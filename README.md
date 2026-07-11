@@ -89,3 +89,8 @@ cargo fmt --check
 cargo clippy --all-targets --all-features -- -D warnings
 cargo test --all
 ```
+
+## License
+
+Sniff is licensed under the GNU Affero General Public License, version 3.
+See [LICENSE](LICENSE) and [TRADEMARKS.md](TRADEMARKS.md).
