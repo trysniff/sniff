@@ -7,13 +7,16 @@ It is not a security scanner, bug finder, or generic code-quality platform.
 
 ## Install
 
-Install Rust from <https://rustup.rs>, then install Sniff from this directory:
+Install Rust from <https://rustup.rs>, then install Sniff from GitHub:
 
 ```powershell
-cargo install --path . --locked
+cargo install --git https://github.com/trysniff/sniff.git sniff --locked
 ```
 
 The `sniff` command is then available through Cargo's binary directory.
+
+For local development, clone the repository and run `cargo install --path .
+--locked` from its root.
 
 ## Configure
 
