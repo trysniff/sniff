@@ -46,7 +46,7 @@ pub(super) async fn run_llm_checks(
 
     let pb_llm = ProgressBar::new(llm_total as u64);
     pb_llm.set_style(input.bar_style);
-    pb_llm.set_message("Sniffing...");
+    pb_llm.set_message("Sniffing");
 
     let pb_llm_clone = pb_llm.clone();
     let on_progress = move || {
@@ -61,7 +61,7 @@ pub(super) async fn run_llm_checks(
         Some(on_progress),
     )
     .await;
-    pb_llm.finish_and_clear();
+    pb_llm.finish();
     let (verdicts, in_tok, out_tok) = result?;
     Ok((
         verdicts,

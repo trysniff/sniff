@@ -11,7 +11,9 @@ fn build_progress_styles() -> Result<(ProgressStyle, ProgressStyle), String> {
 
     let bar_style = ProgressStyle::default_bar()
         .tick_chars("/|\\-")
-        .template("{spinner:.cyan.bold} {msg} [{bar:30.cyan/dim}] {percent}% {elapsed}")
+        .template(
+            "{spinner:.cyan.bold} {msg:.yellow.bold} [{bar:30.cyan/dim}] {percent}% {elapsed}",
+        )
         .map_err(|err| err.to_string())?
         .progress_chars("=>-");
 
