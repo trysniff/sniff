@@ -19,11 +19,14 @@ pub mod symbol_graph;
 pub mod types;
 pub mod walker;
 
+mod cli_banner;
+
 use clap::Parser;
 use std::thread;
 
 fn main() {
     let args = cli::CliArgs::parse();
+    cli_banner::print();
     let handle = match thread::Builder::new()
         .name("sniff-runner".to_string())
         .stack_size(64 * 1024 * 1024)
