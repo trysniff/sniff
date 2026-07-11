@@ -2,7 +2,6 @@ use crate::report_types::LLMVerdict;
 use crate::types::{FileRecord, MethodRecord};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
-use tokio::task::JoinSet;
 
 use super::Analyzer;
 
@@ -68,11 +67,6 @@ async fn run_review_job(analyzer: Arc<Analyzer>, job: ReviewJob) -> Result<Revie
     }
 }
 
-async fn abort_review_jobs(jobs: &mut JoinSet<Result<ReviewOutcome, String>>) {
-    jobs.abort_all();
-    while jobs.join_next().await.is_some() {}
-}
-
 pub(super) async fn run_review_jobs<F>(
     analyzer: Arc<Analyzer>,
     jobs: Vec<ReviewJob>,
@@ -81,36 +75,18 @@ pub(super) async fn run_review_jobs<F>(
 where
     F: Fn() + Send + Sync + 'static,
 {
-    let mut running = JoinSet::new();
+    let mut outcomes = Vec::with_capacity(jobs.len());
     for job in jobs {
         let analyzer = Arc::clone(&analyzer);
-        let on_progress = on_progress.clone();
-        running.spawn(async move {
-            let outcome = run_review_job(Arc::clone(&analyzer), job).await?;
-            analyzer.in_tok.fetch_add(outcome.in_tok, Ordering::SeqCst);
-            analyzer
-                .out_tok
-                .fetch_add(outcome.out_tok, Ordering::SeqCst);
-            if let Some(op) = on_progress.as_ref() {
-                op();
-            }
-            Ok(outcome)
-        });
-    }
-
-    let mut outcomes = Vec::new();
-    while let Some(joined) = running.join_next().await {
-        match joined {
-            Ok(Ok(outcome)) => outcomes.push(outcome),
-            Ok(Err(err)) => {
-                abort_review_jobs(&mut running).await;
-                return Err(err);
-            }
-            Err(err) => {
-                abort_review_jobs(&mut running).await;
-                return Err(format!("LLM review task failed: {err}"));
-            }
+        let outcome = run_review_job(analyzer.clone(), job).await?;
+        analyzer.in_tok.fetch_add(outcome.in_tok, Ordering::SeqCst);
+        analyzer
+            .out_tok
+            .fetch_add(outcome.out_tok, Ordering::SeqCst);
+        if let Some(op) = on_progress.as_ref() {
+            op();
         }
+        outcomes.push(outcome);
     }
 
     outcomes.sort_by_key(|outcome| outcome.index);
