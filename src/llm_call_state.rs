@@ -80,7 +80,7 @@ async fn run_call_attempt(
     state.attempt_count += 1;
     if state.attempt_count > 1 {
         eprintln!(
-            "  LLM request attempt {}/{}",
+            "  Sniffing: request attempt {}/{}",
             state.attempt_count, state.max_attempt_count
         );
     }

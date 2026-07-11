@@ -193,7 +193,7 @@ where
         return Ok((verdict, 0, 0));
     }
 
-    eprintln!("  LLM evidence retry: {label}");
+    eprintln!("  Sniffing: retrying evidence for {label}");
     let retry_prompt = build_invalid_evidence_retry_prompt(prompt, &verdict.evidence, source);
     let (retry_result, input_tokens, output_tokens) =
         analyzer.llm_client.call(&retry_prompt, schema).await?;

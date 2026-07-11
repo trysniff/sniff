@@ -33,7 +33,7 @@ pub(super) async fn analyze_file(
         ],
     );
 
-    eprintln!("  LLM review: file {}", file.file_path);
+    eprintln!("  Sniffing: file {}", file.file_path);
     let (result, mut i, mut o) = analyzer
         .llm_client
         .call(&prompt, ResponseSchema::FileReview)

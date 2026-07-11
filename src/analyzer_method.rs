@@ -44,7 +44,7 @@ pub(super) async fn analyze_method_review_with_context(
         ],
     );
 
-    eprintln!("  LLM review: method {}::{}", method.file_path, method.name);
+    eprintln!("  Sniffing: method {}::{}", method.file_path, method.name);
     let (result, mut i, mut o) = analyzer
         .llm_client
         .call(&prompt, ResponseSchema::MethodReview)
