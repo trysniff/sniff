@@ -11,8 +11,6 @@ categories = ["command-line-utilities", "development-tools"]
 include = [
   "Cargo.lock",
   "README.md",
-  "SNIFF_SPEC.md",
-  "SNIFF_TECHNICAL_SPEC.md",
   "gold_fixtures/**",
   "scripts/**",
   "src/*.rs",
