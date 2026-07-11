@@ -1,13 +1,12 @@
 const BANNER: &str = r#"
-       ______      ______
-    .-'      '-.__-'      '-.
-  .'          .--.          '.
- /           (    )           \
-|            (    )            |
-|             '--'             |
- \                           /
-  '.                       .'
-    '-.__________________.-'
+ ________  ________   ___  ________ ________
+|\   ____\|\   ___  \|\  \|\  _____\\  _____\
+\ \  \___|\ \  \\ \  \ \  \ \  \__/\ \  \__/
+ \ \_____  \ \  \\ \  \ \  \ \   __\\ \   __\
+  \|____|\  \ \  \\ \  \ \  \ \  \_| \ \  \_|
+    ____\_\  \ \__\\ \__\ \__\ \__\   \ \__\
+   |\_________\|**| \\|**|\|**|\\|**|    \|__|
+   \|_________|
 "#;
 
 pub(crate) fn print() {
@@ -19,9 +18,8 @@ mod tests {
     use super::BANNER;
 
     #[test]
-    fn banner_has_the_snout_shape() {
-        assert!(BANNER.contains("______"));
-        assert!(BANNER.contains("(    )"));
-        assert!(BANNER.contains("__.-"));
+    fn banner_contains_the_cli_mark() {
+        assert!(BANNER.contains(r"|\   ____\|\   ___"));
+        assert!(BANNER.contains(r"\|_________|"));
     }
 }

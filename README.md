@@ -5,6 +5,17 @@ spend unnecessary effort understanding, trusting, or changing it.
 
 It is not a security scanner, bug finder, or generic code-quality platform.
 
+```text
+ ________  ________   ___  ________ ________
+|\   ____\|\   ___  \|\  \|\  _____\\  _____\
+\ \  \___|\ \  \\ \  \ \  \ \  \__/\ \  \__/
+ \ \_____  \ \  \\ \  \ \  \ \   __\\ \   __\
+  \|____|\  \ \  \\ \  \ \  \ \  \_| \ \  \_|
+    ____\_\  \ \__\\ \__\ \__\ \__\   \ \__\
+   |\_________\|**| \\|**|\|**|\\|**|    \|__|
+   \|_________|
+```
+
 ## Install
 
 Install Rust from <https://rustup.rs>, then install Sniff from this directory:
