@@ -1,0 +1,22 @@
+[thresholds]
+max_loc = 40
+max_nesting = 3
+max_params = 4
+max_methods_per_file = 10
+
+ignore = [
+  "node_modules", "dist", "build", ".git", "coverage",
+  "__pycache__", ".venv", "vendor", "target",
+]
+
+generic_names = [
+  "handle*", "process*", "do*", "manage*", "get*", "set*", "update*",
+  "data", "temp", "result", "info", "stuff", "misc",
+]
+
+generic_file_names = ["utils", "helpers", "misc", "common", "shared", "tools"]
+
+model = "your-model"
+
+[llm]
+system_context = ""

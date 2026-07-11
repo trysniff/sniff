@@ -1,0 +1,49 @@
+use crate::language_adapter::{ExportDetection, LanguageAdapter};
+
+pub(super) fn adapter() -> LanguageAdapter {
+    language_adapter!(
+        "python",
+        "tree-sitter-python",
+        [".py"],
+        ["function_definition", "decorated_definition"],
+        [],
+        "name",
+        "parameters",
+        [
+            "identifier",
+            "typed_parameter",
+            "default_parameter",
+            "typed_default_parameter",
+            "list_splat_pattern",
+            "dictionary_splat_pattern",
+        ],
+        [
+            "if_statement",
+            "for_statement",
+            "while_statement",
+            "try_statement",
+            "with_statement",
+            "match_statement",
+        ],
+        ExportDetection::Convention,
+        [
+            "handle_*",
+            "process_*",
+            "do_*",
+            "manage_*",
+            "data",
+            "result",
+            "temp",
+            "info",
+            "foo",
+            "bar"
+        ],
+        [
+            "setUp",
+            "tearDown",
+            "setUpClass",
+            "tearDownClass",
+            "setUp_*"
+        ]
+    )
+}
