@@ -1,5 +1,3 @@
-#[path = "reporter_console.rs"]
-pub mod console;
 #[path = "reporter_cost.rs"]
 pub mod cost;
 #[path = "reporter_markdown.rs"]

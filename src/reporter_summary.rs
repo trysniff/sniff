@@ -1,6 +1,5 @@
 use crate::report_types::{FileVerdict, RunStats};
 use crate::types::FindingTier;
-use colored::Colorize;
 
 fn verdict_counts(file_verdicts: &[FileVerdict]) -> (usize, usize) {
     let kinda = file_verdicts
@@ -38,33 +37,38 @@ pub(super) fn append_footer(
     ]);
 }
 
-pub(super) fn print_summary(s: &RunStats, file_verdicts: &[FileVerdict], cost_str: &str) {
+pub(super) fn print_summary(
+    s: &RunStats,
+    file_verdicts: &[FileVerdict],
+    cost_str: &str,
+    out: Option<&str>,
+) {
     let (kinda, slop) = verdict_counts(file_verdicts);
+    println!("Report written to {}", out.unwrap_or("sniff-report.md"));
+    println!("Findings: {} Slop, {} Kinda Slop", slop, kinda);
+
+    let affected = file_verdicts
+        .iter()
+        .filter(|verdict| verdict.verdict != FindingTier::Clean)
+        .collect::<Vec<_>>();
+    if affected.is_empty() {
+        println!("Affected files: none");
+    } else {
+        println!("Affected files:");
+        for verdict in affected {
+            let methods = if verdict.flagged_methods.is_empty() {
+                "file-level".to_string()
+            } else {
+                verdict.flagged_methods.join(", ")
+            };
+            println!("  {}: {}", verdict.file_path, methods);
+        }
+    }
+
     println!(
-        "\n{}",
-        "--------------------------------------------------------".dimmed()
+        "Scanned: {} files, {} methods | AI: {}/{} | Est. cost: {}",
+        s.files_scanned, s.methods_analyzed, s.ai_reviews, s.ai_expected_reviews, cost_str
     );
-    println!(
-        "{}",
-        format!(
-            "  {} files - {} methods",
-            s.files_scanned, s.methods_analyzed
-        )
-        .dimmed()
-    );
-    println!(
-        "{}",
-        format!(
-            "  ai coverage: {} of {} expected reviews completed, {} missed",
-            s.ai_reviews, s.ai_expected_reviews, s.ai_failed_reviews
-        )
-        .dimmed()
-    );
-    println!(
-        "{}",
-        format!("  slop findings: {} slop - {} kinda slop", slop, kinda).dimmed()
-    );
-    println!("{}", format!("  estimated cost: {}", cost_str).dimmed());
 }
 
 #[cfg(test)]

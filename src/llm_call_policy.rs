@@ -65,13 +65,11 @@ pub(super) fn classify_failed_attempt(
     prompt: &str,
     schema: ResponseSchema,
     err: String,
-    attempt_count: usize,
-    max_attempt_count: usize,
+    _attempt_count: usize,
+    _max_attempt_count: usize,
     same_prompt_retry_count: usize,
     max_same_prompt_retry_count: usize,
 ) -> Result<(CallOutcome, String, usize, usize), String> {
-    let short_err = super::super::llm_text::truncate_for_log(&err, 180);
-    eprintln!("  LLM request failed on attempt {attempt_count}/{max_attempt_count}: {short_err}");
     Ok((
         retry_action_to_call_outcome(llm_retry::classify_error(
             prompt,

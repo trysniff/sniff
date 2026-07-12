@@ -6,12 +6,13 @@ use std::path::Path;
 
 use super::support;
 use super::verdicts::{build_file_verdict, normalize_file_verdict};
-use super::{Analyzer, analyzer_prompts};
+use super::{Analyzer, ReviewProgressCallback, analyzer_prompts};
 
 pub(super) async fn analyze_file(
     analyzer: &Analyzer,
     file: &FileRecord,
     static_signals: &[String],
+    on_progress: Option<&ReviewProgressCallback>,
 ) -> Result<(Option<LLMVerdict>, usize, usize), String> {
     let filename = Path::new(&file.file_path)
         .file_name()
@@ -56,8 +57,11 @@ pub(super) async fn analyze_file(
         &prompt,
         ResponseSchema::FileReview,
         verdict,
-        &review_source,
-        &retry_label,
+        support::RetryContext {
+            source: &review_source,
+            label: &retry_label,
+            on_progress,
+        },
         |retry_result| {
             let mut verdict = build_file_verdict(retry_result, &file.file_path);
             normalize_file_verdict(file, &analyzer.llm_client, &mut verdict);

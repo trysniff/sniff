@@ -10,7 +10,31 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+fn parse_virtual_file(file_path: &str, source: &str) -> FileRecord {
+    let extension = file_path
+        .rsplit(['\\', '/'])
+        .next()
+        .and_then(|name| name.rsplit_once('.'))
+        .map(|(_, extension)| extension)
+        .expect("virtual role fixture needs a file extension");
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock should be after the Unix epoch")
+        .as_nanos();
+    let temp_path = std::env::temp_dir().join(format!("sniff-role-fixture-{nonce}.{extension}"));
+    std::fs::write(&temp_path, source).expect("write virtual role fixture");
+    let mut file = crate::parser::parse_file_checked(temp_path.to_str().unwrap())
+        .expect("parse virtual role fixture");
+    let _ = std::fs::remove_file(&temp_path);
+
+    file.file_path = file_path.to_string();
+    for method in &mut file.methods {
+        method.file_path = file_path.to_string();
+    }
+    file
+}
 
 fn cfg(endpoint: &str) -> ResolvedConfig {
     ResolvedConfig {

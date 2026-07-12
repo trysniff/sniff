@@ -12,9 +12,6 @@ pub struct CliArgs {
     pub path: String,
 
     #[arg(long)]
-    pub verbose: bool,
-
-    #[arg(long)]
     pub only_files: bool,
 
     #[arg(long)]
@@ -23,9 +20,8 @@ pub struct CliArgs {
 
 pub async fn run(
     path: &str,
-    verbose: bool,
     only_files: bool,
     skip_dotenv: bool,
 ) -> Result<i32, Box<dyn std::error::Error>> {
-    pipeline::run(path, verbose, only_files, skip_dotenv).await
+    pipeline::run(path, only_files, skip_dotenv).await
 }

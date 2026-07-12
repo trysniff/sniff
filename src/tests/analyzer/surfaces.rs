@@ -446,15 +446,10 @@ public fun sanitizeMedicationStrengthInput(value: String): String {
     let static_flags =
         crate::scorer::score(std::slice::from_ref(&file), &ResolvedConfig::default());
 
-    let (verdicts, _, _) = analyze_with_client(
-        &[file],
-        &static_flags,
-        analyzer.llm_client,
-        false,
-        None::<fn()>,
-    )
-    .await
-    .expect("analysis should complete");
+    let (verdicts, _, _) =
+        analyze_with_client(&[file], &static_flags, analyzer.llm_client, false, None)
+            .await
+            .expect("analysis should complete");
 
     let verdict = verdicts
         .into_iter()

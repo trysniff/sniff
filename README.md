@@ -51,7 +51,6 @@ sniff C:\path\to\repository
 Useful flags:
 
 ```text
---verbose       include clean items in console output
 --only-files    review files only; skips method-level LLM review
 --skip-dotenv   do not load .env files
 ```

@@ -379,7 +379,7 @@ fn skillmatch_backend_hotspots_match_the_current_report_contract() {
 }
 
 #[test]
-fn default_console_output_hides_kinda_slop_entries() {
+fn console_summary_does_not_leak_report_findings() {
     let root = unique_root("sniff-dogfood-console-filter");
     fs::create_dir_all(&root).unwrap();
 
@@ -415,14 +415,13 @@ fn default_console_output_hides_kinda_slop_entries() {
     );
 
     let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Report written to"));
+    assert!(stdout.contains("Findings:"));
+    assert!(stdout.contains("Affected files:"));
+    assert!(stdout.contains("sloppy.py"));
     assert!(
-        !stdout.contains("Kinda Slop"),
-        "default console output should hide kinda slop findings:\n{}",
-        stdout
-    );
-    assert!(
-        stdout.contains("Slop"),
-        "default console output should still surface real slop:\n{}",
+        !stdout.contains("Top reasons") && !stdout.contains("Evidence:"),
+        "console output should not leak report details:\n{}",
         stdout
     );
 

@@ -1,8 +1,6 @@
 use super::super::llm_retry;
-use super::super::llm_text;
 use super::ResponseSchema;
 use super::{LLMClient, llm_call_policy};
-use std::io::Write;
 use std::time::Duration;
 
 pub(super) struct CallState {
@@ -48,10 +46,6 @@ async fn apply_outcome(
         llm_call_policy::CallOutcome::Return(result) => Ok(Some(result)),
         llm_call_policy::CallOutcome::RetrySamePrompt => {
             state.same_prompt_retry_count += 1;
-            eprintln!(
-                "  LLM returned no usable response; retrying the same request ({}/{})",
-                state.same_prompt_retry_count, state.max_same_prompt_retry_count
-            );
             Ok(None)
         }
         llm_call_policy::CallOutcome::RetryWithRepair(new_prompt) => {
@@ -78,12 +72,6 @@ async fn run_call_attempt(
     state: &mut CallState,
 ) -> Result<Option<(Option<serde_json::Value>, usize, usize)>, String> {
     state.attempt_count += 1;
-    if state.attempt_count > 1 {
-        eprintln!(
-            "  Sniffing: request attempt {}/{}",
-            state.attempt_count, state.max_attempt_count
-        );
-    }
 
     let (outcome, attempt_err, input_tokens, output_tokens) = llm_call_policy::classify_attempt(
         client,
@@ -111,13 +99,6 @@ async fn run_call_attempt(
 }
 
 fn finish_call(state: &CallState) -> Result<(Option<serde_json::Value>, usize, usize), String> {
-    eprintln!(
-        "  LLM skip after {} attempts ({} repair retries): {}",
-        state.attempt_count,
-        state.repair_count,
-        llm_text::truncate_for_log(&state.last_err, 120)
-    );
-    let _ = std::io::stderr().flush();
     Err(state.last_err.clone())
 }
 
@@ -134,7 +115,6 @@ pub(super) async fn execute_call(
     let _permit = match acquire_call_permit(client).await {
         Ok(p) => p,
         Err(e) => {
-            eprintln!("  LLM semaphore error: {}", e);
             return Err(format!("LLM semaphore error: {}", e));
         }
     };
