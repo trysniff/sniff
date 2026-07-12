@@ -4,7 +4,7 @@ use crate::llm::LLMClient;
 use crate::report_types::{LLMVerdict, StaticFlag};
 use crate::types::FileRecord;
 use colored::Colorize;
-use indicatif::{ProgressBar, ProgressStyle};
+use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use std::io::{Error as IoError, ErrorKind};
 use std::sync::Arc;
 
@@ -46,17 +46,27 @@ pub(super) async fn run_llm_checks(
         ));
     };
 
-    let pb_llm = ProgressBar::new(llm_total as u64);
+    let progress = MultiProgress::new();
+    let status_line = progress.add(ProgressBar::new_spinner());
+    status_line.set_style(
+        ProgressStyle::default_spinner()
+            .template("{msg}")
+            .map_err(|err| format!("failed to build progress status style: {err}"))?,
+    );
+    status_line.set_message(format!("{}", "Preparing reviews".cyan().bold()));
+
+    let pb_llm = progress.add(ProgressBar::new(llm_total as u64));
     pb_llm.set_style(input.bar_style);
     pb_llm.set_message(format!("{}", "Sniffing reviews".cyan().bold()));
 
+    let status_line_clone = status_line.clone();
     let pb_llm_clone = pb_llm.clone();
     let on_progress: ReviewProgressCallback = Arc::new(move |event| match event {
         ReviewProgress::Started { label } => {
-            pb_llm_clone.set_message(format!("{}", label.cyan().bold()));
+            status_line_clone.set_message(format!("{}", label.cyan().bold()));
         }
         ReviewProgress::RetryingEvidence { label } => {
-            pb_llm_clone.set_message(format!(
+            status_line_clone.set_message(format!(
                 "{}",
                 format!("retrying evidence: {label}").yellow().bold()
             ));
@@ -72,7 +82,8 @@ pub(super) async fn run_llm_checks(
         Some(on_progress),
     )
     .await;
-    pb_llm.finish();
+    status_line.finish_and_clear();
+    pb_llm.finish_and_clear();
     let (verdicts, in_tok, out_tok) = result?;
     Ok((
         verdicts,
