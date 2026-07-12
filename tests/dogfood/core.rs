@@ -363,7 +363,7 @@ fn support_facades_are_reviewed_and_real_slop_still_surfaces_end_to_end() {
 }
 
 #[test]
-fn react_main_entrypoints_stay_out_of_the_report_end_to_end() {
+fn react_main_entrypoints_stay_out_of_the_report_but_are_reviewed_end_to_end() {
     let root = unique_root("sniff-dogfood-react-entrypoint");
     fs::create_dir_all(&root).unwrap();
 
@@ -407,8 +407,8 @@ fn react_main_entrypoints_stay_out_of_the_report_end_to_end() {
 
     let prompt_text = prompts.lock().unwrap().join("\n");
     assert!(
-        !prompt_text.contains("src/main.tsx"),
-        "main.tsx should not be sent for AI review:\n{}",
+        prompt_text.contains("Filename: main.tsx"),
+        "main.tsx should be reviewed by the AI before its intentional-surface verdict is normalized:\n{}",
         prompt_text
     );
 
