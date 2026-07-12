@@ -22,6 +22,20 @@ cargo package --locked
 Use local mock endpoints and fixtures for analyzer tests. Do not add tests that
 call a real paid model provider or require a secret.
 
+## Publishing
+
+The crates.io package is `sniff-cli`; it installs the `sniff` executable. Before
+publishing, run `cargo package --locked` and `cargo publish --dry-run --locked`.
+After the first publish, the `github:trysniff:maintainers` team should be added
+as a crates.io owner:
+
+```powershell
+cargo owner --add github:trysniff:maintainers sniff-cli
+```
+
+Never commit a crates.io token. Use `cargo login` locally or a protected release
+workflow secret.
+
 ## Analyzer Changes
 
 Sniff is a slop finder, not a generic bug or security scanner. Changes to
