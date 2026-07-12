@@ -301,8 +301,27 @@ fn data_catalog_modules_are_treated_as_intentional_surfaces() {
 
 #[test]
 fn real_brandset_platform_catalog_is_treated_as_intentional_surface() {
-    let file =
-        crate::parser::parse_file(r"C:\Users\User\Brandset\Brandset\ui\src\data\platforms.ts");
+    let file = super::parse_virtual_file(
+        r"C:\Users\User\Brandset\Brandset\ui\src\data\platforms.ts",
+        r#"
+export const PLATFORM_CONFIGS: Record<string, { label: string }> = {
+  web: { label: "Web" },
+  mobile: { label: "Mobile" },
+};
+
+export function getPlatformClaimMode(platformId: string) {
+  return PLATFORM_CONFIGS[platformId]?.label ?? "unknown";
+}
+
+export function isPlatformCacheEligible(platformId: string) {
+  return platformId in PLATFORM_CONFIGS;
+}
+
+export function getPlatformSetupObjective(platformId: string) {
+  return Object.fromEntries([[platformId, PLATFORM_CONFIGS[platformId]]]);
+}
+"#,
+    );
 
     assert!(
         is_data_catalog_module(&file),
@@ -336,8 +355,16 @@ fn pure_contract_type_modules_are_treated_as_intentional_surfaces() {
 
 #[test]
 fn real_brandset_contract_type_module_is_treated_as_intentional_surface() {
-    let file = crate::parser::parse_file(
+    let file = super::parse_virtual_file(
         r"C:\Users\User\Brandset\Brandset\ui\background\core\session-runtime-contracts.ts",
+        r#"
+export type LoggerMethod = (...args: unknown[]) => void;
+export type SessionPolicy = 'aggressive_clean' | 'preserve_login';
+export interface PlatformConfig {
+  signupUrl?: string;
+  checkUrl?: string;
+}
+"#,
     );
 
     assert!(is_contract_type_module(&file));

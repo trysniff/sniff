@@ -3,21 +3,14 @@ use crate::report_types::RunReport;
 use indicatif::ProgressStyle;
 use std::io::{Error as IoError, ErrorKind};
 
-fn build_progress_styles() -> Result<(ProgressStyle, ProgressStyle), String> {
-    let spinner_style = ProgressStyle::default_spinner()
-        .tick_chars("/|\\-")
-        .template("{spinner:.cyan.bold} {msg}")
-        .map_err(|err| err.to_string())?;
-
-    let bar_style = ProgressStyle::default_bar()
+fn build_progress_style() -> Result<ProgressStyle, String> {
+    ProgressStyle::default_bar()
         .tick_chars("/|\\-")
         .template(
             "{spinner:.cyan.bold} {msg:.yellow.bold} [{bar:30.cyan/dim}] {percent}% {elapsed}",
         )
-        .map_err(|err| err.to_string())?
-        .progress_chars("=>-");
-
-    Ok((spinner_style, bar_style))
+        .map_err(|err| err.to_string())
+        .map(|style| style.progress_chars("=>-"))
 }
 
 fn exit_code_for_run(has_issues: bool, ai_failed_reviews: usize) -> i32 {
@@ -111,15 +104,8 @@ fn clear_previous_report(report_path: &std::path::Path) -> Result<(), Box<dyn st
 async fn scan_target(
     path: &str,
     config: &crate::config::ResolvedConfig,
-    spinner_style: &ProgressStyle,
 ) -> Result<Vec<crate::types::FileRecord>, String> {
-    let pb = indicatif::ProgressBar::new_spinner();
-    pb.set_style(spinner_style.clone());
-    pb.set_message("Scanning files...");
-
-    let file_records = io::scan_files(path, config).await;
-    pb.finish_and_clear();
-    file_records
+    io::scan_files(path, config).await
 }
 
 async fn build_run_report(
@@ -159,7 +145,6 @@ async fn build_run_report(
 
 pub async fn run(
     path: &str,
-    verbose: bool,
     only_files: bool,
     skip_dotenv: bool,
 ) -> Result<i32, Box<dyn std::error::Error>> {
@@ -172,10 +157,8 @@ pub async fn run(
     crate::roles::clear_file_role_cache();
     clear_previous_report(&report_path)?;
 
-    let (spinner_style, bar_style) = build_progress_styles()
-        .map_err(|err| IoError::other(format!("failed to build progress styles: {}", err)))?;
     eprintln!("Scanning source files...");
-    let mut file_records = scan_target(path, &config, &spinner_style)
+    let mut file_records = scan_target(path, &config)
         .await
         .map_err(|err| IoError::other(format!("file scan failed: {err}")))?;
 
@@ -191,12 +174,13 @@ pub async fn run(
         eprintln!("Using LLM endpoint: {}", config.llm.endpoint.trim());
     }
     eprintln!("Preparing report...");
+    let bar_style = build_progress_style()
+        .map_err(|err| IoError::other(format!("failed to build progress style: {}", err)))?;
     let (run_report, has_issues) =
         build_run_report(path, only_files, &config, &mut file_records, &bar_style).await?;
 
-    eprintln!("Rendering report...");
     let report_path_text = report_path.to_string_lossy().to_string();
-    crate::reporter::render_report(&run_report, &config, verbose, Some(&report_path_text))
+    crate::reporter::render_report(&run_report, &config, Some(&report_path_text))
         .map_err(IoError::other)?;
 
     Ok(exit_code_for_run(

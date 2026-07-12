@@ -30,7 +30,13 @@ fn wrapper_only_modules_are_detected() {
 
 #[test]
 fn real_version_py_is_wrapper_only() {
-    let file = crate::parser::parse_file("C:\\Users\\User\\bumpkin\\src\\version.py");
+    let file = super::parse_virtual_file(
+        "C:\\Users\\User\\bumpkin\\src\\version.py",
+        "from bumpkin.versioning import tags\n\n\
+def bump_semver(version, label):\n    return tags.bump_semver(version, label)\n\n\
+def parse_tag(tag):\n    return tags.parse_tag(tag)\n\n\
+def detect_next_version(label):\n    return tags.detect_next_version(label)\n",
+    );
     assert!(is_wrapper_only_module(&file));
     assert_eq!(file.methods.len(), 3);
 }
@@ -238,23 +244,32 @@ public fun sanitizeMedicationStrengthInput(value: String): String {
 
 #[test]
 fn real_diff_py_is_a_facade_module() {
-    let file = crate::parser::parse_file("C:\\Users\\User\\bumpkin\\src\\diff.py");
+    let file = super::parse_virtual_file(
+        "C:\\Users\\User\\bumpkin\\src\\diff.py",
+        "from bumpkin.analysis import diff_core\n\n\
+def _run_git(args):\n    return diff_core._run_git(args)\n\n\
+def _repository_root():\n    return diff_core._repository_root(run_git_fn=_run_git)\n",
+    );
     assert!(is_wrapper_only_module(&file));
     assert!(file.methods.iter().any(is_thin_delegation_method));
 }
 
 #[test]
 fn real_court_py_is_a_wrapper_only_module() {
-    let file =
-        crate::parser::parse_file("C:\\Users\\User\\bumpkin\\src\\bumpkin\\orchestrator\\court.py");
+    let file = super::parse_virtual_file(
+        "C:\\Users\\User\\bumpkin\\src\\bumpkin\\orchestrator\\court.py",
+        "from bumpkin.orchestrator import court_core\n\n\
+def extract_content(payload):\n    return court_core.extract_content(payload)\n",
+    );
     assert!(is_wrapper_only_module(&file));
     assert!(file.methods.iter().any(is_thin_delegation_method));
 }
 
 #[test]
 fn real_webhook_service_py_is_not_treated_as_intentional_surface() {
-    let file = crate::parser::parse_file(
+    let file = super::parse_virtual_file(
         "C:\\Users\\User\\bumpkin\\src\\bumpkin\\integrations\\github\\webhook_service.py",
+        "def handle_webhook(event):\n    return event\n",
     );
     assert_eq!(
         classify_file_role(
@@ -268,8 +283,10 @@ fn real_webhook_service_py_is_not_treated_as_intentional_surface() {
 
 #[test]
 fn real_persistence_protocols_py_is_intentional_surface() {
-    let file = crate::parser::parse_file(
+    let file = super::parse_virtual_file(
         "C:\\Users\\User\\bumpkin\\src\\bumpkin\\integrations\\github\\persistence_protocols.py",
+        "from typing import Protocol\n\n\
+class EventPersistenceStore(Protocol):\n    def record_event(self, event): ...\n",
     );
     assert!(is_protocol_surface_module(&file));
     assert!(is_intentional_surface_record(&file));
@@ -277,8 +294,9 @@ fn real_persistence_protocols_py_is_intentional_surface() {
 
 #[test]
 fn real_llm_transport_py_is_intentional_surface() {
-    let file = crate::parser::parse_file(
+    let file = super::parse_virtual_file(
         "C:\\Users\\User\\bumpkin\\src\\bumpkin\\providers\\llm_transport.py",
+        "def request_json(endpoint, payload):\n    return payload\n",
     );
     assert!(is_support_plumbing_module(
         "C:\\Users\\User\\bumpkin\\src\\bumpkin\\providers\\llm_transport.py"

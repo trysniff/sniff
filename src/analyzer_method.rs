@@ -5,14 +5,15 @@ use crate::types::MethodRecord;
 
 use super::support;
 use super::verdicts::build_method_verdict;
-use super::{Analyzer, analyzer_prompts};
+use super::{Analyzer, ReviewProgressCallback, analyzer_prompts};
 
 pub(super) async fn analyze_method_review(
     analyzer: &Analyzer,
     method: &MethodRecord,
     static_signals: &[String],
+    on_progress: Option<&ReviewProgressCallback>,
 ) -> Result<(Option<LLMVerdict>, usize, usize), String> {
-    analyze_method_review_with_context(analyzer, method, static_signals, "").await
+    analyze_method_review_with_context(analyzer, method, static_signals, "", on_progress).await
 }
 
 pub(super) async fn analyze_method_review_with_context(
@@ -20,6 +21,7 @@ pub(super) async fn analyze_method_review_with_context(
     method: &MethodRecord,
     static_signals: &[String],
     file_context: &str,
+    on_progress: Option<&ReviewProgressCallback>,
 ) -> Result<(Option<LLMVerdict>, usize, usize), String> {
     let mut refs_str = String::new();
     for r in &method.references {
@@ -72,8 +74,11 @@ pub(super) async fn analyze_method_review_with_context(
         &prompt,
         ResponseSchema::MethodReview,
         verdict,
-        &method.source,
-        &retry_label,
+        support::RetryContext {
+            source: &method.source,
+            label: &retry_label,
+            on_progress,
+        },
         |retry_result| {
             build_method_verdict(
                 retry_result,

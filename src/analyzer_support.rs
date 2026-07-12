@@ -6,6 +6,7 @@ use std::fmt::Display;
 use std::io::Write;
 
 use super::verdicts::{clear_unsupported_verdict, evidence_is_exact_substring};
+use super::{ReviewProgress, ReviewProgressCallback};
 
 pub(super) fn render_template(template: &str, values: &[&dyn Display]) -> String {
     let mut rendered = String::with_capacity(template.len());
@@ -177,26 +178,40 @@ pub(super) fn build_invalid_evidence_retry_prompt(
     )
 }
 
+pub(super) struct RetryContext<'a> {
+    pub(super) source: &'a str,
+    pub(super) label: &'a str,
+    pub(super) on_progress: Option<&'a ReviewProgressCallback>,
+}
+
 pub(super) async fn retry_invalid_evidence<F>(
     analyzer: &super::Analyzer,
     prompt: &str,
     schema: ResponseSchema,
     mut verdict: LLMVerdict,
-    source: &str,
-    label: &str,
+    retry: RetryContext<'_>,
     mut rebuild: F,
 ) -> Result<(LLMVerdict, usize, usize), String>
 where
     F: FnMut(&serde_json::Value) -> LLMVerdict + Send,
 {
-    if !verdict.smelly || evidence_is_exact_substring(source, &verdict.evidence) {
+    if !verdict.smelly || evidence_is_exact_substring(retry.source, &verdict.evidence) {
         return Ok((verdict, 0, 0));
     }
 
-    eprintln!("  Sniffing: retrying evidence for {label}");
-    let retry_prompt = build_invalid_evidence_retry_prompt(prompt, &verdict.evidence, source);
+    if let Some(callback) = retry.on_progress {
+        callback(ReviewProgress::RetryingEvidence {
+            label: retry.label.to_string(),
+        });
+    }
+    let retry_prompt = build_invalid_evidence_retry_prompt(prompt, &verdict.evidence, retry.source);
     let (retry_result, input_tokens, output_tokens) =
         analyzer.llm_client.call(&retry_prompt, schema).await?;
+    if let Some(callback) = retry.on_progress {
+        callback(ReviewProgress::Started {
+            label: retry.label.to_string(),
+        });
+    }
 
     let Some(retry_result) = retry_result else {
         clear_unsupported_verdict(&mut verdict);
@@ -208,7 +223,7 @@ where
         return Ok((verdict, input_tokens, output_tokens));
     }
 
-    if verdict.smelly && !evidence_is_exact_substring(source, &verdict.evidence) {
+    if verdict.smelly && !evidence_is_exact_substring(retry.source, &verdict.evidence) {
         clear_unsupported_verdict(&mut verdict);
     }
 

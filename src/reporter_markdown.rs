@@ -1,5 +1,4 @@
 use crate::report_types::RunReport;
-use colored::Colorize;
 use std::io::Write;
 
 use super::summary::append_footer;
@@ -44,10 +43,6 @@ pub(super) fn write_markdown_report(
         .map_err(|err| format!("failed to create report file {out_path}: {}", err))?;
     f.write_all(md_lines.join("\n").as_bytes())
         .map_err(|err| format!("failed to write report file {out_path}: {}", err))?;
-    println!(
-        "\n{}",
-        format!("Report written to {}", out_path).green().bold()
-    );
     Ok(())
 }
 

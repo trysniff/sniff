@@ -298,17 +298,17 @@ fn brandset_supabase_clean_neighbors_stay_clean_while_signup_wrapper_surfaces() 
 
     let report = fs::read_to_string(root.join("sniff-report.md")).unwrap();
     assert!(
-        report.contains("signup-wrapper\\index.ts"),
+        report.contains("signup-wrapper") && report.contains("index.ts"),
         "expected signup-wrapper to remain in the report:\n{}",
         report
     );
     assert!(
-        !report.contains("notify-payment-health\\index.ts"),
+        !report.contains("notify-payment-health"),
         "notify-payment-health should stay out of the report:\n{}",
         report
     );
     assert!(
-        !report.contains("create-polar-checkout-session\\index.ts"),
+        !report.contains("create-polar-checkout-session"),
         "create-polar-checkout-session should stay out of the report:\n{}",
         report
     );

@@ -6,6 +6,8 @@ use crate::types::{FileRecord, MethodRecord};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use super::{ReviewProgress, ReviewProgressCallback};
+
 #[path = "analyzer_prompts.rs"]
 mod analyzer_prompts;
 #[path = "analyzer_file.rs"]
@@ -36,7 +38,7 @@ impl Analyzer {
         method: &MethodRecord,
         static_signals: &[String],
     ) -> Result<(Option<LLMVerdict>, usize, usize), String> {
-        method_review::analyze_method_review(self, method, static_signals).await
+        method_review::analyze_method_review(self, method, static_signals, None).await
     }
 
     async fn analyze_method_review_with_context(
@@ -44,12 +46,14 @@ impl Analyzer {
         method: &MethodRecord,
         static_signals: &[String],
         file_context: &str,
+        on_progress: Option<&ReviewProgressCallback>,
     ) -> Result<(Option<LLMVerdict>, usize, usize), String> {
         method_review::analyze_method_review_with_context(
             self,
             method,
             static_signals,
             file_context,
+            on_progress,
         )
         .await
     }
@@ -59,20 +63,26 @@ impl Analyzer {
         file: &FileRecord,
         static_signals: &[String],
     ) -> Result<(Option<LLMVerdict>, usize, usize), String> {
-        file_review::analyze_file(self, file, static_signals).await
+        file_review::analyze_file(self, file, static_signals, None).await
+    }
+
+    async fn analyze_file_with_progress(
+        &self,
+        file: &FileRecord,
+        static_signals: &[String],
+        on_progress: Option<&ReviewProgressCallback>,
+    ) -> Result<(Option<LLMVerdict>, usize, usize), String> {
+        file_review::analyze_file(self, file, static_signals, on_progress).await
     }
 }
 
-pub async fn analyze_with_client<F>(
+pub async fn analyze_with_client(
     file_records: &[FileRecord],
     static_flags: &[StaticFlag],
     client: Arc<LLMClient>,
     only_files: bool,
-    on_progress: Option<F>,
-) -> Result<(Vec<LLMVerdict>, usize, usize), String>
-where
-    F: Fn() + Send + Sync + 'static,
-{
+    on_progress: Option<ReviewProgressCallback>,
+) -> Result<(Vec<LLMVerdict>, usize, usize), String> {
     let analyzer = Arc::new(Analyzer {
         llm_client: client,
         in_tok: AtomicUsize::new(0),
@@ -119,7 +129,6 @@ where
         review_index += 1;
     }
 
-    let on_progress = on_progress.map(Arc::new);
     let verdicts = jobs::run_review_jobs(Arc::clone(&analyzer), jobs, on_progress).await?;
 
     let total_in = analyzer.in_tok.load(Ordering::SeqCst);
@@ -127,16 +136,13 @@ where
     Ok((verdicts, total_in, total_out))
 }
 
-pub async fn analyze<F>(
+pub async fn analyze(
     file_records: &[FileRecord],
     static_flags: &[StaticFlag],
     config: ResolvedConfig,
     only_files: bool,
-    on_progress: Option<F>,
-) -> Result<(Vec<LLMVerdict>, usize, usize), String>
-where
-    F: Fn() + Send + Sync + 'static,
-{
+    on_progress: Option<ReviewProgressCallback>,
+) -> Result<(Vec<LLMVerdict>, usize, usize), String> {
     let api_key = env_value::read("SNIFF_API_KEY");
     if api_key.is_none() {
         if file_records.is_empty() {

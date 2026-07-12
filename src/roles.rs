@@ -215,13 +215,6 @@ pub async fn resolve_file_roles(
         return Ok((input_tokens, output_tokens));
     }
 
-    eprintln!(
-        "  Role resolution queue: {} ambiguous files",
-        unresolved.len()
-    );
-
-    let mut completed = 0usize;
-    let total = unresolved.len();
     for file in unresolved {
         match classify_with_llm(client.as_ref(), &file).await {
             Ok((role, in_tok, out_tok)) => {
@@ -236,10 +229,6 @@ pub async fn resolve_file_roles(
                     file.file_path, err
                 ));
             }
-        }
-        completed += 1;
-        if completed == total || completed.is_multiple_of(25) {
-            eprintln!("  Role resolution progress: {}/{}", completed, total);
         }
     }
 

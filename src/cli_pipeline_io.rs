@@ -1,17 +1,7 @@
 use crate::config::ResolvedConfig;
 use crate::types::FileRecord;
-use indicatif::{ProgressBar, ProgressStyle};
 
 pub(super) async fn parse_files(file_paths: &[String]) -> Result<Vec<FileRecord>, String> {
-    let pb_parse = ProgressBar::new(file_paths.len() as u64);
-    let style = ProgressStyle::default_bar()
-        .tick_chars("/|\\-")
-        .template("{spinner:.cyan.bold} {msg} [{bar:30.cyan/dim}] {percent}% {elapsed}")
-        .map_err(|err| err.to_string())?
-        .progress_chars("=>-");
-    pb_parse.set_style(style);
-    pb_parse.set_message("Parsing...");
-
     let mut file_records = Vec::new();
     for fp in file_paths {
         let fp_clone = fp.clone();
@@ -20,21 +10,15 @@ pub(super) async fn parse_files(file_paths: &[String]) -> Result<Vec<FileRecord>
                 .await
             {
                 Ok(Ok(record)) => record,
-                Ok(Err(err)) => {
-                    pb_parse.finish_and_clear();
-                    return Err(err);
-                }
+                Ok(Err(err)) => return Err(err),
                 Err(err) => {
-                    pb_parse.finish_and_clear();
                     return Err(format!("parser task failed for {fp}: {err}"));
                 }
             };
         if !record.language.is_empty() {
             file_records.push(record);
         }
-        pb_parse.inc(1);
     }
-    pb_parse.finish_and_clear();
     Ok(file_records)
 }
 

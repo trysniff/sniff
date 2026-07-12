@@ -202,7 +202,7 @@ async fn llm_error_fails_scan_without_starting_later_review_jobs() {
         },
     ];
 
-    let result = analyze_with_client(&files, &[], client, true, None::<fn()>).await;
+    let result = analyze_with_client(&files, &[], client, true, None).await;
 
     unsafe {
         env::remove_var("SNIFF_LLM_MAX_CONCURRENCY");
@@ -255,7 +255,7 @@ async fn missing_api_key_fails_when_reviews_are_required() {
         env::remove_var("SNIFF_API_KEY");
     }
 
-    let err = analyze(&[file], &[], ResolvedConfig::default(), false, None::<fn()>)
+    let err = analyze(&[file], &[], ResolvedConfig::default(), false, None)
         .await
         .expect_err("expected missing api key to fail when reviews are needed");
     assert!(err.contains("AI config is missing"));
@@ -326,6 +326,7 @@ async fn method_review_includes_file_path() {
             &method,
             &[],
             "class WebhookService:\n    def other_handler(self):\n        return None",
+            None,
         )
         .await
         .unwrap();
@@ -503,13 +504,41 @@ async fn invalid_evidence_retries_can_rescue_a_valid_slop_verdict() {
         methods: vec![],
     };
 
-    let (verdict, _, _) = analyzer.analyze_file(&file, &[]).await.unwrap();
-    let verdict = verdict.expect("expected file verdict");
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let events_sink = Arc::clone(&events);
+    let on_progress: ReviewProgressCallback = Arc::new(move |event| {
+        events_sink.lock().unwrap().push(event);
+    });
+    let (verdicts, _, _) = analyze_with_client(
+        std::slice::from_ref(&file),
+        &[],
+        Arc::clone(&analyzer.llm_client),
+        true,
+        Some(on_progress),
+    )
+    .await
+    .unwrap();
+    let verdict = verdicts.into_iter().next().expect("expected file verdict");
     assert_eq!(verdict.tier, FindingTier::KindaSlop);
     assert!(verdict.smelly);
     assert_eq!(verdict.reason, "small helper");
     assert_eq!(verdict.evidence, "return 1");
     assert_eq!(hits.load(Ordering::SeqCst), 4);
+    assert_eq!(
+        *events.lock().unwrap(),
+        vec![
+            ReviewProgress::Started {
+                label: "file sample.py".to_string(),
+            },
+            ReviewProgress::RetryingEvidence {
+                label: "file sample.py".to_string(),
+            },
+            ReviewProgress::Started {
+                label: "file sample.py".to_string(),
+            },
+            ReviewProgress::Completed,
+        ]
+    );
 }
 
 #[tokio::test]
