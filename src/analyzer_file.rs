@@ -5,7 +5,7 @@ use crate::types::FileRecord;
 use std::path::Path;
 
 use super::support;
-use super::verdicts::{build_file_verdict, normalize_file_verdict};
+use super::verdicts::{build_file_verdict, clear_unsupported_verdict, validate_file_review};
 use super::{Analyzer, ReviewProgressCallback, analyzer_prompts};
 
 pub(super) async fn analyze_file(
@@ -42,13 +42,14 @@ pub(super) async fn analyze_file(
         support::log_ai_review_miss("file", &file.file_path, None);
         return Ok((None, i, o));
     };
+    validate_file_review(&result)
+        .map_err(|err| format!("file {} returned an invalid verdict: {err}", file.file_path))?;
 
-    let mut verdict = build_file_verdict(&result, &file.file_path);
+    let verdict = build_file_verdict(&result, &file.file_path);
 
-    normalize_file_verdict(file, &analyzer.llm_client, &mut verdict);
-
-    if support::clear_if_unsupported_reason(&mut verdict) {
-        return Ok((Some(verdict), i, o));
+    let mut verdict = verdict;
+    if verdict.smelly && verdict.reason.trim().is_empty() {
+        clear_unsupported_verdict(&mut verdict);
     }
 
     let retry_label = format!("file {}", file.file_path);
@@ -63,9 +64,12 @@ pub(super) async fn analyze_file(
             on_progress,
         },
         |retry_result| {
+            validate_file_review(retry_result)?;
             let mut verdict = build_file_verdict(retry_result, &file.file_path);
-            normalize_file_verdict(file, &analyzer.llm_client, &mut verdict);
-            verdict
+            if verdict.smelly && verdict.reason.trim().is_empty() {
+                clear_unsupported_verdict(&mut verdict);
+            }
+            Ok(verdict)
         },
     )
     .await?;

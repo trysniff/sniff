@@ -7,7 +7,9 @@ pub(super) struct StatsInput<'a> {
     pub verdicts: &'a [LLMVerdict],
     pub in_tok: usize,
     pub out_tok: usize,
+    pub cached_in_tok: usize,
     pub ai_expected_reviews: usize,
+    pub method_reviews_expected: usize,
 }
 
 #[allow(clippy::field_reassign_with_default)]
@@ -63,18 +65,37 @@ pub(super) fn generate_stats(input: StatsInput<'_>) -> RunStats {
     stats.slop_ai = input
         .verdicts
         .iter()
-        .filter(|v| v.smelly && v.tier == FindingTier::Slop)
+        .filter(|v| v.check_type == "method" && v.smelly && v.tier == FindingTier::Slop)
         .count();
     stats.kinda_slop_ai = input
         .verdicts
         .iter()
-        .filter(|v| v.smelly && v.tier == FindingTier::KindaSlop)
+        .filter(|v| v.check_type == "method" && v.smelly && v.tier == FindingTier::KindaSlop)
+        .count();
+    stats.unresolved_ai = input
+        .verdicts
+        .iter()
+        .filter(|v| v.check_type == "method" && v.tier == FindingTier::Unresolved)
         .count();
     stats.ai_reviews = input.verdicts.len();
     stats.ai_expected_reviews = input.ai_expected_reviews;
     stats.ai_failed_reviews = input
         .ai_expected_reviews
         .saturating_sub(input.verdicts.len());
+    stats.method_reviews_expected = input.method_reviews_expected;
+    stats.method_reviews_completed = input
+        .verdicts
+        .iter()
+        .filter(|verdict| verdict.check_type == "method")
+        .count();
+    stats.method_review_failures = stats
+        .method_reviews_expected
+        .saturating_sub(stats.method_reviews_completed);
+    stats.unresolved_methods = input
+        .verdicts
+        .iter()
+        .filter(|verdict| verdict.check_type == "method" && verdict.tier == FindingTier::Unresolved)
+        .count();
     stats.dead_methods = input
         .static_flags
         .iter()
@@ -98,6 +119,7 @@ pub(super) fn generate_stats(input: StatsInput<'_>) -> RunStats {
         })
         .count();
     stats.input_tokens = input.in_tok;
+    stats.cached_input_tokens = input.cached_in_tok.min(input.in_tok);
     stats.output_tokens = input.out_tok;
     stats
 }
@@ -106,10 +128,15 @@ pub(super) fn build_run_report_from_parts(
     file_records: &[FileRecord],
     static_flags: Vec<StaticFlag>,
     verdicts: Vec<LLMVerdict>,
+    with_file_reviews: bool,
     stats: RunStats,
 ) -> (RunReport, bool) {
-    let file_verdicts =
-        crate::file_verdicts::build_file_verdicts(file_records, &static_flags, &verdicts);
+    let file_verdicts = crate::file_verdicts::build_file_verdicts_with_mode(
+        file_records,
+        &static_flags,
+        &verdicts,
+        with_file_reviews,
+    );
     let run_report = RunReport {
         file_verdicts,
         static_flags,
@@ -117,67 +144,33 @@ pub(super) fn build_run_report_from_parts(
         stats,
     };
 
-    let has_issues = run_report
-        .file_verdicts
-        .iter()
-        .any(|verdict| verdict.verdict != crate::types::FindingTier::Clean);
+    let has_method_issues = run_report.llm_verdicts.iter().any(|verdict| {
+        verdict.check_type == "method" && verdict.tier != crate::types::FindingTier::Clean
+    });
+    let has_file_issues = with_file_reviews
+        && run_report
+            .file_verdicts
+            .iter()
+            .any(|verdict| verdict.verdict != crate::types::FindingTier::Clean);
+    let has_issues = has_method_issues || has_file_issues;
 
     (run_report, has_issues)
 }
 
 #[allow(dead_code)]
-pub(super) fn expected_ai_reviews(file_records: &[FileRecord], only_files: bool) -> usize {
-    let method_reviews = reviewable_method_count(file_records, only_files);
+pub(super) fn expected_ai_reviews(file_records: &[FileRecord], with_file_reviews: bool) -> usize {
+    expected_method_reviews(file_records) + usize::from(with_file_reviews) * file_records.len()
+}
 
-    let file_reviews = file_records.len();
-
-    method_reviews + file_reviews
+pub(super) fn expected_method_reviews(file_records: &[FileRecord]) -> usize {
+    file_records.iter().map(|file| file.methods.len()).sum()
 }
 
 pub(super) fn expected_ai_reviews_after_role_resolution(
     file_records: &[FileRecord],
-    only_files: bool,
+    with_file_reviews: bool,
 ) -> usize {
-    let method_reviews = reviewable_method_count(file_records, only_files);
-
-    let file_reviews = file_records.len();
-
-    method_reviews + file_reviews
-}
-
-fn reviewable_method_count(file_records: &[FileRecord], only_files: bool) -> usize {
-    if only_files {
-        return 0;
-    }
-
-    file_records
-        .iter()
-        .map(|file| {
-            file.methods
-                .iter()
-                .filter(|method| !is_rust_cfg_test_method(file, method))
-                .count()
-        })
-        .sum()
-}
-
-fn rust_cfg_test_start_line(source: &str) -> Option<usize> {
-    source
-        .lines()
-        .position(|line| line.trim().starts_with("#[cfg(test)]"))
-        .map(|idx| idx + 1)
-}
-
-fn is_rust_cfg_test_method(file: &FileRecord, method: &crate::types::MethodRecord) -> bool {
-    if !file.file_path.ends_with(".rs") {
-        return false;
-    }
-
-    let Some(cfg_test_line) = rust_cfg_test_start_line(&file.source) else {
-        return false;
-    };
-
-    method.start_line > cfg_test_line
+    expected_ai_reviews(file_records, with_file_reviews)
 }
 
 #[cfg(test)]
@@ -212,7 +205,7 @@ mod tests {
     }
 
     #[test]
-    fn expected_ai_reviews_counts_all_files_and_methods() {
+    fn expected_ai_reviews_matches_the_selected_review_surface() {
         let files = vec![
             file(
                 "src/app/page.tsx",
@@ -231,12 +224,13 @@ mod tests {
             ),
         ];
 
-        assert_eq!(expected_ai_reviews(&files, true), 3);
-        assert_eq!(expected_ai_reviews(&files, false), 6);
+        assert_eq!(expected_ai_reviews(&files, true), 6);
+        assert_eq!(expected_ai_reviews(&files, false), 3);
+        assert_eq!(expected_method_reviews(&files), 3);
     }
 
     #[test]
-    fn rust_cfg_test_methods_are_not_counted_as_ai_reviews() {
+    fn rust_cfg_test_methods_are_counted_as_ai_reviews() {
         let file = FileRecord {
             file_path: "src/reporter_summary.rs".to_string(),
             source: r#"
@@ -291,6 +285,6 @@ mod tests {
             vec![method("src/app/page.tsx", "Page")],
         );
 
-        assert_eq!(expected_ai_reviews(&[file], false), 2);
+        assert_eq!(expected_ai_reviews(&[file], false), 1);
     }
 }

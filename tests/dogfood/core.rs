@@ -1,7 +1,46 @@
 use super::*;
 
 #[test]
-fn failed_ai_setup_removes_stale_report() {
+fn unresolved_method_is_reported_and_exits_non_successfully() {
+    let root = unique_root("sniff-unresolved-method");
+    fs::create_dir_all(&root).unwrap();
+    write_file(
+        &root,
+        "src/boundary.py",
+        "def external_boundary(value):\n    return external_package.transform(value)\n",
+    );
+    let endpoint = format!("{}/chat/completions", spawn_unresolved_method_server());
+    fs::write(
+        root.join(".env"),
+        format!("SNIFF_API_KEY=test-key\nSNIFF_ENDPOINT={endpoint}\nSNIFF_MODEL=test-model\n"),
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_sniff"))
+        .current_dir(&root)
+        .arg(&root)
+        .output()
+        .unwrap();
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "Unresolved must be a visible non-success result.\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report = fs::read_to_string(root.join("sniff-report.md")).unwrap();
+    assert!(report.contains("## Unresolved Reviews"));
+    assert!(report.contains("`external_boundary`"));
+    assert!(report.contains("Missing evidence: external package implementation and consumers"));
+    assert!(report.contains("Do not edit from these entries"));
+    assert!(!report.contains("Recommended action"));
+
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn failed_ai_setup_preserves_last_completed_report() {
     let root = unique_root("sniff-dogfood-stale-report");
     fs::create_dir_all(&root).unwrap();
     write_file(&root, "src/sample.py", "def sample():\n    return 1\n");
@@ -27,9 +66,10 @@ fn failed_ai_setup_removes_stale_report() {
         "expected explicit AI setup failure:\n{}",
         stderr
     );
-    assert!(
-        !root.join("sniff-report.md").exists(),
-        "failed scan left a stale report behind"
+    assert_eq!(
+        fs::read_to_string(root.join("sniff-report.md")).unwrap(),
+        "stale report from an earlier run\n",
+        "a failed scan must not destroy the last completed report"
     );
 
     let _ = fs::remove_dir_all(&root);
@@ -75,7 +115,7 @@ fn bumpkin_style_repo_scan_finishes_without_stack_overflow() {
 }
 
 #[test]
-fn only_files_still_surfaces_signature_hotspots() {
+fn deprecated_only_files_alias_adds_file_reviews_without_skipping_methods() {
     let root = unique_root("sniff-dogfood-signature-hotspot");
     fs::create_dir_all(&root).unwrap();
 
@@ -416,7 +456,7 @@ fn react_main_entrypoints_stay_out_of_the_report_but_are_reviewed_end_to_end() {
 }
 
 #[test]
-fn explicit_compatibility_shims_stay_out_of_the_report_end_to_end() {
+fn methodless_compatibility_shims_stay_out_of_the_report_without_ai_spend() {
     let root = unique_root("sniff-dogfood-compat-shim");
     fs::create_dir_all(&root).unwrap();
 
@@ -470,12 +510,12 @@ fn explicit_compatibility_shims_stay_out_of_the_report_end_to_end() {
         "compatibility shim filenames should not be surfaced as slop:\n{}",
         report
     );
+    assert!(report.contains("AI coverage:** 0 of 0 expected reviews completed, 0 missed"));
 
     let prompt_text = prompts.lock().unwrap().join("\n");
     assert!(
-        prompt_text.contains("MedicationDetailsContract.kt")
-            && prompt_text.contains("RemindersCabinetContract.kt"),
-        "the compatibility shims should still be reviewed so we know the end-to-end path ran:\n{}",
+        prompt_text.is_empty(),
+        "files with no methods should not buy method or file reviews:\n{}",
         prompt_text
     );
 

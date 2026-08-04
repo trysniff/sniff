@@ -1,3 +1,5 @@
+#![cfg(test)]
+
 #[path = "analyzer_file_verdicts_rules.rs"]
 mod rules;
 
@@ -11,14 +13,7 @@ use crate::roles::{
 use crate::types::{FileRecord, FindingTier};
 use std::path::Path;
 
-pub(crate) fn clear_unsupported_verdict(verdict: &mut LLMVerdict) {
-    verdict.tier = FindingTier::Clean;
-    verdict.smelly = false;
-    verdict.reason.clear();
-    verdict.evidence.clear();
-    verdict.cohesive = Some(true);
-    verdict.name_accurate = Some(true);
-}
+use super::clear_unsupported_verdict;
 
 pub(crate) fn normalize_file_verdict(
     file: &FileRecord,
@@ -84,7 +79,7 @@ pub(crate) fn normalize_file_verdict(
         return;
     }
 
-    if rules::should_clear_detector_verdict(file, &reason, &lower_reason)
+    if rules::should_clear_detector_verdict(file, &lower_reason)
         || rules::should_clear_analysis_verdict(file, &reason, &lower_reason)
         || rules::should_clear_parsing_verdict(file, &reason)
         || rules::should_clear_versioning_verdict(file, &reason)

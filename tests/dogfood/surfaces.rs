@@ -32,6 +32,7 @@ fn medication_numeric_rules_still_surface_as_real_slop_end_to_end() {
             } else {
                 r#"{"choices":[{"message":{"content":"{\"smelly\":false,\"tier\":\"clean\",\"evidence\":\"\",\"cohesive\":true,\"name_accurate\":true,\"reason\":\"clean\"}"}}]}"#
             };
+            let body = semanticize_method_response(&request, body);
             let response = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 body.len(),

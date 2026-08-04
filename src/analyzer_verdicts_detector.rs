@@ -17,11 +17,7 @@ fn detector_noise_reason(lower_reason: &str) -> bool {
         || lower_reason.contains("placeholder implementation")
 }
 
-pub(super) fn should_clear_detector_verdict(
-    file: &FileRecord,
-    _reason: &str,
-    lower_reason: &str,
-) -> bool {
+pub(super) fn should_clear_detector_verdict(file: &FileRecord, lower_reason: &str) -> bool {
     is_detector_facade_module(file)
         || (is_detector_support_module(&file.file_path) && detector_noise_reason(lower_reason))
         || (is_utility_surface_module(file) && detector_noise_reason(lower_reason))

@@ -39,7 +39,7 @@ fn main() {
                 Err(err) => return Err(format!("failed to build tokio runtime: {}", err)),
             };
             rt.block_on(async move {
-                cli::run(&args.path, args.only_files, args.skip_dotenv)
+                cli::run(&args.path, args.with_file_reviews, args.skip_dotenv)
                     .await
                     .map_err(|e| e.to_string())
             })

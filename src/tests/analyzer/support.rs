@@ -547,9 +547,9 @@ async fn parser_impl_state_bag_noise_is_cleared() {
     let (verdict, in_tok, out_tok) = analyzer.analyze_file(&file, &[]).await.unwrap();
     assert!(verdict.is_some());
     let verdict = verdict.unwrap();
-    assert_eq!(verdict.tier, FindingTier::Clean);
-    assert!(verdict.reason.is_empty());
-    assert!(verdict.evidence.is_empty());
+    assert_eq!(verdict.tier, FindingTier::KindaSlop);
+    assert!(!verdict.reason.is_empty());
+    assert!(!verdict.evidence.is_empty());
     assert!(in_tok > 0);
     assert!(out_tok > 0);
     assert_eq!(hits.load(Ordering::SeqCst), 2);

@@ -7,7 +7,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 use tokio::sync::Semaphore;
 
-#[allow(dead_code)] // Used by the semantic review checkpoint layer in a later stacked PR.
 const REVIEW_CONTRACT_VERSION: &str = "semantic-method-v25";
 const DEFAULT_CONTEXT_TOKENS: usize = 128_000;
 const RESERVED_OUTPUT_TOKENS: usize = 8_192;
@@ -54,7 +53,6 @@ pub enum ResponseSchema {
     RoleClassification,
 }
 
-#[allow(dead_code)] // Later stacked PRs consume the review scheduling fields.
 pub struct LLMClient {
     config: ResolvedConfig,
     api_key: Option<String>,
@@ -65,7 +63,6 @@ pub struct LLMClient {
     cached_input_tokens: AtomicUsize,
 }
 
-#[allow(dead_code)] // Preserve a buildable transport-first PR before its consumers land.
 impl LLMClient {
     pub fn try_new(config: ResolvedConfig, api_key: Option<String>) -> Result<Self, String> {
         let api_key = api_key
@@ -92,6 +89,7 @@ impl LLMClient {
         Self::try_new(config, api_key).expect("failed to build LLM HTTP client")
     }
 
+    #[cfg(test)]
     pub(crate) fn config(&self) -> &ResolvedConfig {
         &self.config
     }

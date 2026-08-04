@@ -1,11 +1,11 @@
 use crate::llm::ResponseSchema;
 use crate::report_types::LLMVerdict;
-use crate::types::{FileRecord, MethodRecord};
+use crate::types::{FileRecord, FindingTier, MethodRecord};
 use std::env;
 use std::fmt::Display;
 use std::io::Write;
 
-use super::verdicts::{clear_unsupported_verdict, evidence_is_exact_substring};
+use super::verdicts::evidence_matches_source;
 use super::{ReviewProgress, ReviewProgressCallback};
 
 pub(super) fn render_template(template: &str, values: &[&dyn Display]) -> String {
@@ -24,25 +24,6 @@ pub(super) fn render_template(template: &str, values: &[&dyn Display]) -> String
     rendered
 }
 
-pub(super) fn truncate_source(source: &str, max_chars: usize) -> String {
-    if source.chars().count() <= max_chars {
-        return source.to_string();
-    }
-
-    let head = max_chars / 2;
-    let tail = max_chars - head;
-    let head_text: String = source.chars().take(head).collect();
-    let tail_text: String = source
-        .chars()
-        .rev()
-        .take(tail)
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-        .collect();
-    format!("{head_text}\n...\n{tail_text}")
-}
-
 pub(super) fn review_key(file_path: &str, method_name: &str) -> String {
     format!("{}::{}", file_path, method_name)
 }
@@ -59,27 +40,12 @@ pub(super) fn format_static_signals(signals: &[String]) -> String {
     }
 }
 
-fn rust_cfg_test_start_line(source: &str) -> Option<usize> {
-    source
+pub(super) fn strip_rust_cfg_test_source(source: &str) -> String {
+    let Some(cfg_test_line) = source
         .lines()
         .position(|line| line.trim().starts_with("#[cfg(test)]"))
         .map(|idx| idx + 1)
-}
-
-pub(crate) fn is_rust_cfg_test_method(file: &FileRecord, method: &MethodRecord) -> bool {
-    if !file.file_path.ends_with(".rs") {
-        return false;
-    }
-
-    let Some(cfg_test_line) = rust_cfg_test_start_line(&file.source) else {
-        return false;
-    };
-
-    method.start_line > cfg_test_line
-}
-
-pub(super) fn strip_rust_cfg_test_source(source: &str) -> String {
-    let Some(cfg_test_line) = rust_cfg_test_start_line(source) else {
+    else {
         return source.to_string();
     };
 
@@ -91,11 +57,7 @@ pub(super) fn strip_rust_cfg_test_source(source: &str) -> String {
 }
 
 pub(super) fn format_method_inventory(file: &FileRecord) -> String {
-    let methods: Vec<&MethodRecord> = file
-        .methods
-        .iter()
-        .filter(|method| !is_rust_cfg_test_method(file, method))
-        .collect();
+    let methods: Vec<&MethodRecord> = file.methods.iter().collect();
 
     if methods.is_empty() {
         return "none".to_string();
@@ -119,24 +81,6 @@ pub(super) fn format_method_inventory(file: &FileRecord) -> String {
     }
 
     rendered.join("\n")
-}
-
-pub(super) fn surrounding_file_context(file: &FileRecord, method: &MethodRecord) -> String {
-    let lines = file.source.lines().collect::<Vec<_>>();
-    if lines.is_empty() {
-        return "none".to_string();
-    }
-
-    let start = method.start_line.saturating_sub(1).saturating_sub(12);
-    let end = method.end_line.saturating_add(12).min(lines.len());
-    let context = lines[start..end]
-        .iter()
-        .enumerate()
-        .map(|(offset, line)| format!("{:>4}: {}", start + offset + 1, line))
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    truncate_source(&context, 6000)
 }
 
 pub(super) fn log_ai_review_miss(kind: &str, path: &str, name: Option<&str>) {
@@ -193,9 +137,9 @@ pub(super) async fn retry_invalid_evidence<F>(
     mut rebuild: F,
 ) -> Result<(LLMVerdict, usize, usize), String>
 where
-    F: FnMut(&serde_json::Value) -> LLMVerdict + Send,
+    F: FnMut(&serde_json::Value) -> Result<LLMVerdict, String> + Send,
 {
-    if !verdict.smelly || evidence_is_exact_substring(retry.source, &verdict.evidence) {
+    if !verdict.smelly || evidence_matches_source(retry.source, &verdict.evidence) {
         return Ok((verdict, 0, 0));
     }
 
@@ -214,149 +158,33 @@ where
     }
 
     let Some(retry_result) = retry_result else {
-        clear_unsupported_verdict(&mut verdict);
+        mark_unresolved_evidence(&mut verdict, "the evidence repair returned no response");
         return Ok((verdict, input_tokens, output_tokens));
     };
 
-    verdict = rebuild(&retry_result);
-    if clear_if_unsupported_reason(&mut verdict) {
-        return Ok((verdict, input_tokens, output_tokens));
-    }
-
-    if verdict.smelly && !evidence_is_exact_substring(retry.source, &verdict.evidence) {
-        clear_unsupported_verdict(&mut verdict);
+    verdict = rebuild(&retry_result)?;
+    if verdict.smelly && !evidence_matches_source(retry.source, &verdict.evidence) {
+        mark_unresolved_evidence(
+            &mut verdict,
+            "the repaired evidence is not an exact source substring",
+        );
     }
 
     Ok((verdict, input_tokens, output_tokens))
 }
 
-pub(crate) fn reason_looks_speculative(reason: &str) -> bool {
-    let lower = reason.to_lowercase();
-    let markers = [
-        "previous version",
-        "incomplete refactor",
-        "careless copy",
-        "copy-paste",
-        "copy pasted",
-        "hardcoded debug",
-        "debug path",
-        "format string",
-        "format string uses placeholder",
-        "literal newline",
-        "escaped newline",
-        "hard to read",
-        "fragile",
-        "placeholder",
-        "runtime issue",
-        "speculative",
-        "looks like",
-        "indicates",
-    ];
-
-    markers.iter().any(|marker| lower.contains(marker))
-}
-
-pub(crate) fn reason_matches_slop_pattern(reason: &str) -> bool {
-    let lower = reason.to_lowercase();
-    let markers = [
-        "function is too big",
-        "function is too large",
-        "too much code",
-        "too many parameters",
-        "name is vague",
-        "vague name",
-        "filename is vague",
-        "vague filename",
-        "file does too much",
-        "module does too much",
-        "dumping ground",
-        "responsibility sprawl",
-        "sprawling helper surface",
-        "helper surface",
-        "unrelated responsibilities",
-        "too many responsibilities",
-        "mixes concerns",
-        "mixing concerns",
-        "single function handles",
-        "overbuilt helper",
-        "small helper",
-        "unnecessary helper",
-        "wrapper",
-        "delegat",
-        "pass-through",
-        "adds no value",
-        "branchy control flow",
-        "tangled control flow",
-        "control flow is tangled",
-        "excessive nesting",
-        "loop-heavy control flow",
-        "duplicate",
-        "copy-pasted",
-        "copy pasted",
-        "repeated logic",
-        "unnecessary abstraction",
-        "low-value abstraction",
-        "generic plumbing",
-        "hides intent",
-        "hidden intent",
-        "boilerplate",
-        "fallback chain",
-        "unnecessary fallback",
-        "comments restate",
-        "restates the code",
-    ];
-
-    markers.iter().any(|marker| lower.contains(marker))
-}
-
-pub(crate) fn reason_is_control_flow_only(reason: &str) -> bool {
-    let lower = reason.to_lowercase();
-    let has_shape_marker = lower.contains("branchy control flow")
-        || lower.contains("loop-heavy control flow")
-        || lower.contains("excessive branching")
-        || lower.contains("too many branches");
-    if !has_shape_marker {
-        return false;
-    }
-
-    let qualitative_markers = [
-        "tangled",
-        "duplicated decision",
-        "unrelated",
-        "hidden state",
-        "hidden intent",
-        "generic plumbing",
-        "hard to follow",
-        "hard to understand",
-        "unnecessary",
-    ];
-    !qualitative_markers
-        .iter()
-        .any(|marker| lower.contains(marker))
-}
-
-pub(crate) fn reason_is_empty(reason: &str) -> bool {
-    reason.trim().is_empty()
-}
-
-pub(super) fn clear_if_unsupported_reason(verdict: &mut LLMVerdict) -> bool {
-    if !verdict.smelly {
-        return false;
-    }
-
-    let unsupported = reason_is_empty(&verdict.reason)
-        || reason_looks_speculative(&verdict.reason)
-        || reason_is_control_flow_only(&verdict.reason)
-        || !reason_matches_slop_pattern(&verdict.reason);
-    if unsupported {
-        clear_unsupported_verdict(verdict);
-    }
-    unsupported
+fn mark_unresolved_evidence(verdict: &mut LLMVerdict, reason: &str) {
+    verdict.smelly = false;
+    verdict.tier = FindingTier::Unresolved;
+    verdict.evidence.clear();
+    verdict.reason = format!("AI evidence could not be validated: {reason}");
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{reason_is_control_flow_only, reason_matches_slop_pattern, render_template};
+    use super::{mark_unresolved_evidence, render_template};
+    use crate::report_types::LLMVerdict;
+    use crate::types::FindingTier;
 
     #[test]
     fn template_interpolation_does_not_consume_braces_from_inserted_source() {
@@ -367,15 +195,28 @@ mod tests {
     }
 
     #[test]
-    fn reason_gate_accepts_slop_language_and_rejects_runtime_claims() {
-        assert!(reason_matches_slop_pattern("file does too much"));
-        assert!(reason_matches_slop_pattern("small helper adds no value"));
-        assert!(!reason_matches_slop_pattern("this may cause a runtime bug"));
-        assert!(reason_is_control_flow_only(
-            "branchy control flow (11 branches)"
-        ));
-        assert!(!reason_is_control_flow_only(
-            "tangled control flow hides state transitions"
-        ));
+    fn invalid_file_evidence_becomes_unresolved_not_clean() {
+        let mut verdict = LLMVerdict {
+            verdict_type: "file".to_string(),
+            file_path: "src/app.py".to_string(),
+            method_name: None,
+            check_type: "file".to_string(),
+            smelly: true,
+            tier: FindingTier::KindaSlop,
+            cohesive: Some(false),
+            name_accurate: Some(true),
+            evidence: "not in source".to_string(),
+            reason: "the file is hard to follow".to_string(),
+            loc: 10,
+            start_line: 1,
+            end_line: 10,
+        };
+
+        mark_unresolved_evidence(&mut verdict, "the quote is absent");
+
+        assert_eq!(verdict.tier, FindingTier::Unresolved);
+        assert!(!verdict.smelly);
+        assert!(verdict.reason.contains("quote is absent"));
+        assert!(verdict.evidence.is_empty());
     }
 }

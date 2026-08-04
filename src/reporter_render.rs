@@ -16,6 +16,6 @@ pub fn render_report(
         write_markdown_report(run_report, out_path, &cost_str)?;
     }
 
-    print_summary(&run_report.stats, &run_report.file_verdicts, &cost_str, out);
+    print_summary(&run_report.stats, &run_report.llm_verdicts, &cost_str, out);
     Ok(())
 }

@@ -1,14 +1,12 @@
 use super::{env, io, llm, stats};
 use crate::report_types::RunReport;
 use indicatif::ProgressStyle;
+use std::hash::{Hash, Hasher};
 use std::io::{Error as IoError, ErrorKind};
 
 fn build_progress_style() -> Result<ProgressStyle, String> {
     ProgressStyle::default_bar()
-        .tick_chars("/|\\-")
-        .template(
-            "{spinner:.cyan.bold} {msg:.yellow.bold} [{bar:30.cyan/dim}] {percent}% {elapsed}",
-        )
+        .template("[{bar:18.cyan/dim}] {pos}/{len} {percent}%")
         .map_err(|err| err.to_string())
         .map(|style| style.progress_chars("=>-"))
 }
@@ -19,6 +17,18 @@ fn exit_code_for_run(has_issues: bool, ai_failed_reviews: usize) -> i32 {
     } else {
         0
     }
+}
+
+fn source_inventory_summary(file_records: &[crate::types::FileRecord]) -> String {
+    let methods = file_records
+        .iter()
+        .map(|file| file.methods.len())
+        .sum::<usize>();
+    format!(
+        "Found {} supported files, {} methods.",
+        file_records.len(),
+        methods
+    )
 }
 
 fn report_path_for_target(target_path: &std::path::Path) -> std::path::PathBuf {
@@ -62,6 +72,23 @@ fn report_path_for_target(target_path: &std::path::Path) -> std::path::PathBuf {
     }
 }
 
+fn checkpoint_path_for_target(
+    target_path: &std::path::Path,
+    report_path: &std::path::Path,
+) -> std::path::PathBuf {
+    if target_path.is_dir() {
+        return report_path.with_file_name(".sniff-checkpoint.json");
+    }
+
+    let resolved_target = std::fs::canonicalize(target_path)
+        .unwrap_or_else(|_| target_path.to_path_buf())
+        .to_string_lossy()
+        .to_string();
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    resolved_target.hash(&mut hasher);
+    report_path.with_file_name(format!(".sniff-checkpoint-{:016x}.json", hasher.finish()))
+}
+
 fn strip_windows_verbatim_prefix(path: std::path::PathBuf) -> std::path::PathBuf {
     let text = path.to_string_lossy();
     if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
@@ -73,36 +100,6 @@ fn strip_windows_verbatim_prefix(path: std::path::PathBuf) -> std::path::PathBuf
     path
 }
 
-fn clear_previous_report(report_path: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
-    match std::fs::metadata(report_path) {
-        Ok(metadata) if metadata.is_file() => {
-            std::fs::remove_file(report_path).map_err(|err| {
-                IoError::other(format!(
-                    "failed to remove stale report {}: {err}",
-                    report_path.display()
-                ))
-            })?;
-        }
-        Ok(_) => {
-            return Err(IoError::other(format!(
-                "cannot write report: {} exists and is not a file",
-                report_path.display()
-            ))
-            .into());
-        }
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-        Err(err) => {
-            return Err(IoError::other(format!(
-                "failed to inspect report {}: {err}",
-                report_path.display()
-            ))
-            .into());
-        }
-    }
-
-    Ok(())
-}
-
 async fn scan_target(
     path: &str,
     config: &crate::config::ResolvedConfig,
@@ -112,13 +109,21 @@ async fn scan_target(
 
 async fn build_run_report(
     path: &str,
-    only_files: bool,
+    with_file_reviews: bool,
     config: &crate::config::ResolvedConfig,
     file_records: &mut [crate::types::FileRecord],
     bar_style: &ProgressStyle,
+    checkpoint_path: &std::path::Path,
 ) -> Result<(RunReport, bool), Box<dyn std::error::Error>> {
-    let review =
-        llm::prepare_review_artifacts(path, only_files, config, file_records, bar_style).await?;
+    let review = llm::prepare_review_artifacts(
+        path,
+        with_file_reviews,
+        config,
+        file_records,
+        bar_style,
+        Some(checkpoint_path),
+    )
+    .await?;
 
     let stats = stats::generate_stats(stats::StatsInput {
         file_records,
@@ -126,7 +131,9 @@ async fn build_run_report(
         verdicts: &review.verdicts,
         in_tok: review.in_tok,
         out_tok: review.out_tok,
+        cached_in_tok: review.cached_in_tok,
         ai_expected_reviews: review.ai_expected_reviews,
+        method_reviews_expected: review.method_reviews_expected,
     });
 
     if stats.ai_failed_reviews > 0 {
@@ -141,23 +148,24 @@ async fn build_run_report(
         file_records,
         review.static_flags,
         review.verdicts,
+        with_file_reviews,
         stats,
     ))
 }
 
 pub async fn run(
     path: &str,
-    only_files: bool,
+    with_file_reviews: bool,
     skip_dotenv: bool,
 ) -> Result<i32, Box<dyn std::error::Error>> {
     let target_path = std::path::Path::new(path);
     let report_path = report_path_for_target(target_path);
+    let checkpoint_path = checkpoint_path_for_target(target_path, &report_path);
     env::load_working_dir_env(skip_dotenv).map_err(IoError::other)?;
     env::load_target_env(target_path, skip_dotenv).map_err(IoError::other)?;
     let config = crate::config_loader::resolve_config(target_path)
         .map_err(|err| IoError::new(ErrorKind::InvalidInput, err))?;
     crate::roles::clear_file_role_cache();
-    clear_previous_report(&report_path)?;
 
     eprintln!("Scanning source files...");
     let mut file_records = scan_target(path, &config)
@@ -171,15 +179,28 @@ pub async fn run(
         )
         .into());
     }
-    eprintln!("Found {} supported files.", file_records.len());
+    eprintln!("{}", source_inventory_summary(&file_records));
+    if checkpoint_path.exists() {
+        eprintln!(
+            "Resuming completed reviews from {}",
+            checkpoint_path.display()
+        );
+    }
     if !config.llm.endpoint.trim().is_empty() {
         eprintln!("Using LLM endpoint: {}", config.llm.endpoint.trim());
     }
     eprintln!("Preparing report...");
     let bar_style = build_progress_style()
         .map_err(|err| IoError::other(format!("failed to build progress style: {}", err)))?;
-    let (run_report, has_issues) =
-        build_run_report(path, only_files, &config, &mut file_records, &bar_style).await?;
+    let (run_report, has_issues) = build_run_report(
+        path,
+        with_file_reviews,
+        &config,
+        &mut file_records,
+        &bar_style,
+        &checkpoint_path,
+    )
+    .await?;
 
     let report_path_text = report_path.to_string_lossy().to_string();
     crate::reporter::render_report(&run_report, &config, Some(&report_path_text))
@@ -193,7 +214,11 @@ pub async fn run(
 
 #[cfg(test)]
 mod tests {
-    use super::{report_path_for_target, strip_windows_verbatim_prefix};
+    use super::{
+        checkpoint_path_for_target, report_path_for_target, source_inventory_summary,
+        strip_windows_verbatim_prefix,
+    };
+    use crate::types::{FileRecord, MethodRecord};
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -213,5 +238,63 @@ mod tests {
 
         assert_eq!(report_path, expected_root.join("sniff-report.md"));
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn file_checkpoint_is_isolated_from_directory_checkpoint() {
+        let root = std::env::temp_dir().join("sniff-checkpoint-scope-test");
+        fs::create_dir_all(&root).unwrap();
+        let target = root.join("module.py");
+        fs::write(&target, "def run():\n    return 1\n").unwrap();
+        let report = root.join("sniff-report.md");
+
+        let path = checkpoint_path_for_target(&target, &report);
+        assert_ne!(path, root.join(".sniff-checkpoint.json"));
+        assert!(
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(
+                    |name| name.starts_with(".sniff-checkpoint-") && name.ends_with(".json")
+                )
+        );
+
+        fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn source_inventory_reports_files_and_methods_before_review() {
+        let method = |name: &str| MethodRecord {
+            name: name.to_string(),
+            file_path: "sample.ts".to_string(),
+            source: format!("function {name}() {{}}"),
+            loc: 1,
+            param_count: 0,
+            start_line: 1,
+            end_line: 1,
+            is_exported: false,
+            language: "typescript".to_string(),
+            nesting_depth: 0,
+            references: vec![],
+            real_ref_count: 0,
+        };
+        let files = vec![
+            FileRecord {
+                file_path: "one.ts".to_string(),
+                source: String::new(),
+                language: "typescript".to_string(),
+                methods: vec![method("one"), method("two")],
+            },
+            FileRecord {
+                file_path: "two.ts".to_string(),
+                source: String::new(),
+                language: "typescript".to_string(),
+                methods: vec![method("three")],
+            },
+        ];
+
+        assert_eq!(
+            source_inventory_summary(&files),
+            "Found 2 supported files, 3 methods."
+        );
     }
 }

@@ -9,6 +9,8 @@ fn walk_directory(
     root: &Path,
     config: &ResolvedConfig,
     file_paths: &mut Vec<String>,
+    include_surface_files: bool,
+    evidence_only: bool,
 ) -> Result<(), String> {
     let ignored = config.ignore.clone();
     let mut builder = WalkBuilder::new(root);
@@ -20,7 +22,12 @@ fn walk_directory(
         match result {
             Ok(entry) => {
                 let path = entry.path();
-                if path.is_file() && filters::should_keep_file(path, config) {
+                let keep = if evidence_only {
+                    filters::should_keep_evidence_file(path, config)
+                } else {
+                    filters::should_keep_file(path, config, include_surface_files)
+                };
+                if path.is_file() && keep {
                     file_paths.push(path.to_string_lossy().replace("\\\\?\\", ""));
                 }
             }
@@ -44,14 +51,32 @@ pub fn walk(root_path: &str, config: &ResolvedConfig) -> Result<Vec<String>, Str
     }
 
     if root.is_file() {
-        if filters::should_keep_file(root, config) {
+        if filters::should_keep_file(root, config, true) {
             file_paths.push(root.to_string_lossy().replace("\\\\?\\", ""));
         }
         return Ok(file_paths);
     }
 
-    walk_directory(root, config, &mut file_paths)?;
+    walk_directory(
+        root,
+        config,
+        &mut file_paths,
+        filters::is_explicit_surface_root(root),
+        false,
+    )?;
 
+    file_paths.sort();
+    Ok(file_paths)
+}
+
+pub fn walk_evidence(root_path: &str, config: &ResolvedConfig) -> Result<Vec<String>, String> {
+    let root = std::fs::canonicalize(root_path)
+        .map_err(|err| format!("failed to resolve evidence target {root_path}: {err}"))?;
+    if root.is_file() {
+        return Ok(Vec::new());
+    }
+    let mut file_paths = Vec::new();
+    walk_directory(&root, config, &mut file_paths, false, true)?;
     file_paths.sort();
     Ok(file_paths)
 }
@@ -122,6 +147,28 @@ mod tests {
             files.is_empty(),
             "expected fixture corpus files to be skipped from walks: {files:?}"
         );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn explicit_fixture_directory_is_scannable() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("sniff-explicit-fixture-{unique}"));
+        let fixture = root.join("tests").join("fixtures");
+        fs::create_dir_all(&fixture).unwrap();
+        fs::write(
+            fixture.join("example.py"),
+            "def example(value):\n    return value\n",
+        )
+        .unwrap();
+
+        let files = walk(fixture.to_str().unwrap(), &ResolvedConfig::default()).unwrap();
+        assert_eq!(files.len(), 1, "explicit fixture target should be scanned");
+        assert!(files[0].ends_with("example.py"));
 
         let _ = fs::remove_dir_all(&root);
     }

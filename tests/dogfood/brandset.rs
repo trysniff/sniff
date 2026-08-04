@@ -56,7 +56,7 @@ fn brandset_signup_wrapper_survives_end_to_end() {
 }
 
 #[test]
-fn default_scan_reviews_every_method_and_every_file_end_to_end() {
+fn default_scan_reviews_every_method_without_separate_file_calls_end_to_end() {
     let root = unique_root("sniff-dogfood-exhaustive-method-review");
     fs::create_dir_all(&root).unwrap();
 
@@ -93,8 +93,8 @@ fn default_scan_reviews_every_method_and_every_file_end_to_end() {
 
     let report = fs::read_to_string(root.join("sniff-report.md")).unwrap();
     assert!(
-        report.contains("AI coverage:** 5 of 5 expected reviews completed, 0 missed"),
-        "expected two file reviews plus three method reviews:\n{report}"
+        report.contains("AI coverage:** 3 of 3 expected reviews completed, 0 missed"),
+        "expected exactly three exhaustive method reviews:\n{report}"
     );
 
     let prompt_text = prompts.lock().unwrap().join("\n");
@@ -105,8 +105,9 @@ fn default_scan_reviews_every_method_and_every_file_end_to_end() {
         );
     }
     assert!(
-        prompt_text.contains("Filename: math.py") && prompt_text.contains("Filename: format.ts"),
-        "expected both files to be reviewed:\n{prompt_text}"
+        !prompt_text.contains("Judge this file only as a secondary observation")
+            && prompt_text.contains("Authoritative full containing file:"),
+        "expected full files as method evidence without separate file-review calls:\n{prompt_text}"
     );
 
     let _ = fs::remove_dir_all(&root);
@@ -147,7 +148,7 @@ fn default_scan_reviews_every_supported_language_end_to_end() {
     write_file(
         &root,
         "src/main.go",
-        "package main\n\nfunc normalizeValue(value string) string {\n    return value\n}\n",
+        "package main\n\nfunc normalizeValue(value string) string {\n    return value\n}\n\nvar _ = normalizeValue(\"\")\n",
     );
     write_file(
         &root,
@@ -170,8 +171,8 @@ fn default_scan_reviews_every_supported_language_end_to_end() {
 
     let report = fs::read_to_string(root.join("sniff-report.md")).unwrap();
     assert!(
-        report.contains("AI coverage:** 12 of 12 expected reviews completed, 0 missed"),
-        "expected every language method and file to be reviewed:\n{report}"
+        report.contains("AI coverage:** 6 of 6 expected reviews completed, 0 missed"),
+        "expected every language method to be reviewed:\n{report}"
     );
     assert!(
         !report.contains("## `"),
@@ -194,8 +195,8 @@ fn default_scan_reviews_every_supported_language_end_to_end() {
         "Main.kt",
     ] {
         assert!(
-            prompt_text.contains(&format!("Filename: {filename}")),
-            "expected file {filename} to be reviewed:\n{prompt_text}"
+            prompt_text.contains(filename),
+            "expected method evidence from {filename}:\n{prompt_text}"
         );
     }
 
@@ -230,7 +231,7 @@ fn default_scan_surfaces_method_slop_through_the_final_report() {
         String::from_utf8_lossy(&output.stderr),
     );
     let report = fs::read_to_string(root.join("sniff-report.md")).unwrap();
-    assert!(report.contains("AI coverage:** 4 of 4 expected reviews completed, 0 missed"));
+    assert!(report.contains("AI coverage:** 2 of 2 expected reviews completed, 0 missed"));
     assert!(
         report.contains("sloppy.py"),
         "method slop should reach the report:\n{report}"

@@ -290,8 +290,8 @@ fn small_python_package_with_generated_downloads_stays_clean_end_to_end() {
         report
     );
     assert!(
-        report.contains("AI coverage:** 4 of 4 expected reviews completed, 0 missed"),
-        "expected full AI coverage on the small Python package:\n{}",
+        report.contains("AI coverage:** 7 of 7 expected reviews completed, 0 missed"),
+        "expected all three methods plus four file reviews to complete:\n{}",
         report
     );
     assert!(
@@ -365,7 +365,8 @@ fn skillmatch_backend_hotspots_match_the_current_report_contract() {
     assert!(report.contains("jobController.js"));
     assert!(report.contains("postsController.js"));
     assert!(report.contains("userController.js"));
-    assert!(report.contains("AI coverage:** 4 of 4 expected reviews completed, 0 missed"));
+    assert!(report.contains("AI coverage:** 88 of 88 expected reviews completed, 0 missed"));
+    assert!(report.contains("Method review coverage:** 84 of 84 methods completed, 0 missed"));
 
     let prompt_text = prompts.lock().unwrap().join("\n");
     assert!(
@@ -417,8 +418,8 @@ fn console_summary_does_not_leak_report_findings() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("Report written to"));
     assert!(stdout.contains("Findings:"));
-    assert!(stdout.contains("Affected files:"));
-    assert!(stdout.contains("sloppy.py"));
+    assert!(!stdout.contains("Affected files:"));
+    assert!(!stdout.contains("sloppy.py"));
     assert!(
         !stdout.contains("Top reasons") && !stdout.contains("Evidence:"),
         "console output should not leak report details:\n{}",
