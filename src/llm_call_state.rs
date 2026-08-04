@@ -1,7 +1,7 @@
 use super::super::llm_retry;
 use super::ResponseSchema;
 use super::{LLMClient, llm_call_policy};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 pub(super) struct CallState {
     last_err: String,
@@ -11,20 +11,30 @@ pub(super) struct CallState {
     same_prompt_retry_count: usize,
     max_attempt_count: usize,
     max_same_prompt_retry_count: usize,
+    max_repair_count: usize,
     input_tokens: usize,
     output_tokens: usize,
 }
 
 impl CallState {
-    fn new(prompt: &str) -> Self {
+    fn new(prompt: &str, max_attempt_count: usize, schema: ResponseSchema) -> Self {
+        let max_repair_count = if matches!(
+            schema,
+            ResponseSchema::MethodIntentBatchReview | ResponseSchema::SemanticMethodBatchReview
+        ) {
+            1
+        } else {
+            llm_retry::max_format_repairs()
+        };
         Self {
             last_err: String::new(),
             current_prompt: prompt.to_string(),
             repair_count: 0,
             attempt_count: 0,
             same_prompt_retry_count: 0,
-            max_attempt_count: llm_retry::max_attempts(),
+            max_attempt_count,
             max_same_prompt_retry_count: llm_retry::max_same_prompt_retries(),
+            max_repair_count,
             input_tokens: 0,
             output_tokens: 0,
         }
@@ -49,6 +59,12 @@ async fn apply_outcome(
             Ok(None)
         }
         llm_call_policy::CallOutcome::RetryWithRepair(new_prompt) => {
+            if state.repair_count >= state.max_repair_count {
+                return Err(format!(
+                    "LLM response format remained invalid after {} repair attempts; last error: {}",
+                    state.repair_count, state.last_err
+                ));
+            }
             state.current_prompt = new_prompt;
             state.same_prompt_retry_count = 0;
             state.repair_count += 1;
@@ -88,6 +104,12 @@ async fn run_call_attempt(
     state.output_tokens += output_tokens;
     if !attempt_err.is_empty() {
         state.last_err = attempt_err;
+        if std::env::var_os("SNIFF_DEBUG_LLM").is_some() {
+            eprintln!(
+                "[llm-debug] attempt={} error={}",
+                state.attempt_count, state.last_err
+            );
+        }
     }
 
     match outcome {
@@ -98,8 +120,20 @@ async fn run_call_attempt(
     }
 }
 
-fn finish_call(state: &CallState) -> Result<(Option<serde_json::Value>, usize, usize), String> {
-    Err(state.last_err.clone())
+fn finish_call(
+    state: &CallState,
+    termination: Option<&str>,
+) -> Result<(Option<serde_json::Value>, usize, usize), String> {
+    let detail = if state.last_err.is_empty() {
+        "no provider error was captured"
+    } else {
+        state.last_err.as_str()
+    };
+    let reason = termination.unwrap_or("review attempts exhausted");
+    Err(format!(
+        "LLM {reason} after {} attempts; last error: {detail}",
+        state.attempt_count
+    ))
 }
 
 pub(super) async fn execute_call(
@@ -111,7 +145,9 @@ pub(super) async fn execute_call(
         return Err("LLM path is unavailable: missing API key".to_string());
     }
 
-    let mut state = CallState::new(prompt);
+    let mut state = CallState::new(prompt, client.max_attempt_count(), schema);
+    let retry_budget = llm_retry::retry_budget();
+    let retry_deadline = Instant::now() + retry_budget;
     let _permit = match acquire_call_permit(client).await {
         Ok(p) => p,
         Err(e) => {
@@ -119,11 +155,98 @@ pub(super) async fn execute_call(
         }
     };
 
+    let mut termination = None;
     while state.attempt_count < state.max_attempt_count {
-        if let Some(result) = run_call_attempt(client, prompt, schema, &mut state).await? {
-            return Ok(result);
+        let remaining = retry_deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            termination = Some(format!(
+                "retry budget exhausted after {}s",
+                retry_budget.as_secs()
+            ));
+            break;
+        }
+
+        match tokio::time::timeout(
+            remaining,
+            run_call_attempt(client, prompt, schema, &mut state),
+        )
+        .await
+        {
+            Ok(result) => {
+                if let Some(result) = result? {
+                    return Ok(result);
+                }
+            }
+            Err(_) => {
+                termination = Some(format!(
+                    "retry budget exhausted after {}s",
+                    retry_budget.as_secs()
+                ));
+                break;
+            }
         }
     }
 
-    finish_call(&state)
+    if termination.is_none() && state.attempt_count >= state.max_attempt_count {
+        termination = Some(format!(
+            "maximum attempt count ({}) reached",
+            state.max_attempt_count
+        ));
+    }
+
+    finish_call(&state, termination.as_deref())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CallState, finish_call};
+
+    #[test]
+    fn exhausted_error_preserves_the_last_provider_error() {
+        let state = CallState {
+            last_err: "Empty assistant content from Anthropic endpoint".to_string(),
+            current_prompt: "prompt".to_string(),
+            repair_count: 0,
+            attempt_count: 7,
+            same_prompt_retry_count: 3,
+            max_attempt_count: 128,
+            max_same_prompt_retry_count: 3,
+            max_repair_count: 3,
+            input_tokens: 10,
+            output_tokens: 2,
+        };
+
+        let err = finish_call(&state, Some("retry budget exhausted after 1s"))
+            .expect_err("an exhausted call must fail");
+        assert!(err.contains("retry budget exhausted after 1s"));
+        assert!(err.contains("after 7 attempts"));
+        assert!(err.contains("Empty assistant content"));
+    }
+
+    #[tokio::test]
+    async fn format_repairs_stop_at_their_own_budget() {
+        let mut state = CallState {
+            last_err: "missing fields: reviews".to_string(),
+            current_prompt: "prompt".to_string(),
+            repair_count: 3,
+            attempt_count: 4,
+            same_prompt_retry_count: 0,
+            max_attempt_count: 128,
+            max_same_prompt_retry_count: 3,
+            max_repair_count: 3,
+            input_tokens: 10,
+            output_tokens: 2,
+        };
+
+        let error = super::apply_outcome(
+            &mut state,
+            super::llm_call_policy::CallOutcome::RetryWithRepair("repair".to_string()),
+            4,
+        )
+        .await
+        .expect_err("a malformed response must not consume the transport retry budget");
+
+        assert!(error.contains("after 3 repair attempts"));
+        assert_eq!(state.current_prompt, "prompt");
+    }
 }

@@ -51,6 +51,13 @@ pub(super) fn build_payload(
         reqwest::header::CONTENT_TYPE,
         reqwest::header::HeaderValue::from_static("application/json"),
     );
+    // Long sequential repository scans can outlive a provider's keep-alive
+    // connection. Use a fresh connection per request so a stale pooled socket
+    // cannot strand one required method review.
+    headers.insert(
+        reqwest::header::CONNECTION,
+        reqwest::header::HeaderValue::from_static("close"),
+    );
     (payload, headers)
 }
 

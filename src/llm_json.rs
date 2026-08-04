@@ -66,6 +66,7 @@ fn object_looks_like_result(map: &serde_json::Map<String, serde_json::Value>) ->
         || map.contains_key("evidence")
         || map.contains_key("role")
         || map.contains_key("verdict")
+        || map.contains_key("reviews")
 }
 
 fn repair_unclosed_object(content: &str) -> Option<String> {
@@ -124,24 +125,33 @@ fn repair_unclosed_object(content: &str) -> Option<String> {
     Some(candidate)
 }
 
-fn escape_control_chars_in_strings(content: &str) -> Option<String> {
+fn sanitize_json_strings(content: &str) -> Option<String> {
     let mut escaped_content = String::with_capacity(content.len());
     let mut in_string = false;
-    let mut escaped = false;
     let mut changed = false;
 
-    for ch in content.chars() {
+    let mut chars = content.chars().peekable();
+    while let Some(ch) = chars.next() {
         if in_string {
-            if escaped {
-                escaped_content.push(ch);
-                escaped = false;
-                continue;
-            }
-
             match ch {
                 '\\' => {
-                    escaped_content.push(ch);
-                    escaped = true;
+                    let Some(next) = chars.peek().copied() else {
+                        escaped_content.push_str("\\\\");
+                        changed = true;
+                        continue;
+                    };
+
+                    if matches!(next, '"' | '\\' | '/' | 'b' | 'f' | 'n' | 'r' | 't' | 'u') {
+                        escaped_content.push('\\');
+                        escaped_content.push(next);
+                        chars.next();
+                    } else {
+                        // Models sometimes describe a path with prose such as
+                        // "\\?\\C:". Preserve that prose by escaping only the
+                        // invalid JSON backslash instead of discarding the reply.
+                        escaped_content.push_str("\\\\");
+                        changed = true;
+                    }
                 }
                 '"' => {
                     escaped_content.push(ch);
@@ -216,7 +226,7 @@ pub(super) fn extract_json_object(content: &str) -> Result<serde_json::Value, St
         return Ok(obj);
     }
 
-    if let Some(sanitized) = escape_control_chars_in_strings(parsed_target)
+    if let Some(sanitized) = sanitize_json_strings(parsed_target)
         && let Some(obj) = parse_json_object_candidate(&sanitized)
     {
         return Ok(obj);
@@ -292,10 +302,26 @@ mod tests {
     }
 
     #[test]
+    fn extract_json_object_repairs_invalid_backslash_escapes_in_strings() {
+        let content = r#"{"smelly":false,"tier":"clean","pattern":"none","intent":"Strip prefix (\?\\C:)","reason":"clean","necessity_check":"necessary","evidence":[]}"#;
+        let value = extract_json_object(content).unwrap();
+        assert_eq!(value["tier"], "clean");
+        assert!(value["intent"].as_str().unwrap().contains("\\?"));
+    }
+
+    #[test]
     fn extract_json_object_unwraps_openai_style_content_wrappers() {
         let content = r#"{"choices":[{"message":{"content":"{\"smelly\":true,\"tier\":\"slop\",\"evidence\":\"fn demo()\",\"reason\":\"function is too big\"}"}}]}"#;
         let value = extract_json_object(content).unwrap();
         assert_eq!(value["tier"], "slop");
         assert_eq!(value["reason"], "function is too big");
+    }
+
+    #[test]
+    fn extract_json_object_preserves_batch_review_roots() {
+        let content = r#"{"reviews":[{"method_key":"m0","tier":"clean"},{"method_key":"m1","tier":"clean"}]}"#;
+        let value = extract_json_object(content).unwrap();
+
+        assert_eq!(value["reviews"].as_array().unwrap().len(), 2);
     }
 }

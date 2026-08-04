@@ -44,6 +44,14 @@ pub(super) fn classify_successful_response(
                 String::new(),
             )),
             Err(err) => {
+                if std::env::var_os("SNIFF_DEBUG_LLM").is_some() {
+                    eprintln!(
+                        "[llm-debug] schema={} validation={} parsed={}",
+                        schema_name(schema),
+                        err,
+                        parsed_obj
+                    );
+                }
                 let err = err.to_string();
                 Ok((repair_outcome(prompt, &content, schema, &err), err))
             }
@@ -58,6 +66,19 @@ pub(super) fn classify_successful_response(
                 Ok((repair_outcome(prompt, &content, schema, &err), err))
             }
         }
+    }
+}
+
+fn schema_name(schema: ResponseSchema) -> &'static str {
+    match schema {
+        ResponseSchema::MethodReview => "method",
+        ResponseSchema::MethodIntentReview => "method_intent",
+        ResponseSchema::MethodIntentBatchReview => "method_intent_batch",
+        ResponseSchema::SemanticMethodReview => "semantic_method",
+        ResponseSchema::SemanticMethodBatchReview => "semantic_method_batch",
+        ResponseSchema::ScopedTierReview => "scoped_tier",
+        ResponseSchema::FileReview => "file",
+        ResponseSchema::RoleClassification => "role",
     }
 }
 
@@ -95,7 +116,20 @@ pub(super) async fn classify_attempt(
     same_prompt_retry_count: usize,
     max_same_prompt_retry_count: usize,
 ) -> Result<(CallOutcome, String, usize, usize), String> {
-    match client.try_call_raw(current_prompt).await {
+    let attempt = tokio::time::timeout(
+        super::super::llm_retry::attempt_timeout(),
+        client.try_call_raw(current_prompt),
+    )
+    .await;
+    let raw_result = match attempt {
+        Ok(result) => result,
+        Err(_) => Err(format!(
+            "LLM attempt watchdog expired after {}s",
+            super::super::llm_retry::attempt_timeout().as_secs()
+        )),
+    };
+
+    match raw_result {
         Ok((content, in_t, out_t)) => {
             let (outcome, error) = classify_successful_response(
                 prompt,

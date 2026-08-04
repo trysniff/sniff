@@ -14,7 +14,7 @@ pub(super) fn openai_payload(model: &str, sys_ctx: &str, prompt: &str) -> serde_
     serde_json::json!({
         "model": model,
         "temperature": 0,
-        "max_tokens": 1024,
+        "max_tokens": 4096,
         "stream": false,
         "thinking": {"type": "disabled"},
         "messages": messages,
@@ -26,7 +26,7 @@ pub(super) fn anthropic_payload(model: &str, sys_ctx: &str, prompt: &str) -> ser
     let mut payload = serde_json::json!({
         "model": model,
         "temperature": 0,
-        "max_tokens": 1024,
+        "max_tokens": 4096,
         "stream": false,
         "thinking": {"type": "disabled"},
         "messages": [
@@ -59,7 +59,7 @@ mod tests {
         assert_eq!(payload["thinking"]["type"], "disabled");
         assert_eq!(payload["response_format"]["type"], "json_object");
         assert_eq!(payload["stream"], false);
-        assert_eq!(payload["max_tokens"], 1024);
+        assert_eq!(payload["max_tokens"], 4096);
     }
 
     #[test]
@@ -68,6 +68,6 @@ mod tests {
         assert_eq!(payload["thinking"]["type"], "disabled");
         assert_eq!(payload["messages"][0]["role"], "user");
         assert_eq!(payload["stream"], false);
-        assert_eq!(payload["max_tokens"], 1024);
+        assert_eq!(payload["max_tokens"], 4096);
     }
 }
