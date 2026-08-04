@@ -123,7 +123,10 @@ pub(super) async fn scan_context_files(
 
 #[cfg(test)]
 mod tests {
-    use super::{repository_root_for_target, scan_context_files, scan_evidence_files, scan_files};
+    use super::{
+        repository_root_for_target, scan_context_files, scan_evidence_files, scan_files,
+        strip_windows_verbatim_prefix,
+    };
     use crate::config::ResolvedConfig;
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -213,10 +216,11 @@ mod tests {
         let (context_root, context) = scan_context_files(target.to_str().unwrap(), &config)
             .await
             .unwrap();
+        let canonical_root = strip_windows_verbatim_prefix(fs::canonicalize(&root).unwrap());
 
         assert_eq!(review_targets.len(), 1);
-        assert_eq!(repository_root_for_target(&target), root);
-        assert_eq!(context_root, root);
+        assert_eq!(repository_root_for_target(&target), canonical_root);
+        assert_eq!(context_root, canonical_root);
         assert_eq!(context.len(), 3);
         assert!(
             context
