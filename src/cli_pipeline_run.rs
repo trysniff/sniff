@@ -22,7 +22,9 @@ fn exit_code_for_run(has_issues: bool, ai_failed_reviews: usize) -> i32 {
 }
 
 fn report_path_for_target(target_path: &std::path::Path) -> std::path::PathBuf {
-    let current_dir = std::env::current_dir().ok();
+    let current_dir = std::env::current_dir()
+        .ok()
+        .map(|path| strip_windows_verbatim_prefix(std::fs::canonicalize(&path).unwrap_or(path)));
     let resolved_target = strip_windows_verbatim_prefix(
         std::fs::canonicalize(target_path).unwrap_or_else(|_| target_path.to_path_buf()),
     );
