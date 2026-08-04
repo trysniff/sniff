@@ -1,0 +1,436 @@
+[[case]]
+language = "python"
+path = "tests/semantic_gold_fixtures/python/conceptual_slop.py"
+method = "slop_prepare_payload"
+tier = "slop"
+pattern = "ceremonial_logic"
+evidence = "if payload.get(\"user\") is not None:"
+explanation = "The method performs the same return decision on both branches after building a temporary payload."
+
+[[case]]
+language = "python"
+path = "tests/semantic_gold_fixtures/python/clean_complex.py"
+method = "clean_parse_tokens"
+tier = "clean"
+pattern = "none"
+evidence = ""
+explanation = "The loop is a necessary stateful tokenizer for quoted and escaped input."
+
+[[case]]
+language = "python"
+path = "tests/semantic_gold_fixtures/python/clean_complex.py"
+method = "clean_validate_contract"
+tier = "clean"
+pattern = "none"
+evidence = ""
+explanation = "Schema consistency checks are necessary when validating untrusted model output."
+
+[[case]]
+language = "python"
+path = "tests/semantic_gold_fixtures/python/clean_complex.py"
+method = "clean_extract_json_payload"
+tier = "clean"
+pattern = "none"
+evidence = ""
+explanation = "The exception pass only advances from strict parsing to an intentional recovery path and does not make the method a protocol stub."
+
+[[case]]
+language = "python"
+path = "tests/semantic_gold_fixtures/python/clean_complex.py"
+method = "kinda_forward_payload"
+tier = "kinda_slop"
+pattern = "needless_indirection"
+evidence = "forwarded = payload"
+explanation = "The local alias has no contract purpose and can be removed while preserving the signature, return value, and every caller-visible behavior."
+
+[[case]]
+language = "python"
+path = "tests/semantic_gold_fixtures/python/clean_complex.py"
+method = "unresolved_external_boundary"
+tier = "unresolved"
+pattern = "none"
+evidence = ""
+explanation = "External consumers and the boundary contract are not present in the repository dossier."
+
+[[case]]
+language = "javascript"
+path = "tests/semantic_gold_fixtures/javascript/clean_complex.js"
+method = "kindaForwardPayload"
+tier = "kinda_slop"
+pattern = "needless_indirection"
+evidence = "const forwarded = payload;"
+explanation = "The local alias has no contract purpose and can be removed while preserving the signature, return value, and every caller-visible behavior."
+
+[[case]]
+language = "typescript"
+path = "tests/semantic_gold_fixtures/typescript/clean_complex.ts"
+method = "kindaForwardPayload"
+tier = "kinda_slop"
+pattern = "needless_indirection"
+evidence = "const forwarded = payload;"
+explanation = "The local alias has no contract purpose and can be removed while preserving the signature, return value, and every caller-visible behavior."
+
+[[case]]
+language = "rust"
+path = "tests/semantic_gold_fixtures/rust/clean_complex.rs"
+method = "kinda_forward_payload"
+tier = "kinda_slop"
+pattern = "needless_indirection"
+evidence = "let forwarded = payload;"
+explanation = "The local alias has no contract purpose and can be removed while preserving the signature, return value, and every caller-visible behavior."
+
+[[case]]
+language = "go"
+path = "tests/semantic_gold_fixtures/go/clean_complex.go"
+method = "kindaForwardPayload"
+tier = "kinda_slop"
+pattern = "needless_indirection"
+evidence = "forwarded := payload"
+explanation = "The local alias has no contract purpose and can be removed while preserving the signature, return value, and every caller-visible behavior."
+
+[[case]]
+language = "kotlin"
+path = "tests/semantic_gold_fixtures/kotlin/clean_complex.kt"
+method = "kindaForwardPayload"
+tier = "kinda_slop"
+pattern = "needless_indirection"
+evidence = "val forwarded = payload"
+explanation = "The local alias has no contract purpose and can be removed while preserving the signature, return value, and every caller-visible behavior."
+
+[[case]]
+language = "javascript"
+path = "tests/semantic_gold_fixtures/javascript/conceptual_slop.js"
+method = "slop_prepare_payload"
+tier = "slop"
+pattern = "ceremonial_logic"
+evidence = "if (payload.user !== undefined && payload.user !== null) {"
+explanation = "The method performs the same return decision on both branches after building a temporary payload."
+
+[[case]]
+language = "javascript"
+path = "tests/semantic_gold_fixtures/javascript/clean_complex.js"
+method = "clean_parse_tokens"
+tier = "clean"
+pattern = "none"
+evidence = ""
+explanation = "The loop is a necessary stateful tokenizer for quoted and escaped input."
+
+[[case]]
+language = "javascript"
+path = "tests/semantic_gold_fixtures/javascript/clean_complex.js"
+method = "clean_validate_contract"
+tier = "clean"
+pattern = "none"
+evidence = ""
+explanation = "Schema consistency checks are necessary when validating untrusted model output."
+
+[[case]]
+language = "typescript"
+path = "tests/semantic_gold_fixtures/typescript/conceptual_slop.ts"
+method = "slop_prepare_payload"
+tier = "slop"
+pattern = "ceremonial_logic"
+evidence = "if (payload.user !== undefined && payload.user !== null) {"
+explanation = "The method performs the same return decision on both branches after building a temporary payload."
+
+[[case]]
+language = "typescript"
+path = "tests/semantic_gold_fixtures/typescript/clean_complex.ts"
+method = "clean_parse_tokens"
+tier = "clean"
+pattern = "none"
+evidence = ""
+explanation = "The loop is a necessary stateful tokenizer for quoted and escaped input."
+
+[[case]]
+language = "typescript"
+path = "tests/semantic_gold_fixtures/typescript/clean_complex.ts"
+method = "clean_validate_contract"
+tier = "clean"
+pattern = "none"
+evidence = ""
+explanation = "Schema consistency checks are necessary when validating untrusted model output."
+
+[[case]]
+language = "rust"
+path = "tests/semantic_gold_fixtures/rust/conceptual_slop.rs"
+method = "slop_prepare_payload"
+tier = "slop"
+pattern = "ceremonial_logic"
+evidence = "if payload.is_some() {"
+explanation = "The method returns the same value from both branches after an unnecessary conditional."
+
+[[case]]
+language = "rust"
+path = "tests/semantic_gold_fixtures/rust/clean_complex.rs"
+method = "clean_parse_tokens"
+tier = "clean"
+pattern = "none"
+evidence = ""
+explanation = "The loop is a necessary stateful tokenizer for quoted and escaped input."
+
+[[case]]
+language = "rust"
+path = "tests/semantic_gold_fixtures/rust/clean_complex.rs"
+method = "clean_validate_contract"
+tier = "clean"
+pattern = "none"
+evidence = ""
+explanation = "Schema consistency checks are necessary when validating untrusted model output."
+
+[[case]]
+language = "go"
+path = "tests/semantic_gold_fixtures/go/conceptual_slop.go"
+method = "slopPreparePayload"
+tier = "slop"
+pattern = "ceremonial_logic"
+evidence = "if payload != nil {"
+explanation = "The method returns the same value from both branches after an unnecessary conditional."
+
+[[case]]
+language = "go"
+path = "tests/semantic_gold_fixtures/go/clean_complex.go"
+method = "cleanParseTokens"
+tier = "clean"
+pattern = "none"
+evidence = ""
+explanation = "The loop is a necessary stateful tokenizer for quoted and escaped input."
+
+[[case]]
+language = "go"
+path = "tests/semantic_gold_fixtures/go/clean_complex.go"
+method = "cleanValidateContract"
+tier = "clean"
+pattern = "none"
+evidence = ""
+explanation = "Schema consistency checks are necessary when validating untrusted model output."
+
+[[case]]
+language = "kotlin"
+path = "tests/semantic_gold_fixtures/kotlin/conceptual_slop.kt"
+method = "slopPreparePayload"
+tier = "slop"
+pattern = "ceremonial_logic"
+evidence = "return if (payload != null) payload else payload"
+explanation = "The method returns the same value from both branches after an unnecessary conditional."
+
+[[case]]
+language = "kotlin"
+path = "tests/semantic_gold_fixtures/kotlin/clean_complex.kt"
+method = "cleanParseTokens"
+tier = "clean"
+pattern = "none"
+evidence = ""
+explanation = "The loop is a necessary stateful tokenizer for quoted and escaped input."
+
+[[case]]
+language = "kotlin"
+path = "tests/semantic_gold_fixtures/kotlin/clean_complex.kt"
+method = "cleanValidateContract"
+tier = "clean"
+pattern = "none"
+evidence = ""
+explanation = "Schema consistency checks are necessary when validating untrusted model output."
+
+[[case]]
+language = "python"
+path = "tests/semantic_gold_fixtures/python/intent_contracts.py"
+method = "resolve_preview_rationale_lines"
+tier = "slop"
+pattern = "ceremonial_logic"
+evidence = "_ = ("
+explanation = "Every repository-owned caller uses only the release inputs, so the discarded model-era parameters and their ceremonial tuple are a stale compatibility contract that can be removed together."
+
+[[case]]
+language = "python"
+path = "tests/semantic_gold_fixtures/python/intent_dead_code.py"
+method = "_canonical_transform"
+tier = "clean"
+pattern = "none"
+evidence = ""
+explanation = "The implementation has resolved callers and performs the shared normalization required by both delegates."
+change_scope = "none"
+
+[[case]]
+language = "python"
+path = "tests/semantic_gold_fixtures/python/intent_dead_code.py"
+method = "_stale_private_delegate"
+tier = "slop"
+pattern = "needless_indirection"
+evidence = "def _stale_private_delegate(value: str) -> str:"
+explanation = "The private delegate has no resolved callers, lexical candidates, tests, exports, registrations, or boundary role, so deleting the whole method is behavior-preserving removal of dead conceptual machinery."
+change_scope = "whole_method"
+
+[[case]]
+language = "python"
+path = "tests/semantic_gold_fixtures/python/intent_dead_code.py"
+method = "public_unused_boundary"
+tier = "unresolved"
+pattern = "none"
+evidence = ""
+explanation = "The method is explicitly exported through __all__, so repository evidence cannot prove that deleting its callable contract preserves external consumers."
+change_scope = "none"
+
+[[case]]
+language = "python"
+path = "tests/semantic_gold_fixtures/python/main.py"
+method = "_stale_entrypoint_helper"
+tier = "slop"
+pattern = "needless_indirection"
+evidence = "def _stale_entrypoint_helper(value: str) -> str:"
+explanation = "A private helper with no repository consumer remains dead conceptual machinery even when its containing file is an entrypoint."
+change_scope = "whole_method"
+
+[[case]]
+language = "python"
+path = "tests/semantic_gold_fixtures/python/main.py"
+method = "main"
+tier = "clean"
+pattern = "none"
+evidence = ""
+explanation = "The public main function is invoked by the command boundary and is not dead merely because the repository graph has no caller."
+change_scope = "none"
+
+[[case]]
+language = "python"
+path = "tests/semantic_gold_fixtures/python/intent_contracts.py"
+method = "extract_signature"
+tier = "kinda_slop"
+pattern = "ceremonial_logic"
+evidence = "if indent == 0:"
+explanation = "The nested condition is always true because indent is initialized to zero and never changed, so removing only that condition preserves the return behavior."
+
+[[case]]
+language = "python"
+path = "tests/semantic_gold_fixtures/python/intent_contracts.py"
+method = "choose_payload"
+tier = "slop"
+pattern = "duplicated_decision_paths"
+evidence = "if enabled:"
+explanation = "Both branches return the identical value, so the decision path has no contract purpose and can be replaced by a direct return."
+
+[[case]]
+language = "python"
+path = "tests/semantic_gold_fixtures/python/intent_contracts.py"
+method = "_load_impl"
+tier = "clean"
+pattern = "none"
+evidence = ""
+explanation = "The implementation constructs the value required by the stable public loading boundary."
+
+[[case]]
+language = "python"
+path = "tests/semantic_gold_fixtures/python/intent_contracts.py"
+method = "stable_load"
+tier = "clean"
+pattern = "none"
+evidence = ""
+explanation = "The thin wrapper is a documented stable API with resolved callers and a compatibility re-export."
+
+[[case]]
+language = "python"
+path = "tests/semantic_gold_fixtures/python/intent_contracts.py"
+method = "run_with_clock"
+tier = "clean"
+pattern = "none"
+evidence = ""
+explanation = "The injected clock is an intentional deterministic dependency seam used by a resolved caller."
+
+[[case]]
+language = "python"
+path = "tests/semantic_gold_fixtures/python/intent_contracts.py"
+method = "emit_event"
+tier = "clean"
+pattern = "none"
+evidence = ""
+explanation = "The event publisher is a callback default and a monkeypatch seam used by repository tests."
+
+[[case]]
+language = "python"
+path = "tests/semantic_gold_fixtures/python/intent_contracts.py"
+method = "call_model"
+tier = "clean"
+pattern = "none"
+evidence = ""
+explanation = "The retry and rejection branches have different exception contracts and are not duplicate decision paths."
+
+[[case]]
+language = "python"
+path = "tests/semantic_gold_fixtures/python/intent_contracts.py"
+method = "unresolved_external_boundary"
+tier = "unresolved"
+pattern = "none"
+evidence = ""
+explanation = "The external package implementation and consumers are unavailable, so necessity cannot be established."
+
+[[case]]
+language = "python"
+path = "tests/semantic_gold_fixtures/python/intent_contracts.py"
+method = "metadata"
+tier = "clean"
+pattern = "none"
+evidence = ""
+explanation = "The no-op body defines a protocol contract and must not be treated as dead or needless code."
+
+[[case]]
+language = "python"
+path = "tests/semantic_gold_fixtures/python/intent_memory_store.py"
+method = "metadata"
+tier = "clean"
+pattern = "none"
+evidence = ""
+explanation = "Returning None is the intentional in-memory implementation of the protocol metadata contract."
+
+[[case]]
+language = "python"
+path = "tests/semantic_gold_fixtures/python/intent_consumers.py"
+method = "load_for_request"
+tier = "clean"
+pattern = "none"
+evidence = ""
+explanation = "This resolved caller adapts request handling to the stable loading API."
+
+[[case]]
+language = "python"
+path = "tests/semantic_gold_fixtures/python/intent_consumers.py"
+method = "run_deterministically"
+tier = "clean"
+pattern = "none"
+evidence = ""
+explanation = "This caller intentionally supplies a deterministic clock implementation."
+
+[[case]]
+language = "python"
+path = "tests/semantic_gold_fixtures/python/intent_consumers.py"
+method = "publish"
+tier = "clean"
+pattern = "none"
+evidence = ""
+explanation = "The publisher parameter is an intentional callback replacement boundary."
+
+[[case]]
+language = "python"
+path = "tests/semantic_gold_fixtures/python/intent_consumers.py"
+method = "plan_release"
+tier = "clean"
+pattern = "none"
+evidence = ""
+explanation = "This orchestration boundary invokes the injected rationale callback with the complete repository-owned argument contract."
+
+[[case]]
+language = "python"
+path = "tests/semantic_gold_fixtures/python/intent_consumers.py"
+method = "render_release_rationale"
+tier = "clean"
+pattern = "none"
+evidence = ""
+explanation = "This caller proves the rationale boundary needs only the three release inputs and does not depend on the stale model-era parameters."
+
+[[case]]
+language = "python"
+path = "tests/semantic_gold_fixtures/python/intent_tests.py"
+method = "test_emit_event"
+tier = "clean"
+pattern = "none"
+evidence = ""
+explanation = "The test method proves the event function is an intentional monkeypatch seam."

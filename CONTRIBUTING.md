@@ -43,9 +43,9 @@ classification, evidence, roles, prompts, parsing, retries, or report output
 should include a focused regression or gold test. A finding must remain tied to
 exact source evidence and a recognized slop reason.
 
-When changing review orchestration, verify that every eligible method and file
-still receives its required review and that failures cannot produce a partial
-report.
+When changing review orchestration, verify that normal scans still review every
+method, `--only-files` still reviews every file, and failures cannot produce a
+partial report.
 
 ## Pull Requests
 
