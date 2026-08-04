@@ -2,6 +2,69 @@ use super::{parse_file, parse_file_checked, parse_file_symbols, parse_file_symbo
 use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[test]
+fn python_all_controls_top_level_export_visibility() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!("sniff-python-all-{nanos}"));
+    fs::create_dir_all(&root).unwrap();
+    let file_path = root.join("candidate.py");
+    fs::write(
+        &file_path,
+        r#"from .types import ReleasePlan
+
+def public_but_internal() -> None:
+    pass
+
+def _release_candidate_to_plan(candidate: object) -> ReleasePlan:
+    return ReleasePlan(candidate)
+
+__all__ = [
+    "_release_candidate_to_plan",
+]
+"#,
+    )
+    .unwrap();
+    let path = file_path.to_string_lossy();
+
+    let record = parse_file_checked(&path).expect("parse Python methods");
+    assert!(
+        record
+            .methods
+            .iter()
+            .any(|method| { method.name == "_release_candidate_to_plan" && method.is_exported }),
+        "a private-looking name listed in __all__ must be exported: {:?}",
+        record.methods
+    );
+    assert!(
+        record
+            .methods
+            .iter()
+            .any(|method| method.name == "public_but_internal" && !method.is_exported),
+        "an explicit __all__ excludes otherwise public top-level names: {:?}",
+        record.methods
+    );
+
+    let symbols = parse_file_symbols_checked(&path).expect("parse Python symbols");
+    assert!(symbols.definitions.iter().any(|definition| {
+        definition.name == "_release_candidate_to_plan" && definition.is_exported
+    }));
+    assert!(symbols.exports.iter().any(|export| {
+        export.exported_name == "_release_candidate_to_plan"
+            && export.local_symbol_name == "_release_candidate_to_plan"
+    }));
+    assert!(
+        !symbols
+            .exports
+            .iter()
+            .any(|export| export.exported_name == "ReleasePlan")
+    );
+
+    fs::remove_dir_all(&root).ok();
+}
+
 fn write_kotlin_fixture() -> (std::path::PathBuf, String) {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -50,6 +113,30 @@ import androidx.compose.runtime.Composable
 @Composable
 fun DashboardHero(nextDose: String?): String {
     return nextDose ?: "none"
+}
+"#,
+    )
+    .unwrap();
+
+    let file_path_str = file_path.to_string_lossy().to_string();
+    (root, file_path_str)
+}
+
+fn write_kotlin_suspend_function_type_fixture() -> (std::path::PathBuf, String) {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!("sniff-kotlin-suspend-type-{nanos}"));
+    fs::create_dir_all(&root).unwrap();
+    let file_path = root.join("Coordinator.kt");
+    fs::write(
+        &file_path,
+        r#"
+object Coordinator {
+    suspend fun reload(
+        transform: suspend (String, String) -> String = { first, second -> first + second },
+    ): String = transform("first", "second")
 }
 "#,
     )
@@ -124,6 +211,103 @@ fn kotlin_composable_function_keeps_its_real_name() {
         record.methods
     );
     fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn kotlin_suspend_function_types_are_parsed() {
+    let (root, file_path_str) = write_kotlin_suspend_function_type_fixture();
+    let record = parse_file_checked(&file_path_str).expect("valid Kotlin should parse");
+    assert!(
+        record.methods.iter().any(|method| method.name == "reload"),
+        "expected suspend function type fixture to yield reload: {:?}",
+        record.methods
+    );
+    fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn kotlin_internal_visibility_propagates_through_owners() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!("sniff-kotlin-visibility-{nanos}"));
+    fs::create_dir_all(&root).unwrap();
+    let file_path = root.join("Runtime.kt");
+    fs::write(
+        &file_path,
+        r#"package demo
+
+internal fun internalTopLevel(): String = "internal"
+public fun publicTopLevel(): String = "public"
+
+internal object InternalRuntime {
+    fun inheritedInternalVisibility(): String = "internal owner"
+}
+
+object PublicRuntime {
+    internal fun internalMember(): String = "internal member"
+    fun publicMember(): String = "public member"
+}
+"#,
+    )
+    .unwrap();
+    let path = file_path.to_string_lossy();
+
+    let record = parse_file_checked(&path).expect("parse Kotlin methods");
+    for private_name in [
+        "internalTopLevel",
+        "inheritedInternalVisibility",
+        "internalMember",
+    ] {
+        assert!(
+            record
+                .methods
+                .iter()
+                .any(|method| { method.name == private_name && !method.is_exported }),
+            "{private_name} must remain repository-private: {:?}",
+            record.methods
+        );
+    }
+    for external_name in ["publicTopLevel", "publicMember"] {
+        assert!(
+            record
+                .methods
+                .iter()
+                .any(|method| { method.name == external_name && method.is_exported }),
+            "{external_name} must remain externally visible: {:?}",
+            record.methods
+        );
+    }
+
+    let symbols = parse_file_symbols_checked(&path).expect("parse Kotlin symbols");
+    for private_name in [
+        "internalTopLevel",
+        "InternalRuntime",
+        "inheritedInternalVisibility",
+        "internalMember",
+    ] {
+        assert!(
+            symbols
+                .definitions
+                .iter()
+                .any(|definition| { definition.name == private_name && !definition.is_exported }),
+            "{private_name} symbol must remain repository-private: {:?}",
+            symbols.definitions
+        );
+    }
+    for external_name in ["publicTopLevel", "PublicRuntime", "publicMember"] {
+        assert!(
+            symbols
+                .definitions
+                .iter()
+                .any(|definition| { definition.name == external_name && definition.is_exported }),
+            "{external_name} symbol must remain externally visible: {:?}",
+            symbols.definitions
+        );
+    }
+
+    fs::remove_dir_all(root).ok();
 }
 
 #[test]
@@ -205,6 +389,227 @@ const plain = (value: string) => value.trim()
 }
 
 #[test]
+fn javascript_nested_callbacks_do_not_inherit_container_variable_names() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!("sniff-js-nested-callback-{nanos}"));
+    fs::create_dir_all(&root).unwrap();
+    let file_path = root.join("callbacks.js");
+    fs::write(
+        &file_path,
+        r#"
+const directHandler = (value) => value.trim()
+
+function stableStringify(value) {
+  const keys = Object.keys(value).sort()
+  const entries = keys.map(
+    (key) => `${key}:${value[key]}`,
+  )
+  return entries.join(",")
+}
+
+export function exportedOuter(values) {
+  return values.map((value) => value)
+}
+
+export class ExportedBox {
+  run(values) {
+    return values.map((value) => value)
+  }
+}
+"#,
+    )
+    .unwrap();
+
+    let file_path_str = file_path.to_string_lossy().to_string();
+    let record = parse_file_checked(&file_path_str).expect("valid JavaScript should parse");
+    let method_names = record
+        .methods
+        .iter()
+        .map(|method| method.name.as_str())
+        .collect::<Vec<_>>();
+
+    assert!(method_names.contains(&"directHandler"));
+    assert!(method_names.contains(&"stableStringify"));
+    assert!(method_names.contains(&"exportedOuter"));
+    assert!(method_names.contains(&"run"));
+    assert!(
+        method_names
+            .iter()
+            .filter(|name| name.starts_with("<anonymous@"))
+            .count()
+            >= 3
+    );
+    assert!(!method_names.contains(&"entries"));
+
+    let symbols = parse_file_symbols(&file_path_str);
+    let anonymous_definitions = symbols
+        .definitions
+        .iter()
+        .filter(|definition| definition.name.starts_with("<anonymous@"))
+        .collect::<Vec<_>>();
+    assert!(anonymous_definitions.len() >= 3);
+    assert!(
+        anonymous_definitions
+            .iter()
+            .all(|definition| !definition.is_exported && definition.owner_type.is_none())
+    );
+    fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn typescript_object_members_and_local_export_lists_keep_their_real_boundaries() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!("sniff-ts-object-members-{nanos}"));
+    fs::create_dir_all(&root).unwrap();
+    let file_path = root.join("boundaries.tsx");
+    fs::write(
+        &file_path,
+        r#"
+export const affiliateLinks = {
+  teamChat: () => "https://example.test/chat",
+}
+
+const telemetry = {
+  beforeSend(event: unknown) {
+    return event
+  },
+}
+
+export const ROUTE_DEPS = {
+  get ALERT_WINDOW_SUFFIX() {
+    return "today"
+  },
+}
+
+function Badge() {
+  return <span />
+}
+
+export { Badge }
+"#,
+    )
+    .unwrap();
+
+    let path = file_path.to_string_lossy().to_string();
+    let record = parse_file_checked(&path).expect("valid TypeScript should parse");
+    let badge = record
+        .methods
+        .iter()
+        .find(|method| method.name == "Badge")
+        .expect("Badge method");
+    assert!(
+        badge.is_exported,
+        "local export list must mark Badge public"
+    );
+    for member in ["teamChat", "beforeSend", "ALERT_WINDOW_SUFFIX"] {
+        assert!(
+            record.methods.iter().any(|method| method.name == member),
+            "expected object member {member}: {:?}",
+            record.methods
+        );
+    }
+
+    let symbols = parse_file_symbols_checked(&path).expect("index TypeScript symbols");
+    let definition = |name: &str| {
+        symbols
+            .definitions
+            .iter()
+            .find(|definition| definition.name == name)
+            .unwrap_or_else(|| panic!("missing definition {name}"))
+    };
+    assert!(definition("affiliateLinks").is_exported);
+    assert_eq!(
+        definition("teamChat").owner_type.as_deref(),
+        Some("affiliateLinks")
+    );
+    assert!(!definition("teamChat").is_exported);
+    assert_eq!(
+        definition("beforeSend").owner_type.as_deref(),
+        Some("telemetry")
+    );
+    assert_eq!(
+        definition("ALERT_WINDOW_SUFFIX").owner_type.as_deref(),
+        Some("ROUTE_DEPS")
+    );
+    assert!(definition("Badge").is_exported);
+    assert!(symbols.exports.iter().any(|export| {
+        export.exported_name == "affiliateLinks" && export.local_symbol_name == "affiliateLinks"
+    }));
+    assert!(
+        symbols
+            .exports
+            .iter()
+            .any(|export| export.exported_name == "Badge" && export.local_symbol_name == "Badge")
+    );
+    assert!(
+        !symbols
+            .exports
+            .iter()
+            .any(|export| export.exported_name == "teamChat")
+    );
+
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn typescript_nested_functions_and_class_methods_are_parsed() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!("sniff-ts-nested-{nanos}"));
+    fs::create_dir_all(&root).unwrap();
+    let file_path = root.join("checkout-rpc.ts");
+    fs::write(
+        &file_path,
+        r#"
+export function createCheckoutRpc() {
+  async function invokeCheckoutFunction() {
+    return true
+  }
+  const createCheckoutSession = async () => invokeCheckoutFunction()
+  return { createCheckoutSession }
+}
+
+export class CheckoutController {
+  async start() {
+    return createCheckoutRpc()
+  }
+}
+"#,
+    )
+    .unwrap();
+
+    let file_path_str = file_path.to_string_lossy().to_string();
+    let record = parse_file_checked(&file_path_str).expect("valid TypeScript should parse");
+    let method_names = record
+        .methods
+        .iter()
+        .map(|method| method.name.as_str())
+        .collect::<Vec<_>>();
+    for expected in [
+        "createCheckoutRpc",
+        "invokeCheckoutFunction",
+        "createCheckoutSession",
+        "start",
+    ] {
+        assert!(
+            method_names.contains(&expected),
+            "expected {expected} to be discovered: {:?}",
+            record.methods
+        );
+    }
+
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
 fn unsupported_extensions_fail_closed() {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -278,6 +683,14 @@ fn uppercase_extensions_are_supported() {
     let symbols = parse_file_symbols(&file_path_str);
 
     assert_eq!(record.language, "typescript");
+    assert!(
+        record
+            .methods
+            .iter()
+            .all(|method| method.language == "typescript"),
+        "method prompts must retain the TypeScript language: {:?}",
+        record.methods
+    );
     assert!(
         record
             .methods
@@ -434,6 +847,63 @@ fn rust_file_methods_cover_generic_impls_and_pub_super_structs() {
     fs::remove_dir_all(&root).ok();
 }
 
+#[test]
+fn rust_method_boundaries_come_from_ast_spans() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!("sniff-rust-spans-{nanos}"));
+    fs::create_dir_all(&root).unwrap();
+    let file_path = root.join("boundaries.rs");
+    fs::write(
+        &file_path,
+        r#"fn is_identifier_char(ch: char) -> bool {
+    ch == '_' || ch == '$' || ch.is_ascii_alphanumeric()
+}
+
+pub trait Contract {
+    fn required(&self, value: char);
+
+    fn defaulted(&self) -> bool {
+        true
+    }
+}
+
+fn after_contract() -> bool {
+    true
+}
+"#,
+    )
+    .unwrap();
+
+    let record = parse_file(&file_path.to_string_lossy());
+    let identifier = record
+        .methods
+        .iter()
+        .find(|method| method.name == "is_identifier_char")
+        .expect("character literals must not break the method boundary");
+    assert_eq!((identifier.start_line, identifier.end_line), (1, 3));
+    assert!(!identifier.source.contains("Contract"));
+
+    let required = record
+        .methods
+        .iter()
+        .find(|method| method.name == "required")
+        .expect("trait declarations must be discovered");
+    assert_eq!(required.start_line, required.end_line);
+    assert!(required.source.trim_end().ends_with(';'));
+
+    let after = record
+        .methods
+        .iter()
+        .find(|method| method.name == "after_contract")
+        .expect("methods after a trait declaration must remain discoverable");
+    assert_eq!((after.start_line, after.end_line), (13, 15));
+
+    fs::remove_dir_all(&root).ok();
+}
+
 fn write_invalid_fixture(extension: &str, source: &[u8]) -> (std::path::PathBuf, String) {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -476,6 +946,37 @@ fn checked_parse_rejects_malformed_go_instead_of_returning_zero_methods() {
     let (root, path) = write_invalid_fixture("go", b"package broken\n\nfunc broken( {\n");
     let error = parse_file_checked(&path).expect_err("malformed Go must fail closed");
     assert!(error.contains("failed to parse"), "{error}");
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn go_symbol_scan_records_top_level_calls_without_string_or_comment_noise() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!("sniff-go-top-level-call-{nanos}"));
+    fs::create_dir_all(&root).unwrap();
+    let file_path = root.join("main.go");
+    fs::write(
+        &file_path,
+        "package main\n\nfunc normalizeValue(value string) string {\n    return value\n}\n\nvar _ = normalizeValue(\"\")\nvar text = \"fakeCall()\"\n// commentCall()\n",
+    )
+    .unwrap();
+
+    let symbols = parse_file_symbols_checked(&file_path.to_string_lossy()).expect("parse Go");
+    assert!(symbols.references.iter().any(|reference| {
+        reference.name == "normalizeValue"
+            && reference.line == 7
+            && reference.snippet.contains("var _ = normalizeValue")
+    }));
+    assert!(
+        !symbols
+            .references
+            .iter()
+            .any(|reference| reference.name == "fakeCall" || reference.name == "commentCall")
+    );
+
     fs::remove_dir_all(root).ok();
 }
 
