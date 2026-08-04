@@ -9,6 +9,10 @@ impl SymbolGraph {
         segments: &[&str],
         visited: &mut HashSet<String>,
     ) -> Option<ResolvedSymbol> {
+        if let Some(resolved) = self.resolve_rust_direct_reference(ctx, segments, visited) {
+            return Some(resolved);
+        }
+        visited.clear();
         let (type_file, resolved_type_name, member_name) =
             self.resolve_rust_type_target(ctx, segments, visited)?;
         self.resolve_rust_type_member(ctx, &type_file, &resolved_type_name, &member_name)

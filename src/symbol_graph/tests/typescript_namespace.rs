@@ -46,6 +46,7 @@ export function main() {
         ResolvedSymbol::External {
             file_path,
             symbol_name,
+            ..
         } => {
             assert_eq!(normalize_path(file_path), normalize_path(&helpers_file));
             assert_eq!(symbol_name, "processData");
@@ -108,6 +109,7 @@ export function main() {
         ResolvedSymbol::External {
             file_path,
             symbol_name,
+            ..
         } => {
             assert_eq!(normalize_path(file_path), normalize_path(&helpers_file));
             assert_eq!(symbol_name, "processData");

@@ -89,6 +89,8 @@ pub(in crate::parser) fn parse_file_symbols(file_path: &str) -> LocalFileSymbols
             definitions: Vec::new(),
             imports: Vec::new(),
             exports: Vec::new(),
+            modules: Vec::new(),
+            types: Vec::new(),
             references: Vec::new(),
         };
     };

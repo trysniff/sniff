@@ -9,6 +9,7 @@ pub(crate) struct SymbolExtractor<'a> {
     pub definitions: Vec<SymbolDefinition>,
     pub imports: Vec<ImportRecord>,
     pub exports: Vec<ExportRecord>,
+    pub modules: Vec<ModuleRecord>,
     pub references: Vec<SymbolReference>,
     pub scopes: Vec<HashSet<String>>,
     pub next_id: usize,

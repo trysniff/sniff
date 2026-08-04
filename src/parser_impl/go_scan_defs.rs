@@ -94,6 +94,8 @@ fn record_go_function(
             .map(|c| c.is_uppercase())
             .unwrap_or(false),
         owner_type: recv,
+        receiver_type: None,
+        value_type: None,
     });
     *next_id += 1;
     Some(end)

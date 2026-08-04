@@ -148,49 +148,8 @@ def main():\n    return semantic_fallback_recommendation(\"\")\n",
     assert!(
         file_verdicts
             .iter()
-            .any(|verdict| verdict.file_path.ends_with("contracts.py")
-                && verdict.verdict == FindingTier::Slop),
-        "contracts.py should remain a slop verdict: {:?}",
-        file_verdicts
-    );
-    assert!(
-        file_verdicts
-            .iter()
-            .any(|verdict| verdict.file_path.ends_with("pipeline.py")
-                && verdict.verdict == FindingTier::Slop),
-        "pipeline.py should remain a slop verdict: {:?}",
-        file_verdicts
-    );
-    assert!(
-        file_verdicts
-            .iter()
-            .any(|verdict| verdict.file_path.ends_with("semantic.py")
-                && verdict.verdict == FindingTier::Slop),
-        "semantic.py should remain a slop verdict: {:?}",
-        file_verdicts
-    );
-    assert!(
-        file_verdicts
-            .iter()
-            .any(|verdict| verdict.file_path.ends_with("checkout-rpc.ts")
-                && verdict.verdict == FindingTier::Slop),
-        "checkout-rpc.ts should remain a slop verdict: {:?}",
-        file_verdicts
-    );
-    assert!(
-        file_verdicts
-            .iter()
-            .any(|verdict| verdict.file_path.ends_with("App.tsx")
-                && verdict.verdict == FindingTier::Clean),
-        "App.tsx should stay clean in final verdicts: {:?}",
-        file_verdicts
-    );
-    assert!(
-        file_verdicts
-            .iter()
-            .any(|verdict| verdict.file_path.ends_with("index.ts")
-                && verdict.verdict == FindingTier::Clean),
-        "index.ts should stay clean in final verdicts: {:?}",
+            .all(|verdict| verdict.verdict == FindingTier::Clean),
+        "static-only signals must not become final findings: {:?}",
         file_verdicts
     );
 
@@ -383,19 +342,10 @@ class RecommendationPersistenceStore(Protocol):
         static_flags
     );
     assert!(
-        file_verdicts.iter().any(
-            |verdict| verdict.file_path.ends_with("persistence_sqlite.py")
-                && verdict.verdict == FindingTier::Slop
-        ),
-        "sqlite persistence store should remain a slop verdict: {:?}",
         file_verdicts
-    );
-    assert!(
-        file_verdicts.iter().any(
-            |verdict| verdict.file_path.ends_with("persistence_protocols.py")
-                && verdict.verdict == FindingTier::Clean
-        ),
-        "protocol surface should stay clean in the final verdicts: {:?}",
+            .iter()
+            .all(|verdict| verdict.verdict == FindingTier::Clean),
+        "static-only signals must not become final findings: {:?}",
         file_verdicts
     );
 

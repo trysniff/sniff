@@ -22,7 +22,7 @@ async fn ambiguous_role_uses_llm_and_is_cached() {
         .unwrap();
     assert!(in_tok > 0);
     assert!(out_tok > 0);
-    assert!(hits.load(Ordering::SeqCst) >= 2);
+    assert_eq!(hits.load(Ordering::SeqCst), 1);
     assert_eq!(
         classify_file_role("reporting.rs"),
         FileRole::AdapterIntegration
@@ -51,6 +51,39 @@ async fn ambiguous_role_failure_aborts_resolution() {
     assert!(err.contains("Role resolution failed"));
     assert!(err.contains("HTTP 402"));
     assert_eq!(hits.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn role_checkpoint_survives_role_resolution_until_pipeline_cleanup() {
+    let _role_lock = ROLE_TEST_LOCK
+        .get_or_init(|| std::sync::Mutex::new(()))
+        .lock()
+        .unwrap();
+    clear_file_role_cache();
+    let body = r#"{"choices":[{"message":{"content":"{\"role\":\"adapter_integration\",\"reason\":\"framework glue\"}"}}]}"#;
+    let (endpoint, _) = spawn_openai_style_server(body);
+    let client = Arc::new(LLMClient::new(cfg(&endpoint), Some("test-key".to_string())));
+    let file = FileRecord {
+        file_path: "reporting.rs".to_string(),
+        source: "use reqwest::Client;\n".to_string(),
+        language: "rust".to_string(),
+        methods: vec![],
+    };
+    let checkpoint_path = std::env::temp_dir().join(format!(
+        "sniff-role-checkpoint-test-{}.json",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+
+    resolve_file_roles_with_checkpoint(&[file], client, Some(&checkpoint_path))
+        .await
+        .unwrap();
+    assert!(checkpoint_path.exists());
+
+    remove_role_checkpoint(&checkpoint_path).unwrap();
+    assert!(!checkpoint_path.exists());
 }
 
 #[test]
@@ -410,9 +443,6 @@ fn config_validation_modules_are_detected() {
 fn detector_support_modules_are_detected_from_absolute_paths() {
     assert!(is_detector_support_module(
         r"C:\Users\User\Sniff\src\analyzer_file_verdicts.rs"
-    ));
-    assert!(is_detector_support_module(
-        r"C:\Users\User\Sniff\src\analyzer_verdicts_clear.rs"
     ));
     assert!(is_detector_support_module(
         r"C:\Users\User\Sniff\src\roles_surface_presentation.rs"

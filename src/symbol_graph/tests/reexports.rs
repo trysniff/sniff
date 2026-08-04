@@ -1,6 +1,117 @@
 use super::*;
 
 #[test]
+fn test_rust_qualified_call_resolves_through_reexport() {
+    let dir = unique_tag("temp_rust_qualified_reexport");
+    let src_dir = format!("{dir}/src");
+    fs::create_dir_all(&src_dir).unwrap();
+
+    let lib_file = write_temp_file(
+        &src_dir,
+        "lib.rs",
+        r#"mod reporter;
+mod consumer;
+mod unrelated;
+"#,
+    );
+    let reporter_file = write_temp_file(
+        &src_dir,
+        "reporter.rs",
+        r#"#[path = "reporter_render.rs"]
+mod render;
+
+pub use render::render_report;
+"#,
+    );
+    let render_file = write_temp_file(
+        &src_dir,
+        "reporter_render.rs",
+        r#"pub fn render_report() {}
+"#,
+    );
+    let consumer_file = write_temp_file(
+        &src_dir,
+        "consumer.rs",
+        r#"pub fn run() {
+    crate::reporter::render_report();
+}
+"#,
+    );
+    let unrelated_file = write_temp_file(
+        &src_dir,
+        "unrelated.rs",
+        r#"pub fn render_report() {}
+"#,
+    );
+
+    let mut graph = SymbolGraph::new(&dir);
+    for file in [
+        &lib_file,
+        &reporter_file,
+        &render_file,
+        &consumer_file,
+        &unrelated_file,
+    ] {
+        graph.add_file(parse_file_symbols(file));
+    }
+    graph.resolve_all();
+
+    let reference = graph
+        .files
+        .get(&consumer_file)
+        .unwrap()
+        .references
+        .iter()
+        .find(|reference| reference.name == "crate::reporter::render_report")
+        .expect("qualified render_report call");
+    match reference.resolved_symbol.as_ref() {
+        Some(ResolvedSymbol::External {
+            file_path,
+            symbol_name,
+            definition_id: Some(_),
+        }) => {
+            assert_eq!(normalize_path(file_path), normalize_path(&render_file));
+            assert_eq!(symbol_name, "render_report");
+        }
+        other => panic!("expected re-export target, got {other:?}"),
+    }
+
+    let reporter_symbols = graph.files.get(&reporter_file).unwrap();
+    let export_index = reporter_symbols
+        .exports
+        .iter()
+        .position(|export| export.exported_name == "render_report")
+        .unwrap();
+    let target_id = graph
+        .files
+        .get(&render_file)
+        .unwrap()
+        .definitions
+        .iter()
+        .find(|definition| definition.name == "render_report")
+        .unwrap()
+        .id;
+    let unrelated_id = graph
+        .files
+        .get(&unrelated_file)
+        .unwrap()
+        .definitions
+        .iter()
+        .find(|definition| definition.name == "render_report")
+        .unwrap()
+        .id;
+    assert!(graph.export_targets_definition(&reporter_file, export_index, &render_file, target_id));
+    assert!(!graph.export_targets_definition(
+        &reporter_file,
+        export_index,
+        &unrelated_file,
+        unrelated_id
+    ));
+
+    fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn test_python_alias_import_reexport_resolution() {
     let dir = unique_tag("temp_python_reexport");
     let pkg_dir = format!("{}/pkg", dir);
@@ -53,6 +164,7 @@ def main():
         ResolvedSymbol::External {
             file_path,
             symbol_name,
+            ..
         } => {
             assert_eq!(normalize_path(file_path), normalize_path(&helpers_file));
             assert_eq!(symbol_name, "process_data");
@@ -115,6 +227,7 @@ export function main() {
         ResolvedSymbol::External {
             file_path,
             symbol_name,
+            ..
         } => {
             assert_eq!(normalize_path(file_path), normalize_path(&helpers_file));
             assert_eq!(symbol_name, "processData");
@@ -169,6 +282,7 @@ export function main() {
         ResolvedSymbol::External {
             file_path,
             symbol_name,
+            ..
         } => {
             assert_eq!(normalize_path(file_path), normalize_path(&helpers_file));
             assert_eq!(symbol_name, "processThing");
@@ -230,6 +344,7 @@ def main():
         ResolvedSymbol::External {
             file_path,
             symbol_name,
+            ..
         } => {
             assert_eq!(normalize_path(file_path), normalize_path(&helpers_file));
             assert_eq!(symbol_name, "process_data");
@@ -292,6 +407,7 @@ export function main() {
         ResolvedSymbol::External {
             file_path,
             symbol_name,
+            ..
         } => {
             assert_eq!(normalize_path(file_path), normalize_path(&helpers_file));
             assert_eq!(symbol_name, "processData");

@@ -12,6 +12,8 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+static NEXT_VIRTUAL_FIXTURE_ID: AtomicUsize = AtomicUsize::new(0);
+
 fn parse_virtual_file(file_path: &str, source: &str) -> FileRecord {
     let extension = file_path
         .rsplit(['\\', '/'])
@@ -23,7 +25,10 @@ fn parse_virtual_file(file_path: &str, source: &str) -> FileRecord {
         .duration_since(UNIX_EPOCH)
         .expect("system clock should be after the Unix epoch")
         .as_nanos();
-    let temp_path = std::env::temp_dir().join(format!("sniff-role-fixture-{nonce}.{extension}"));
+    let unique_id = NEXT_VIRTUAL_FIXTURE_ID.fetch_add(1, Ordering::Relaxed);
+    let temp_path = std::env::temp_dir().join(format!(
+        "sniff-role-fixture-{nonce}-{unique_id}.{extension}"
+    ));
     std::fs::write(&temp_path, source).expect("write virtual role fixture");
     let mut file = crate::parser::parse_file_checked(temp_path.to_str().unwrap())
         .expect("parse virtual role fixture");

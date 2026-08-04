@@ -1,8 +1,8 @@
 use crate::language_adapter::LanguageAdapter;
 use crate::languages;
 use crate::types::{
-    ExportRecord, FileRecord, ImportRecord, LocalFileSymbols, MethodRecord, SymbolDefinition,
-    SymbolKind, SymbolReference,
+    ExportRecord, FileRecord, ImportRecord, LocalFileSymbols, MethodRecord, ModuleRecord,
+    SymbolDefinition, SymbolKind, SymbolReference, TypeRecord,
 };
 use std::collections::HashSet;
 
@@ -10,12 +10,6 @@ use std::collections::HashSet;
 mod file;
 #[path = "parser_impl/go_extractor.rs"]
 mod go;
-#[path = "parser_impl/js_ts_functions.rs"]
-mod js_ts_functions;
-#[path = "parser_impl/js_ts_imports.rs"]
-mod js_ts_imports;
-#[path = "parser_impl/js_ts_references.rs"]
-mod js_ts_references;
 #[path = "parser_impl/kotlin_extractor.rs"]
 mod kotlin;
 #[path = "parser_impl_line_index.rs"]

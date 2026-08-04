@@ -3,7 +3,7 @@ use crate::slop_reason::{self, ReasonKind};
 use crate::types::FindingTier;
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::signals::{is_wrapper_noise_reason, join_visible_reasons, visible_reasons};
+use super::signals::{join_visible_reasons, visible_reasons};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) enum SignalSeverity {
@@ -42,10 +42,13 @@ pub(super) struct FileVerdictBuilder {
     file_signals: SignalGroup,
     method_signals: BTreeMap<String, SignalGroup>,
     llm_clean_methods: BTreeSet<String>,
+    file_observations_enabled: bool,
     llm_reviewed: bool,
     llm_file_reviewed: bool,
     llm_method_review_count: usize,
     llm_smelly: bool,
+    unresolved_methods: BTreeMap<String, String>,
+    unresolved_file: Option<String>,
 }
 
 impl FileVerdictBuilder {
@@ -57,10 +60,13 @@ impl FileVerdictBuilder {
             file_signals: SignalGroup::new(),
             method_signals: BTreeMap::new(),
             llm_clean_methods: BTreeSet::new(),
+            file_observations_enabled: true,
             llm_reviewed: false,
             llm_file_reviewed: false,
             llm_method_review_count: 0,
             llm_smelly: false,
+            unresolved_methods: BTreeMap::new(),
+            unresolved_file: None,
         }
     }
 
@@ -81,14 +87,43 @@ impl FileVerdictBuilder {
         }
     }
 
+    pub(super) fn add_unresolved_method(
+        &mut self,
+        method_name: Option<&str>,
+        reason: impl Into<String>,
+    ) {
+        let Some(method_name) = method_name else {
+            self.unresolved_file = Some(reason.into());
+            return;
+        };
+        self.unresolved_methods
+            .insert(method_name.to_string(), reason.into());
+    }
+
     fn llm_clean_override(&self) -> bool {
         let method_review_complete =
             self.llm_method_review_count == 0 || self.llm_method_review_count >= self.method_count;
-        self.llm_reviewed && self.llm_file_reviewed && !self.llm_smelly && method_review_complete
+        self.llm_reviewed
+            && self.llm_file_reviewed
+            && !self.llm_smelly
+            && self.unresolved_methods.is_empty()
+            && self.unresolved_file.is_none()
+            && method_review_complete
     }
 
     pub(super) fn add_file_reason(&mut self, severity: SignalSeverity, reason: impl Into<String>) {
+        if !self.file_observations_enabled {
+            return;
+        }
         self.file_signals.add_reason(severity, reason);
+    }
+
+    pub(super) fn disable_file_observations(&mut self) {
+        self.file_observations_enabled = false;
+    }
+
+    pub(super) fn file_observations_enabled(&self) -> bool {
+        self.file_observations_enabled
     }
 
     pub(super) fn add_method_reason(
@@ -109,26 +144,39 @@ impl FileVerdictBuilder {
             return Vec::new();
         }
 
-        let stronger_reason_present = self.has_non_wrapper_visible_reason();
+        let method_finding_present = self.has_visible_method_reason();
         let mut lines = Vec::new();
 
-        let file_reasons = visible_reasons(self.role, &self.file_signals.reasons);
-        if !file_reasons.is_empty() {
-            let reason = join_visible_reasons(&file_reasons);
-            lines.push((self.file_signals.severity, reason));
+        for (method_name, reason) in &self.unresolved_methods {
+            lines.push((
+                SignalSeverity::Severe,
+                format!("{method_name}: unresolved review: {reason}"),
+            ));
+        }
+        if let Some(reason) = &self.unresolved_file {
+            lines.push((
+                SignalSeverity::Severe,
+                format!("unresolved file review: {reason}"),
+            ));
+        }
+
+        // Once a method has an evidence-backed semantic finding, keep the
+        // user-facing report method-first. File review remains available in
+        // raw LLM results, but must not drown out or amplify that finding.
+        if !method_finding_present {
+            let file_reasons = visible_reasons(self.role, &self.file_signals.reasons);
+            if !file_reasons.is_empty() {
+                let reason = join_visible_reasons(&file_reasons);
+                lines.push((self.file_signals.severity, reason));
+            }
         }
 
         for (method_name, group) in &self.method_signals {
             if self.llm_clean_methods.contains(method_name) {
                 continue;
             }
-            let reasons = visible_reasons(self.role, &group.reasons);
+            let reasons = method_reasons(&group.reasons);
             if reasons.is_empty() {
-                continue;
-            }
-            if stronger_reason_present
-                && reasons.iter().all(|reason| is_wrapper_noise_reason(reason))
-            {
                 continue;
             }
             let reason = format!("{method_name}: {}", join_visible_reasons(&reasons));
@@ -144,22 +192,26 @@ impl FileVerdictBuilder {
             return Vec::new();
         }
 
-        let stronger_reason_present = self.has_non_wrapper_visible_reason();
-        self.method_signals
-            .iter()
-            .filter(|(method_name, group)| {
-                if self.llm_clean_methods.contains(*method_name) {
-                    return false;
-                }
-                let reasons = visible_reasons(self.role, &group.reasons);
-                if reasons.is_empty() {
-                    return false;
-                }
-                !(stronger_reason_present
-                    && reasons.iter().all(|reason| is_wrapper_noise_reason(reason)))
-            })
-            .map(|(method, _)| method.clone())
-            .collect()
+        let mut methods = self.unresolved_methods.keys().cloned().collect::<Vec<_>>();
+        methods.extend(
+            self.method_signals
+                .iter()
+                .filter(|(method_name, group)| {
+                    if self.llm_clean_methods.contains(*method_name) {
+                        return false;
+                    }
+                    let reasons = method_reasons(&group.reasons);
+                    if reasons.is_empty() {
+                        return false;
+                    }
+                    true
+                })
+                .map(|(method, _)| method.clone())
+                .collect::<Vec<_>>(),
+        );
+        methods.sort();
+        methods.dedup();
+        methods
     }
 
     fn mild_file_reason_count(&self) -> usize {
@@ -176,32 +228,36 @@ impl FileVerdictBuilder {
             .filter(|(method_name, group)| {
                 !self.llm_clean_methods.contains(*method_name)
                     && group.severity == SignalSeverity::Mild
-                    && !visible_reasons(self.role, &group.reasons).is_empty()
+                    && !method_reasons(&group.reasons).is_empty()
             })
             .count()
     }
 
-    fn visible_method_group_count(&self) -> usize {
-        self.method_signals
-            .iter()
-            .filter(|(method_name, group)| {
-                !self.llm_clean_methods.contains(*method_name)
-                    && !visible_reasons(self.role, &group.reasons).is_empty()
-            })
-            .count()
+    fn has_visible_method_reason(&self) -> bool {
+        self.method_signals.iter().any(|(method_name, group)| {
+            !self.llm_clean_methods.contains(method_name)
+                && !method_reasons(&group.reasons).is_empty()
+        })
     }
 
-    fn control_flow_only_method_group_count(&self) -> usize {
-        self.method_signals
-            .iter()
-            .filter(|(method_name, group)| {
-                if self.llm_clean_methods.contains(*method_name) {
-                    return false;
-                }
-                let reasons = visible_reasons(self.role, &group.reasons);
-                !reasons.is_empty() && reasons.iter().all(|reason| is_control_flow_reason(reason))
-            })
-            .count()
+    fn method_verdict(&self) -> Option<FindingTier> {
+        if !self.unresolved_methods.is_empty() || self.unresolved_file.is_some() {
+            return Some(FindingTier::Unresolved);
+        }
+        if !self.has_visible_method_reason() {
+            return None;
+        }
+
+        let severe = self.method_signals.iter().any(|(method_name, group)| {
+            !self.llm_clean_methods.contains(method_name)
+                && group.severity == SignalSeverity::Severe
+                && !method_reasons(&group.reasons).is_empty()
+        });
+        if severe {
+            Some(FindingTier::Slop)
+        } else {
+            Some(FindingTier::KindaSlop)
+        }
     }
 
     fn severe_signal_count(&self) -> usize {
@@ -212,28 +268,9 @@ impl FileVerdictBuilder {
                 .filter(|(method_name, group)| {
                     !self.llm_clean_methods.contains(*method_name)
                         && group.severity == SignalSeverity::Severe
-                        && !visible_reasons(self.role, &group.reasons).is_empty()
+                        && !method_reasons(&group.reasons).is_empty()
                 })
                 .count()
-    }
-
-    fn has_non_wrapper_visible_reason(&self) -> bool {
-        let file_reasons = visible_reasons(self.role, &self.file_signals.reasons);
-        if file_reasons
-            .iter()
-            .any(|reason| !is_wrapper_noise_reason(reason))
-        {
-            return true;
-        }
-
-        self.method_signals.iter().any(|(method_name, group)| {
-            if self.llm_clean_methods.contains(method_name) {
-                return false;
-            }
-            visible_reasons(self.role, &group.reasons)
-                .iter()
-                .any(|reason| !is_wrapper_noise_reason(reason))
-        })
     }
 
     fn lone_file_reason_is_vague_or_supporting(&self) -> bool {
@@ -246,14 +283,19 @@ impl FileVerdictBuilder {
     }
 
     fn verdict(&self) -> FindingTier {
+        if !self.unresolved_methods.is_empty() || self.unresolved_file.is_some() {
+            return FindingTier::Unresolved;
+        }
         if self.llm_clean_override() {
             return FindingTier::Clean;
         }
 
+        if let Some(method_verdict) = self.method_verdict() {
+            return method_verdict;
+        }
+
         let mild_file_count = self.mild_file_reason_count();
         let mild_method_count = self.mild_method_group_count();
-        let visible_method_group_count = self.visible_method_group_count();
-        let control_flow_only_method_group_count = self.control_flow_only_method_group_count();
         let severe_count = self.severe_signal_count();
 
         if severe_count > 0 {
@@ -263,28 +305,32 @@ impl FileVerdictBuilder {
                 return FindingTier::Clean;
             }
             FindingTier::KindaSlop
-        } else if mild_file_count == 0
-            && visible_method_group_count > 0
-            && visible_method_group_count <= 2
-            && control_flow_only_method_group_count == visible_method_group_count
-        {
-            FindingTier::Clean
-        } else if mild_file_count == 0
-            && visible_method_group_count > 0
-            && visible_method_group_count <= 3
-            && control_flow_only_method_group_count == visible_method_group_count
-        {
-            FindingTier::KindaSlop
         } else if mild_file_count + mild_method_count >= 3 {
             FindingTier::Slop
-        } else if mild_file_count + mild_method_count >= 2 {
+        } else if mild_file_count + mild_method_count >= 1 {
             FindingTier::KindaSlop
         } else {
             FindingTier::Clean
         }
     }
 
-    fn recommended_action(&self, top_reasons: &[String]) -> String {
+    fn recommended_action(&self, top_reasons: &[String], flagged_methods: &[String]) -> String {
+        if !flagged_methods.is_empty() {
+            if top_reasons.iter().any(|reason| {
+                let lower = reason.to_lowercase();
+                lower.contains("duplicated decision")
+                    || lower.contains("ceremonial logic")
+                    || lower.contains("unnecessarily complicated")
+                    || lower.contains("hidden intent")
+                    || lower.contains("needless indirection")
+                    || lower.contains("state transition")
+            }) {
+                return "simplify the flagged method and remove the unnecessary machinery"
+                    .to_string();
+            }
+            return "simplify the flagged method and keep its intent direct".to_string();
+        }
+
         let has_reason = |kind| {
             top_reasons
                 .iter()
@@ -347,7 +393,7 @@ impl FileVerdictBuilder {
         let recommended_action = if matches!(verdict, FindingTier::Clean) {
             String::new()
         } else {
-            self.recommended_action(&top_reasons)
+            self.recommended_action(&top_reasons, &flagged_methods)
         };
 
         crate::report_types::FileVerdict {
@@ -366,11 +412,15 @@ pub(super) fn classify_signal_tier(tier: FindingTier) -> Option<SignalSeverity> 
         FindingTier::Slop => Some(SignalSeverity::Severe),
         FindingTier::KindaSlop => Some(SignalSeverity::Mild),
         FindingTier::Clean => None,
+        FindingTier::Unresolved => None,
     }
 }
 
-fn is_control_flow_reason(reason: &str) -> bool {
-    slop_reason::is(reason, ReasonKind::ControlFlow)
+fn method_reasons(reasons: &BTreeSet<String>) -> Vec<&String> {
+    reasons
+        .iter()
+        .filter(|reason| !reason.trim().is_empty())
+        .collect()
 }
 
 #[cfg(test)]
@@ -398,7 +448,7 @@ mod tests {
     }
 
     #[test]
-    fn wrapper_method_is_hidden_when_stronger_reasons_exist_elsewhere() {
+    fn semantic_method_reason_remains_visible_alongside_file_reason() {
         let mut builder = FileVerdictBuilder::new("demo.rs".to_string(), FileRole::Library, 2);
         builder.add_file_reason(
             SignalSeverity::Severe,
@@ -413,22 +463,16 @@ mod tests {
         let verdict = builder.finish();
 
         assert!(
-            !verdict
+            verdict
                 .flagged_methods
                 .iter()
                 .any(|method| method == "thin_wrapper")
         );
         assert!(
-            !verdict
-                .top_reasons
-                .iter()
-                .any(|reason| reason.contains("thin wrapper"))
-        );
-        assert!(
             verdict
                 .top_reasons
                 .iter()
-                .any(|reason| reason.contains("file does too much"))
+                .any(|reason| reason.contains("thin wrapper"))
         );
     }
 
@@ -445,5 +489,22 @@ mod tests {
         assert!(verdict.top_reasons.is_empty());
         assert!(verdict.flagged_methods.is_empty());
         assert!(verdict.recommended_action.is_empty());
+    }
+
+    #[test]
+    fn unresolved_method_cannot_be_hidden_by_clean_file_review() {
+        let mut builder = FileVerdictBuilder::new("boundary.py".to_string(), FileRole::Library, 1);
+        builder.mark_llm_review(false, Some("boundary"));
+        builder.mark_llm_review(false, None);
+        builder.add_unresolved_method(
+            Some("boundary"),
+            "interface implementations and external callers were not available",
+        );
+
+        let verdict = builder.finish();
+
+        assert_eq!(verdict.verdict, FindingTier::Unresolved);
+        assert_eq!(verdict.flagged_methods, vec!["boundary".to_string()]);
+        assert!(verdict.top_reasons[0].contains("unresolved review"));
     }
 }

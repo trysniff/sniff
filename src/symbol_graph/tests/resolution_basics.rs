@@ -81,6 +81,7 @@ def test():
         ResolvedSymbol::External {
             file_path,
             symbol_name,
+            ..
         } => {
             assert!(file_path.contains("temp_file_a.py"));
             assert_eq!(symbol_name, "foo");
@@ -138,6 +139,7 @@ func Bar() {
         ResolvedSymbol::External {
             file_path,
             symbol_name,
+            ..
         } => {
             assert!(file_path.contains("a.go"));
             assert_eq!(symbol_name, "Foo");
@@ -248,6 +250,7 @@ export function run() {
         ResolvedSymbol::External {
             file_path,
             symbol_name,
+            ..
         } => {
             assert!(file_path.contains("a.js"));
             assert_eq!(symbol_name, "greet");
@@ -307,6 +310,7 @@ func Bar() {{
         ResolvedSymbol::External {
             file_path,
             symbol_name,
+            ..
         } => {
             assert!(file_path.contains("a.go"));
             assert_eq!(symbol_name, "Foo");
@@ -362,6 +366,7 @@ pub fn run() {
         ResolvedSymbol::External {
             file_path,
             symbol_name,
+            ..
         } => {
             assert!(file_path.contains("utils.rs"));
             assert_eq!(symbol_name, "helper");
@@ -424,6 +429,7 @@ pub fn run() {
         ResolvedSymbol::External {
             file_path,
             symbol_name,
+            ..
         } => {
             assert_eq!(normalize_path(file_path), normalize_path(&foo_file));
             assert_eq!(symbol_name, "make_thing");
@@ -449,6 +455,7 @@ impl Thing {
         Thing
     }
 }
+
 "#,
     );
     let consumer_file = write_temp_file(
@@ -483,6 +490,7 @@ pub fn run() {
         ResolvedSymbol::External {
             file_path,
             symbol_name,
+            ..
         } => {
             assert_eq!(normalize_path(file_path), normalize_path(&foo_file));
             assert_eq!(symbol_name, "new");

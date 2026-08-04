@@ -18,12 +18,14 @@ fn parse_js_ts_symbols(source_text: &str, file_path: &str) -> LocalFileSymbols {
         imports: Vec::new(),
         exports: Vec::new(),
         references: Vec::new(),
-        scopes: vec![HashSet::new()],
         next_id: 0,
         current_name_hint: None,
-        in_class: false,
-        in_function_body: false,
+        current_class: None,
+        current_class_exported: false,
+        current_object: None,
+        current_object_exported: false,
         is_exported_context: false,
+        callable_depth: 0,
     };
 
     extractor.visit_program(&parsed.program);
@@ -33,6 +35,8 @@ fn parse_js_ts_symbols(source_text: &str, file_path: &str) -> LocalFileSymbols {
         definitions: extractor.definitions,
         imports: extractor.imports,
         exports: extractor.exports,
+        modules: Vec::new(),
+        types: Vec::new(),
         references: extractor.references,
     }
 }
@@ -43,6 +47,8 @@ fn parse_python_symbols(source_text: &str, file_path: &str) -> LocalFileSymbols 
         definitions: Vec::new(),
         imports: Vec::new(),
         exports: Vec::new(),
+        modules: Vec::new(),
+        types: Vec::new(),
         references: Vec::new(),
     };
 
@@ -58,13 +64,16 @@ fn parse_python_symbols(source_text: &str, file_path: &str) -> LocalFileSymbols 
             methods: Vec::new(),
             definitions: Vec::new(),
             imports: Vec::new(),
+            scoped_imports: Vec::new(),
             exports: Vec::new(),
+            types: Vec::new(),
             references: Vec::new(),
             scopes: vec![HashSet::new()],
             next_id: 0,
             parent_is_class: false,
             in_function_body: false,
             scanned: false,
+            explicit_exports: None,
         };
 
         for stmt in module.body {
@@ -74,6 +83,7 @@ fn parse_python_symbols(source_text: &str, file_path: &str) -> LocalFileSymbols 
         symbols.definitions = extractor.definitions;
         symbols.imports = extractor.imports;
         symbols.exports = extractor.exports;
+        symbols.types = extractor.types;
         symbols.references = extractor.references;
     }
 
@@ -86,6 +96,8 @@ fn parse_rust_symbols(source_text: &str, file_path: &str) -> LocalFileSymbols {
         definitions: Vec::new(),
         imports: Vec::new(),
         exports: Vec::new(),
+        modules: Vec::new(),
+        types: Vec::new(),
         references: Vec::new(),
     };
 
@@ -97,6 +109,7 @@ fn parse_rust_symbols(source_text: &str, file_path: &str) -> LocalFileSymbols {
             definitions: Vec::new(),
             imports: Vec::new(),
             exports: Vec::new(),
+            modules: Vec::new(),
             references: Vec::new(),
             scopes: vec![HashSet::new()],
             next_id: 0,
@@ -108,6 +121,7 @@ fn parse_rust_symbols(source_text: &str, file_path: &str) -> LocalFileSymbols {
         symbols.definitions = extractor.definitions;
         symbols.imports = extractor.imports;
         symbols.exports = extractor.exports;
+        symbols.modules = extractor.modules;
         symbols.references = extractor.references;
     }
 
@@ -140,6 +154,8 @@ fn parse_kotlin_symbols(
         definitions: Vec::new(),
         imports: Vec::new(),
         exports: Vec::new(),
+        modules: Vec::new(),
+        types: Vec::new(),
         references: Vec::new(),
     };
 
@@ -156,6 +172,7 @@ fn parse_kotlin_symbols(
             definitions: Vec::new(),
             imports: Vec::new(),
             exports: Vec::new(),
+            modules: Vec::new(),
             references: Vec::new(),
             scopes: vec![HashSet::new()],
             next_id: 0,
@@ -165,6 +182,7 @@ fn parse_kotlin_symbols(
         symbols.definitions = extractor.definitions;
         symbols.imports = extractor.imports;
         symbols.exports = extractor.exports;
+        symbols.modules = extractor.modules;
         symbols.references = extractor.references;
     }
 
@@ -181,6 +199,8 @@ fn parse_go_symbols(
         definitions: Vec::new(),
         imports: Vec::new(),
         exports: Vec::new(),
+        modules: Vec::new(),
+        types: Vec::new(),
         references: Vec::new(),
     };
 
@@ -244,6 +264,8 @@ pub(crate) fn parse_symbols_for_language(
             definitions: Vec::new(),
             imports: Vec::new(),
             exports: Vec::new(),
+            modules: Vec::new(),
+            types: Vec::new(),
             references: Vec::new(),
         },
     }

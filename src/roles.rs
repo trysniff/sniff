@@ -1,6 +1,9 @@
 use crate::llm::{LLMClient, ResponseSchema};
 use crate::types::FileRecord;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
+use std::path::{Path, PathBuf};
 #[cfg(test)]
 use std::sync::Mutex;
 use std::sync::{Arc, OnceLock, RwLock};
@@ -80,7 +83,6 @@ pub fn is_detector_support_module(file_path: &str) -> bool {
             | "src/analyzer_support.rs"
             | "src/analyzer_file_verdicts.rs"
             | "src/analyzer_verdicts_detector.rs"
-            | "src/analyzer_verdicts_clear.rs"
             | "src/analyzer_verdicts_rules.rs"
             | "src/analyzer_verdicts_rules_analysis.rs"
             | "src/file_verdicts_builder.rs"
@@ -102,7 +104,6 @@ pub fn is_detector_support_module(file_path: &str) -> bool {
         || normalized.ends_with("/analyzer_support.rs")
         || normalized.ends_with("/analyzer_file_verdicts.rs")
         || normalized.ends_with("/analyzer_verdicts_detector.rs")
-        || normalized.ends_with("/analyzer_verdicts_clear.rs")
         || normalized.ends_with("/analyzer_verdicts_rules.rs")
         || normalized.ends_with("/analyzer_verdicts_rules_analysis.rs")
         || normalized.ends_with("/file_verdicts_builder.rs")
@@ -132,25 +133,27 @@ fn truncate_source(source: &str, max_chars: usize) -> String {
     format!("{head_text}\n...\n{tail_text}")
 }
 
-fn parse_role(value: &serde_json::Value) -> FileRole {
+fn parse_role(value: &serde_json::Value) -> Result<FileRole, String> {
     let role = value
         .get("role")
         .and_then(|v| v.as_str())
-        .unwrap_or("")
+        .ok_or_else(|| "role classification response is missing a string role".to_string())?
         .trim()
         .to_lowercase();
 
     match role.as_str() {
-        "cli_entrypoint" | "entrypoint" => FileRole::Entrypoint,
-        "adapter_integration" => FileRole::AdapterIntegration,
-        "example" => FileRole::Example,
-        "fixture" => FileRole::Fixture,
-        "test" => FileRole::Test,
-        "docs" => FileRole::Docs,
-        "generated" => FileRole::Generated,
-        "core_library" | "library" => FileRole::Library,
-        "mixed" => FileRole::Mixed,
-        _ => FileRole::Mixed,
+        "cli_entrypoint" | "entrypoint" => Ok(FileRole::Entrypoint),
+        "adapter_integration" => Ok(FileRole::AdapterIntegration),
+        "example" => Ok(FileRole::Example),
+        "fixture" => Ok(FileRole::Fixture),
+        "test" => Ok(FileRole::Test),
+        "docs" => Ok(FileRole::Docs),
+        "generated" => Ok(FileRole::Generated),
+        "core_library" | "library" => Ok(FileRole::Library),
+        "mixed" => Ok(FileRole::Mixed),
+        other => Err(format!(
+            "role classification returned unsupported role `{other}`"
+        )),
     }
 }
 
@@ -186,21 +189,157 @@ Return only JSON:\n\
         truncate_source(&file.source, 2800)
     );
 
+    // Role is supporting repository metadata, not a semantic slop verdict.
+    // Schema retries already protect this call; consensus would buy the same
+    // temperature-zero classification at least twice for every unresolved file.
     let (result, in_tok, out_tok) = client
-        .call(&prompt, ResponseSchema::RoleClassification)
+        .call_single(&prompt, ResponseSchema::RoleClassification)
         .await?;
-    let role = result.as_ref().map(parse_role).unwrap_or(FileRole::Mixed);
+    let result = result.ok_or_else(|| {
+        "role classification returned no valid JSON response after retries".to_string()
+    })?;
+    let role = parse_role(&result)?;
 
     Ok((role, in_tok, out_tok))
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct RoleCheckpointEntry {
+    key: String,
+    role: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct RoleCheckpointFile {
+    version: u32,
+    context: String,
+    completed: Vec<RoleCheckpointEntry>,
+}
+
+struct RoleCheckpointStore {
+    path: PathBuf,
+    context: String,
+    completed: HashMap<String, FileRole>,
+}
+
+impl RoleCheckpointStore {
+    fn load(path: &Path, context: &str) -> Result<Self, String> {
+        let completed = match std::fs::read_to_string(path) {
+            Ok(contents) => match serde_json::from_str::<RoleCheckpointFile>(&contents) {
+                Ok(file) if file.version == 1 && file.context == context => file
+                    .completed
+                    .into_iter()
+                    .map(|entry| {
+                        parse_role(&serde_json::json!({"role": entry.role}))
+                            .map(|role| (entry.key, role))
+                    })
+                    .collect::<Result<HashMap<_, _>, _>>()?,
+                Ok(_) => HashMap::new(),
+                Err(err) => {
+                    eprintln!(
+                        "Ignoring unreadable Sniff role checkpoint {}: {}",
+                        path.display(),
+                        err
+                    );
+                    HashMap::new()
+                }
+            },
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => HashMap::new(),
+            Err(err) => {
+                return Err(format!(
+                    "failed to read Sniff role checkpoint {}: {err}",
+                    path.display()
+                ));
+            }
+        };
+
+        Ok(Self {
+            path: path.to_path_buf(),
+            context: context.to_string(),
+            completed,
+        })
+    }
+
+    fn record(&mut self, key: String, role: FileRole) -> Result<(), String> {
+        self.completed.insert(key, role);
+        self.persist()
+    }
+
+    fn persist(&self) -> Result<(), String> {
+        let mut completed: Vec<_> = self
+            .completed
+            .iter()
+            .map(|(key, role)| RoleCheckpointEntry {
+                key: key.clone(),
+                role: file_role_label(*role).to_string(),
+            })
+            .collect();
+        completed.sort_by(|left, right| left.key.cmp(&right.key));
+        let contents = serde_json::to_string_pretty(&RoleCheckpointFile {
+            version: 1,
+            context: self.context.clone(),
+            completed,
+        })
+        .map_err(|err| format!("failed to serialize Sniff role checkpoint: {err}"))?;
+        if let Some(parent) = self.path.parent() {
+            std::fs::create_dir_all(parent).map_err(|err| {
+                format!(
+                    "failed to create Sniff role checkpoint directory {}: {err}",
+                    parent.display()
+                )
+            })?;
+        }
+        let temporary = self.path.with_extension("json.tmp");
+        std::fs::write(&temporary, contents).map_err(|err| {
+            format!(
+                "failed to write Sniff role checkpoint {}: {err}",
+                temporary.display()
+            )
+        })?;
+        if self.path.exists() {
+            std::fs::remove_file(&self.path).map_err(|err| {
+                format!(
+                    "failed to replace Sniff role checkpoint {}: {err}",
+                    self.path.display()
+                )
+            })?;
+        }
+        std::fs::rename(&temporary, &self.path).map_err(|err| {
+            format!(
+                "failed to finalize Sniff role checkpoint {}: {err}",
+                self.path.display()
+            )
+        })
+    }
+}
+
+fn role_checkpoint_key(file: &FileRecord) -> String {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    file.file_path.hash(&mut hasher);
+    file.language.hash(&mut hasher);
+    file.source.hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
 }
 
 pub async fn resolve_file_roles(
     file_records: &[FileRecord],
     client: Arc<LLMClient>,
 ) -> Result<(usize, usize), String> {
+    resolve_file_roles_with_checkpoint(file_records, client, None).await
+}
+
+pub async fn resolve_file_roles_with_checkpoint(
+    file_records: &[FileRecord],
+    client: Arc<LLMClient>,
+    checkpoint_path: Option<&Path>,
+) -> Result<(usize, usize), String> {
     let mut input_tokens = 0usize;
     let mut output_tokens = 0usize;
     let mut unresolved = Vec::new();
+    let context = client.review_context_key();
+    let mut checkpoint = checkpoint_path
+        .map(|path| RoleCheckpointStore::load(path, &context))
+        .transpose()?;
 
     for file in file_records {
         if let Some(role) = heuristic_file_role(&file.file_path) {
@@ -216,10 +355,23 @@ pub async fn resolve_file_roles(
     }
 
     for file in unresolved {
+        let key = role_checkpoint_key(&file);
+        if let Some(role) = checkpoint
+            .as_ref()
+            .and_then(|store| store.completed.get(&key))
+            .copied()
+        {
+            cache_file_role(&file.file_path, role);
+            continue;
+        }
+
         match classify_with_llm(client.as_ref(), &file).await {
             Ok((role, in_tok, out_tok)) => {
                 let file_path = file.file_path.clone();
                 cache_file_role(&file_path, role);
+                if let Some(store) = checkpoint.as_mut() {
+                    store.record(key, role)?;
+                }
                 input_tokens += in_tok;
                 output_tokens += out_tok;
             }
@@ -233,6 +385,17 @@ pub async fn resolve_file_roles(
     }
 
     Ok((input_tokens, output_tokens))
+}
+
+pub fn remove_role_checkpoint(path: &Path) -> Result<(), String> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(format!(
+            "failed to remove completed Sniff role checkpoint {}: {err}",
+            path.display()
+        )),
+    }
 }
 
 fn cache_key(file_path: &str) -> String {
@@ -758,6 +921,33 @@ mod intentional_surface_path_tests {
         ));
         assert!(is_intentional_surface_path("scripts/run_app_server.py"));
         assert!(is_intentional_surface_path("src/main.tsx"));
+    }
+}
+
+#[cfg(test)]
+mod role_parse_tests {
+    use super::{FileRole, parse_role};
+
+    #[test]
+    fn invalid_llm_role_is_a_hard_error() {
+        let error = parse_role(&serde_json::json!({"role": "probably_library"}))
+            .expect_err("unknown roles must not silently become mixed");
+        assert!(error.contains("unsupported role"));
+    }
+
+    #[test]
+    fn missing_llm_role_is_a_hard_error() {
+        let error = parse_role(&serde_json::json!({"reason": "ambiguous"}))
+            .expect_err("missing roles must not silently become mixed");
+        assert!(error.contains("missing a string role"));
+    }
+
+    #[test]
+    fn supported_llm_role_is_parsed_without_fallback() {
+        assert_eq!(
+            parse_role(&serde_json::json!({"role": "core_library"})).unwrap(),
+            FileRole::Library
+        );
     }
 }
 

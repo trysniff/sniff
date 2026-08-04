@@ -19,21 +19,19 @@ pub(super) fn resolve_module_path(ctx: &ResolveContext<'_>, source_module: &str)
     let parent_dir = importing_path.parent()?;
 
     match ctx.language {
-        "javascript" | "typescript" => {
-            js_ts::resolve_js_ts_module_path(parent_dir, source_module, ctx.all_files)
-        }
+        "javascript" | "typescript" => js_ts::resolve_js_ts_module_path(
+            parent_dir,
+            source_module,
+            ctx.project_root,
+            ctx.all_files,
+        ),
         "python" => python::resolve_python_module_path(
             parent_dir,
             source_module,
             ctx.project_root,
             ctx.all_files,
         ),
-        "rust" => rust_path::resolve_rust_module_path(
-            ctx.importing_file,
-            source_module,
-            ctx.project_root,
-            ctx.all_files,
-        ),
+        "rust" => rust_path::resolve_rust_module_path(ctx, source_module),
         "go" => go_path::resolve_go_module_path(source_module, ctx.all_files),
         _ => None,
     }

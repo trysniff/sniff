@@ -5,4 +5,4 @@ mod merge;
 #[path = "file_verdicts_signals.rs"]
 mod signals;
 
-pub use merge::build_file_verdicts;
+pub use merge::{build_file_verdicts, build_file_verdicts_with_mode};

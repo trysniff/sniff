@@ -1,10 +1,13 @@
-use crate::types::LocalFileSymbols;
-use std::collections::HashMap;
+use crate::types::{LocalFileSymbols, ResolvedSymbol};
+use std::collections::{HashMap, HashSet};
 
 pub(crate) struct ResolveContext<'a> {
     importing_file: &'a str,
     project_root: &'a str,
     all_files: &'a HashMap<String, String>,
+    rust_modules: &'a HashMap<(String, String), String>,
+    rust_parents: &'a HashMap<String, String>,
+    rust_crate_names: &'a HashSet<String>,
     language: &'a str,
 }
 
@@ -22,6 +25,8 @@ pub use paths::normalize_path;
 pub struct SymbolGraph {
     pub files: HashMap<String, LocalFileSymbols>,
     pub project_root: String,
+    resolved_imports: HashMap<(String, usize), ResolvedSymbol>,
+    resolved_exports: HashMap<(String, usize), ResolvedSymbol>,
 }
 
 impl SymbolGraph {
@@ -29,6 +34,8 @@ impl SymbolGraph {
         SymbolGraph {
             files: HashMap::new(),
             project_root: project_root.to_string(),
+            resolved_imports: HashMap::new(),
+            resolved_exports: HashMap::new(),
         }
     }
 
@@ -53,5 +60,58 @@ impl SymbolGraph {
 
     pub fn resolve_all(&mut self) {
         self.resolve_all_impl();
+    }
+
+    #[allow(dead_code)] // Consumed by the semantic dossier in the next stacked PR.
+    pub(crate) fn import_targets_definition(
+        &self,
+        file_path: &str,
+        import_index: usize,
+        target_file: &str,
+        target_definition_id: usize,
+    ) -> bool {
+        self.resolved_imports
+            .get(&(file_path.to_string(), import_index))
+            .is_some_and(|resolved| {
+                resolved_matches_definition(resolved, file_path, target_file, target_definition_id)
+            })
+    }
+
+    #[allow(dead_code)] // Consumed by the semantic dossier in the next stacked PR.
+    pub(crate) fn export_targets_definition(
+        &self,
+        file_path: &str,
+        export_index: usize,
+        target_file: &str,
+        target_definition_id: usize,
+    ) -> bool {
+        self.resolved_exports
+            .get(&(file_path.to_string(), export_index))
+            .is_some_and(|resolved| {
+                resolved_matches_definition(resolved, file_path, target_file, target_definition_id)
+            })
+    }
+}
+
+#[allow(dead_code)] // Shared by the staged graph APIs above.
+fn resolved_matches_definition(
+    resolved: &ResolvedSymbol,
+    source_file: &str,
+    target_file: &str,
+    target_definition_id: usize,
+) -> bool {
+    match resolved {
+        ResolvedSymbol::Local(definition_id) => {
+            paths::same_path(source_file, target_file) && *definition_id == target_definition_id
+        }
+        ResolvedSymbol::External {
+            file_path,
+            definition_id: Some(definition_id),
+            ..
+        } => paths::same_path(file_path, target_file) && *definition_id == target_definition_id,
+        ResolvedSymbol::External {
+            definition_id: None,
+            ..
+        } => false,
     }
 }

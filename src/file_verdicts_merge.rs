@@ -6,30 +6,25 @@ use crate::roles::{
 use crate::types::FileRecord;
 
 use super::builder::{FileVerdictBuilder, classify_signal_tier};
-use super::signals::is_supporting_only_reason;
-
-fn add_static_flag(builder: &mut FileVerdictBuilder, flag: &StaticFlag) {
-    let Some(severity) = classify_signal_tier(flag.tier) else {
-        return;
-    };
-
-    if flag
-        .reasons
-        .iter()
-        .all(|reason| is_supporting_only_reason(reason))
-    {
+fn add_llm_verdict(
+    builder: &mut FileVerdictBuilder,
+    verdict: &LLMVerdict,
+    allow_file_findings: bool,
+) {
+    if verdict.method_name.is_none() && !builder.file_observations_enabled() {
         return;
     }
-
-    if let Some(method_name) = &flag.method_name {
-        builder.add_method_reason(method_name.clone(), severity, flag.reasons.join("; "));
-    } else {
-        builder.add_file_reason(severity, flag.reasons.join("; "));
-    }
-}
-
-fn add_llm_verdict(builder: &mut FileVerdictBuilder, verdict: &LLMVerdict) {
     builder.mark_llm_review(verdict.smelly, verdict.method_name.as_deref());
+
+    if verdict.tier == crate::types::FindingTier::Unresolved {
+        builder.add_unresolved_method(verdict.method_name.as_deref(), verdict.reason.clone());
+        return;
+    }
+
+    if verdict.method_name.is_none() && !allow_file_findings {
+        return;
+    }
+
     if !verdict.smelly {
         return;
     }
@@ -38,23 +33,25 @@ fn add_llm_verdict(builder: &mut FileVerdictBuilder, verdict: &LLMVerdict) {
         return;
     };
 
-    if verdict.reason.is_empty() || is_supporting_only_reason(&verdict.reason) {
+    if verdict.reason.is_empty() {
         return;
     }
 
+    let reason = if verdict.evidence.is_empty() {
+        verdict.reason.clone()
+    } else {
+        format!("{} ({})", verdict.reason, verdict.evidence)
+    };
     if let Some(method_name) = &verdict.method_name {
-        let reason = if verdict.evidence.is_empty() {
-            verdict.reason.clone()
-        } else {
-            format!("{} ({})", verdict.reason, verdict.evidence)
-        };
+        // Method reviews are the semantic authority. Do not classify or hide
+        // their reasons with the legacy file-level vocabulary; a valid method
+        // finding such as needless indirection must remain visible even when
+        // its wording happens to resemble wrapper noise.
         builder.add_method_reason(method_name.clone(), severity, reason);
     } else {
-        let reason = if verdict.evidence.is_empty() {
-            verdict.reason.clone()
-        } else {
-            format!("{} ({})", verdict.reason, verdict.evidence)
-        };
+        // File reviews remain available for the explicit --with-file-reviews mode
+        // and for independent cross-method observations. Static signals never
+        // enter this path.
         builder.add_file_reason(severity, reason);
     }
 }
@@ -82,57 +79,29 @@ fn seed_builders(
             None
         };
 
+        let mut builder =
+            FileVerdictBuilder::new(file.file_path.clone(), role, reviewable_method_count(file));
         if skip_reason.is_some() {
-            continue;
+            builder.disable_file_observations();
         }
-
-        builders.insert(
-            file.file_path.clone(),
-            FileVerdictBuilder::new(file.file_path.clone(), role, reviewable_method_count(file)),
-        );
+        builders.insert(file.file_path.clone(), builder);
     }
 
     builders
 }
 
 fn reviewable_method_count(file: &FileRecord) -> usize {
-    if !file.file_path.ends_with(".rs") {
-        return file.methods.len();
-    }
-
-    let Some(cfg_test_line) = file
-        .source
-        .lines()
-        .position(|line| line.trim().starts_with("#[cfg(test)]"))
-        .map(|index| index + 1)
-    else {
-        return file.methods.len();
-    };
-
-    file.methods
-        .iter()
-        .filter(|method| method.start_line <= cfg_test_line)
-        .count()
-}
-
-fn apply_static_flags(
-    builders: &mut std::collections::BTreeMap<String, FileVerdictBuilder>,
-    static_flags: &[StaticFlag],
-) {
-    for flag in static_flags {
-        if let Some(builder) = builders.get_mut(&flag.file_path) {
-            add_static_flag(builder, flag);
-        }
-    }
+    file.methods.len()
 }
 
 fn apply_llm_verdicts(
     builders: &mut std::collections::BTreeMap<String, FileVerdictBuilder>,
     llm_verdicts: &[LLMVerdict],
+    allow_file_findings: bool,
 ) {
     for verdict in llm_verdicts {
         if let Some(builder) = builders.get_mut(&verdict.file_path) {
-            add_llm_verdict(builder, verdict);
+            add_llm_verdict(builder, verdict, allow_file_findings);
         }
     }
 }
@@ -142,13 +111,33 @@ pub fn build_file_verdicts(
     static_flags: &[StaticFlag],
     llm_verdicts: &[LLMVerdict],
 ) -> Vec<crate::report_types::FileVerdict> {
+    build_file_verdicts_with_mode(file_records, static_flags, llm_verdicts, true)
+}
+
+pub fn build_file_verdicts_with_mode(
+    file_records: &[FileRecord],
+    static_flags: &[StaticFlag],
+    llm_verdicts: &[LLMVerdict],
+    allow_file_findings: bool,
+) -> Vec<crate::report_types::FileVerdict> {
     let mut builders = seed_builders(file_records);
-    apply_static_flags(&mut builders, static_flags);
-    apply_llm_verdicts(&mut builders, llm_verdicts);
+    // Static signals are model context and remain available in RunReport. They
+    // are deliberately not merged into final findings: a static-only signal
+    // cannot become Slop or Kinda Slop.
+    let _ = static_flags;
+    apply_llm_verdicts(&mut builders, llm_verdicts, allow_file_findings);
 
     builders
         .into_values()
-        .map(FileVerdictBuilder::finish)
+        .filter_map(|builder| {
+            let file_observations_enabled = builder.file_observations_enabled();
+            let verdict = builder.finish();
+            if !file_observations_enabled && verdict.verdict == crate::types::FindingTier::Clean {
+                None
+            } else {
+                Some(verdict)
+            }
+        })
         .collect()
 }
 
@@ -159,7 +148,7 @@ mod tests {
     use crate::types::{FileRecord, FindingTier, MethodRecord};
 
     #[test]
-    fn medication_numeric_rules_slop_survives_merge() {
+    fn file_level_ai_slop_can_surface_without_static_signals() {
         let file_path =
             "shared/contract/src/commonMain/kotlin/com/pillit/shared/uicontract/MedicationNumericRules.kt"
                 .to_string();
