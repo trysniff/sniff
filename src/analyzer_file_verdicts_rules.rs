@@ -11,10 +11,9 @@ mod versioning;
 
 pub(super) fn should_clear_detector_verdict(
     file: &crate::types::FileRecord,
-    reason: &str,
     lower_reason: &str,
 ) -> bool {
-    detector::should_clear_detector_verdict(file, reason, lower_reason)
+    detector::should_clear_detector_verdict(file, lower_reason)
 }
 
 pub(super) fn should_clear_analysis_verdict(

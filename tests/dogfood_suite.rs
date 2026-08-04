@@ -210,6 +210,480 @@ fn repair_mock_file_evidence(request: &str, body: &str) -> String {
     envelope.to_string()
 }
 
+fn remove_method_line_number_prefixes(source: &str) -> String {
+    source
+        .lines()
+        .map(|line| {
+            let Some((prefix, remainder)) = line.split_once('|') else {
+                return line;
+            };
+            if prefix.trim().parse::<usize>().is_ok() {
+                remainder.strip_prefix(' ').unwrap_or(remainder)
+            } else {
+                line
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn request_prompt(request: &str) -> String {
+    let body = request
+        .split_once("\r\n\r\n")
+        .map(|(_, body)| body)
+        .unwrap_or(request);
+    let Ok(payload) = serde_json::from_str::<serde_json::Value>(body) else {
+        return request.to_string();
+    };
+    let Some(content) = payload
+        .get("messages")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|messages| messages.last())
+        .and_then(|message| message.get("content"))
+    else {
+        return request.to_string();
+    };
+    if let Some(content) = content.as_str() {
+        return content.to_string();
+    }
+    content
+        .as_array()
+        .and_then(|blocks| blocks.first())
+        .and_then(|block| block.get("text"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or(request)
+        .to_string()
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MockMethodPass {
+    Intent,
+    Semantic,
+}
+
+fn mock_method_pass(prompt: &str) -> Option<MockMethodPass> {
+    if prompt.contains("INTENT INVESTIGATION PASS") || prompt.contains("semantic intent pass") {
+        return Some(MockMethodPass::Intent);
+    }
+    if prompt.contains("ADVERSARIAL SEMANTIC PASS")
+        || prompt.contains("FINAL ADJUDICATION PASS")
+        || prompt.contains("adversarial semantic pass")
+        || prompt.contains("final adjudicator")
+        || prompt.contains("focused dead-method adjudicator")
+        || prompt
+            .contains("final severity judge for a deterministically proven private-unused method")
+        || prompt.contains("claim-scoped adjudicator")
+    {
+        return Some(MockMethodPass::Semantic);
+    }
+    None
+}
+
+fn batch_method_block(prompt: &str, index: usize) -> Option<&str> {
+    let marker = format!("METHOD KEY: m{index}\n");
+    let block = prompt.split_once(&marker)?.1;
+    Some(
+        block
+            .split_once("\n\n================ METHOD ================\n\n")
+            .map(|(block, _)| block)
+            .unwrap_or(block),
+    )
+}
+
+fn batch_method_path(prompt: &str, index: usize) -> Option<&str> {
+    batch_method_block(prompt, index)?
+        .lines()
+        .find_map(|line| line.strip_prefix("File path: "))
+}
+
+fn batch_method_name(prompt: &str, index: usize) -> Option<&str> {
+    batch_method_block(prompt, index)?
+        .lines()
+        .find_map(|line| line.strip_prefix("Method: "))?
+        .split_once(" (")
+        .map(|(name, _)| name)
+}
+
+fn authoritative_file_source<'a>(prompt: &'a str, path: &str) -> Option<&'a str> {
+    let file_marker = format!("Authoritative full containing file: {path}\n---\n");
+    let rest = prompt.split_once(&file_marker)?.1;
+    for delimiter in [
+        "\n---\n\n================ FILE ================\n\n",
+        "\n---\n\nMETHOD KEY:",
+    ] {
+        if let Some((source, _)) = rest.split_once(delimiter) {
+            return Some(source);
+        }
+    }
+    None
+}
+
+fn batch_method_source(prompt: &str, index: usize) -> Option<(String, usize)> {
+    let block = batch_method_block(prompt, index)?;
+    let path = batch_method_path(prompt, index)?;
+    let range = block
+        .lines()
+        .find_map(|line| line.strip_prefix("Evidence line range: "))?;
+    let (start, end) = range.split_once(" through ")?;
+    let start = start.trim().parse::<usize>().ok()?;
+    let end = end.trim().parse::<usize>().ok()?;
+    let file_source = authoritative_file_source(prompt, path)?;
+    let method_source = file_source
+        .lines()
+        .skip(start.saturating_sub(1))
+        .take(end.saturating_sub(start).saturating_add(1))
+        .collect::<Vec<_>>()
+        .join("\n");
+    Some((method_source, start))
+}
+
+fn mock_hotspot_path(path: &str) -> bool {
+    let path = path.replace('\\', "/").to_lowercase();
+    [
+        "sloppy.py",
+        "signup-wrapper/index.ts",
+        "session-launch-policy.ts",
+        "session-actions.ts",
+        "session-state.ts",
+        "session-safe-start.ts",
+        "session-launch-orchestration.ts",
+        "runtime-message-validation.ts",
+        "drop-payload-staging.ts",
+        "service-worker-runtime-handlers.ts",
+        "registry-sync.ts",
+        "runtime-wireup.ts",
+        "feedback-handlers.ts",
+        "crypto-feedback.ts",
+        "frame-sync.ts",
+        "pipeline.py",
+        "planning.py",
+        "repository_client.py",
+        "rationale.py",
+        "comments.py",
+        "engine.py",
+        "recommendations.py",
+        "contracts.py",
+        "ingress.py",
+        "reactions.py",
+        "webhook.py",
+        "webhook_commands.py",
+        "webhook_service.py",
+        "rendering.py",
+        "webhook_release_flow.py",
+        "persistence_ephemeral.py",
+        "persistence_sqlite.py",
+        "release_job.py",
+        "finding_python_signatures.py",
+        "finding_js_ts.py",
+        "finding_python_signature_findings.py",
+        "finding_python_surface_findings.py",
+        "semantic_review.py",
+        "case_file.py",
+        "chunking.py",
+        "semantic.py",
+        "checkout-rpc.ts",
+        "domain-gateway.ts",
+        "multiline-evidence.ts",
+        "applicationcontroller.js",
+        "jobcontroller.js",
+        "postscontroller.js",
+        "usercontroller.js",
+    ]
+    .iter()
+    .any(|suffix| path.ends_with(suffix))
+}
+
+fn apply_mock_semantic_tier(review: &mut serde_json::Value, tier: &str) {
+    let unresolved = tier == "unresolved";
+    let clean = tier == "clean";
+    review["tier"] = serde_json::Value::String(tier.to_string());
+    review["contract_status"] = serde_json::Value::String(
+        if clean {
+            "required"
+        } else if unresolved {
+            "unknown"
+        } else {
+            "unnecessary"
+        }
+        .to_string(),
+    );
+    review["behavior_status"] =
+        serde_json::Value::String(if unresolved { "unknown" } else { "preserved" }.to_string());
+    review["pattern"] = serde_json::Value::String(if clean || unresolved {
+        "none".to_string()
+    } else {
+        "unnecessarily_complicated".to_string()
+    });
+    review["simplification"] = serde_json::Value::String(
+        if clean || unresolved {
+            "none"
+        } else {
+            "replace the unnecessary machinery with the direct operation"
+        }
+        .to_string(),
+    );
+    review["change_scope"] =
+        serde_json::Value::String(if clean || unresolved { "none" } else { "local" }.to_string());
+    if clean {
+        review["reason"] = serde_json::Value::String("clean".to_string());
+        review["missing_evidence"] = serde_json::json!([]);
+        review["evidence"] = serde_json::json!([]);
+    }
+}
+
+fn single_method_source(prompt: &str) -> (String, usize) {
+    let source = prompt
+        .split_once("Method source:\n---\n")
+        .and_then(|(_, rest)| rest.split_once("\n---"))
+        .map(|(source, _)| remove_method_line_number_prefixes(source))
+        .unwrap_or_default();
+    let start = prompt
+        .split_once("absolute file line numbers from ")
+        .and_then(|(_, rest)| rest.split_once(" through "))
+        .and_then(|(start, _)| start.trim().parse::<usize>().ok())
+        .unwrap_or(1);
+    (source, start)
+}
+
+fn exact_mock_evidence(source: &str, method_start: usize, preferred: &str) -> serde_json::Value {
+    let quote = if !preferred.trim().is_empty() && source.contains(preferred) {
+        preferred.to_string()
+    } else {
+        source
+            .lines()
+            .find(|line| !line.trim().is_empty())
+            .unwrap_or("return value")
+            .to_string()
+    };
+    let quote_start = source
+        .lines()
+        .position(|line| line.contains(&quote))
+        .map(|offset| method_start + offset)
+        .unwrap_or(method_start);
+    let quote_end = quote_start + quote.lines().count().saturating_sub(1);
+    serde_json::json!([{
+        "start_line": quote_start,
+        "end_line": quote_end,
+        "quote": quote
+    }])
+}
+
+fn semanticize_method_response(request: &str, body: &str) -> String {
+    let decoded_prompt = request_prompt(request);
+    let Some(pass) = mock_method_pass(&decoded_prompt) else {
+        return body.to_string();
+    };
+
+    let Ok(mut envelope) = serde_json::from_str::<serde_json::Value>(body) else {
+        return body.to_string();
+    };
+    if decoded_prompt
+        .contains("final severity judge for a deterministically proven private-unused method")
+    {
+        let Some(content_slot) = envelope.pointer_mut("/choices/0/message/content") else {
+            return body.to_string();
+        };
+        *content_slot = serde_json::Value::String(
+            serde_json::json!({
+                "tier": "slop",
+                "reason": "The unused private method adds misleading conceptual machinery."
+            })
+            .to_string(),
+        );
+        return envelope.to_string();
+    }
+    let Some(content) = envelope
+        .pointer("/choices/0/message/content")
+        .and_then(serde_json::Value::as_str)
+    else {
+        return body.to_string();
+    };
+    let Ok(mut verdict) = serde_json::from_str::<serde_json::Value>(content) else {
+        return body.to_string();
+    };
+    let tier = verdict
+        .get("tier")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("clean")
+        .to_string();
+    let reason = verdict
+        .get("reason")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let batch_count = decoded_prompt.matches("METHOD KEY:").count();
+
+    if pass == MockMethodPass::Intent {
+        let missing_evidence = verdict
+            .get("missing_evidence")
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!([]));
+        let content = if batch_count > 0 {
+            let has_path_oracle = (0..batch_count).any(|index| {
+                batch_method_path(&decoded_prompt, index).is_some_and(mock_hotspot_path)
+            });
+            let reviews = (0..batch_count)
+                .map(|index| {
+                    let method_tier = if has_path_oracle {
+                        if batch_method_path(&decoded_prompt, index)
+                            .is_some_and(mock_hotspot_path)
+                        {
+                            "slop"
+                        } else {
+                            "clean"
+                        }
+                    } else {
+                        tier.as_str()
+                    };
+                    serde_json::json!({
+                        "method_key": format!("m{index}"),
+                        "intent": "The method performs the behavior represented by this dogfood fixture.",
+                        "contract_status": if method_tier == "clean" { "required" } else if method_tier == "unresolved" { "unknown" } else { "unnecessary" },
+                        "necessity_check": "The fixture dossier establishes the method contract used by this test.",
+                        "missing_evidence": if method_tier == "unresolved" { missing_evidence.clone() } else { serde_json::json!([]) }
+                    })
+                })
+                .collect::<Vec<_>>();
+            serde_json::json!({"reviews": reviews})
+        } else {
+            serde_json::json!({
+                "intent": "The method performs the behavior represented by this dogfood fixture.",
+                "contract_status": if tier == "clean" { "required" } else if tier == "unresolved" { "unknown" } else { "unnecessary" },
+                "necessity_check": "The fixture dossier establishes the method contract used by this test.",
+                "missing_evidence": missing_evidence
+            })
+        };
+        let Some(content_slot) = envelope.pointer_mut("/choices/0/message/content") else {
+            return body.to_string();
+        };
+        *content_slot = serde_json::Value::String(content.to_string());
+        return envelope.to_string();
+    }
+
+    let unresolved = tier == "unresolved";
+    verdict["contract_status"] = serde_json::Value::String(
+        if tier == "clean" {
+            "required"
+        } else if unresolved {
+            "unknown"
+        } else {
+            "unnecessary"
+        }
+        .to_string(),
+    );
+    verdict["contract_impact"] = serde_json::Value::String(
+        if tier == "clean" {
+            "The fixture contract requires the current method shape."
+        } else if unresolved {
+            "The contract impact cannot be established from the fixture evidence."
+        } else {
+            "The simplification preserves the fixture method signature and contract."
+        }
+        .to_string(),
+    );
+    verdict["dependency_impact"] = serde_json::Value::String(if tier == "clean" {
+        "The fixture callers depend on the current behavior."
+    } else if unresolved {
+        "External dependency impact cannot be established."
+    } else {
+        "No fixture caller, test, adapter, callback, re-export, or compatibility path depends on the redundant machinery."
+    }
+    .to_string());
+    verdict["simplification"] = serde_json::Value::String(
+        if unresolved || tier == "clean" {
+            "none"
+        } else {
+            "replace the unnecessary machinery with the direct operation"
+        }
+        .to_string(),
+    );
+    verdict["change_scope"] = serde_json::Value::String(
+        if unresolved || tier == "clean" {
+            "none"
+        } else {
+            "local"
+        }
+        .to_string(),
+    );
+    verdict["behavior_status"] =
+        serde_json::Value::String(if unresolved { "unknown" } else { "preserved" }.to_string());
+    if !unresolved {
+        verdict["missing_evidence"] = serde_json::json!([]);
+    }
+
+    verdict["pattern"] = serde_json::Value::String(if tier == "clean" || unresolved {
+        "none".to_string()
+    } else {
+        "unnecessarily_complicated".to_string()
+    });
+    verdict["intent"] = serde_json::Value::String(
+        "The method performs the behavior represented by this dogfood fixture.".to_string(),
+    );
+    verdict["necessity_check"] = serde_json::Value::String(
+        "The fixture response includes a semantic necessity check.".to_string(),
+    );
+    if tier == "clean" || unresolved {
+        verdict["smelly"] = serde_json::Value::Bool(false);
+        verdict["evidence"] = serde_json::json!([]);
+    } else {
+        verdict["smelly"] = serde_json::Value::Bool(true);
+        let original_evidence = verdict
+            .get("evidence")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
+        let (source, method_start) = single_method_source(&decoded_prompt);
+        verdict["evidence"] = exact_mock_evidence(&source, method_start, original_evidence);
+    }
+    verdict["reason"] = serde_json::Value::String(reason);
+
+    let Some(content_slot) = envelope.pointer_mut("/choices/0/message/content") else {
+        return body.to_string();
+    };
+    if batch_count > 0 {
+        let has_path_oracle = (0..batch_count)
+            .any(|index| batch_method_path(&decoded_prompt, index).is_some_and(mock_hotspot_path));
+        let reviews = (0..batch_count)
+            .map(|index| {
+                let mut review = verdict.clone();
+                review["method_key"] = serde_json::Value::String(format!("m{index}"));
+                let method_tier = if has_path_oracle {
+                    if batch_method_path(&decoded_prompt, index).is_some_and(mock_hotspot_path) {
+                        "slop"
+                    } else {
+                        "clean"
+                    }
+                } else {
+                    tier.as_str()
+                };
+                apply_mock_semantic_tier(&mut review, method_tier);
+                if method_tier != "clean" && method_tier != "unresolved" {
+                    let preferred = review
+                        .get("evidence")
+                        .and_then(serde_json::Value::as_array)
+                        .and_then(|entries| entries.first())
+                        .and_then(|entry| entry.get("quote"))
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("");
+                    if let Some((source, start)) = batch_method_source(&decoded_prompt, index) {
+                        let preferred = if source.contains(preferred) {
+                            preferred
+                        } else {
+                            batch_method_name(&decoded_prompt, index).unwrap_or(preferred)
+                        };
+                        review["evidence"] = exact_mock_evidence(&source, start, preferred);
+                    }
+                }
+                review
+            })
+            .collect::<Vec<_>>();
+        *content_slot =
+            serde_json::Value::String(serde_json::json!({"reviews": reviews}).to_string());
+    } else {
+        *content_slot = serde_json::Value::String(verdict.to_string());
+    }
+    envelope.to_string()
+}
+
 fn spawn_openai_style_server() -> (String, Arc<AtomicUsize>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
@@ -233,6 +707,7 @@ fn spawn_openai_style_server() -> (String, Arc<AtomicUsize>) {
             } else {
                 r#"{"choices":[{"message":{"content":"{\"smelly\":false,\"tier\":\"clean\",\"evidence\":\"\",\"reason\":\"clean\"}"}}]}"#
             };
+            let body = semanticize_method_response(&request, body);
             let response = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 body.len(),
@@ -246,6 +721,46 @@ fn spawn_openai_style_server() -> (String, Arc<AtomicUsize>) {
     });
 
     (format!("http://{}", addr), hits)
+}
+
+fn spawn_unresolved_method_server() -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    thread::spawn(move || {
+        loop {
+            let Ok((stream, _)) = listener.accept() else {
+                break;
+            };
+            let (mut stream, request) = read_http_request(stream);
+            let prompt = request_prompt(&request);
+            let content = if prompt.contains("You classify codebase file roles for Sniff.")
+                || (request.contains("probe")
+                    && request.contains("Return exactly one JSON object with this shape"))
+            {
+                r#"{"role":"core_library","reason":"production module"}"#
+            } else if prompt.contains("Filename:") {
+                r#"{"smelly":false,"tier":"clean","evidence":"","cohesive":true,"name_accurate":true,"reason":"clean"}"#
+            } else {
+                r#"{"smelly":false,"tier":"unresolved","pattern":"none","intent":"Forward to an external package boundary.","reason":"The boundary contract cannot be established from repository evidence.","necessity_check":"The external implementation is unavailable.","contract_status":"unknown","contract_impact":"The effect of simplifying the boundary cannot be established.","dependency_impact":"External consumers cannot be inspected.","simplification":"none","change_scope":"none","behavior_status":"unknown","missing_evidence":["external package implementation and consumers"],"evidence":[]}"#
+            };
+            let body = serde_json::json!({
+                "choices": [{"message": {"content": content}}]
+            })
+            .to_string();
+            let body = semanticize_method_response(&request, &body);
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = stream.write_all(response.as_bytes());
+            let _ = stream.flush();
+            let _ = stream.shutdown(Shutdown::Both);
+        }
+    });
+
+    format!("http://{}", addr)
 }
 
 fn spawn_prompt_logging_server() -> (String, Arc<AtomicUsize>, Arc<Mutex<Vec<String>>>) {
@@ -376,6 +891,7 @@ fn spawn_prompt_logging_server() -> (String, Arc<AtomicUsize>, Arc<Mutex<Vec<Str
                 r#"{"choices":[{"message":{"content":"{\"smelly\":false,\"tier\":\"clean\",\"evidence\":\"\",\"cohesive\":true,\"name_accurate\":true,\"reason\":\"clean\"}"}}]}"#
             };
             let body = repair_mock_file_evidence(&request, body);
+            let body = semanticize_method_response(&request, &body);
             let response = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 body.len(),
@@ -438,6 +954,7 @@ fn spawn_bumpkin_shape_server() -> (String, Arc<AtomicUsize>, Arc<Mutex<Vec<Stri
                 r#"{"choices":[{"message":{"content":"{\"smelly\":false,\"tier\":\"clean\",\"evidence\":\"\",\"cohesive\":true,\"name_accurate\":true,\"reason\":\"clean\"}"}}]}"#
             };
             let body = repair_mock_file_evidence(&request, body);
+            let body = semanticize_method_response(&request, &body);
             let response = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 body.len(),
@@ -484,6 +1001,7 @@ fn spawn_bumpkin_github_integration_server() -> (String, ManagedChild) {
             } else {
                 r#"{"choices":[{"message":{"content":"{\"smelly\":false,\"tier\":\"clean\",\"evidence\":\"\",\"cohesive\":true,\"name_accurate\":true,\"reason\":\"clean\"}"}}]}"#
             };
+            let body = semanticize_method_response(&request, body);
             let response = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 body.len(),

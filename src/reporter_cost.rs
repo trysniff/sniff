@@ -12,11 +12,17 @@ fn configured_rate(name: &str, default: f64) -> f64 {
 
 pub(super) fn calculate_cost(s: &RunStats, _config: &ResolvedConfig) -> String {
     let input_per_m = configured_rate("SNIFF_INPUT_COST_PER_MILLION", 0.14);
+    let cached_input_per_m = configured_rate("SNIFF_CACHED_INPUT_COST_PER_MILLION", 0.0028);
     let output_per_m = configured_rate("SNIFF_OUTPUT_COST_PER_MILLION", 0.28);
-    let rate_suffix = format!("; rates ${input_per_m:.2}/M in / ${output_per_m:.2}/M out");
+    let cached_input_tokens = s.cached_input_tokens.min(s.input_tokens);
+    let cache_miss_input_tokens = s.input_tokens - cached_input_tokens;
+    let rate_suffix = format!(
+        "; cached {cached_input_tokens}; rates ${input_per_m:.2}/M miss / ${cached_input_per_m:.4}/M cached / ${output_per_m:.2}/M out"
+    );
 
-    let cost =
-        (s.input_tokens as f64 / 1e6) * input_per_m + (s.output_tokens as f64 / 1e6) * output_per_m;
+    let cost = (cache_miss_input_tokens as f64 / 1e6) * input_per_m
+        + (cached_input_tokens as f64 / 1e6) * cached_input_per_m
+        + (s.output_tokens as f64 / 1e6) * output_per_m;
     if cost < 0.0001 && (s.input_tokens > 0 || s.output_tokens > 0) {
         format!(
             "<$0.0001 (Tokens: {} in / {} out{})",
@@ -46,6 +52,20 @@ mod tests {
 
         let cost = calculate_cost(&stats, &ResolvedConfig::default());
 
-        assert!(cost.contains("rates $0.14/M in / $0.28/M out"));
+        assert!(cost.contains("rates $0.14/M miss / $0.0028/M cached / $0.28/M out"));
+    }
+
+    #[test]
+    fn cost_summary_prices_cached_input_separately() {
+        let stats = RunStats {
+            input_tokens: 1_000_000,
+            cached_input_tokens: 750_000,
+            ..RunStats::default()
+        };
+
+        let cost = calculate_cost(&stats, &ResolvedConfig::default());
+
+        assert!(cost.starts_with("$0.0371"));
+        assert!(cost.contains("cached 750000"));
     }
 }

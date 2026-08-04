@@ -19,11 +19,14 @@ pub(super) fn build_graph(
 
 pub(super) fn build_static_flags(
     file_records: &mut [FileRecord],
+    evidence_records: &[FileRecord],
     path: &str,
     config: &ResolvedConfig,
 ) -> Result<(Vec<StaticFlag>, crate::symbol_graph::SymbolGraph), String> {
-    let graph = build_graph(file_records, path)?;
-    crate::callgraph::build_references(file_records, &graph);
+    let mut context_records = file_records.to_vec();
+    context_records.extend_from_slice(evidence_records);
+    let graph = build_graph(&context_records, path)?;
+    crate::callgraph::build_references_with_context(file_records, &context_records, &graph);
     let ref_flags = crate::callgraph::build_ref_count_flags(file_records);
     let scorer_flags = scorer::score(file_records, config);
     let mut supporting_flags =

@@ -18,10 +18,10 @@ async fn filename_vague_is_suppressed_for_normal_modules() {
 
     let (verdict, _, _) = analyzer.analyze_file(&file, &[]).await.unwrap();
     let verdict = verdict.expect("expected file verdict");
-    assert_eq!(verdict.tier, FindingTier::Clean);
+    assert_eq!(verdict.tier, FindingTier::Unresolved);
     assert!(!verdict.smelly);
-    assert!(verdict.reason.is_empty());
-    assert_eq!(hits.load(Ordering::SeqCst), 2);
+    assert!(verdict.reason.contains("evidence"));
+    assert_eq!(hits.load(Ordering::SeqCst), 4);
 }
 
 #[test]

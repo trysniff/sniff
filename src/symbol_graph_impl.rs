@@ -62,7 +62,6 @@ impl SymbolGraph {
         self.resolve_all_impl();
     }
 
-    #[allow(dead_code)] // Consumed by the semantic dossier in the next stacked PR.
     pub(crate) fn import_targets_definition(
         &self,
         file_path: &str,
@@ -77,7 +76,6 @@ impl SymbolGraph {
             })
     }
 
-    #[allow(dead_code)] // Consumed by the semantic dossier in the next stacked PR.
     pub(crate) fn export_targets_definition(
         &self,
         file_path: &str,
@@ -93,7 +91,6 @@ impl SymbolGraph {
     }
 }
 
-#[allow(dead_code)] // Shared by the staged graph APIs above.
 fn resolved_matches_definition(
     resolved: &ResolvedSymbol,
     source_file: &str,

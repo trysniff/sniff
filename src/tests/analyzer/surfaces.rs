@@ -309,9 +309,9 @@ public fun sanitizeMedicationStrengthInput(value: String): String {
 }
 
 #[tokio::test]
-async fn medication_numeric_rules_stays_slop_with_static_signals() {
-    let body = r#"{"choices":[{"message":{"content":"{\"smelly\":true,\"tier\":\"slop\",\"evidence\":\"character == '/' && !slashSeen && currentPartHasDigits && !endsWith(\\\".\\\") -> {\",\"cohesive\":false,\"name_accurate\":false,\"reason\":\"function is too big\"}"}}]}"#;
-    let (endpoint, _hits) = spawn_openai_style_server(body);
+async fn medication_numeric_rules_static_signals_do_not_buy_a_file_review() {
+    let file_body = r#"{"choices":[{"message":{"content":"{\"smelly\":true,\"tier\":\"slop\",\"evidence\":\"character == '/' && !slashSeen && currentPartHasDigits && !endsWith(\\\".\\\") -> {\",\"cohesive\":false,\"name_accurate\":false,\"reason\":\"function is too big\"}"}}]}"#;
+    let (endpoint, _hits) = spawn_openai_style_server_with_clean_batches(file_body);
     let analyzer = Analyzer {
         llm_client: Arc::new(LLMClient::new(cfg(&endpoint), Some("test-key".to_string()))),
         in_tok: AtomicUsize::new(0),
@@ -451,15 +451,9 @@ public fun sanitizeMedicationStrengthInput(value: String): String {
             .await
             .expect("analysis should complete");
 
-    let verdict = verdicts
-        .into_iter()
-        .find(|verdict| {
-            verdict.file_path.ends_with("MedicationNumericRules.kt")
-                && verdict.method_name.is_none()
-        })
-        .expect("expected the file verdict");
-    assert_eq!(verdict.tier, FindingTier::Slop);
-    assert!(verdict.smelly);
+    assert_eq!(verdicts.len(), 3);
+    assert!(verdicts.iter().all(|verdict| verdict.method_name.is_some()));
+    assert!(verdicts.iter().all(|verdict| !verdict.smelly));
 }
 
 #[test]

@@ -1,25 +1,41 @@
-use crate::report_types::{FileVerdict, RunStats};
+use crate::report_types::{LLMVerdict, RunStats};
 use crate::types::FindingTier;
 
-fn verdict_counts(file_verdicts: &[FileVerdict]) -> (usize, usize) {
-    let kinda = file_verdicts
+fn verdict_counts(verdicts: &[LLMVerdict]) -> (usize, usize, usize) {
+    let method_verdicts = verdicts
         .iter()
-        .filter(|verdict| verdict.verdict == FindingTier::KindaSlop)
-        .count();
-    let slop = file_verdicts
+        .filter(|verdict| verdict.check_type == "method")
+        .collect::<Vec<_>>();
+    let kinda = method_verdicts
         .iter()
-        .filter(|verdict| verdict.verdict == FindingTier::Slop)
+        .filter(|verdict| verdict.tier == FindingTier::KindaSlop)
         .count();
-    (kinda, slop)
+    let slop = method_verdicts
+        .iter()
+        .filter(|verdict| verdict.tier == FindingTier::Slop)
+        .count();
+    let unresolved = method_verdicts
+        .iter()
+        .filter(|verdict| verdict.tier == FindingTier::Unresolved)
+        .count();
+    (kinda, slop, unresolved)
 }
 
 pub(super) fn append_footer(
     md_lines: &mut Vec<String>,
     s: &RunStats,
-    file_verdicts: &[FileVerdict],
+    verdicts: &[LLMVerdict],
     cost_str: &str,
 ) {
-    let (kinda, slop) = verdict_counts(file_verdicts);
+    let (kinda, slop, unresolved) = verdict_counts(verdicts);
+    let unresolved_summary = if unresolved == 0 {
+        "**Unresolved reviews:** 0".to_string()
+    } else {
+        format!(
+            "**Unresolved reviews:** {} (evidence was insufficient; this is not a clean result)",
+            unresolved
+        )
+    };
     md_lines.extend(vec![
         "---".to_string(),
         format!(
@@ -30,61 +46,61 @@ pub(super) fn append_footer(
             "**AI coverage:** {} of {} expected reviews completed, {} missed",
             s.ai_reviews, s.ai_expected_reviews, s.ai_failed_reviews
         ),
+        format!(
+            "**Method review coverage:** {} of {} methods completed, {} missed",
+            s.method_reviews_completed, s.method_reviews_expected, s.method_review_failures
+        ),
         format!("**Slop findings:** {} slop | {} kinda slop", slop, kinda),
-        "**Note:** verdict counts come from final merged file verdicts, not raw signals."
-            .to_string(),
+        unresolved_summary,
+        "**Note:** verdict counts come from exhaustive AI method reviews, not static signals or file-level summaries.".to_string(),
         format!("**Est. Cost:** {}", cost_str),
     ]);
 }
 
 pub(super) fn print_summary(
     s: &RunStats,
-    file_verdicts: &[FileVerdict],
+    verdicts: &[LLMVerdict],
     cost_str: &str,
     out: Option<&str>,
 ) {
-    let (kinda, slop) = verdict_counts(file_verdicts);
+    let (kinda, slop, unresolved) = verdict_counts(verdicts);
     println!("Report written to {}", out.unwrap_or("sniff-report.md"));
-    println!("Findings: {} Slop, {} Kinda Slop", slop, kinda);
-
-    let affected = file_verdicts
-        .iter()
-        .filter(|verdict| verdict.verdict != FindingTier::Clean)
-        .collect::<Vec<_>>();
-    if affected.is_empty() {
-        println!("Affected files: none");
-    } else {
-        println!("Affected files:");
-        for verdict in affected {
-            let methods = if verdict.flagged_methods.is_empty() {
-                "file-level".to_string()
-            } else {
-                verdict.flagged_methods.join(", ")
-            };
-            println!("  {}: {}", verdict.file_path, methods);
-        }
-    }
+    println!(
+        "Findings: {} Slop, {} Kinda Slop, {} Unresolved",
+        slop, kinda, unresolved
+    );
 
     println!(
-        "Scanned: {} files, {} methods | AI: {}/{} | Est. cost: {}",
-        s.files_scanned, s.methods_analyzed, s.ai_reviews, s.ai_expected_reviews, cost_str
+        "Scanned: {} files, {} methods | AI methods: {}/{} | Est. cost: {}",
+        s.files_scanned,
+        s.methods_analyzed,
+        s.method_reviews_completed,
+        s.method_reviews_expected,
+        cost_str
     );
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::report_types::FileVerdict;
+    use crate::report_types::LLMVerdict;
     use crate::types::FindingTier;
 
-    fn verdict(file_path: &str, tier: FindingTier) -> FileVerdict {
-        FileVerdict {
+    fn verdict(file_path: &str, tier: FindingTier) -> LLMVerdict {
+        LLMVerdict {
+            verdict_type: "method".to_string(),
             file_path: file_path.to_string(),
-            role: "core_library".to_string(),
-            verdict: tier,
-            top_reasons: vec![],
-            flagged_methods: vec![],
-            recommended_action: "trim the largest offender and keep the file focused".to_string(),
+            method_name: Some("sample".to_string()),
+            check_type: "method".to_string(),
+            smelly: matches!(tier, FindingTier::Slop | FindingTier::KindaSlop),
+            tier,
+            cohesive: None,
+            name_accurate: None,
+            evidence: String::new(),
+            reason: String::new(),
+            loc: 1,
+            start_line: 1,
+            end_line: 1,
         }
     }
 
@@ -99,19 +115,23 @@ mod tests {
             ai_failed_reviews: 0,
             ..RunStats::default()
         };
-        let file_verdicts = vec![
+        let verdicts = vec![
             verdict("a.rs", FindingTier::Clean),
             verdict("b.rs", FindingTier::KindaSlop),
             verdict("c.rs", FindingTier::Slop),
         ];
 
-        append_footer(&mut lines, &stats, &file_verdicts, "$0.00");
+        append_footer(&mut lines, &stats, &verdicts, "$0.00");
 
         assert!(
             lines
                 .iter()
                 .any(|line| line.contains("**Slop findings:** 1 slop | 1 kinda slop")),
             "unexpected footer lines: {lines:?}"
+        );
+        assert!(
+            lines.iter().any(|line| line == "**Unresolved reviews:** 0"),
+            "unexpected unresolved summary: {lines:?}"
         );
         assert!(
             lines.iter().any(|line| line
@@ -124,5 +144,20 @@ mod tests {
                 .all(|line| !line.contains("AI Reviews") && !line.contains("AI Failures")),
             "unexpected AI bookkeeping in footer lines: {lines:?}"
         );
+    }
+
+    #[test]
+    fn footer_warns_only_when_reviews_are_unresolved() {
+        let mut lines = Vec::new();
+        append_footer(
+            &mut lines,
+            &RunStats::default(),
+            &[verdict("a.rs", FindingTier::Unresolved)],
+            "$0.00",
+        );
+
+        assert!(lines.iter().any(|line| {
+            line == "**Unresolved reviews:** 1 (evidence was insufficient; this is not a clean result)"
+        }));
     }
 }
