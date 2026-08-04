@@ -1,6 +1,7 @@
 use super::ResponseSchema;
 use super::llm_repair;
 use std::env;
+use std::time::Duration;
 
 pub(super) enum RetryAction {
     Fatal(String),
@@ -15,7 +16,10 @@ pub(super) fn max_attempts() -> usize {
         .ok()
         .and_then(|value| value.trim().parse::<usize>().ok())
         .filter(|value| *value > 0)
-        .unwrap_or(32)
+        // A full repository run can make thousands of sequential requests.
+        // Transient provider disconnects must not turn into a partial report
+        // after only a few minutes of otherwise successful work.
+        .unwrap_or(128)
 }
 
 pub(super) fn max_same_prompt_retries() -> usize {
@@ -25,6 +29,36 @@ pub(super) fn max_same_prompt_retries() -> usize {
         .and_then(|value| value.trim().parse::<usize>().ok())
         .filter(|value| *value > 0)
         .unwrap_or(3)
+}
+
+pub(super) fn max_format_repairs() -> usize {
+    env::var("SNIFF_LLM_MAX_FORMAT_REPAIRS")
+        .or_else(|_| env::var("LLM_MAX_FORMAT_REPAIRS"))
+        .ok()
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(3)
+}
+
+pub(super) fn retry_budget() -> Duration {
+    let seconds = env::var("SNIFF_LLM_RETRY_BUDGET_SECS")
+        .or_else(|_| env::var("LLM_RETRY_BUDGET_SECS"))
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .filter(|seconds| *seconds > 0)
+        .unwrap_or(1800);
+    Duration::from_secs(seconds)
+}
+
+pub(super) fn attempt_timeout() -> Duration {
+    let seconds = env::var("SNIFF_LLM_ATTEMPT_TIMEOUT_SECS")
+        .or_else(|_| env::var("LLM_ATTEMPT_TIMEOUT_SECS"))
+        .or_else(|_| env::var("SNIFF_LLM_CLIENT_TIMEOUT_SECS"))
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .filter(|seconds| *seconds > 0)
+        .unwrap_or(600);
+    Duration::from_secs(seconds)
 }
 
 pub(super) fn retry_same_prompt_without_repair(err: &str) -> bool {
@@ -116,6 +150,7 @@ pub(super) fn classify_error(
 
 #[cfg(test)]
 mod tests {
+    use super::ResponseSchema;
     use super::{http_status_from_error, is_fatal_http_status, should_retry_http_status};
 
     #[test]
@@ -144,5 +179,37 @@ mod tests {
         assert!(super::retry_same_prompt_without_repair(
             "Empty response content"
         ));
+    }
+
+    #[test]
+    fn transient_transport_errors_are_retryable() {
+        assert!(matches!(
+            super::classify_error(
+                "prompt",
+                ResponseSchema::MethodReview,
+                "error sending request for url (https://example.test)",
+                0,
+                3,
+            ),
+            super::RetryAction::SleepThenRetry
+        ));
+    }
+
+    #[test]
+    fn retry_budget_defaults_to_thirty_minutes() {
+        assert_eq!(super::retry_budget(), std::time::Duration::from_secs(1800));
+    }
+
+    #[test]
+    fn attempt_timeout_defaults_to_ten_minutes() {
+        assert_eq!(
+            super::attempt_timeout(),
+            std::time::Duration::from_secs(600)
+        );
+    }
+
+    #[test]
+    fn format_repairs_have_a_separate_bounded_default() {
+        assert_eq!(super::max_format_repairs(), 3);
     }
 }

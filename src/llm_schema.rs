@@ -5,8 +5,23 @@ pub(super) fn schema_description(schema: ResponseSchema) -> &'static str {
         ResponseSchema::MethodReview => {
             "Required fields: smelly (bool), tier (string), evidence (string), reason (string)."
         }
+        ResponseSchema::MethodIntentReview => {
+            "Required fields: intent (string), contract_status (string), necessity_check (string), missing_evidence (array of strings). This pass describes intent and contract only; it must not assign a slop tier."
+        }
+        ResponseSchema::MethodIntentBatchReview => {
+            "Required root field: reviews (array). Every review requires method_key (string), intent (string), contract_status (string), necessity_check (string), and missing_evidence (array of strings). Return exactly one review for every requested method key."
+        }
+        ResponseSchema::SemanticMethodReview => {
+            "Required fields: tier (string), pattern (string), intent (string), reason (string), necessity_check (string), contract_status (string), contract_impact (string), dependency_impact (string), simplification (string), change_scope (string), behavior_status (string), missing_evidence (array of strings), evidence (array of objects with start_line (number), end_line (number), quote (string)). Allowed tiers are slop, kinda_slop, clean, unresolved. Tier is the sole verdict field. change_scope must be none for clean/unresolved and local, signature, or whole_method for slop/kinda_slop. Slop and kinda_slop must prove contract_status=unnecessary, behavior_status=preserved, unchanged contract impact, absent dependency impact, and provide a concrete simplification plus evidence. Unresolved must list missing_evidence."
+        }
+        ResponseSchema::SemanticMethodBatchReview => {
+            "Required root field: reviews (array). Every review requires method_key (string), tier, pattern, intent, reason, necessity_check, contract_status, contract_impact, dependency_impact, simplification, change_scope, behavior_status, missing_evidence, and semantic evidence. Return exactly one independent review for every requested method key."
+        }
+        ResponseSchema::ScopedTierReview => {
+            "Required fields: tier (string) and reason (string). Allowed tiers are slop, kinda_slop, clean, or unresolved."
+        }
         ResponseSchema::FileReview => {
-            "Required fields: smelly (bool), tier (string), evidence (string), cohesive (bool), name_accurate (bool), reason (string)."
+            "Required fields: smelly (bool), tier (string), evidence (string), cohesive (bool), name_accurate (bool), reason (string). Allowed tiers are slop, kinda_slop, clean, unresolved; unresolved means the file-level evidence is insufficient and must use smelly=false."
         }
         ResponseSchema::RoleClassification => "Required fields: role (string), reason (string).",
     }
@@ -49,11 +64,132 @@ pub(super) fn validate_schema(
         }
     }
 
+    fn check_number(
+        obj: &serde_json::Map<String, serde_json::Value>,
+        name: &str,
+        missing: &mut Vec<String>,
+        wrong_type: &mut Vec<String>,
+    ) {
+        match obj.get(name) {
+            Some(v) if v.is_u64() || v.is_i64() => {}
+            Some(_) => wrong_type.push(name.to_string()),
+            None => missing.push(name.to_string()),
+        }
+    }
+
+    fn check_semantic_evidence(
+        obj: &serde_json::Map<String, serde_json::Value>,
+        missing: &mut Vec<String>,
+        wrong_type: &mut Vec<String>,
+    ) {
+        let Some(value) = obj.get("evidence") else {
+            missing.push("evidence".to_string());
+            return;
+        };
+        let Some(entries) = value.as_array() else {
+            wrong_type.push("evidence".to_string());
+            return;
+        };
+        for (index, entry) in entries.iter().enumerate() {
+            let Some(entry) = entry.as_object() else {
+                wrong_type.push(format!("evidence[{index}]"));
+                continue;
+            };
+            check_number(entry, "start_line", missing, wrong_type);
+            check_number(entry, "end_line", missing, wrong_type);
+            check_string(entry, "quote", missing, wrong_type);
+        }
+    }
+
+    fn check_string_array(
+        obj: &serde_json::Map<String, serde_json::Value>,
+        name: &str,
+        missing: &mut Vec<String>,
+        wrong_type: &mut Vec<String>,
+    ) {
+        let Some(value) = obj.get(name) else {
+            missing.push(name.to_string());
+            return;
+        };
+        let Some(entries) = value.as_array() else {
+            wrong_type.push(name.to_string());
+            return;
+        };
+        for (index, entry) in entries.iter().enumerate() {
+            if !entry.is_string() {
+                wrong_type.push(format!("{name}[{index}]"));
+            }
+        }
+    }
+
+    fn check_intent_review(
+        obj: &serde_json::Map<String, serde_json::Value>,
+        missing: &mut Vec<String>,
+        wrong_type: &mut Vec<String>,
+    ) {
+        check_string(obj, "intent", missing, wrong_type);
+        check_string(obj, "contract_status", missing, wrong_type);
+        check_string(obj, "necessity_check", missing, wrong_type);
+        check_string_array(obj, "missing_evidence", missing, wrong_type);
+    }
+
+    fn check_semantic_review(
+        obj: &serde_json::Map<String, serde_json::Value>,
+        missing: &mut Vec<String>,
+        wrong_type: &mut Vec<String>,
+    ) {
+        check_string(obj, "tier", missing, wrong_type);
+        check_string(obj, "pattern", missing, wrong_type);
+        check_string(obj, "intent", missing, wrong_type);
+        check_string(obj, "reason", missing, wrong_type);
+        check_string(obj, "necessity_check", missing, wrong_type);
+        check_string(obj, "contract_status", missing, wrong_type);
+        check_string(obj, "contract_impact", missing, wrong_type);
+        check_string(obj, "dependency_impact", missing, wrong_type);
+        check_string(obj, "simplification", missing, wrong_type);
+        check_string(obj, "change_scope", missing, wrong_type);
+        check_string(obj, "behavior_status", missing, wrong_type);
+        check_string_array(obj, "missing_evidence", missing, wrong_type);
+        check_semantic_evidence(obj, missing, wrong_type);
+    }
+
+    fn check_review_array_envelope(
+        obj: &serde_json::Map<String, serde_json::Value>,
+        missing: &mut Vec<String>,
+        wrong_type: &mut Vec<String>,
+    ) {
+        match obj.get("reviews") {
+            Some(value) if value.is_array() => {}
+            Some(_) => wrong_type.push("reviews".to_string()),
+            None => missing.push("reviews".to_string()),
+        }
+    }
+
     match schema {
         ResponseSchema::MethodReview => {
             check_bool(obj, "smelly", &mut missing, &mut wrong_type);
             check_string(obj, "tier", &mut missing, &mut wrong_type);
             check_string(obj, "evidence", &mut missing, &mut wrong_type);
+            check_string(obj, "reason", &mut missing, &mut wrong_type);
+        }
+        ResponseSchema::MethodIntentReview => {
+            check_intent_review(obj, &mut missing, &mut wrong_type);
+        }
+        ResponseSchema::MethodIntentBatchReview => {
+            // Per-method fields and keys are validated by the batch analyzer,
+            // which can preserve valid siblings and repair only invalid keys.
+            check_review_array_envelope(obj, &mut missing, &mut wrong_type);
+        }
+        ResponseSchema::SemanticMethodReview => {
+            check_semantic_review(obj, &mut missing, &mut wrong_type);
+        }
+        ResponseSchema::SemanticMethodBatchReview => {
+            // Detailed fields, keys, and exact evidence are validated per
+            // method by the targeted batch repair layer.
+            check_review_array_envelope(obj, &mut missing, &mut wrong_type);
+        }
+        ResponseSchema::ScopedTierReview => {
+            check_string(obj, "tier", &mut missing, &mut wrong_type);
             check_string(obj, "reason", &mut missing, &mut wrong_type);
         }
         ResponseSchema::FileReview => {
@@ -81,5 +217,74 @@ pub(super) fn validate_schema(
             parts.push(format!("wrong field types: {}", wrong_type.join(", ")));
         }
         Err(parts.join("; "))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ResponseSchema, validate_schema};
+
+    #[test]
+    fn clean_semantic_review_may_omit_its_explanation() {
+        let value = serde_json::json!({
+            "smelly": false,
+            "tier": "clean",
+            "pattern": "none",
+            "intent": "Return a configured value.",
+            "reason": "The method is coherent.",
+            "necessity_check": "The implementation is direct.",
+            "contract_status": "required",
+            "contract_impact": "The method contract requires the direct operation.",
+            "dependency_impact": "Callers depend on the returned configured value.",
+            "simplification": "none",
+            "change_scope": "none",
+            "behavior_status": "preserved",
+            "missing_evidence": [],
+            "evidence": []
+        });
+
+        assert!(validate_schema(&value, ResponseSchema::SemanticMethodReview).is_ok());
+    }
+
+    #[test]
+    fn semantic_batch_requires_typed_reviews() {
+        let review = serde_json::json!({
+            "method_key": "m0",
+            "tier": "clean",
+            "pattern": "none",
+            "intent": "Return a configured value.",
+            "reason": "The method is coherent.",
+            "necessity_check": "The implementation is direct.",
+            "contract_status": "required",
+            "contract_impact": "The method contract requires the operation.",
+            "dependency_impact": "Callers consume the value.",
+            "simplification": "none",
+            "change_scope": "none",
+            "behavior_status": "preserved",
+            "missing_evidence": [],
+            "evidence": []
+        });
+        let value = serde_json::json!({"reviews": [review]});
+
+        assert!(validate_schema(&value, ResponseSchema::SemanticMethodBatchReview).is_ok());
+    }
+
+    #[test]
+    fn intent_batch_rejects_non_array_reviews() {
+        let value = serde_json::json!({"reviews": {}});
+        let error = validate_schema(&value, ResponseSchema::MethodIntentBatchReview).unwrap_err();
+        assert!(error.contains("wrong field types: reviews"));
+    }
+
+    #[test]
+    fn semantic_batch_defers_method_fields_to_the_semantic_validator() {
+        let value = serde_json::json!({
+            "reviews": [{
+                "method_key": "m0",
+                "evidence": [{"start_line": 1, "end_line": 1}]
+            }]
+        });
+
+        assert!(validate_schema(&value, ResponseSchema::SemanticMethodBatchReview).is_ok());
     }
 }

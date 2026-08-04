@@ -33,7 +33,7 @@ pub(super) async fn try_call_raw(
     config: &ResolvedConfig,
     api_key: Option<&String>,
     prompt: &str,
-) -> Result<(String, usize, usize), String> {
+) -> Result<(String, usize, usize, usize), String> {
     let (payload, mut headers) = super::llm_transport::build_payload(config, prompt);
     let timeout = request_timeout();
     let request_url = request_url(config);
@@ -59,6 +59,15 @@ pub(super) async fn try_call_raw(
     }
 
     let request = async {
+        if std::env::var_os("SNIFF_DEBUG_LLM").is_some() {
+            eprintln!(
+                "[llm-debug] request start endpoint={} prompt_chars={} request_timeout_secs={} body_timeout_secs={}",
+                request_url,
+                prompt.chars().count(),
+                timeout.as_secs(),
+                body_timeout().as_secs()
+            );
+        }
         let mut resp = client
             .post(&request_url)
             .headers(headers.clone())
@@ -68,6 +77,9 @@ pub(super) async fn try_call_raw(
             .map_err(|e| e.to_string())?;
 
         let status = resp.status();
+        if std::env::var_os("SNIFF_DEBUG_LLM").is_some() {
+            eprintln!("[llm-debug] response headers status={status}");
+        }
         if !status.is_success() {
             let text = resp.text().await.unwrap_or_default();
             let snippet = truncate_for_log(&text, 200);
@@ -104,6 +116,9 @@ pub(super) async fn try_call_raw(
                 ));
             };
 
+            if std::env::var_os("SNIFF_DEBUG_LLM").is_some() {
+                eprintln!("[llm-debug] response chunk bytes={}", chunk.len());
+            }
             body.push_str(&String::from_utf8_lossy(&chunk));
             match serde_json::from_str::<serde_json::Value>(&body) {
                 Ok(value) => break value,
@@ -121,18 +136,25 @@ pub(super) async fn try_call_raw(
             return Err(format!("API error response: {}", err));
         }
 
-        let (content, in_t, out_t) = match endpoint_kind(config) {
+        let (content, in_t, out_t, cached_in_t) = match endpoint_kind(config) {
             EndpointKind::OpenAi => {
                 let content = llm_content::openai_content(&data);
-                let (in_t, out_t) = llm_usage::openai_usage(&data, prompt, &content);
-                (content, in_t, out_t)
+                let (in_t, out_t, cached_in_t) = llm_usage::openai_usage(&data, prompt, &content);
+                (content, in_t, out_t, cached_in_t)
             }
             EndpointKind::Anthropic => {
                 let content = llm_content::anthropic_content(&data);
-                let (in_t, out_t) = llm_usage::anthropic_usage(&data, prompt, &content);
-                (content, in_t, out_t)
+                let (in_t, out_t, cached_in_t) =
+                    llm_usage::anthropic_usage(&data, prompt, &content);
+                (content, in_t, out_t, cached_in_t)
             }
         };
+
+        if std::env::var_os("SNIFF_DEBUG_LLM").is_some() {
+            eprintln!(
+                "[llm-debug] usage input_tokens={in_t} cached_input_tokens={cached_in_t} output_tokens={out_t}"
+            );
+        }
 
         if content.trim().is_empty() {
             return Err(format!(
@@ -140,7 +162,14 @@ pub(super) async fn try_call_raw(
             ));
         }
 
-        Ok((content, in_t, out_t))
+        if std::env::var_os("SNIFF_DEBUG_LLM_CONTENT").is_some() {
+            eprintln!(
+                "[llm-debug] assistant content={}",
+                truncate_for_log(&content, 800)
+            );
+        }
+
+        Ok((content, in_t, out_t, cached_in_t))
     };
 
     match tokio::time::timeout(timeout, request).await {
