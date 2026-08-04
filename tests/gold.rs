@@ -116,7 +116,8 @@ fn parse_records(paths: &[String]) -> Vec<FileRecord> {
 }
 
 fn build_graph(paths: &[String], root: &str) -> SymbolGraph {
-    let mut graph = SymbolGraph::new(root);
+    let canonical_root = fs::canonicalize(root).unwrap_or_else(|_| PathBuf::from(root));
+    let mut graph = SymbolGraph::new(&canonical_root.to_string_lossy());
     for path in paths {
         graph.add_file(parse_file_symbols(path));
     }
