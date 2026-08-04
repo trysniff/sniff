@@ -399,7 +399,7 @@ pub(super) fn render_adjudication_prompt(
         method.end_line,
         method.real_ref_count,
         context_with_boundary,
-        &callers,
+        callers,
         callees,
         numbered_source,
         first_json,
