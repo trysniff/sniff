@@ -191,7 +191,7 @@ pub async fn run(
 
 #[cfg(test)]
 mod tests {
-    use super::report_path_for_target;
+    use super::{report_path_for_target, strip_windows_verbatim_prefix};
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -207,8 +207,9 @@ mod tests {
         fs::create_dir_all(root.join(".git")).unwrap();
 
         let report_path = report_path_for_target(&nested);
+        let expected_root = strip_windows_verbatim_prefix(fs::canonicalize(&root).unwrap());
 
-        assert_eq!(report_path, root.join("sniff-report.md"));
+        assert_eq!(report_path, expected_root.join("sniff-report.md"));
         fs::remove_dir_all(root).unwrap();
     }
 }
