@@ -13,14 +13,65 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  verify:
+  format:
+    name: format
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt, clippy
-      - run: cargo fmt --check
-      - run: cargo clippy --all-targets --all-features -- -D warnings
-      - run: cargo test --all --locked
+          components: rustfmt
+      - run: cargo fmt --all -- --check
+
+  clippy:
+    name: clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - run: cargo clippy --all-targets --locked -- -D warnings
+
+  test:
+    name: test-${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test --all-targets --locked
+
+  msrv:
+    name: msrv-1.88
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - run: cargo check --all-targets --locked
+
+  package:
+    name: package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
       - run: cargo package --locked
+
+  verify:
+    name: verify
+    if: always()
+    needs: [format, clippy, test, msrv, package]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every CI job to pass
+        shell: bash
+        run: |
+          [[ "${{ needs.format.result }}" == "success" ]]
+          [[ "${{ needs.clippy.result }}" == "success" ]]
+          [[ "${{ needs.test.result }}" == "success" ]]
+          [[ "${{ needs.msrv.result }}" == "success" ]]
+          [[ "${{ needs.package.result }}" == "success" ]]

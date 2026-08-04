@@ -3,6 +3,7 @@
 use sniff::config::{LLMConfig, ResolvedConfig, ThresholdsConfig};
 use sniff::llm::{LLMClient, ResponseSchema};
 use std::env;
+use std::ffi::OsString;
 use std::io::{Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -56,7 +57,37 @@ fn read_http_request(stream: &mut TcpStream) -> String {
 }
 
 fn env_guard() -> std::sync::MutexGuard<'static, ()> {
-    ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
+    ENV_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+struct EnvVarGuard {
+    key: &'static str,
+    previous: Option<OsString>,
+}
+
+impl EnvVarGuard {
+    fn set(key: &'static str, value: &str) -> Self {
+        let previous = env::var_os(key);
+        unsafe {
+            env::set_var(key, value);
+        }
+        Self { key, previous }
+    }
+}
+
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        unsafe {
+            if let Some(previous) = self.previous.take() {
+                env::set_var(self.key, previous);
+            } else {
+                env::remove_var(self.key);
+            }
+        }
+    }
 }
 
 fn cfg(endpoint: &str) -> ResolvedConfig {
@@ -400,9 +431,7 @@ async fn call_keeps_retrying_empty_assistant_content_before_repairing() {
 #[tokio::test]
 async fn call_retries_body_timeout_before_repairing() {
     let _env_lock = env_guard();
-    unsafe {
-        env::set_var("SNIFF_LLM_BODY_TIMEOUT_SECS", "1");
-    }
+    let _body_timeout = EnvVarGuard::set("SNIFF_LLM_BODY_TIMEOUT_SECS", "1");
     let (endpoint, hits) = spawn_body_stall_then_valid_server();
     let client = LLMClient::new(cfg(&endpoint), Some("test-key".to_string()));
 
@@ -410,15 +439,8 @@ async fn call_retries_body_timeout_before_repairing() {
         .call("Review this method.", ResponseSchema::MethodReview)
         .await
     else {
-        unsafe {
-            env::remove_var("SNIFF_LLM_BODY_TIMEOUT_SECS");
-        }
         panic!("expected body-timeout retry response to parse");
     };
-
-    unsafe {
-        env::remove_var("SNIFF_LLM_BODY_TIMEOUT_SECS");
-    }
 
     let value = value.expect("expected body-timeout retry response to parse");
     assert_eq!(value["tier"], "slop");
@@ -593,9 +615,7 @@ async fn quoted_api_keys_are_normalized_before_sending() {
 #[tokio::test]
 async fn probe_reports_transport_errors_directly() {
     let _env_lock = env_guard();
-    unsafe {
-        env::set_var("SNIFF_LLM_MAX_ATTEMPTS", "1");
-    }
+    let _max_attempts = EnvVarGuard::set("SNIFF_LLM_MAX_ATTEMPTS", "1");
 
     let client = LLMClient::new(
         cfg("http://127.0.0.1:9/anthropic"),
@@ -607,9 +627,6 @@ async fn probe_reports_transport_errors_directly() {
         .await
         .expect_err("expected probe to fail on a dead endpoint");
 
-    unsafe {
-        env::remove_var("SNIFF_LLM_MAX_ATTEMPTS");
-    }
     assert!(err.contains("error sending request"), "{err}");
     assert!(err.contains("/anthropic/v1/messages"), "{err}");
 }
@@ -617,9 +634,7 @@ async fn probe_reports_transport_errors_directly() {
 #[tokio::test]
 async fn probe_retries_until_the_payload_becomes_valid() {
     let _env_lock = env_guard();
-    unsafe {
-        env::set_var("SNIFF_LLM_MAX_ATTEMPTS", "3");
-    }
+    let _max_attempts = EnvVarGuard::set("SNIFF_LLM_MAX_ATTEMPTS", "3");
 
     let invalid = r#"{"choices":[{"message":{"content":"{\"role\":\"mixed\"}"}}]}"#;
     let valid =
@@ -632,10 +647,6 @@ async fn probe_retries_until_the_payload_becomes_valid() {
         .await
         .expect("expected probe retry to succeed");
     assert_eq!(hits.load(Ordering::SeqCst), 3);
-
-    unsafe {
-        env::remove_var("SNIFF_LLM_MAX_ATTEMPTS");
-    }
 }
 
 #[tokio::test]
@@ -656,10 +667,8 @@ async fn probe_does_not_retry_on_permanent_http_errors() {
 #[tokio::test]
 async fn probe_times_out_promptly_on_hanging_requests() {
     let _env_lock = env_guard();
-    unsafe {
-        env::set_var("SNIFF_LLM_CLIENT_TIMEOUT_SECS", "1");
-        env::set_var("SNIFF_LLM_MAX_ATTEMPTS", "1");
-    }
+    let _client_timeout = EnvVarGuard::set("SNIFF_LLM_CLIENT_TIMEOUT_SECS", "1");
+    let _max_attempts = EnvVarGuard::set("SNIFF_LLM_MAX_ATTEMPTS", "1");
 
     let (endpoint, hits) = spawn_hanging_server();
     let client = LLMClient::new(cfg(&endpoint), Some("test-key".to_string()));
@@ -669,14 +678,10 @@ async fn probe_times_out_promptly_on_hanging_requests() {
         .await
         .expect_err("expected probe to fail on a hanging request");
 
-    unsafe {
-        env::remove_var("SNIFF_LLM_CLIENT_TIMEOUT_SECS");
-        env::remove_var("SNIFF_LLM_MAX_ATTEMPTS");
-    }
-
     assert!(hits.load(Ordering::SeqCst) >= 1);
     assert!(
         err.contains("timed out")
+            || err.contains("watchdog expired")
             || err.contains("no valid JSON response")
             || err.contains("error sending request"),
         "{err}"

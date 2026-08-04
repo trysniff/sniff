@@ -2,6 +2,7 @@
 name = "sniff-cli"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.88"
 autobins = false
 description = "An exhaustive LLM-backed slop finder for codebases"
 readme = "README.md"
