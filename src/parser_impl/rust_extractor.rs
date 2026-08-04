@@ -11,6 +11,7 @@ pub(super) struct RustExtractor<'a> {
     pub definitions: Vec<SymbolDefinition>,
     pub imports: Vec<ImportRecord>,
     pub exports: Vec<ExportRecord>,
+    pub modules: Vec<ModuleRecord>,
     pub references: Vec<SymbolReference>,
     pub scopes: Vec<HashSet<String>>,
     pub next_id: usize,
@@ -19,10 +20,9 @@ pub(super) struct RustExtractor<'a> {
 }
 
 impl<'a> RustExtractor<'a> {
-    pub(super) fn visit_file<T>(&mut self, _file: &T) {
+    pub(super) fn visit_file(&mut self, file: &syn::File) {
         let lines: Vec<&str> = self.source.lines().collect();
         let mut idx = 0usize;
-        let mut impl_type: Option<String> = None;
         while idx < lines.len() {
             let trimmed = lines[idx].trim();
             if trimmed.is_empty() || trimmed.starts_with("//") {
@@ -30,11 +30,11 @@ impl<'a> RustExtractor<'a> {
                 continue;
             }
 
-            if let Some((import, export)) = helpers::parse_use(trimmed) {
-                self.imports.push(import);
-                if let Some(export) = export {
-                    self.exports.push(export);
-                }
+            if trimmed.starts_with("use ")
+                || trimmed.starts_with("pub use ")
+                || trimmed.starts_with("pub(crate) use ")
+                || trimmed.starts_with("pub(super) use ")
+            {
                 idx += 1;
                 continue;
             }
@@ -54,35 +54,49 @@ impl<'a> RustExtractor<'a> {
                     end_line: end,
                     is_exported: trimmed.starts_with("pub ") || trimmed.starts_with("pub("),
                     owner_type: None,
+                    receiver_type: None,
+                    value_type: None,
                 });
                 self.next_id += 1;
                 idx = if trimmed.ends_with(';') { idx + 1 } else { end };
                 continue;
             }
 
-            if let Some(rest) = trimmed.strip_prefix("impl")
-                && (rest.starts_with('<') || rest.chars().next().is_some_and(char::is_whitespace))
-            {
-                impl_type = helpers::parse_impl_name(trimmed);
-                idx = self.scan_rust_impl_block(&lines, idx, impl_type.clone());
+            if let Some(name) = helpers::parse_fn_name(trimmed) {
+                for reference in helpers::scan::collect_refs(trimmed) {
+                    if reference.name != name {
+                        self.references.push(SymbolReference {
+                            name: reference.name,
+                            line: idx + 1,
+                            snippet: trimmed.to_string(),
+                            is_member_call: reference.is_member_call,
+                            is_callable_value: false,
+                            resolved_symbol: None,
+                        });
+                    }
+                }
+                idx += 1;
                 continue;
             }
 
-            if helpers::parse_fn_name(trimmed).is_some() {
-                idx = self.scan_rust_fn_block(&lines, idx, impl_type.clone());
-                continue;
-            }
-
-            for ref_name in helpers::scan::collect_refs(trimmed) {
+            for reference in helpers::scan::collect_refs(trimmed) {
                 self.references.push(SymbolReference {
-                    name: ref_name,
+                    name: reference.name,
                     line: idx + 1,
                     snippet: trimmed.to_string(),
+                    is_member_call: reference.is_member_call,
+                    is_callable_value: false,
                     resolved_symbol: None,
                 });
             }
 
             idx += 1;
         }
+
+        // The file was already validated by syn. Use its spans as the source of
+        // truth for callable boundaries rather than trying to balance Rust syntax.
+        helpers::record_rust_ast_modules_and_uses(self, file);
+        helpers::record_rust_ast_callables(self, file);
+        helpers::record_rust_ast_callable_values(self, file);
     }
 }

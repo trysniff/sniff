@@ -1,6 +1,56 @@
 use super::lookup_file;
+use crate::symbol_graph::ResolveContext;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+
+fn crate_root_file(ctx: &ResolveContext<'_>) -> Option<String> {
+    let root = rust_module_root(ctx.project_root);
+    ["lib.rs", "main.rs", "mod.rs"]
+        .iter()
+        .find_map(|name| lookup_file(&root.join(name).to_string_lossy(), ctx.all_files))
+}
+
+fn resolve_linked_rust_module(ctx: &ResolveContext<'_>, parts: &[&str]) -> Option<String> {
+    let mut index = 0usize;
+    let mut current = match parts.first().copied()? {
+        "crate" => {
+            index = 1;
+            crate_root_file(ctx)?
+        }
+        "self" => {
+            index = 1;
+            ctx.importing_file.to_string()
+        }
+        "super" => {
+            let mut current = ctx.importing_file.to_string();
+            while parts.get(index) == Some(&"super") {
+                current = ctx
+                    .rust_parents
+                    .get(&super::super::normalize_path(&current))?
+                    .clone();
+                index += 1;
+            }
+            current
+        }
+        crate_name if ctx.rust_crate_names.contains(crate_name) => {
+            index = 1;
+            crate_root_file(ctx)?
+        }
+        _ => ctx.importing_file.to_string(),
+    };
+
+    while let Some(segment) = parts.get(index) {
+        current = ctx
+            .rust_modules
+            .get(&(
+                super::super::normalize_path(&current),
+                (*segment).to_string(),
+            ))?
+            .clone();
+        index += 1;
+    }
+    Some(current)
+}
 
 fn rust_module_root(project_root: &str) -> PathBuf {
     let src_root = Path::new(project_root).join("src");
@@ -68,10 +118,8 @@ fn resolve_rust_module_candidates(
 }
 
 pub(super) fn resolve_rust_module_path(
-    importing_file: &str,
+    ctx: &ResolveContext<'_>,
     source_module: &str,
-    project_root: &str,
-    all_files: &HashMap<String, String>,
 ) -> Option<String> {
     let parts: Vec<&str> = source_module
         .split("::")
@@ -81,17 +129,22 @@ pub(super) fn resolve_rust_module_path(
         return None;
     }
 
-    let roots = resolve_rust_module_roots(importing_file, project_root, &parts)?;
+    if let Some(linked) = resolve_linked_rust_module(ctx, &parts) {
+        return Some(linked);
+    }
+
+    let roots = resolve_rust_module_roots(ctx.importing_file, ctx.project_root, &parts)?;
 
     let start_idx = match parts[0] {
         "crate" | "self" => 1,
         "super" => parts.iter().take_while(|p| **p == "super").count(),
+        crate_name if ctx.rust_crate_names.contains(crate_name) => 1,
         _ => 0,
     };
     let module_parts = &parts[start_idx..];
     if module_parts.is_empty() {
-        return resolve_rust_module_root_files(&roots, all_files);
+        return resolve_rust_module_root_files(&roots, ctx.all_files);
     }
 
-    resolve_rust_module_candidates(&roots, module_parts, all_files)
+    resolve_rust_module_candidates(&roots, module_parts, ctx.all_files)
 }

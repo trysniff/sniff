@@ -1,6 +1,6 @@
 [package]
 name = "sniff-cli"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.88"
 autobins = false
@@ -12,8 +12,12 @@ keywords = ["code-analysis", "ai", "slop", "developer-tools"]
 categories = ["command-line-utilities", "development-tools"]
 
 include = [
+  "CHANGELOG.md",
   "Cargo.lock",
+  "LICENSE",
   "README.md",
+  "SECURITY.md",
+  "TRADEMARKS.md",
   "gold_fixtures/**",
   "scripts/**",
   "src/*.rs",
@@ -43,7 +47,7 @@ tokio = { version = "1", features = ["full"] }
 toml = "0.8"
 tree-sitter = "0.22"
 tree-sitter-go = "0.21"
-tree-sitter-kotlin = "0.3.8"
+tree-sitter-kotlin = { package = "tree-sitter-kotlin-ng", version = "1.1.0" }
 oxc_allocator = "0.13"
 oxc_parser = "0.13"
 oxc_ast = "0.13"

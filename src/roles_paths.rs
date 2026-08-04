@@ -83,6 +83,11 @@ pub fn is_entrypoint_path(normalized: &str, name: &str) -> bool {
         || normalized.ends_with("/__main__.tsx")
         || normalized.ends_with("/__main__.jsx")
         || normalized.ends_with("/__main__.js")
+        || (matches!(name, "index.ts" | "index.js")
+            && (normalized.contains("/worker/src/")
+                || normalized.contains("/workers/src/")
+                || normalized.starts_with("worker/src/")
+                || normalized.starts_with("workers/src/")))
         || is_serverless_function_entrypoint(normalized, name)
 }
 
@@ -117,6 +122,9 @@ pub fn is_cli_path(name: &str) -> bool {
 }
 
 pub fn is_adapter_integration_path(normalized: &str, name: &str) -> bool {
+    let is_tool_config = [".config.js", ".config.jsx", ".config.ts", ".config.tsx"]
+        .iter()
+        .any(|suffix| name.ends_with(suffix));
     contains_any(
         normalized,
         &[
@@ -138,22 +146,23 @@ pub fn is_adapter_integration_path(normalized: &str, name: &str) -> bool {
             "/connector/",
             "/connectors/",
         ],
-    ) || contains_any(
-        name,
-        &[
-            "adapter",
-            "bridge",
-            "gateway",
-            "client",
-            "transport",
-            "integration",
-            "http",
-            "api",
-            "grpc",
-            "rpc",
-            "connector",
-        ],
-    )
+    ) || is_tool_config
+        || contains_any(
+            name,
+            &[
+                "adapter",
+                "bridge",
+                "gateway",
+                "client",
+                "transport",
+                "integration",
+                "http",
+                "api",
+                "grpc",
+                "rpc",
+                "connector",
+            ],
+        )
 }
 
 #[cfg(test)]
@@ -165,6 +174,16 @@ mod tests {
         assert!(is_entrypoint_path("ui/src/main.tsx", "main.tsx"));
         assert!(is_entrypoint_path("ui/src/main.jsx", "main.jsx"));
         assert!(!is_entrypoint_path("ui/src/index.tsx", "index.tsx"));
+    }
+
+    #[test]
+    fn worker_src_index_is_an_entrypoint_without_marking_ui_indexes() {
+        assert!(is_entrypoint_path("worker/src/index.ts", "index.ts"));
+        assert!(is_entrypoint_path(
+            "packages/workers/src/index.js",
+            "index.js"
+        ));
+        assert!(!is_entrypoint_path("ui/src/index.ts", "index.ts"));
     }
 
     #[test]

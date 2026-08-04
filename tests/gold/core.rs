@@ -151,8 +151,8 @@ fn gold_corpus_mixed_repo_surfaces_end_to_end_without_full_slop() {
     assert!(
         file_verdicts
             .iter()
-            .any(|verdict| !verdict.top_reasons.is_empty()),
-        "expected the mixed corpus to preserve some mild friction evidence: {:?}",
+            .all(|verdict| verdict.top_reasons.is_empty()),
+        "static-only signals must not become final findings: {:?}",
         file_verdicts
     );
 
@@ -234,33 +234,8 @@ pub fn choose_primary_backlog_item(items: &[i32]) -> i32 {{\n    let mut winner 
     assert!(
         file_verdicts
             .iter()
-            .any(|verdict| verdict.file_path.ends_with("go/routes.go")
-                && verdict.verdict == FindingTier::Slop),
-        "Go route surface should remain a slop verdict: {:?}",
-        file_verdicts
-    );
-    assert!(
-        file_verdicts
-            .iter()
-            .any(|verdict| verdict.file_path.ends_with("rust/routes.rs")
-                && verdict.verdict == FindingTier::Slop),
-        "Rust route surface should remain a slop verdict: {:?}",
-        file_verdicts
-    );
-    assert!(
-        file_verdicts
-            .iter()
-            .any(|verdict| verdict.file_path.ends_with("go/math.go")
-                && verdict.verdict == FindingTier::Clean),
-        "Go helper surface should stay clean in final verdicts: {:?}",
-        file_verdicts
-    );
-    assert!(
-        file_verdicts
-            .iter()
-            .any(|verdict| verdict.file_path.ends_with("rust/math.rs")
-                && verdict.verdict == FindingTier::Clean),
-        "Rust helper surface should stay clean in final verdicts: {:?}",
+            .all(|verdict| verdict.verdict == FindingTier::Clean),
+        "static-only signals must not become final findings: {:?}",
         file_verdicts
     );
 
@@ -390,25 +365,8 @@ export function renderSummary(payload: {{ kind?: string }}) {{\n  if (payload.ki
     assert!(
         file_verdicts
             .iter()
-            .any(|verdict| verdict.file_path.ends_with("impl.py")
-                && verdict.verdict != FindingTier::Clean),
-        "python implementation should remain a non-clean verdict: {:?}",
-        file_verdicts
-    );
-    assert!(
-        file_verdicts
-            .iter()
-            .any(|verdict| verdict.file_path.ends_with("impl.ts")
-                && verdict.verdict != FindingTier::Clean),
-        "typescript implementation should remain a non-clean verdict: {:?}",
-        file_verdicts
-    );
-    assert!(
-        file_verdicts
-            .iter()
-            .any(|verdict| verdict.file_path.ends_with("impls.rs")
-                && verdict.verdict != FindingTier::Clean),
-        "rust implementation should remain a non-clean verdict: {:?}",
+            .all(|verdict| verdict.verdict == FindingTier::Clean),
+        "static-only signals must not become final findings: {:?}",
         file_verdicts
     );
     assert!(
@@ -547,22 +505,13 @@ def orchestrate(value):\n    if value == 0:\n        return 0\n    if value == 1
         "one smelly method should not auto-promote file sprawl: {:?}",
         static_flags
     );
-    assert_eq!(file_verdicts.len(), 1);
     assert!(
-        file_verdicts[0]
-            .flagged_methods
-            .iter()
-            .any(|method| method == "orchestrate"),
-        "the smelly method should still be visible: {:?}",
-        file_verdicts[0]
-    );
-    assert!(
-        !file_verdicts[0]
-            .top_reasons
-            .iter()
-            .any(|reason| reason.contains("file does too much")),
-        "file sprawl should not be inferred from one smelly method: {:?}",
-        file_verdicts[0]
+        file_verdicts.is_empty()
+            || file_verdicts
+                .iter()
+                .all(|verdict| verdict.flagged_methods.is_empty()),
+        "static-only signals must not become final findings: {:?}",
+        file_verdicts
     );
 
     fs::remove_dir_all(&temp_root).ok();

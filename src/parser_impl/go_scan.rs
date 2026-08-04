@@ -23,8 +23,8 @@ pub(crate) fn get_parser(adapter: &LanguageAdapter) -> Option<Parser> {
 }
 
 impl<'a> SymbolExtractor<'a> {
-    pub(crate) fn visit<T>(&mut self, _root: T) {
-        let ranges = defs::scan_go_defs_and_imports(self);
-        refs_scan::scan_go_references(self, &ranges);
+    pub(crate) fn visit(&mut self, root: tree_sitter::Node<'_>) {
+        defs::scan_go_defs_and_imports(self);
+        refs_scan::scan_go_references(self, root);
     }
 }

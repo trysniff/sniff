@@ -16,6 +16,7 @@ fn resolve_go_qualified_reference(
     Some(ResolvedSymbol::External {
         file_path: resolved_path,
         symbol_name: member.to_string(),
+        definition_id: None,
     })
 }
 
@@ -34,6 +35,7 @@ fn resolve_rust_qualified_reference_name(
     Some(ResolvedSymbol::External {
         file_path: resolved_path,
         symbol_name: symbol_name.to_string(),
+        definition_id: None,
     })
 }
 

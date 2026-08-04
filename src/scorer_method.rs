@@ -4,6 +4,7 @@ use crate::report_types::StaticFlag;
 use crate::roles::is_protocol_surface_module;
 use crate::roles::{is_analysis_finding_support_module, is_intentional_surface_record};
 use crate::types::FileRecord;
+use std::collections::HashSet;
 use std::path::Path;
 
 use super::rules;
@@ -40,31 +41,97 @@ fn is_placeholder_stub_method(method: &crate::types::MethodRecord) -> bool {
     discards_args && returns_constant
 }
 
-pub(super) fn is_cfg_test_module_method(
+pub(crate) fn is_cfg_test_module_method(
     file: &FileRecord,
     method: &crate::types::MethodRecord,
 ) -> bool {
+    cfg_test_method_lines(file).contains(&method.start_line)
+}
+
+pub(crate) fn cfg_test_method_lines(file: &FileRecord) -> HashSet<usize> {
     if !file.file_path.ends_with(".rs") {
-        return false;
+        return HashSet::new();
     }
-
-    if let (Some(cfg_test_pos), Some(method_pos)) = (
-        file.source.find("#[cfg(test)]"),
-        file.source.find(&method.source),
-    ) {
-        return method_pos > cfg_test_pos;
-    }
-
-    let Some(cfg_test_line) = file
-        .source
-        .lines()
-        .position(|line| line.trim().starts_with("#[cfg(test)]"))
-        .map(|idx| idx + 1)
-    else {
-        return false;
+    let Ok(parsed) = syn::parse_file(&file.source) else {
+        return HashSet::new();
     };
+    let mut spans = Vec::new();
+    collect_rust_test_method_spans(
+        &parsed.items,
+        rust_attrs_select_tests(&parsed.attrs),
+        &mut spans,
+    );
+    file.methods
+        .iter()
+        .filter(|method| {
+            spans
+                .iter()
+                .any(|(start, end)| *start <= method.start_line && method.start_line <= *end)
+        })
+        .map(|method| method.start_line)
+        .collect()
+}
 
-    method.start_line > cfg_test_line
+fn rust_attrs_select_tests(attrs: &[syn::Attribute]) -> bool {
+    attrs.iter().any(|attribute| {
+        if attribute.path().is_ident("test") {
+            return true;
+        }
+        matches!(&attribute.meta, syn::Meta::List(list)
+            if (attribute.path().is_ident("cfg") || attribute.path().is_ident("cfg_attr"))
+                && list.tokens.to_string().split(|character: char| !character.is_alphanumeric() && character != '_').any(|token| token == "test"))
+    })
+}
+
+fn rust_span_lines(span: proc_macro2::Span) -> (usize, usize) {
+    (span.start().line, span.end().line)
+}
+
+fn collect_rust_test_method_spans(
+    items: &[syn::Item],
+    inherited_test_context: bool,
+    spans: &mut Vec<(usize, usize)>,
+) {
+    use syn::spanned::Spanned;
+
+    for item in items {
+        match item {
+            syn::Item::Fn(function)
+                if inherited_test_context || rust_attrs_select_tests(&function.attrs) =>
+            {
+                spans.push(rust_span_lines(function.span()));
+            }
+            syn::Item::Impl(implementation) => {
+                let test_context =
+                    inherited_test_context || rust_attrs_select_tests(&implementation.attrs);
+                for item in &implementation.items {
+                    if let syn::ImplItem::Fn(function) = item
+                        && (test_context || rust_attrs_select_tests(&function.attrs))
+                    {
+                        spans.push(rust_span_lines(function.span()));
+                    }
+                }
+            }
+            syn::Item::Trait(trait_item) => {
+                let test_context =
+                    inherited_test_context || rust_attrs_select_tests(&trait_item.attrs);
+                for item in &trait_item.items {
+                    if let syn::TraitItem::Fn(function) = item
+                        && (test_context || rust_attrs_select_tests(&function.attrs))
+                    {
+                        spans.push(rust_span_lines(function.span()));
+                    }
+                }
+            }
+            syn::Item::Mod(module) => {
+                let test_context = inherited_test_context || rust_attrs_select_tests(&module.attrs);
+                if let Some((_, nested)) = &module.content {
+                    collect_rust_test_method_spans(nested, test_context, spans);
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 pub(super) fn collect_method_flags(input: MethodFlagInput<'_>) {
@@ -84,8 +151,9 @@ pub(super) fn collect_method_flags(input: MethodFlagInput<'_>) {
         None => return,
     };
 
+    let cfg_test_methods = cfg_test_method_lines(input.file);
     for method in &input.file.methods {
-        if is_cfg_test_module_method(input.file, method) {
+        if cfg_test_methods.contains(&method.start_line) {
             continue;
         }
 
@@ -208,5 +276,44 @@ mod tests {
 
         assert!(is_cfg_test_module_method(&file, &file.methods[1]));
         assert!(!is_cfg_test_module_method(&file, &file.methods[0]));
+    }
+
+    #[test]
+    fn isolated_cfg_test_item_does_not_reclassify_later_production_methods() {
+        let source = r#"
+#[cfg(test)]
+fn test_helper() {}
+
+fn production_helper() {}
+"#;
+        let methods = [
+            ("test_helper", "fn test_helper() {}", 3),
+            ("production_helper", "fn production_helper() {}", 5),
+        ]
+        .into_iter()
+        .map(|(name, source, line)| MethodRecord {
+            name: name.to_string(),
+            file_path: "src/demo.rs".to_string(),
+            source: source.to_string(),
+            loc: 1,
+            param_count: 0,
+            start_line: line,
+            end_line: line,
+            is_exported: false,
+            language: "rust".to_string(),
+            nesting_depth: 0,
+            references: Vec::new(),
+            real_ref_count: 0,
+        })
+        .collect::<Vec<_>>();
+        let file = FileRecord {
+            file_path: "src/demo.rs".to_string(),
+            source: source.to_string(),
+            language: "rust".to_string(),
+            methods,
+        };
+
+        assert!(is_cfg_test_module_method(&file, &file.methods[0]));
+        assert!(!is_cfg_test_module_method(&file, &file.methods[1]));
     }
 }

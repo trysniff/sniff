@@ -588,7 +588,7 @@ pub fn build_support_payload(value: i32) -> i32 {
 }
 
 #[test]
-fn smelly_llm_verdict_survives_even_when_static_is_quiet() {
+fn smelly_method_verdict_survives_even_when_static_is_quiet() {
     let temp_root = std::env::temp_dir().join(unique_tag("sniff_smelly_llm_survives"));
     let src_dir = temp_root.join("src");
     fs::create_dir_all(&src_dir).unwrap();
@@ -604,19 +604,19 @@ def collect_python_signature_source(lines, start_index):
 
     let file_records = parse_records(std::slice::from_ref(&file_path));
     let llm_verdicts = vec![sniff::report_types::LLMVerdict {
-        verdict_type: "file".to_string(),
+        verdict_type: "method".to_string(),
         file_path: file_path.clone(),
-        method_name: None,
-        check_type: "file_review".to_string(),
+        method_name: Some("collect_python_signature_source".to_string()),
+        check_type: "method_review".to_string(),
         smelly: true,
         tier: FindingTier::Slop,
         cohesive: Some(false),
         name_accurate: Some(true),
-        evidence: "collect_python_signature_source".to_string(),
-        reason: "file does too much".to_string(),
-        loc: 0,
-        start_line: 0,
-        end_line: 0,
+        evidence: "return lines[start_index]".to_string(),
+        reason: "intent is hidden behind unnecessary machinery".to_string(),
+        loc: 2,
+        start_line: 2,
+        end_line: 3,
     }];
 
     let file_verdicts =
@@ -626,10 +626,18 @@ def collect_python_signature_source(lines, start_index):
     assert_eq!(file_verdicts[0].verdict, FindingTier::Slop);
     assert!(
         file_verdicts[0]
+            .flagged_methods
+            .iter()
+            .any(|method| method == "collect_python_signature_source"),
+        "semantic method verdict should identify the method: {:?}",
+        file_verdicts[0]
+    );
+    assert!(
+        file_verdicts[0]
             .top_reasons
             .iter()
-            .any(|reason| reason.contains("file does too much")),
-        "smelly LLM verdict should keep its reason: {:?}",
+            .any(|reason| reason.contains("intent is hidden")),
+        "smelly method verdict should keep its reason: {:?}",
         file_verdicts[0]
     );
 

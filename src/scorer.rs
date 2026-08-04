@@ -7,7 +7,7 @@ mod control_flow;
 #[path = "scorer_file.rs"]
 mod file;
 #[path = "scorer_method.rs"]
-mod method;
+pub(crate) mod method;
 #[path = "scorer_rules.rs"]
 mod rules;
 #[path = "scorer_tiers.rs"]

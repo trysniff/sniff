@@ -109,7 +109,7 @@ fn collect_functions(
     source: &str,
     file_path: &str,
     methods: &mut Vec<MethodRecord>,
-    owner_stack: &mut Vec<String>,
+    owner_stack: &mut Vec<(String, bool)>,
 ) {
     match node.kind() {
         "class_declaration"
@@ -118,7 +118,11 @@ fn collect_functions(
         | "enum_class_declaration"
         | "fun_interface_declaration" => {
             if let Some(owner) = name_for_node(node, source) {
-                owner_stack.push(owner);
+                let owner_is_external = super::declaration_is_repository_external(node, source)
+                    && owner_stack
+                        .last()
+                        .is_none_or(|(_, is_external)| *is_external);
+                owner_stack.push((owner, owner_is_external));
                 let mut cursor = node.walk();
                 for child in node.children(&mut cursor) {
                     collect_functions(child, source, file_path, methods, owner_stack);
@@ -148,16 +152,16 @@ fn collect_functions(
                             let start = node.start_position().row;
                             let end = node.end_position().row;
                             let source_text = node_text(node, source).unwrap_or("").to_string();
-                            let refs = source_text
-                                .lines()
-                                .flat_map(super::refs::collect_refs)
+                            let refs = super::refs::collect_source_refs(&source_text)
+                                .into_iter()
+                                .flat_map(|(_, _, refs)| refs)
                                 .filter(|r| r != cleaned)
                                 .collect::<Vec<_>>();
-                            let is_exported = !source
-                                .lines()
-                                .nth(start)
-                                .map(|line| line.contains("private "))
-                                .unwrap_or(false);
+                            let is_exported =
+                                super::declaration_is_repository_external(node, source)
+                                    && owner_stack
+                                        .last()
+                                        .is_none_or(|(_, is_external)| *is_external);
                             push_method(
                                 methods,
                                 file_path,
@@ -177,16 +181,15 @@ fn collect_functions(
             let start = node.start_position().row;
             let end = node.end_position().row;
             let source_text = node_text(node, source).unwrap_or("").to_string();
-            let refs = source_text
-                .lines()
-                .flat_map(super::refs::collect_refs)
+            let refs = super::refs::collect_source_refs(&source_text)
+                .into_iter()
+                .flat_map(|(_, _, refs)| refs)
                 .filter(|r| r != &name)
                 .collect::<Vec<_>>();
-            let is_exported = !source
-                .lines()
-                .nth(start)
-                .map(|line| line.contains("private "))
-                .unwrap_or(false);
+            let is_exported = super::declaration_is_repository_external(node, source)
+                && owner_stack
+                    .last()
+                    .is_none_or(|(_, is_external)| *is_external);
             push_method(
                 methods,
                 file_path,

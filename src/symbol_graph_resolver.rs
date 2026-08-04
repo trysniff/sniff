@@ -3,11 +3,239 @@ use super::paths::{
     resolve_qualified_reference, resolve_symbol_key, same_path,
 };
 use super::{ResolveContext, SymbolGraph};
-use crate::types::ResolvedSymbol;
+use crate::types::{ImportRecord, LocalFileSymbols, ResolvedSymbol, SymbolKind};
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+fn lookup_graph_file(all_files: &HashMap<String, String>, candidate: &Path) -> Option<String> {
+    all_files
+        .get(&super::paths::normalize_path(&candidate.to_string_lossy()))
+        .cloned()
+}
+
+fn default_rust_module_candidates(parent_file: &str, module_name: &str) -> Vec<PathBuf> {
+    let parent = Path::new(parent_file);
+    let directory = parent.parent().unwrap_or_else(|| Path::new("."));
+    let stem = parent
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("");
+    let mut candidates = Vec::new();
+    if !matches!(stem, "lib" | "main" | "mod") && !stem.is_empty() {
+        candidates.push(directory.join(stem).join(format!("{module_name}.rs")));
+        candidates.push(directory.join(stem).join(module_name).join("mod.rs"));
+    }
+    candidates.push(directory.join(format!("{module_name}.rs")));
+    candidates.push(directory.join(module_name).join("mod.rs"));
+    candidates
+}
+
+fn build_rust_module_maps(
+    files: &HashMap<String, crate::types::LocalFileSymbols>,
+    all_files: &HashMap<String, String>,
+) -> (HashMap<(String, String), String>, HashMap<String, String>) {
+    let mut modules = HashMap::new();
+    let mut parents = HashMap::new();
+    for (parent_file, symbols) in files {
+        if !parent_file.ends_with(".rs") {
+            continue;
+        }
+        let parent_dir = Path::new(parent_file)
+            .parent()
+            .unwrap_or_else(|| Path::new("."));
+        for module in &symbols.modules {
+            let target = module
+                .source_path
+                .as_deref()
+                .and_then(|source| lookup_graph_file(all_files, &parent_dir.join(source)))
+                .or_else(|| {
+                    default_rust_module_candidates(parent_file, &module.local_name)
+                        .iter()
+                        .find_map(|candidate| lookup_graph_file(all_files, candidate))
+                });
+            let Some(target) = target else {
+                continue;
+            };
+            let parent_key = super::paths::normalize_path(parent_file);
+            let target_key = super::paths::normalize_path(&target);
+            modules.insert(
+                (parent_key.clone(), module.local_name.clone()),
+                target.clone(),
+            );
+            parents
+                .entry(target_key)
+                .or_insert_with(|| parent_file.clone());
+        }
+    }
+    (modules, parents)
+}
+
+fn rust_crate_names(project_root: &str) -> HashSet<String> {
+    let manifest = Path::new(project_root).join("Cargo.toml");
+    let Ok(contents) = std::fs::read_to_string(manifest) else {
+        return HashSet::new();
+    };
+    let Ok(value) = contents.parse::<toml::Value>() else {
+        return HashSet::new();
+    };
+    let mut names = HashSet::new();
+    if let Some(name) = value
+        .get("lib")
+        .and_then(|section| section.get("name"))
+        .and_then(toml::Value::as_str)
+    {
+        names.insert(name.to_string());
+    }
+    if let Some(name) = value
+        .get("package")
+        .and_then(|section| section.get("name"))
+        .and_then(toml::Value::as_str)
+    {
+        names.insert(name.replace('-', "_"));
+    }
+    names
+}
+
+fn language_for_path(file_path: &str) -> &'static str {
+    if file_path.ends_with(".go") {
+        "go"
+    } else if file_path.ends_with(".py") {
+        "python"
+    } else if file_path.ends_with(".rs") {
+        "rust"
+    } else if file_path.ends_with(".kt") {
+        "kotlin"
+    } else if file_path.ends_with(".js")
+        || file_path.ends_with(".ts")
+        || file_path.ends_with(".jsx")
+        || file_path.ends_with(".tsx")
+    {
+        "javascript"
+    } else {
+        "unknown"
+    }
+}
+
+#[path = "symbol_graph_resolver_kotlin.rs"]
+mod kotlin;
 
 impl SymbolGraph {
+    fn resolve_js_ts_qualified_member_reference(
+        &self,
+        ctx: &ResolveContext<'_>,
+        current_file: &str,
+        reference_name: &str,
+    ) -> Option<ResolvedSymbol> {
+        let (receiver, member) = reference_name.rsplit_once('.')?;
+        if receiver.is_empty() || member.is_empty() || receiver.contains('.') {
+            return None;
+        }
+        let current_symbols = self.files.get(current_file)?;
+        if let Some(definition) = current_symbols.definitions.iter().find(|definition| {
+            definition.name == member && definition.owner_type.as_deref() == Some(receiver)
+        }) {
+            return Some(ResolvedSymbol::Local(definition.id));
+        }
+
+        let (import_index, import) = current_symbols
+            .imports
+            .iter()
+            .enumerate()
+            .find(|(_, import)| import.local_name == receiver)?;
+        if import.imported_name == "*" {
+            let target_file = resolve_module_path(ctx, &import.source_module)?;
+            return self.resolve_symbol_in_file(ctx, &target_file, member, &mut HashSet::new());
+        }
+
+        let resolved_owner = self
+            .resolved_imports
+            .get(&(current_file.to_string(), import_index));
+        let (target_file, owner_name) = match resolved_owner {
+            Some(ResolvedSymbol::Local(definition_id)) => {
+                let definition = current_symbols
+                    .definitions
+                    .iter()
+                    .find(|definition| definition.id == *definition_id)?;
+                (current_file.to_string(), definition.name.clone())
+            }
+            Some(ResolvedSymbol::External {
+                file_path,
+                symbol_name,
+                definition_id,
+            }) => {
+                let owner_name = definition_id
+                    .and_then(|id| {
+                        self.files
+                            .get(file_path)?
+                            .definitions
+                            .iter()
+                            .find_map(|definition| {
+                                (definition.id == id).then(|| definition.name.clone())
+                            })
+                    })
+                    .unwrap_or_else(|| symbol_name.clone());
+                (file_path.clone(), owner_name)
+            }
+            None => {
+                let target_file = resolve_module_path(ctx, &import.source_module)?;
+                (target_file, import.imported_name.clone())
+            }
+        };
+        let target_symbols = self.files.get(&target_file)?;
+        let definition = target_symbols.definitions.iter().find(|definition| {
+            definition.name == member
+                && definition.owner_type.as_deref() == Some(owner_name.as_str())
+        })?;
+        if same_path(current_file, &target_file) {
+            Some(ResolvedSymbol::Local(definition.id))
+        } else {
+            Some(ResolvedSymbol::External {
+                file_path: target_file,
+                symbol_name: definition.name.clone(),
+                definition_id: Some(definition.id),
+            })
+        }
+    }
+
+    fn refine_rust_callable_target(
+        &self,
+        current_file: &str,
+        resolved: ResolvedSymbol,
+        symbol_name: &str,
+        member_call: bool,
+    ) -> ResolvedSymbol {
+        let target_file = match &resolved {
+            ResolvedSymbol::Local(_) => current_file,
+            ResolvedSymbol::External { file_path, .. } => file_path,
+        };
+        let Some(symbols) = self.files.get(target_file) else {
+            return resolved;
+        };
+        let mut matches = symbols.definitions.iter().filter(|definition| {
+            definition.name == symbol_name
+                && if member_call {
+                    definition.owner_type.is_some()
+                } else {
+                    definition.owner_type.is_none()
+                }
+        });
+        let Some(definition) = matches.next() else {
+            return resolved;
+        };
+        if matches.next().is_some() {
+            return resolved;
+        }
+        if same_path(current_file, target_file) {
+            ResolvedSymbol::Local(definition.id)
+        } else {
+            ResolvedSymbol::External {
+                file_path: target_file.to_string(),
+                symbol_name: definition.name.clone(),
+                definition_id: Some(definition.id),
+            }
+        }
+    }
+
     fn resolve_export_target(
         &self,
         ctx: &ResolveContext<'_>,
@@ -19,6 +247,9 @@ impl SymbolGraph {
             importing_file: target_file,
             project_root: ctx.project_root,
             all_files: ctx.all_files,
+            rust_modules: ctx.rust_modules,
+            rust_parents: ctx.rust_parents,
+            rust_crate_names: ctx.rust_crate_names,
             language: ctx.language,
         };
         for export in file_symbols
@@ -93,7 +324,9 @@ impl SymbolGraph {
 
         for (file_path, file_symbols) in &self.files {
             for def in &file_symbols.definitions {
-                if def.name == symbol_name {
+                if def.name == symbol_name
+                    && matches!(&def.kind, SymbolKind::Function | SymbolKind::Method)
+                {
                     matches.push((file_path.clone(), def.id, def.name.clone()));
                 }
             }
@@ -110,8 +343,103 @@ impl SymbolGraph {
             ResolvedSymbol::External {
                 file_path: matched_file,
                 symbol_name: def_name,
+                definition_id: Some(def_id),
             }
         })
+    }
+
+    fn resolve_unique_owned_method_reference(
+        &self,
+        current_file: &str,
+        symbol_name: &str,
+    ) -> Option<ResolvedSymbol> {
+        let mut matches = self.files.iter().flat_map(|(file_path, symbols)| {
+            symbols
+                .definitions
+                .iter()
+                .filter(move |definition| {
+                    definition.name == symbol_name
+                        && matches!(&definition.kind, SymbolKind::Method)
+                        && definition.owner_type.is_some()
+                })
+                .map(move |definition| (file_path.clone(), definition.id, definition.name.clone()))
+        });
+        let first = matches.next()?;
+        if matches.next().is_some() {
+            return None;
+        }
+        let (matched_file, definition_id, definition_name) = first;
+        Some(if same_path(current_file, &matched_file) {
+            ResolvedSymbol::Local(definition_id)
+        } else {
+            ResolvedSymbol::External {
+                file_path: matched_file,
+                symbol_name: definition_name,
+                definition_id: Some(definition_id),
+            }
+        })
+    }
+
+    fn resolve_python_inherited_method(
+        &self,
+        ctx: &ResolveContext<'_>,
+        current_file: &str,
+        owner_type: &str,
+        member_name: &str,
+        visited: &mut HashSet<String>,
+    ) -> Option<ResolvedSymbol> {
+        let visit_key = format!(
+            "{}::{owner_type}",
+            super::paths::normalize_path(current_file)
+        );
+        if !visited.insert(visit_key) {
+            return None;
+        }
+        let symbols = self.files.get(current_file)?;
+        let type_record = symbols
+            .types
+            .iter()
+            .find(|record| record.name == owner_type)?;
+
+        for base in &type_record.bases {
+            let (base_file, base_name) = if let Some(import) = symbols
+                .imports
+                .iter()
+                .find(|import| import.local_name == *base)
+            {
+                (
+                    resolve_module_path(ctx, &import.source_module)?,
+                    import.imported_name.clone(),
+                )
+            } else {
+                (current_file.to_string(), base.clone())
+            };
+            let base_symbols = self.files.get(&base_file)?;
+            if let Some(definition) = base_symbols.definitions.iter().find(|definition| {
+                definition.name == member_name
+                    && definition.owner_type.as_deref() == Some(base_name.as_str())
+            }) {
+                return Some(if same_path(ctx.importing_file, &base_file) {
+                    ResolvedSymbol::Local(definition.id)
+                } else {
+                    ResolvedSymbol::External {
+                        file_path: base_file,
+                        symbol_name: definition.name.clone(),
+                        definition_id: Some(definition.id),
+                    }
+                });
+            }
+            if let Some(resolved) = self.resolve_python_inherited_method(
+                ctx,
+                &base_file,
+                &base_name,
+                member_name,
+                visited,
+            ) {
+                return Some(resolved);
+            }
+        }
+        None
     }
 
     pub(super) fn resolve_all_impl(&mut self) {
@@ -120,34 +448,133 @@ impl SymbolGraph {
             .keys()
             .map(|f| (super::paths::normalize_path(f), f.clone()))
             .collect();
+        let (rust_modules, rust_parents) = build_rust_module_maps(&self.files, &all_files);
+        let rust_crate_names = rust_crate_names(&self.project_root);
+        let mut resolved_imports = HashMap::new();
+        let mut resolved_exports = HashMap::new();
+        for (file_path, file_symbols) in &self.files {
+            let ctx = ResolveContext {
+                importing_file: file_path,
+                project_root: &self.project_root,
+                all_files: &all_files,
+                rust_modules: &rust_modules,
+                rust_parents: &rust_parents,
+                rust_crate_names: &rust_crate_names,
+                language: language_for_path(file_path),
+            };
+            for (index, import) in file_symbols.imports.iter().enumerate() {
+                if matches!(import.imported_name.as_str(), "*" | "default") {
+                    continue;
+                }
+                let Some(target_file) = resolve_module_path(&ctx, &import.source_module) else {
+                    continue;
+                };
+                let mut visited = HashSet::new();
+                if let Some(resolved) = self.resolve_symbol_in_file(
+                    &ctx,
+                    &target_file,
+                    &import.imported_name,
+                    &mut visited,
+                ) {
+                    resolved_imports.insert((file_path.clone(), index), resolved);
+                }
+            }
+            for (index, export) in file_symbols.exports.iter().enumerate() {
+                let resolved = if let (Some(source_module), Some(source_symbol)) = (
+                    export.source_module.as_deref(),
+                    export.source_symbol_name.as_deref(),
+                ) {
+                    if matches!(source_symbol, "*" | "default") {
+                        None
+                    } else {
+                        resolve_module_path(&ctx, source_module).and_then(|target_file| {
+                            self.resolve_symbol_in_file(
+                                &ctx,
+                                &target_file,
+                                source_symbol,
+                                &mut HashSet::new(),
+                            )
+                        })
+                    }
+                } else {
+                    resolve_direct_symbol(
+                        file_path,
+                        file_path,
+                        file_symbols,
+                        &export.local_symbol_name,
+                    )
+                };
+                if let Some(resolved) = resolved {
+                    resolved_exports.insert((file_path.clone(), index), resolved);
+                }
+            }
+        }
+        self.resolved_imports = resolved_imports;
+        self.resolved_exports = resolved_exports;
         let mut updates: HashMap<String, Vec<(usize, ResolvedSymbol)>> = HashMap::new();
 
         for (file_path, file_symbols) in &self.files {
             let mut resolved_refs = Vec::new();
 
-            let language = if file_path.ends_with(".go") {
-                "go"
-            } else if file_path.ends_with(".py") {
-                "python"
-            } else if file_path.ends_with(".rs") {
-                "rust"
-            } else if file_path.ends_with(".js")
-                || file_path.ends_with(".ts")
-                || file_path.ends_with(".jsx")
-                || file_path.ends_with(".tsx")
-            {
-                "javascript"
-            } else {
-                "unknown"
-            };
+            let language = language_for_path(file_path);
 
             for (ref_idx, reference) in file_symbols.references.iter().enumerate() {
                 let ctx = ResolveContext {
                     importing_file: file_path,
                     project_root: &self.project_root,
                     all_files: &all_files,
+                    rust_modules: &rust_modules,
+                    rust_parents: &rust_parents,
+                    rust_crate_names: &rust_crate_names,
                     language,
                 };
+
+                let is_rust_member_call = language == "rust"
+                    && !reference.name.contains("::")
+                    && reference.is_member_call;
+                let is_python_member_call = language == "python" && reference.is_member_call;
+                let is_js_ts_member_call =
+                    matches!(language, "javascript" | "typescript") && reference.is_member_call;
+                let js_ts_owner = is_js_ts_member_call
+                    .then(|| {
+                        file_symbols
+                            .definitions
+                            .iter()
+                            .filter(|definition| {
+                                definition.start_line <= reference.line
+                                    && reference.line <= definition.end_line
+                                    && definition.owner_type.is_some()
+                            })
+                            .min_by_key(|definition| {
+                                definition.end_line.saturating_sub(definition.start_line)
+                            })
+                            .and_then(|definition| definition.owner_type.as_deref())
+                    })
+                    .flatten();
+
+                if language == "kotlin"
+                    && reference.name.contains('.')
+                    && let Some(resolved) = self.resolve_kotlin_qualified_method_reference(
+                        file_path,
+                        &reference.name,
+                        reference.line,
+                    )
+                {
+                    resolved_refs.push((ref_idx, resolved));
+                    continue;
+                }
+
+                if language == "kotlin"
+                    && !reference.name.contains('.')
+                    && let Some(resolved) = self.resolve_kotlin_local_callable_reference(
+                        file_path,
+                        &reference.name,
+                        reference.line,
+                    )
+                {
+                    resolved_refs.push((ref_idx, resolved));
+                    continue;
+                }
 
                 if language == "rust"
                     && reference.name.contains("::")
@@ -158,9 +585,39 @@ impl SymbolGraph {
                     continue;
                 }
 
+                if matches!(language, "javascript" | "typescript")
+                    && reference.name.contains('.')
+                    && let Some(resolved) = self.resolve_js_ts_qualified_member_reference(
+                        &ctx,
+                        file_path,
+                        &reference.name,
+                    )
+                {
+                    resolved_refs.push((ref_idx, resolved));
+                    continue;
+                }
+
                 let mut local_match = None;
                 for def in &file_symbols.definitions {
-                    if def.name == reference.name {
+                    if def.name == reference.name
+                        && ((!matches!(
+                            language,
+                            "rust" | "python" | "javascript" | "typescript" | "kotlin"
+                        ) || (is_js_ts_member_call
+                            && js_ts_owner.is_some()
+                            && def.owner_type.as_deref() == js_ts_owner)
+                            || (matches!(language, "javascript" | "typescript")
+                                && !is_js_ts_member_call
+                                && def.owner_type.is_none()))
+                            || (is_rust_member_call && def.owner_type.is_some())
+                            || (language == "rust"
+                                && !is_rust_member_call
+                                && def.owner_type.is_none())
+                            || (is_python_member_call && def.owner_type.is_some())
+                            || (language == "python"
+                                && !is_python_member_call
+                                && def.owner_type.is_none()))
+                    {
                         local_match = Some(ResolvedSymbol::Local(def.id));
                         break;
                     }
@@ -181,6 +638,7 @@ impl SymbolGraph {
                                     package_match = Some(ResolvedSymbol::External {
                                         file_path: other_file.clone(),
                                         symbol_name: def.name.clone(),
+                                        definition_id: Some(def.id),
                                     });
                                     break;
                                 }
@@ -198,6 +656,13 @@ impl SymbolGraph {
 
                 let mut import_match = None;
                 for imp in &file_symbols.imports {
+                    if language == "kotlin"
+                        && let Some(resolved) =
+                            self.resolve_kotlin_imported_reference(file_path, imp, &reference.name)
+                    {
+                        import_match = Some(resolved);
+                        break;
+                    }
                     if language == "python"
                         && imp.imported_name == "*"
                         && let Some(resolved_path) = resolve_module_path(&ctx, &imp.source_module)
@@ -274,7 +739,16 @@ impl SymbolGraph {
                                 &direct_target,
                                 &mut visited,
                             ) {
-                                import_match = Some(resolved);
+                                import_match = Some(if language == "rust" {
+                                    self.refine_rust_callable_target(
+                                        file_path,
+                                        resolved,
+                                        &direct_target,
+                                        is_rust_member_call,
+                                    )
+                                } else {
+                                    resolved
+                                });
                                 break;
                             }
 
@@ -322,6 +796,7 @@ impl SymbolGraph {
                                         import_match = Some(ResolvedSymbol::External {
                                             file_path: candidate_path.clone(),
                                             symbol_name: target_symbol_name.clone(),
+                                            definition_id: None,
                                         });
                                         break;
                                     }
@@ -346,16 +821,74 @@ impl SymbolGraph {
                 }
 
                 if language == "rust" {
+                    if is_rust_member_call
+                        && let Some(resolved) =
+                            self.resolve_unique_owned_method_reference(file_path, &reference.name)
+                    {
+                        resolved_refs.push((ref_idx, resolved));
+                        continue;
+                    }
+                    if !is_rust_member_call
+                        && !reference.name.contains("::")
+                        && let Some(resolved) = self.resolve_rust_symbol_through_globs(
+                            &ctx,
+                            file_path,
+                            &reference.name,
+                            &mut HashSet::new(),
+                        )
+                    {
+                        resolved_refs.push((ref_idx, resolved));
+                        continue;
+                    }
                     let terminal_name = reference
                         .name
                         .rsplit("::")
                         .next()
                         .unwrap_or(&reference.name);
-                    if let Some(resolved) =
-                        self.resolve_unique_symbol_reference(file_path, terminal_name)
+                    if !reference.is_callable_value
+                        && let Some(resolved) =
+                            self.resolve_unique_symbol_reference(file_path, terminal_name)
                     {
                         resolved_refs.push((ref_idx, resolved));
                     }
+                } else if language == "python" && is_python_member_call {
+                    let terminal_name =
+                        reference.name.rsplit('.').next().unwrap_or(&reference.name);
+                    let owner_type = file_symbols
+                        .definitions
+                        .iter()
+                        .filter(|definition| {
+                            definition.start_line <= reference.line
+                                && reference.line <= definition.end_line
+                                && definition.owner_type.is_some()
+                        })
+                        .min_by_key(|definition| {
+                            definition.end_line.saturating_sub(definition.start_line)
+                        })
+                        .and_then(|definition| definition.owner_type.as_deref());
+                    if let Some(owner_type) = owner_type
+                        && let Some(resolved) = self.resolve_python_inherited_method(
+                            &ctx,
+                            file_path,
+                            owner_type,
+                            terminal_name,
+                            &mut HashSet::new(),
+                        )
+                    {
+                        resolved_refs.push((ref_idx, resolved));
+                        continue;
+                    }
+                    if let Some(resolved) =
+                        self.resolve_unique_owned_method_reference(file_path, terminal_name)
+                    {
+                        resolved_refs.push((ref_idx, resolved));
+                    }
+                } else if language == "kotlin"
+                    && !reference.name.contains('.')
+                    && let Some(resolved) =
+                        self.resolve_kotlin_top_level_reference(file_path, &reference.name)
+                {
+                    resolved_refs.push((ref_idx, resolved));
                 }
             }
 

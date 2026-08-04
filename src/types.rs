@@ -6,6 +6,7 @@ pub enum FindingTier {
     Slop,
     KindaSlop,
     Clean,
+    Unresolved,
 }
 
 impl FindingTier {
@@ -14,14 +15,7 @@ impl FindingTier {
             FindingTier::Slop => "Slop",
             FindingTier::KindaSlop => "Kinda Slop",
             FindingTier::Clean => "Clean",
-        }
-    }
-
-    pub fn json_label(self) -> &'static str {
-        match self {
-            FindingTier::Slop => "slop",
-            FindingTier::KindaSlop => "kinda_slop",
-            FindingTier::Clean => "clean",
+            FindingTier::Unresolved => "Unresolved",
         }
     }
 }
@@ -74,6 +68,10 @@ pub struct SymbolDefinition {
     pub end_line: usize,
     pub is_exported: bool,
     pub owner_type: Option<String>,
+    #[serde(default)]
+    pub receiver_type: Option<String>,
+    #[serde(default)]
+    pub value_type: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -92,10 +90,26 @@ pub struct ExportRecord {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModuleRecord {
+    pub local_name: String,
+    pub source_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TypeRecord {
+    pub name: String,
+    pub bases: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SymbolReference {
     pub name: String,
     pub line: usize,
     pub snippet: String,
+    #[serde(default)]
+    pub is_member_call: bool,
+    #[serde(default)]
+    pub is_callable_value: bool,
     pub resolved_symbol: Option<ResolvedSymbol>,
 }
 
@@ -105,6 +119,8 @@ pub enum ResolvedSymbol {
     External {
         file_path: String,
         symbol_name: String,
+        #[serde(default)]
+        definition_id: Option<usize>,
     },
 }
 
@@ -114,5 +130,9 @@ pub struct LocalFileSymbols {
     pub definitions: Vec<SymbolDefinition>,
     pub imports: Vec<ImportRecord>,
     pub exports: Vec<ExportRecord>,
+    #[serde(default)]
+    pub modules: Vec<ModuleRecord>,
+    #[serde(default)]
+    pub types: Vec<TypeRecord>,
     pub references: Vec<SymbolReference>,
 }

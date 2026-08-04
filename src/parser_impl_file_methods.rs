@@ -1,5 +1,4 @@
 use super::*;
-use std::collections::HashSet;
 use std::path::Path;
 
 fn parse_js_ts_file_methods(record: &mut FileRecord, file_path: &str) -> Result<(), String> {
@@ -25,16 +24,21 @@ fn parse_js_ts_file_methods(record: &mut FileRecord, file_path: &str) -> Result<
         imports: Vec::new(),
         exports: Vec::new(),
         references: Vec::new(),
-        scopes: vec![HashSet::new()],
         next_id: 0,
         current_name_hint: None,
-        in_class: false,
-        in_function_body: false,
+        current_class: None,
+        current_class_exported: false,
+        current_object: None,
+        current_object_exported: false,
         is_exported_context: false,
+        callable_depth: 0,
     };
 
     extractor.visit_program(&parsed.program);
     record.methods = extractor.methods;
+    for method in &mut record.methods {
+        method.language.clone_from(&record.language);
+    }
     Ok(())
 }
 
@@ -55,13 +59,16 @@ fn parse_python_file_methods(record: &mut FileRecord, file_path: &str) -> Result
         methods: Vec::new(),
         definitions: Vec::new(),
         imports: Vec::new(),
+        scoped_imports: Vec::new(),
         exports: Vec::new(),
+        types: Vec::new(),
         references: Vec::new(),
         scopes: vec![HashSet::new()],
         next_id: 0,
         parent_is_class: false,
         in_function_body: false,
         scanned: false,
+        explicit_exports: None,
     };
 
     for stmt in module.body {
@@ -81,6 +88,7 @@ fn parse_rust_file_methods(record: &mut FileRecord, file_path: &str) -> Result<(
         definitions: Vec::new(),
         imports: Vec::new(),
         exports: Vec::new(),
+        modules: Vec::new(),
         references: Vec::new(),
         scopes: vec![HashSet::new()],
         next_id: 0,

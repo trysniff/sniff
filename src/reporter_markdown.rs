@@ -16,7 +16,7 @@ pub(super) fn write_markdown_report(
             crate::types::FindingTier::KindaSlop => {
                 kinda_count += 1;
             }
-            crate::types::FindingTier::Clean => {}
+            crate::types::FindingTier::Clean | crate::types::FindingTier::Unresolved => {}
         }
     }
     if kinda_count > 0 {

@@ -1,4 +1,4 @@
-use sniff::file_verdicts::build_file_verdicts;
+use sniff::file_verdicts::{build_file_verdicts, build_file_verdicts_with_mode};
 use sniff::report_types::{LLMVerdict, StaticFlag};
 use sniff::types::{FileRecord, FindingTier, MethodRecord};
 
@@ -61,7 +61,7 @@ fn clean_method_verdict(path: &str, name: &str) -> LLMVerdict {
 }
 
 #[test]
-fn one_mild_method_stays_clean() {
+fn static_method_signal_stays_clean_without_a_semantic_verdict() {
     let path = "src/sample.py";
     let file_records = vec![file(path, vec![method("helper", path, 8)])];
     let verdicts = build_file_verdicts(
@@ -77,7 +77,84 @@ fn one_mild_method_stays_clean() {
 
     assert_eq!(verdicts.len(), 1);
     assert_eq!(verdicts[0].verdict, FindingTier::Clean);
-    assert_eq!(verdicts[0].flagged_methods, vec!["helper".to_string()]);
+    assert!(verdicts[0].flagged_methods.is_empty());
+}
+
+#[test]
+fn one_mild_semantic_method_finding_survives_file_aggregation() {
+    let path = "src/conceptual.py";
+    let method_name = "normalize_value";
+    let file_records = vec![file(path, vec![method(method_name, path, 8)])];
+    let verdict = LLMVerdict {
+        verdict_type: "method".to_string(),
+        file_path: path.to_string(),
+        method_name: Some(method_name.to_string()),
+        check_type: "semantic_method_review".to_string(),
+        smelly: true,
+        tier: FindingTier::KindaSlop,
+        cohesive: None,
+        name_accurate: None,
+        evidence: "if value is None: return \"\"".to_string(),
+        reason: "duplicated decision paths: the same empty result is selected twice".to_string(),
+        loc: 8,
+        start_line: 1,
+        end_line: 8,
+    };
+
+    let verdicts = build_file_verdicts(&file_records, &[], &[verdict]);
+
+    assert_eq!(verdicts[0].verdict, FindingTier::KindaSlop);
+    assert_eq!(verdicts[0].flagged_methods, vec![method_name.to_string()]);
+    assert!(verdicts[0].top_reasons.iter().any(|reason| {
+        reason.contains(method_name) && reason.contains("duplicated decision paths")
+    }));
+}
+
+#[test]
+fn file_review_cannot_promote_a_mild_method_finding() {
+    let path = "src/conceptual.py";
+    let method_name = "normalize_value";
+    let file_records = vec![file(path, vec![method(method_name, path, 8)])];
+    let method_verdict = LLMVerdict {
+        verdict_type: "method".to_string(),
+        file_path: path.to_string(),
+        method_name: Some(method_name.to_string()),
+        check_type: "semantic_method_review".to_string(),
+        smelly: true,
+        tier: FindingTier::KindaSlop,
+        cohesive: None,
+        name_accurate: None,
+        evidence: "return value".to_string(),
+        reason: "ceremonial logic: an unnecessary temporary obscures the direct return".to_string(),
+        loc: 8,
+        start_line: 1,
+        end_line: 8,
+    };
+    let file_verdict = LLMVerdict {
+        verdict_type: "file".to_string(),
+        file_path: path.to_string(),
+        method_name: None,
+        check_type: "file".to_string(),
+        smelly: true,
+        tier: FindingTier::Slop,
+        cohesive: Some(false),
+        name_accurate: Some(true),
+        evidence: "return value".to_string(),
+        reason: "file does too much: the module mixes unrelated responsibilities".to_string(),
+        loc: 0,
+        start_line: 0,
+        end_line: 0,
+    };
+
+    let verdicts = build_file_verdicts(&file_records, &[], &[method_verdict, file_verdict]);
+
+    assert_eq!(verdicts[0].verdict, FindingTier::KindaSlop);
+    assert!(
+        verdicts[0]
+            .top_reasons
+            .iter()
+            .all(|reason| { !reason.contains("file does too much") })
+    );
 }
 
 #[test]
@@ -416,7 +493,7 @@ fn lone_supporting_reason_is_detected_even_when_it_is_not_first() {
 }
 
 #[test]
-fn lone_file_level_structure_signal_stays_kinda_slop() {
+fn static_file_signal_stays_clean_without_a_semantic_verdict() {
     let path = "src/sample.py";
     let file_records = vec![file(path, vec![method("helper", path, 8)])];
     let verdicts = build_file_verdicts(
@@ -435,11 +512,11 @@ fn lone_file_level_structure_signal_stays_kinda_slop() {
         &[] as &[LLMVerdict],
     );
 
-    assert_eq!(verdicts[0].verdict, FindingTier::KindaSlop);
+    assert_eq!(verdicts[0].verdict, FindingTier::Clean);
 }
 
 #[test]
-fn two_mild_methods_bump_to_kinda_slop() {
+fn multiple_static_method_signals_stay_clean_without_semantic_verdicts() {
     let path = "src/sample.py";
     let file_records = vec![file(
         path,
@@ -454,7 +531,7 @@ fn two_mild_methods_bump_to_kinda_slop() {
         &[] as &[LLMVerdict],
     );
 
-    assert_eq!(verdicts[0].verdict, FindingTier::KindaSlop);
+    assert_eq!(verdicts[0].verdict, FindingTier::Clean);
 }
 
 #[test]
@@ -513,7 +590,7 @@ fn two_control_flow_only_methods_stay_clean() {
 }
 
 #[test]
-fn three_control_flow_only_methods_stay_kinda_slop() {
+fn control_flow_static_signals_stay_clean_without_semantic_verdicts() {
     let path = "src/sample.py";
     let file_records = vec![file(
         path,
@@ -548,11 +625,11 @@ fn three_control_flow_only_methods_stay_kinda_slop() {
         &[] as &[LLMVerdict],
     );
 
-    assert_eq!(verdicts[0].verdict, FindingTier::KindaSlop);
+    assert_eq!(verdicts[0].verdict, FindingTier::Clean);
 }
 
 #[test]
-fn severe_signal_bumps_to_slop() {
+fn severe_static_signal_stays_clean_without_a_semantic_verdict() {
     let path = "src/sample.py";
     let file_records = vec![file(path, vec![method("helper", path, 8)])];
     let verdicts = build_file_verdicts(
@@ -566,11 +643,11 @@ fn severe_signal_bumps_to_slop() {
         &[] as &[LLMVerdict],
     );
 
-    assert_eq!(verdicts[0].verdict, FindingTier::Slop);
+    assert_eq!(verdicts[0].verdict, FindingTier::Clean);
 }
 
 #[test]
-fn generated_and_docs_files_are_skipped() {
+fn generated_and_docs_files_are_omitted_without_method_findings() {
     let file_records = vec![
         file(
             "generated/generated.py",
@@ -584,4 +661,86 @@ fn generated_and_docs_files_are_skipped() {
 
     let verdicts = build_file_verdicts(&file_records, &[], &[] as &[LLMVerdict]);
     assert!(verdicts.is_empty());
+}
+
+#[test]
+fn method_finding_survives_file_role_suppression() {
+    let path = "generated/generated.py";
+    let file_records = vec![file(path, vec![method("real_slop", path, 8)])];
+    let verdicts = build_file_verdicts(
+        &file_records,
+        &[],
+        &[LLMVerdict {
+            verdict_type: "method".to_string(),
+            file_path: path.to_string(),
+            method_name: Some("real_slop".to_string()),
+            check_type: "method".to_string(),
+            smelly: true,
+            tier: FindingTier::Slop,
+            cohesive: None,
+            name_accurate: None,
+            evidence: "return value".to_string(),
+            reason: "ceremonial logic: the method wraps a direct value without adding intent"
+                .to_string(),
+            loc: 1,
+            start_line: 1,
+            end_line: 1,
+        }],
+    );
+
+    assert_eq!(verdicts.len(), 1);
+    assert_eq!(verdicts[0].verdict, FindingTier::Slop);
+    assert_eq!(verdicts[0].flagged_methods, vec!["real_slop".to_string()]);
+    assert!(
+        verdicts[0]
+            .top_reasons
+            .iter()
+            .any(|reason| reason.contains("ceremonial logic"))
+    );
+}
+
+#[test]
+fn normal_method_mode_hides_secondary_file_only_findings() {
+    let path = "src/sample.py";
+    let file_records = vec![file(path, vec![method("helper", path, 8)])];
+    let file_verdict = LLMVerdict {
+        verdict_type: "file".to_string(),
+        file_path: path.to_string(),
+        method_name: None,
+        check_type: "file_review".to_string(),
+        smelly: true,
+        tier: FindingTier::Slop,
+        cohesive: Some(false),
+        name_accurate: Some(true),
+        evidence: "def helper".to_string(),
+        reason: "file hides intent across methods".to_string(),
+        loc: 0,
+        start_line: 0,
+        end_line: 0,
+    };
+
+    let normal = build_file_verdicts_with_mode(&file_records, &[], &[file_verdict], false);
+    assert_eq!(normal[0].verdict, FindingTier::Clean);
+
+    let file_only = build_file_verdicts_with_mode(
+        &file_records,
+        &[],
+        &[LLMVerdict {
+            verdict_type: "file".to_string(),
+            file_path: path.to_string(),
+            method_name: None,
+            check_type: "file_review".to_string(),
+            smelly: true,
+            tier: FindingTier::Slop,
+            cohesive: Some(false),
+            name_accurate: Some(true),
+            evidence: "def helper".to_string(),
+            reason: "file hides intent across methods".to_string(),
+            loc: 0,
+            start_line: 0,
+            end_line: 0,
+        }],
+        true,
+    );
+    assert_eq!(file_only[0].verdict, FindingTier::Slop);
 }

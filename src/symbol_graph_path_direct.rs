@@ -18,6 +18,7 @@ pub(crate) fn resolve_direct_symbol(
         Some(ResolvedSymbol::External {
             file_path: target_file.to_string(),
             symbol_name: def.name.clone(),
+            definition_id: Some(def.id),
         })
     }
 }
