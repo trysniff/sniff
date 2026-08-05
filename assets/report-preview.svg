@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="690" viewBox="0 0 1200 690" role="img" aria-labelledby="title desc">
+  <title id="title">Sniff estimate and report preview</title>
+  <desc id="desc">A terminal preview showing an offline estimate followed by an evidence-backed slop finding.</desc>
+  <rect width="1200" height="690" rx="28" fill="#181614"/>
+  <rect x="1" y="1" width="1198" height="688" rx="27" fill="none" stroke="#4b4540" stroke-width="2"/>
+  <circle cx="42" cy="37" r="8" fill="#f17f6f"/>
+  <circle cx="68" cy="37" r="8" fill="#efbd62"/>
+  <circle cx="94" cy="37" r="8" fill="#71b687"/>
+  <text x="600" y="44" text-anchor="middle" fill="#8f8881" font-family="Consolas, monospace" font-size="17">sniff - repository root</text>
+
+  <g font-family="Consolas, monospace" font-size="20">
+    <text x="38" y="92" fill="#d6d0c9">$ sniff --estimate</text>
+    <text x="38" y="132" fill="#65d3c8">Sniff estimate</text>
+    <text x="215" y="132" fill="#8f8881">(no LLM requests were made)</text>
+    <text x="58" y="168" fill="#d6d0c9">9 files  |  28 methods  |  Python</text>
+    <text x="58" y="202" fill="#d6d0c9">estimated runtime: 25s-7m</text>
+    <text x="58" y="236" fill="#d6d0c9">estimated cost:    $0.01-$0.02</text>
+    <text x="58" y="270" fill="#71b687">below the configured confirmation threshold</text>
+  </g>
+
+  <line x1="38" y1="306" x2="1162" y2="306" stroke="#38332f" stroke-width="2"/>
+
+  <g font-family="Consolas, monospace">
+    <text x="38" y="354" fill="#f17f6f" font-size="23" font-weight="700">SLOP</text>
+    <text x="126" y="354" fill="#f3eee8" font-size="23">duplicated decision paths</text>
+    <text x="38" y="391" fill="#8f8881" font-size="17">finding_python_parameter_compat.py :: is_requiredness_tightening</text>
+
+    <rect x="38" y="420" width="1124" height="102" rx="10" fill="#24211e" stroke="#38332f"/>
+    <text x="62" y="458" fill="#d6d0c9" font-size="18">if is_optional_param(old_token) and not is_optional_param(new_token):</text>
+    <text x="82" y="487" fill="#65d3c8" font-size="18">return True</text>
+    <text x="62" y="516" fill="#65d3c8" font-size="18">return True</text>
+
+    <text x="38" y="564" fill="#efbd62" font-size="18">Why</text>
+    <text x="96" y="564" fill="#d6d0c9" font-size="18">The condition promises a distinction, but both paths do the same thing.</text>
+    <text x="38" y="602" fill="#71b687" font-size="18">Simplify</text>
+    <text x="135" y="602" fill="#d6d0c9" font-size="18">Replace the duplicated branch with a single return True.</text>
+    <text x="38" y="650" fill="#8f8881" font-size="16">Exact evidence  |  behavior preserved  |  dependency impact checked</text>
+  </g>
+</svg>
