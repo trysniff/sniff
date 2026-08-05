@@ -94,4 +94,6 @@ pub use contract::is_callback_contract_module;
 pub use facade::{is_detector_facade_module, is_thin_delegation_method, is_thin_wrapper_export};
 pub use hooks::is_hydration_hook_module;
 pub use presentation::is_presentation_surface_module;
-pub use protocol::{is_protocol_stub_method, is_protocol_surface_module};
+pub use protocol::{
+    is_language_protocol_method, is_protocol_stub_method, is_protocol_surface_module,
+};

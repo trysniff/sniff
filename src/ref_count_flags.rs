@@ -1,8 +1,9 @@
 use crate::report_types::StaticFlag;
 use crate::roles::{
     is_analysis_finding_support_module, is_contract_type_module, is_data_catalog_module,
-    is_intentional_surface_record, is_protocol_stub_method, is_protocol_surface_module,
-    is_thin_wrapper_export, is_utility_helper_name, is_wrapper_only_module,
+    is_intentional_surface_record, is_language_protocol_method, is_protocol_stub_method,
+    is_protocol_surface_module, is_thin_wrapper_export, is_utility_helper_name,
+    is_wrapper_only_module,
 };
 use crate::types::{FileRecord, FindingTier};
 
@@ -54,6 +55,7 @@ fn should_skip_method_record(
 ) -> bool {
     should_skip_ref_flag(&method.name)
         || is_utility_helper_name(&method.name)
+        || is_language_protocol_method(method)
         || is_protocol_stub_method(method)
         || is_thin_wrapper_export(method)
         || is_intentional_surface_record(file_record)

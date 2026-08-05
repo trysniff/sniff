@@ -1,6 +1,13 @@
 use crate::roles::normalize_path;
 use crate::types::{FileRecord, MethodRecord};
 
+pub fn is_language_protocol_method(method: &MethodRecord) -> bool {
+    method.language == "python"
+        && method.name.len() > 4
+        && method.name.starts_with("__")
+        && method.name.ends_with("__")
+}
+
 pub fn is_protocol_stub_method(method: &MethodRecord) -> bool {
     let source = method.source.trim();
     if source.is_empty() {
@@ -91,7 +98,7 @@ pub fn is_protocol_surface_module(file: &FileRecord) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::is_protocol_stub_method;
+    use super::{is_language_protocol_method, is_protocol_stub_method};
     use crate::types::MethodRecord;
 
     fn method(source: &str) -> MethodRecord {
@@ -133,5 +140,18 @@ mod tests {
         assert!(is_protocol_stub_method(&method(
             "def load(self):\n    raise NotImplementedError()\n"
         )));
+    }
+
+    #[test]
+    fn python_dunders_are_runtime_protocol_methods() {
+        for name in ["__iter__", "__repr__", "__enter__", "__aexit__"] {
+            let mut candidate = method("def protocol_method(self):\n    return self\n");
+            candidate.name = name.to_string();
+            assert!(is_language_protocol_method(&candidate));
+        }
+
+        let mut ordinary = method("def render(self):\n    return self\n");
+        ordinary.name = "render".to_string();
+        assert!(!is_language_protocol_method(&ordinary));
     }
 }

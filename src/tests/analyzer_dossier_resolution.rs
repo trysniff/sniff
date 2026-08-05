@@ -681,6 +681,33 @@ fn inline_object_argument_members_are_consumed_callback_contracts() {
 }
 
 #[test]
+fn python_dunder_methods_are_not_closed_world_dead_code_candidates() {
+    let mut protocol_method = method("def __iter__(self):\n    return iter(self._items)\n");
+    protocol_method.name = "__iter__".to_string();
+    protocol_method.is_exported = false;
+    let file = FileRecord {
+        file_path: protocol_method.file_path.clone(),
+        source: protocol_method.source.clone(),
+        language: protocol_method.language.clone(),
+        methods: vec![protocol_method.clone()],
+    };
+    let graph = SymbolGraph::new(".");
+
+    let dossier = build_method_dossier(
+        &file,
+        &protocol_method,
+        &graph,
+        std::slice::from_ref(&file),
+        vec![],
+    );
+
+    assert!(!dossier.repository_private_unused_candidate);
+    assert!(dossier.context.contains(
+        "the Python dunder declaration is invoked implicitly through the language data model"
+    ));
+}
+
+#[test]
 fn typed_object_callback_defaults_are_not_private_unused() {
     let nonce = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

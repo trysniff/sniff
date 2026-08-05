@@ -1,7 +1,7 @@
 use crate::roles::{
     FileRole, classify_file_role, file_role_label, is_callback_contract_module,
-    is_compatibility_shim_record, is_protocol_stub_method, is_protocol_surface_module,
-    is_thin_wrapper_export,
+    is_compatibility_shim_record, is_language_protocol_method, is_protocol_stub_method,
+    is_protocol_surface_module, is_thin_wrapper_export,
 };
 use crate::symbol_graph::SymbolGraph;
 use crate::types::{FileRecord, MethodRecord, Reference, SymbolDefinition};
