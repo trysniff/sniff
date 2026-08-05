@@ -99,6 +99,8 @@ pub struct ModuleRecord {
 pub struct TypeRecord {
     pub name: String,
     pub bases: Vec<String>,
+    #[serde(default)]
+    pub constructor_is_private: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

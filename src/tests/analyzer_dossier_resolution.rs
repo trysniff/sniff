@@ -104,6 +104,7 @@ fn rust_associated_method_evidence_is_owner_qualified() {
         types: vec![crate::types::TypeRecord {
             name: "LineIndex".to_string(),
             bases: Vec::new(),
+            constructor_is_private: false,
         }],
         references: Vec::new(),
     });
@@ -126,6 +127,7 @@ fn rust_associated_method_evidence_is_owner_qualified() {
         types: vec![crate::types::TypeRecord {
             name: "OtherIndex".to_string(),
             bases: Vec::new(),
+            constructor_is_private: false,
         }],
         references: Vec::new(),
     });

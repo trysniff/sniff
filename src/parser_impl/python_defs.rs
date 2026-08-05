@@ -306,7 +306,11 @@ fn python_class_record(trimmed: &str) -> Option<TypeRecord> {
         .filter(|base| !base.is_empty())
         .map(|base| base.rsplit('.').next().unwrap_or(base).to_string())
         .collect();
-    Some(TypeRecord { name, bases })
+    Some(TypeRecord {
+        name,
+        bases,
+        constructor_is_private: false,
+    })
 }
 
 pub(super) fn record_python_function(

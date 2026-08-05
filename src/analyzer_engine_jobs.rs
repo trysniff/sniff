@@ -482,12 +482,13 @@ fn previous_contract_context(previous: &str, current: &str) -> bool {
         "semantic-method-v23",
         "semantic-method-v24",
         "semantic-method-v25",
+        "semantic-method-v26",
     ]
     .into_iter()
     .any(|version| {
         previous.replace(
             &format!("review_contract={version}"),
-            "review_contract=semantic-method-v26",
+            "review_contract=semantic-method-v27",
         ) == current
             && previous.contains(&format!("review_contract={version}"))
     })
