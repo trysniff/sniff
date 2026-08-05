@@ -19,7 +19,7 @@ fn exit_code_for_run(has_issues: bool, ai_failed_reviews: usize) -> i32 {
     }
 }
 
-fn source_inventory_summary(file_records: &[crate::types::FileRecord]) -> String {
+pub(super) fn source_inventory_summary(file_records: &[crate::types::FileRecord]) -> String {
     let methods = file_records
         .iter()
         .map(|file| file.methods.len())
@@ -31,7 +31,7 @@ fn source_inventory_summary(file_records: &[crate::types::FileRecord]) -> String
     )
 }
 
-fn report_path_for_target(target_path: &std::path::Path) -> std::path::PathBuf {
+pub(super) fn report_path_for_target(target_path: &std::path::Path) -> std::path::PathBuf {
     let current_dir = std::env::current_dir()
         .ok()
         .map(|path| strip_windows_verbatim_prefix(std::fs::canonicalize(&path).unwrap_or(path)));
@@ -45,7 +45,7 @@ fn report_path_for_target(target_path: &std::path::Path) -> std::path::PathBuf {
         return current_dir.join("sniff-report.md");
     }
 
-    let mut candidate = if resolved_target.is_dir() {
+    let target_root = if resolved_target.is_dir() {
         resolved_target
     } else {
         resolved_target
@@ -54,19 +54,25 @@ fn report_path_for_target(target_path: &std::path::Path) -> std::path::PathBuf {
             .unwrap_or_else(|| std::path::PathBuf::from("."))
     };
 
+    if [".git", "Cargo.toml", "pyproject.toml", "package.json"]
+        .iter()
+        .any(|marker| target_root.join(marker).exists())
+    {
+        return target_root.join("sniff-report.md");
+    }
+
+    let mut candidate = target_root.clone();
+
     loop {
-        if [".git", "Cargo.toml", "pyproject.toml", "package.json"]
-            .iter()
-            .any(|marker| candidate.join(marker).exists())
-        {
+        if candidate.join(".git").exists() {
             return candidate.join("sniff-report.md");
         }
 
         let Some(parent) = candidate.parent() else {
-            return candidate.join("sniff-report.md");
+            return target_root.join("sniff-report.md");
         };
         if parent == candidate {
-            return candidate.join("sniff-report.md");
+            return target_root.join("sniff-report.md");
         }
         candidate = parent.to_path_buf();
     }
@@ -157,6 +163,7 @@ pub async fn run(
     path: &str,
     with_file_reviews: bool,
     skip_dotenv: bool,
+    assume_yes: bool,
 ) -> Result<i32, Box<dyn std::error::Error>> {
     let target_path = std::path::Path::new(path);
     let report_path = report_path_for_target(target_path);
@@ -180,6 +187,9 @@ pub async fn run(
         .into());
     }
     eprintln!("{}", source_inventory_summary(&file_records));
+    let estimate = super::preflight::ScanEstimate::from_files(&file_records, with_file_reviews);
+    super::preflight::print_scan_cost_summary(&estimate);
+    super::preflight::confirm_expensive_scan(&estimate, assume_yes)?;
     if checkpoint_path.exists() {
         eprintln!(
             "Resuming completed reviews from {}",

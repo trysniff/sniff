@@ -9,6 +9,7 @@ pub mod language_adapter;
 pub mod languages;
 pub mod llm;
 pub mod parser;
+pub mod pricing;
 pub mod report_types;
 pub mod reporter;
 pub mod roles;
@@ -38,11 +39,7 @@ fn main() {
                 Ok(rt) => rt,
                 Err(err) => return Err(format!("failed to build tokio runtime: {}", err)),
             };
-            rt.block_on(async move {
-                cli::run(&args.path, args.with_file_reviews, args.skip_dotenv)
-                    .await
-                    .map_err(|e| e.to_string())
-            })
+            rt.block_on(async move { cli::run(args).await.map_err(|e| e.to_string()) })
         }) {
         Ok(handle) => handle,
         Err(err) => {
