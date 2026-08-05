@@ -136,6 +136,63 @@ fn rust_cfg_alternative_targets(
     }
 }
 
+fn go_build_alternative_targets(
+    graph: &crate::symbol_graph::SymbolGraph,
+    file_records: &HashMap<String, &FileRecord>,
+    primary: &(String, String, usize),
+) -> Vec<(String, String, usize)> {
+    let (target_file, target_name, target_line) = primary;
+    if !target_file.to_ascii_lowercase().ends_with(".go") {
+        return vec![primary.clone()];
+    }
+    let Some(primary_symbols) = graph.files.get(target_file) else {
+        return vec![primary.clone()];
+    };
+    let Some(primary_definition) = primary_symbols.definitions.iter().find(|definition| {
+        definition.name == *target_name && definition.start_line == *target_line
+    }) else {
+        return vec![primary.clone()];
+    };
+    let target_dir = std::path::Path::new(target_file).parent();
+    let alternatives = graph
+        .files
+        .iter()
+        .filter(|(file_path, _)| std::path::Path::new(file_path).parent() == target_dir)
+        .filter(|(file_path, _)| {
+            file_records.get(*file_path).is_some_and(|file| {
+                file.source
+                    .lines()
+                    .take(5)
+                    .any(|line| line.trim_start().starts_with("//go:build "))
+            })
+        })
+        .flat_map(|(file_path, symbols)| {
+            symbols
+                .definitions
+                .iter()
+                .filter(|definition| {
+                    definition.name == primary_definition.name
+                        && definition.owner_type == primary_definition.owner_type
+                        && std::mem::discriminant(&definition.kind)
+                            == std::mem::discriminant(&primary_definition.kind)
+                })
+                .map(|definition| {
+                    (
+                        file_path.clone(),
+                        definition.name.clone(),
+                        definition.start_line,
+                    )
+                })
+        })
+        .collect::<Vec<_>>();
+
+    if alternatives.len() > 1 {
+        alternatives
+    } else {
+        vec![primary.clone()]
+    }
+}
+
 fn collect_refs_for_file(
     collected_refs: &mut HashMap<(String, String, usize), Vec<TempRef>>,
     file_record: &FileRecord,
@@ -152,21 +209,25 @@ fn collect_refs_for_file(
         {
             let idx = reference.line.saturating_sub(1);
             let (snippet, _) = get_caller_snippet(file_record, &lines, idx, reference.line);
-            for target_key in rust_cfg_alternative_targets(graph, file_records, &target_key) {
-                let entries = collected_refs.entry(target_key).or_default();
-                if entries.iter().any(|existing| {
-                    existing
-                        .caller_file_path
-                        .eq_ignore_ascii_case(ref_file_path)
-                        && existing.line_num == reference.line
-                }) {
-                    continue;
+            for language_target in rust_cfg_alternative_targets(graph, file_records, &target_key) {
+                for target_key in
+                    go_build_alternative_targets(graph, file_records, &language_target)
+                {
+                    let entries = collected_refs.entry(target_key).or_default();
+                    if entries.iter().any(|existing| {
+                        existing
+                            .caller_file_path
+                            .eq_ignore_ascii_case(ref_file_path)
+                            && existing.line_num == reference.line
+                    }) {
+                        continue;
+                    }
+                    entries.push(TempRef {
+                        caller_file_path: ref_file_path.to_string(),
+                        line_num: reference.line,
+                        snippet: snippet.clone(),
+                    });
                 }
-                entries.push(TempRef {
-                    caller_file_path: ref_file_path.to_string(),
-                    line_num: reference.line,
-                    snippet: snippet.clone(),
-                });
             }
         }
     });
