@@ -528,7 +528,14 @@ mod tests {
 
         let report = check_report_writable(&root).unwrap();
 
-        assert_eq!(report, root.join("sniff-report.md"));
+        assert_eq!(
+            report.file_name().and_then(|name| name.to_str()),
+            Some("sniff-report.md")
+        );
+        assert_eq!(
+            fs::canonicalize(report.parent().unwrap()).unwrap(),
+            fs::canonicalize(&root).unwrap()
+        );
         assert!(!report.exists());
         assert_eq!(fs::read_dir(&root).unwrap().count(), 0);
         fs::remove_dir_all(root).unwrap();
