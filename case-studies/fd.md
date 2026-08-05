@@ -6,6 +6,9 @@
 - Target commit: [`41532d1`](https://github.com/sharkdp/fd/commit/41532d114e2ba565fb5367d606c111b29b96450c)
 - Sniff version: `0.2.2`
 - Accepted Sniff commit: `e530db0`
+- Model: `deepseek-v4-flash`
+- Endpoint: `https://api.deepseek.com/anthropic`
+- Pre-run estimate: $0.09-$0.20 and 1-56 minutes
 - Validation binary SHA-256: `963FC1D865F628EE746F690CA7EFFA908446630DB0751143571253E2F1563D0D`
 - Files: 22
 - Methods: 217

@@ -6,6 +6,9 @@
 - Target commit: [`3419113`](https://github.com/sindresorhus/ky/commit/3419113b48e034fdcf8fa6bd3be3da7b3d0d758f)
 - Sniff version: `0.2.2`
 - Accepted Sniff commit: `e2106ef`
+- Model: `deepseek-v4-flash`
+- Endpoint: `https://api.deepseek.com/anthropic`
+- Pre-run estimate: $0.06-$0.14 and 1-44 minutes
 - Files: 30
 - Methods: 135
 

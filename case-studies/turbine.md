@@ -6,6 +6,9 @@
 - Target commit: [`0fbb877`](https://github.com/cashapp/turbine/commit/0fbb8774aa6da2c4d524ab4cfb03dfd575613240)
 - Sniff version: `0.2.2`
 - Accepted Sniff runtime commit: `1ef4100`
+- Model: `deepseek-v4-flash`
+- Endpoint: `https://api.deepseek.com/anthropic`
+- Pre-run estimate: $0.08-$0.19 and 1-56 minutes
 - Files: 15
 - Methods: 234
 

@@ -6,6 +6,9 @@
 - Target commit: [`38cdd62`](https://github.com/caddyserver/certmagic/commit/38cdd6254bf2fc9c5e456aae41a93214e0e64514)
 - Sniff version: `0.2.2`
 - Accepted Sniff commit: `53852e1`
+- Model: `deepseek-v4-flash`
+- Endpoint: `https://api.deepseek.com/anthropic`
+- Pre-run estimate: $0.16-$0.35 and 2-72 minutes
 - Validation binary SHA-256: `5515C390977C281EBFB18D61FED2822D3A3C16377CFBD304AF96C491CAF4A23E`
 - Files: 22
 - Methods: 294

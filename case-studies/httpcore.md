@@ -6,6 +6,9 @@
 - Target commit: [`10a6582`](https://github.com/encode/httpcore/commit/10a658221deb38a4c5b16db55ab554b0bf731707)
 - Sniff version: `0.2.2`
 - Accepted Sniff commit: `bcdac72`
+- Model: `deepseek-v4-flash`
+- Endpoint: `https://api.deepseek.com/anthropic`
+- Pre-run estimate: $0.13-$0.31 and 2-90 minutes
 - Validation binary SHA-256: `A0CDF334B8FD890E7164A7C9D62ACF7DB724478AA277A55106E9AB3B137AA368`
 - Files: 32
 - Methods: 329
