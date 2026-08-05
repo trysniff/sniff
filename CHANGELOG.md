@@ -10,6 +10,7 @@ All notable changes to Sniff will be documented here.
 - Include exhausted validation attempts in token and cost totals.
 - Recalibrate conservative runtime estimates from the measured Ky validation run.
 - Resolve Kotlin private-constructor companion invocations and fluent calls split by comments.
+- Reject AI dead-code claims unless the closed-world private-unused proof is established.
 
 ## 0.2.1 - 2026-08-05
 
