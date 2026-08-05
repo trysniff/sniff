@@ -25,9 +25,10 @@ Each study follows the same process:
 | TypeScript | [Ky](ky.md) | `3419113` | 135 | 135 / 135 | 0 | $0.0507 |
 | Kotlin | [Turbine](turbine.md) | `0fbb877` | 234 | 234 / 234 | 0 | $0.0461 |
 | Rust | [fd](fd.md) | `41532d1` | 217 | 217 / 217 | 0 | $0.0975 |
+| Python | [httpcore](httpcore.md) | `10a6582` | 329 | 329 / 329 | 0 | $0.2175 |
 
-Python and Go studies will be added only after their runs and human
-adjudication are complete.
+The Go study will be added only after its run and human adjudication are
+complete.
 
 ## Reading The Numbers
 

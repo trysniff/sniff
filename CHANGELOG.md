@@ -11,6 +11,8 @@ All notable changes to Sniff will be documented here.
 - Recalibrate conservative runtime estimates from the measured Ky validation run.
 - Resolve Kotlin private-constructor companion invocations and fluent calls split by comments.
 - Reject AI dead-code claims unless the closed-world private-unused proof is established.
+- Recognize Python data-model methods as implicit protocol boundaries.
+- Publish adjudicated TypeScript, Kotlin, Rust, and Python validation studies.
 
 ## 0.2.1 - 2026-08-05
 
