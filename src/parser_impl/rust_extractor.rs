@@ -98,5 +98,6 @@ impl<'a> RustExtractor<'a> {
         helpers::record_rust_ast_modules_and_uses(self, file);
         helpers::record_rust_ast_callables(self, file);
         helpers::record_rust_ast_callable_values(self, file);
+        helpers::record_rust_ast_token_references(self, file);
     }
 }

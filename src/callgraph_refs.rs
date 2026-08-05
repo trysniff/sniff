@@ -78,9 +78,68 @@ fn resolve_reference_target(
     }
 }
 
+fn rust_cfg_alternative_targets(
+    graph: &crate::symbol_graph::SymbolGraph,
+    file_records: &HashMap<String, &FileRecord>,
+    primary: &(String, String, usize),
+) -> Vec<(String, String, usize)> {
+    let (target_file, target_name, target_line) = primary;
+    if !target_file.to_ascii_lowercase().ends_with(".rs") {
+        return vec![primary.clone()];
+    }
+    let Some(symbols) = graph.files.get(target_file) else {
+        return vec![primary.clone()];
+    };
+    let Some(primary_definition) = symbols.definitions.iter().find(|definition| {
+        definition.name == *target_name && definition.start_line == *target_line
+    }) else {
+        return vec![primary.clone()];
+    };
+    let Some(file) = file_records.get(target_file) else {
+        return vec![primary.clone()];
+    };
+    let alternatives = symbols
+        .definitions
+        .iter()
+        .filter(|definition| {
+            definition.name == primary_definition.name
+                && definition.owner_type == primary_definition.owner_type
+                && std::mem::discriminant(&definition.kind)
+                    == std::mem::discriminant(&primary_definition.kind)
+        })
+        .filter_map(|definition| {
+            file.methods
+                .iter()
+                .find(|method| {
+                    method.name == definition.name && method.start_line == definition.start_line
+                })
+                .filter(|method| {
+                    method.source.lines().any(|line| {
+                        let line = line.trim();
+                        line.starts_with("#[cfg(") || line.starts_with("#[cfg_attr(")
+                    })
+                })
+                .map(|_| {
+                    (
+                        target_file.clone(),
+                        definition.name.clone(),
+                        definition.start_line,
+                    )
+                })
+        })
+        .collect::<Vec<_>>();
+
+    if alternatives.len() > 1 {
+        alternatives
+    } else {
+        vec![primary.clone()]
+    }
+}
+
 fn collect_refs_for_file(
     collected_refs: &mut HashMap<(String, String, usize), Vec<TempRef>>,
     file_record: &FileRecord,
+    file_records: &HashMap<String, &FileRecord>,
     graph: &crate::symbol_graph::SymbolGraph,
     ref_file_path: &str,
     file_symbols: &crate::types::LocalFileSymbols,
@@ -93,20 +152,22 @@ fn collect_refs_for_file(
         {
             let idx = reference.line.saturating_sub(1);
             let (snippet, _) = get_caller_snippet(file_record, &lines, idx, reference.line);
-            let entries = collected_refs.entry(target_key).or_default();
-            if entries.iter().any(|existing| {
-                existing
-                    .caller_file_path
-                    .eq_ignore_ascii_case(ref_file_path)
-                    && existing.line_num == reference.line
-            }) {
-                return;
+            for target_key in rust_cfg_alternative_targets(graph, file_records, &target_key) {
+                let entries = collected_refs.entry(target_key).or_default();
+                if entries.iter().any(|existing| {
+                    existing
+                        .caller_file_path
+                        .eq_ignore_ascii_case(ref_file_path)
+                        && existing.line_num == reference.line
+                }) {
+                    continue;
+                }
+                entries.push(TempRef {
+                    caller_file_path: ref_file_path.to_string(),
+                    line_num: reference.line,
+                    snippet: snippet.clone(),
+                });
             }
-            entries.push(TempRef {
-                caller_file_path: ref_file_path.to_string(),
-                line_num: reference.line,
-                snippet,
-            });
         }
     });
 }
@@ -127,6 +188,7 @@ fn collect_resolved_references(
                 collect_refs_for_file(
                     &mut collected_refs,
                     file_record,
+                    &file_map,
                     graph,
                     ref_file_path,
                     file_symbols,
@@ -277,6 +339,7 @@ pub(super) fn build_callee_context(
 #[cfg(test)]
 mod tests {
     use super::{build_references, get_caller_snippet};
+    use crate::parser::{parse_file, parse_file_symbols};
     use crate::symbol_graph::SymbolGraph;
     use crate::types::{
         FileRecord, LocalFileSymbols, MethodRecord, ResolvedSymbol, SymbolDefinition, SymbolKind,
@@ -428,5 +491,49 @@ mod tests {
         let target = &files[0].methods[0];
         assert_eq!(target.real_ref_count, 1);
         assert_eq!(target.references.len(), 1);
+    }
+
+    #[test]
+    fn rust_cfg_alternatives_share_the_runtime_call_site() {
+        let root = std::env::temp_dir().join(format!(
+            "sniff_cfg_alternatives_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("output.rs");
+        std::fs::write(
+            &path,
+            r#"fn print_entry() {
+    print_entry_uncolorized();
+}
+
+#[cfg(unix)]
+fn print_entry_uncolorized() {}
+
+#[cfg(not(unix))]
+fn print_entry_uncolorized() {}
+"#,
+        )
+        .unwrap();
+        let path = path.to_string_lossy().to_string();
+        let mut files = vec![parse_file(&path)];
+        let mut graph = SymbolGraph::new(&root.to_string_lossy());
+        graph.add_file(parse_file_symbols(&path));
+        graph.resolve_all();
+
+        build_references(&mut files, &graph);
+
+        let alternatives = files[0]
+            .methods
+            .iter()
+            .filter(|method| method.name == "print_entry_uncolorized")
+            .collect::<Vec<_>>();
+        assert_eq!(alternatives.len(), 2);
+        assert!(alternatives.iter().all(|method| method.real_ref_count == 1));
+        std::fs::remove_dir_all(root).ok();
     }
 }

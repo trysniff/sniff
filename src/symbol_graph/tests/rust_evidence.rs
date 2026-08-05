@@ -345,3 +345,84 @@ pub fn use_supplied_callback(shadowed_callback: fn() -> String) -> String {
 
     fs::remove_dir_all(&root).ok();
 }
+
+#[test]
+fn test_rust_receiver_call_resolves_to_same_owner_method() {
+    let root = unique_tag("temp_rust_receiver_call");
+    let source = write_temp_file(
+        &root,
+        "src/cli.rs",
+        r#"struct Opts;
+
+impl Opts {
+    fn search_paths(&self) {
+        let _ = Ok::<_, ()>(vec![self.normalize_path(".")]);
+    }
+
+    fn normalize_path(&self, path: &str) -> String {
+        path.to_string()
+    }
+}
+"#,
+    );
+    let mut graph = SymbolGraph::new(&root);
+    graph.add_file(parse_file_symbols(&source));
+    graph.resolve_all();
+
+    let symbols = graph.files.get(&source).unwrap();
+    let definition = symbols
+        .definitions
+        .iter()
+        .find(|definition| definition.name == "normalize_path")
+        .unwrap();
+    let reference = symbols
+        .references
+        .iter()
+        .find(|reference| reference.name == "normalize_path")
+        .expect("receiver call");
+    assert!(matches!(
+        reference.resolved_symbol,
+        Some(ResolvedSymbol::Local(id)) if id == definition.id
+    ));
+
+    fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn test_rust_proc_macro_attribute_records_callable_reference() {
+    let root = unique_tag("temp_rust_attribute_callback");
+    let source = write_temp_file(
+        &root,
+        "src/cli.rs",
+        r#"struct Opts {
+    #[arg(long, value_parser = parse_millis)]
+    timeout: u64,
+}
+
+fn parse_millis(value: &str) -> Result<u64, ()> {
+    value.parse().map_err(|_| ())
+}
+"#,
+    );
+    let mut graph = SymbolGraph::new(&root);
+    graph.add_file(parse_file_symbols(&source));
+    graph.resolve_all();
+
+    let symbols = graph.files.get(&source).unwrap();
+    let definition = symbols
+        .definitions
+        .iter()
+        .find(|definition| definition.name == "parse_millis")
+        .unwrap();
+    let reference = symbols
+        .references
+        .iter()
+        .find(|reference| reference.name == "parse_millis" && reference.is_callable_value)
+        .expect("proc-macro callable reference");
+    assert!(matches!(
+        reference.resolved_symbol,
+        Some(ResolvedSymbol::Local(id)) if id == definition.id
+    ));
+
+    fs::remove_dir_all(&root).ok();
+}
