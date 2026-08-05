@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 use tokio::sync::Semaphore;
 
-const REVIEW_CONTRACT_VERSION: &str = "semantic-method-v25";
+const REVIEW_CONTRACT_VERSION: &str = "semantic-method-v26";
 const DEFAULT_CONTEXT_TOKENS: usize = 128_000;
 const RESERVED_OUTPUT_TOKENS: usize = 8_192;
 const CONSERVATIVE_CHARS_PER_TOKEN: usize = 3;
@@ -61,6 +61,8 @@ pub struct LLMClient {
     max_attempt_count: usize,
     max_prompt_chars: usize,
     cached_input_tokens: AtomicUsize,
+    failed_input_tokens: AtomicUsize,
+    failed_output_tokens: AtomicUsize,
 }
 
 impl LLMClient {
@@ -82,6 +84,8 @@ impl LLMClient {
             max_attempt_count,
             max_prompt_chars,
             cached_input_tokens: AtomicUsize::new(0),
+            failed_input_tokens: AtomicUsize::new(0),
+            failed_output_tokens: AtomicUsize::new(0),
         })
     }
 
@@ -118,6 +122,21 @@ impl LLMClient {
 
     pub(crate) fn cached_input_tokens(&self) -> usize {
         self.cached_input_tokens.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn failed_input_tokens(&self) -> usize {
+        self.failed_input_tokens.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn failed_output_tokens(&self) -> usize {
+        self.failed_output_tokens.load(Ordering::Relaxed)
+    }
+
+    pub(super) fn record_failed_usage(&self, input_tokens: usize, output_tokens: usize) {
+        self.failed_input_tokens
+            .fetch_add(input_tokens, Ordering::Relaxed);
+        self.failed_output_tokens
+            .fetch_add(output_tokens, Ordering::Relaxed);
     }
 
     pub(crate) fn restore_cached_input_tokens(&self, tokens: usize) {

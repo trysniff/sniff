@@ -27,7 +27,7 @@ fn review_context_key_versions_the_semantic_contract_not_the_binary() {
     let context = client.review_context_key();
 
     assert!(!context.contains("sniff_version="));
-    assert!(context.contains("review_contract=semantic-method-v25"));
+    assert!(context.contains("review_contract=semantic-method-v26"));
     assert!(context.contains("model=test-model"));
     assert!(context.contains("endpoint=https://example.invalid/v1"));
 }
@@ -129,6 +129,34 @@ fn spawn_cached_usage_server() -> String {
     format!("http://{addr}")
 }
 
+fn spawn_malformed_batch_usage_server() -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (ready_tx, ready_rx) = mpsc::channel();
+
+    thread::spawn(move || {
+        let _ = ready_tx.send(());
+        for _ in 0..2 {
+            let Ok((mut stream, _)) = listener.accept() else {
+                return;
+            };
+            let mut buf = [0u8; 4096];
+            let _ = stream.read(&mut buf);
+            let body = r#"{"choices":[{"message":{"content":"{\"tier\":\"clean\"}"}}],"usage":{"prompt_tokens":10,"completion_tokens":2,"prompt_cache_hit_tokens":4}}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = stream.write_all(response.as_bytes());
+            let _ = stream.flush();
+        }
+    });
+    let _ = ready_rx.recv();
+
+    format!("http://{addr}")
+}
+
 #[test]
 fn llm_concurrency_defaults_and_clamps_to_the_supported_range() {
     assert_eq!(parse_max_concurrency(None), 4);
@@ -167,4 +195,19 @@ async fn client_accumulates_provider_cache_hits() {
     assert_eq!(output_tokens, 20);
     assert_eq!(client.cached_input_tokens(), 750);
     assert_eq!(task_cached_tokens, 750);
+}
+
+#[tokio::test]
+async fn exhausted_format_repairs_are_included_in_usage_totals() {
+    let endpoint = spawn_malformed_batch_usage_server();
+    let client = LLMClient::new(cfg(&endpoint), Some("test-key".to_string()));
+
+    client
+        .call_single("review this batch", ResponseSchema::MethodIntentBatchReview)
+        .await
+        .expect_err("malformed batch should exhaust its format repair");
+
+    assert_eq!(client.failed_input_tokens(), 20);
+    assert_eq!(client.failed_output_tokens(), 4);
+    assert_eq!(client.cached_input_tokens(), 8);
 }

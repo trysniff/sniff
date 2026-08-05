@@ -12,7 +12,9 @@ const CHARS_PER_TOKEN: usize = 3;
 const LOWER_OUTPUT_TOKENS_PER_METHOD: usize = 250;
 const UPPER_OUTPUT_TOKENS_PER_METHOD: usize = 900;
 const LOWER_SECONDS_PER_REQUEST: usize = 5;
-const UPPER_SECONDS_PER_REQUEST: usize = 60;
+// Provider-side reasoning made a measured 135-method Ky run exceed the former
+// 60-second ceiling. Keep the public estimate conservative across providers.
+const UPPER_SECONDS_PER_REQUEST: usize = 120;
 
 #[derive(Debug, Clone)]
 pub(super) struct ScanEstimate {

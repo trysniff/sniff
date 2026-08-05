@@ -109,8 +109,8 @@ pub(super) async fn run_llm_checks(
     let (verdicts, in_tok, out_tok) = result?;
     Ok((
         verdicts,
-        in_tok + input.role_input_tokens,
-        out_tok + input.role_output_tokens,
+        in_tok + input.role_input_tokens + usage_client.failed_input_tokens(),
+        out_tok + input.role_output_tokens + usage_client.failed_output_tokens(),
         usage_client.cached_input_tokens(),
     ))
 }

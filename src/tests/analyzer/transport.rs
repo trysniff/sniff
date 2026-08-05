@@ -1064,6 +1064,63 @@ async fn partial_batch_repairs_only_the_missing_method_key() {
 }
 
 #[tokio::test]
+async fn malformed_batch_is_split_until_each_method_receives_a_valid_review() {
+    let _lock = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+    unsafe {
+        env::set_var("SNIFF_LLM_MAX_CONCURRENCY", "1");
+        env::set_var("SNIFF_LLM_METHOD_BATCH_SIZE", "2");
+    }
+    let malformed_batch = r#"{"choices":[{"message":{"content":"{\"tier\":\"clean\"}"}}]}"#;
+    let singleton_intent = r#"{"choices":[{"message":{"content":"{\"reviews\":[{\"method_key\":\"m0\",\"intent\":\"Return the configured value.\",\"contract_status\":\"required\",\"necessity_check\":\"The direct return implements the method contract.\",\"missing_evidence\":[]}] }"}}]}"#;
+    let singleton_clean = r#"{"choices":[{"message":{"content":"{\"reviews\":[{\"method_key\":\"m0\",\"tier\":\"clean\",\"reason\":\"The direct return serves the established contract.\"}]}"}}]}"#;
+    let (endpoint, hits) = spawn_openai_style_server_sequence(vec![
+        malformed_batch,
+        malformed_batch,
+        singleton_intent,
+        singleton_clean,
+        singleton_intent,
+        singleton_clean,
+    ]);
+    let client = Arc::new(LLMClient::new(cfg(&endpoint), Some("test-key".to_string())));
+    let method = |name: &str, start_line: usize, value: usize| MethodRecord {
+        name: name.to_string(),
+        file_path: "sample.py".to_string(),
+        source: format!("def {name}():\n    return {value}\n"),
+        loc: 2,
+        param_count: 0,
+        start_line,
+        end_line: start_line + 1,
+        is_exported: true,
+        language: "python".to_string(),
+        nesting_depth: 0,
+        references: vec![],
+        real_ref_count: 0,
+    };
+    let file = FileRecord {
+        file_path: "sample.py".to_string(),
+        source: "def first():\n    return 1\n\ndef second():\n    return 2\n".to_string(),
+        language: "python".to_string(),
+        methods: vec![method("first", 1, 1), method("second", 4, 2)],
+    };
+
+    let result = analyze_with_client(std::slice::from_ref(&file), &[], client, false, None).await;
+    unsafe {
+        env::remove_var("SNIFF_LLM_MAX_CONCURRENCY");
+        env::remove_var("SNIFF_LLM_METHOD_BATCH_SIZE");
+    }
+
+    let (verdicts, _, _) = result.expect("split batch review should complete");
+    assert_eq!(verdicts.len(), 2);
+    assert!(
+        verdicts
+            .iter()
+            .all(|verdict| verdict.tier == FindingTier::Clean),
+        "unexpected split batch verdicts: {verdicts:#?}"
+    );
+    assert_eq!(hits.load(Ordering::SeqCst), 6);
+}
+
+#[tokio::test]
 async fn disagreement_runs_a_final_adjudication_pass() {
     let slop = r#"{"choices":[{"message":{"content":"{\"smelly\":true,\"tier\":\"slop\",\"evidence\":\"return 1\",\"reason\":\"unnecessary machinery\"}"}}]}"#;
     let clean = r#"{"choices":[{"message":{"content":"{\"smelly\":false,\"tier\":\"clean\",\"evidence\":\"\",\"reason\":\"clean\"}"}}]}"#;

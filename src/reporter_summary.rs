@@ -28,6 +28,7 @@ pub(super) fn append_footer(
     cost_str: &str,
 ) {
     let (kinda, slop, unresolved) = verdict_counts(verdicts);
+    let resolved_methods = s.method_reviews_completed.saturating_sub(unresolved);
     let unresolved_summary = if unresolved == 0 {
         "**Unresolved reviews:** 0".to_string()
     } else {
@@ -43,12 +44,15 @@ pub(super) fn append_footer(
             s.files_scanned, s.methods_analyzed
         ),
         format!(
-            "**AI coverage:** {} of {} expected reviews completed, {} missed",
+            "**AI response coverage:** {} of {} review records emitted, {} missing",
             s.ai_reviews, s.ai_expected_reviews, s.ai_failed_reviews
         ),
         format!(
-            "**Method review coverage:** {} of {} methods completed, {} missed",
-            s.method_reviews_completed, s.method_reviews_expected, s.method_review_failures
+            "**Trusted method verdicts:** {} of {} resolved, {} unresolved, {} missing",
+            resolved_methods,
+            s.method_reviews_expected,
+            unresolved,
+            s.method_review_failures
         ),
         format!("**Slop findings:** {} slop | {} kinda slop", slop, kinda),
         unresolved_summary,
@@ -64,6 +68,7 @@ pub(super) fn print_summary(
     out: Option<&str>,
 ) {
     let (kinda, slop, unresolved) = verdict_counts(verdicts);
+    let resolved_methods = s.method_reviews_completed.saturating_sub(unresolved);
     println!("Report written to {}", out.unwrap_or("sniff-report.md"));
     println!(
         "Findings: {} Slop, {} Kinda Slop, {} Unresolved",
@@ -71,11 +76,13 @@ pub(super) fn print_summary(
     );
 
     println!(
-        "Scanned: {} files, {} methods | AI methods: {}/{} | Est. cost: {}",
+        "Scanned: {} files, {} methods | AI verdicts: {}/{} resolved, {} unresolved, {} missing | Est. cost: {}",
         s.files_scanned,
         s.methods_analyzed,
-        s.method_reviews_completed,
+        resolved_methods,
         s.method_reviews_expected,
+        unresolved,
+        s.method_review_failures,
         cost_str
     );
 }
@@ -134,8 +141,9 @@ mod tests {
             "unexpected unresolved summary: {lines:?}"
         );
         assert!(
-            lines.iter().any(|line| line
-                .contains("**AI coverage:** 3 of 3 expected reviews completed, 0 missed")),
+            lines.iter().any(|line| {
+                line.contains("**AI response coverage:** 3 of 3 review records emitted, 0 missing")
+            }),
             "unexpected footer lines: {lines:?}"
         );
         assert!(
@@ -149,15 +157,25 @@ mod tests {
     #[test]
     fn footer_warns_only_when_reviews_are_unresolved() {
         let mut lines = Vec::new();
+        let stats = RunStats {
+            ai_reviews: 1,
+            ai_expected_reviews: 1,
+            method_reviews_completed: 1,
+            method_reviews_expected: 1,
+            ..RunStats::default()
+        };
         append_footer(
             &mut lines,
-            &RunStats::default(),
+            &stats,
             &[verdict("a.rs", FindingTier::Unresolved)],
             "$0.00",
         );
 
         assert!(lines.iter().any(|line| {
             line == "**Unresolved reviews:** 1 (evidence was insufficient; this is not a clean result)"
+        }));
+        assert!(lines.iter().any(|line| {
+            line == "**Trusted method verdicts:** 0 of 1 resolved, 1 unresolved, 0 missing"
         }));
     }
 }
