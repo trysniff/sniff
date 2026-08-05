@@ -18,6 +18,7 @@ impl Command {
         // Local mocks should expose contract failures immediately, not inherit
         // the production retry window and make CI appear to hang.
         command
+            .arg("--yes")
             .env("SNIFF_LLM_MAX_ATTEMPTS", "2")
             .env("SNIFF_LLM_RETRY_BUDGET_SECS", "5")
             .env("SNIFF_LLM_MAX_FORMAT_REPAIRS", "1")
