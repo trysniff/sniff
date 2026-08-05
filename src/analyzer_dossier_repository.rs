@@ -28,6 +28,12 @@ pub(super) fn render_repository_facts(
             .map(|definition| definition.id)
     });
     let mut facts = Vec::new();
+    if method.language == "go" && repository_external_visibility && method.real_ref_count == 0 {
+        facts.push(
+            "external callable boundary: established by the exported/public declaration; absent in-repository callers are expected and are not missing contract evidence"
+                .to_string(),
+        );
+    }
     let resolved_sites = method
         .references
         .iter()
@@ -59,6 +65,20 @@ pub(super) fn render_repository_facts(
             })
         })
         .and_then(|definition| definition.owner_type.as_deref());
+    let (go_owner_constructions, go_interface_guards) = target_owner
+        .filter(|_| method.language == "go" && method.is_exported)
+        .map(|owner| go_owner_contract_evidence(owner, index))
+        .unwrap_or_default();
+    if !go_interface_guards.is_empty() {
+        facts.push(format!(
+            "Go owner construction evidence: {}",
+            if_empty(go_owner_constructions.clone())
+        ));
+        facts.push(format!(
+            "Go compile-time interface guards: {}",
+            if_empty(go_interface_guards.clone())
+        ));
+    }
     let object_owner = target_owner.and_then(|owner| {
         graph
             .files
@@ -397,6 +417,7 @@ pub(super) fn render_repository_facts(
                 .to_string(),
         );
     }
+    protocol_usage.extend(go_interface_guards.clone());
     let has_callback_provenance = !callback_provenance.is_empty();
     for evidence in [
         &mut test_usage,
@@ -646,6 +667,7 @@ pub(super) fn render_repository_facts(
         || object_owner.is_some()
         || inline_object_owner.is_some()
         || !object_owner_usage.is_empty()
+        || !go_interface_guards.is_empty()
         || has_compatibility_contract;
     let returned_member_has_external_contract =
         returned_member_evidence.is_some() && !private_js_ts_package;
@@ -673,6 +695,7 @@ pub(super) fn render_repository_facts(
         && enumeration_invocation_proof.is_none()
         && computed_invocation_evidence.is_empty()
         && object_owner_usage.is_empty()
+        && go_interface_guards.is_empty()
         && !has_protocol_contract
         && !has_compatibility_contract;
     facts.push(format!(
@@ -716,6 +739,45 @@ pub(super) fn render_repository_facts(
         repository_private_unused_candidate,
         stale_discard_signature_proof,
     }
+}
+
+fn go_owner_contract_evidence(
+    owner: &str,
+    index: &DossierRepositoryIndex<'_>,
+) -> (Vec<String>, Vec<String>) {
+    let construction = format!("{owner}{{");
+    let pointer_guard = format!("=(*{owner})(nil)");
+    let value_guard = format!("={owner}(nil)");
+    let mut constructions = Vec::new();
+    let mut guards = Vec::new();
+
+    for (file_index, lines) in index.source_lines.iter().enumerate() {
+        for (line_index, line) in lines.iter().enumerate() {
+            let compact = line
+                .chars()
+                .filter(|character| !character.is_whitespace())
+                .collect::<String>();
+            let evidence = || {
+                format!(
+                    "{}:{}: {}",
+                    index.file_records[file_index].file_path,
+                    line_index + 1,
+                    line.trim()
+                )
+            };
+            if compact.contains(&pointer_guard) || compact.contains(&value_guard) {
+                guards.push(evidence());
+            } else if compact.contains(&construction) {
+                constructions.push(evidence());
+            }
+        }
+    }
+
+    constructions.sort();
+    constructions.dedup();
+    guards.sort();
+    guards.dedup();
+    (constructions, guards)
 }
 
 pub(super) fn callback_parameter_provenance(

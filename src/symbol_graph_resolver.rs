@@ -380,6 +380,41 @@ impl SymbolGraph {
         })
     }
 
+    fn resolve_go_package_method_reference(
+        &self,
+        current_file: &str,
+        symbol_name: &str,
+    ) -> Option<ResolvedSymbol> {
+        let current_dir = Path::new(current_file).parent()?;
+        let mut matches = self.files.iter().flat_map(|(file_path, symbols)| {
+            let same_package = Path::new(file_path).parent() == Some(current_dir);
+            symbols
+                .definitions
+                .iter()
+                .filter(move |definition| {
+                    same_package
+                        && definition.name == symbol_name
+                        && matches!(&definition.kind, SymbolKind::Method)
+                        && definition.owner_type.is_some()
+                })
+                .map(move |definition| (file_path.clone(), definition.id, definition.name.clone()))
+        });
+        let first = matches.next()?;
+        if matches.next().is_some() {
+            return None;
+        }
+        let (matched_file, definition_id, definition_name) = first;
+        Some(if same_path(current_file, &matched_file) {
+            ResolvedSymbol::Local(definition_id)
+        } else {
+            ResolvedSymbol::External {
+                file_path: matched_file,
+                symbol_name: definition_name,
+                definition_id: Some(definition_id),
+            }
+        })
+    }
+
     fn resolve_python_inherited_method(
         &self,
         ctx: &ResolveContext<'_>,
@@ -533,6 +568,7 @@ impl SymbolGraph {
                     && !reference.name.contains("::")
                     && reference.is_member_call;
                 let is_python_member_call = language == "python" && reference.is_member_call;
+                let is_go_member_call = language == "go" && reference.is_member_call;
                 let is_js_ts_member_call =
                     matches!(language, "javascript" | "typescript") && reference.is_member_call;
                 let js_ts_owner = is_js_ts_member_call
@@ -830,6 +866,24 @@ impl SymbolGraph {
                 if let Some(resolved) = resolve_qualified_reference(&ctx, &reference.name) {
                     resolved_refs.push((ref_idx, resolved));
                     continue;
+                }
+
+                if is_go_member_call {
+                    let (qualifier, terminal_name) = reference
+                        .name
+                        .rsplit_once('.')
+                        .unwrap_or(("", &reference.name));
+                    let qualifier_is_import = file_symbols
+                        .imports
+                        .iter()
+                        .any(|import| import.local_name == qualifier);
+                    if !qualifier_is_import
+                        && let Some(resolved) =
+                            self.resolve_go_package_method_reference(file_path, terminal_name)
+                    {
+                        resolved_refs.push((ref_idx, resolved));
+                        continue;
+                    }
                 }
 
                 if language == "rust" {

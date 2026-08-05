@@ -708,6 +708,63 @@ fn python_dunder_methods_are_not_closed_world_dead_code_candidates() {
 }
 
 #[test]
+fn go_export_and_interface_guards_establish_runtime_boundaries() {
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!("sniff-go-interface-{nonce}"));
+    std::fs::create_dir_all(&root).unwrap();
+    let path = root.join("solver.go");
+    std::fs::write(
+        &path,
+        r#"package solver
+
+type Solver interface { Present() error }
+type solverWrapper struct{}
+
+func (sw solverWrapper) Present() error { return nil }
+func New() Solver { return solverWrapper{} }
+
+var _ Solver = (*solverWrapper)(nil)
+"#,
+    )
+    .unwrap();
+
+    let path_text = path.to_string_lossy().to_string();
+    let mut file = crate::parser::parse_file_checked(&path_text).expect("parse Go file");
+    let mut graph = SymbolGraph::new(root.to_string_lossy().as_ref());
+    graph.add_file(crate::parser::parse_file_symbols_checked(&path_text).expect("index Go"));
+    graph.resolve_all();
+    let context_files = [file.clone()];
+    crate::callgraph::build_references_with_context(
+        std::slice::from_mut(&mut file),
+        &context_files,
+        &graph,
+    );
+    let present = file
+        .methods
+        .iter()
+        .find(|method| method.name == "Present")
+        .expect("extract Present")
+        .clone();
+    let dossier = build_method_dossier(
+        &file,
+        &present,
+        &graph,
+        std::slice::from_ref(&file),
+        Vec::new(),
+    );
+
+    assert!(dossier.context.contains("exported/public declaration"));
+    assert!(dossier.context.contains("solverWrapper{}"));
+    assert!(dossier.context.contains("(*solverWrapper)(nil)"));
+    assert!(!dossier.repository_private_unused_candidate);
+
+    std::fs::remove_dir_all(root).ok();
+}
+
+#[test]
 fn typed_object_callback_defaults_are_not_private_unused() {
     let nonce = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
