@@ -26,9 +26,12 @@ Each study follows the same process:
 | Kotlin | [Turbine](turbine.md) | `0fbb877` | 234 | 234 / 234 | 0 | $0.0461 |
 | Rust | [fd](fd.md) | `41532d1` | 217 | 217 / 217 | 0 | $0.0975 |
 | Python | [httpcore](httpcore.md) | `10a6582` | 329 | 329 / 329 | 0 | $0.2175 |
+| Go | [CertMagic](certmagic.md) | `38cdd62` | 294 | 294 / 294 | 1 | $0.1622 |
 
-The Go study will be added only after its run and human adjudication are
-complete.
+Together these studies cover 1,209 methods. Every method received a trusted
+verdict, and one of the 1,209 produced a confirmed finding. The accepted
+reports represent $0.5740 of final verdict-set cost. Including rejected and
+corrective iterations, the validation campaign cost approximately $1.0305.
 
 ## Reading The Numbers
 

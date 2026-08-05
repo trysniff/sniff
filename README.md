@@ -84,8 +84,10 @@ Bumpkin finding above.
 Sniff is tested against pinned third-party repositories, and analyzer mistakes
 are published alongside the fixes they forced. The current studies cover
 [Ky (TypeScript)](case-studies/ky.md),
-[Turbine (Kotlin)](case-studies/turbine.md), and
-[fd (Rust)](case-studies/fd.md).
+[Turbine (Kotlin)](case-studies/turbine.md),
+[fd (Rust)](case-studies/fd.md),
+[httpcore (Python)](case-studies/httpcore.md), and
+[CertMagic (Go)](case-studies/certmagic.md).
 
 See the [validation method and aggregate results](case-studies/README.md).
 Zero findings means no slop satisfied Sniff's evidence contract; it is not a
