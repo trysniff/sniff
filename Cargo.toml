@@ -54,7 +54,7 @@ oxc_allocator = "0.13"
 oxc_parser = "0.13"
 oxc_ast = "0.13"
 oxc_span = "0.13"
-oxc_syntax = "0.13"
+oxc_syntax = "0.54"
 rustpython-parser = "0.4"
 rustpython-ast = { version = "0.4", features = ["visitor"] }
 syn = { version = "2.0.118", features = ["full", "visit"] }
