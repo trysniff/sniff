@@ -9,6 +9,7 @@ pub mod language_adapter;
 pub mod languages;
 pub mod llm;
 pub mod parser;
+pub mod pricing;
 pub mod report_types;
 pub mod reporter;
 pub mod roles;

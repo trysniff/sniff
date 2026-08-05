@@ -1,28 +1,18 @@
 use crate::config::ResolvedConfig;
+use crate::pricing::PricingRates;
 use crate::report_types::RunStats;
-use std::env;
-
-fn configured_rate(name: &str, default: f64) -> f64 {
-    env::var(name)
-        .ok()
-        .and_then(|value| value.trim().parse::<f64>().ok())
-        .filter(|value| value.is_finite() && *value >= 0.0)
-        .unwrap_or(default)
-}
 
 pub(super) fn calculate_cost(s: &RunStats, _config: &ResolvedConfig) -> String {
-    let input_per_m = configured_rate("SNIFF_INPUT_COST_PER_MILLION", 0.14);
-    let cached_input_per_m = configured_rate("SNIFF_CACHED_INPUT_COST_PER_MILLION", 0.0028);
-    let output_per_m = configured_rate("SNIFF_OUTPUT_COST_PER_MILLION", 0.28);
+    let rates = PricingRates::from_env();
+    let input_per_m = rates.input_per_million;
+    let cached_input_per_m = rates.cached_input_per_million;
+    let output_per_m = rates.output_per_million;
     let cached_input_tokens = s.cached_input_tokens.min(s.input_tokens);
-    let cache_miss_input_tokens = s.input_tokens - cached_input_tokens;
     let rate_suffix = format!(
         "; cached {cached_input_tokens}; rates ${input_per_m:.2}/M miss / ${cached_input_per_m:.4}/M cached / ${output_per_m:.2}/M out"
     );
 
-    let cost = (cache_miss_input_tokens as f64 / 1e6) * input_per_m
-        + (cached_input_tokens as f64 / 1e6) * cached_input_per_m
-        + (s.output_tokens as f64 / 1e6) * output_per_m;
+    let cost = rates.cost(s.input_tokens, cached_input_tokens, s.output_tokens);
     if cost < 0.0001 && (s.input_tokens > 0 || s.output_tokens > 0) {
         format!(
             "<$0.0001 (Tokens: {} in / {} out{})",
