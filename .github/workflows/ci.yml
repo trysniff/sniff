@@ -59,7 +59,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo package --locked
+      - run: cargo package --locked --target-dir target/package-check
 
   verify:
     name: verify

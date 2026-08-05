@@ -13,7 +13,7 @@
 - [ ] `cargo fmt --check`
 - [ ] `cargo clippy --all-targets --all-features -- -D warnings`
 - [ ] `cargo test --all --locked`
-- [ ] `cargo package --locked`
+- [ ] `cargo package --locked --target-dir target/package-check`
 
 ## Checklist
 

@@ -532,7 +532,18 @@ fn live_repository_reports_largest_method_dossiers() {
     let minimum_callers = std::env::var("SNIFF_LIVE_DOSSIER_MIN_CALLERS")
         .ok()
         .and_then(|value| value.parse::<usize>().ok());
-    let dossier_index = build_dossier_repository_index(&graph, &context_files);
+    let production_paths = files
+        .iter()
+        .map(|file| file.file_path.as_str())
+        .collect::<std::collections::HashSet<_>>();
+    let mut dossier_files = files.clone();
+    dossier_files.extend(
+        context_files
+            .iter()
+            .filter(|file| !production_paths.contains(file.file_path.as_str()))
+            .cloned(),
+    );
+    let dossier_index = build_dossier_repository_index(&graph, &dossier_files);
     let mut sizes = files
             .iter()
             .filter(|file| {

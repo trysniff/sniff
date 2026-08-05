@@ -16,7 +16,7 @@ Install stable Rust, then run the verification suite from the repository root:
 cargo fmt --check
 cargo clippy --all-targets --all-features -- -D warnings
 cargo test --all --locked
-cargo package --locked
+cargo package --locked --target-dir target/package-check
 ```
 
 Use local mock endpoints and fixtures for analyzer tests. Do not add tests that
@@ -25,7 +25,10 @@ call a real paid model provider or require a secret.
 ## Publishing
 
 The crates.io package is `sniff-cli`; it installs the `sniff` executable. Before
-publishing, run `cargo package --locked` and `cargo publish --dry-run --locked`.
+publishing, run `cargo package --locked --target-dir target/package-check` and
+`cargo publish --dry-run --locked --target-dir target/publish-check`. Keeping
+package verification artifacts isolated prevents them from replacing the
+workspace binary used for local dogfood runs.
 After the first publish, the `github:trysniff:maintainers` team should be added
 as a crates.io owner:
 
