@@ -231,7 +231,7 @@ Exit codes:
 cargo fmt --all -- --check
 cargo clippy --all-targets --locked -- -D warnings
 cargo test --all-targets --locked
-cargo package --locked
+cargo package --locked --target-dir target/package-check
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md).
