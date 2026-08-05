@@ -51,7 +51,7 @@ tree-sitter = "0.22"
 tree-sitter-go = "0.21"
 tree-sitter-kotlin = { package = "tree-sitter-kotlin-ng", version = "1.1.0" }
 oxc_allocator = "0.13"
-oxc_parser = "0.13"
+oxc_parser = "0.54"
 oxc_ast = "0.13"
 oxc_span = "0.13"
 oxc_syntax = "0.13"
