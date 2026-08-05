@@ -47,10 +47,10 @@ pub use paths::{
 pub use python_names::{is_python_alias_export_assignment, is_python_identifier_like};
 pub use surface::{
     is_callback_contract_module, is_config_validation_module, is_detector_facade_module,
-    is_hydration_hook_module, is_module_barrel_module, is_presentation_surface_module,
-    is_protocol_stub_method, is_protocol_surface_module, is_pure_reexport_module,
-    is_thin_delegation_method, is_thin_wrapper_export, is_wrapper_assignment,
-    is_wrapper_only_module, source_looks_like_wrapper_module,
+    is_hydration_hook_module, is_language_protocol_method, is_module_barrel_module,
+    is_presentation_surface_module, is_protocol_stub_method, is_protocol_surface_module,
+    is_pure_reexport_module, is_thin_delegation_method, is_thin_wrapper_export,
+    is_wrapper_assignment, is_wrapper_only_module, source_looks_like_wrapper_module,
 };
 
 pub fn is_intentional_surface_path(file_path: &str) -> bool {

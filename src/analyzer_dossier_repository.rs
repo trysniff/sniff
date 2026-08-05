@@ -391,6 +391,12 @@ pub(super) fn render_repository_facts(
                 .to_string(),
         );
     }
+    if is_language_protocol_method(method) {
+        protocol_usage.push(
+            "the Python dunder declaration is invoked implicitly through the language data model"
+                .to_string(),
+        );
+    }
     let has_callback_provenance = !callback_provenance.is_empty();
     for evidence in [
         &mut test_usage,
@@ -568,7 +574,8 @@ pub(super) fn render_repository_facts(
     let history_establishes_compatibility =
         history_established && history_describes_compatibility(&history);
 
-    let has_protocol_contract = is_protocol_stub_method(method)
+    let has_protocol_contract = is_language_protocol_method(method)
+        || is_protocol_stub_method(method)
         || is_protocol_surface_module(file)
         || class_contract.is_some()
         || external_framework_contract.is_some()
