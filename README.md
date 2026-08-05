@@ -1,125 +1,242 @@
-# Sniff
+<div align="center">
+  <img src="assets/sniff-logo.png" alt="Sniff pig nose logo" width="152">
+  <h1>Sniff</h1>
+  <p><strong>Exhaustive, LLM-backed slop detection for real codebases.</strong></p>
+  <p>
+    <a href="https://crates.io/crates/sniff-cli"><img src="https://img.shields.io/crates/v/sniff-cli.svg" alt="crates.io version"></a>
+    <a href="https://github.com/trysniff/sniff/actions/workflows/ci.yml"><img src="https://github.com/trysniff/sniff/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
+    <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-blue.svg" alt="AGPL-3.0 license"></a>
+  </p>
+</div>
 
-Sniff is a slop finder. Its only purpose is to find code that makes humans
-spend unnecessary effort understanding, trusting, or changing it.
+Sniff reviews every discovered method with repository context to find code that
+may work, but is needlessly difficult for a human to understand, trust, or
+change. It is a slop finder, not a security scanner, bug finder, linter, or
+generic code-quality score.
 
-It is not a security scanner, bug finder, or generic code-quality platform.
+> [!WARNING]
+> **A normal Sniff scan sends source code to the LLM endpoint you configure.**
+> Check that provider's retention, training, region, and privacy policy before
+> scanning private code. `sniff --estimate` and `sniff doctor` are offline;
+> only `sniff doctor --probe` and a normal scan contact the provider.
 
-## Install
+## Quickstart
 
-Install Rust from <https://rustup.rs>, then install Sniff from GitHub:
+Install [Rust](https://rustup.rs), then install the published crate:
 
-```powershell
-cargo install sniff-cli
+```console
+cargo install sniff-cli --locked
 ```
 
-The `sniff` command is then available through Cargo's binary directory.
+The first install compiles native dependencies and can take several minutes.
+After installation, this setup takes about a minute:
 
-For local development, clone the repository and run `cargo install --path .
---locked` from its root.
+```console
+# In the repository you want to inspect, create .env with the three values below.
+SNIFF_API_KEY=your-deepseek-key
+SNIFF_ENDPOINT=https://api.deepseek.com
+SNIFF_MODEL=deepseek-v4-flash
 
-## Configure
+# Validate configuration and source discovery without contacting the model.
+sniff doctor
 
-Sniff requires a funded LLM provider for normal scans. Put the configuration in
-the repository being scanned, or export it in the environment:
+# See method count, runtime range, and cost range without contacting the model.
+sniff --estimate
+
+# Start the exhaustive review. Expensive scans ask for confirmation first.
+sniff
+```
+
+Sniff writes `sniff-report.md` at the scanned repository root. A successful run
+reviews every eligible method; it never replaces failed AI reviews with a
+static-only report.
+
+## What A Finding Looks Like
+
+This finding came from a completed scan, not a hand-written demo:
+
+```text
+[Slop][ai] duplicated decision paths
+
+The condition appears to distinguish an optional-to-required transition, but
+both paths return True. The branch communicates a distinction that does not
+exist and makes the method harder to trust.
+
+Exact evidence:
+    if is_optional_param(old_token) and not is_optional_param(new_token):
+        return True
+    return True
+
+Behavior-preserving simplification:
+    return True
+```
+
+The evidence is exact, the friction is named, and the proposed simplification
+does not change the callable contract, return behavior, or side effects.
+
+The preview combines output from the offline fixture smoke test with the real
+Bumpkin finding above.
+
+![Sniff estimate and evidence-backed report preview](assets/report-preview.png)
+
+## Cost Before Commitment
+
+`sniff --estimate [PATH]` parses the repository locally and reports:
+
+- supported files and methods
+- language breakdown
+- conservative input and output token ranges
+- expected request and runtime ranges
+- estimated cost using your configured provider rates
+
+It makes **zero LLM requests**. A normal scan pauses before its first review
+when the upper estimate crosses `$1`, two hours, or 2,000 methods. Interactive
+runs ask for confirmation; automation must pass `--yes` explicitly. Override
+the cost threshold with `SNIFF_CONFIRM_COST_USD`.
+
+Measured dogfood run on 2026-08-02:
+
+| Repository | Commit | Model | Coverage | Runtime | Estimated cost |
+| --- | --- | --- | ---: | ---: | ---: |
+| Bumpkin | `593a522` | `deepseek-v4-flash` | 1,222 / 1,222 methods | 1h 15m | $0.6912 |
+
+That is one real run, not a universal benchmark. Provider latency, cache hits,
+repository shape, retries, and response length all change runtime and cost.
+The estimate uses configured rates; the final report is still an estimate, not
+the provider's invoice.
+
+## Provider Configuration
+
+Sniff uses `SNIFF_API_KEY`, `SNIFF_ENDPOINT`, and `SNIFF_MODEL`. These examples
+were checked against provider documentation on 2026-08-05. Prices and model
+availability can change, so verify the linked provider page before a large run.
+
+### DeepSeek
 
 ```dotenv
-SNIFF_API_KEY=your-key
-SNIFF_ENDPOINT=https://provider.example/v1
-SNIFF_MODEL=your-model
-# Optional method/file pipelines in flight at once (1-8; default 4).
-SNIFF_LLM_MAX_CONCURRENCY=4
-# Optional same-file methods reviewed per model request (1-8; default 8).
-SNIFF_LLM_METHOD_BATCH_SIZE=8
-# Optional provider context window in tokens (default 128000).
-SNIFF_LLM_CONTEXT_TOKENS=128000
-# Optional direct character ceiling; overrides the derived context limit.
-# SNIFF_LLM_MAX_PROMPT_CHARS=500000
-# Optional cost-estimate rates, in USD per million tokens.
+SNIFF_API_KEY=your-deepseek-key
+SNIFF_ENDPOINT=https://api.deepseek.com
+SNIFF_MODEL=deepseek-v4-flash
 SNIFF_INPUT_COST_PER_MILLION=0.14
 SNIFF_CACHED_INPUT_COST_PER_MILLION=0.0028
 SNIFF_OUTPUT_COST_PER_MILLION=0.28
 ```
 
-The endpoint and model are read from `SNIFF_ENDPOINT` and `SNIFF_MODEL`; Sniff
-does not hardcode a provider. OpenAI-compatible endpoints use the chat
-completion envelope. Endpoints whose URL contains `/anthropic` use the
-Anthropic envelope. Optional repository thresholds and ignore rules belong in
-`sniff.config.toml`. The report cost line uses the configured rates, which are
-estimates rather than provider billing data.
+[DeepSeek models and current pricing](https://api-docs.deepseek.com/quick_start/pricing/)
+
+### OpenAI
+
+```dotenv
+SNIFF_API_KEY=your-openai-key
+SNIFF_ENDPOINT=https://api.openai.com/v1
+SNIFF_MODEL=gpt-4.1-mini
+SNIFF_INPUT_COST_PER_MILLION=0.40
+SNIFF_CACHED_INPUT_COST_PER_MILLION=0.10
+SNIFF_OUTPUT_COST_PER_MILLION=1.60
+```
+
+[OpenAI GPT-4.1 mini model and pricing](https://developers.openai.com/api/docs/models/gpt-4.1-mini)
+
+### Anthropic
+
+```dotenv
+SNIFF_API_KEY=your-anthropic-key
+SNIFF_ENDPOINT=https://api.anthropic.com
+SNIFF_MODEL=claude-haiku-4-5-20251001
+SNIFF_INPUT_COST_PER_MILLION=1.00
+SNIFF_CACHED_INPUT_COST_PER_MILLION=0.10
+SNIFF_OUTPUT_COST_PER_MILLION=5.00
+```
+
+[Anthropic models](https://platform.claude.com/docs/en/about-claude/models/overview)
+and [Anthropic pricing](https://platform.claude.com/docs/en/about-claude/pricing)
+
+### OpenRouter
+
+```dotenv
+SNIFF_API_KEY=your-openrouter-key
+SNIFF_ENDPOINT=https://openrouter.ai/api/v1
+SNIFF_MODEL=anthropic/claude-haiku-4.5
+SNIFF_INPUT_COST_PER_MILLION=1.00
+SNIFF_CACHED_INPUT_COST_PER_MILLION=0.10
+SNIFF_OUTPUT_COST_PER_MILLION=5.00
+```
+
+[OpenRouter's model page](https://openrouter.ai/anthropic/claude-haiku-4.5/api)
+lists the current model slug, providers, data policies, and prices. Routing can
+change the effective price, so configure the rates for the route you choose.
+
+## Diagnose Setup
+
+```console
+sniff doctor [PATH]
+```
+
+`doctor` checks the target, `.env` loading, API key presence, endpoint syntax,
+model, supported source discovery, and report permissions without contacting
+the provider. To explicitly test authentication and response compatibility with
+one small paid request:
+
+```console
+sniff doctor --probe [PATH]
+```
+
+The command labels that request as paid before sending it.
 
 ## Run
 
-Run the exhaustive method and file review from a repository root:
-
-```powershell
-sniff
-sniff C:\path\to\repository
+```console
+sniff [PATH]
+sniff --with-file-reviews [PATH]
+sniff --skip-dotenv [PATH]
+sniff --yes [PATH]
 ```
 
-Useful flags:
+Methods are always reviewed. `--with-file-reviews` adds a secondary file-level
+review. Supported source languages are Rust, Python, JavaScript, TypeScript, Go,
+and Kotlin.
 
-```text
---with-file-reviews    add secondary file-level reviews; methods are always reviewed
---only-files           deprecated alias for --with-file-reviews
---skip-dotenv   do not load .env files
-```
-
-The normal scan writes `sniff-report.md` at the scanned repository root when
-the target is outside the current directory. Scans of the current directory
-continue to write it there. Supported source languages are Rust,
-Python, JavaScript, TypeScript, Go, and Kotlin.
+Sniff runs up to four independent review pipelines concurrently and batches up
+to eight same-file methods per request. Tune these with
+`SNIFF_LLM_MAX_CONCURRENCY` and `SNIFF_LLM_METHOD_BATCH_SIZE`, each from `1` to
+`8`. Methods from different files are never batched together.
 
 Transient transport failures are retried up to 128 times within a 30-minute
-budget by default. Set `SNIFF_LLM_MAX_ATTEMPTS` and
-`SNIFF_LLM_RETRY_BUDGET_SECS` to tune those limits. Malformed responses have a
-separate three-repair budget, configurable with
-`SNIFF_LLM_MAX_FORMAT_REPAIRS`; they cannot consume all transport retries.
-Fatal HTTP responses such as an invalid endpoint status or insufficient balance
-still fail immediately.
-
-Sniff runs up to four independent review pipelines concurrently by default.
-Set `SNIFF_LLM_MAX_CONCURRENCY` between `1` and `8` to tune throughput. Within
-one file, Sniff reviews up to eight methods in a shared request so the containing
-file is not retransmitted for every method. Set
-`SNIFF_LLM_METHOD_BATCH_SIZE` between `1` and `8` to tune the batch. Every
-method retains an independent intent pass, adversarial challenge, adjudication,
-evidence boundary, verdict, and checkpoint entry; methods from different files
-are never batched together. Evidence-heavy batches automatically shrink to fit
-the configured context window. If a complete single-method prompt cannot fit,
-Sniff fails before sending the request rather than truncating evidence.
+budget by default. Malformed responses have a separate three-repair budget.
+Tune these with `SNIFF_LLM_MAX_ATTEMPTS`, `SNIFF_LLM_RETRY_BUDGET_SECS`, and
+`SNIFF_LLM_MAX_FORMAT_REPAIRS`. Fatal HTTP responses still fail immediately.
 
 ## Reliability Contract
 
-Sniff reviews every eligible method by default. Optional file-level reviews run
-only with `--with-file-reviews`. Static analysis supplies context; the LLM makes
-the semantic Slop, Kinda Slop, Clean, or Unresolved judgment. A finding must
-contain exact source evidence and a recognized slop-shaped reason.
+Static analysis supplies repository evidence and graph context. The LLM reviews
+every eligible method and returns `Slop`, `Kinda Slop`, `Clean`, or `Unresolved`.
+A reported finding must include exact source evidence, a recognized slop-shaped
+reason, contract impact, dependency proof, and a behavior-preserving
+simplification.
 
-Parsing, configuration, transport, response validation, or report-writing
-failures are fatal. Sniff retries malformed or transient responses, but never
-falls back to a partial or static-only report. Runs leave the last completed
-`sniff-report.md` unchanged on failure and retain fingerprinted review caches
-for later runs. Changed source, model contracts, and retryable validation
-failures are invalidated instead of being reused.
+Parsing, configuration, transport, response validation, incomplete coverage,
+and report-writing failures are fatal. Sniff never emits a partial report as a
+successful result. Completed reviews are checkpointed for safe resume; changed
+source and changed review contracts invalidate stale entries.
 
-Exit codes are:
+Exit codes:
 
-- `0`: completed report with no findings
-- `1`: completed report containing Slop or Kinda Slop
-- `2`: scan failure; no valid report was produced
+- `0`: complete report with no findings
+- `1`: complete report containing `Slop` or `Kinda Slop`
+- `2`: failed scan; no valid new report was produced
 
 ## Development
 
-Run the complete local verification suite:
-
-```powershell
+```console
 cargo fmt --all -- --check
-cargo clippy --all-targets -- -D warnings
-cargo test --all-targets
+cargo clippy --all-targets --locked -- -D warnings
+cargo test --all-targets --locked
+cargo package --locked
 ```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md).
 
 ## License
 
-Sniff is licensed under the GNU Affero General Public License, version 3.
-See [LICENSE](LICENSE) and [TRADEMARKS.md](TRADEMARKS.md).
+Sniff is licensed under the GNU Affero General Public License, version 3. See
+[LICENSE](LICENSE) and [TRADEMARKS.md](TRADEMARKS.md).

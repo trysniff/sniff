@@ -2,6 +2,14 @@
 
 All notable changes to Sniff will be documented here.
 
+## 0.2.1 - 2026-08-05
+
+- Add offline `sniff doctor` checks and an explicit `doctor --probe` provider request.
+- Add no-LLM `sniff --estimate` cost and runtime ranges with pre-scan confirmation.
+- Support provider-specific payloads for DeepSeek, OpenAI, Anthropic, and OpenRouter-compatible endpoints.
+- Share configured pricing between pre-scan estimates and final reports.
+- Expand the public quickstart, provider examples, privacy warning, and measured dogfood proof.
+
 ## 0.2.0 - 2026-08-04
 
 - Review every discovered method with separate intent and adversarial semantic passes.
