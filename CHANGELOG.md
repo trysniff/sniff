@@ -2,6 +2,14 @@
 
 All notable changes to Sniff will be documented here.
 
+## 0.2.2 - 2026-08-05
+
+- Preserve function-valued object properties when their owning object has repository consumers.
+- Split malformed method batches and retry at smaller granularity before emitting `Unresolved`.
+- Distinguish emitted response records from trusted resolved method verdicts in reports.
+- Include exhausted validation attempts in token and cost totals.
+- Recalibrate conservative runtime estimates from the measured Ky validation run.
+
 ## 0.2.1 - 2026-08-05
 
 - Add offline `sniff doctor` checks and an explicit `doctor --probe` provider request.
