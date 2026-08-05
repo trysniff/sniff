@@ -1,13 +1,18 @@
 use std::path::PathBuf;
 use std::process::{Command, Output};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+static FIXTURE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 fn fixture() -> PathBuf {
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("clock should follow the Unix epoch")
         .as_nanos();
-    let root = std::env::temp_dir().join(format!("sniff-offline-cli-{nonce}"));
+    let sequence = FIXTURE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let process = std::process::id();
+    let root = std::env::temp_dir().join(format!("sniff-offline-cli-{process}-{nonce}-{sequence}"));
     std::fs::create_dir_all(&root).expect("fixture directory");
     std::fs::write(
         root.join("example.py"),
