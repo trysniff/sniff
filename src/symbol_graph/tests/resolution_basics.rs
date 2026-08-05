@@ -320,6 +320,75 @@ func Bar() {{
 }
 
 #[test]
+fn test_go_receiver_calls_and_function_arguments_resolve() {
+    let dir = unique_tag("temp_go_receiver_and_callback");
+    fs::create_dir_all(&dir).unwrap();
+    let file = format!("{}/main.go", dir);
+    let lifecycle_file = format!("{}/lifecycle.go", dir);
+    let code = r#"
+package pkg
+
+type limiter struct{}
+
+func (r *limiter) permit() {}
+func handler() {}
+func register(fn func()) {}
+
+func wire(r *limiter) {
+    r.permit()
+    register(handler)
+    go r.maintain()
+}
+"#;
+    fs::write(&file, code).unwrap();
+    fs::write(
+        &lifecycle_file,
+        "package pkg\n\nfunc (r *limiter) maintain() {}\n",
+    )
+    .unwrap();
+
+    let mut graph = SymbolGraph::new(&dir);
+    graph.add_file(parse_file_symbols(&file));
+    graph.add_file(parse_file_symbols(&lifecycle_file));
+    graph.resolve_all();
+
+    let symbols = graph.files.get(&file).unwrap();
+    let permit = symbols
+        .references
+        .iter()
+        .find(|reference| reference.name == "r.permit")
+        .expect("receiver call reference");
+    assert!(permit.is_member_call);
+    assert!(matches!(
+        permit.resolved_symbol,
+        Some(ResolvedSymbol::Local(_))
+    ));
+
+    let handler = symbols
+        .references
+        .iter()
+        .find(|reference| reference.name == "handler")
+        .expect("function argument reference");
+    assert!(handler.is_callable_value);
+    assert!(matches!(
+        handler.resolved_symbol,
+        Some(ResolvedSymbol::Local(_))
+    ));
+
+    let maintain = symbols
+        .references
+        .iter()
+        .find(|reference| reference.name == "r.maintain")
+        .expect("cross-file goroutine receiver call reference");
+    assert!(matches!(
+        maintain.resolved_symbol,
+        Some(ResolvedSymbol::External { .. })
+    ));
+
+    fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn test_rust_resolution_and_dogfood_path() {
     let dir = unique_tag("temp_rust_mod");
     let src_dir = format!("{}/src", dir);
