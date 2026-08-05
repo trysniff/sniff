@@ -261,6 +261,19 @@ fn parenthesis_balance(source: &str) -> isize {
     })
 }
 
+fn next_dot_continuation(lines: &[&str], current: usize) -> Option<usize> {
+    let mut next = current + 1;
+    while let Some(line) = lines.get(next) {
+        let trimmed = line.trim_start();
+        if trimmed.is_empty() || trimmed.starts_with("//") {
+            next += 1;
+            continue;
+        }
+        return trimmed.starts_with('.').then_some(next);
+    }
+    None
+}
+
 pub(crate) fn collect_source_refs(source: &str) -> Vec<(usize, String, Vec<String>)> {
     let lines = source.lines().collect::<Vec<_>>();
     let mut references = Vec::new();
@@ -269,13 +282,22 @@ pub(crate) fn collect_source_refs(source: &str) -> Vec<(usize, String, Vec<Strin
         let start = line_index;
         let mut logical = lines[line_index].to_string();
         let mut balance = parenthesis_balance(&logical);
-        while line_index + 1 < lines.len()
-            && (balance > 0 || lines[line_index + 1].trim_start().starts_with('.'))
-        {
-            line_index += 1;
-            logical.push('\n');
-            logical.push_str(lines[line_index]);
-            balance += parenthesis_balance(lines[line_index]);
+        while line_index + 1 < lines.len() {
+            let continuation = next_dot_continuation(&lines, line_index);
+            if balance <= 0 && continuation.is_none() {
+                break;
+            }
+            let end = if balance > 0 {
+                line_index + 1
+            } else {
+                continuation.expect("dot continuation")
+            };
+            while line_index < end {
+                line_index += 1;
+                logical.push('\n');
+                logical.push_str(lines[line_index]);
+                balance += parenthesis_balance(lines[line_index]);
+            }
         }
         let refs = collect_refs(&logical);
         let mut search_from = 0usize;
@@ -423,5 +445,16 @@ mod tests {
             })
             .collect::<Vec<_>>();
         assert_eq!(display_lines, vec![1, 2]);
+    }
+
+    #[test]
+    fn preserves_fluent_chains_across_comment_lines() {
+        let refs = collect_source_refs(
+            "it\n  .reportUnconsumedEvents()\n  // Cancellation details are noise.\n  // Keep only actionable failures.\n  .stripCancellations()\n",
+        );
+        assert!(refs.iter().any(|(line, _, references)| {
+            *line == 4
+                && references == &["it.reportUnconsumedEvents.stripCancellations".to_string()]
+        }));
     }
 }

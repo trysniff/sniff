@@ -9,6 +9,7 @@ All notable changes to Sniff will be documented here.
 - Distinguish emitted response records from trusted resolved method verdicts in reports.
 - Include exhausted validation attempts in token and cost totals.
 - Recalibrate conservative runtime estimates from the measured Ky validation run.
+- Resolve Kotlin private-constructor companion invocations and fluent calls split by comments.
 
 ## 0.2.1 - 2026-08-05
 

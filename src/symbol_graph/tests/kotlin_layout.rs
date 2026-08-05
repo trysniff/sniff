@@ -770,3 +770,102 @@ fn test_kotlin_trailing_lambda_extension_call_is_indexed() {
     ));
     fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn test_kotlin_private_constructor_calls_resolve_to_companion_invoke_outside_owner() {
+    let dir = unique_tag("temp_kotlin_private_constructor_invoke");
+    fs::create_dir_all(&dir).unwrap();
+    let assertion = write_temp_file(
+        &dir,
+        "TurbineAssertionError.kt",
+        "package sample\n\ninternal class TurbineAssertionError private constructor(message: String) {\n  companion object {\n    operator fun invoke(message: String) = TurbineAssertionError(message)\n  }\n}\n",
+    );
+    let caller = write_temp_file(
+        &dir,
+        "Caller.kt",
+        "package sample\n\nfun fail() = TurbineAssertionError(\"failed\")\n",
+    );
+
+    let mut graph = SymbolGraph::new(&dir);
+    graph.add_file(parse_file_symbols(&assertion));
+    graph.add_file(parse_file_symbols(&caller));
+    graph.resolve_all();
+
+    let assertion_symbols = graph.files.get(&assertion).unwrap();
+    assert!(assertion_symbols.types.iter().any(|type_record| {
+        type_record.name == "TurbineAssertionError" && type_record.constructor_is_private
+    }));
+    let invoke = assertion_symbols
+        .definitions
+        .iter()
+        .find(|definition| definition.name == "invoke")
+        .expect("companion invoke definition");
+    let constructor_call = assertion_symbols
+        .references
+        .iter()
+        .find(|reference| reference.name == "TurbineAssertionError")
+        .expect("private constructor call inside companion invoke");
+    assert!(constructor_call.resolved_symbol.is_none());
+
+    let external_call = graph
+        .files
+        .get(&caller)
+        .unwrap()
+        .references
+        .iter()
+        .find(|reference| reference.name == "TurbineAssertionError")
+        .expect("class-shaped companion invoke call");
+    assert!(matches!(
+        external_call.resolved_symbol,
+        Some(ResolvedSymbol::External {
+            definition_id: Some(id),
+            ..
+        }) if id == invoke.id
+    ));
+    fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn test_kotlin_comment_split_chain_resolves_from_intermediate_return_type() {
+    let dir = unique_tag("temp_kotlin_comment_split_chain");
+    fs::create_dir_all(&dir).unwrap();
+    let report = write_temp_file(
+        &dir,
+        "Turbine.kt",
+        "package sample\n\nclass UnconsumedEventReport {\n  fun stripCancellations(): UnconsumedEventReport = this\n}\n\nclass ChannelTurbine {\n  fun reportUnconsumedEvents(): UnconsumedEventReport = UnconsumedEventReport()\n}\n",
+    );
+    let caller = write_temp_file(
+        &dir,
+        "Flow.kt",
+        "package sample\n\nfun collect(turbines: List<ChannelTurbine>) =\n  turbines.map {\n    it\n      .reportUnconsumedEvents()\n      // Cancellation details are noise.\n      // Keep only actionable failures.\n      .stripCancellations()\n  }\n",
+    );
+
+    let mut graph = SymbolGraph::new(&dir);
+    graph.add_file(parse_file_symbols(&report));
+    graph.add_file(parse_file_symbols(&caller));
+    graph.resolve_all();
+
+    let report_symbols = graph.files.get(&report).unwrap();
+    let strip = report_symbols
+        .definitions
+        .iter()
+        .find(|definition| definition.name == "stripCancellations")
+        .expect("stripCancellations definition");
+    let reference = graph
+        .files
+        .get(&caller)
+        .unwrap()
+        .references
+        .iter()
+        .find(|reference| reference.name.ends_with(".stripCancellations"))
+        .expect("comment-split fluent call");
+    assert_eq!(reference.line, 9);
+    assert!(matches!(
+        reference.resolved_symbol,
+        Some(ResolvedSymbol::External {
+            definition_id: Some(id),
+            ..
+        }) if id == strip.id
+    ));
+    fs::remove_dir_all(&dir).ok();
+}

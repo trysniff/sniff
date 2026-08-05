@@ -42,6 +42,37 @@ fn kotlin_enclosing_owner(symbols: &LocalFileSymbols, line: usize) -> Option<&st
 }
 
 impl SymbolGraph {
+    fn kotlin_unique_callable_value_type(
+        &self,
+        current_file: &str,
+        callable_name: &str,
+    ) -> Option<String> {
+        let current_package = self
+            .files
+            .get(current_file)?
+            .modules
+            .first()
+            .map(|module| module.local_name.as_str());
+        let mut value_types = self.files.values().flat_map(|symbols| {
+            let same_package = symbols
+                .modules
+                .first()
+                .map(|module| module.local_name.as_str())
+                == current_package;
+            symbols.definitions.iter().filter_map(move |definition| {
+                (same_package
+                    && matches!(&definition.kind, SymbolKind::Function | SymbolKind::Method)
+                    && definition.name == callable_name)
+                    .then(|| definition.value_type.as_deref().map(kotlin_type_leaf))
+                    .flatten()
+            })
+        });
+        let first = value_types.next()?.to_string();
+        value_types
+            .all(|value_type| value_type == first)
+            .then_some(first)
+    }
+
     fn kotlin_member_value_type(&self, owner_type: &str, member_name: &str) -> Option<String> {
         let owner_type = kotlin_type_leaf(owner_type);
         let mut value_types = self.files.values().flat_map(|symbols| {
@@ -67,7 +98,7 @@ impl SymbolGraph {
     ) -> Option<String> {
         let root = *qualifier_parts.first()?;
         let current_symbols = self.files.get(current_file)?;
-        let mut current = current_symbols
+        let binding_type = current_symbols
             .definitions
             .iter()
             .filter(|definition| {
@@ -89,15 +120,87 @@ impl SymbolGraph {
                     .next()
                     .is_some_and(|character| character.is_ascii_uppercase())
                     .then(|| root.to_string())
-            })?;
+            });
 
-        for projection in &qualifier_parts[1..] {
+        let (mut current, remaining) =
+            if let Some(binding_type) = binding_type {
+                (binding_type, &qualifier_parts[1..])
+            } else {
+                let (index, inferred) = qualifier_parts.iter().enumerate().skip(1).find_map(
+                    |(index, projection)| {
+                        self.kotlin_unique_callable_value_type(current_file, projection)
+                            .map(|value_type| (index, value_type))
+                    },
+                )?;
+                (inferred, &qualifier_parts[index + 1..])
+            };
+
+        for projection in remaining {
             current = match *projection {
                 "current" | "value" => kotlin_first_generic_argument(&current)?.to_string(),
                 member => self.kotlin_member_value_type(&current, member)?,
             };
         }
         Some(kotlin_type_leaf(&current).to_string())
+    }
+
+    pub(super) fn resolve_kotlin_private_constructor_invoke(
+        &self,
+        current_file: &str,
+        reference_name: &str,
+        reference_line: usize,
+    ) -> Option<ResolvedSymbol> {
+        let current_symbols = self.files.get(current_file)?;
+        let current_package = current_symbols
+            .modules
+            .first()
+            .map(|module| module.local_name.as_str());
+        let current_owner = kotlin_enclosing_owner(current_symbols, reference_line);
+        let mut matches = self.files.iter().flat_map(|(file_path, symbols)| {
+            let candidate_package = symbols
+                .modules
+                .first()
+                .map(|module| module.local_name.as_str());
+            let imported_name = current_symbols.imports.iter().find_map(|import| {
+                (import.local_name == reference_name
+                    && import.source_module == candidate_package.unwrap_or_default())
+                .then_some(import.imported_name.as_str())
+            });
+            let class_name = imported_name.unwrap_or(reference_name);
+            let visible = current_package == candidate_package || imported_name.is_some();
+            let private_constructor = visible
+                && symbols.types.iter().any(|type_record| {
+                    type_record.name == class_name && type_record.constructor_is_private
+                });
+            let called_from_owner = same_path(current_file, file_path)
+                && current_owner.is_some_and(|owner| kotlin_type_leaf(owner) == class_name);
+            symbols
+                .definitions
+                .iter()
+                .filter(move |definition| {
+                    private_constructor
+                        && !called_from_owner
+                        && matches!(&definition.kind, SymbolKind::Method)
+                        && definition.name == "invoke"
+                        && definition.owner_type.as_deref().map(kotlin_type_leaf)
+                            == Some(class_name)
+                })
+                .map(move |definition| (file_path.clone(), definition.id, definition.name.clone()))
+        });
+        let first = matches.next()?;
+        if matches.next().is_some() {
+            return None;
+        }
+        let (matched_file, definition_id, definition_name) = first;
+        Some(if same_path(current_file, &matched_file) {
+            ResolvedSymbol::Local(definition_id)
+        } else {
+            ResolvedSymbol::External {
+                file_path: matched_file,
+                symbol_name: definition_name,
+                definition_id: Some(definition_id),
+            }
+        })
     }
 
     pub(super) fn resolve_kotlin_local_callable_reference(

@@ -54,6 +54,26 @@ fn name_for_node(node: Node, source: &str) -> Option<String> {
     first_identifier_from_node(node, source)
 }
 
+fn kotlin_type_record(node: Node, source: &str) -> Option<TypeRecord> {
+    let name = name_for_node(node, source)?;
+    let declaration = node_text(node, source)?;
+    let header = declaration
+        .split_once('{')
+        .map_or(declaration, |(header, _)| header);
+    let tokens = header
+        .split(|character: char| !character.is_ascii_alphanumeric() && character != '_')
+        .filter(|token| !token.is_empty())
+        .collect::<Vec<_>>();
+    let constructor_is_private = tokens
+        .windows(2)
+        .any(|tokens| tokens == ["private", "constructor"]);
+    Some(TypeRecord {
+        name,
+        bases: Vec::new(),
+        constructor_is_private,
+    })
+}
+
 fn kotlin_identifier_prefix(value: &str) -> Option<&str> {
     let end = value
         .char_indices()
@@ -566,6 +586,9 @@ fn visit_node(
         | "enum_class_declaration"
         | "fun_interface_declaration" => {
             let owner = name_for_node(node, source);
+            if let Some(type_record) = kotlin_type_record(node, source) {
+                extractor.types.push(type_record);
+            }
             let is_exported = super::declaration_is_repository_external(node, source)
                 && owner_stack
                     .last()

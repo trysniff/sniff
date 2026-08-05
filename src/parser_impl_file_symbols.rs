@@ -173,6 +173,7 @@ fn parse_kotlin_symbols(
             imports: Vec::new(),
             exports: Vec::new(),
             modules: Vec::new(),
+            types: Vec::new(),
             references: Vec::new(),
             scopes: vec![HashSet::new()],
             next_id: 0,
@@ -183,6 +184,7 @@ fn parse_kotlin_symbols(
         symbols.imports = extractor.imports;
         symbols.exports = extractor.exports;
         symbols.modules = extractor.modules;
+        symbols.types = extractor.types;
         symbols.references = extractor.references;
     }
 

@@ -566,6 +566,18 @@ impl SymbolGraph {
 
                 if language == "kotlin"
                     && !reference.name.contains('.')
+                    && let Some(resolved) = self.resolve_kotlin_private_constructor_invoke(
+                        file_path,
+                        &reference.name,
+                        reference.line,
+                    )
+                {
+                    resolved_refs.push((ref_idx, resolved));
+                    continue;
+                }
+
+                if language == "kotlin"
+                    && !reference.name.contains('.')
                     && let Some(resolved) = self.resolve_kotlin_local_callable_reference(
                         file_path,
                         &reference.name,
