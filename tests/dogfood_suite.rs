@@ -1,12 +1,44 @@
+use std::ffi::OsStr;
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
+use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command};
+use std::process::{Child, Command as ProcessCommand};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+struct Command(ProcessCommand);
+
+impl Command {
+    fn new<S: AsRef<OsStr>>(program: S) -> Self {
+        let mut command = ProcessCommand::new(program);
+        // Local mocks should expose contract failures immediately, not inherit
+        // the production retry window and make CI appear to hang.
+        command
+            .env("SNIFF_LLM_MAX_ATTEMPTS", "2")
+            .env("SNIFF_LLM_RETRY_BUDGET_SECS", "5")
+            .env("SNIFF_LLM_MAX_FORMAT_REPAIRS", "1")
+            .env("SNIFF_LLM_MAX_CONCURRENCY", "1");
+        Self(command)
+    }
+}
+
+impl Deref for Command {
+    type Target = ProcessCommand;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for Command {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
 
 struct ManagedChild {
     child: Option<Child>,
@@ -117,6 +149,8 @@ fn ts_slop_bundle(prefix: &str, function_name: &str) -> String {
 }
 
 fn read_http_request(stream: TcpStream) -> (TcpStream, String) {
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+    let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
     let mut reader = BufReader::new(stream);
     let mut headers = String::new();
 
