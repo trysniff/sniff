@@ -767,3 +767,69 @@ pub(super) fn record_rust_ast_callable_values(extractor: &mut RustExtractor<'_>,
     };
     visitor.visit_file(file);
 }
+
+struct RustTokenReferenceVisitor<'extractor, 'source> {
+    extractor: &'extractor mut RustExtractor<'source>,
+}
+
+impl RustTokenReferenceVisitor<'_, '_> {
+    fn record_tokens(&mut self, tokens: proc_macro2::TokenStream) {
+        for token in tokens {
+            match token {
+                proc_macro2::TokenTree::Ident(ident) => {
+                    let name = ident.to_string();
+                    let line = ident.span().start().line.max(1);
+                    if self
+                        .extractor
+                        .references
+                        .iter()
+                        .any(|reference| reference.line == line && reference.name == name)
+                    {
+                        continue;
+                    }
+                    let snippet = self
+                        .extractor
+                        .source
+                        .lines()
+                        .nth(line.saturating_sub(1))
+                        .unwrap_or_default()
+                        .trim()
+                        .to_string();
+                    self.extractor.references.push(SymbolReference {
+                        name,
+                        line,
+                        snippet,
+                        is_member_call: false,
+                        is_callable_value: true,
+                        resolved_symbol: None,
+                    });
+                }
+                proc_macro2::TokenTree::Group(group) => self.record_tokens(group.stream()),
+                _ => {}
+            }
+        }
+    }
+}
+
+impl<'ast> Visit<'ast> for RustTokenReferenceVisitor<'_, '_> {
+    fn visit_attribute(&mut self, attribute: &'ast syn::Attribute) {
+        match &attribute.meta {
+            syn::Meta::List(list) => self.record_tokens(list.tokens.clone()),
+            syn::Meta::NameValue(name_value) => {
+                syn::visit::visit_expr(self, &name_value.value);
+            }
+            syn::Meta::Path(_) => {}
+        }
+    }
+
+    fn visit_macro(&mut self, rust_macro: &'ast syn::Macro) {
+        self.record_tokens(rust_macro.tokens.clone());
+    }
+}
+
+pub(super) fn record_rust_ast_token_references(
+    extractor: &mut RustExtractor<'_>,
+    file: &syn::File,
+) {
+    RustTokenReferenceVisitor { extractor }.visit_file(file);
+}

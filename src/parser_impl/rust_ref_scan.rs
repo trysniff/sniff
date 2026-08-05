@@ -255,4 +255,20 @@ mod tests {
         assert_eq!(references[1].name, "get");
         assert!(references[1].is_member_call);
     }
+
+    #[test]
+    fn rust_reference_scan_keeps_member_calls_nested_in_macros() {
+        for line in [
+            "return Ok(vec![self.normalize_path(current_directory)]);",
+            "Some(self.normalize_path(path))",
+        ] {
+            let references = collect_refs(line);
+            assert!(
+                references.iter().any(|reference| {
+                    reference.name == "normalize_path" && reference.is_member_call
+                }),
+                "nested receiver call was lost in {line}"
+            );
+        }
+    }
 }
