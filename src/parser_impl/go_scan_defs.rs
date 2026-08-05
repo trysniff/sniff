@@ -1,28 +1,42 @@
 use super::*;
 
-fn parse_import(trimmed: &str) -> Option<ImportRecord> {
-    let rest = trimmed.strip_prefix("import ")?;
-    let rest = rest.trim().trim_end_matches(';');
-    if rest.starts_with('(') {
+fn parse_import_spec(spec: &str) -> Option<ImportRecord> {
+    let spec = spec.trim().trim_end_matches(';');
+    if spec.is_empty() || spec.starts_with("//") || matches!(spec, "(" | ")") {
         return None;
     }
-    if let Some((local, source)) = rest.split_once(' ') {
-        Some(ImportRecord {
-            local_name: local.trim().to_string(),
-            source_module: source
-                .trim()
-                .trim_matches('"')
-                .trim_matches('\'')
-                .to_string(),
-            imported_name: "*".to_string(),
-        })
+
+    let mut parts = spec.split_whitespace();
+    let first = parts.next()?;
+    let (explicit_local, quoted_source) = if first.starts_with(['"', '`']) {
+        (None, first)
     } else {
-        Some(ImportRecord {
-            local_name: rest.trim().trim_matches('"').to_string(),
-            source_module: rest.trim().trim_matches('"').to_string(),
-            imported_name: "*".to_string(),
-        })
+        (Some(first), parts.next()?)
+    };
+    let source_module = quoted_source
+        .trim_matches('"')
+        .trim_matches('`')
+        .to_string();
+    if source_module.is_empty() {
+        return None;
     }
+    let local_name = explicit_local.map_or_else(
+        || source_module.rsplit('/').next().unwrap_or_default(),
+        |local| local,
+    );
+    if local_name.is_empty() {
+        return None;
+    }
+
+    Some(ImportRecord {
+        local_name: local_name.to_string(),
+        source_module,
+        imported_name: "*".to_string(),
+    })
+}
+
+fn parse_import(trimmed: &str) -> Option<ImportRecord> {
+    parse_import_spec(trimmed.strip_prefix("import ")?)
 }
 
 pub(crate) fn parse_func_name(trimmed: &str) -> Option<(Option<String>, String, usize)> {
@@ -106,9 +120,29 @@ pub(crate) fn scan_go_defs_and_imports(extractor: &mut SymbolExtractor<'_>) -> V
     let lines: Vec<&str> = source.lines().collect();
     let mut ranges = Vec::new();
     let mut i = 0usize;
+    let mut in_import_block = false;
     while i < lines.len() {
         let trimmed = lines[i].trim();
+        if in_import_block {
+            if trimmed.starts_with(')') {
+                in_import_block = false;
+            } else if let Some(import_record) = parse_import_spec(trimmed) {
+                extractor.imports.push(import_record);
+            }
+            i += 1;
+            continue;
+        }
+
         if trimmed.is_empty() || trimmed.starts_with("//") || trimmed.starts_with("package ") {
+            i += 1;
+            continue;
+        }
+
+        if trimmed
+            .strip_prefix("import")
+            .is_some_and(|rest| rest.trim_start().starts_with('('))
+        {
+            in_import_block = true;
             i += 1;
             continue;
         }

@@ -981,6 +981,45 @@ fn go_symbol_scan_records_top_level_calls_without_string_or_comment_noise() {
 }
 
 #[test]
+fn go_symbol_scan_records_grouped_imports_with_package_qualifiers() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!("sniff-go-grouped-import-{nanos}"));
+    fs::create_dir_all(&root).unwrap();
+    let file_path = root.join("main.go");
+    fs::write(
+        &file_path,
+        r#"package main
+
+import (
+    "example.test/project/internal/filedescriptor"
+    alias "example.test/project/internal/other"
+)
+
+func useImports() {
+    filedescriptor.Dup(1)
+    alias.Call()
+}
+"#,
+    )
+    .unwrap();
+
+    let symbols = parse_file_symbols_checked(&file_path.to_string_lossy()).expect("parse Go");
+    assert!(symbols.imports.iter().any(|import| {
+        import.local_name == "filedescriptor"
+            && import.source_module == "example.test/project/internal/filedescriptor"
+    }));
+    assert!(symbols.imports.iter().any(|import| {
+        import.local_name == "alias"
+            && import.source_module == "example.test/project/internal/other"
+    }));
+
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
 fn checked_parse_rejects_malformed_kotlin_instead_of_returning_zero_methods() {
     let (root, path) = write_invalid_fixture("kt", b"fun broken( {\n");
     let error = parse_file_checked(&path).expect_err("malformed Kotlin must fail closed");

@@ -385,6 +385,70 @@ func wire(r *limiter) {
         Some(ResolvedSymbol::External { .. })
     ));
 
+    let mut records = vec![
+        crate::parser::parse_file_checked(&file).unwrap(),
+        crate::parser::parse_file_checked(&lifecycle_file).unwrap(),
+    ];
+    let context = records.clone();
+    crate::callgraph::build_references_with_context(&mut records, &context, &graph);
+    let permit_method = records[0]
+        .methods
+        .iter()
+        .find(|method| method.name == "permit")
+        .expect("permit method");
+    assert_eq!(permit_method.real_ref_count, 1);
+    let maintain_method = records[1]
+        .methods
+        .iter()
+        .find(|method| method.name == "maintain")
+        .expect("maintain method");
+    assert_eq!(maintain_method.real_ref_count, 1);
+
+    fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn test_go_build_tag_alternatives_share_the_resolved_caller() {
+    let dir = unique_tag("temp_go_build_alternatives");
+    let package_dir = format!("{dir}/internal/filedescriptor");
+    fs::create_dir_all(&package_dir).unwrap();
+    fs::write(format!("{dir}/go.mod"), "module example.test/project\n").unwrap();
+    let caller = write_temp_file(
+        &dir,
+        "caller.go",
+        "package pkg\n\nimport (\n    \"example.test/project/internal/filedescriptor\"\n)\n\nfunc useDup() { filedescriptor.Dup(1) }\n",
+    );
+    let unix = write_temp_file(
+        &package_dir,
+        "dup_unix.go",
+        "//go:build unix\n\npackage filedescriptor\n\nfunc Dup(fd int) int { return fd }\n",
+    );
+    let other = write_temp_file(
+        &package_dir,
+        "dup_other.go",
+        "//go:build !unix\n\npackage filedescriptor\n\nfunc Dup(fd int) int { return 0 }\n",
+    );
+
+    let mut graph = SymbolGraph::new(&dir);
+    for path in [&caller, &unix, &other] {
+        graph.add_file(parse_file_symbols(path));
+    }
+    graph.resolve_all();
+
+    let mut records = [&caller, &unix, &other]
+        .into_iter()
+        .map(|path| crate::parser::parse_file_checked(path).unwrap())
+        .collect::<Vec<_>>();
+    let context = records.clone();
+    crate::callgraph::build_references_with_context(&mut records, &context, &graph);
+    let dup_counts = records
+        .iter()
+        .flat_map(|file| file.methods.iter())
+        .filter(|method| method.name == "Dup")
+        .map(|method| method.real_ref_count)
+        .collect::<Vec<_>>();
+    assert_eq!(dup_counts, vec![1, 1]);
+
     fs::remove_dir_all(&dir).ok();
 }
 

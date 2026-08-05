@@ -32,7 +32,7 @@ pub(super) fn resolve_module_path(ctx: &ResolveContext<'_>, source_module: &str)
             ctx.all_files,
         ),
         "rust" => rust_path::resolve_rust_module_path(ctx, source_module),
-        "go" => go_path::resolve_go_module_path(source_module, ctx.all_files),
+        "go" => go_path::resolve_go_module_path(source_module, ctx.project_root, ctx.all_files),
         _ => None,
     }
 }
