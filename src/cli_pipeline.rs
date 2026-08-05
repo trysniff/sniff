@@ -8,9 +8,12 @@ mod io;
 mod llm;
 #[path = "cli_pipeline_roles.rs"]
 mod pipeline_roles;
+#[path = "cli_pipeline_preflight.rs"]
+mod preflight;
 #[path = "cli_pipeline_run.rs"]
 mod run;
 #[path = "cli_pipeline_stats.rs"]
 mod stats;
 
+pub use preflight::{doctor, estimate};
 pub use run::run;
