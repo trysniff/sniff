@@ -510,7 +510,8 @@ fn methodless_compatibility_shims_stay_out_of_the_report_without_ai_spend() {
         "compatibility shim filenames should not be surfaced as slop:\n{}",
         report
     );
-    assert!(report.contains("AI coverage:** 0 of 0 expected reviews completed, 0 missed"));
+    assert!(report.contains("AI response coverage:** 0 of 0 review records emitted, 0 missing"));
+    assert!(report.contains("Trusted method verdicts:** 0 of 0 resolved, 0 unresolved, 0 missing"));
 
     let prompt_text = prompts.lock().unwrap().join("\n");
     assert!(

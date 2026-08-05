@@ -172,11 +172,14 @@ pub(super) async fn execute_call(
         )
         .await
         {
-            Ok(result) => {
-                if let Some(result) = result? {
-                    return Ok(result);
+            Ok(result) => match result {
+                Ok(Some(result)) => return Ok(result),
+                Ok(None) => {}
+                Err(error) => {
+                    client.record_failed_usage(state.input_tokens, state.output_tokens);
+                    return Err(error);
                 }
-            }
+            },
             Err(_) => {
                 termination = Some(format!(
                     "retry budget exhausted after {}s",
@@ -194,6 +197,7 @@ pub(super) async fn execute_call(
         ));
     }
 
+    client.record_failed_usage(state.input_tokens, state.output_tokens);
     finish_call(&state, termination.as_deref())
 }
 

@@ -481,12 +481,13 @@ fn previous_contract_context(previous: &str, current: &str) -> bool {
         "semantic-method-v22",
         "semantic-method-v23",
         "semantic-method-v24",
+        "semantic-method-v25",
     ]
     .into_iter()
     .any(|version| {
         previous.replace(
             &format!("review_contract={version}"),
-            "review_contract=semantic-method-v25",
+            "review_contract=semantic-method-v26",
         ) == current
             && previous.contains(&format!("review_contract={version}"))
     })
@@ -791,47 +792,66 @@ async fn run_review_unit_untracked(
         });
     }
 
-    match analyzer
-        .analyze_method_review_batch(&methods, on_progress)
-        .await
-    {
-        Ok((verdicts, input_tokens, output_tokens)) => {
-            if verdicts.len() != methods.len() {
-                return Err(format!(
-                    "method batch returned {} verdicts for {} methods",
-                    verdicts.len(),
-                    methods.len()
+    let mut pending_batches = VecDeque::from([(keys, indices, methods)]);
+    let mut completed = Vec::new();
+    while let Some((mut keys, mut indices, mut methods)) = pending_batches.pop_front() {
+        match analyzer
+            .analyze_method_review_batch(&methods, on_progress)
+            .await
+        {
+            Ok((verdicts, input_tokens, output_tokens)) => {
+                if verdicts.len() != methods.len() {
+                    return Err(format!(
+                        "method batch returned {} verdicts for {} methods",
+                        verdicts.len(),
+                        methods.len()
+                    ));
+                }
+                let count = methods.len();
+                completed.extend(keys.into_iter().zip(indices).zip(verdicts).enumerate().map(
+                    |(position, ((key, index), verdict))| {
+                        (
+                            key,
+                            ReviewOutcome {
+                                index,
+                                retry_on_resume: verdict.tier == FindingTier::Unresolved
+                                    && verdict
+                                        .reason
+                                        .starts_with("AI review could not be validated."),
+                                verdict: Some(verdict),
+                                in_tok: token_share(input_tokens, position, count),
+                                out_tok: token_share(output_tokens, position, count),
+                                cached_in_tok: 0,
+                            },
+                        )
+                    },
                 ));
             }
-            let count = methods.len();
-            Ok(keys
-                .into_iter()
-                .zip(indices)
-                .zip(verdicts)
-                .enumerate()
-                .map(|(position, ((key, index), verdict))| {
-                    (
-                        key,
-                        ReviewOutcome {
-                            index,
-                            retry_on_resume: verdict.tier == FindingTier::Unresolved
-                                && verdict
-                                    .reason
-                                    .starts_with("AI review could not be validated."),
-                            verdict: Some(verdict),
-                            in_tok: token_share(input_tokens, position, count),
-                            out_tok: token_share(output_tokens, position, count),
-                            cached_in_tok: 0,
-                        },
-                    )
-                })
-                .collect())
+            Err(err) if recoverable_method_review_error(&err) && methods.len() > 1 => {
+                let split_at = methods.len() / 2;
+                if let Some(callback) = on_progress {
+                    callback(ReviewProgress::RetryingEvidence {
+                        label: format!(
+                            "splitting invalid batch of {} methods into {} and {}",
+                            methods.len(),
+                            split_at,
+                            methods.len() - split_at
+                        ),
+                    });
+                }
+                let right_keys = keys.split_off(split_at);
+                let right_indices = indices.split_off(split_at);
+                let right_methods = methods.split_off(split_at);
+                pending_batches.push_front((right_keys, right_indices, right_methods));
+                pending_batches.push_front((keys, indices, methods));
+            }
+            Err(err) if recoverable_method_review_error(&err) => {
+                completed.extend(unresolved_batch_outcomes(keys, indices, methods, &err));
+            }
+            Err(err) => return Err(format!("LLM method batch failed: {err}")),
         }
-        Err(err) if recoverable_method_review_error(&err) => {
-            Ok(unresolved_batch_outcomes(keys, indices, methods, &err))
-        }
-        Err(err) => Err(format!("LLM method batch failed: {err}")),
     }
+    Ok(completed)
 }
 
 async fn run_review_unit(

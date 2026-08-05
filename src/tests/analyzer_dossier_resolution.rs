@@ -679,6 +679,73 @@ fn inline_object_argument_members_are_consumed_callback_contracts() {
 }
 
 #[test]
+fn typed_object_callback_defaults_are_not_private_unused() {
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!("sniff-object-callback-{nonce}"));
+    std::fs::create_dir_all(&root).unwrap();
+    let path = root.join("normalize.ts");
+    std::fs::write(
+        &path,
+        r#"type RetryOptions = {
+	delay: (attemptCount: number) => number;
+};
+
+const defaultRetryOptions: RetryOptions = {
+	delay: attemptCount => 0.3 * (2 ** (attemptCount - 1)) * 1000,
+};
+
+export const normalizeRetryOptions = (): RetryOptions => ({
+	...defaultRetryOptions,
+});
+"#,
+    )
+    .unwrap();
+
+    let path_text = path.to_string_lossy().to_string();
+    let mut file = crate::parser::parse_file_checked(&path_text).expect("parse TypeScript file");
+    let mut graph = SymbolGraph::new(root.to_string_lossy().as_ref());
+    graph.add_file(
+        crate::parser::parse_file_symbols_checked(&path_text).expect("index TypeScript symbols"),
+    );
+    graph.resolve_all();
+    let context_files = [file.clone()];
+    crate::callgraph::build_references_with_context(
+        std::slice::from_mut(&mut file),
+        &context_files,
+        &graph,
+    );
+    let delay = file
+        .methods
+        .iter()
+        .find(|method| method.name == "delay")
+        .expect("extract delay callback")
+        .clone();
+    let dossier = build_method_dossier(
+        &file,
+        &delay,
+        &graph,
+        std::slice::from_ref(&file),
+        Vec::new(),
+    );
+
+    assert!(
+        !dossier.repository_private_unused_candidate,
+        "object callback was incorrectly considered unused:\n{}",
+        dossier.context
+    );
+    assert!(
+        dossier
+            .context
+            .contains("member of repository object `defaultRetryOptions`")
+    );
+
+    std::fs::remove_dir_all(root).ok();
+}
+
+#[test]
 fn implicit_return_object_members_can_be_closed_world_unused() {
     let source =
         "export const useStore = create()((set) => ({\n  setTier: (tier) => set({ tier }),\n}));";

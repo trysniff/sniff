@@ -38,7 +38,8 @@ fn brandset_signup_wrapper_survives_end_to_end() {
     );
 
     let report = fs::read_to_string(root.join("sniff-report.md")).unwrap();
-    assert!(report.contains("AI coverage:**"));
+    assert!(report.contains("AI response coverage:**"));
+    assert!(report.contains("Trusted method verdicts:**"));
     let prompt_text = prompts.lock().unwrap().join("\n");
     assert!(
         prompt_text.contains("signup-wrapper")
@@ -93,7 +94,9 @@ fn default_scan_reviews_every_method_without_separate_file_calls_end_to_end() {
 
     let report = fs::read_to_string(root.join("sniff-report.md")).unwrap();
     assert!(
-        report.contains("AI coverage:** 3 of 3 expected reviews completed, 0 missed"),
+        report.contains("AI response coverage:** 3 of 3 review records emitted, 0 missing")
+            && report
+                .contains("Trusted method verdicts:** 3 of 3 resolved, 0 unresolved, 0 missing"),
         "expected exactly three exhaustive method reviews:\n{report}"
     );
 
@@ -171,7 +174,9 @@ fn default_scan_reviews_every_supported_language_end_to_end() {
 
     let report = fs::read_to_string(root.join("sniff-report.md")).unwrap();
     assert!(
-        report.contains("AI coverage:** 6 of 6 expected reviews completed, 0 missed"),
+        report.contains("AI response coverage:** 6 of 6 review records emitted, 0 missing")
+            && report
+                .contains("Trusted method verdicts:** 6 of 6 resolved, 0 unresolved, 0 missing"),
         "expected every language method to be reviewed:\n{report}"
     );
     assert!(
@@ -231,7 +236,8 @@ fn default_scan_surfaces_method_slop_through_the_final_report() {
         String::from_utf8_lossy(&output.stderr),
     );
     let report = fs::read_to_string(root.join("sniff-report.md")).unwrap();
-    assert!(report.contains("AI coverage:** 2 of 2 expected reviews completed, 0 missed"));
+    assert!(report.contains("AI response coverage:** 2 of 2 review records emitted, 0 missing"));
+    assert!(report.contains("Trusted method verdicts:** 2 of 2 resolved, 0 unresolved, 0 missing"));
     assert!(
         report.contains("sloppy.py"),
         "method slop should reach the report:\n{report}"

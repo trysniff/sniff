@@ -55,7 +55,8 @@ fn bumpkin_github_integration_subtree_matches_current_report_contract() {
     );
 
     let report = fs::read_to_string(root.join("sniff-report.md")).unwrap();
-    assert!(report.contains("AI coverage:**"));
+    assert!(report.contains("AI response coverage:**"));
+    assert!(report.contains("Trusted method verdicts:**"));
 
     child.kill();
     child.wait();
@@ -107,7 +108,8 @@ fn brandset_background_core_subtree_matches_current_report_contract() {
     );
 
     let report = fs::read_to_string(root.join("sniff-report.md")).unwrap();
-    assert!(report.contains("AI coverage:**"));
+    assert!(report.contains("AI response coverage:**"));
+    assert!(report.contains("Trusted method verdicts:**"));
 
     let _ = fs::remove_dir_all(&root);
 }
@@ -290,7 +292,9 @@ fn small_python_package_with_generated_downloads_stays_clean_end_to_end() {
         report
     );
     assert!(
-        report.contains("AI coverage:** 7 of 7 expected reviews completed, 0 missed"),
+        report.contains("AI response coverage:** 7 of 7 review records emitted, 0 missing")
+            && report
+                .contains("Trusted method verdicts:** 3 of 3 resolved, 0 unresolved, 0 missing"),
         "expected all three methods plus four file reviews to complete:\n{}",
         report
     );
@@ -365,8 +369,10 @@ fn skillmatch_backend_hotspots_match_the_current_report_contract() {
     assert!(report.contains("jobController.js"));
     assert!(report.contains("postsController.js"));
     assert!(report.contains("userController.js"));
-    assert!(report.contains("AI coverage:** 88 of 88 expected reviews completed, 0 missed"));
-    assert!(report.contains("Method review coverage:** 84 of 84 methods completed, 0 missed"));
+    assert!(report.contains("AI response coverage:** 88 of 88 review records emitted, 0 missing"));
+    assert!(
+        report.contains("Trusted method verdicts:** 84 of 84 resolved, 0 unresolved, 0 missing")
+    );
 
     let prompt_text = prompts.lock().unwrap().join("\n");
     assert!(

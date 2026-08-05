@@ -70,6 +70,29 @@ pub(super) fn render_repository_facts(
                     && definition.name == owner
             })
     });
+    let object_owner_usage = object_owner
+        .map(|owner| {
+            index
+                .source_locations(&owner.name)
+                .into_iter()
+                .filter_map(|location| {
+                    let candidate = &file_records[location.file_index];
+                    let line_number = location.line_index + 1;
+                    if candidate.file_path != file.file_path
+                        || (owner.start_line..=owner.end_line).contains(&line_number)
+                    {
+                        return None;
+                    }
+                    Some(format!(
+                        "{}:{}: {}",
+                        candidate.file_path,
+                        line_number,
+                        index.source_lines[location.file_index][location.line_index].trim()
+                    ))
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
     let inline_object_owner = target_owner.filter(|owner| owner.starts_with("<object@"));
     let class_contract = target_owner.and_then(|owner| class_contract_evidence(file, owner));
     let owner_invocation_evidence = js_ts_owner_invocation_evidence(method, target_owner, index);
@@ -123,6 +146,10 @@ pub(super) fn render_repository_facts(
                 "repository"
             },
             owner.name
+        ));
+        facts.push(format!(
+            "owning object repository consumers: {}",
+            if_empty(object_owner_usage.clone())
         ));
     } else if let Some(owner) = inline_object_owner {
         facts.push(format!(
@@ -611,6 +638,7 @@ pub(super) fn render_repository_facts(
         || external_object_escape.is_some()
         || object_owner.is_some()
         || inline_object_owner.is_some()
+        || !object_owner_usage.is_empty()
         || has_compatibility_contract;
     let returned_member_has_external_contract =
         returned_member_evidence.is_some() && !private_js_ts_package;
@@ -637,6 +665,7 @@ pub(super) fn render_repository_facts(
         && file_content_test_contract.is_empty()
         && enumeration_invocation_proof.is_none()
         && computed_invocation_evidence.is_empty()
+        && object_owner_usage.is_empty()
         && !has_protocol_contract
         && !has_compatibility_contract;
     facts.push(format!(
