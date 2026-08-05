@@ -79,6 +79,18 @@ Bumpkin finding above.
 
 ![Sniff estimate and evidence-backed report preview](assets/report-preview.png)
 
+## OSS Validation
+
+Sniff is tested against pinned third-party repositories, and analyzer mistakes
+are published alongside the fixes they forced. The current studies cover
+[Ky (TypeScript)](case-studies/ky.md),
+[Turbine (Kotlin)](case-studies/turbine.md), and
+[fd (Rust)](case-studies/fd.md).
+
+See the [validation method and aggregate results](case-studies/README.md).
+Zero findings means no slop satisfied Sniff's evidence contract; it is not a
+claim that a repository is perfect.
+
 ## Cost Before Commitment
 
 `sniff --estimate [PATH]` parses the repository locally and reports:
