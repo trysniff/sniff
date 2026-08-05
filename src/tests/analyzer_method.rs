@@ -1,7 +1,8 @@
 use super::{
     IntentMethodReview, SemanticMethodReview, append_intent_challenge,
-    enforce_boundary_requirements, missing_evidence_needs_history, needs_private_unused_refinement,
-    numbered_method_source, private_unused_requires_signature_change, proven_private_unused_review,
+    enforce_boundary_requirements, enforce_dead_code_proof, missing_evidence_needs_history,
+    needs_private_unused_refinement, numbered_method_source,
+    private_unused_requires_signature_change, proven_private_unused_review,
     render_adjudication_prompt,
 };
 use crate::types::MethodRecord;
@@ -297,4 +298,50 @@ fn exported_whole_method_removal_becomes_unresolved() {
     assert_eq!(public_review.tier, crate::types::FindingTier::Unresolved);
     assert_eq!(public_review.change_scope, "none");
     assert!(public_review.missing_evidence[0].contains("external consumers"));
+}
+
+#[test]
+fn dead_code_requires_the_closed_world_private_unused_proof() {
+    let mut method = MethodRecord {
+        name: "helper".to_string(),
+        file_path: "src/helper.kt".to_string(),
+        source: "private fun helper() = Unit".to_string(),
+        loc: 1,
+        param_count: 0,
+        start_line: 1,
+        end_line: 1,
+        is_exported: false,
+        language: "kotlin".to_string(),
+        nesting_depth: 0,
+        references: vec![],
+        real_ref_count: 2,
+    };
+    let dead_review = SemanticMethodReview {
+        tier: crate::types::FindingTier::Slop,
+        pattern: "dead_code".to_string(),
+        intent: "Provide a helper.".to_string(),
+        reason: "No callers exist.".to_string(),
+        evidence: vec![],
+        necessity_check: "No consumer exists.".to_string(),
+        contract_status: "unnecessary".to_string(),
+        contract_impact: "Delete the helper.".to_string(),
+        dependency_impact: "No dependencies exist.".to_string(),
+        simplification: "Delete the method.".to_string(),
+        change_scope: "whole_method".to_string(),
+        behavior_status: "preserved".to_string(),
+        missing_evidence: vec![],
+    };
+
+    let called = enforce_dead_code_proof(dead_review.clone(), &method, false);
+    assert_eq!(called.tier, crate::types::FindingTier::Clean);
+    assert!(called.reason.contains("2 caller(s)"));
+
+    method.real_ref_count = 0;
+    method.is_exported = true;
+    let public = enforce_dead_code_proof(dead_review.clone(), &method, false);
+    assert_eq!(public.tier, crate::types::FindingTier::Clean);
+    assert!(public.reason.contains("externally visible"));
+
+    let proven = enforce_dead_code_proof(dead_review, &method, true);
+    assert_eq!(proven.tier, crate::types::FindingTier::Slop);
 }

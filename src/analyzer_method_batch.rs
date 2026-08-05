@@ -8,10 +8,11 @@ use std::sync::Arc;
 
 use super::dossier::StaleDiscardSignatureProof;
 use super::method_review::{
-    compact_method_context, enforce_boundary_requirements, enforce_exported_change_scope,
-    missing_evidence_needs_history, private_unused_requires_signature_change,
-    proven_private_unused_review, refine_private_unused_if_needed,
-    refine_scoped_construct_if_needed, render_packet_reference_context, requires_ai_adjudication,
+    compact_method_context, enforce_boundary_requirements, enforce_dead_code_proof,
+    enforce_exported_change_scope, missing_evidence_needs_history,
+    private_unused_requires_signature_change, proven_private_unused_review,
+    refine_private_unused_if_needed, refine_scoped_construct_if_needed,
+    render_packet_reference_context, requires_ai_adjudication,
 };
 use super::verdicts::{
     IntentMethodReview, SemanticMethodReview, build_semantic_method_verdict,
@@ -797,6 +798,11 @@ pub(super) async fn analyze_method_review_batch(
         .await?;
         input_tokens += scoped_input;
         output_tokens += scoped_output;
+        let review = enforce_dead_code_proof(
+            review,
+            &item.method,
+            item.repository_private_unused_candidate,
+        );
         resolved_reviews.push(enforce_exported_change_scope(
             review,
             &item.method,

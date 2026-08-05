@@ -665,6 +665,8 @@ pub(super) async fn analyze_method_review_with_context(
     input_tokens += scoped_input;
     output_tokens += scoped_output;
     let final_review =
+        enforce_dead_code_proof(final_review, method, repository_private_unused_candidate);
+    let final_review =
         enforce_exported_change_scope(final_review, method, repository_private_unused_candidate);
     let verdict = build_semantic_method_verdict(
         &final_review,
@@ -675,6 +677,45 @@ pub(super) async fn analyze_method_review_with_context(
         method.end_line,
     );
     Ok((Some(verdict), input_tokens, output_tokens))
+}
+
+pub(super) fn enforce_dead_code_proof(
+    review: SemanticMethodReview,
+    method: &MethodRecord,
+    repository_private_unused_candidate: bool,
+) -> SemanticMethodReview {
+    if review.pattern != "dead_code"
+        || !matches!(review.tier, FindingTier::Slop | FindingTier::KindaSlop)
+        || repository_private_unused_candidate
+    {
+        return review;
+    }
+
+    let reason = if method.real_ref_count > 0 {
+        format!(
+            "The repository graph resolves {} caller(s), disproving the dead-code claim.",
+            method.real_ref_count
+        )
+    } else {
+        "The callable is externally visible, so absent repository callers do not prove dead code."
+            .to_string()
+    };
+    SemanticMethodReview {
+        tier: FindingTier::Clean,
+        pattern: "none".to_string(),
+        intent: review.intent,
+        reason,
+        evidence: Vec::new(),
+        necessity_check: "The closed-world private-unused proof is false.".to_string(),
+        contract_status: "required".to_string(),
+        contract_impact: "No removal is proposed.".to_string(),
+        dependency_impact: "Existing callers or the external callable boundary are preserved."
+            .to_string(),
+        simplification: "none".to_string(),
+        change_scope: "none".to_string(),
+        behavior_status: "preserved".to_string(),
+        missing_evidence: Vec::new(),
+    }
 }
 
 pub(super) fn enforce_boundary_requirements(
