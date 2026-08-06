@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
+use crate::types::FindingTier;
+
 pub const SLOP_DEFINITION: &str = "Unnecessary or misleading implementation machinery that superficially satisfies a task while transferring disproportionate comprehension, verification, or change burden to future developers.";
 
 pub const PRODUCT_NON_GOALS: &[&str] = &[
@@ -108,6 +110,13 @@ impl SlopPattern {
     pub fn is_finding(self) -> bool {
         self != Self::None
     }
+
+    pub fn is_valid_for(self, tier: FindingTier) -> bool {
+        match tier {
+            FindingTier::Slop | FindingTier::KindaSlop => self.is_finding(),
+            FindingTier::Clean | FindingTier::Unresolved => self == Self::None,
+        }
+    }
 }
 
 impl fmt::Display for SlopPattern {
@@ -119,6 +128,7 @@ impl fmt::Display for SlopPattern {
 #[cfg(test)]
 mod tests {
     use super::{SLOP_DEFINITION, SlopPattern};
+    use crate::types::FindingTier;
 
     #[test]
     fn ontology_has_one_stable_wire_name_per_pattern() {
@@ -150,5 +160,22 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(prompt_names, typed_names);
+    }
+
+    #[test]
+    fn verdicts_accept_only_contract_appropriate_patterns() {
+        for tier in [FindingTier::Slop, FindingTier::KindaSlop] {
+            assert!(!SlopPattern::None.is_valid_for(tier));
+            for pattern in SlopPattern::FINDING_PATTERNS {
+                assert!(pattern.is_valid_for(tier));
+            }
+        }
+
+        for tier in [FindingTier::Clean, FindingTier::Unresolved] {
+            assert!(SlopPattern::None.is_valid_for(tier));
+            for pattern in SlopPattern::FINDING_PATTERNS {
+                assert!(!pattern.is_valid_for(tier));
+            }
+        }
     }
 }
