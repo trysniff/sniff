@@ -1,6 +1,9 @@
-use super::{JournalCompletion, JournalStore, sha256_text, summarize};
+use super::{
+    JournalCompletion, JournalRoleCompletion, JournalStage, JournalStore, scan_id, sha256_text,
+    summarize,
+};
 use crate::report_types::LLMVerdict;
-use crate::types::FindingTier;
+use crate::types::{FileRecord, FindingTier};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -115,7 +118,7 @@ fn journal_ignores_only_a_torn_final_event() {
 }
 
 #[test]
-fn changed_semantic_or_provider_context_does_not_reuse_events() {
+fn changed_provider_context_does_not_reuse_events() {
     let path = temp_journal_path();
     let first =
         "review_contract=semantic-method-v28\nmodel=first\nendpoint=https://example.invalid";
@@ -128,12 +131,6 @@ fn changed_semantic_or_provider_context_does_not_reuse_events() {
         )
         .unwrap();
 
-    assert!(
-        JournalStore::load(&path, "semantic-b", first)
-            .unwrap()
-            .completed
-            .is_empty()
-    );
     let second =
         "review_contract=semantic-method-v28\nmodel=second\nendpoint=https://example.invalid";
     let loaded = JournalStore::load(&path, "semantic-a", second).unwrap();
@@ -233,4 +230,106 @@ fn summary_of_missing_journal_is_empty() {
     let summary = summarize(&temp_journal_path()).unwrap();
 
     assert_eq!(summary, super::JournalSummary::default());
+}
+
+#[test]
+fn one_scan_summary_combines_role_and_method_usage_without_mixing_coverage() {
+    let path = temp_journal_path();
+    let context =
+        "review_contract=semantic-method-v28\nmodel=test\nendpoint=https://example.invalid";
+    let mut roles =
+        JournalStore::load_for_scan(&path, "run-a", JournalStage::Role, "role-index", context, 2)
+            .unwrap();
+    roles
+        .record_role(
+            "role-a".to_string(),
+            sha256_text("role-source"),
+            JournalRoleCompletion {
+                role: Some("core_library".to_string()),
+                in_tok: 10,
+                out_tok: 1,
+                cached_in_tok: 4,
+                retry_on_resume: false,
+            },
+        )
+        .unwrap();
+    let mut methods = JournalStore::load_for_scan(
+        &path,
+        "run-a",
+        JournalStage::Method,
+        "semantic-index",
+        context,
+        3,
+    )
+    .unwrap();
+    methods
+        .record(
+            "method-a".to_string(),
+            sha256_text("method-source"),
+            completion(FindingTier::Clean, 20, 2),
+        )
+        .unwrap();
+
+    let summary = summarize(&path).unwrap();
+    assert_eq!(summary.expected_units, 3);
+    assert_eq!(summary.completed_units, 1);
+    assert_eq!(summary.expected_role_units, 2);
+    assert_eq!(summary.completed_role_units, 1);
+    assert_eq!(summary.input_tokens, 30);
+    assert_eq!(summary.output_tokens, 3);
+    assert_eq!(summary.cached_input_tokens, 4);
+    methods.remove().unwrap();
+}
+
+#[test]
+fn scan_identity_is_order_independent_and_source_sensitive() {
+    let file = |path: &str, source: &str| FileRecord {
+        file_path: path.to_string(),
+        source: source.to_string(),
+        language: "python".to_string(),
+        methods: vec![],
+    };
+    let first = vec![file("b.py", "b = 1"), file("a.py", "a = 1")];
+    let reordered = vec![file("a.py", "a = 1"), file("b.py", "b = 1")];
+    let changed = vec![file("a.py", "a = 2"), file("b.py", "b = 1")];
+
+    assert_eq!(scan_id(&first, "context"), scan_id(&reordered, "context"));
+    assert_ne!(scan_id(&first, "context"), scan_id(&changed, "context"));
+    assert_ne!(scan_id(&first, "context"), scan_id(&first, "other"));
+}
+
+#[test]
+fn unchanged_unit_is_available_as_a_cross_scan_content_cache_hit() {
+    let path = temp_journal_path();
+    let context =
+        "review_contract=semantic-method-v28\nmodel=test\nendpoint=https://example.invalid";
+    let mut first = JournalStore::load_for_scan(
+        &path,
+        "run-a",
+        JournalStage::Method,
+        "semantic-a",
+        context,
+        1,
+    )
+    .unwrap();
+    first
+        .record(
+            "stable-unit".to_string(),
+            sha256_text("stable-source"),
+            completion(FindingTier::Clean, 100, 10),
+        )
+        .unwrap();
+
+    let second = JournalStore::load_for_scan(
+        &path,
+        "run-b",
+        JournalStage::Method,
+        "semantic-b",
+        context,
+        1,
+    )
+    .unwrap();
+    let cached = second.completed.get("stable-unit").unwrap();
+    assert!(!second.is_current_scan(cached));
+    second.remove().unwrap();
 }

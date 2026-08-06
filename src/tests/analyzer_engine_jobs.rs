@@ -156,7 +156,7 @@ async fn resumed_journal_restores_cached_input_usage_without_an_api_call() {
         in_tok: AtomicUsize::new(0),
         out_tok: AtomicUsize::new(0),
     });
-    let verdicts = run_review_jobs(analyzer, vec![job], None, context, Some(&path))
+    let verdicts = run_review_jobs(analyzer, vec![job], None, context, Some(&path), None)
         .await
         .unwrap();
 
@@ -166,6 +166,73 @@ async fn resumed_journal_restores_cached_input_usage_without_an_api_call() {
         .unwrap()
         .remove()
         .unwrap();
+}
+
+#[tokio::test]
+async fn cross_scan_content_cache_records_zero_cost_coverage_without_an_api_call() {
+    let path = temp_journal_path();
+    let job = method_job("def demo():\n    return 1\n");
+    let context = "review_contract=test\nmodel=test";
+    let semantic_hash = semantic_index_hash(std::slice::from_ref(&job));
+    let key = job.journal_unit_id();
+    let outcome = ReviewOutcome {
+        index: 0,
+        verdict: Some(LLMVerdict {
+            verdict_type: "method".to_string(),
+            file_path: "src/demo.py".to_string(),
+            method_name: Some("demo".to_string()),
+            check_type: "method".to_string(),
+            smelly: false,
+            tier: FindingTier::Clean,
+            cohesive: None,
+            name_accurate: None,
+            evidence: String::new(),
+            reason: "The method directly serves its contract.".to_string(),
+            loc: 1,
+            start_line: 1,
+            end_line: 1,
+        }),
+        in_tok: 100,
+        out_tok: 10,
+        cached_in_tok: 75,
+        retry_on_resume: false,
+    };
+    let mut store = JournalStore::load_for_scan(
+        &path,
+        "run-a",
+        crate::review_journal::JournalStage::Method,
+        &semantic_hash,
+        context,
+        1,
+    )
+    .unwrap();
+    record_outcome(&mut store, key, &outcome).unwrap();
+
+    let client = Arc::new(LLMClient::new(ResolvedConfig::default(), None));
+    let analyzer = Arc::new(Analyzer {
+        llm_client: Arc::clone(&client),
+        in_tok: AtomicUsize::new(0),
+        out_tok: AtomicUsize::new(0),
+    });
+    let verdicts = run_review_jobs(
+        analyzer,
+        vec![job],
+        None,
+        context,
+        Some(&path),
+        Some("run-b"),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(verdicts.len(), 1);
+    assert_eq!(client.cached_input_tokens(), 0);
+    let summary = crate::review_journal::summarize(&path).unwrap();
+    assert_eq!(summary.scan_id.as_deref(), Some("run-b"));
+    assert_eq!(summary.completed_units, 1);
+    assert_eq!(summary.input_tokens, 0);
+    assert_eq!(summary.output_tokens, 0);
+    std::fs::remove_file(path).unwrap();
 }
 
 #[test]
@@ -254,7 +321,9 @@ fn journal_unit_id_ignores_rendered_dossier_order() {
         dossier.context = "callers:\n- second\n- first".to_string();
     }
 
-    assert_eq!(first.journal_unit_id(), second.journal_unit_id());
+    let unit_id = first.journal_unit_id();
+    assert_eq!(unit_id, second.journal_unit_id());
+    assert_eq!(unit_id.len(), 64);
 }
 
 #[test]

@@ -111,11 +111,14 @@ fn format_journal_status(
         )
     };
     format!(
-        "Journal: {}\nProgress: {}/{} completed ({progress})\nRemaining: {remaining} ({} retryable)\nFindings so far: {} slop, {} kinda slop, {} unresolved\nUsage so far: {} input, {} cached input, {} output tokens; ${:.4} estimated\nProvider: {} / {}",
+        "Journal: {}\nProgress: {}/{} completed ({progress})\nRemaining: {remaining} ({} retryable)\nRole metadata: {}/{} completed ({} retryable)\nFindings so far: {} slop, {} kinda slop, {} unresolved\nUsage so far: {} input, {} cached input, {} output tokens; ${:.4} estimated\nProvider: {} / {}",
         journal_path.display(),
         summary.completed_units,
         summary.expected_units,
         summary.retryable_units,
+        summary.completed_role_units,
+        summary.expected_role_units,
+        summary.retryable_role_units,
         summary.slop,
         summary.kinda_slop,
         summary.unresolved,
@@ -366,6 +369,9 @@ mod tests {
             expected_units: 10,
             completed_units: 4,
             retryable_units: 1,
+            expected_role_units: 0,
+            completed_role_units: 0,
+            retryable_role_units: 0,
             slop: 1,
             kinda_slop: 2,
             unresolved: 0,
@@ -382,6 +388,6 @@ mod tests {
         assert!(rendered.contains("Progress: 4/10 completed (40.0%)"));
         assert!(rendered.contains("Remaining: 6 (1 retryable)"));
         assert!(rendered.contains("Usage so far: 100 input, 60 cached input, 20 output tokens"));
-        assert_eq!(rendered.lines().count(), 6);
+        assert_eq!(rendered.lines().count(), 7);
     }
 }

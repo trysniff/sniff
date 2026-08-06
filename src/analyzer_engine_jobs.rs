@@ -3,17 +3,16 @@ use crate::types::{FileRecord, FindingTier, MethodRecord};
 use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::future::Future;
-use std::hash::{Hash, Hasher};
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use tokio::task::JoinSet;
 
 use super::dossier::MethodDossier;
-use super::journal::{JournalCompletion, JournalEntry, JournalStore, sha256_text};
 use super::method_batch_review::BatchMethodReview;
 use super::method_review::MethodReviewContext;
 use super::{Analyzer, ReviewProgress, ReviewProgressCallback};
+use crate::review_journal::{JournalCompletion, JournalEntry, JournalStore, sha256_text};
 
 pub(super) enum ReviewJob {
     Method {
@@ -152,6 +151,15 @@ fn journal_entry_is_reusable(entry: &JournalEntry) -> bool {
     entry.is_reusable()
 }
 
+fn push_identity_field(identity: &mut String, label: &str, value: &str) {
+    identity.push_str(&label.len().to_string());
+    identity.push(':');
+    identity.push_str(label);
+    identity.push_str(&value.len().to_string());
+    identity.push(':');
+    identity.push_str(value);
+}
+
 impl ReviewJob {
     fn label(&self) -> String {
         match self {
@@ -161,7 +169,7 @@ impl ReviewJob {
     }
 
     fn journal_unit_id(&self) -> String {
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        let mut identity = String::new();
         match self {
             Self::Method {
                 method,
@@ -169,31 +177,73 @@ impl ReviewJob {
                 dossier,
                 ..
             } => {
-                "method".hash(&mut hasher);
-                method.file_path.hash(&mut hasher);
-                method.name.hash(&mut hasher);
-                method.source.hash(&mut hasher);
-                method.start_line.hash(&mut hasher);
-                method.end_line.hash(&mut hasher);
+                push_identity_field(&mut identity, "kind", "method");
+                push_identity_field(&mut identity, "file_path", &method.file_path);
+                push_identity_field(&mut identity, "method_name", &method.name);
+                push_identity_field(&mut identity, "source", &method.source);
+                push_identity_field(&mut identity, "start_line", &method.start_line.to_string());
+                push_identity_field(&mut identity, "end_line", &method.end_line.to_string());
                 let mut sorted_signals = static_signals.clone();
                 sorted_signals.sort();
-                sorted_signals.hash(&mut hasher);
-                dossier.full_file.hash(&mut hasher);
+                push_identity_field(
+                    &mut identity,
+                    "signal_count",
+                    &sorted_signals.len().to_string(),
+                );
+                for signal in sorted_signals {
+                    push_identity_field(&mut identity, "signal", &signal);
+                }
+                push_identity_field(&mut identity, "full_file", &dossier.full_file);
                 let mut sorted_boundaries = dossier.boundary_requirements.clone();
                 sorted_boundaries.sort();
-                sorted_boundaries.hash(&mut hasher);
-                dossier
-                    .repository_private_unused_candidate
-                    .hash(&mut hasher);
-                dossier.stale_discard_signature_proof.hash(&mut hasher);
+                push_identity_field(
+                    &mut identity,
+                    "boundary_count",
+                    &sorted_boundaries.len().to_string(),
+                );
+                for boundary in sorted_boundaries {
+                    push_identity_field(&mut identity, "boundary", &boundary);
+                }
+                push_identity_field(
+                    &mut identity,
+                    "private_unused_candidate",
+                    if dossier.repository_private_unused_candidate {
+                        "true"
+                    } else {
+                        "false"
+                    },
+                );
+                if let Some(proof) = dossier.stale_discard_signature_proof.as_deref() {
+                    push_identity_field(&mut identity, "stale_discard_proof", "present");
+                    push_identity_field(
+                        &mut identity,
+                        "discarded_parameter_count",
+                        &proof.discarded_parameters.len().to_string(),
+                    );
+                    for parameter in &proof.discarded_parameters {
+                        push_identity_field(&mut identity, "discarded_parameter", parameter);
+                    }
+                    push_identity_field(
+                        &mut identity,
+                        "caller_site_count",
+                        &proof.caller_sites.len().to_string(),
+                    );
+                    for caller in &proof.caller_sites {
+                        push_identity_field(&mut identity, "caller_site", caller);
+                    }
+                } else {
+                    push_identity_field(&mut identity, "stale_discard_proof", "absent");
+                }
                 if let Some(proof) = super::dossier::duplicated_branch_construct(method) {
-                    "duplicated_branch_construct".hash(&mut hasher);
-                    proof.hash(&mut hasher);
+                    push_identity_field(&mut identity, "branch_proof", "duplicated");
+                    push_identity_field(&mut identity, "branch_proof_value", &proof);
                 } else if let Some(rejected) =
                     super::dossier::rejected_non_exhaustive_duplicate_branch(method)
                 {
-                    "rejected_non_exhaustive_duplicate_branch".hash(&mut hasher);
-                    rejected.hash(&mut hasher);
+                    push_identity_field(&mut identity, "branch_proof", "rejected_non_exhaustive");
+                    push_identity_field(&mut identity, "branch_proof_value", &rejected);
+                } else {
+                    push_identity_field(&mut identity, "branch_proof", "absent");
                 }
                 let compact_context = dossier
                     .context
@@ -202,7 +252,14 @@ impl ReviewJob {
                     .unwrap_or(&dossier.context);
                 let mut context_lines = compact_context.lines().collect::<Vec<_>>();
                 context_lines.sort_unstable();
-                context_lines.hash(&mut hasher);
+                push_identity_field(
+                    &mut identity,
+                    "context_line_count",
+                    &context_lines.len().to_string(),
+                );
+                for line in context_lines {
+                    push_identity_field(&mut identity, "context_line", line);
+                }
                 let mut sorted_callees = dossier.callees.iter().collect::<Vec<_>>();
                 sorted_callees.sort_by(|left, right| {
                     left.file_path
@@ -210,10 +267,15 @@ impl ReviewJob {
                         .then(left.line.cmp(&right.line))
                         .then(left.snippet.cmp(&right.snippet))
                 });
+                push_identity_field(
+                    &mut identity,
+                    "callee_count",
+                    &sorted_callees.len().to_string(),
+                );
                 for reference in sorted_callees {
-                    reference.file_path.hash(&mut hasher);
-                    reference.line.hash(&mut hasher);
-                    reference.snippet.hash(&mut hasher);
+                    push_identity_field(&mut identity, "callee_path", &reference.file_path);
+                    push_identity_field(&mut identity, "callee_line", &reference.line.to_string());
+                    push_identity_field(&mut identity, "callee_snippet", &reference.snippet);
                 }
                 let mut sorted_references = method.references.iter().collect::<Vec<_>>();
                 sorted_references.sort_by(|left, right| {
@@ -222,33 +284,59 @@ impl ReviewJob {
                         .then(left.line.cmp(&right.line))
                         .then(left.snippet.cmp(&right.snippet))
                 });
+                push_identity_field(
+                    &mut identity,
+                    "reference_count",
+                    &sorted_references.len().to_string(),
+                );
                 for reference in sorted_references {
-                    reference.file_path.hash(&mut hasher);
-                    reference.line.hash(&mut hasher);
-                    reference.snippet.hash(&mut hasher);
+                    push_identity_field(&mut identity, "reference_path", &reference.file_path);
+                    push_identity_field(
+                        &mut identity,
+                        "reference_line",
+                        &reference.line.to_string(),
+                    );
+                    push_identity_field(&mut identity, "reference_snippet", &reference.snippet);
                 }
-                crate::roles::file_role_label(crate::roles::classify_file_role(&method.file_path))
-                    .hash(&mut hasher);
+                push_identity_field(
+                    &mut identity,
+                    "file_role",
+                    crate::roles::file_role_label(crate::roles::classify_file_role(
+                        &method.file_path,
+                    )),
+                );
             }
             Self::File {
                 file,
                 static_signals,
                 ..
             } => {
-                "file".hash(&mut hasher);
-                file.file_path.hash(&mut hasher);
-                file.source.hash(&mut hasher);
+                push_identity_field(&mut identity, "kind", "file");
+                push_identity_field(&mut identity, "file_path", &file.file_path);
+                push_identity_field(&mut identity, "source", &file.source);
                 let mut sorted_signals = static_signals.clone();
                 sorted_signals.sort();
-                sorted_signals.hash(&mut hasher);
-                crate::roles::file_role_label(crate::roles::classify_file_role(&file.file_path))
-                    .hash(&mut hasher);
+                push_identity_field(
+                    &mut identity,
+                    "signal_count",
+                    &sorted_signals.len().to_string(),
+                );
+                for signal in sorted_signals {
+                    push_identity_field(&mut identity, "signal", &signal);
+                }
+                push_identity_field(
+                    &mut identity,
+                    "file_role",
+                    crate::roles::file_role_label(crate::roles::classify_file_role(
+                        &file.file_path,
+                    )),
+                );
             }
         }
         // The job identity is already unique for a method or file. Do not
         // include the scan position: filesystem traversal order may change
         // between retries, but completed reviews must remain reusable.
-        format!("{:016x}", hasher.finish())
+        sha256_text(&identity)
     }
 
     fn source_hash(&self) -> String {
@@ -615,14 +703,15 @@ async fn run_review_unit(
     unit: Vec<(String, ReviewJob)>,
     on_progress: Option<&ReviewProgressCallback>,
 ) -> Result<Vec<(String, ReviewOutcome)>, String> {
-    let (mut result, cached_input_tokens) = crate::llm::LLMClient::track_cached_input_tokens(
-        run_review_unit_untracked(analyzer, unit, on_progress),
-    )
-    .await;
+    let (mut result, usage) =
+        crate::llm::LLMClient::track_usage(run_review_unit_untracked(analyzer, unit, on_progress))
+            .await;
     if let Ok(outcomes) = result.as_mut() {
         let count = outcomes.len();
         for (position, (_, outcome)) in outcomes.iter_mut().enumerate() {
-            outcome.cached_in_tok = token_share(cached_input_tokens, position, count);
+            outcome.cached_in_tok = token_share(usage.cached_input_tokens, position, count);
+            outcome.in_tok += token_share(usage.failed_input_tokens, position, count);
+            outcome.out_tok += token_share(usage.failed_output_tokens, position, count);
         }
     }
     result
@@ -677,6 +766,7 @@ pub(super) async fn run_review_jobs(
     on_progress: Option<ReviewProgressCallback>,
     review_context_key: &str,
     journal_path: Option<&Path>,
+    scan_id: Option<&str>,
 ) -> Result<Vec<LLMVerdict>, String> {
     let semantic_index_hash = semantic_index_hash(&jobs);
     let source_hashes = jobs
@@ -686,12 +776,23 @@ pub(super) async fn run_review_jobs(
     let expected_units = jobs.len();
     let mut journal = journal_path
         .map(|path| {
-            JournalStore::load_with_expected(
-                path,
-                &semantic_index_hash,
-                review_context_key,
-                expected_units,
-            )
+            if let Some(scan_id) = scan_id {
+                JournalStore::load_for_scan(
+                    path,
+                    scan_id,
+                    crate::review_journal::JournalStage::Method,
+                    &semantic_index_hash,
+                    review_context_key,
+                    expected_units,
+                )
+            } else {
+                JournalStore::load_with_expected(
+                    path,
+                    &semantic_index_hash,
+                    review_context_key,
+                    expected_units,
+                )
+            }
         })
         .transpose()?;
     let mut outcomes = Vec::with_capacity(jobs.len());
@@ -702,18 +803,44 @@ pub(super) async fn run_review_jobs(
             .as_ref()
             .and_then(|store| store.completed.get(&journal_unit_id))
             .filter(|entry| journal_entry_is_reusable(entry))
+            .cloned()
         {
-            analyzer.in_tok.fetch_add(entry.in_tok, Ordering::SeqCst);
-            analyzer.out_tok.fetch_add(entry.out_tok, Ordering::SeqCst);
+            let is_current_scan = journal
+                .as_ref()
+                .is_some_and(|store| store.is_current_scan(&entry));
+            let (in_tok, out_tok, cached_in_tok) = if is_current_scan {
+                (entry.in_tok, entry.out_tok, entry.cached_in_tok)
+            } else {
+                let source_hash = source_hashes.get(&journal_unit_id).ok_or_else(|| {
+                    format!("missing source hash for cached review {journal_unit_id}")
+                })?;
+                journal
+                    .as_mut()
+                    .expect("cached journal entry requires a store")
+                    .record(
+                        journal_unit_id.clone(),
+                        source_hash.clone(),
+                        JournalCompletion {
+                            verdict: entry.verdict.clone(),
+                            in_tok: 0,
+                            out_tok: 0,
+                            cached_in_tok: 0,
+                            retry_on_resume: false,
+                        },
+                    )?;
+                (0, 0, 0)
+            };
+            analyzer.in_tok.fetch_add(in_tok, Ordering::SeqCst);
+            analyzer.out_tok.fetch_add(out_tok, Ordering::SeqCst);
             analyzer
                 .llm_client
-                .restore_cached_input_tokens(entry.cached_in_tok);
+                .restore_cached_input_tokens(cached_in_tok);
             outcomes.push(ReviewOutcome {
                 index,
                 verdict: entry.verdict.clone(),
-                in_tok: entry.in_tok,
-                out_tok: entry.out_tok,
-                cached_in_tok: entry.cached_in_tok,
+                in_tok,
+                out_tok,
+                cached_in_tok,
                 retry_on_resume: false,
             });
             if let Some(callback) = on_progress.as_ref() {

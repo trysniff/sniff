@@ -22,6 +22,7 @@ pub(super) struct LlmCheckInput<'a> {
     pub(super) role_input_tokens: usize,
     pub(super) role_output_tokens: usize,
     pub(super) journal_path: Option<&'a Path>,
+    pub(super) scan_id: Option<&'a str>,
 }
 
 const MAX_PROGRESS_LABEL_CHARS: usize = 76;
@@ -97,6 +98,7 @@ pub(super) async fn run_llm_checks(
             with_file_reviews: false,
             graph: Some(input.graph),
             journal_path: input.journal_path,
+            scan_id: input.scan_id,
         },
         client,
         Some(on_progress),
@@ -107,8 +109,8 @@ pub(super) async fn run_llm_checks(
     let (verdicts, in_tok, out_tok) = result?;
     Ok((
         verdicts,
-        in_tok + input.role_input_tokens + usage_client.failed_input_tokens(),
-        out_tok + input.role_output_tokens + usage_client.failed_output_tokens(),
+        in_tok + input.role_input_tokens,
+        out_tok + input.role_output_tokens,
         usage_client.cached_input_tokens(),
     ))
 }
@@ -226,26 +228,32 @@ pub(super) async fn prepare_review_artifacts(
         path,
         config,
     )?;
+    let scan_id = llm_client
+        .as_ref()
+        .map(|client| crate::review_journal::scan_id(file_records, &client.review_context_key()));
+    if let (Some(journal_path), Some(scan_id), Some(client)) =
+        (journal_path, scan_id.as_deref(), llm_client.as_ref())
+    {
+        crate::review_journal::initialize_method_stage(
+            journal_path,
+            scan_id,
+            &client.review_context_key(),
+            super::stats::expected_method_reviews(file_records),
+        )
+        .map_err(IoError::other)?;
+    }
 
     let llm_client_for_roles = llm_client.as_ref().map(Arc::clone);
-    let role_checkpoint_path = journal_path.map(|path| {
-        let checkpoint_name = path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or(".sniff-journal.jsonl");
-        let role_name = checkpoint_name.replace(".sniff-journal", ".sniff-role-checkpoint");
-        path.with_file_name(role_name)
-    });
     let (role_in_tok, role_out_tok, llm_client) = resolve_roles(
         file_records,
         llm_client_for_roles,
-        role_checkpoint_path.as_deref(),
+        journal_path,
+        scan_id.as_deref(),
     )
     .await
     .map_err(IoError::other)?;
 
     let ai_expected_reviews = super::stats::expected_ai_reviews_after_role_resolution(file_records);
-    preflight_llm_endpoint(path, ai_expected_reviews, llm_client.as_ref()).await?;
 
     let production_paths = file_records
         .iter()
@@ -274,11 +282,27 @@ pub(super) async fn prepare_review_artifacts(
         role_input_tokens: role_in_tok,
         role_output_tokens: role_out_tok,
         journal_path,
+        scan_id: scan_id.as_deref(),
     })
     .await
     .map_err(IoError::other);
 
-    let (verdicts, in_tok, out_tok, cached_in_tok) = review_result?;
+    let (verdicts, fallback_in_tok, fallback_out_tok, fallback_cached_in_tok) = review_result?;
+    let journal_usage = journal_path
+        .map(crate::review_journal::summarize)
+        .transpose()
+        .map_err(IoError::other)?
+        .filter(|summary| summary.scan_id.as_deref() == scan_id.as_deref());
+    let (in_tok, out_tok, cached_in_tok) = journal_usage.map_or(
+        (fallback_in_tok, fallback_out_tok, fallback_cached_in_tok),
+        |summary| {
+            (
+                summary.input_tokens,
+                summary.output_tokens,
+                summary.cached_input_tokens,
+            )
+        },
+    );
 
     Ok(ReviewArtifacts {
         static_flags,

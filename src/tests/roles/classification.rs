@@ -44,24 +44,36 @@ async fn ambiguous_role_failure_aborts_resolution() {
         language: "rust".to_string(),
         methods: vec![],
     };
+    let journal_path = std::env::temp_dir().join(format!(
+        "sniff-role-failure-journal-test-{}.jsonl",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
 
-    let err = resolve_file_roles(&[file], Arc::clone(&client))
-        .await
-        .expect_err("expected role resolution to fail hard");
+    let err =
+        resolve_file_roles_with_journal(&[file], Arc::clone(&client), Some(&journal_path), None)
+            .await
+            .expect_err("expected role resolution to fail hard");
     assert!(err.contains("Role resolution failed"));
     assert!(err.contains("HTTP 402"));
     assert_eq!(hits.load(Ordering::SeqCst), 1);
+    let summary = crate::review_journal::summarize(&journal_path).unwrap();
+    assert_eq!(summary.completed_role_units, 0);
+    assert_eq!(summary.retryable_role_units, 1);
+    std::fs::remove_file(journal_path).unwrap();
 }
 
 #[tokio::test]
-async fn role_checkpoint_survives_role_resolution_until_pipeline_cleanup() {
+async fn role_journal_reuses_completed_classification_without_an_api_call() {
     let _role_lock = ROLE_TEST_LOCK
         .get_or_init(|| std::sync::Mutex::new(()))
         .lock()
         .unwrap();
     clear_file_role_cache();
     let body = r#"{"choices":[{"message":{"content":"{\"role\":\"adapter_integration\",\"reason\":\"framework glue\"}"}}]}"#;
-    let (endpoint, _) = spawn_openai_style_server(body);
+    let (endpoint, hits) = spawn_openai_style_server(body);
     let client = Arc::new(LLMClient::new(cfg(&endpoint), Some("test-key".to_string())));
     let file = FileRecord {
         file_path: "reporting.rs".to_string(),
@@ -69,21 +81,36 @@ async fn role_checkpoint_survives_role_resolution_until_pipeline_cleanup() {
         language: "rust".to_string(),
         methods: vec![],
     };
-    let checkpoint_path = std::env::temp_dir().join(format!(
-        "sniff-role-checkpoint-test-{}.json",
+    let journal_path = std::env::temp_dir().join(format!(
+        "sniff-role-journal-test-{}.jsonl",
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos()
     ));
 
-    resolve_file_roles_with_checkpoint(&[file], client, Some(&checkpoint_path))
+    resolve_file_roles_with_journal(
+        std::slice::from_ref(&file),
+        Arc::clone(&client),
+        Some(&journal_path),
+        Some("run-a"),
+    )
+    .await
+    .unwrap();
+    assert!(journal_path.exists());
+    clear_file_role_cache();
+    resolve_file_roles_with_journal(&[file], client, Some(&journal_path), Some("run-b"))
         .await
         .unwrap();
-    assert!(checkpoint_path.exists());
+    assert_eq!(hits.load(Ordering::SeqCst), 1);
+    let summary = crate::review_journal::summarize(&journal_path).unwrap();
+    assert_eq!(summary.expected_role_units, 1);
+    assert_eq!(summary.completed_role_units, 1);
+    assert_eq!(summary.retryable_role_units, 0);
+    assert_eq!(summary.input_tokens, 0);
+    assert_eq!(summary.output_tokens, 0);
 
-    remove_role_checkpoint(&checkpoint_path).unwrap();
-    assert!(!checkpoint_path.exists());
+    std::fs::remove_file(&journal_path).unwrap();
 }
 
 #[test]

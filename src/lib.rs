@@ -13,6 +13,8 @@ pub mod pricing;
 pub mod product_contract;
 pub mod report_types;
 pub mod reporter;
+#[path = "analyzer_journal.rs"]
+pub(crate) mod review_journal;
 pub mod roles;
 pub mod scorer;
 pub mod signal_layers;

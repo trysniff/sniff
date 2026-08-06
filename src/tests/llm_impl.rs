@@ -202,12 +202,16 @@ async fn exhausted_format_repairs_are_included_in_usage_totals() {
     let endpoint = spawn_malformed_batch_usage_server();
     let client = LLMClient::new(cfg(&endpoint), Some("test-key".to_string()));
 
-    client
-        .call_single("review this batch", ResponseSchema::MethodIntentBatchReview)
-        .await
-        .expect_err("malformed batch should exhaust its format repair");
+    let (result, usage) = LLMClient::track_usage(
+        client.call_single("review this batch", ResponseSchema::MethodIntentBatchReview),
+    )
+    .await;
+    result.expect_err("malformed batch should exhaust its format repair");
 
     assert_eq!(client.failed_input_tokens(), 20);
     assert_eq!(client.failed_output_tokens(), 4);
     assert_eq!(client.cached_input_tokens(), 8);
+    assert_eq!(usage.failed_input_tokens, 20);
+    assert_eq!(usage.failed_output_tokens, 4);
+    assert_eq!(usage.cached_input_tokens, 8);
 }
