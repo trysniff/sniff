@@ -234,8 +234,9 @@ simplification.
 
 Parsing, configuration, transport, response validation, incomplete coverage,
 and report-writing failures are fatal. Sniff never emits a partial report as a
-successful result. Completed reviews are checkpointed for safe resume; changed
-source and changed review contracts invalidate stale entries.
+successful result. Every completed review is durably appended to a local journal
+for safe resume; changed source, semantic context, or review contracts invalidate
+stale entries.
 
 Exit codes:
 

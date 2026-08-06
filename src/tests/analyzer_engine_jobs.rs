@@ -1,15 +1,15 @@
 use super::super::Analyzer;
 use super::super::dossier::MethodDossier;
+use super::super::journal::{JournalCompletion, JournalStore, sha256_text};
 use super::{
-    CheckpointEntry, CheckpointStore, ReviewJob, ReviewOutcome, checkpoint_entry_is_reusable,
-    group_pending_reviews, jobs_fingerprint, recoverable_method_review_error,
-    run_bounded_review_tasks, run_bounded_review_tasks_keyed, run_review_jobs,
+    ReviewJob, ReviewOutcome, group_pending_reviews, recoverable_method_review_error,
+    run_bounded_review_tasks, run_bounded_review_tasks_keyed, run_review_jobs, semantic_index_hash,
     unresolved_method_verdict,
 };
 use crate::config::ResolvedConfig;
 use crate::llm::LLMClient;
 use crate::report_types::LLMVerdict;
-use crate::types::{FileRecord, FindingTier, MethodRecord};
+use crate::types::{FindingTier, MethodRecord};
 use std::collections::{HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -47,20 +47,7 @@ fn method_job(source: &str) -> ReviewJob {
     }
 }
 
-fn file_job(source: &str) -> ReviewJob {
-    ReviewJob::File {
-        index: 0,
-        file: FileRecord {
-            file_path: "src/demo.py".to_string(),
-            source: source.to_string(),
-            language: "python".to_string(),
-            methods: vec![],
-        },
-        static_signals: vec![],
-    }
-}
-
-fn temp_checkpoint_path() -> std::path::PathBuf {
+fn temp_journal_path() -> std::path::PathBuf {
     static NEXT_CHECKPOINT: AtomicUsize = AtomicUsize::new(0);
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -68,16 +55,34 @@ fn temp_checkpoint_path() -> std::path::PathBuf {
         .as_nanos();
     let sequence = NEXT_CHECKPOINT.fetch_add(1, Ordering::Relaxed);
     std::env::temp_dir().join(format!(
-        "sniff-checkpoint-{}-{nonce}-{sequence}.json",
+        "sniff-journal-{}-{nonce}-{sequence}.jsonl",
         std::process::id()
     ))
 }
 
+fn record_outcome(
+    store: &mut JournalStore,
+    key: String,
+    outcome: &ReviewOutcome,
+) -> Result<(), String> {
+    store.record(
+        key.clone(),
+        sha256_text(&key),
+        JournalCompletion {
+            verdict: outcome.verdict.clone(),
+            in_tok: outcome.in_tok,
+            out_tok: outcome.out_tok,
+            cached_in_tok: outcome.cached_in_tok,
+            retry_on_resume: outcome.retry_on_resume,
+        },
+    )
+}
+
 #[test]
-fn checkpoint_round_trip_preserves_completed_verdicts() {
-    let path = temp_checkpoint_path();
+fn journal_round_trip_preserves_completed_verdicts() {
+    let path = temp_journal_path();
     let job = method_job("def demo():\n    return 1\n");
-    let key = job.checkpoint_key();
+    let key = job.journal_unit_id();
     let verdict = LLMVerdict {
         verdict_type: "method_review".to_string(),
         file_path: "src/demo.py".to_string(),
@@ -102,10 +107,10 @@ fn checkpoint_round_trip_preserves_completed_verdicts() {
         retry_on_resume: false,
     };
 
-    let mut store = CheckpointStore::load(&path, 77, "context").unwrap();
-    store.record(key.clone(), &outcome).unwrap();
-    let loaded = CheckpointStore::load(&path, 77, "context").unwrap();
-    let entry = loaded.completed.get(&key).expect("checkpoint entry");
+    let mut store = JournalStore::load(&path, 77, "context").unwrap();
+    record_outcome(&mut store, key.clone(), &outcome).unwrap();
+    let loaded = JournalStore::load(&path, 77, "context").unwrap();
+    let entry = loaded.completed.get(&key).expect("journal entry");
     assert_eq!(entry.in_tok, 12);
     assert_eq!(entry.out_tok, 3);
     assert_eq!(entry.cached_in_tok, 2);
@@ -114,12 +119,12 @@ fn checkpoint_round_trip_preserves_completed_verdicts() {
 }
 
 #[tokio::test]
-async fn resumed_checkpoint_restores_cached_input_usage_without_an_api_call() {
-    let path = temp_checkpoint_path();
+async fn resumed_journal_restores_cached_input_usage_without_an_api_call() {
+    let path = temp_journal_path();
     let job = method_job("def demo():\n    return 1\n");
     let context = "review_contract=test\nmodel=test";
-    let fingerprint = jobs_fingerprint(std::slice::from_ref(&job), context);
-    let key = job.checkpoint_key();
+    let semantic_hash = semantic_index_hash(std::slice::from_ref(&job));
+    let key = job.journal_unit_id();
     let outcome = ReviewOutcome {
         index: 0,
         verdict: Some(LLMVerdict {
@@ -142,8 +147,8 @@ async fn resumed_checkpoint_restores_cached_input_usage_without_an_api_call() {
         cached_in_tok: 75,
         retry_on_resume: false,
     };
-    let mut store = CheckpointStore::load(&path, fingerprint, context).unwrap();
-    store.record(key, &outcome).unwrap();
+    let mut store = JournalStore::load(&path, &semantic_hash, context).unwrap();
+    record_outcome(&mut store, key, &outcome).unwrap();
 
     let client = Arc::new(LLMClient::new(ResolvedConfig::default(), None));
     let analyzer = Arc::new(Analyzer {
@@ -157,67 +162,17 @@ async fn resumed_checkpoint_restores_cached_input_usage_without_an_api_call() {
 
     assert_eq!(verdicts.len(), 1);
     assert_eq!(client.cached_input_tokens(), 75);
-    CheckpointStore::load(&path, fingerprint, context)
+    JournalStore::load(&path, &semantic_hash, context)
         .unwrap()
         .remove()
         .unwrap();
 }
 
 #[test]
-fn validation_failure_unresolved_entries_are_retried_on_resume() {
-    let validation_failure = CheckpointEntry {
-        key: "validation".to_string(),
-        verdict: Some(LLMVerdict {
-            verdict_type: "method".to_string(),
-            file_path: "src/demo.py".to_string(),
-            method_name: Some("demo".to_string()),
-            check_type: "method".to_string(),
-            smelly: false,
-            tier: FindingTier::Unresolved,
-            cohesive: None,
-            name_accurate: None,
-            evidence: String::new(),
-            reason: "AI review could not be validated. Missing evidence: malformed batch"
-                .to_string(),
-            loc: 1,
-            start_line: 1,
-            end_line: 1,
-        }),
-        in_tok: 0,
-        out_tok: 0,
-        cached_in_tok: 0,
-        retry_on_resume: None,
-    };
-    let semantic_unresolved = CheckpointEntry {
-        key: "semantic".to_string(),
-        verdict: Some(LLMVerdict {
-            reason:
-                "The method contract could not be established. Missing evidence: external consumers"
-                    .to_string(),
-            ..validation_failure.verdict.clone().unwrap()
-        }),
-        ..validation_failure.clone()
-    };
-    let explicit_retry = CheckpointEntry {
-        retry_on_resume: Some(true),
-        ..semantic_unresolved.clone()
-    };
-    let explicit_complete = CheckpointEntry {
-        retry_on_resume: Some(false),
-        ..validation_failure.clone()
-    };
-
-    assert!(!checkpoint_entry_is_reusable(&validation_failure));
-    assert!(checkpoint_entry_is_reusable(&semantic_unresolved));
-    assert!(!checkpoint_entry_is_reusable(&explicit_retry));
-    assert!(checkpoint_entry_is_reusable(&explicit_complete));
-}
-
-#[test]
 fn changed_scan_fingerprint_does_not_reuse_old_reviews() {
-    let path = temp_checkpoint_path();
+    let path = temp_journal_path();
     let job = method_job("def demo():\n    return 1\n");
-    let key = job.checkpoint_key();
+    let key = job.journal_unit_id();
     let outcome = ReviewOutcome {
         index: 0,
         verdict: None,
@@ -227,96 +182,15 @@ fn changed_scan_fingerprint_does_not_reuse_old_reviews() {
         retry_on_resume: false,
     };
 
-    let mut store = CheckpointStore::load(&path, 77, "context").unwrap();
-    store.record(key, &outcome).unwrap();
-    let changed = CheckpointStore::load(&path, 78, "changed-context").unwrap();
+    let mut store = JournalStore::load(&path, 77, "context").unwrap();
+    record_outcome(&mut store, key, &outcome).unwrap();
+    let changed = JournalStore::load(&path, 78, "changed-context").unwrap();
     assert!(changed.completed.is_empty());
     changed.remove().unwrap();
 }
 
 #[test]
-fn same_context_reuses_completed_entries_when_job_fingerprint_changes() {
-    let path = temp_checkpoint_path();
-    let job = method_job("def demo():\n    return 1\n");
-    let key = job.checkpoint_key();
-    let outcome = ReviewOutcome {
-        index: 0,
-        verdict: None,
-        in_tok: 1,
-        out_tok: 1,
-        cached_in_tok: 0,
-        retry_on_resume: false,
-    };
-
-    let mut store = CheckpointStore::load(&path, 77, "context").unwrap();
-    store.record(key.clone(), &outcome).unwrap();
-    let loaded = CheckpointStore::load(&path, 78, "context").unwrap();
-    assert!(loaded.completed.contains_key(&key));
-    loaded.remove().unwrap();
-}
-
-#[test]
-fn binary_version_change_reuses_the_same_semantic_checkpoint() {
-    let path = temp_checkpoint_path();
-    let job = method_job("def demo():\n    return 1\n");
-    let key = job.checkpoint_key();
-    let outcome = ReviewOutcome {
-        index: 0,
-        verdict: None,
-        in_tok: 1,
-        out_tok: 1,
-        cached_in_tok: 0,
-        retry_on_resume: false,
-    };
-    let old = "sniff_version=0.1.5\nreview_contract=semantic-method-v28\nmodel=test";
-    let current = "review_contract=semantic-method-v28\nmodel=test";
-
-    let mut store = CheckpointStore::load(&path, 77, old).unwrap();
-    store.record(key.clone(), &outcome).unwrap();
-    let loaded = CheckpointStore::load(&path, 78, current).unwrap();
-
-    assert!(!loaded.migrated_from_previous_contract);
-    assert!(loaded.completed.contains_key(&key));
-    loaded.remove().unwrap();
-}
-
-#[test]
-fn v28_checkpoint_migration_preserves_files_and_drops_v27_method_reviews() {
-    let path = temp_checkpoint_path();
-    let method = method_job("def ordinary():\n    return 1\n");
-    let file = file_job("def ordinary():\n    return 1\n");
-    let method_key = method.checkpoint_key();
-    let file_key = file.checkpoint_key();
-    let outcome = ReviewOutcome {
-        index: 0,
-        verdict: None,
-        in_tok: 1,
-        out_tok: 1,
-        cached_in_tok: 0,
-        retry_on_resume: false,
-    };
-    let v27 = "sniff_version=0.1.5\nreview_contract=semantic-method-v27\nmodel=test";
-    let v28 = "sniff_version=0.1.5\nreview_contract=semantic-method-v28\nmodel=test";
-
-    let mut store = CheckpointStore::load(&path, 77, v27).unwrap();
-    store.record(method_key.clone(), &outcome).unwrap();
-    store.record(file_key.clone(), &outcome).unwrap();
-
-    let mut migrated = CheckpointStore::load(&path, 78, v28).unwrap();
-    assert!(migrated.migrated_from_previous_contract);
-    migrated.migrate_previous_contract(&[method, file]).unwrap();
-    assert!(!migrated.completed.contains_key(&method_key));
-    assert!(migrated.completed.contains_key(&file_key));
-
-    let reloaded = CheckpointStore::load(&path, 78, v28).unwrap();
-    assert!(!reloaded.migrated_from_previous_contract);
-    assert!(!reloaded.completed.contains_key(&method_key));
-    assert!(reloaded.completed.contains_key(&file_key));
-    reloaded.remove().unwrap();
-}
-
-#[test]
-fn checkpoint_fingerprint_is_independent_of_job_order() {
+fn semantic_index_identity_is_independent_of_job_order() {
     let first = vec![
         method_job("def first():\n    return 1\n"),
         method_job("def second():\n    return 2\n"),
@@ -326,10 +200,7 @@ fn checkpoint_fingerprint_is_independent_of_job_order() {
         method_job("def first():\n    return 1\n"),
     ];
 
-    assert_eq!(
-        jobs_fingerprint(&first, "context"),
-        jobs_fingerprint(&second, "context")
-    );
+    assert_eq!(semantic_index_hash(&first), semantic_index_hash(&second));
 }
 
 #[test]
@@ -373,7 +244,7 @@ fn method_batch_size_defaults_and_clamps_to_the_supported_range() {
 }
 
 #[test]
-fn checkpoint_key_ignores_rendered_dossier_order() {
+fn journal_unit_id_ignores_rendered_dossier_order() {
     let mut first = method_job("def demo():\n    return 1\n");
     let mut second = method_job("def demo():\n    return 1\n");
     if let ReviewJob::Method { dossier, .. } = &mut first {
@@ -383,11 +254,11 @@ fn checkpoint_key_ignores_rendered_dossier_order() {
         dossier.context = "callers:\n- second\n- first".to_string();
     }
 
-    assert_eq!(first.checkpoint_key(), second.checkpoint_key());
+    assert_eq!(first.journal_unit_id(), second.journal_unit_id());
 }
 
 #[test]
-fn checkpoint_key_canonicalizes_unordered_method_context() {
+fn journal_unit_id_canonicalizes_unordered_method_context() {
     let mut first = method_job("def demo():\n    return 1\n");
     let mut second = method_job("def demo():\n    return 1\n");
     if let ReviewJob::Method {
@@ -435,28 +306,7 @@ fn checkpoint_key_canonicalizes_unordered_method_context() {
         dossier.boundary_requirements = vec!["a boundary".to_string(), "z boundary".to_string()];
     }
 
-    assert_eq!(first.checkpoint_key(), second.checkpoint_key());
-}
-
-#[test]
-fn legacy_indexed_checkpoint_keys_are_migrated() {
-    let path = temp_checkpoint_path();
-    let key = method_job("def demo():\n    return 1\n").checkpoint_key();
-    let contents = serde_json::json!({
-        "version": 1,
-        "fingerprint": 76,
-        "completed": [{
-            "key": format!("0:{key}"),
-            "verdict": null,
-            "in_tok": 1,
-            "out_tok": 1
-        }]
-    });
-    std::fs::write(&path, serde_json::to_string(&contents).unwrap()).unwrap();
-
-    let loaded = CheckpointStore::load(&path, 77, "context").unwrap();
-    assert!(loaded.completed.contains_key(&key));
-    loaded.remove().unwrap();
+    assert_eq!(first.journal_unit_id(), second.journal_unit_id());
 }
 
 #[test]
@@ -577,9 +427,9 @@ async fn keyed_review_tasks_serialize_shared_files_but_overlap_distinct_files() 
 }
 
 #[tokio::test]
-async fn bounded_review_tasks_checkpoint_completed_work_before_a_failure() {
-    let path = temp_checkpoint_path();
-    let mut checkpoint = CheckpointStore::load(&path, 77, "context").unwrap();
+async fn bounded_review_tasks_journal_completed_work_before_a_failure() {
+    let path = temp_journal_path();
+    let mut journal = JournalStore::load(&path, 77, "context").unwrap();
     let pending = VecDeque::from([0usize, 1, 2]);
 
     let error = run_bounded_review_tasks(
@@ -610,16 +460,16 @@ async fn bounded_review_tasks_checkpoint_completed_work_before_a_failure() {
                 cached_in_tok: 0,
                 retry_on_resume: false,
             };
-            checkpoint.record(format!("method-{index}"), &outcome)
+            record_outcome(&mut journal, format!("method-{index}"), &outcome)
         },
     )
     .await
     .unwrap_err();
 
     assert_eq!(error, "provider failed");
-    let loaded = CheckpointStore::load(&path, 77, "context").unwrap();
+    let loaded = JournalStore::load(&path, 77, "context").unwrap();
     assert!(loaded.completed.contains_key("method-0"));
     assert!(!loaded.completed.contains_key("method-1"));
-    assert!(!loaded.completed.contains_key("method-2"));
+    assert!(loaded.completed.contains_key("method-2"));
     loaded.remove().unwrap();
 }

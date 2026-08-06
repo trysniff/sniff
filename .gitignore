@@ -18,6 +18,8 @@ sniff-report*.md
 .sniff-checkpoint.json.tmp
 .sniff-checkpoint-*.json
 .sniff-checkpoint-*.json.tmp
+.sniff-journal.jsonl
+.sniff-journal-*.jsonl
 .sniff-role-checkpoint.json
 .sniff-role-checkpoint.json.tmp
 .sniff-role-checkpoint-*.json

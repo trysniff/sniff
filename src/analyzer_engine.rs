@@ -27,6 +27,8 @@ use support::review_key;
 mod dossier;
 #[path = "analyzer_engine_jobs.rs"]
 mod jobs;
+#[path = "analyzer_journal.rs"]
+mod journal;
 #[path = "analyzer_signal_maps.rs"]
 mod signal_maps;
 
@@ -42,7 +44,7 @@ pub struct AnalysisRun<'a> {
     pub static_flags: &'a [StaticFlag],
     pub with_file_reviews: bool,
     pub graph: Option<&'a crate::symbol_graph::SymbolGraph>,
-    pub checkpoint_path: Option<&'a std::path::Path>,
+    pub journal_path: Option<&'a std::path::Path>,
 }
 
 impl Analyzer {
@@ -123,7 +125,7 @@ pub async fn analyze_with_client_and_graph(
     on_progress: Option<ReviewProgressCallback>,
     graph: Option<&crate::symbol_graph::SymbolGraph>,
 ) -> Result<(Vec<LLMVerdict>, usize, usize), String> {
-    analyze_with_client_and_graph_and_checkpoint(
+    analyze_with_client_and_graph_and_journal(
         file_records,
         static_flags,
         client,
@@ -135,23 +137,23 @@ pub async fn analyze_with_client_and_graph(
     .await
 }
 
-pub async fn analyze_with_client_and_graph_and_checkpoint(
+pub async fn analyze_with_client_and_graph_and_journal(
     file_records: &[FileRecord],
     static_flags: &[StaticFlag],
     client: Arc<LLMClient>,
     with_file_reviews: bool,
     on_progress: Option<ReviewProgressCallback>,
     graph: Option<&crate::symbol_graph::SymbolGraph>,
-    checkpoint_path: Option<&std::path::Path>,
+    journal_path: Option<&std::path::Path>,
 ) -> Result<(Vec<LLMVerdict>, usize, usize), String> {
-    analyze_with_client_and_graph_and_checkpoint_with_context(
+    analyze_with_client_and_graph_and_journal_with_context(
         AnalysisRun {
             file_records,
             context_file_records: file_records,
             static_flags,
             with_file_reviews,
             graph,
-            checkpoint_path,
+            journal_path,
         },
         client,
         on_progress,
@@ -159,7 +161,7 @@ pub async fn analyze_with_client_and_graph_and_checkpoint(
     .await
 }
 
-pub async fn analyze_with_client_and_graph_and_checkpoint_with_context(
+pub async fn analyze_with_client_and_graph_and_journal_with_context(
     run: AnalysisRun<'_>,
     client: Arc<LLMClient>,
     on_progress: Option<ReviewProgressCallback>,
@@ -170,7 +172,7 @@ pub async fn analyze_with_client_and_graph_and_checkpoint_with_context(
         static_flags,
         with_file_reviews,
         graph,
-        checkpoint_path,
+        journal_path,
     } = run;
     let analyzer = Arc::new(Analyzer {
         llm_client: client,
@@ -239,7 +241,7 @@ pub async fn analyze_with_client_and_graph_and_checkpoint_with_context(
         jobs,
         on_progress,
         &review_context_key,
-        checkpoint_path,
+        journal_path,
     )
     .await?;
 

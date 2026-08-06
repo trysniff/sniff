@@ -14,6 +14,6 @@ mod core;
 
 pub use core::{
     AnalysisRun, Analyzer, analyze, analyze_with_client, analyze_with_client_and_graph,
-    analyze_with_client_and_graph_and_checkpoint,
-    analyze_with_client_and_graph_and_checkpoint_with_context,
+    analyze_with_client_and_graph_and_journal,
+    analyze_with_client_and_graph_and_journal_with_context,
 };
