@@ -238,7 +238,7 @@ mod tests {
             serde_json::json!({
                 "smelly": true,
                 "tier": "slop",
-                "pattern": "intent_hidden",
+                "pattern": "contract_fog",
                 "evidence": [{"start_line": 1, "end_line": 1, "quote": "return value"}]
             }),
             serde_json::json!({
@@ -259,18 +259,18 @@ mod tests {
             serde_json::json!({
                 "smelly": true,
                 "tier": "slop",
-                "pattern": "intent_hidden",
+                "pattern": "contract_fog",
                 "evidence": [{"start_line": 1, "end_line": 1, "quote": "return value"}]
             }),
             serde_json::json!({
                 "smelly": true,
                 "tier": "slop",
-                "pattern": "intent_hidden",
+                "pattern": "contract_fog",
                 "evidence": [{"start_line": 2, "end_line": 2, "quote": "return helper(value)"}]
             }),
         ];
 
         let result = pick_semantic_consensus(votes).unwrap().unwrap();
-        assert_eq!(semantic_consensus_key(&result), "slop|intent_hidden");
+        assert_eq!(semantic_consensus_key(&result), "slop|contract_fog");
     }
 }

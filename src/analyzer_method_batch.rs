@@ -60,7 +60,7 @@ fn semantic_batch_output_contract(count: usize) -> String {
     format!(
         "Output contract (strict): return one JSON object with a `reviews` array of exactly {count} objects. Expected method_key values, in order: [{}]. Every object must contain all of: method_key, tier, pattern, intent, reason, necessity_check, contract_status, contract_impact, dependency_impact, simplification, change_scope, behavior_status, missing_evidence, evidence.\n\
 `tier` must be exactly `slop`, `kinda_slop`, `clean`, or `unresolved`.\n\
-`pattern` must be exactly `intent_hidden`, `duplicated_decision_paths`, `ceremonial_logic`, `speculative_defense`, `needless_indirection`, `difficult_state_transition`, `semantic_mismatch`, `unnecessarily_complicated`, `dead_code`, or `none`. Use `dead_code` only for whole-method deletion backed by the supplied closed-world private-unused proof.\n\
+`pattern` must be exactly one of Sniff's typed patterns: {}, or `none`. Use `residual_machinery` for whole-method deletion only when backed by the supplied closed-world private-unused proof. Use `other` only for an exact evidenced mechanism that fits no named pattern.\n\
 `contract_status` must be exactly `required`, `unnecessary`, or `unknown`; never use `necessary`.\n\
 `behavior_status` must be exactly `preserved` or `unknown`.\n\
 `change_scope` must be exactly `none`, `local`, `signature`, or `whole_method`.\n\
@@ -69,7 +69,8 @@ For Unresolved: tier=`unresolved`, pattern=`none`, contract_status=`unknown`, be
 For Slop or Kinda Slop: contract_status=`unnecessary`, behavior_status=`preserved`, missing_evidence=[], and include a precise simplification plus one or more evidence objects. Use change_scope=`local` for internal statement changes, `signature` for callable-contract changes, and `whole_method` only for deletion. Scope these fields to the exact cited machinery. If that local machinery is proven unnecessary, a separate uncertain construct does not veto the narrow finding and must remain unchanged. Never call deletion of an exported/public method behavior-preserving when external consumers are not resolvable.\n\
 Every evidence object must contain start_line, end_line, and quote; quote must be an exact substring of only that method's unprefixed source. Tier is the sole verdict field. Before responding, verify that the array has exactly {count} entries and every expected key appears once.\n\
 Every prose field must be one precise sentence of at most 28 words. Do not repeat the same proof across reason, necessity_check, contract_impact, and dependency_impact; each field must contribute only its named fact. Keep simplification imperative and concise.",
-        expected_method_keys(count)
+        expected_method_keys(count),
+        crate::product_contract::SLOP_PATTERN_PROMPT_LIST,
     )
 }
 
@@ -447,7 +448,7 @@ async fn call_intent_batch(
 fn invalid_semantic_review(label: &str, repair: &str) -> SemanticMethodReview {
     SemanticMethodReview {
         tier: crate::types::FindingTier::Unresolved,
-        pattern: "none".to_string(),
+        pattern: crate::product_contract::SlopPattern::None,
         intent: "The semantic review could not be validated.".to_string(),
         reason: "AI review could not be validated.".to_string(),
         evidence: Vec::new(),

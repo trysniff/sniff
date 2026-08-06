@@ -141,16 +141,19 @@ fn semantic_review_requires_concrete_pattern_and_exact_evidence() {
 
     let review = parse_semantic_method_review(&result, source, 10, 12).unwrap();
     assert_eq!(review.tier, FindingTier::Slop);
-    assert_eq!(review.pattern, "ceremonial_logic");
+    assert_eq!(
+        review.pattern,
+        crate::product_contract::SlopPattern::CeremonialLogic
+    );
     assert_eq!(review.evidence.len(), 1);
 }
 
 #[test]
-fn semantic_review_accepts_closed_world_dead_code_pattern() {
+fn semantic_review_accepts_closed_world_residual_machinery_pattern() {
     let source = "def _stale():\n    return legacy_helper()\n";
     let result = serde_json::json!({
         "tier": "slop",
-        "pattern": "dead_code",
+        "pattern": "residual_machinery",
         "intent": "Expose a private legacy helper.",
         "reason": "The unused helper adds misleading conceptual machinery.",
         "necessity_check": "The closed repository dossier proves the method has no consumer or boundary role.",
@@ -171,7 +174,10 @@ fn semantic_review_accepts_closed_world_dead_code_pattern() {
     let review = parse_semantic_method_review(&result, source, 1, 2).unwrap();
 
     assert_eq!(review.tier, FindingTier::Slop);
-    assert_eq!(review.pattern, "dead_code");
+    assert_eq!(
+        review.pattern,
+        crate::product_contract::SlopPattern::ResidualMachinery
+    );
     assert_eq!(review.change_scope, "whole_method");
 }
 
@@ -181,7 +187,7 @@ fn semantic_finding_rejects_placeholder_contract_and_dependency_proof() {
         "def choose(enabled, value):\n    if enabled:\n        return value\n    return value\n";
     let result = serde_json::json!({
         "tier": "slop",
-        "pattern": "duplicated_decision_paths",
+        "pattern": "duplicated_semantics",
         "intent": "Return the supplied value.",
         "reason": "Both paths return the same value.",
         "necessity_check": "The branch has no distinct behavior.",
@@ -238,7 +244,7 @@ fn local_scope_rejects_a_hidden_signature_change() {
         "def choose(enabled, value):\n    if enabled:\n        return value\n    return value\n";
     let result = serde_json::json!({
         "tier": "slop",
-        "pattern": "duplicated_decision_paths",
+        "pattern": "duplicated_semantics",
         "intent": "Return the supplied value.",
         "reason": "Both paths return the same value.",
         "necessity_check": "The branch has no distinct behavior.",
@@ -431,7 +437,7 @@ fn semantic_review_rejects_evidence_that_is_not_in_the_method() {
     let result = serde_json::json!({
         "smelly": true,
         "tier": "slop",
-        "pattern": "intent_hidden",
+        "pattern": "contract_fog",
         "intent": "Return the value.",
         "reason": "The implementation hides a direct operation.",
         "necessity_check": "No extra machinery is required.",

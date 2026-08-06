@@ -27,7 +27,7 @@ fn review_context_key_versions_the_semantic_contract_not_the_binary() {
     let context = client.review_context_key();
 
     assert!(!context.contains("sniff_version="));
-    assert!(context.contains("review_contract=semantic-method-v27"));
+    assert!(context.contains("review_contract=semantic-method-v28"));
     assert!(context.contains("model=test-model"));
     assert!(context.contains("endpoint=https://example.invalid/v1"));
 }

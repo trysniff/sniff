@@ -71,7 +71,7 @@ pub(super) fn build_payload(
     (payload, headers)
 }
 
-pub(super) fn schema_description(schema: ResponseSchema) -> &'static str {
+pub(super) fn schema_description(schema: ResponseSchema) -> String {
     super::llm_schema::schema_description(schema)
 }
 

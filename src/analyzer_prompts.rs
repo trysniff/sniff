@@ -64,7 +64,7 @@ Validation of untrusted model/API data, schema consistency, parser invariants, e
 Scope a finding to the exact cited machinery, not automatically to the entire method. If one construct is proven unnecessary while a separate construct remains contractually uncertain, report only the proven construct and leave the uncertain construct unchanged; do not turn supported local evidence into Unresolved merely because a broader refactor is unproven. The simplification and contract proof must be equally narrow.\n\n\
 For Python methods, adjudicate the accepted signature and an explicit `_ = (...)` parameter-discard statement separately. A verified or uncertain compatibility signature may remain unchanged while the no-op tuple expression is removable ceremony because Python does not require unused parameters to be consumed. Removing only that expression preserves the signature and behavior and is at most Kinda Slop unless stronger evidence proves the signature itself stale.\n\n\
 Ask whether a human must perform unnecessary mental work to understand the method: hidden intent, duplicated decisions, ceremonial steps, speculative defenses, needless indirection, difficult state transitions, misleading semantics, or an unnecessarily complicated simple job. Look for concrete source evidence, not vibes or generic quality concerns.\n\n\
-    Allowed patterns are: intent_hidden, duplicated_decision_paths, ceremonial_logic, speculative_defense, needless_indirection, difficult_state_transition, semantic_mismatch, unnecessarily_complicated, and dead_code. Use `dead_code` only for a complete repository-private method whose closed-world dossier proves no caller, test, export, registration, callback, compatibility path, protocol role, or external consumer. Use pattern `none` for clean. Evidence line numbers are absolute file line numbers from {} through {}. The method source below is prefixed with line numbers for navigation; do not include the prefix or separator in a quote. Every quote must be an exact substring of the unprefixed method source. Use `slop` when the unnecessary machinery is clearly removable without changing intended behavior, such as identical branches, a no-op condition, duplicated decision paths, or an abstraction with no semantic effect. Use `kinda_slop` only when proven unnecessary friction is local or minor.\n\n\
+    Allowed patterns are: residual_machinery, duplicated_semantics, parallel_reinvention, ceremonial_logic, needless_indirection, speculative_defense, band_aid_control_flow, contract_fog, test_mirroring, test_subversion, fictional_integration, abandoned_compatibility, responsibility_fragmentation, misleading_completion, unnecessary_state_complexity, and other. Use `residual_machinery` for a complete repository-private method only when its closed-world dossier proves no caller, test, export, registration, callback, compatibility path, protocol role, or external consumer. Use `other` only when the exact evidenced mechanism does not fit another pattern and describe that mechanism precisely in reason. Use pattern `none` for clean or unresolved. Evidence line numbers are absolute file line numbers from {} through {}. The method source below is prefixed with line numbers for navigation; do not include the prefix or separator in a quote. Every quote must be an exact substring of the unprefixed method source. Use `slop` when the unnecessary machinery is clearly removable without changing intended behavior, such as identical branches, a no-op condition, duplicated semantics, or an abstraction with no semantic effect. Use `kinda_slop` only when proven unnecessary friction is local or minor.\n\n\
     For `slop` or `kinda_slop`, require `contract_status`=`unnecessary`, `behavior_status`=`preserved`, a precise simplification, and exact evidence. The `necessity_check` must explain why the public/protocol contract remains unchanged and why no caller, test, adapter, callback, re-export, or compatibility path depends on the current machinery. If the dossier cannot establish those facts, return `unresolved` and list the missing evidence.\n\n\
 Set `change_scope` to `local` when only statements inside the method change, `signature` when its callable contract changes, and `whole_method` only when the entire method is removed. Use `none` for Clean or Unresolved. Never call deletion of an exported/public method behavior-preserving when external consumers are not resolvable.\n\n\
 Method: {} ({} LOC)\n\n\
@@ -125,3 +125,19 @@ ONLY as JSON:\n\
   \"name_accurate\": true | false,\n\
   \"reason\": \"specific file-level conceptual friction\"\n\
 }}";
+
+#[cfg(test)]
+mod tests {
+    use super::METHOD_ADVERSARIAL_REVIEW_PROMPT;
+
+    #[test]
+    fn adversarial_prompt_exposes_the_typed_ontology() {
+        for pattern in crate::product_contract::SlopPattern::FINDING_PATTERNS {
+            assert!(
+                METHOD_ADVERSARIAL_REVIEW_PROMPT.contains(pattern.as_str()),
+                "missing typed slop pattern {}",
+                pattern.as_str()
+            );
+        }
+    }
+}

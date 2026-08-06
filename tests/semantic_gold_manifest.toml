@@ -305,7 +305,7 @@ language = "python"
 path = "tests/semantic_gold_fixtures/python/intent_contracts.py"
 method = "choose_payload"
 tier = "slop"
-pattern = "duplicated_decision_paths"
+pattern = "duplicated_semantics"
 evidence = "if enabled:"
 explanation = "Both branches return the identical value, so the decision path has no contract purpose and can be replaced by a direct return."
 

@@ -222,7 +222,7 @@ fn all_three_batch_passes_share_the_complete_evidence_prefix() {
         .iter()
         .map(|item| SemanticMethodReview {
             tier: crate::types::FindingTier::Clean,
-            pattern: "none".to_string(),
+            pattern: crate::product_contract::SlopPattern::None,
             intent: format!("Return the value from {}.", item.method.name),
             reason: "The implementation directly fulfills its purpose.".to_string(),
             evidence: Vec::new(),

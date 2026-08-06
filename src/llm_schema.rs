@@ -1,29 +1,41 @@
 use super::ResponseSchema;
+use crate::product_contract::{SLOP_PATTERN_PROMPT_LIST, SlopPattern};
 
-pub(super) fn schema_description(schema: ResponseSchema) -> &'static str {
+pub(super) fn schema_description(schema: ResponseSchema) -> String {
     match schema {
         ResponseSchema::MethodReview => {
             "Required fields: smelly (bool), tier (string), evidence (string), reason (string)."
+                .to_string()
         }
         ResponseSchema::MethodIntentReview => {
             "Required fields: intent (string), contract_status (string), necessity_check (string), missing_evidence (array of strings). This pass describes intent and contract only; it must not assign a slop tier."
+                .to_string()
         }
         ResponseSchema::MethodIntentBatchReview => {
             "Required root field: reviews (array). Every review requires method_key (string), intent (string), contract_status (string), necessity_check (string), and missing_evidence (array of strings). Return exactly one review for every requested method key."
+                .to_string()
         }
         ResponseSchema::SemanticMethodReview => {
-            "Required fields: tier (string), pattern (string), intent (string), reason (string), necessity_check (string), contract_status (string), contract_impact (string), dependency_impact (string), simplification (string), change_scope (string), behavior_status (string), missing_evidence (array of strings), evidence (array of objects with start_line (number), end_line (number), quote (string)). Allowed tiers are slop, kinda_slop, clean, unresolved. Tier is the sole verdict field. change_scope must be none for clean/unresolved and local, signature, or whole_method for slop/kinda_slop. Slop and kinda_slop must prove contract_status=unnecessary, behavior_status=preserved, unchanged contract impact, absent dependency impact, and provide a concrete simplification plus evidence. Unresolved must list missing_evidence."
+            format!(
+                "Required fields: tier (string), pattern (string), intent (string), reason (string), necessity_check (string), contract_status (string), contract_impact (string), dependency_impact (string), simplification (string), change_scope (string), behavior_status (string), missing_evidence (array of strings), evidence (array of objects with start_line (number), end_line (number), quote (string)). Allowed tiers are slop, kinda_slop, clean, unresolved. Allowed finding patterns are {SLOP_PATTERN_PROMPT_LIST}; use none for clean or unresolved. Tier is the sole verdict field. change_scope must be none for clean/unresolved and local, signature, or whole_method for slop/kinda_slop. Slop and kinda_slop must prove contract_status=unnecessary, behavior_status=preserved, unchanged contract impact, absent dependency impact, and provide a concrete simplification plus evidence. Unresolved must list missing_evidence."
+            )
         }
         ResponseSchema::SemanticMethodBatchReview => {
-            "Required root field: reviews (array). Every review requires method_key (string), tier, pattern, intent, reason, necessity_check, contract_status, contract_impact, dependency_impact, simplification, change_scope, behavior_status, missing_evidence, and semantic evidence. Return exactly one independent review for every requested method key."
+            format!(
+                "Required root field: reviews (array). Every review requires method_key (string), tier, pattern, intent, reason, necessity_check, contract_status, contract_impact, dependency_impact, simplification, change_scope, behavior_status, missing_evidence, and semantic evidence. Allowed finding patterns are {SLOP_PATTERN_PROMPT_LIST}; use none for clean or unresolved. Return exactly one independent review for every requested method key."
+            )
         }
         ResponseSchema::ScopedTierReview => {
             "Required fields: tier (string) and reason (string). Allowed tiers are slop, kinda_slop, clean, or unresolved."
+                .to_string()
         }
         ResponseSchema::FileReview => {
             "Required fields: smelly (bool), tier (string), evidence (string), cohesive (bool), name_accurate (bool), reason (string). Allowed tiers are slop, kinda_slop, clean, unresolved; unresolved means the file-level evidence is insufficient and must use smelly=false."
+                .to_string()
         }
-        ResponseSchema::RoleClassification => "Required fields: role (string), reason (string).",
+        ResponseSchema::RoleClassification => {
+            "Required fields: role (string), reason (string).".to_string()
+        }
     }
 }
 
@@ -140,6 +152,11 @@ pub(super) fn validate_schema(
     ) {
         check_string(obj, "tier", missing, wrong_type);
         check_string(obj, "pattern", missing, wrong_type);
+        if let Some(pattern) = obj.get("pattern").and_then(serde_json::Value::as_str)
+            && SlopPattern::parse(pattern).is_none()
+        {
+            wrong_type.push("pattern (unknown value)".to_string());
+        }
         check_string(obj, "intent", missing, wrong_type);
         check_string(obj, "reason", missing, wrong_type);
         check_string(obj, "necessity_check", missing, wrong_type);
@@ -222,7 +239,7 @@ pub(super) fn validate_schema(
 
 #[cfg(test)]
 mod tests {
-    use super::{ResponseSchema, validate_schema};
+    use super::{ResponseSchema, schema_description, validate_schema};
 
     #[test]
     fn clean_semantic_review_may_omit_its_explanation() {
@@ -286,5 +303,37 @@ mod tests {
         });
 
         assert!(validate_schema(&value, ResponseSchema::SemanticMethodBatchReview).is_ok());
+    }
+
+    #[test]
+    fn semantic_schema_rejects_untyped_pattern_values() {
+        let value = serde_json::json!({
+            "tier": "slop",
+            "pattern": "vague_vibes",
+            "intent": "Return a configured value.",
+            "reason": "The implementation adds unsupported ceremony.",
+            "necessity_check": "The ceremony has no contract purpose.",
+            "contract_status": "unnecessary",
+            "contract_impact": "The contract remains unchanged.",
+            "dependency_impact": "No dependency uses the ceremony.",
+            "simplification": "Remove the ceremony.",
+            "change_scope": "local",
+            "behavior_status": "preserved",
+            "missing_evidence": [],
+            "evidence": [{"start_line": 1, "end_line": 1, "quote": "noop();"}]
+        });
+
+        let error = validate_schema(&value, ResponseSchema::SemanticMethodReview).unwrap_err();
+        assert!(error.contains("pattern (unknown value)"));
+    }
+
+    #[test]
+    fn semantic_schema_description_uses_the_canonical_ontology() {
+        let description = schema_description(ResponseSchema::SemanticMethodReview);
+        for pattern in crate::product_contract::SlopPattern::FINDING_PATTERNS {
+            assert!(description.contains(pattern.as_str()));
+        }
+        assert!(!description.contains("intent_hidden"));
+        assert!(!description.contains("dead_code"));
     }
 }
