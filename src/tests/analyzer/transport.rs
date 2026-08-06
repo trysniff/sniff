@@ -973,8 +973,12 @@ async fn interrupted_method_reviews_resume_from_journal() {
         .iter()
         .map(|entry| entry["cached_in_tok"].as_u64().unwrap())
         .sum::<u64>();
+    let completed_methods = completed
+        .iter()
+        .filter(|entry| !entry["is_manifest"].as_bool().unwrap_or(false))
+        .collect::<Vec<_>>();
     assert!(completed.iter().all(|entry| entry["status"] == "completed"));
-    assert!(completed.iter().all(|entry| {
+    assert!(completed_methods.iter().all(|entry| {
         entry["source_hash"]
             .as_str()
             .is_some_and(|hash| hash.len() == 64)
@@ -1010,7 +1014,7 @@ async fn interrupted_method_reviews_resume_from_journal() {
     }
 
     let (verdicts, input_tokens, output_tokens) = resumed.expect("the resumed run should complete");
-    assert_eq!(completed.len(), 4);
+    assert_eq!(completed_methods.len(), 4);
     assert_eq!(journal_input_tokens, 310);
     assert_eq!(journal_output_tokens, 34);
     assert_eq!(journal_cached_input_tokens, 54);
@@ -1021,6 +1025,117 @@ async fn interrupted_method_reviews_resume_from_journal() {
     assert_eq!(hit_count, 6);
     assert!(journal_exists_after_resume);
     std::fs::remove_file(journal).ok();
+}
+
+#[tokio::test]
+async fn batch_completion_is_fsynced_before_a_later_item_fails() {
+    let body = r#"{"choices":[{"message":{"content":"{}"}}]}"#;
+    let (endpoint, _) = spawn_openai_style_server_with_clean_batches(body);
+    let client = Arc::new(LLMClient::new(cfg(&endpoint), Some("test-key".to_string())));
+    let analyzer = Analyzer {
+        llm_client: Arc::clone(&client),
+        in_tok: AtomicUsize::new(0),
+        out_tok: AtomicUsize::new(0),
+    };
+    let source = "def first():\n    return 1\n\ndef second():\n    return 2\n";
+    let full_file: Arc<str> = Arc::from(source);
+    let item = |name: &str, start_line: usize, value: usize| {
+        super::super::method_batch_review::BatchMethodReview {
+            method: MethodRecord {
+                name: name.to_string(),
+                file_path: "sample.py".to_string(),
+                source: format!("def {name}():\n    return {value}\n"),
+                loc: 2,
+                param_count: 0,
+                start_line,
+                end_line: start_line + 1,
+                is_exported: true,
+                language: "python".to_string(),
+                nesting_depth: 0,
+                references: vec![],
+                real_ref_count: 0,
+            },
+            static_signals: vec![],
+            full_file: Arc::clone(&full_file),
+            file_context: "Method dossier:\n- repository evidence: none".to_string(),
+            project_root: Box::new(std::path::PathBuf::from(".")),
+            callee_context: vec![],
+            boundary_requirements: vec![],
+            repository_private_unused_candidate: false,
+            stale_discard_signature_proof: None,
+        }
+    };
+    let items = vec![item("first", 1, 1), item("second", 4, 2)];
+    let journal_path = std::env::temp_dir().join(format!(
+        "sniff-batch-item-persistence-{}.jsonl",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let journal = Arc::new(Mutex::new(
+        crate::review_journal::JournalStore::load_for_scan(
+            &journal_path,
+            "batch-run",
+            crate::review_journal::JournalStage::Method,
+            "semantic-index",
+            &client.review_context_key(),
+            2,
+        )
+        .unwrap(),
+    ));
+    let usage_journal = Arc::clone(&journal);
+    let usage_callback: super::super::method_batch_review::BatchUsageCallback =
+        Arc::new(move |usage| {
+            usage_journal.lock().unwrap().record_usage(
+                usage.in_tok,
+                usage.out_tok,
+                usage.cached_in_tok,
+            )
+        });
+    let completion_journal = Arc::clone(&journal);
+    let completion_sources = items
+        .iter()
+        .map(|item| crate::review_journal::sha256_text(&item.method.source))
+        .collect::<Vec<_>>();
+    let completion_callback: super::super::method_batch_review::BatchCompletionCallback =
+        Arc::new(move |index, verdict| {
+            if index == 1 {
+                return Err("injected interruption after the first completed item".to_string());
+            }
+            completion_journal.lock().unwrap().record(
+                format!("method-{index}"),
+                completion_sources[index].clone(),
+                crate::review_journal::JournalCompletion {
+                    verdict: Some(verdict.clone()),
+                    in_tok: 0,
+                    out_tok: 0,
+                    cached_in_tok: 0,
+                    retry_on_resume: false,
+                },
+            )
+        });
+
+    let error = analyzer
+        .analyze_method_review_batch(
+            &items,
+            None,
+            Some(&usage_callback),
+            Some(&completion_callback),
+        )
+        .await
+        .expect_err("the injected second-item interruption should stop the batch");
+
+    assert!(error.contains("injected interruption"), "{error}");
+    let summary = crate::review_journal::summarize(&journal_path).unwrap();
+    assert_eq!(summary.completed_units, 1);
+    assert_eq!(summary.expected_units, 2);
+    assert!(summary.input_tokens > 0);
+    let contents = std::fs::read_to_string(&journal_path).unwrap();
+    assert!(contents.contains("\"unit_id\":\"method-0\""));
+    assert!(!contents.contains("\"unit_id\":\"method-1\""));
+    drop(journal);
+    std::fs::remove_file(journal_path).unwrap();
 }
 
 #[tokio::test]

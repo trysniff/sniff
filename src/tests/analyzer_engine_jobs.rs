@@ -105,6 +105,7 @@ fn journal_round_trip_preserves_completed_verdicts() {
         out_tok: 3,
         cached_in_tok: 2,
         retry_on_resume: false,
+        persisted: false,
     };
 
     let mut store = JournalStore::load(&path, 77, "context").unwrap();
@@ -146,6 +147,7 @@ async fn resumed_journal_restores_cached_input_usage_without_an_api_call() {
         out_tok: 10,
         cached_in_tok: 75,
         retry_on_resume: false,
+        persisted: false,
     };
     let mut store = JournalStore::load(&path, &semantic_hash, context).unwrap();
     record_outcome(&mut store, key, &outcome).unwrap();
@@ -196,6 +198,7 @@ async fn cross_scan_content_cache_records_zero_cost_coverage_without_an_api_call
         out_tok: 10,
         cached_in_tok: 75,
         retry_on_resume: false,
+        persisted: false,
     };
     let mut store = JournalStore::load_for_scan(
         &path,
@@ -282,6 +285,7 @@ fn changed_scan_fingerprint_does_not_reuse_old_reviews() {
         out_tok: 1,
         cached_in_tok: 0,
         retry_on_resume: false,
+        persisted: false,
     };
 
     let mut store = JournalStore::load(&path, 77, "context").unwrap();
@@ -604,6 +608,7 @@ async fn bounded_review_tasks_journal_completed_work_before_a_failure() {
                 out_tok: 1,
                 cached_in_tok: 0,
                 retry_on_resume: false,
+                persisted: false,
             };
             record_outcome(&mut journal, format!("method-{index}"), &outcome)
         },

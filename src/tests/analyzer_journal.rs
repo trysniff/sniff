@@ -334,3 +334,31 @@ fn unchanged_unit_is_available_as_a_cross_scan_content_cache_hit() {
     assert!(!second.is_current_scan(cached));
     second.remove().unwrap();
 }
+
+#[test]
+fn usage_events_count_cost_without_counting_as_completed_units() {
+    let path = temp_journal_path();
+    let context =
+        "review_contract=semantic-method-v28\nmodel=test\nendpoint=https://example.invalid";
+    let mut store = JournalStore::load_for_scan(
+        &path,
+        "run-a",
+        JournalStage::Method,
+        "semantic-index",
+        context,
+        2,
+    )
+    .unwrap();
+
+    store.record_usage(100, 10, 40).unwrap();
+
+    let summary = summarize(&path).unwrap();
+    assert_eq!(summary.completed_units, 0);
+    assert_eq!(summary.expected_units, 2);
+    assert_eq!(summary.input_tokens, 100);
+    assert_eq!(summary.cached_input_tokens, 40);
+    assert_eq!(summary.output_tokens, 10);
+    assert_eq!(store.completed.len(), 0);
+    assert!((store.spent_usd() - summary.estimated_cost_usd).abs() < f64::EPSILON);
+    store.remove().unwrap();
+}

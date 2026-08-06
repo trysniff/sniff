@@ -74,7 +74,7 @@ scan; changed or invalidated work is reviewed again.
 
 `--budget-usd` is a cumulative estimated limit for one scan. Sniff stops
 admitting new paid review batches when the journaled estimate reaches the
-limit, drains and persists already-running requests, exits with code `3`, and
+limit, drains and persists already-running review batches, exits with code `3`, and
 does not write an incomplete report. Continue with a higher limit, for example
 `sniff resume --budget-usd 1.00`. Concurrent in-flight requests can finish
 above the limit, and configured token rates may differ from the provider's

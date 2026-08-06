@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::future::Future;
 use std::path::Path;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::task::JoinSet;
 
@@ -35,7 +35,11 @@ struct ReviewOutcome {
     out_tok: usize,
     cached_in_tok: usize,
     retry_on_resume: bool,
+    persisted: bool,
 }
+
+type ReviewItemCompletionCallback =
+    Arc<dyn Fn(&str, &ReviewOutcome) -> Result<(), String> + Send + Sync>;
 
 async fn abort_and_drain<T: Send + 'static>(tasks: &mut JoinSet<T>) {
     tasks.abort_all();
@@ -579,6 +583,7 @@ async fn run_review_job(
                 out_tok,
                 cached_in_tok: 0,
                 retry_on_resume: false,
+                persisted: false,
             }),
             Ok((None, _, _)) => Err(format!(
                 "LLM review failed: method {}::{} returned no verdict",
@@ -591,6 +596,7 @@ async fn run_review_job(
                 out_tok: 0,
                 cached_in_tok: 0,
                 retry_on_resume: true,
+                persisted: false,
             }),
             Err(err) => Err(format!(
                 "LLM review failed: method {}::{}: {}",
@@ -612,6 +618,7 @@ async fn run_review_job(
                 out_tok,
                 cached_in_tok: 0,
                 retry_on_resume: false,
+                persisted: false,
             }),
             Err(err) => Err(format!(
                 "LLM review failed: file {}: {}",
@@ -647,6 +654,7 @@ fn unresolved_batch_outcomes(
                     out_tok: 0,
                     cached_in_tok: 0,
                     retry_on_resume: true,
+                    persisted: false,
                 },
             )
         })
@@ -657,6 +665,8 @@ async fn run_review_unit_untracked(
     analyzer: Arc<Analyzer>,
     unit: Vec<(String, ReviewJob)>,
     on_progress: Option<&ReviewProgressCallback>,
+    on_usage: Option<&super::method_batch_review::BatchUsageCallback>,
+    on_item_completed: Option<&ReviewItemCompletionCallback>,
 ) -> Result<Vec<(String, ReviewOutcome)>, String> {
     if unit.len() == 1 && matches!(&unit[0].1, ReviewJob::File { .. }) {
         let (key, job) = unit.into_iter().next().expect("single review unit");
@@ -696,11 +706,41 @@ async fn run_review_unit_untracked(
     let mut pending_batches = VecDeque::from([(keys, indices, methods)]);
     let mut completed = Vec::new();
     while let Some((mut keys, mut indices, mut methods)) = pending_batches.pop_front() {
+        let completion_count = Arc::new(AtomicUsize::new(0));
+        let batch_completion = on_item_completed.map(|callback| {
+            let callback = Arc::clone(callback);
+            let completion_count = Arc::clone(&completion_count);
+            let completion_keys = keys.clone();
+            let completion_indices = indices.clone();
+            Arc::new(move |position: usize, verdict: &LLMVerdict| {
+                let key = completion_keys
+                    .get(position)
+                    .ok_or_else(|| format!("batch completed unknown method position {position}"))?;
+                let index = *completion_indices
+                    .get(position)
+                    .ok_or_else(|| format!("batch completed unknown method position {position}"))?;
+                let outcome = ReviewOutcome {
+                    index,
+                    verdict: Some(verdict.clone()),
+                    in_tok: 0,
+                    out_tok: 0,
+                    cached_in_tok: 0,
+                    retry_on_resume: verdict.tier == FindingTier::Unresolved
+                        && verdict
+                            .reason
+                            .starts_with("AI review could not be validated."),
+                    persisted: true,
+                };
+                callback(key, &outcome)?;
+                completion_count.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            }) as super::method_batch_review::BatchCompletionCallback
+        });
         match analyzer
-            .analyze_method_review_batch(&methods, on_progress)
+            .analyze_method_review_batch(&methods, on_progress, on_usage, batch_completion.as_ref())
             .await
         {
-            Ok((verdicts, input_tokens, output_tokens)) => {
+            Ok((verdicts, _, _)) => {
                 if verdicts.len() != methods.len() {
                     return Err(format!(
                         "method batch returned {} verdicts for {} methods",
@@ -708,9 +748,9 @@ async fn run_review_unit_untracked(
                         methods.len()
                     ));
                 }
-                let count = methods.len();
-                completed.extend(keys.into_iter().zip(indices).zip(verdicts).enumerate().map(
-                    |(position, ((key, index), verdict))| {
+                let persisted = batch_completion.is_some();
+                completed.extend(keys.into_iter().zip(indices).zip(verdicts).map(
+                    |((key, index), verdict)| {
                         (
                             key,
                             ReviewOutcome {
@@ -720,15 +760,20 @@ async fn run_review_unit_untracked(
                                         .reason
                                         .starts_with("AI review could not be validated."),
                                 verdict: Some(verdict),
-                                in_tok: token_share(input_tokens, position, count),
-                                out_tok: token_share(output_tokens, position, count),
+                                in_tok: 0,
+                                out_tok: 0,
                                 cached_in_tok: 0,
+                                persisted,
                             },
                         )
                     },
                 ));
             }
-            Err(err) if recoverable_method_review_error(&err) && methods.len() > 1 => {
+            Err(err)
+                if recoverable_method_review_error(&err)
+                    && methods.len() > 1
+                    && completion_count.load(Ordering::SeqCst) == 0 =>
+            {
                 let split_at = methods.len() / 2;
                 if let Some(callback) = on_progress {
                     callback(ReviewProgress::RetryingEvidence {
@@ -746,6 +791,15 @@ async fn run_review_unit_untracked(
                 pending_batches.push_front((right_keys, right_indices, right_methods));
                 pending_batches.push_front((keys, indices, methods));
             }
+            Err(err)
+                if recoverable_method_review_error(&err)
+                    && completion_count.load(Ordering::SeqCst) > 0 =>
+            {
+                return Err(format!(
+                    "LLM method batch failed after {} method(s) were durably completed; resume from the journal: {err}",
+                    completion_count.load(Ordering::SeqCst)
+                ));
+            }
             Err(err) if recoverable_method_review_error(&err) => {
                 completed.extend(unresolved_batch_outcomes(keys, indices, methods, &err));
             }
@@ -759,10 +813,22 @@ async fn run_review_unit(
     analyzer: Arc<Analyzer>,
     unit: Vec<(String, ReviewJob)>,
     on_progress: Option<&ReviewProgressCallback>,
+    on_usage: Option<&super::method_batch_review::BatchUsageCallback>,
+    on_item_completed: Option<&ReviewItemCompletionCallback>,
 ) -> Result<Vec<(String, ReviewOutcome)>, String> {
-    let (mut result, usage) =
-        crate::llm::LLMClient::track_usage(run_review_unit_untracked(analyzer, unit, on_progress))
+    let is_file = unit.len() == 1 && matches!(&unit[0].1, ReviewJob::File { .. });
+    if !is_file {
+        return run_review_unit_untracked(analyzer, unit, on_progress, on_usage, on_item_completed)
             .await;
+    }
+    let (mut result, usage) = crate::llm::LLMClient::track_usage(run_review_unit_untracked(
+        analyzer,
+        unit,
+        on_progress,
+        on_usage,
+        on_item_completed,
+    ))
+    .await;
     if let Ok(outcomes) = result.as_mut() {
         let count = outcomes.len();
         for (position, (_, outcome)) in outcomes.iter_mut().enumerate() {
@@ -853,6 +919,14 @@ pub(super) async fn run_review_jobs(
             }
         })
         .transpose()?;
+    if let Some(store) = journal.as_ref() {
+        let (stage_in_tok, stage_out_tok, stage_cached_in_tok) = store.stage_usage();
+        analyzer.in_tok.fetch_add(stage_in_tok, Ordering::SeqCst);
+        analyzer.out_tok.fetch_add(stage_out_tok, Ordering::SeqCst);
+        analyzer
+            .llm_client
+            .restore_cached_input_tokens(stage_cached_in_tok);
+    }
     if budget_usd.is_some() && journal.is_none() {
         return Err(
             "--budget-usd requires a durable journal path so completed work can be resumed"
@@ -876,9 +950,7 @@ pub(super) async fn run_review_jobs(
             let is_current_scan = journal
                 .as_ref()
                 .is_some_and(|store| store.is_current_scan(&entry));
-            let (in_tok, out_tok, cached_in_tok) = if is_current_scan {
-                (entry.in_tok, entry.out_tok, entry.cached_in_tok)
-            } else {
+            if !is_current_scan {
                 let source_hash = source_hashes.get(&journal_unit_id).ok_or_else(|| {
                     format!("missing source hash for cached review {journal_unit_id}")
                 })?;
@@ -896,20 +968,15 @@ pub(super) async fn run_review_jobs(
                             retry_on_resume: false,
                         },
                     )?;
-                (0, 0, 0)
-            };
-            analyzer.in_tok.fetch_add(in_tok, Ordering::SeqCst);
-            analyzer.out_tok.fetch_add(out_tok, Ordering::SeqCst);
-            analyzer
-                .llm_client
-                .restore_cached_input_tokens(cached_in_tok);
+            }
             outcomes.push(ReviewOutcome {
                 index,
                 verdict: entry.verdict.clone(),
-                in_tok,
-                out_tok,
-                cached_in_tok,
+                in_tok: 0,
+                out_tok: 0,
+                cached_in_tok: 0,
                 retry_on_resume: false,
+                persisted: true,
             });
             if let Some(callback) = on_progress.as_ref() {
                 callback(ReviewProgress::Completed);
@@ -924,34 +991,24 @@ pub(super) async fn run_review_jobs(
         method_batch_size(),
         analyzer.llm_client.max_prompt_chars(),
     );
-
-    let completed = run_bounded_review_tasks_keyed_until(
-        pending,
-        analyzer.llm_client.max_concurrency(),
-        |unit| {
-            let analyzer = Arc::clone(&analyzer);
-            let progress = on_progress.clone();
-            async move {
-                if let Some(callback) = progress.as_ref() {
-                    for (_, job) in &unit {
-                        callback(ReviewProgress::Started { label: job.label() });
-                    }
-                }
-                run_review_unit(analyzer, unit, progress.as_ref()).await
-            }
-        },
-        |unit| {
-            for (journal_unit_id, outcome) in unit {
-                analyzer.in_tok.fetch_add(outcome.in_tok, Ordering::SeqCst);
-                analyzer
-                    .out_tok
-                    .fetch_add(outcome.out_tok, Ordering::SeqCst);
-                if let Some(store) = journal.as_mut() {
-                    let source_hash = source_hashes.get(journal_unit_id).ok_or_else(|| {
-                        format!("missing source hash for completed review {journal_unit_id}")
-                    })?;
-                    store.record(
-                        journal_unit_id.clone(),
+    let journal = journal.map(|store| Arc::new(Mutex::new(store)));
+    let source_hashes = Arc::new(source_hashes);
+    let item_completion: ReviewItemCompletionCallback = {
+        let analyzer = Arc::clone(&analyzer);
+        let journal = journal.clone();
+        let source_hashes = Arc::clone(&source_hashes);
+        let progress = on_progress.clone();
+        let spend_budget = Arc::clone(&spend_budget);
+        Arc::new(move |journal_unit_id, outcome| {
+            if let Some(store) = journal.as_ref() {
+                let source_hash = source_hashes.get(journal_unit_id).ok_or_else(|| {
+                    format!("missing source hash for completed review {journal_unit_id}")
+                })?;
+                store
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .record(
+                        journal_unit_id.to_string(),
                         source_hash.clone(),
                         JournalCompletion {
                             verdict: outcome.verdict.clone(),
@@ -961,18 +1018,79 @@ pub(super) async fn run_review_jobs(
                             retry_on_resume: outcome.retry_on_resume,
                         },
                     )?;
-                }
-                if let Some(callback) = on_progress.as_ref() {
-                    callback(ReviewProgress::Completed);
-                }
-                spend_budget
+            }
+            analyzer.in_tok.fetch_add(outcome.in_tok, Ordering::SeqCst);
+            analyzer
+                .out_tok
+                .fetch_add(outcome.out_tok, Ordering::SeqCst);
+            if let Some(callback) = progress.as_ref() {
+                callback(ReviewProgress::Completed);
+            }
+            spend_budget
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .add(crate::pricing::PricingRates::from_env().cost(
+                    outcome.in_tok,
+                    outcome.cached_in_tok,
+                    outcome.out_tok,
+                ));
+            Ok(())
+        })
+    };
+    let usage_completion: super::method_batch_review::BatchUsageCallback = {
+        let analyzer = Arc::clone(&analyzer);
+        let journal = journal.clone();
+        let spend_budget = Arc::clone(&spend_budget);
+        Arc::new(move |usage| {
+            if let Some(store) = journal.as_ref() {
+                store
                     .lock()
                     .unwrap_or_else(|poisoned| poisoned.into_inner())
-                    .add(crate::pricing::PricingRates::from_env().cost(
-                        outcome.in_tok,
-                        outcome.cached_in_tok,
-                        outcome.out_tok,
-                    ));
+                    .record_usage(usage.in_tok, usage.out_tok, usage.cached_in_tok)?;
+            }
+            analyzer.in_tok.fetch_add(usage.in_tok, Ordering::SeqCst);
+            analyzer.out_tok.fetch_add(usage.out_tok, Ordering::SeqCst);
+            spend_budget
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .add(crate::pricing::PricingRates::from_env().cost(
+                    usage.in_tok,
+                    usage.cached_in_tok,
+                    usage.out_tok,
+                ));
+            Ok(())
+        })
+    };
+
+    let completed = run_bounded_review_tasks_keyed_until(
+        pending,
+        analyzer.llm_client.max_concurrency(),
+        |unit| {
+            let analyzer = Arc::clone(&analyzer);
+            let progress = on_progress.clone();
+            let usage_completion = Arc::clone(&usage_completion);
+            let item_completion = Arc::clone(&item_completion);
+            async move {
+                if let Some(callback) = progress.as_ref() {
+                    for (_, job) in &unit {
+                        callback(ReviewProgress::Started { label: job.label() });
+                    }
+                }
+                run_review_unit(
+                    analyzer,
+                    unit,
+                    progress.as_ref(),
+                    Some(&usage_completion),
+                    Some(&item_completion),
+                )
+                .await
+            }
+        },
+        |unit| {
+            for (journal_unit_id, outcome) in unit {
+                if !outcome.persisted {
+                    item_completion(journal_unit_id, outcome)?;
+                }
             }
             Ok(())
         },
