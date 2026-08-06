@@ -37,7 +37,7 @@ pub(super) struct ScanEstimate {
 }
 
 impl ScanEstimate {
-    pub(super) fn from_files(files: &[FileRecord], with_file_reviews: bool) -> Self {
+    pub(super) fn from_files(files: &[FileRecord]) -> Self {
         let files_count = files.len();
         let methods = files.iter().map(|file| file.methods.len()).sum::<usize>();
         let source_chars = files
@@ -69,17 +69,10 @@ impl ScanEstimate {
             .saturating_add(methods.saturating_mul(6_000));
         let input_tokens_low = ceil_div(input_chars_low, CHARS_PER_TOKEN);
         let input_tokens_high = ceil_div(input_chars_high, CHARS_PER_TOKEN);
-        let file_review_tokens_low = usize::from(with_file_reviews) * files_count * 200;
-        let file_review_tokens_high = usize::from(with_file_reviews) * files_count * 600;
-        let output_tokens_low = methods
-            .saturating_mul(LOWER_OUTPUT_TOKENS_PER_METHOD)
-            .saturating_add(file_review_tokens_low);
-        let output_tokens_high = methods
-            .saturating_mul(UPPER_OUTPUT_TOKENS_PER_METHOD)
-            .saturating_add(file_review_tokens_high);
-        let file_requests = usize::from(with_file_reviews) * files_count;
-        let requests_low = batches.saturating_mul(2).saturating_add(file_requests);
-        let requests_high = batches.saturating_mul(3).saturating_add(file_requests);
+        let output_tokens_low = methods.saturating_mul(LOWER_OUTPUT_TOKENS_PER_METHOD);
+        let output_tokens_high = methods.saturating_mul(UPPER_OUTPUT_TOKENS_PER_METHOD);
+        let requests_low = batches.saturating_mul(2);
+        let requests_high = batches.saturating_mul(3);
         let runtime_seconds_low =
             ceil_div(requests_low, concurrency).saturating_mul(LOWER_SECONDS_PER_REQUEST);
         let runtime_seconds_high =
@@ -183,11 +176,7 @@ fn load_scan_inputs(
     Ok((config, target))
 }
 
-pub async fn estimate(
-    path: &str,
-    with_file_reviews: bool,
-    skip_dotenv: bool,
-) -> Result<i32, Box<dyn std::error::Error>> {
+pub async fn estimate(path: &str, skip_dotenv: bool) -> Result<i32, Box<dyn std::error::Error>> {
     let (config, _) = load_scan_inputs(path, skip_dotenv)?;
     let files = io::scan_files(path, &config)
         .await
@@ -197,7 +186,7 @@ pub async fn estimate(
             IoError::new(ErrorKind::InvalidInput, "No supported source files found.").into(),
         );
     }
-    let estimate = ScanEstimate::from_files(&files, with_file_reviews);
+    let estimate = ScanEstimate::from_files(&files);
     print_estimate(&estimate);
     Ok(0)
 }
@@ -501,7 +490,7 @@ mod tests {
             )],
         }];
 
-        let estimate = ScanEstimate::from_files(&files, false);
+        let estimate = ScanEstimate::from_files(&files);
 
         assert_eq!(estimate.files, 1);
         assert_eq!(estimate.methods, 1);

@@ -37,7 +37,6 @@ fn bumpkin_github_integration_subtree_matches_current_report_contract() {
     let output = Command::new(env!("CARGO_BIN_EXE_sniff"))
         .current_dir(&root)
         .arg(&github_root)
-        .arg("--only-files")
         .arg("--skip-dotenv")
         .env("SNIFF_API_KEY", "test-key")
         .env("SNIFF_ENDPOINT", &endpoint)
@@ -91,7 +90,6 @@ fn brandset_background_core_subtree_matches_current_report_contract() {
     let output = Command::new(env!("CARGO_BIN_EXE_sniff"))
         .current_dir(&root)
         .arg(&background_root)
-        .arg("--only-files")
         .arg("--skip-dotenv")
         .env("SNIFF_API_KEY", "test-key")
         .env("SNIFF_ENDPOINT", &endpoint)
@@ -133,7 +131,6 @@ fn data_catalog_modules_stay_out_of_the_report_end_to_end() {
     let output = Command::new(env!("CARGO_BIN_EXE_sniff"))
         .current_dir(&root)
         .arg(&root)
-        .arg("--only-files")
         .output()
         .unwrap();
 
@@ -159,8 +156,8 @@ fn data_catalog_modules_stay_out_of_the_report_end_to_end() {
 
     let prompt_text = prompts.lock().unwrap().join("\n");
     assert!(
-        prompt_text.contains("Filename: platforms.ts"),
-        "data catalog glue should be sent for AI review:\n{}",
+        !prompt_text.contains("File path: platforms.ts"),
+        "methodless data catalog glue should not consume a method review:\n{}",
         prompt_text
     );
 
@@ -186,7 +183,6 @@ fn pure_contract_type_modules_stay_out_of_the_report_end_to_end() {
     let output = Command::new(env!("CARGO_BIN_EXE_sniff"))
         .current_dir(&root)
         .arg(&root)
-        .arg("--only-files")
         .output()
         .unwrap();
 
@@ -212,8 +208,8 @@ fn pure_contract_type_modules_stay_out_of_the_report_end_to_end() {
 
     let prompt_text = prompts.lock().unwrap().join("\n");
     assert!(
-        prompt_text.contains("Filename: session-runtime-contracts.ts"),
-        "contract-only type files should be sent for AI review:\n{}",
+        !prompt_text.contains("File path: session-runtime-contracts.ts"),
+        "methodless contract-only type files should not consume a method review:\n{}",
         prompt_text
     );
 
@@ -274,7 +270,6 @@ fn small_python_package_with_generated_downloads_stays_clean_end_to_end() {
     let output = Command::new(env!("CARGO_BIN_EXE_sniff"))
         .current_dir(&root)
         .arg(&root)
-        .arg("--only-files")
         .output()
         .unwrap();
 
@@ -292,10 +287,10 @@ fn small_python_package_with_generated_downloads_stays_clean_end_to_end() {
         report
     );
     assert!(
-        report.contains("AI response coverage:** 7 of 7 review records emitted, 0 missing")
+        report.contains("AI response coverage:** 3 of 3 review records emitted, 0 missing")
             && report
                 .contains("Trusted method verdicts:** 3 of 3 resolved, 0 unresolved, 0 missing"),
-        "expected all three methods plus four file reviews to complete:\n{}",
+        "expected all three eligible methods to complete:\n{}",
         report
     );
     assert!(
@@ -306,11 +301,12 @@ fn small_python_package_with_generated_downloads_stays_clean_end_to_end() {
 
     let prompt_text = prompts.lock().unwrap().join("\n");
     assert!(
-        prompt_text.contains("Filename: __init__.py")
-            && prompt_text.contains("Filename: api.py")
-            && prompt_text.contains("Filename: catalog.py")
-            && prompt_text.contains("Filename: formal.py"),
-        "expected all four source files to be reviewed:\n{}",
+        !prompt_text.contains("File path: __init__.py")
+            && prompt_text.contains("File path: ")
+            && prompt_text.contains("api.py")
+            && prompt_text.contains("catalog.py")
+            && prompt_text.contains("formal.py"),
+        "expected only the three files with eligible methods to be reviewed:\n{}",
         prompt_text
     );
     assert!(
@@ -348,7 +344,6 @@ fn skillmatch_backend_hotspots_match_the_current_report_contract() {
     let output = Command::new(env!("CARGO_BIN_EXE_sniff"))
         .current_dir(&root)
         .arg(&root)
-        .arg("--only-files")
         .arg("--skip-dotenv")
         .env("SNIFF_API_KEY", "test-key")
         .env("SNIFF_ENDPOINT", &endpoint)
@@ -369,16 +364,17 @@ fn skillmatch_backend_hotspots_match_the_current_report_contract() {
     assert!(report.contains("jobController.js"));
     assert!(report.contains("postsController.js"));
     assert!(report.contains("userController.js"));
-    assert!(report.contains("AI response coverage:** 88 of 88 review records emitted, 0 missing"));
+    assert!(report.contains("AI response coverage:** 84 of 84 review records emitted, 0 missing"));
     assert!(
         report.contains("Trusted method verdicts:** 84 of 84 resolved, 0 unresolved, 0 missing")
     );
 
     let prompt_text = prompts.lock().unwrap().join("\n");
     assert!(
-        prompt_text.contains("Filename: applicationController.js")
-            && prompt_text.contains("Filename: jobController.js")
-            && prompt_text.contains("Filename: userController.js"),
+        prompt_text.contains("File path: ")
+            && prompt_text.contains("applicationController.js")
+            && prompt_text.contains("jobController.js")
+            && prompt_text.contains("userController.js"),
         "expected the backend hotspots to be reviewed by the mock provider:\n{}",
         prompt_text
     );
@@ -409,7 +405,6 @@ fn console_summary_does_not_leak_report_findings() {
     let output = Command::new(env!("CARGO_BIN_EXE_sniff"))
         .current_dir(&root)
         .arg(&root)
-        .arg("--only-files")
         .output()
         .unwrap();
 

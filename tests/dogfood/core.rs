@@ -93,7 +93,6 @@ fn bumpkin_style_repo_scan_finishes_without_stack_overflow() {
     let output = Command::new(env!("CARGO_BIN_EXE_sniff"))
         .current_dir(&root)
         .arg(root.join("src").join("bumpkin"))
-        .arg("--only-files")
         .output()
         .unwrap();
 
@@ -115,7 +114,7 @@ fn bumpkin_style_repo_scan_finishes_without_stack_overflow() {
 }
 
 #[test]
-fn deprecated_only_files_alias_adds_file_reviews_without_skipping_methods() {
+fn standard_method_census_surfaces_signature_hotspots() {
     let root = unique_root("sniff-dogfood-signature-hotspot");
     fs::create_dir_all(&root).unwrap();
 
@@ -153,7 +152,6 @@ fn deprecated_only_files_alias_adds_file_reviews_without_skipping_methods() {
     let output = Command::new(env!("CARGO_BIN_EXE_sniff"))
         .current_dir(&root)
         .arg(root.join("src"))
-        .arg("--only-files")
         .output()
         .unwrap();
 
@@ -168,12 +166,12 @@ fn deprecated_only_files_alias_adds_file_reviews_without_skipping_methods() {
     let report = fs::read_to_string(root.join("sniff-report.md")).unwrap();
     assert!(
         report.contains("finding_python_signatures.py"),
-        "signature hotspot should surface in only-files mode:\n{}",
+        "signature hotspot should surface in the standard method census:\n{}",
         report
     );
     assert!(
         report.contains("Slop"),
-        "signature hotspot should still be slop in only-files mode:\n{}",
+        "signature hotspot should still be slop in the standard method census:\n{}",
         report
     );
     assert!(
@@ -181,7 +179,8 @@ fn deprecated_only_files_alias_adds_file_reviews_without_skipping_methods() {
             .lock()
             .unwrap()
             .iter()
-            .any(|prompt| prompt.contains("Filename: finding_python_signatures.py")),
+            .any(|prompt| prompt.contains("File path: ")
+                && prompt.contains("finding_python_signatures.py")),
         "expected the hotspot file to be reviewed by the mock provider"
     );
 
@@ -282,7 +281,6 @@ fn support_facades_are_reviewed_and_real_slop_still_surfaces_end_to_end() {
     let output = Command::new(env!("CARGO_BIN_EXE_sniff"))
         .current_dir(&root)
         .arg(root.join("src"))
-        .arg("--only-files")
         .output()
         .unwrap();
 
@@ -389,14 +387,14 @@ fn support_facades_are_reviewed_and_real_slop_still_surfaces_end_to_end() {
     assert!(
         prompts
             .iter()
-            .any(|prompt| prompt.contains("Filename: explanation_facts.py")),
-        "support re-export shims should be reviewed as files"
+            .all(|prompt| !prompt.contains("File path: explanation_facts.py")),
+        "methodless support re-export shims should not consume a method review"
     );
     assert!(
         prompts
             .iter()
-            .any(|prompt| prompt.contains("Filename: postprocess.py")),
-        "expected the support orchestration file to be reviewed as a file"
+            .any(|prompt| prompt.contains("File path: ") && prompt.contains("postprocess.py")),
+        "expected the support orchestration method to be reviewed"
     );
 
     let _ = fs::remove_dir_all(&root);
@@ -421,7 +419,6 @@ fn react_main_entrypoints_stay_out_of_the_report_but_are_reviewed_end_to_end() {
     let output = Command::new(env!("CARGO_BIN_EXE_sniff"))
         .current_dir(&root)
         .arg(&root)
-        .arg("--only-files")
         .output()
         .unwrap();
 
@@ -447,7 +444,7 @@ fn react_main_entrypoints_stay_out_of_the_report_but_are_reviewed_end_to_end() {
 
     let prompt_text = prompts.lock().unwrap().join("\n");
     assert!(
-        prompt_text.contains("Filename: main.tsx"),
+        prompt_text.contains("File path: ") && prompt_text.contains("main.tsx"),
         "main.tsx should be reviewed by the AI before its intentional-surface verdict is normalized:\n{}",
         prompt_text
     );

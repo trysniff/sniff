@@ -17,7 +17,6 @@ pub(super) struct LlmCheckInput<'a> {
     pub(super) context_file_records: &'a [FileRecord],
     pub(super) static_flags: &'a [StaticFlag],
     pub(super) graph: &'a crate::symbol_graph::SymbolGraph,
-    pub(super) with_file_reviews: bool,
     pub(super) bar_style: ProgressStyle,
     pub(super) llm_client: Option<Arc<LLMClient>>,
     pub(super) role_input_tokens: usize,
@@ -44,8 +43,7 @@ pub(super) async fn run_llm_checks(
     input: LlmCheckInput<'_>,
 ) -> Result<(Vec<LLMVerdict>, usize, usize, usize), String> {
     let method_total = super::stats::expected_method_reviews(input.file_records);
-    let file_total = usize::from(input.with_file_reviews) * input.file_records.len();
-    let llm_total = method_total + file_total;
+    let llm_total = method_total;
     if llm_total == 0 {
         return Ok((
             Vec::new(),
@@ -96,7 +94,7 @@ pub(super) async fn run_llm_checks(
             file_records: input.file_records,
             context_file_records: input.context_file_records,
             static_flags: input.static_flags,
-            with_file_reviews: input.with_file_reviews,
+            with_file_reviews: false,
             graph: Some(input.graph),
             checkpoint_path: input.checkpoint_path,
         },
@@ -210,14 +208,13 @@ fn preflight_timeout() -> Duration {
 
 pub(super) async fn prepare_review_artifacts(
     path: &str,
-    with_file_reviews: bool,
     config: &ResolvedConfig,
     file_records: &mut [FileRecord],
     bar_style: &ProgressStyle,
     checkpoint_path: Option<&Path>,
 ) -> Result<ReviewArtifacts, Box<dyn std::error::Error>> {
     let ai_expected_reviews_before_roles =
-        super::stats::expected_ai_reviews_after_role_resolution(file_records, with_file_reviews);
+        super::stats::expected_ai_reviews_after_role_resolution(file_records);
     let llm_client = if ai_expected_reviews_before_roles > 0 {
         build_llm_client(config).map_err(IoError::other)?
     } else {
@@ -247,8 +244,7 @@ pub(super) async fn prepare_review_artifacts(
     .await
     .map_err(IoError::other)?;
 
-    let ai_expected_reviews =
-        super::stats::expected_ai_reviews_after_role_resolution(file_records, with_file_reviews);
+    let ai_expected_reviews = super::stats::expected_ai_reviews_after_role_resolution(file_records);
     preflight_llm_endpoint(path, ai_expected_reviews, llm_client.as_ref()).await?;
 
     let production_paths = file_records
@@ -273,7 +269,6 @@ pub(super) async fn prepare_review_artifacts(
         context_file_records: &context_file_records,
         static_flags: &static_flags,
         graph: &graph,
-        with_file_reviews,
         bar_style: bar_style.clone(),
         llm_client,
         role_input_tokens: role_in_tok,

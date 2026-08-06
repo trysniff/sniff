@@ -33,7 +33,6 @@ fn bumpkin_github_recommendations_surfaces_real_slop_while_publishers_stay_clean
     let output = Command::new(env!("CARGO_BIN_EXE_sniff"))
         .current_dir(&root)
         .arg(".")
-        .arg("--only-files")
         .output()
         .unwrap();
 
@@ -124,7 +123,6 @@ fn bumpkin_github_webhook_plumbing_surfaces_real_slop_while_http_client_stays_cl
     let output = Command::new(env!("CARGO_BIN_EXE_sniff"))
         .current_dir(&root)
         .arg(".")
-        .arg("--only-files")
         .output()
         .unwrap();
 
@@ -210,7 +208,6 @@ fn bumpkin_release_rendering_surfaces_real_slop_while_publish_and_analysis_stay_
     let output = Command::new(env!("CARGO_BIN_EXE_sniff"))
         .current_dir(&root)
         .arg(".")
-        .arg("--only-files")
         .output()
         .unwrap();
 
@@ -281,7 +278,6 @@ fn bumpkin_webhook_release_flow_surfaces_real_slop_while_notes_and_commands_stay
     let output = Command::new(env!("CARGO_BIN_EXE_sniff"))
         .current_dir(&root)
         .arg(".")
-        .arg("--only-files")
         .output()
         .unwrap();
 
@@ -352,7 +348,6 @@ fn bumpkin_persistence_surfaces_real_slop_while_protocols_stay_clean() {
     let output = Command::new(env!("CARGO_BIN_EXE_sniff"))
         .current_dir(&root)
         .arg(".")
-        .arg("--only-files")
         .output()
         .unwrap();
 
@@ -462,7 +457,6 @@ export function auditPayloadLine(line: string) {
     let output = Command::new(env!("CARGO_BIN_EXE_sniff"))
         .current_dir(&root)
         .arg(".")
-        .arg("--only-files")
         .output()
         .unwrap();
 
@@ -488,9 +482,9 @@ export function auditPayloadLine(line: string) {
 
     let prompts = prompts.lock().unwrap();
     assert!(
-        prompts
-            .iter()
-            .any(|prompt| prompt.contains("Filename: multiline-evidence.ts")),
+        prompts.iter().any(
+            |prompt| prompt.contains("File path: ") && prompt.contains("multiline-evidence.ts")
+        ),
         "expected multiline-evidence.ts to be reviewed by the mock provider"
     );
 
@@ -538,7 +532,6 @@ fn bumpkin_analysis_hotspots_survive_end_to_end() {
     let output = Command::new(env!("CARGO_BIN_EXE_sniff"))
         .current_dir(&root)
         .arg(".")
-        .arg("--only-files")
         .output()
         .unwrap();
 
@@ -571,10 +564,10 @@ fn bumpkin_analysis_hotspots_survive_end_to_end() {
 
     let prompts = prompts.lock().unwrap();
     for name in [
-        "Filename: case_file.py",
-        "Filename: finding_js_ts.py",
-        "Filename: finding_python_signatures.py",
-        "Filename: semantic_review.py",
+        "case_file.py",
+        "finding_js_ts.py",
+        "finding_python_signatures.py",
+        "semantic_review.py",
     ] {
         assert!(
             prompts.iter().any(|prompt| prompt.contains(name)),
@@ -639,7 +632,6 @@ fn bumpkin_provider_hotspots_survive_end_to_end() {
     let output = Command::new(env!("CARGO_BIN_EXE_sniff"))
         .current_dir(&root)
         .arg(".")
-        .arg("--only-files")
         .output()
         .unwrap();
 
@@ -675,11 +667,11 @@ fn bumpkin_provider_hotspots_survive_end_to_end() {
 
     let prompts = prompts.lock().unwrap();
     for name in [
-        "Filename: chunking.py",
-        "Filename: semantic.py",
-        "Filename: llm.py",
-        "Filename: llm_transport.py",
-        "Filename: llm_recommend.py",
+        "chunking.py",
+        "semantic.py",
+        "llm.py",
+        "llm_transport.py",
+        "llm_recommend.py",
     ] {
         assert!(
             prompts.iter().any(|prompt| prompt.contains(name)),

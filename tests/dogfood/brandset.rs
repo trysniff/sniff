@@ -21,7 +21,6 @@ fn brandset_signup_wrapper_survives_end_to_end() {
     let output = Command::new(env!("CARGO_BIN_EXE_sniff"))
         .current_dir(&root)
         .arg(root.join("supabase").join("functions"))
-        .arg("--only-files")
         .arg("--skip-dotenv")
         .env("SNIFF_API_KEY", "test-key")
         .env("SNIFF_ENDPOINT", &endpoint)
@@ -291,7 +290,6 @@ fn brandset_supabase_clean_neighbors_stay_clean_while_signup_wrapper_surfaces() 
     let output = Command::new(env!("CARGO_BIN_EXE_sniff"))
         .current_dir(&root)
         .arg(root.join("supabase").join("functions"))
-        .arg("--only-files")
         .output()
         .unwrap();
 
@@ -373,7 +371,6 @@ fn brandset_session_layer_boundary_survives_end_to_end() {
     let output = Command::new(env!("CARGO_BIN_EXE_sniff"))
         .current_dir(&root)
         .arg(root.join("ui").join("background").join("core"))
-        .arg("--only-files")
         .output()
         .unwrap();
 
@@ -451,7 +448,6 @@ fn brandset_session_state_survives_while_contract_files_stay_clean() {
     let output = Command::new(env!("CARGO_BIN_EXE_sniff"))
         .current_dir(&root)
         .arg(root.join("ui").join("background").join("core"))
-        .arg("--only-files")
         .output()
         .unwrap();
 
@@ -483,9 +479,9 @@ fn brandset_session_state_survives_while_contract_files_stay_clean() {
     let prompt_text = prompts.lock().unwrap().join("\n");
     assert!(
         prompt_text.contains("session-state")
-            && prompt_text.contains("session-runtime-contracts")
-            && prompt_text.contains("session-init-payload"),
-        "expected the session state surfaces to be reviewed by the mock provider:\n{}",
+            && !prompt_text.contains("File path: session-runtime-contracts")
+            && !prompt_text.contains("File path: session-init-payload"),
+        "expected only eligible session-state methods to be reviewed by the mock provider:\n{}",
         prompt_text
     );
 
@@ -529,7 +525,6 @@ fn brandset_session_safe_start_boundary_survives_end_to_end() {
     let output = Command::new(env!("CARGO_BIN_EXE_sniff"))
         .current_dir(&root)
         .arg(root.join("ui").join("background").join("core"))
-        .arg("--only-files")
         .output()
         .unwrap();
 
@@ -624,7 +619,6 @@ fn brandset_session_orchestration_boundary_surfaces_real_slop_and_keeps_neighbor
     let output = Command::new(env!("CARGO_BIN_EXE_sniff"))
         .current_dir(&root)
         .arg(root.join("ui").join("background").join("core"))
-        .arg("--only-files")
         .output()
         .unwrap();
 

@@ -128,14 +128,13 @@ pub(super) fn build_run_report_from_parts(
     file_records: &[FileRecord],
     static_flags: Vec<StaticFlag>,
     verdicts: Vec<LLMVerdict>,
-    with_file_reviews: bool,
     stats: RunStats,
 ) -> (RunReport, bool) {
     let file_verdicts = crate::file_verdicts::build_file_verdicts_with_mode(
         file_records,
         &static_flags,
         &verdicts,
-        with_file_reviews,
+        false,
     );
     let run_report = RunReport {
         file_verdicts,
@@ -147,30 +146,22 @@ pub(super) fn build_run_report_from_parts(
     let has_method_issues = run_report.llm_verdicts.iter().any(|verdict| {
         verdict.check_type == "method" && verdict.tier != crate::types::FindingTier::Clean
     });
-    let has_file_issues = with_file_reviews
-        && run_report
-            .file_verdicts
-            .iter()
-            .any(|verdict| verdict.verdict != crate::types::FindingTier::Clean);
-    let has_issues = has_method_issues || has_file_issues;
+    let has_issues = has_method_issues;
 
     (run_report, has_issues)
 }
 
 #[allow(dead_code)]
-pub(super) fn expected_ai_reviews(file_records: &[FileRecord], with_file_reviews: bool) -> usize {
-    expected_method_reviews(file_records) + usize::from(with_file_reviews) * file_records.len()
+pub(super) fn expected_ai_reviews(file_records: &[FileRecord]) -> usize {
+    expected_method_reviews(file_records)
 }
 
 pub(super) fn expected_method_reviews(file_records: &[FileRecord]) -> usize {
     file_records.iter().map(|file| file.methods.len()).sum()
 }
 
-pub(super) fn expected_ai_reviews_after_role_resolution(
-    file_records: &[FileRecord],
-    with_file_reviews: bool,
-) -> usize {
-    expected_ai_reviews(file_records, with_file_reviews)
+pub(super) fn expected_ai_reviews_after_role_resolution(file_records: &[FileRecord]) -> usize {
+    expected_ai_reviews(file_records)
 }
 
 #[cfg(test)]
@@ -205,7 +196,7 @@ mod tests {
     }
 
     #[test]
-    fn expected_ai_reviews_matches_the_selected_review_surface() {
+    fn expected_ai_reviews_matches_the_exhaustive_method_census() {
         let files = vec![
             file(
                 "src/app/page.tsx",
@@ -224,8 +215,7 @@ mod tests {
             ),
         ];
 
-        assert_eq!(expected_ai_reviews(&files, true), 6);
-        assert_eq!(expected_ai_reviews(&files, false), 3);
+        assert_eq!(expected_ai_reviews(&files), 3);
         assert_eq!(expected_method_reviews(&files), 3);
     }
 
@@ -265,16 +255,16 @@ mod tests {
             ],
         };
 
-        assert_eq!(expected_ai_reviews(&[file], false), 3);
+        assert_eq!(expected_ai_reviews(&[file]), 3);
     }
 
     #[test]
-    fn real_webhook_service_counts_as_an_ai_review_target() {
+    fn methodless_files_do_not_invent_an_ai_review_target() {
         let file = crate::parser::parse_file(
             "C:\\Users\\User\\Bumpkin\\src\\bumpkin\\integrations\\github\\webhook_service.py",
         );
 
-        assert_eq!(expected_ai_reviews(&[file], true), 1);
+        assert_eq!(expected_ai_reviews(&[file]), 0);
     }
 
     #[test]
@@ -285,6 +275,6 @@ mod tests {
             vec![method("src/app/page.tsx", "Page")],
         );
 
-        assert_eq!(expected_ai_reviews(&[file], false), 1);
+        assert_eq!(expected_ai_reviews(&[file]), 1);
     }
 }
