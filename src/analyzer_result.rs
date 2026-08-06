@@ -219,7 +219,7 @@ pub(crate) fn parse_semantic_method_review(
         .any(|value| states_unresolved_evidence(value));
 
     if matches!(tier, FindingTier::Clean) {
-        if pattern != SlopPattern::None {
+        if !pattern.is_valid_for(tier) {
             return Err("clean semantic verdict must use pattern `none`".to_string());
         }
         if contract_status != "required"
@@ -235,7 +235,7 @@ pub(crate) fn parse_semantic_method_review(
             );
         }
     } else if matches!(tier, FindingTier::Unresolved) {
-        if pattern != SlopPattern::None {
+        if !pattern.is_valid_for(tier) {
             return Err("unresolved semantic verdict must use pattern `none`".to_string());
         }
         if missing_evidence.is_empty()
@@ -247,7 +247,7 @@ pub(crate) fn parse_semantic_method_review(
         {
             return Err("unresolved semantic verdict must use an unknown contract and behavior, no simplification, no change scope, and list missing evidence".to_string());
         }
-    } else if !pattern.is_finding() {
+    } else if !pattern.is_valid_for(tier) {
         return Err("non-clean semantic verdict must use a finding pattern".to_string());
     }
     if matches!(tier, FindingTier::Slop | FindingTier::KindaSlop)
