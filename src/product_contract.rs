@@ -12,7 +12,9 @@ pub const PRODUCT_NON_GOALS: &[&str] = &[
     "linting",
     "generic maintainability scoring",
     "architecture preference enforcement",
-    "automatic repository modification",
+    "integrated development environment",
+    "automatic refactoring",
+    "pull request review",
 ];
 
 pub const SLOP_PATTERN_PROMPT_LIST: &str = "residual_machinery, duplicated_semantics, parallel_reinvention, ceremonial_logic, needless_indirection, speculative_defense, band_aid_control_flow, contract_fog, test_mirroring, test_subversion, fictional_integration, abandoned_compatibility, responsibility_fragmentation, misleading_completion, unnecessary_state_complexity, and other";
@@ -127,7 +129,7 @@ impl fmt::Display for SlopPattern {
 
 #[cfg(test)]
 mod tests {
-    use super::{SLOP_DEFINITION, SlopPattern};
+    use super::{PRODUCT_NON_GOALS, SLOP_DEFINITION, SlopPattern};
     use crate::types::FindingTier;
 
     #[test]
@@ -145,6 +147,31 @@ mod tests {
     fn canonical_definition_names_burden_and_unnecessary_machinery() {
         assert!(SLOP_DEFINITION.contains("Unnecessary or misleading"));
         assert!(SLOP_DEFINITION.contains("burden"));
+    }
+
+    #[test]
+    fn public_readme_carries_the_frozen_product_boundary() {
+        let readme = include_str!("../README.md")
+            .lines()
+            .map(|line| line.trim_start_matches("> "))
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(readme.contains(SLOP_DEFINITION));
+
+        for phrase in [
+            "AI-authorship detector",
+            "security scanner",
+            "bug finder",
+            "linter",
+            "generic maintainability score",
+            "architecture-opinion engine",
+            "IDE",
+            "automatic refactoring tool",
+            "PR reviewer",
+        ] {
+            assert!(readme.contains(phrase), "README omitted non-goal: {phrase}");
+        }
+        assert_eq!(PRODUCT_NON_GOALS.len(), 9);
     }
 
     #[test]

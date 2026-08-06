@@ -9,10 +9,16 @@
   </p>
 </div>
 
-Sniff reviews every discovered method with repository context to find code that
-may work, but is needlessly difficult for a human to understand, trust, or
-change. It is a slop finder, not a security scanner, bug finder, linter, or
-generic code-quality score.
+Sniff reviews every eligible method with repository context to find slop:
+
+> Unnecessary or misleading implementation machinery that superficially
+> satisfies a task while transferring disproportionate comprehension,
+> verification, or change burden to future developers.
+
+It does not matter whether AI or a human wrote the code. Sniff is not an
+AI-authorship detector, security scanner, bug finder, linter, generic
+maintainability score, architecture-opinion engine, IDE, automatic refactoring
+tool, or PR reviewer.
 
 > [!WARNING]
 > **A normal Sniff scan sends source code to the LLM endpoint you configure.**
