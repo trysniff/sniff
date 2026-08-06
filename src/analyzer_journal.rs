@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const JOURNAL_VERSION: u32 = 2;
+const BUDGET_PAUSE_PREFIX: &str = "Sniff budget pause:";
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -151,6 +152,7 @@ pub(super) struct JournalStore {
     path: PathBuf,
     context: JournalContext,
     pub(super) completed: HashMap<String, JournalEntry>,
+    spent_usd: f64,
 }
 
 impl JournalStore {
@@ -177,11 +179,12 @@ impl JournalStore {
             review_context,
             expected_units,
         );
-        let completed = load_entries(path, &context)?;
+        let (completed, spent_usd) = load_state(path, &context)?;
         Ok(Self {
             path: path.to_path_buf(),
             context,
             completed,
+            spent_usd,
         })
     }
 
@@ -201,11 +204,12 @@ impl JournalStore {
             review_context,
             expected_units,
         );
-        let completed = load_entries(path, &context)?;
+        let (completed, spent_usd) = load_state(path, &context)?;
         let mut store = Self {
             path: path.to_path_buf(),
             context,
             completed,
+            spent_usd,
         };
         store.ensure_stage_manifest()?;
         Ok(store)
@@ -268,6 +272,7 @@ impl JournalStore {
         };
 
         append_entry(&self.path, &entry)?;
+        self.spent_usd += entry.estimated_cost_usd;
         self.completed.insert(unit_id, entry);
         Ok(())
     }
@@ -332,8 +337,13 @@ impl JournalStore {
         };
 
         append_entry(&self.path, &entry)?;
+        self.spent_usd += entry.estimated_cost_usd;
         self.completed.insert(unit_id, entry);
         Ok(())
+    }
+
+    pub(crate) fn spent_usd(&self) -> f64 {
+        self.spent_usd
     }
 
     fn ensure_stage_manifest(&mut self) -> Result<(), String> {
@@ -473,6 +483,16 @@ pub(super) fn sha256_text(value: &str) -> String {
     format!("{:x}", Sha256::digest(value.as_bytes()))
 }
 
+pub(crate) fn budget_pause(spent_usd: f64, limit_usd: f64) -> String {
+    format!(
+        "{BUDGET_PAUSE_PREFIX} estimated scan spend ${spent_usd:.4} reached the ${limit_usd:.4} limit. Completed work is journaled; resume with a higher --budget-usd limit. In-flight requests may finish above the limit."
+    )
+}
+
+pub(crate) fn is_budget_pause(error: &str) -> bool {
+    error.starts_with(BUDGET_PAUSE_PREFIX)
+}
+
 pub(crate) fn scan_id(file_records: &[FileRecord], review_context: &str) -> String {
     let mut files = file_records.iter().collect::<Vec<_>>();
     files.sort_by(|left, right| left.file_path.cmp(&right.file_path));
@@ -529,15 +549,22 @@ fn safe_endpoint(endpoint: &str) -> String {
     format!("{scheme}://{safe_authority}{path}")
 }
 
-fn load_entries(
+fn load_state(
     path: &Path,
     context: &JournalContext,
-) -> Result<HashMap<String, JournalEntry>, String> {
-    Ok(read_entries(path, true)?
+) -> Result<(HashMap<String, JournalEntry>, f64), String> {
+    let entries = read_entries(path, true)?;
+    let spent_usd = entries
+        .iter()
+        .filter(|entry| entry.version == JOURNAL_VERSION && entry.scan_id == context.scan_id)
+        .map(|entry| entry.estimated_cost_usd)
+        .sum();
+    let completed = entries
         .into_iter()
         .filter(|entry| !entry.is_manifest && context.matches_cache(entry))
         .map(|entry| (entry.unit_id.clone(), entry))
-        .collect())
+        .collect();
+    Ok((completed, spent_usd))
 }
 
 fn read_entries(path: &Path, recover_torn_tail: bool) -> Result<Vec<JournalEntry>, String> {

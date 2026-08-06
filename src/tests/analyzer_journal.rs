@@ -278,6 +278,7 @@ fn one_scan_summary_combines_role_and_method_usage_without_mixing_coverage() {
     assert_eq!(summary.input_tokens, 30);
     assert_eq!(summary.output_tokens, 3);
     assert_eq!(summary.cached_input_tokens, 4);
+    assert_eq!(methods.spent_usd(), summary.estimated_cost_usd);
     methods.remove().unwrap();
 }
 

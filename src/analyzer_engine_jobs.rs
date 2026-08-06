@@ -4,8 +4,8 @@ use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::future::Future;
 use std::path::Path;
-use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::sync::{Arc, Mutex};
 use tokio::task::JoinSet;
 
 use super::dossier::MethodDossier;
@@ -62,11 +62,12 @@ where
     .await
 }
 
+#[cfg(test)]
 async fn run_bounded_review_tasks_keyed<I, R, Start, Task, Complete, Keys>(
-    mut pending: VecDeque<I>,
+    pending: VecDeque<I>,
     max_concurrency: usize,
-    mut start: Start,
-    mut on_completed: Complete,
+    start: Start,
+    on_completed: Complete,
     keys_for: Keys,
 ) -> Result<Vec<R>, String>
 where
@@ -77,6 +78,56 @@ where
     Complete: FnMut(&R) -> Result<(), String>,
     Keys: Fn(&I) -> Vec<String>,
 {
+    run_bounded_review_tasks_keyed_until(
+        pending,
+        max_concurrency,
+        start,
+        on_completed,
+        keys_for,
+        || true,
+    )
+    .await
+    .map(|run| run.completed)
+}
+
+struct BoundedTaskRun<R> {
+    completed: Vec<R>,
+    stopped_early: bool,
+}
+
+#[derive(Debug)]
+struct SpendBudget {
+    limit_usd: Option<f64>,
+    spent_usd: f64,
+}
+
+impl SpendBudget {
+    fn can_start(&self) -> bool {
+        self.limit_usd.is_none_or(|limit| self.spent_usd < limit)
+    }
+
+    fn add(&mut self, cost_usd: f64) {
+        self.spent_usd += cost_usd;
+    }
+}
+
+async fn run_bounded_review_tasks_keyed_until<I, R, Start, Task, Complete, Keys, CanStart>(
+    mut pending: VecDeque<I>,
+    max_concurrency: usize,
+    mut start: Start,
+    mut on_completed: Complete,
+    keys_for: Keys,
+    mut can_start: CanStart,
+) -> Result<BoundedTaskRun<R>, String>
+where
+    I: Send + 'static,
+    R: Send + 'static,
+    Start: FnMut(I) -> Task,
+    Task: Future<Output = Result<R, String>> + Send + 'static,
+    Complete: FnMut(&R) -> Result<(), String>,
+    Keys: Fn(&I) -> Vec<String>,
+    CanStart: FnMut() -> bool,
+{
     let mut tasks = JoinSet::new();
     let mut completed = Vec::with_capacity(pending.len());
     let mut active_keys = std::collections::HashSet::new();
@@ -85,6 +136,9 @@ where
 
     loop {
         while first_error.is_none() && tasks.len() < max_concurrency {
+            if !can_start() {
+                break;
+            }
             let Some(position) = pending
                 .iter()
                 .position(|item| keys_for(item).iter().all(|key| !active_keys.contains(key)))
@@ -130,7 +184,10 @@ where
 
     match first_error {
         Some(error) => Err(error),
-        None => Ok(completed),
+        None => Ok(BoundedTaskRun {
+            completed,
+            stopped_early: !pending.is_empty(),
+        }),
     }
 }
 
@@ -767,6 +824,7 @@ pub(super) async fn run_review_jobs(
     review_context_key: &str,
     journal_path: Option<&Path>,
     scan_id: Option<&str>,
+    budget_usd: Option<f64>,
 ) -> Result<Vec<LLMVerdict>, String> {
     let semantic_index_hash = semantic_index_hash(&jobs);
     let source_hashes = jobs
@@ -795,6 +853,16 @@ pub(super) async fn run_review_jobs(
             }
         })
         .transpose()?;
+    if budget_usd.is_some() && journal.is_none() {
+        return Err(
+            "--budget-usd requires a durable journal path so completed work can be resumed"
+                .to_string(),
+        );
+    }
+    let spend_budget = Arc::new(Mutex::new(SpendBudget {
+        limit_usd: budget_usd,
+        spent_usd: journal.as_ref().map_or(0.0, JournalStore::spent_usd),
+    }));
     let mut outcomes = Vec::with_capacity(jobs.len());
     let mut pending = Vec::new();
     for (index, job) in jobs.into_iter().enumerate() {
@@ -857,7 +925,7 @@ pub(super) async fn run_review_jobs(
         analyzer.llm_client.max_prompt_chars(),
     );
 
-    let completed = run_bounded_review_tasks_keyed(
+    let completed = run_bounded_review_tasks_keyed_until(
         pending,
         analyzer.llm_client.max_concurrency(),
         |unit| {
@@ -897,13 +965,45 @@ pub(super) async fn run_review_jobs(
                 if let Some(callback) = on_progress.as_ref() {
                     callback(ReviewProgress::Completed);
                 }
+                spend_budget
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .add(crate::pricing::PricingRates::from_env().cost(
+                        outcome.in_tok,
+                        outcome.cached_in_tok,
+                        outcome.out_tok,
+                    ));
             }
             Ok(())
         },
         |unit| review_unit_cache_keys(unit),
+        {
+            let spend_budget = Arc::clone(&spend_budget);
+            move || {
+                spend_budget
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .can_start()
+            }
+        },
     )
     .await?;
-    outcomes.extend(completed.into_iter().flatten().map(|(_, outcome)| outcome));
+    if completed.stopped_early {
+        let budget = spend_budget
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        return Err(crate::review_journal::budget_pause(
+            budget.spent_usd,
+            budget.limit_usd.expect("early stop requires a budget"),
+        ));
+    }
+    outcomes.extend(
+        completed
+            .completed
+            .into_iter()
+            .flatten()
+            .map(|(_, outcome)| outcome),
+    );
 
     outcomes.sort_by_key(|outcome| outcome.index);
     Ok(outcomes

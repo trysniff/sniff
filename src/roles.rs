@@ -222,7 +222,7 @@ pub async fn resolve_file_roles(
     file_records: &[FileRecord],
     client: Arc<LLMClient>,
 ) -> Result<(usize, usize), String> {
-    resolve_file_roles_with_journal(file_records, client, None, None).await
+    resolve_file_roles_with_journal(file_records, client, None, None, None).await
 }
 
 pub async fn resolve_file_roles_with_journal(
@@ -230,6 +230,7 @@ pub async fn resolve_file_roles_with_journal(
     client: Arc<LLMClient>,
     journal_path: Option<&Path>,
     run_id: Option<&str>,
+    budget_usd: Option<f64>,
 ) -> Result<(usize, usize), String> {
     let mut input_tokens = 0usize;
     let mut output_tokens = 0usize;
@@ -268,6 +269,12 @@ pub async fn resolve_file_roles_with_journal(
             )
         })
         .transpose()?;
+    if budget_usd.is_some() && journal.is_none() {
+        return Err(
+            "--budget-usd requires a durable journal path so completed work can be resumed"
+                .to_string(),
+        );
+    }
     for file in unresolved {
         let key = role_journal_key(&file);
         if let Some((role_label, is_current_scan)) =
@@ -292,6 +299,16 @@ pub async fn resolve_file_roles_with_journal(
             }
             cache_file_role(&file.file_path, role);
             continue;
+        }
+
+        if let Some(limit_usd) = budget_usd {
+            let spent_usd = journal
+                .as_ref()
+                .expect("budgeted role review requires a journal")
+                .spent_usd();
+            if spent_usd >= limit_usd {
+                return Err(crate::review_journal::budget_pause(spent_usd, limit_usd));
+            }
         }
 
         let (attempt, usage) =

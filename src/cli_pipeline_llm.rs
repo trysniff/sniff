@@ -23,6 +23,7 @@ pub(super) struct LlmCheckInput<'a> {
     pub(super) role_output_tokens: usize,
     pub(super) journal_path: Option<&'a Path>,
     pub(super) scan_id: Option<&'a str>,
+    pub(super) budget_usd: Option<f64>,
 }
 
 const MAX_PROGRESS_LABEL_CHARS: usize = 76;
@@ -99,6 +100,7 @@ pub(super) async fn run_llm_checks(
             graph: Some(input.graph),
             journal_path: input.journal_path,
             scan_id: input.scan_id,
+            budget_usd: input.budget_usd,
         },
         client,
         Some(on_progress),
@@ -214,6 +216,7 @@ pub(super) async fn prepare_review_artifacts(
     file_records: &mut [FileRecord],
     bar_style: &ProgressStyle,
     journal_path: Option<&Path>,
+    budget_usd: Option<f64>,
 ) -> Result<ReviewArtifacts, Box<dyn std::error::Error>> {
     let ai_expected_reviews_before_roles =
         super::stats::expected_ai_reviews_after_role_resolution(file_records);
@@ -249,6 +252,7 @@ pub(super) async fn prepare_review_artifacts(
         llm_client_for_roles,
         journal_path,
         scan_id.as_deref(),
+        budget_usd,
     )
     .await
     .map_err(IoError::other)?;
@@ -283,6 +287,7 @@ pub(super) async fn prepare_review_artifacts(
         role_output_tokens: role_out_tok,
         journal_path,
         scan_id: scan_id.as_deref(),
+        budget_usd,
     })
     .await
     .map_err(IoError::other);
