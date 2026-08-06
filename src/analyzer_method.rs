@@ -300,7 +300,7 @@ pub(super) async fn call_semantic_pass(
 fn invalid_semantic_adjudication(label: &str, error: &str) -> SemanticMethodReview {
     SemanticMethodReview {
         tier: FindingTier::Unresolved,
-        pattern: "none".to_string(),
+        pattern: crate::product_contract::SlopPattern::None,
         intent: "The semantic review could not be validated.".to_string(),
         reason: "AI review could not be validated.".to_string(),
         evidence: Vec::new(),
@@ -404,6 +404,10 @@ pub(super) fn render_adjudication_prompt(
         numbered_source,
         first_json,
         second_json,
+    );
+    let prompt = prompt.replace(
+        "intent_hidden, duplicated_decision_paths, ceremonial_logic, speculative_defense, needless_indirection, difficult_state_transition, semantic_mismatch, unnecessarily_complicated",
+        crate::product_contract::SLOP_PATTERN_PROMPT_LIST,
     );
     format!(
         "{prompt}\n\nMandatory proof fields: include `contract_impact`, `dependency_impact`, and `change_scope`. Set change_scope to `none` for Clean or Unresolved, `local` for internal statement changes, `signature` for callable-contract changes, and `whole_method` only for deletion. For Slop or Kinda Slop, `contract_impact` must explain why the public/protocol contract remains unchanged, and `dependency_impact` must explain why no caller, test, adapter, callback, re-export, or compatibility path depends on the current machinery. Never call deletion of an exported/public method behavior-preserving when external consumers are not resolvable. If either impact cannot be established, return Unresolved. Scope a finding to the exact cited machinery. A proven local construct may be reported while a separate uncertain construct remains unchanged; the uncertainty does not veto the narrower finding. For Python, adjudicate a compatibility signature separately from an explicit `_ = (...)` discard expression: the signature can remain unchanged while the no-op expression is removable Kinda Slop because deleting only that expression preserves the signature and behavior. Keep every prose field to at most 28 words, make each proof field contribute only its named fact, and do not repeat explanations."
@@ -684,7 +688,8 @@ pub(super) fn enforce_dead_code_proof(
     method: &MethodRecord,
     repository_private_unused_candidate: bool,
 ) -> SemanticMethodReview {
-    if review.pattern != "dead_code"
+    if review.pattern != crate::product_contract::SlopPattern::ResidualMachinery
+        || review.change_scope != "whole_method"
         || !matches!(review.tier, FindingTier::Slop | FindingTier::KindaSlop)
         || repository_private_unused_candidate
     {
@@ -702,7 +707,7 @@ pub(super) fn enforce_dead_code_proof(
     };
     SemanticMethodReview {
         tier: FindingTier::Clean,
-        pattern: "none".to_string(),
+        pattern: crate::product_contract::SlopPattern::None,
         intent: review.intent,
         reason,
         evidence: Vec::new(),
@@ -728,7 +733,7 @@ pub(super) fn enforce_boundary_requirements(
 
     SemanticMethodReview {
         tier: FindingTier::Unresolved,
-        pattern: "none".to_string(),
+        pattern: crate::product_contract::SlopPattern::None,
         intent: review.intent,
         reason: "The method's boundary contract could not be verified from the available repository evidence.".to_string(),
         evidence: Vec::new(),
@@ -760,7 +765,7 @@ pub(super) fn enforce_exported_change_scope(
 
     SemanticMethodReview {
         tier: FindingTier::Unresolved,
-        pattern: "none".to_string(),
+        pattern: crate::product_contract::SlopPattern::None,
         intent: review.intent,
         reason: "The proposed simplification changes an exported/public callable contract whose external consumers cannot be exhaustively resolved from this repository.".to_string(),
         evidence: Vec::new(),

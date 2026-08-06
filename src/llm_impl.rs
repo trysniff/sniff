@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 use tokio::sync::Semaphore;
 
-const REVIEW_CONTRACT_VERSION: &str = "semantic-method-v27";
+const REVIEW_CONTRACT_VERSION: &str = "semantic-method-v28";
 const DEFAULT_CONTEXT_TOKENS: usize = 128_000;
 const RESERVED_OUTPUT_TOKENS: usize = 8_192;
 const CONSERVATIVE_CHARS_PER_TOKEN: usize = 3;

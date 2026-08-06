@@ -208,7 +208,7 @@ fn semanticize_method_response(request: &str, body: &str) -> String {
         verdict["pattern"] = serde_json::Value::String(if tier == "clean" {
             "none".to_string()
         } else {
-            "unnecessarily_complicated".to_string()
+            "residual_machinery".to_string()
         });
         verdict["intent"] = serde_json::Value::String(
             "The method performs the behavior represented by the test fixture.".to_string(),

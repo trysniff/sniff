@@ -41,7 +41,7 @@ fn private_unused_proof_replaces_invented_model_actions_with_graph_facts() {
     };
     let scoped = SemanticMethodReview {
         tier: crate::types::FindingTier::Slop,
-        pattern: "needless_indirection".to_string(),
+        pattern: crate::product_contract::SlopPattern::NeedlessIndirection,
         intent: "Run processing.".to_string(),
         reason: "Inline the call elsewhere.".to_string(),
         evidence: Vec::new(),
@@ -80,7 +80,7 @@ fn private_unused_proof_replaces_invented_model_actions_with_graph_facts() {
 fn proven_private_unused_clean_or_unresolved_reviews_require_severity_refinement() {
     let mut review = SemanticMethodReview {
         tier: crate::types::FindingTier::Clean,
-        pattern: "none".to_string(),
+        pattern: crate::product_contract::SlopPattern::None,
         intent: "Provide a private helper.".to_string(),
         reason: "The method appears coherent.".to_string(),
         evidence: Vec::new(),
@@ -128,7 +128,7 @@ fn adjudicator_prompt_protects_intentional_boundaries() {
     };
     let review = SemanticMethodReview {
         tier: crate::types::FindingTier::Clean,
-        pattern: "none".to_string(),
+        pattern: crate::product_contract::SlopPattern::None,
         intent: "Expose a stable public boundary.".to_string(),
         reason: "clean".to_string(),
         evidence: vec![],
@@ -147,6 +147,12 @@ fn adjudicator_prompt_protects_intentional_boundaries() {
     assert!(prompt.contains("never `slop`"));
     assert!(prompt.contains("Scope a finding to the exact cited machinery"));
     assert!(prompt.contains("the signature can remain unchanged"));
+    for pattern in crate::product_contract::SlopPattern::FINDING_PATTERNS {
+        assert!(prompt.contains(pattern.as_str()));
+    }
+    assert!(!prompt.contains("intent_hidden"));
+    assert!(!prompt.contains("duplicated_decision_paths"));
+    assert!(!prompt.contains("unnecessarily_complicated"));
 }
 
 #[test]
@@ -238,7 +244,7 @@ fn high_fanout_reference_context_keeps_every_call_without_repeating_surrounding_
 fn unresolved_boundary_requirements_override_a_clean_model_verdict() {
     let review = SemanticMethodReview {
         tier: crate::types::FindingTier::Clean,
-        pattern: "none".to_string(),
+        pattern: crate::product_contract::SlopPattern::None,
         intent: "Expose an exported alias.".to_string(),
         reason: "clean".to_string(),
         evidence: vec![],
@@ -276,7 +282,7 @@ fn exported_whole_method_removal_becomes_unresolved() {
     };
     let review = SemanticMethodReview {
         tier: crate::types::FindingTier::Slop,
-        pattern: "ceremonial_logic".to_string(),
+        pattern: crate::product_contract::SlopPattern::CeremonialLogic,
         intent: "Expose a helper.".to_string(),
         reason: "The helper appears unused.".to_string(),
         evidence: vec![],
@@ -318,7 +324,7 @@ fn dead_code_requires_the_closed_world_private_unused_proof() {
     };
     let dead_review = SemanticMethodReview {
         tier: crate::types::FindingTier::Slop,
-        pattern: "dead_code".to_string(),
+        pattern: crate::product_contract::SlopPattern::ResidualMachinery,
         intent: "Provide a helper.".to_string(),
         reason: "No callers exist.".to_string(),
         evidence: vec![],
@@ -344,4 +350,42 @@ fn dead_code_requires_the_closed_world_private_unused_proof() {
 
     let proven = enforce_dead_code_proof(dead_review, &method, true);
     assert_eq!(proven.tier, crate::types::FindingTier::Slop);
+}
+
+#[test]
+fn local_residual_machinery_does_not_require_whole_method_dead_code_proof() {
+    let method = MethodRecord {
+        name: "sample".to_string(),
+        file_path: "src/sample.py".to_string(),
+        source: "def sample():\n    noop()\n    return 1\n".to_string(),
+        loc: 3,
+        param_count: 0,
+        start_line: 1,
+        end_line: 3,
+        is_exported: false,
+        language: "python".to_string(),
+        nesting_depth: 0,
+        references: vec![],
+        real_ref_count: 0,
+    };
+    let review = SemanticMethodReview {
+        tier: crate::types::FindingTier::KindaSlop,
+        pattern: crate::product_contract::SlopPattern::ResidualMachinery,
+        intent: "Return one.".to_string(),
+        reason: "The no-op call adds residual machinery.".to_string(),
+        evidence: vec![],
+        necessity_check: "The no-op has no contract purpose.".to_string(),
+        contract_status: "unnecessary".to_string(),
+        contract_impact: "Removing the no-op preserves the callable contract.".to_string(),
+        dependency_impact: "No dependency observes the no-op.".to_string(),
+        simplification: "Remove noop().".to_string(),
+        change_scope: "local".to_string(),
+        behavior_status: "preserved".to_string(),
+        missing_evidence: vec![],
+    };
+
+    assert_eq!(
+        enforce_dead_code_proof(review.clone(), &method, false),
+        review
+    );
 }

@@ -1,3 +1,4 @@
+use crate::product_contract::SlopPattern;
 use crate::report_types::LLMVerdict;
 use crate::types::FindingTier;
 use serde::{Deserialize, Serialize};
@@ -12,7 +13,7 @@ pub(crate) struct SemanticEvidence {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct SemanticMethodReview {
     pub(crate) tier: FindingTier,
-    pub(crate) pattern: String,
+    pub(crate) pattern: SlopPattern,
     pub(crate) intent: String,
     pub(crate) reason: String,
     pub(crate) evidence: Vec<SemanticEvidence>,
@@ -78,18 +79,6 @@ pub(crate) fn parse_intent_method_review(
         missing_evidence,
     })
 }
-
-const SEMANTIC_PATTERNS: &[&str] = &[
-    "intent_hidden",
-    "duplicated_decision_paths",
-    "ceremonial_logic",
-    "speculative_defense",
-    "needless_indirection",
-    "difficult_state_transition",
-    "semantic_mismatch",
-    "unnecessarily_complicated",
-    "dead_code",
-];
 
 pub(crate) fn parse_result_fields(
     result: &serde_json::Value,
@@ -168,7 +157,9 @@ pub(crate) fn parse_semantic_method_review(
             .map(str::to_string)
             .ok_or_else(|| format!("semantic verdict is missing non-empty {name}"))
     };
-    let pattern = string_field("pattern")?;
+    let raw_pattern = string_field("pattern")?;
+    let pattern = SlopPattern::parse(&raw_pattern)
+        .ok_or_else(|| format!("unknown semantic slop pattern: {raw_pattern}"))?;
     let intent = string_field("intent")?;
     let reason = result
         .get("reason")
@@ -228,7 +219,7 @@ pub(crate) fn parse_semantic_method_review(
         .any(|value| states_unresolved_evidence(value));
 
     if matches!(tier, FindingTier::Clean) {
-        if pattern != "none" {
+        if pattern != SlopPattern::None {
             return Err("clean semantic verdict must use pattern `none`".to_string());
         }
         if contract_status != "required"
@@ -244,7 +235,7 @@ pub(crate) fn parse_semantic_method_review(
             );
         }
     } else if matches!(tier, FindingTier::Unresolved) {
-        if pattern != "none" {
+        if pattern != SlopPattern::None {
             return Err("unresolved semantic verdict must use pattern `none`".to_string());
         }
         if missing_evidence.is_empty()
@@ -256,8 +247,8 @@ pub(crate) fn parse_semantic_method_review(
         {
             return Err("unresolved semantic verdict must use an unknown contract and behavior, no simplification, no change scope, and list missing evidence".to_string());
         }
-    } else if !SEMANTIC_PATTERNS.contains(&pattern.as_str()) {
-        return Err(format!("unknown semantic slop pattern: {pattern}"));
+    } else if !pattern.is_finding() {
+        return Err("non-clean semantic verdict must use a finding pattern".to_string());
     }
     if matches!(tier, FindingTier::Slop | FindingTier::KindaSlop)
         && !matches!(
@@ -488,7 +479,7 @@ pub(crate) fn parse_adversarial_method_review(
                 intent.contract_status == "required" && intent.missing_evidence.is_empty();
             Ok(SemanticMethodReview {
                 tier,
-                pattern: "none".to_string(),
+                pattern: SlopPattern::None,
                 intent: intent.intent.clone(),
                 reason,
                 evidence: Vec::new(),
@@ -520,7 +511,7 @@ pub(crate) fn parse_adversarial_method_review(
             }
             Ok(SemanticMethodReview {
                 tier,
-                pattern: "none".to_string(),
+                pattern: SlopPattern::None,
                 intent: intent.intent.clone(),
                 reason,
                 evidence: Vec::new(),
@@ -715,7 +706,7 @@ pub(crate) fn build_semantic_method_verdict(
     } else {
         format!(
             "{}: {} Simplification: {} Contract impact: {} Dependency proof: {} Necessity proof: {}",
-            semantic_pattern_label(&review.pattern),
+            review.pattern.label(),
             review.reason,
             review.simplification,
             review.contract_impact,
@@ -743,21 +734,6 @@ pub(crate) fn build_semantic_method_verdict(
         loc,
         start_line,
         end_line,
-    }
-}
-
-fn semantic_pattern_label(pattern: &str) -> &str {
-    match pattern {
-        "intent_hidden" => "intent is hidden",
-        "duplicated_decision_paths" => "duplicated decision paths",
-        "ceremonial_logic" => "ceremonial logic",
-        "speculative_defense" => "speculative defensive machinery",
-        "needless_indirection" => "needless indirection",
-        "difficult_state_transition" => "state transition is difficult to follow",
-        "semantic_mismatch" => "method meaning does not match its implementation",
-        "unnecessarily_complicated" => "simple job is unnecessarily complicated",
-        "dead_code" => "dead conceptual machinery",
-        _ => pattern,
     }
 }
 

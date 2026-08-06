@@ -150,7 +150,7 @@ pub(crate) async fn refine_private_unused_if_needed(
     };
     let mut scoped = review;
     scoped.tier = tier;
-    scoped.pattern = "dead_code".to_string();
+    scoped.pattern = crate::product_contract::SlopPattern::ResidualMachinery;
     scoped.reason = result
         .get("reason")
         .and_then(serde_json::Value::as_str)
@@ -287,7 +287,7 @@ fn proven_duplicated_branch_review(
     let shared_statement = shared_branch_statement(duplicated_branch);
     SemanticMethodReview {
         tier,
-        pattern: "duplicated_decision_paths".to_string(),
+        pattern: crate::product_contract::SlopPattern::DuplicatedSemantics,
         intent: review.intent.clone(),
         reason,
         evidence: vec![construct_evidence(method, duplicated_branch)],
@@ -312,7 +312,7 @@ fn unresolved_construct_adjudication(
 ) -> SemanticMethodReview {
     SemanticMethodReview {
         tier: FindingTier::Unresolved,
-        pattern: "none".to_string(),
+        pattern: crate::product_contract::SlopPattern::None,
         intent: review.intent.clone(),
         reason: reason.to_string(),
         evidence: Vec::new(),
@@ -416,7 +416,7 @@ fn proven_local_parameter_discard_review(
 ) -> SemanticMethodReview {
     SemanticMethodReview {
         tier: FindingTier::KindaSlop,
-        pattern: "ceremonial_logic".to_string(),
+        pattern: crate::product_contract::SlopPattern::CeremonialLogic,
         intent: review.intent.clone(),
         reason,
         evidence: vec![construct_evidence(method, discard_block)],
@@ -519,7 +519,7 @@ fn proven_stale_signature_review(
     let parameters = proof.discarded_parameters.join(", ");
     SemanticMethodReview {
         tier,
-        pattern: "ceremonial_logic".to_string(),
+        pattern: crate::product_contract::SlopPattern::CeremonialLogic,
         intent: review.intent.clone(),
         reason,
         evidence: vec![
@@ -559,7 +559,7 @@ fn unresolved_stale_signature_adjudication(
 ) -> SemanticMethodReview {
     SemanticMethodReview {
         tier: FindingTier::Unresolved,
-        pattern: "none".to_string(),
+        pattern: crate::product_contract::SlopPattern::None,
         intent: review.intent.clone(),
         reason: "AI adjudication did not resolve the established stale discarded-parameter proof."
             .to_string(),

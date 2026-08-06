@@ -447,7 +447,7 @@ fn apply_mock_semantic_tier(review: &mut serde_json::Value, tier: &str) {
     review["pattern"] = serde_json::Value::String(if clean || unresolved {
         "none".to_string()
     } else {
-        "unnecessarily_complicated".to_string()
+        "residual_machinery".to_string()
     });
     review["simplification"] = serde_json::Value::String(
         if clean || unresolved {
@@ -649,7 +649,7 @@ fn semanticize_method_response(request: &str, body: &str) -> String {
     verdict["pattern"] = serde_json::Value::String(if tier == "clean" || unresolved {
         "none".to_string()
     } else {
-        "unnecessarily_complicated".to_string()
+        "residual_machinery".to_string()
     });
     verdict["intent"] = serde_json::Value::String(
         "The method performs the behavior represented by this dogfood fixture.".to_string(),

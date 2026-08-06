@@ -10,6 +10,7 @@ pub mod languages;
 pub mod llm;
 pub mod parser;
 pub mod pricing;
+pub mod product_contract;
 pub mod report_types;
 pub mod reporter;
 pub mod roles;

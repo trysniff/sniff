@@ -268,8 +268,8 @@ fn binary_version_change_reuses_the_same_semantic_checkpoint() {
         cached_in_tok: 0,
         retry_on_resume: false,
     };
-    let old = "sniff_version=0.1.5\nreview_contract=semantic-method-v27\nmodel=test";
-    let current = "review_contract=semantic-method-v27\nmodel=test";
+    let old = "sniff_version=0.1.5\nreview_contract=semantic-method-v28\nmodel=test";
+    let current = "review_contract=semantic-method-v28\nmodel=test";
 
     let mut store = CheckpointStore::load(&path, 77, old).unwrap();
     store.record(key.clone(), &outcome).unwrap();
@@ -281,7 +281,7 @@ fn binary_version_change_reuses_the_same_semantic_checkpoint() {
 }
 
 #[test]
-fn v27_checkpoint_migration_preserves_files_and_drops_v26_method_reviews() {
+fn v28_checkpoint_migration_preserves_files_and_drops_v27_method_reviews() {
     let path = temp_checkpoint_path();
     let method = method_job("def ordinary():\n    return 1\n");
     let file = file_job("def ordinary():\n    return 1\n");
@@ -295,20 +295,20 @@ fn v27_checkpoint_migration_preserves_files_and_drops_v26_method_reviews() {
         cached_in_tok: 0,
         retry_on_resume: false,
     };
-    let v26 = "sniff_version=0.1.5\nreview_contract=semantic-method-v26\nmodel=test";
     let v27 = "sniff_version=0.1.5\nreview_contract=semantic-method-v27\nmodel=test";
+    let v28 = "sniff_version=0.1.5\nreview_contract=semantic-method-v28\nmodel=test";
 
-    let mut store = CheckpointStore::load(&path, 77, v26).unwrap();
+    let mut store = CheckpointStore::load(&path, 77, v27).unwrap();
     store.record(method_key.clone(), &outcome).unwrap();
     store.record(file_key.clone(), &outcome).unwrap();
 
-    let mut migrated = CheckpointStore::load(&path, 78, v27).unwrap();
+    let mut migrated = CheckpointStore::load(&path, 78, v28).unwrap();
     assert!(migrated.migrated_from_previous_contract);
     migrated.migrate_previous_contract(&[method, file]).unwrap();
     assert!(!migrated.completed.contains_key(&method_key));
     assert!(migrated.completed.contains_key(&file_key));
 
-    let reloaded = CheckpointStore::load(&path, 78, v27).unwrap();
+    let reloaded = CheckpointStore::load(&path, 78, v28).unwrap();
     assert!(!reloaded.migrated_from_previous_contract);
     assert!(!reloaded.completed.contains_key(&method_key));
     assert!(reloaded.completed.contains_key(&file_key));
