@@ -6,7 +6,10 @@ mod pipeline;
 #[derive(Parser, Debug)]
 #[command(name = "sniff")]
 #[command(version)]
-#[command(about = "Sniff - a slop finder for codebases.", long_about = None)]
+#[command(
+    about = "Find unnecessary or misleading implementation machinery in codebases.",
+    long_about = None
+)]
 pub struct CliArgs {
     #[command(subcommand)]
     pub command: Option<CliCommand>,

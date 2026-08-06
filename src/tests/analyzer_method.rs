@@ -156,6 +156,23 @@ fn adjudicator_prompt_protects_intentional_boundaries() {
 }
 
 #[test]
+fn adjudicator_source_does_not_carry_the_retired_wire_ontology() {
+    let source = include_str!("../analyzer_method.rs");
+    for retired in [
+        "intent_hidden",
+        "duplicated_decision_paths",
+        "difficult_state_transition",
+        "semantic_mismatch",
+        "unnecessarily_complicated",
+    ] {
+        assert!(
+            !source.contains(retired),
+            "retired pattern remains: {retired}"
+        );
+    }
+}
+
+#[test]
 fn adversarial_prompt_receives_the_intent_and_its_missing_evidence() {
     let intent = IntentMethodReview {
         intent: "Preserve a stable callback seam.".to_string(),

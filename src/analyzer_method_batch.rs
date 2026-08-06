@@ -208,7 +208,7 @@ fn render_intent_batch_prompt(items: &[BatchMethodReview]) -> Result<String, Str
 
     Ok(format!(
         "{}\n\n{packet}{history}\n\nINTENT INVESTIGATION PASS\nReconstruct every keyed method's apparent purpose, exposed contract, dependencies, and data or state transformation before any slop judgment. Do not assign Slop, Kinda Slop, Clean, or Unresolved in this pass. Record what the dossier establishes about necessity and list missing evidence only for a concrete suspicious construct that cannot yet be evaluated. Do not compare methods, share a verdict, or let one method's evidence satisfy another.\n\n{}",
-        analyzer_prompts::BATCH_SHARED_SEMANTIC_POLICY,
+        analyzer_prompts::batch_shared_semantic_policy(),
         intent_batch_output_contract(items.len())
     ))
 }
@@ -231,7 +231,7 @@ fn render_adversarial_batch_prompt(
 
     Ok(format!(
         "{}\n\n{packet}{history}\n\nADVERSARIAL SEMANTIC PASS\nChallenge each intent record independently and actively test whether the matching method contains hidden intent, duplicated decision paths, ceremonial logic, speculative defense, needless indirection, difficult state transitions, semantic mismatch, or unnecessary complication. Try to disprove a finding before keeping it. Investigate every listed gap against the matching file and dossier. Do not transfer evidence, intent, or verdicts between methods or files. If the only concern is a possible bug rather than behavior-neutral conceptual machinery, return Clean.\n\nINTENT RECORDS TO CHALLENGE\n{intent_records}\n\n{}",
-        analyzer_prompts::BATCH_SHARED_SEMANTIC_POLICY,
+        analyzer_prompts::batch_shared_semantic_policy(),
         adversarial_batch_output_contract(items.len())
     ))
 }
@@ -276,7 +276,7 @@ fn render_adjudication_batch_prompt(
 
     Ok(format!(
         "{}\n\n{packet}{history}\n\nFINAL ADJUDICATION PASS\nReconstruct each disputed method's actual intent yourself, then decide between its intent investigation and adversarial challenge. Reviewer majority and static metrics are not evidence. Keep a finding only when exact source and contract evidence prove behavior-neutral removable machinery. Respect every deterministic boundary requirement. Scope the verdict to the exact cited construct; a proven local simplification may remain reportable while a separate uncertain construct stays unchanged. Do not transfer evidence, intent, or verdicts between methods.\n\nADJUDICATION RECORDS\n{records}\n\n{}",
-        analyzer_prompts::BATCH_SHARED_SEMANTIC_POLICY,
+        analyzer_prompts::batch_shared_semantic_policy(),
         semantic_batch_output_contract(items.len())
     ))
 }
