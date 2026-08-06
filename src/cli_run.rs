@@ -23,7 +23,11 @@ pub struct CliArgs {
     #[arg(long)]
     pub estimate: bool,
 
-    #[arg(long, help = "approve an unusually expensive scan without prompting")]
+    #[arg(
+        long,
+        global = true,
+        help = "approve an unusually expensive scan without prompting"
+    )]
     pub yes: bool,
 }
 
@@ -38,6 +42,16 @@ pub enum CliCommand {
         #[arg(long)]
         probe: bool,
     },
+    /// Show persisted scan progress without loading configuration or contacting a provider.
+    Status {
+        #[arg(default_value = ".")]
+        path: String,
+    },
+    /// Continue an interrupted scan from its durable journal.
+    Resume {
+        #[arg(default_value = ".")]
+        path: String,
+    },
 }
 
 pub async fn run(args: CliArgs) -> Result<i32, Box<dyn std::error::Error>> {
@@ -48,6 +62,10 @@ pub async fn run(args: CliArgs) -> Result<i32, Box<dyn std::error::Error>> {
     match args.command {
         Some(CliCommand::Doctor { path, probe }) => {
             pipeline::doctor(&path, args.skip_dotenv, probe).await
+        }
+        Some(CliCommand::Status { path }) => pipeline::status(&path).await,
+        Some(CliCommand::Resume { path }) => {
+            pipeline::resume(&path, args.skip_dotenv, args.yes).await
         }
         None if args.estimate => pipeline::estimate(&args.path, args.skip_dotenv).await,
         None => pipeline::run(&args.path, args.skip_dotenv, args.yes).await,
@@ -77,6 +95,28 @@ mod tests {
 
         assert!(args.estimate);
         assert_eq!(args.path, "repo");
+    }
+
+    #[test]
+    fn parses_offline_status() {
+        let args = CliArgs::try_parse_from(["sniff", "status", "repo"]).expect("status arguments");
+
+        assert!(matches!(
+            args.command,
+            Some(CliCommand::Status { path }) if path == "repo"
+        ));
+    }
+
+    #[test]
+    fn parses_explicit_resume_approval() {
+        let args = CliArgs::try_parse_from(["sniff", "resume", "repo", "--yes"])
+            .expect("resume arguments");
+
+        assert!(matches!(
+            args.command,
+            Some(CliCommand::Resume { path }) if path == "repo"
+        ));
+        assert!(args.yes);
     }
 
     #[test]

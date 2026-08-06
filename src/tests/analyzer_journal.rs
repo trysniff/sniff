@@ -1,4 +1,4 @@
-use super::{JournalCompletion, JournalStore, sha256_text};
+use super::{JournalCompletion, JournalStore, sha256_text, summarize};
 use crate::report_types::LLMVerdict;
 use crate::types::FindingTier;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -39,6 +39,15 @@ fn clean_completion() -> JournalCompletion {
         cached_in_tok: 80,
         retry_on_resume: false,
     }
+}
+
+fn completion(tier: FindingTier, in_tok: usize, out_tok: usize) -> JournalCompletion {
+    let mut completion = clean_completion();
+    completion.verdict.as_mut().unwrap().tier = tier;
+    completion.in_tok = in_tok;
+    completion.out_tok = out_tok;
+    completion.cached_in_tok = 0;
+    completion
 }
 
 #[test]
@@ -167,4 +176,61 @@ fn journal_does_not_persist_endpoint_credentials_or_query_secrets() {
     assert!(!contents.contains("secret"));
     assert!(!contents.contains("hidden"));
     store.remove().unwrap();
+}
+
+#[test]
+fn summary_uses_latest_event_per_unit_from_latest_scan() {
+    let path = temp_journal_path();
+    let first =
+        "review_contract=semantic-method-v28\nmodel=first\nendpoint=https://example.invalid";
+    let mut old_scan = JournalStore::load_with_expected(&path, "semantic-a", first, 2).unwrap();
+    old_scan
+        .record(
+            "old-unit".to_string(),
+            sha256_text("old-source"),
+            completion(FindingTier::Slop, 900, 90),
+        )
+        .unwrap();
+
+    let second =
+        "review_contract=semantic-method-v28\nmodel=second\nendpoint=https://example.invalid";
+    let mut latest_scan = JournalStore::load_with_expected(&path, "semantic-b", second, 3).unwrap();
+    let mut retryable = completion(FindingTier::Unresolved, 10, 1);
+    retryable.retry_on_resume = true;
+    latest_scan
+        .record("unit-a".to_string(), sha256_text("source-a"), retryable)
+        .unwrap();
+    latest_scan
+        .record(
+            "unit-a".to_string(),
+            sha256_text("source-a"),
+            completion(FindingTier::KindaSlop, 20, 2),
+        )
+        .unwrap();
+    latest_scan
+        .record(
+            "unit-b".to_string(),
+            sha256_text("source-b"),
+            completion(FindingTier::Slop, 30, 3),
+        )
+        .unwrap();
+
+    let summary = summarize(&path).unwrap();
+    assert_eq!(summary.expected_units, 3);
+    assert_eq!(summary.completed_units, 2);
+    assert_eq!(summary.retryable_units, 0);
+    assert_eq!(summary.slop, 1);
+    assert_eq!(summary.kinda_slop, 1);
+    assert_eq!(summary.unresolved, 0);
+    assert_eq!(summary.input_tokens, 60);
+    assert_eq!(summary.output_tokens, 6);
+    assert_eq!(summary.model.as_deref(), Some("second"));
+    latest_scan.remove().unwrap();
+}
+
+#[test]
+fn summary_of_missing_journal_is_empty() {
+    let summary = summarize(&temp_journal_path()).unwrap();
+
+    assert_eq!(summary, super::JournalSummary::default());
 }

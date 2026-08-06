@@ -683,8 +683,16 @@ pub(super) async fn run_review_jobs(
         .iter()
         .map(|job| (job.journal_unit_id(), job.source_hash()))
         .collect::<HashMap<_, _>>();
+    let expected_units = jobs.len();
     let mut journal = journal_path
-        .map(|path| JournalStore::load(path, &semantic_index_hash, review_context_key))
+        .map(|path| {
+            JournalStore::load_with_expected(
+                path,
+                &semantic_index_hash,
+                review_context_key,
+                expected_units,
+            )
+        })
         .transpose()?;
     let mut outcomes = Vec::with_capacity(jobs.len());
     let mut pending = Vec::new();

@@ -32,6 +32,16 @@ fn run_sniff(arguments: &[&str]) -> Output {
         .expect("sniff process should start")
 }
 
+fn run_sniff_without_provider(arguments: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_sniff"))
+        .args(arguments)
+        .env_remove("SNIFF_API_KEY")
+        .env_remove("SNIFF_ENDPOINT")
+        .env_remove("SNIFF_MODEL")
+        .output()
+        .expect("sniff process should start")
+}
+
 #[test]
 fn estimate_succeeds_with_an_unreachable_provider() {
     let root = fixture();
@@ -65,4 +75,64 @@ fn doctor_without_probe_succeeds_with_an_unreachable_provider() {
         stdout.contains("Doctor passed. No LLM request was made."),
         "{stdout}"
     );
+}
+
+#[test]
+fn status_reads_a_journal_without_provider_configuration() {
+    let root = fixture();
+    let journal = serde_json::json!({
+        "version": 1,
+        "scan_id": "scan",
+        "unit_id": "example.py::greet",
+        "expected_units": 2,
+        "source_hash": "source",
+        "semantic_index_hash": "semantic",
+        "prompt_contract_version": "test",
+        "provider": "openai-compatible",
+        "model": "offline-test-model",
+        "endpoint": "https://example.invalid",
+        "review_context_hash": "context",
+        "status": "completed",
+        "verdict": null,
+        "in_tok": 10,
+        "out_tok": 2,
+        "cached_in_tok": 4,
+        "estimated_cost_usd": 0.001,
+        "timestamp_unix_ms": 1,
+        "proof_level": "not_applicable",
+        "retry_on_resume": false
+    });
+    std::fs::write(root.join(".sniff-journal.jsonl"), format!("{journal}\n"))
+        .expect("journal fixture");
+
+    let output = run_sniff_without_provider(&[
+        "--skip-dotenv",
+        "status",
+        root.to_str().expect("UTF-8 fixture path"),
+    ]);
+    std::fs::remove_dir_all(&root).ok();
+
+    assert!(output.status.success(), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Progress: 1/2 completed (50.0%)"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("Remaining: 1 (0 retryable)"), "{stderr}");
+}
+
+#[test]
+fn resume_without_a_journal_fails_before_loading_provider_configuration() {
+    let root = fixture();
+    let output = run_sniff_without_provider(&[
+        "--skip-dotenv",
+        "resume",
+        root.to_str().expect("UTF-8 fixture path"),
+    ]);
+    std::fs::remove_dir_all(&root).ok();
+
+    assert!(!output.status.success(), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("No Sniff journal exists"), "{stderr}");
+    assert!(!stderr.contains("SNIFF_API_KEY"), "{stderr}");
 }
