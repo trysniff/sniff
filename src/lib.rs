@@ -30,5 +30,6 @@ pub mod signal_layers;
 pub mod slop_cases;
 pub(crate) mod slop_reason;
 pub mod symbol_graph;
+pub mod synthesis;
 pub mod types;
 pub mod walker;

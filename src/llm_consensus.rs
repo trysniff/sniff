@@ -14,6 +14,7 @@ pub(super) fn vote_key(schema: ResponseSchema, value: &Value) -> String {
         | ResponseSchema::MethodIntentReview
         | ResponseSchema::SemanticMethodReview
         | ResponseSchema::ScopedTierReview
+        | ResponseSchema::CaseSynthesis
         | ResponseSchema::FileReview => value
             .get("tier")
             .and_then(Value::as_str)
@@ -71,6 +72,7 @@ fn vote_rank(schema: ResponseSchema, value: &Value) -> usize {
         | ResponseSchema::MethodIntentReview
         | ResponseSchema::SemanticMethodReview
         | ResponseSchema::ScopedTierReview
+        | ResponseSchema::CaseSynthesis
         | ResponseSchema::FileReview => match value
             .get("tier")
             .and_then(Value::as_str)
@@ -118,6 +120,7 @@ pub(super) fn pick_consensus(schema: ResponseSchema, votes: Vec<Value>) -> Optio
             | ResponseSchema::MethodIntentReview
             | ResponseSchema::SemanticMethodReview
             | ResponseSchema::ScopedTierReview
+            | ResponseSchema::CaseSynthesis
             | ResponseSchema::FileReview
     ) {
         if matches!(schema, ResponseSchema::SemanticMethodReview) {

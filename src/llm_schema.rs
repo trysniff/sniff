@@ -29,6 +29,10 @@ pub(super) fn schema_description(schema: ResponseSchema) -> String {
             "Required fields: tier (string) and reason (string). Allowed tiers are slop, kinda_slop, clean, or unresolved."
                 .to_string()
         }
+        ResponseSchema::CaseSynthesis => {
+            "Required root field: cases (array). Each case must contain tier, pattern, mechanism, intent, affected_units (array of strings), evidence (array), contract_boundary, counterfactual, and unresolved_assumptions (array of strings)."
+                .to_string()
+        }
         ResponseSchema::FileReview => {
             "Required fields: smelly (bool), tier (string), evidence (string), cohesive (bool), name_accurate (bool), reason (string). Allowed tiers are slop, kinda_slop, clean, unresolved; unresolved means the file-level evidence is insufficient and must use smelly=false."
                 .to_string()
@@ -208,6 +212,9 @@ pub(super) fn validate_schema(
         ResponseSchema::ScopedTierReview => {
             check_string(obj, "tier", &mut missing, &mut wrong_type);
             check_string(obj, "reason", &mut missing, &mut wrong_type);
+        }
+        ResponseSchema::CaseSynthesis => {
+            check_review_array_envelope(obj, &mut missing, &mut wrong_type);
         }
         ResponseSchema::FileReview => {
             check_bool(obj, "smelly", &mut missing, &mut wrong_type);
