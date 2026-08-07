@@ -24,6 +24,7 @@ pub(crate) mod semantic_indexer_doctor;
 pub(crate) mod semantic_indexer_installation;
 pub(crate) mod semantic_indexer_installer;
 pub(crate) mod semantic_indexer_manifest;
+pub(crate) mod semantic_indexer_runner;
 pub mod signal_layers;
 pub(crate) mod slop_reason;
 pub mod symbol_graph;

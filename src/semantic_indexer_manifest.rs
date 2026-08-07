@@ -101,6 +101,18 @@ impl PinnedIndexer {
     }
 }
 
+impl SemanticIndexerKind {
+    pub(crate) fn display_name(self) -> &'static str {
+        match self {
+            Self::TypeScriptJavaScript => "scip-typescript",
+            Self::Python => "scip-python",
+            Self::Go => "scip-go",
+            Self::Kotlin => "scip-java",
+            Self::Rust => "rust-analyzer",
+        }
+    }
+}
+
 pub(crate) fn pinned_indexer(kind: SemanticIndexerKind) -> Result<PinnedIndexer, String> {
     match kind {
         SemanticIndexerKind::TypeScriptJavaScript => Ok(PinnedIndexer {

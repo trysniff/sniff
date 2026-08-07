@@ -90,6 +90,11 @@ pub enum IndexerCommand {
         #[arg(long)]
         force: bool,
     },
+    /// Execute required pinned indexers and strictly ingest their SCIP output.
+    Index {
+        #[arg(default_value = ".")]
+        path: String,
+    },
 }
 
 pub async fn run(args: CliArgs) -> Result<i32, Box<dyn std::error::Error>> {
@@ -114,6 +119,7 @@ pub async fn run(args: CliArgs) -> Result<i32, Box<dyn std::error::Error>> {
             IndexerCommand::Install { path, force } => {
                 pipeline::install_indexers(&path, force).await
             }
+            IndexerCommand::Index { path } => pipeline::index_semantic_sources(&path).await,
         },
         Some(CliCommand::Status { path }) => pipeline::status(&path).await,
         Some(CliCommand::Resume { path }) => {
@@ -149,6 +155,18 @@ mod tests {
             Some(CliCommand::Indexers {
                 command: IndexerCommand::Install { path, force }
             }) if path == "repo" && force
+        ));
+    }
+
+    #[test]
+    fn parses_explicit_indexer_execution() {
+        let args = CliArgs::try_parse_from(["sniff", "indexers", "index", "repo"])
+            .expect("indexer execution arguments");
+        assert!(matches!(
+            args.command,
+            Some(CliCommand::Indexers {
+                command: IndexerCommand::Index { path }
+            }) if path == "repo"
         ));
     }
 

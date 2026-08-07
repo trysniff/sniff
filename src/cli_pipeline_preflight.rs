@@ -447,6 +447,42 @@ pub async fn install_indexers(path: &str, force: bool) -> Result<i32, Box<dyn st
     Ok(0)
 }
 
+pub async fn index_semantic_sources(path: &str) -> Result<i32, Box<dyn std::error::Error>> {
+    let target = PathBuf::from(path);
+    if !target.exists() {
+        return Err(IoError::new(
+            ErrorKind::NotFound,
+            format!("target path does not exist: {}", target.display()),
+        )
+        .into());
+    }
+    let files = io::scan_files(path, &ResolvedConfig::default())
+        .await
+        .map_err(IoError::other)?;
+    if files.is_empty() {
+        return Err(IoError::new(
+            ErrorKind::InvalidInput,
+            "no supported Rust, Python, JavaScript/TypeScript, Go, or Kotlin files found",
+        )
+        .into());
+    }
+    let root = io::repository_root_for_target(&target);
+    let indexes = crate::semantic_indexer_runner::run_required_indexers(&root, &files)
+        .await
+        .map_err(IoError::other)?;
+    for (kind, index) in indexes {
+        println!(
+            "  [ok] {}: {} documents, {} symbols, {} calls",
+            kind.display_name(),
+            index.documents.len(),
+            index.symbols.len(),
+            index.calls.len()
+        );
+    }
+    println!("SCIP semantic indexing completed. No LLM request was made.");
+    Ok(0)
+}
+
 fn validate_endpoint(endpoint: &str, failures: &mut Vec<String>) {
     if endpoint.trim().is_empty() {
         print_fail(
