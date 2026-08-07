@@ -93,9 +93,8 @@ fn missing_position_encoding(kind: SemanticIndexerKind) -> Option<SemanticPositi
     match kind {
         SemanticIndexerKind::TypeScriptJavaScript => Some(SemanticPositionEncoding::Utf16),
         SemanticIndexerKind::Go => Some(SemanticPositionEncoding::Utf8),
-        SemanticIndexerKind::Python | SemanticIndexerKind::Kotlin | SemanticIndexerKind::Rust => {
-            None
-        }
+        SemanticIndexerKind::Python => Some(SemanticPositionEncoding::Utf32),
+        SemanticIndexerKind::Kotlin | SemanticIndexerKind::Rust => None,
     }
 }
 

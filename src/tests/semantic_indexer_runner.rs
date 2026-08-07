@@ -67,12 +67,15 @@ fn unnamed_roots_use_a_stable_project_name() {
 }
 
 #[test]
-fn go_provider_missing_positions_use_its_explicit_utf8_contract() {
+fn providers_with_missing_positions_use_explicit_encoding_contracts() {
     assert_eq!(
         missing_position_encoding(SemanticIndexerKind::Go),
         Some(SemanticPositionEncoding::Utf8)
     );
-    assert_eq!(missing_position_encoding(SemanticIndexerKind::Python), None);
+    assert_eq!(
+        missing_position_encoding(SemanticIndexerKind::Python),
+        Some(SemanticPositionEncoding::Utf32)
+    );
 }
 
 #[test]
