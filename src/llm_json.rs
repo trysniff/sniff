@@ -69,6 +69,7 @@ fn object_looks_like_result(map: &serde_json::Map<String, serde_json::Value>) ->
         || map.contains_key("reviews")
         || map.contains_key("cases")
         || map.contains_key("decisions")
+        || map.contains_key("proofs")
 }
 
 fn repair_unclosed_object(content: &str) -> Option<String> {

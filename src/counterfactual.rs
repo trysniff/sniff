@@ -482,12 +482,16 @@ fn syntax_check(file_path: &str, source: &str) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::validate_case_proofs;
+    use super::{run_counterfactual_proof, validate_case_proofs};
     use crate::product_contract::SlopPattern;
     use crate::slop_cases::{
         CaseEvidence, CaseProof, CounterfactualDecision, CounterfactualEdit, ProofLevel, SlopCase,
     };
     use crate::types::{FileRecord, FindingTier};
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::sync::Arc;
+    use std::time::Duration;
 
     fn case() -> SlopCase {
         SlopCase {
@@ -563,5 +567,64 @@ mod tests {
         }];
         let error = validate_case_proofs(&[case()], &proofs, &[file()]).unwrap_err();
         assert!(error.contains("does not overlap exact evidence"));
+    }
+
+    #[tokio::test]
+    async fn proof_pipeline_accepts_a_concrete_local_provider_edit() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let Ok((mut stream, _)) = listener.accept() else {
+                return;
+            };
+            let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+            let mut request = [0_u8; 16_384];
+            let _ = stream.read(&mut request);
+            let content = serde_json::json!({
+                "proofs": [{
+                    "case_id": "case-a",
+                    "decision": "validated",
+                    "reason": "The exact replacement preserves the stated return contract.",
+                    "edits": [{
+                        "file_path": "src/demo.py",
+                        "start_line": 2,
+                        "end_line": 3,
+                        "replacement": "    return value\n"
+                    }]
+                }]
+            })
+            .to_string();
+            let body = serde_json::json!({
+                "choices": [{"message": {"content": content}}]
+            })
+            .to_string();
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = stream.write_all(response.as_bytes());
+            let _ = stream.flush();
+        });
+
+        let config = crate::config::ResolvedConfig {
+            thresholds: crate::config::ThresholdsConfig::default(),
+            ignore: Vec::new(),
+            generic_names: Vec::new(),
+            generic_file_names: Vec::new(),
+            model: "test-model".to_string(),
+            llm: crate::config::LLMConfig {
+                system_context: String::new(),
+                endpoint: format!("http://{address}/chat/completions"),
+            },
+        };
+        let client =
+            Arc::new(crate::llm::LLMClient::try_new(config, Some("test-key".to_string())).unwrap());
+        let result = run_counterfactual_proof(&[case()], &[file()], client, None, None, None)
+            .await
+            .unwrap();
+        assert_eq!(result.cases.len(), 1);
+        assert_eq!(result.cases[0].counterfactual_edits.len(), 1);
+        assert!(result.input_tokens > 0 || result.output_tokens > 0);
     }
 }
