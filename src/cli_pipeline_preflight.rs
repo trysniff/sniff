@@ -489,7 +489,8 @@ pub async fn index_semantic_sources(path: &str) -> Result<i32, Box<dyn std::erro
                 ambiguous
             );
         }
-        let joined = crate::semantic_method_join::join_methods(&root, &files, &index)
+        let index_files = crate::semantic_indexer_runner::files_for_indexer(&files, kind);
+        let joined = crate::semantic_method_join::join_methods(&root, &index_files, &index)
             .map_err(IoError::other)?;
         println!(
             "       AST identity join: {} resolved, {} compiler-excluded, {} unresolved",

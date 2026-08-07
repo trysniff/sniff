@@ -56,6 +56,17 @@ pub(crate) async fn run_required_indexers(
     Ok(indexes)
 }
 
+pub(crate) fn files_for_indexer(
+    files: &[FileRecord],
+    kind: SemanticIndexerKind,
+) -> Vec<FileRecord> {
+    files
+        .iter()
+        .filter(|file| language_kind(file) == Some(kind))
+        .cloned()
+        .collect()
+}
+
 async fn run_one(
     spec: PinnedIndexer,
     root: &Path,
