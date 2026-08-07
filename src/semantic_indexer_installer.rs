@@ -5,7 +5,7 @@ use crate::semantic_indexer_manifest::{
 use crate::types::FileRecord;
 use flate2::read::GzDecoder;
 use reqwest::Client;
-use serde_json::Value;
+use serde_json::{Deserializer, Value};
 use sha2::{Digest, Sha256};
 use std::ffi::OsString;
 use std::fs::{self, OpenOptions};
@@ -196,16 +196,8 @@ async fn install_go(
     metadata_command
         .args(["mod", "download", "-json"])
         .arg(&module_spec);
-    let metadata = run_command(&mut metadata_command, "Go module pin verification").await?;
-    let value: Value = serde_json::from_slice(&metadata)
-        .map_err(|error| format!("Go module metadata is not valid JSON: {error}"))?;
-    let origin_hash = value
-        .get("Origin")
-        .and_then(|origin| origin.get("Hash"))
-        .and_then(Value::as_str)
-        .ok_or_else(|| {
-            "Go module metadata omitted Origin.Hash; refusing unverified install".to_string()
-        })?;
+    let metadata = run_json_command(&mut metadata_command, "Go module pin verification").await?;
+    let origin_hash = parse_go_origin_hash(&metadata, module)?;
     if origin_hash != commit {
         return Err(format!(
             "{} Go commit mismatch; expected {}, received {}",
@@ -382,6 +374,50 @@ async fn run_command(command: &mut Command, label: &str) -> Result<Vec<u8>, Stri
             compact_output(&combined)
         ))
     }
+}
+
+async fn run_json_command(command: &mut Command, label: &str) -> Result<Vec<u8>, String> {
+    let output = timeout(COMMAND_TIMEOUT, command.output())
+        .await
+        .map_err(|_| {
+            format!(
+                "{label} timed out after {} seconds",
+                COMMAND_TIMEOUT.as_secs()
+            )
+        })?
+        .map_err(|error| format!("{label} could not start: {error}"))?;
+    if output.status.success() {
+        return Ok(output.stdout);
+    }
+    let mut combined = output.stdout;
+    combined.extend_from_slice(&output.stderr);
+    Err(format!(
+        "{label} failed with {}; output: {}",
+        output.status,
+        compact_output(&combined)
+    ))
+}
+
+fn parse_go_origin_hash(bytes: &[u8], module: &str) -> Result<String, String> {
+    let values = Deserializer::from_slice(bytes)
+        .into_iter::<Value>()
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("Go module metadata is not valid JSON: {error}"))?;
+    values
+        .into_iter()
+        .find(|value| value.get("Path").and_then(Value::as_str) == Some(module))
+        .and_then(|value| {
+            value
+                .get("Origin")
+                .and_then(|origin| origin.get("Hash"))
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .ok_or_else(|| {
+            format!(
+                "Go module metadata omitted Origin.Hash for {module}; refusing unverified install"
+            )
+        })
 }
 
 fn parse_json_string(bytes: &[u8], label: &str) -> Result<String, String> {
