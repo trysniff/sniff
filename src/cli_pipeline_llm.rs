@@ -123,8 +123,10 @@ pub(super) async fn run_llm_checks(
     status_line.finish_and_clear();
     pb_llm.finish_and_clear();
     let (analysis, in_tok, out_tok) = result?;
+    let graph_facts = crate::synthesis::build_graph_facts(&analysis.method_records, input.graph);
     let synthesis = crate::synthesis::run_synthesis(
         &analysis.method_records,
+        &graph_facts,
         Arc::clone(&client),
         input.journal_path,
         input.scan_id,
