@@ -1,4 +1,4 @@
-use crate::report_types::{LLMVerdict, RunReport, RunStats, StaticFlag};
+use crate::report_types::{LLMVerdict, MethodReviewRecord, RunReport, RunStats, StaticFlag};
 use crate::types::{FileRecord, FindingTier};
 
 pub(super) struct StatsInput<'a> {
@@ -128,6 +128,7 @@ pub(super) fn build_run_report_from_parts(
     file_records: &[FileRecord],
     static_flags: Vec<StaticFlag>,
     verdicts: Vec<LLMVerdict>,
+    method_review_records: Vec<MethodReviewRecord>,
     stats: RunStats,
 ) -> (RunReport, bool) {
     let file_verdicts = crate::file_verdicts::build_file_verdicts_with_mode(
@@ -140,6 +141,7 @@ pub(super) fn build_run_report_from_parts(
         file_verdicts,
         static_flags,
         llm_verdicts: verdicts,
+        method_review_records,
         stats,
     };
 

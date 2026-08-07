@@ -13,7 +13,8 @@ pub type ReviewProgressCallback = Arc<dyn Fn(ReviewProgress) + Send + Sync>;
 mod core;
 
 pub use core::{
-    AnalysisRun, Analyzer, JournalSummary, analyze, analyze_with_client,
+    AnalysisResult, AnalysisRun, Analyzer, JournalSummary, analyze, analyze_with_client,
     analyze_with_client_and_graph, analyze_with_client_and_graph_and_journal,
-    analyze_with_client_and_graph_and_journal_with_context, summarize_journal,
+    analyze_with_client_and_graph_and_journal_with_context,
+    analyze_with_client_and_graph_and_journal_with_context_and_records, summarize_journal,
 };

@@ -1,7 +1,7 @@
 use crate::config::ResolvedConfig;
 use crate::env_value;
 use crate::llm::LLMClient;
-use crate::report_types::{LLMVerdict, StaticFlag};
+use crate::report_types::{LLMVerdict, MethodReviewRecord, StaticFlag};
 use crate::types::{FileRecord, MethodRecord};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -47,6 +47,11 @@ pub struct AnalysisRun<'a> {
     pub journal_path: Option<&'a std::path::Path>,
     pub scan_id: Option<&'a str>,
     pub budget_usd: Option<f64>,
+}
+
+pub struct AnalysisResult {
+    pub verdicts: Vec<LLMVerdict>,
+    pub method_records: Vec<MethodReviewRecord>,
 }
 
 pub fn summarize_journal(path: &std::path::Path) -> Result<JournalSummary, String> {
@@ -220,6 +225,21 @@ pub async fn analyze_with_client_and_graph_and_journal_with_context(
     client: Arc<LLMClient>,
     on_progress: Option<ReviewProgressCallback>,
 ) -> Result<(Vec<LLMVerdict>, usize, usize), String> {
+    let (result, total_in, total_out) =
+        analyze_with_client_and_graph_and_journal_with_context_and_records(
+            run,
+            client,
+            on_progress,
+        )
+        .await?;
+    Ok((result.verdicts, total_in, total_out))
+}
+
+pub async fn analyze_with_client_and_graph_and_journal_with_context_and_records(
+    run: AnalysisRun<'_>,
+    client: Arc<LLMClient>,
+    on_progress: Option<ReviewProgressCallback>,
+) -> Result<(AnalysisResult, usize, usize), String> {
     let AnalysisRun {
         file_records,
         context_file_records,
@@ -292,7 +312,7 @@ pub async fn analyze_with_client_and_graph_and_journal_with_context(
     }
 
     let review_context_key = analyzer.llm_client.review_context_key();
-    let verdicts = jobs::run_review_jobs(
+    let result = jobs::run_review_jobs_with_records(
         Arc::clone(&analyzer),
         jobs,
         on_progress,
@@ -305,7 +325,14 @@ pub async fn analyze_with_client_and_graph_and_journal_with_context(
 
     let total_in = analyzer.in_tok.load(Ordering::SeqCst);
     let total_out = analyzer.out_tok.load(Ordering::SeqCst);
-    Ok((verdicts, total_in, total_out))
+    Ok((
+        AnalysisResult {
+            verdicts: result.verdicts,
+            method_records: result.method_records,
+        },
+        total_in,
+        total_out,
+    ))
 }
 
 pub async fn analyze(

@@ -43,6 +43,11 @@ struct ReviewOutcome {
 type ReviewItemCompletionCallback =
     Arc<dyn Fn(&str, &ReviewOutcome) -> Result<(), String> + Send + Sync>;
 
+pub(super) struct ReviewJobResult {
+    pub(super) verdicts: Vec<LLMVerdict>,
+    pub(super) method_records: Vec<MethodReviewRecord>,
+}
+
 async fn abort_and_drain<T: Send + 'static>(tasks: &mut JoinSet<T>) {
     tasks.abort_all();
     while tasks.join_next().await.is_some() {}
@@ -991,6 +996,7 @@ fn validate_method_coverage(
     Ok(())
 }
 
+#[cfg(test)]
 pub(super) async fn run_review_jobs(
     analyzer: Arc<Analyzer>,
     jobs: Vec<ReviewJob>,
@@ -1000,6 +1006,28 @@ pub(super) async fn run_review_jobs(
     scan_id: Option<&str>,
     budget_usd: Option<f64>,
 ) -> Result<Vec<LLMVerdict>, String> {
+    Ok(run_review_jobs_with_records(
+        analyzer,
+        jobs,
+        on_progress,
+        review_context_key,
+        journal_path,
+        scan_id,
+        budget_usd,
+    )
+    .await?
+    .verdicts)
+}
+
+pub(super) async fn run_review_jobs_with_records(
+    analyzer: Arc<Analyzer>,
+    jobs: Vec<ReviewJob>,
+    on_progress: Option<ReviewProgressCallback>,
+    review_context_key: &str,
+    journal_path: Option<&Path>,
+    scan_id: Option<&str>,
+    budget_usd: Option<f64>,
+) -> Result<ReviewJobResult, String> {
     let expected_methods = jobs
         .iter()
         .filter_map(|job| match job {
@@ -1246,10 +1274,20 @@ pub(super) async fn run_review_jobs(
     validate_method_coverage(&expected_methods, &outcomes)?;
 
     outcomes.sort_by_key(|outcome| outcome.index);
-    Ok(outcomes
-        .into_iter()
-        .filter_map(|outcome| outcome.verdict)
-        .collect())
+    let mut verdicts = Vec::with_capacity(outcomes.len());
+    let mut method_records = Vec::with_capacity(expected_methods.len());
+    for outcome in outcomes {
+        if let Some(verdict) = outcome.verdict {
+            verdicts.push(verdict);
+        }
+        if let Some(record) = outcome.method_record {
+            method_records.push(record);
+        }
+    }
+    Ok(ReviewJobResult {
+        verdicts,
+        method_records,
+    })
 }
 
 #[cfg(test)]

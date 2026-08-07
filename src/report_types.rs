@@ -193,5 +193,7 @@ pub struct RunReport {
     pub file_verdicts: Vec<FileVerdict>,
     pub static_flags: Vec<StaticFlag>,
     pub llm_verdicts: Vec<LLMVerdict>,
+    /// The complete identity-bearing method census consumed by later synthesis.
+    pub method_review_records: Vec<MethodReviewRecord>,
     pub stats: RunStats,
 }

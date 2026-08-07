@@ -300,6 +300,7 @@ mod tests {
             ],
             static_flags: vec![],
             llm_verdicts: vec![],
+            method_review_records: vec![],
             stats: RunStats {
                 files_scanned: 2,
                 methods_analyzed: 2,
@@ -324,6 +325,7 @@ mod tests {
             file_verdicts: vec![verdict("unknown.rs", FindingTier::Unresolved)],
             static_flags: vec![],
             llm_verdicts: vec![],
+            method_review_records: vec![],
             stats: RunStats {
                 files_scanned: 1,
                 methods_analyzed: 1,
@@ -348,6 +350,7 @@ mod tests {
             file_verdicts: vec![verdict("src/demo.py", FindingTier::Slop)],
             static_flags: vec![],
             llm_verdicts: vec![method_verdict(FindingTier::Slop)],
+            method_review_records: vec![],
             stats: RunStats {
                 files_scanned: 1,
                 methods_analyzed: 1,
@@ -377,6 +380,7 @@ mod tests {
             file_verdicts: vec![],
             static_flags: vec![],
             llm_verdicts: vec![unproven],
+            method_review_records: vec![],
             stats: RunStats {
                 method_reviews_expected: 1,
                 ..RunStats::default()

@@ -1,7 +1,7 @@
 use crate::analyzer::{ReviewProgress, ReviewProgressCallback};
 use crate::config::ResolvedConfig;
 use crate::llm::LLMClient;
-use crate::report_types::{LLMVerdict, StaticFlag};
+use crate::report_types::{LLMVerdict, MethodReviewRecord, StaticFlag};
 use crate::types::FileRecord;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use std::collections::HashSet;
@@ -43,11 +43,21 @@ fn compact_progress_label(label: &str) -> String {
 
 pub(super) async fn run_llm_checks(
     input: LlmCheckInput<'_>,
-) -> Result<(Vec<LLMVerdict>, usize, usize, usize), String> {
+) -> Result<
+    (
+        Vec<LLMVerdict>,
+        Vec<MethodReviewRecord>,
+        usize,
+        usize,
+        usize,
+    ),
+    String,
+> {
     let method_total = super::stats::expected_method_reviews(input.file_records);
     let llm_total = method_total;
     if llm_total == 0 {
         return Ok((
+            Vec::new(),
             Vec::new(),
             input.role_input_tokens,
             input.role_output_tokens,
@@ -91,26 +101,28 @@ pub(super) async fn run_llm_checks(
     });
 
     let usage_client = Arc::clone(&client);
-    let result = crate::analyzer::analyze_with_client_and_graph_and_journal_with_context(
-        crate::analyzer::AnalysisRun {
-            file_records: input.file_records,
-            context_file_records: input.context_file_records,
-            static_flags: input.static_flags,
-            with_file_reviews: false,
-            graph: Some(input.graph),
-            journal_path: input.journal_path,
-            scan_id: input.scan_id,
-            budget_usd: input.budget_usd,
-        },
-        client,
-        Some(on_progress),
-    )
-    .await;
+    let result =
+        crate::analyzer::analyze_with_client_and_graph_and_journal_with_context_and_records(
+            crate::analyzer::AnalysisRun {
+                file_records: input.file_records,
+                context_file_records: input.context_file_records,
+                static_flags: input.static_flags,
+                with_file_reviews: false,
+                graph: Some(input.graph),
+                journal_path: input.journal_path,
+                scan_id: input.scan_id,
+                budget_usd: input.budget_usd,
+            },
+            client,
+            Some(on_progress),
+        )
+        .await;
     status_line.finish_and_clear();
     pb_llm.finish_and_clear();
-    let (verdicts, in_tok, out_tok) = result?;
+    let (analysis, in_tok, out_tok) = result?;
     Ok((
-        verdicts,
+        analysis.verdicts,
+        analysis.method_records,
         in_tok + input.role_input_tokens,
         out_tok + input.role_output_tokens,
         usage_client.cached_input_tokens(),
@@ -120,6 +132,7 @@ pub(super) async fn run_llm_checks(
 pub(super) struct ReviewArtifacts {
     pub(super) static_flags: Vec<StaticFlag>,
     pub(super) verdicts: Vec<LLMVerdict>,
+    pub(super) method_records: Vec<MethodReviewRecord>,
     pub(super) in_tok: usize,
     pub(super) out_tok: usize,
     pub(super) cached_in_tok: usize,
@@ -295,7 +308,8 @@ pub(super) async fn prepare_review_artifacts(
     .await
     .map_err(IoError::other);
 
-    let (verdicts, fallback_in_tok, fallback_out_tok, fallback_cached_in_tok) = review_result?;
+    let (verdicts, method_records, fallback_in_tok, fallback_out_tok, fallback_cached_in_tok) =
+        review_result?;
     let journal_usage = journal_path
         .map(crate::review_journal::summarize)
         .transpose()
@@ -315,6 +329,7 @@ pub(super) async fn prepare_review_artifacts(
     Ok(ReviewArtifacts {
         static_flags,
         verdicts,
+        method_records,
         in_tok,
         out_tok,
         cached_in_tok,
