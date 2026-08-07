@@ -120,10 +120,13 @@ fn ingest_index(
 
     for information in &source.external_symbols {
         if is_known_malformed_python_external_symbol(metadata, information) {
-            index.provenance.diagnostics.push(format!(
-                "scip-python emitted document-local external symbol {:?}; the declaration was discarded and references remain document-scoped",
-                information.symbol
-            ));
+            record_provider_diagnostic(
+                &mut index,
+                format!(
+                    "scip-python emitted document-local external symbol {:?}; the declaration was discarded and references remain document-scoped",
+                    information.symbol
+                ),
+            );
             continue;
         }
         symbols::ingest_symbol_information(&mut index, information, None, true)?;
@@ -134,6 +137,7 @@ fn ingest_index(
             document,
             expected_languages,
             missing_position_encoding,
+            is_scip_python(metadata),
         )?;
     }
     Ok(index)
@@ -178,11 +182,24 @@ fn is_known_malformed_python_external_symbol(
     metadata: &Metadata,
     information: &scip::types::SymbolInformation,
 ) -> bool {
+    is_scip_python(metadata) && information.symbol.starts_with("local ")
+}
+
+fn is_scip_python(metadata: &Metadata) -> bool {
     metadata
         .tool_info
         .as_ref()
         .is_some_and(|tool| tool.name == "scip-python")
-        && scip::symbol::is_local_symbol(&information.symbol)
+}
+
+fn is_malformed_python_local_identity(python_provider: bool, raw: &str) -> bool {
+    python_provider && raw.starts_with("local ") && scip::symbol::parse_symbol(raw).is_err()
+}
+
+fn record_provider_diagnostic(index: &mut SemanticIndex, diagnostic: String) {
+    if !index.provenance.diagnostics.contains(&diagnostic) {
+        index.provenance.diagnostics.push(diagnostic);
+    }
 }
 
 fn ingest_document(
@@ -190,6 +207,7 @@ fn ingest_document(
     document: &Document,
     expected_languages: Option<&BTreeMap<RepositoryPath, String>>,
     missing_position_encoding: Option<crate::semantic_index::SemanticPositionEncoding>,
+    python_provider: bool,
 ) -> Result<(), String> {
     let path = ranges::normalize_repository_path(&document.relative_path)?;
     let language = if document.language.trim().is_empty() {
@@ -213,12 +231,27 @@ fn ingest_document(
     };
 
     for information in &document.symbols {
+        if is_malformed_python_local_identity(python_provider, &information.symbol) {
+            record_provider_diagnostic(
+                index,
+                format!(
+                    "scip-python emitted malformed local symbol {:?}; the declaration was discarded",
+                    information.symbol
+                ),
+            );
+            continue;
+        }
         symbols::ingest_symbol_information(index, information, Some(&path), false)?;
     }
 
     let mut occurrences = Vec::with_capacity(document.occurrences.len());
     for occurrence in &document.occurrences {
-        occurrences.push(ingest_occurrence(index, &path, occurrence)?);
+        occurrences.push(ingest_occurrence(
+            index,
+            &path,
+            occurrence,
+            python_provider,
+        )?);
     }
     index.documents.insert(
         path.clone(),
@@ -237,6 +270,7 @@ fn ingest_occurrence(
     index: &mut SemanticIndex,
     document: &RepositoryPath,
     occurrence: &Occurrence,
+    python_provider: bool,
 ) -> Result<SemanticOccurrence, String> {
     let range = ranges::occurrence_range(occurrence)?;
     let roles = ranges::occurrence_roles(occurrence.symbol_roles)?;
@@ -248,6 +282,15 @@ fn ingest_occurrence(
     }
 
     let symbol = if occurrence.symbol.is_empty() {
+        None
+    } else if is_malformed_python_local_identity(python_provider, &occurrence.symbol) {
+        record_provider_diagnostic(
+            index,
+            format!(
+                "scip-python emitted malformed local occurrence {:?} in {}; the reference was left unresolved",
+                occurrence.symbol, document.0
+            ),
+        );
         None
     } else {
         let id = symbols::stable_symbol_id(&occurrence.symbol, Some(document))?;

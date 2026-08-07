@@ -209,6 +209,43 @@ fn non_python_local_external_symbols_remain_strictly_rejected() {
 }
 
 #[test]
+fn malformed_python_local_occurrences_remain_unresolved() {
+    let root = root("python-malformed-local");
+    let mut index = base_index();
+    index
+        .metadata
+        .as_mut()
+        .unwrap()
+        .tool_info
+        .as_mut()
+        .unwrap()
+        .name = "scip-python".to_string();
+
+    let mut source = document("src/main.py");
+    source.language = "python".to_string();
+    source.position_encoding =
+        EnumOrUnknown::new(PositionEncoding::UTF8CodeUnitOffsetFromLineStart);
+    source
+        .occurrences
+        .push(single_line("local 1(event)", 0, 0, 1, 8));
+    index.documents.push(source);
+
+    let imported = ingest(&root, &index).unwrap();
+    let occurrence = &imported
+        .documents
+        .get(&crate::semantic_index::RepositoryPath(
+            "src/main.py".to_string(),
+        ))
+        .unwrap()
+        .occurrences[0];
+    assert!(occurrence.symbol.is_none());
+    assert_eq!(imported.provenance.diagnostics.len(), 1);
+    assert!(imported.provenance.diagnostics[0].contains("local 1(event)"));
+    assert!(imported.provenance.diagnostics[0].contains("unresolved"));
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
 fn typed_ranges_take_precedence_over_deprecated_ranges() {
     let root = root("encoding");
     let mut index = base_index();
