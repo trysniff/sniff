@@ -13,6 +13,7 @@ use tokio::time::timeout;
 
 const INDEX_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 const MAX_PROCESS_OUTPUT: usize = 2 * 1024 * 1024;
+const MAX_COMPACT_ERROR_OUTPUT: usize = 8 * 1024;
 
 pub(crate) async fn run_required_indexers(
     repository_root: &Path,
@@ -253,11 +254,15 @@ fn compact_process_output(stdout: &[u8], stderr: &[u8]) -> String {
     }
     let text = String::from_utf8_lossy(&combined);
     let compact = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    if compact.len() > 400 {
-        format!("{}...", &compact[..400])
-    } else {
-        compact
+    if compact.len() <= MAX_COMPACT_ERROR_OUTPUT {
+        return compact;
     }
+
+    let head_len = MAX_COMPACT_ERROR_OUTPUT / 2;
+    let tail_len = MAX_COMPACT_ERROR_OUTPUT - head_len;
+    let head = &compact[..head_len];
+    let tail = &compact[compact.len() - tail_len..];
+    format!("{head} ... [provider output elided] ... {tail}")
 }
 
 #[cfg(test)]

@@ -1,4 +1,7 @@
-use super::{files_for_indexer, indexer_arguments, missing_position_encoding, project_name};
+use super::{
+    compact_process_output, files_for_indexer, indexer_arguments, missing_position_encoding,
+    project_name,
+};
 use crate::semantic_index::SemanticPositionEncoding;
 use crate::semantic_indexer_manifest::{SemanticIndexerKind, pinned_indexer};
 use crate::types::FileRecord;
@@ -98,4 +101,16 @@ fn files_for_indexer_partitions_mixed_language_targets() {
             .collect::<Vec<_>>(),
         ["src/main.py"]
     );
+}
+
+#[test]
+fn provider_error_output_keeps_the_actionable_tail() {
+    let stdout = format!("command context {}", "x".repeat(4_500));
+    let stderr = format!("{} failure details", "y".repeat(4_500));
+
+    let compact = compact_process_output(stdout.as_bytes(), stderr.as_bytes());
+
+    assert!(compact.contains("command context"));
+    assert!(compact.contains("failure details"));
+    assert!(compact.contains("provider output elided"));
 }
