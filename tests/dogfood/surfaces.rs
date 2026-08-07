@@ -24,17 +24,22 @@ fn medication_numeric_rules_still_surface_as_real_slop_end_to_end() {
             if let Ok(mut locked) = prompts_clone.lock() {
                 locked.push(request.clone());
             }
-            let body = if request.contains("CASE FIELDS:") {
-                r#"{"choices":[{"message":{"content":"{\"cases\":[]}"}}]}"#
-            } else if request.contains("Return exactly one JSON object with this shape") {
-                r#"{"choices":[{"message":{"content":"{\"role\":\"mixed\",\"reason\":\"probe\"}"}}]}"#
-            } else if request.contains("MedicationNumericRules.kt") {
-                slop_hits_clone.fetch_add(1, Ordering::SeqCst);
-                r#"{"choices":[{"message":{"content":"{\"smelly\":true,\"tier\":\"slop\",\"evidence\":\"character == '/' && !slashSeen && currentPartHasDigits && !endsWith(\\\".\\\") -> {\",\"cohesive\":false,\"name_accurate\":false,\"reason\":\"function is too big\"}"}}]}"#
+            let body = if let Some(proof_body) = proof_mock_response(&request) {
+                proof_body
             } else {
-                r#"{"choices":[{"message":{"content":"{\"smelly\":false,\"tier\":\"clean\",\"evidence\":\"\",\"cohesive\":true,\"name_accurate\":true,\"reason\":\"clean\"}"}}]}"#
+                let body = if request.contains("CASE FIELDS:") {
+                    r#"{"choices":[{"message":{"content":"{\"cases\":[]}"}}]}"#
+                } else if request.contains("Return exactly one JSON object with this shape") {
+                    r#"{"choices":[{"message":{"content":"{\"role\":\"mixed\",\"reason\":\"probe\"}"}}]}"#
+                } else if request.contains("MedicationNumericRules.kt") {
+                    slop_hits_clone.fetch_add(1, Ordering::SeqCst);
+                    r#"{"choices":[{"message":{"content":"{\"smelly\":true,\"tier\":\"slop\",\"evidence\":\"character == '/' && !slashSeen && currentPartHasDigits && !endsWith(\\\".\\\") -> {\",\"cohesive\":false,\"name_accurate\":false,\"reason\":\"function is too big\"}"}}]}"#
+                } else {
+                    r#"{"choices":[{"message":{"content":"{\"smelly\":false,\"tier\":\"clean\",\"evidence\":\"\",\"cohesive\":true,\"name_accurate\":true,\"reason\":\"clean\"}"}}]}"#
+                };
+                let body = body.to_string();
+                semanticize_method_response(&request, &body)
             };
-            let body = semanticize_method_response(&request, body);
             let response = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 body.len(),
@@ -141,7 +146,6 @@ public fun sanitizeMedicationStrengthInput(value: String): String {
         .arg(root.join("shared"))
         .output()
         .unwrap();
-
     assert!(
         matches!(output.status.code(), Some(0) | Some(1)),
         "unexpected exit status: {:?}\nstdout:\n{}\nstderr:\n{}",
