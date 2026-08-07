@@ -1,4 +1,4 @@
-use super::{compact_output, parse_json_string};
+use super::{compact_output, go_executable_name, parse_json_string};
 
 #[test]
 fn json_integrity_values_must_be_strings() {
@@ -16,4 +16,10 @@ fn command_output_is_bounded_and_compacted() {
     let long = compact_output(&vec![b'x'; 500]);
     assert_eq!(long.len(), 403);
     assert!(long.ends_with("..."));
+}
+
+#[test]
+fn go_installation_uses_the_native_executable_name() {
+    let expected = if cfg!(windows) { "go.exe" } else { "go" };
+    assert_eq!(go_executable_name().to_string_lossy(), expected);
 }
