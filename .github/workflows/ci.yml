@@ -61,10 +61,47 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo package --locked --target-dir target/package-check
 
+  semantic-indexers:
+    name: semantic-indexers
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: "8.8"
+      - name: Require the compiler runtimes used by the pinned providers
+        run: |
+          node --version
+          python3 --version
+          go version
+          java --version
+          gradle --version
+      - name: Install and run every pinned semantic indexer
+        shell: bash
+        run: |
+          set -euo pipefail
+          fixtures=(
+            typescript
+            javascript
+            python
+            go
+            kotlin
+            rust
+          )
+          for fixture in "${fixtures[@]}"; do
+            cargo run --quiet -- indexers install "tests/semantic_gold_fixtures/${fixture}" --yes
+            cargo run --quiet -- indexers index "tests/semantic_gold_fixtures/${fixture}" --yes
+          done
+
   verify:
     name: verify
     if: always()
-    needs: [format, clippy, test, msrv, package]
+    needs: [format, clippy, test, msrv, package, semantic-indexers]
     runs-on: ubuntu-latest
     steps:
       - name: Require every CI job to pass
@@ -75,3 +112,4 @@ jobs:
           [[ "${{ needs.test.result }}" == "success" ]]
           [[ "${{ needs.msrv.result }}" == "success" ]]
           [[ "${{ needs.package.result }}" == "success" ]]
+          [[ "${{ needs.semantic-indexers.result }}" == "success" ]]
