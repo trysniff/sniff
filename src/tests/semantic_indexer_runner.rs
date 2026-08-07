@@ -79,6 +79,10 @@ fn providers_with_missing_positions_use_explicit_encoding_contracts() {
         missing_position_encoding(SemanticIndexerKind::Python),
         Some(SemanticPositionEncoding::Utf32)
     );
+    assert_eq!(
+        missing_position_encoding(SemanticIndexerKind::Kotlin),
+        Some(SemanticPositionEncoding::Utf16)
+    );
 }
 
 #[test]
