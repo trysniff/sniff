@@ -21,10 +21,30 @@ fn python_file() -> FileRecord {
     }
 }
 
+#[cfg(windows)]
+fn synthetic_python_root() -> &'static Path {
+    Path::new(r"C:\work\bumpkin")
+}
+
+#[cfg(not(windows))]
+fn synthetic_python_root() -> &'static Path {
+    Path::new("/work/bumpkin")
+}
+
+#[cfg(windows)]
+fn synthetic_root() -> &'static Path {
+    Path::new(r"\")
+}
+
+#[cfg(not(windows))]
+fn synthetic_root() -> &'static Path {
+    Path::new("/")
+}
+
 #[test]
 fn python_arguments_include_a_stable_project_name() {
     let spec = pinned_indexer(SemanticIndexerKind::Python).unwrap();
-    let arguments = indexer_arguments(spec, Path::new(r"C:\work\bumpkin"), &[]);
+    let arguments = indexer_arguments(spec, synthetic_python_root(), &[]);
     assert_eq!(arguments, ["index", ".", "--project-name", "bumpkin"]);
 }
 
@@ -42,7 +62,7 @@ fn javascript_projects_without_tsconfig_use_inference() {
 
 #[test]
 fn unnamed_roots_use_a_stable_project_name() {
-    assert_eq!(project_name(Path::new(r"\")), "sniff-project");
+    assert_eq!(project_name(synthetic_root()), "sniff-project");
 }
 
 #[test]
