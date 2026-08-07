@@ -90,7 +90,7 @@ explanation = "The local alias has no contract purpose and can be removed while 
 
 [[case]]
 language = "kotlin"
-path = "tests/semantic_gold_fixtures/kotlin/clean_complex.kt"
+path = "tests/semantic_gold_fixtures/kotlin/src/main/kotlin/gold/clean_complex.kt"
 method = "kindaForwardPayload"
 tier = "kinda_slop"
 pattern = "needless_indirection"
@@ -207,7 +207,7 @@ explanation = "Schema consistency checks are necessary when validating untrusted
 
 [[case]]
 language = "kotlin"
-path = "tests/semantic_gold_fixtures/kotlin/conceptual_slop.kt"
+path = "tests/semantic_gold_fixtures/kotlin/src/main/kotlin/gold/conceptual_slop.kt"
 method = "slopPreparePayload"
 tier = "slop"
 pattern = "ceremonial_logic"
@@ -216,7 +216,7 @@ explanation = "The method returns the same value from both branches after an unn
 
 [[case]]
 language = "kotlin"
-path = "tests/semantic_gold_fixtures/kotlin/clean_complex.kt"
+path = "tests/semantic_gold_fixtures/kotlin/src/main/kotlin/gold/clean_complex.kt"
 method = "cleanParseTokens"
 tier = "clean"
 pattern = "none"
@@ -225,7 +225,7 @@ explanation = "The loop is a necessary stateful tokenizer for quoted and escaped
 
 [[case]]
 language = "kotlin"
-path = "tests/semantic_gold_fixtures/kotlin/clean_complex.kt"
+path = "tests/semantic_gold_fixtures/kotlin/src/main/kotlin/gold/clean_complex.kt"
 method = "cleanValidateContract"
 tier = "clean"
 pattern = "none"
