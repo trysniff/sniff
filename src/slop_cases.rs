@@ -57,6 +57,92 @@ pub struct SlopCase {
     pub provenance: Vec<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CaseDecision {
+    Keep,
+    Discard,
+    Unresolved,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CaseAdjudication {
+    pub case_id: String,
+    pub decision: CaseDecision,
+    pub reason: String,
+}
+
+/// Parse the verifier response as a complete, fail-closed decision ledger.
+pub fn parse_case_adjudications(
+    value: &serde_json::Value,
+    cases: &[SlopCase],
+) -> Result<Vec<CaseAdjudication>, String> {
+    let decisions = value
+        .get("decisions")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| "case adjudication is missing decisions array".to_string())?;
+    let known = cases
+        .iter()
+        .map(|case| case.case_id.as_str())
+        .collect::<std::collections::HashSet<_>>();
+    let mut parsed = Vec::with_capacity(decisions.len());
+    let mut seen = std::collections::HashSet::new();
+    for (index, value) in decisions.iter().enumerate() {
+        let object = value
+            .as_object()
+            .ok_or_else(|| format!("case adjudication {index} is not an object"))?;
+        let case_id = object
+            .get("case_id")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| format!("case adjudication {index} is missing case_id"))?;
+        if !known.contains(case_id) {
+            return Err(format!(
+                "case adjudication {index} references unknown case {case_id}"
+            ));
+        }
+        if !seen.insert(case_id) {
+            return Err(format!("case adjudication repeats case {case_id}"));
+        }
+        let decision = match object
+            .get("decision")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+        {
+            Some("keep") => CaseDecision::Keep,
+            Some("discard") => CaseDecision::Discard,
+            Some("unresolved") => CaseDecision::Unresolved,
+            Some(other) => {
+                return Err(format!(
+                    "case adjudication {index} has invalid decision {other}"
+                ));
+            }
+            None => return Err(format!("case adjudication {index} is missing decision")),
+        };
+        let reason = object
+            .get("reason")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+            .ok_or_else(|| format!("case adjudication {index} is missing reason"))?;
+        parsed.push(CaseAdjudication {
+            case_id: case_id.to_string(),
+            decision,
+            reason,
+        });
+    }
+    if seen.len() != known.len() {
+        let missing = known
+            .difference(&seen)
+            .copied()
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(format!("case adjudication omitted cases: {missing}"));
+    }
+    Ok(parsed)
+}
+
 /// Seed repository cases from the exhaustive method census.
 ///
 /// This is deliberately conservative: it does not merge similarly worded
@@ -127,7 +213,10 @@ pub fn case_evidence_matches_record(case: &SlopCase, record: &MethodReviewRecord
 
 #[cfg(test)]
 mod tests {
-    use super::{ProofLevel, case_evidence_matches_record, seed_method_cases};
+    use super::{
+        CaseDecision, ProofLevel, case_evidence_matches_record, parse_case_adjudications,
+        seed_method_cases,
+    };
     use crate::product_contract::SlopPattern;
     use crate::report_types::{LLMVerdict, MethodEvidenceRecord, MethodReviewRecord};
     use crate::types::FindingTier;
@@ -197,5 +286,41 @@ mod tests {
 
         assert_eq!(cases[0].pattern, SlopPattern::Other);
         assert_eq!(cases[0].affected_units, vec!["unit-1"]);
+    }
+
+    #[test]
+    fn case_adjudication_requires_one_decision_for_every_case() {
+        let cases = seed_method_cases(&[record(FindingTier::Slop, "ceremonial_logic")]);
+        let value = serde_json::json!({
+            "decisions": [{
+                "case_id": "unit-1",
+                "decision": "keep",
+                "reason": "The challenge found no contract or behavior dependency."
+            }]
+        });
+
+        let parsed = parse_case_adjudications(&value, &cases).unwrap();
+
+        assert_eq!(parsed[0].decision, CaseDecision::Keep);
+    }
+
+    #[test]
+    fn case_adjudication_rejects_unknown_or_missing_cases() {
+        let cases = seed_method_cases(&[record(FindingTier::Slop, "ceremonial_logic")]);
+        let value = serde_json::json!({
+            "decisions": [{
+                "case_id": "unit-1",
+                "decision": "discard",
+                "reason": "The apparent machinery is a public contract."
+            }, {
+                "case_id": "invented",
+                "decision": "keep",
+                "reason": "invented"
+            }]
+        });
+
+        let error = parse_case_adjudications(&value, &cases).unwrap_err();
+
+        assert!(error.contains("unknown case invented"));
     }
 }

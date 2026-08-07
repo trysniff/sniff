@@ -59,6 +59,7 @@ pub enum ResponseSchema {
     SemanticMethodBatchReview,
     ScopedTierReview,
     CaseSynthesis,
+    CaseAdjudication,
     FileReview,
     RoleClassification,
 }

@@ -33,6 +33,10 @@ pub(super) fn schema_description(schema: ResponseSchema) -> String {
             "Required root field: cases (array). Each case must contain tier, pattern, mechanism, intent, affected_units (array of strings), evidence (array), contract_boundary, counterfactual, and unresolved_assumptions (array of strings)."
                 .to_string()
         }
+        ResponseSchema::CaseAdjudication => {
+            "Required root field: decisions (array). Each decision must contain case_id (string), decision (keep, discard, or unresolved), and reason (string)."
+                .to_string()
+        }
         ResponseSchema::FileReview => {
             "Required fields: smelly (bool), tier (string), evidence (string), cohesive (bool), name_accurate (bool), reason (string). Allowed tiers are slop, kinda_slop, clean, unresolved; unresolved means the file-level evidence is insufficient and must use smelly=false."
                 .to_string()
@@ -198,6 +202,18 @@ pub(super) fn validate_schema(
         }
     }
 
+    fn check_decision_array_envelope(
+        obj: &serde_json::Map<String, serde_json::Value>,
+        missing: &mut Vec<String>,
+        wrong_type: &mut Vec<String>,
+    ) {
+        match obj.get("decisions") {
+            Some(value) if value.is_array() => {}
+            Some(_) => wrong_type.push("decisions".to_string()),
+            None => missing.push("decisions".to_string()),
+        }
+    }
+
     match schema {
         ResponseSchema::MethodReview => {
             check_bool(obj, "smelly", &mut missing, &mut wrong_type);
@@ -227,6 +243,9 @@ pub(super) fn validate_schema(
         }
         ResponseSchema::CaseSynthesis => {
             check_case_array_envelope(obj, &mut missing, &mut wrong_type);
+        }
+        ResponseSchema::CaseAdjudication => {
+            check_decision_array_envelope(obj, &mut missing, &mut wrong_type);
         }
         ResponseSchema::FileReview => {
             check_bool(obj, "smelly", &mut missing, &mut wrong_type);

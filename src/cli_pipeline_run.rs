@@ -110,8 +110,18 @@ fn format_journal_status(
             summary.completed_units as f64 * 100.0 / summary.expected_units as f64
         )
     };
+    let adjudication = if summary.expected_adjudication_units == 0 {
+        String::new()
+    } else {
+        format!(
+            "\nAdjudication: {}/{} completed ({} retryable)",
+            summary.completed_adjudication_units,
+            summary.expected_adjudication_units,
+            summary.retryable_adjudication_units
+        )
+    };
     format!(
-        "Journal: {}\nProgress: {}/{} completed ({progress})\nRemaining: {remaining} ({} retryable)\nRole metadata: {}/{} completed ({} retryable)\nFindings so far: {} slop, {} kinda slop, {} unresolved\nUsage so far: {} input, {} cached input, {} output tokens; ${:.4} estimated\nProvider: {} / {}",
+        "Journal: {}\nProgress: {}/{} completed ({progress})\nRemaining: {remaining} ({} retryable)\nRole metadata: {}/{} completed ({} retryable){adjudication}\nFindings so far: {} slop, {} kinda slop, {} unresolved\nUsage so far: {} input, {} cached input, {} output tokens; ${:.4} estimated\nProvider: {} / {}",
         journal_path.display(),
         summary.completed_units,
         summary.expected_units,
@@ -409,6 +419,9 @@ mod tests {
             expected_synthesis_units: 0,
             completed_synthesis_units: 0,
             retryable_synthesis_units: 0,
+            expected_adjudication_units: 0,
+            completed_adjudication_units: 0,
+            retryable_adjudication_units: 0,
             slop: 1,
             kinda_slop: 2,
             unresolved: 0,

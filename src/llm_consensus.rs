@@ -20,9 +20,9 @@ pub(super) fn vote_key(schema: ResponseSchema, value: &Value) -> String {
             .and_then(Value::as_str)
             .unwrap_or("unknown")
             .to_string(),
-        ResponseSchema::MethodIntentBatchReview | ResponseSchema::SemanticMethodBatchReview => {
-            value.to_string()
-        }
+        ResponseSchema::MethodIntentBatchReview
+        | ResponseSchema::SemanticMethodBatchReview
+        | ResponseSchema::CaseAdjudication => value.to_string(),
     }
 }
 
@@ -85,6 +85,7 @@ fn vote_rank(schema: ResponseSchema, value: &Value) -> usize {
         },
         ResponseSchema::MethodIntentBatchReview
         | ResponseSchema::SemanticMethodBatchReview
+        | ResponseSchema::CaseAdjudication
         | ResponseSchema::RoleClassification => 0,
     }
 }

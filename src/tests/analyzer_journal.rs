@@ -1,8 +1,9 @@
 use super::{
-    JournalCompletion, JournalRoleCompletion, JournalStage, JournalStore,
-    JournalSynthesisCompletion, scan_id, sha256_text, summarize,
+    JournalAdjudicationCompletion, JournalCompletion, JournalRoleCompletion, JournalStage,
+    JournalStore, JournalSynthesisCompletion, scan_id, sha256_text, summarize,
 };
 use crate::report_types::LLMVerdict;
+use crate::slop_cases::{CaseAdjudication, CaseDecision};
 use crate::types::{FileRecord, FindingTier};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -330,6 +331,59 @@ fn synthesis_stage_persists_empty_case_results_for_resume() {
     assert_eq!(summary.retryable_synthesis_units, 0);
     assert_eq!(summary.input_tokens, 40);
     assert_eq!(summary.output_tokens, 4);
+    loaded.remove().unwrap();
+}
+
+#[test]
+fn adjudication_stage_persists_complete_decisions_for_resume() {
+    let path = temp_journal_path();
+    let context =
+        "review_contract=semantic-method-v28\nmodel=test\nendpoint=https://example.invalid";
+    let mut adjudication = JournalStore::load_for_scan(
+        &path,
+        "run-a",
+        JournalStage::Adjudication,
+        "adjudication-index",
+        context,
+        1,
+    )
+    .unwrap();
+    let decision = CaseAdjudication {
+        case_id: "case-a".to_string(),
+        decision: CaseDecision::Keep,
+        reason: "The challenge found no contract dependency.".to_string(),
+    };
+    adjudication
+        .record_adjudication(
+            "adjudication-unit".to_string(),
+            sha256_text("case-a"),
+            JournalAdjudicationCompletion {
+                decisions: vec![decision.clone()],
+                in_tok: 20,
+                out_tok: 3,
+                cached_in_tok: 0,
+                retry_on_resume: false,
+            },
+        )
+        .unwrap();
+
+    let loaded = JournalStore::load_for_scan(
+        &path,
+        "run-a",
+        JournalStage::Adjudication,
+        "adjudication-index",
+        context,
+        1,
+    )
+    .unwrap();
+    assert_eq!(
+        loaded.reusable_adjudication("adjudication-unit"),
+        Some((vec![decision], true))
+    );
+    let summary = summarize(&path).unwrap();
+    assert_eq!(summary.expected_adjudication_units, 1);
+    assert_eq!(summary.completed_adjudication_units, 1);
+    assert_eq!(summary.retryable_adjudication_units, 0);
     loaded.remove().unwrap();
 }
 

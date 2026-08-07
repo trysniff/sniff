@@ -133,12 +133,21 @@ pub(super) async fn run_llm_checks(
         input.budget_usd,
     )
     .await?;
+    let adjudication = crate::synthesis::run_case_adjudication(
+        &synthesis.cases,
+        &analysis.method_records,
+        Arc::clone(&client),
+        input.journal_path,
+        input.scan_id,
+        input.budget_usd,
+    )
+    .await?;
     Ok((
         analysis.verdicts,
         analysis.method_records,
-        synthesis.cases,
-        in_tok + input.role_input_tokens + synthesis.input_tokens,
-        out_tok + input.role_output_tokens + synthesis.output_tokens,
+        adjudication.cases,
+        in_tok + input.role_input_tokens + synthesis.input_tokens + adjudication.input_tokens,
+        out_tok + input.role_output_tokens + synthesis.output_tokens + adjudication.output_tokens,
         usage_client.cached_input_tokens(),
     ))
 }
