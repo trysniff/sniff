@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 
+use crate::slop_cases::SlopCase;
 use crate::types::{FindingTier, MethodRecord};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -195,5 +196,7 @@ pub struct RunReport {
     pub llm_verdicts: Vec<LLMVerdict>,
     /// The complete identity-bearing method census consumed by later synthesis.
     pub method_review_records: Vec<MethodReviewRecord>,
+    /// Typed cases seeded from proven method findings; later synthesis may merge them.
+    pub slop_cases: Vec<SlopCase>,
     pub stats: RunStats,
 }

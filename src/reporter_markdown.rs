@@ -301,6 +301,7 @@ mod tests {
             static_flags: vec![],
             llm_verdicts: vec![],
             method_review_records: vec![],
+            slop_cases: vec![],
             stats: RunStats {
                 files_scanned: 2,
                 methods_analyzed: 2,
@@ -326,6 +327,7 @@ mod tests {
             static_flags: vec![],
             llm_verdicts: vec![],
             method_review_records: vec![],
+            slop_cases: vec![],
             stats: RunStats {
                 files_scanned: 1,
                 methods_analyzed: 1,
@@ -351,6 +353,7 @@ mod tests {
             static_flags: vec![],
             llm_verdicts: vec![method_verdict(FindingTier::Slop)],
             method_review_records: vec![],
+            slop_cases: vec![],
             stats: RunStats {
                 files_scanned: 1,
                 methods_analyzed: 1,
@@ -381,6 +384,7 @@ mod tests {
             static_flags: vec![],
             llm_verdicts: vec![unproven],
             method_review_records: vec![],
+            slop_cases: vec![],
             stats: RunStats {
                 method_reviews_expected: 1,
                 ..RunStats::default()

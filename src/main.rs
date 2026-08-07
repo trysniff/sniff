@@ -27,6 +27,7 @@ pub(crate) mod semantic_indexer_manifest;
 pub(crate) mod semantic_indexer_runner;
 pub(crate) mod semantic_method_join;
 pub mod signal_layers;
+pub mod slop_cases;
 pub(crate) mod slop_reason;
 pub mod symbol_graph;
 pub mod types;

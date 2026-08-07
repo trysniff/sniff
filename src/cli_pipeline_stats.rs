@@ -137,11 +137,13 @@ pub(super) fn build_run_report_from_parts(
         &verdicts,
         false,
     );
+    let slop_cases = crate::slop_cases::seed_method_cases(&method_review_records);
     let run_report = RunReport {
         file_verdicts,
         static_flags,
         llm_verdicts: verdicts,
         method_review_records,
+        slop_cases,
         stats,
     };
 
