@@ -512,6 +512,7 @@ mod tests {
                 tool_version: None,
                 arguments: Vec::new(),
                 source_text_encoding: None,
+                diagnostics: Vec::new(),
             },
             documents: BTreeMap::from([(
                 document_path.clone(),

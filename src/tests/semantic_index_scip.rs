@@ -160,6 +160,55 @@ fn document_local_symbols_are_collision_free_across_files() {
 }
 
 #[test]
+fn python_local_external_symbols_are_discarded_with_a_provenance_diagnostic() {
+    let root = root("python-local-external");
+    let mut index = base_index();
+    index
+        .metadata
+        .as_mut()
+        .unwrap()
+        .tool_info
+        .as_mut()
+        .unwrap()
+        .name = "scip-python".to_string();
+    let mut external = SymbolInformation::new();
+    external.symbol = "local 5".to_string();
+    index.external_symbols.push(external);
+
+    let mut source = document("src/main.py");
+    source.language = "python".to_string();
+    source.position_encoding =
+        EnumOrUnknown::new(PositionEncoding::UTF8CodeUnitOffsetFromLineStart);
+    source.occurrences.push(single_line("local 5", 0, 0, 1, 2));
+    index.documents.push(source);
+
+    let imported = ingest(&root, &index).unwrap();
+    assert!(!imported.symbols.values().any(|symbol| {
+        symbol.origin == SemanticSymbolOrigin::External && symbol.provider_identity == "local 5"
+    }));
+    assert_eq!(imported.provenance.diagnostics.len(), 1);
+    assert!(imported.provenance.diagnostics[0].contains("local 5"));
+    assert!(imported.provenance.diagnostics[0].contains("document-scoped"));
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn non_python_local_external_symbols_remain_strictly_rejected() {
+    let root = root("non-python-local-external");
+    let mut index = base_index();
+    let mut external = SymbolInformation::new();
+    external.symbol = "local 5".to_string();
+    index.external_symbols.push(external);
+
+    let error = ingest(&root, &index).unwrap_err();
+    assert!(
+        error.contains("has no containing document identity"),
+        "{error}"
+    );
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
 fn typed_ranges_take_precedence_over_deprecated_ranges() {
     let root = root("encoding");
     let mut index = base_index();

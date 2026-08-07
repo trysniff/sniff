@@ -119,6 +119,13 @@ fn ingest_index(
     let mut index = empty_index(repository_root, metadata)?;
 
     for information in &source.external_symbols {
+        if is_known_malformed_python_external_symbol(metadata, information) {
+            index.provenance.diagnostics.push(format!(
+                "scip-python emitted document-local external symbol {:?}; the declaration was discarded and references remain document-scoped",
+                information.symbol
+            ));
+            continue;
+        }
         symbols::ingest_symbol_information(&mut index, information, None, true)?;
     }
     for document in &source.documents {
@@ -155,6 +162,7 @@ fn empty_index(repository_root: &Path, metadata: &Metadata) -> Result<SemanticIn
             tool_version: (!tool.version.trim().is_empty()).then(|| tool.version.clone()),
             arguments: tool.arguments.clone(),
             source_text_encoding: ranges::metadata_text_encoding(metadata)?,
+            diagnostics: Vec::new(),
         },
         documents: BTreeMap::new(),
         symbols: BTreeMap::new(),
@@ -164,6 +172,17 @@ fn empty_index(repository_root: &Path, metadata: &Metadata) -> Result<SemanticIn
         test_relationships: BTreeSet::new(),
         unresolved_edges: BTreeSet::<SemanticUnresolvedEdge>::new(),
     })
+}
+
+fn is_known_malformed_python_external_symbol(
+    metadata: &Metadata,
+    information: &scip::types::SymbolInformation,
+) -> bool {
+    metadata
+        .tool_info
+        .as_ref()
+        .is_some_and(|tool| tool.name == "scip-python")
+        && scip::symbol::is_local_symbol(&information.symbol)
 }
 
 fn ingest_document(

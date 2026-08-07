@@ -489,6 +489,9 @@ pub async fn index_semantic_sources(path: &str) -> Result<i32, Box<dyn std::erro
                 ambiguous
             );
         }
+        for diagnostic in &index.provenance.diagnostics {
+            println!("       semantic provider diagnostic: {diagnostic}");
+        }
         let index_files = crate::semantic_indexer_runner::files_for_indexer(&files, kind);
         let joined = crate::semantic_method_join::join_methods(&root, &index_files, &index)
             .map_err(IoError::other)?;
