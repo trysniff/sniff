@@ -171,6 +171,7 @@ fn spawn_sniff(root: &Path, endpoint: &str, resume: bool) -> Child {
         .env("SNIFF_LLM_REQUEST_TIMEOUT_SECS", "10")
         .env("SNIFF_LLM_MAX_CONCURRENCY", "1")
         .env("SNIFF_LLM_METHOD_BATCH_SIZE", "1")
+        .env("SNIFF_CACHE_DIR", root.join("test-cache"))
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     if resume {

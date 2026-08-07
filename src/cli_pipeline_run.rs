@@ -183,8 +183,9 @@ fn strip_windows_verbatim_prefix(path: std::path::PathBuf) -> std::path::PathBuf
 async fn scan_target(
     path: &str,
     config: &crate::config::ResolvedConfig,
+    semantic_cache: &crate::semantic_cache::SemanticIndexCache,
 ) -> Result<Vec<crate::types::FileRecord>, String> {
-    io::scan_files(path, config).await
+    io::scan_files_with_cache(path, config, Some(semantic_cache)).await
 }
 
 async fn build_run_report(
@@ -193,6 +194,7 @@ async fn build_run_report(
     file_records: &mut [crate::types::FileRecord],
     bar_style: &ProgressStyle,
     journal_path: &std::path::Path,
+    semantic_cache: &crate::semantic_cache::SemanticIndexCache,
     budget_usd: Option<f64>,
 ) -> Result<(RunReport, bool), Box<dyn std::error::Error>> {
     let review = llm::prepare_review_artifacts(
@@ -201,6 +203,7 @@ async fn build_run_report(
         file_records,
         bar_style,
         Some(journal_path),
+        semantic_cache,
         budget_usd,
     )
     .await?;
@@ -245,10 +248,14 @@ pub async fn run(
     env::load_target_env(target_path, skip_dotenv).map_err(IoError::other)?;
     let config = crate::config_loader::resolve_config(target_path)
         .map_err(|err| IoError::new(ErrorKind::InvalidInput, err))?;
+    let repository_root = io::repository_root_for_target(target_path);
+    let semantic_cache =
+        crate::semantic_cache::SemanticIndexCache::for_repository(&repository_root)
+            .map_err(IoError::other)?;
     crate::roles::clear_file_role_cache();
 
     eprintln!("Scanning source files...");
-    let mut file_records = scan_target(path, &config)
+    let mut file_records = scan_target(path, &config, &semantic_cache)
         .await
         .map_err(|err| IoError::other(format!("file scan failed: {err}")))?;
 
@@ -278,6 +285,7 @@ pub async fn run(
         &mut file_records,
         &bar_style,
         &journal_path,
+        &semantic_cache,
         budget_usd,
     )
     .await;
