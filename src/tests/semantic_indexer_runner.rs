@@ -1,4 +1,5 @@
-use super::{files_for_indexer, indexer_arguments, project_name};
+use super::{files_for_indexer, indexer_arguments, missing_position_encoding, project_name};
+use crate::semantic_index::SemanticPositionEncoding;
 use crate::semantic_indexer_manifest::{SemanticIndexerKind, pinned_indexer};
 use crate::types::FileRecord;
 use std::path::Path;
@@ -63,6 +64,15 @@ fn javascript_projects_without_tsconfig_use_inference() {
 #[test]
 fn unnamed_roots_use_a_stable_project_name() {
     assert_eq!(project_name(synthetic_root()), "sniff-project");
+}
+
+#[test]
+fn go_provider_missing_positions_use_its_explicit_utf8_contract() {
+    assert_eq!(
+        missing_position_encoding(SemanticIndexerKind::Go),
+        Some(SemanticPositionEncoding::Utf8)
+    );
+    assert_eq!(missing_position_encoding(SemanticIndexerKind::Python), None);
 }
 
 #[test]

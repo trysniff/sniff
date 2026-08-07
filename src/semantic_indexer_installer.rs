@@ -130,9 +130,11 @@ fn create_staging_directory(final_root: &Path, spec: PinnedIndexer) -> Result<Pa
 async fn install_source(spec: PinnedIndexer, root: &Path) -> Result<(), String> {
     match spec.source {
         IndexerInstallSource::Npm { package, .. } => install_npm(spec, root, package).await,
-        IndexerInstallSource::GoModule { module, commit } => {
-            install_go(spec, root, module, commit).await
-        }
+        IndexerInstallSource::GoModule {
+            module,
+            package,
+            commit,
+        } => install_go(spec, root, module, package, commit).await,
         IndexerInstallSource::Download(download) => install_download(spec, root, download).await,
     }
 }
@@ -186,10 +188,11 @@ async fn install_go(
     spec: PinnedIndexer,
     root: &Path,
     module: &str,
+    package: &str,
     commit: &str,
 ) -> Result<(), String> {
     let module_spec = format!("{module}@v{}", spec.version);
-    let mut metadata_command = Command::new(executable_name("go"));
+    let mut metadata_command = Command::new(go_executable_name());
     metadata_command
         .args(["mod", "download", "-json"])
         .arg(&module_spec);
@@ -212,10 +215,10 @@ async fn install_go(
     let bin = root.join("bin");
     fs::create_dir_all(&bin)
         .map_err(|error| format!("failed to create Go bin directory: {error}"))?;
-    let mut command = Command::new(executable_name("go"));
+    let mut command = Command::new(go_executable_name());
     command
         .args(["install"])
-        .arg(&module_spec)
+        .arg(format!("{package}@v{}", spec.version))
         .env("GOBIN", &bin);
     run_command(&mut command, "Go indexer installation")
         .await
@@ -405,6 +408,14 @@ fn executable_name(name: &str) -> OsString {
         OsString::from(format!("{name}.cmd"))
     } else {
         OsString::from(name)
+    }
+}
+
+fn go_executable_name() -> OsString {
+    if cfg!(windows) {
+        OsString::from("go.exe")
+    } else {
+        OsString::from("go")
     }
 }
 

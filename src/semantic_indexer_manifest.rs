@@ -30,6 +30,7 @@ pub(crate) enum IndexerInstallSource {
     },
     GoModule {
         module: &'static str,
+        package: &'static str,
         commit: &'static str,
     },
     Download(IndexerDownload),
@@ -143,7 +144,8 @@ pub(crate) fn pinned_indexer(kind: SemanticIndexerKind) -> Result<PinnedIndexer,
             version: "0.2.7",
             runtime: IndexerRuntime::Native,
             source: IndexerInstallSource::GoModule {
-                module: "github.com/scip-code/scip-go/cmd/scip-go",
+                module: "github.com/scip-code/scip-go",
+                package: "github.com/scip-code/scip-go/cmd/scip-go",
                 commit: "2e9ff3c2603a85daabe125c9f20075ec52df0731",
             },
             version_output: VersionOutput::ContainsToken("0.2.7"),

@@ -92,10 +92,10 @@ fn expected_document_languages(
 fn missing_position_encoding(kind: SemanticIndexerKind) -> Option<SemanticPositionEncoding> {
     match kind {
         SemanticIndexerKind::TypeScriptJavaScript => Some(SemanticPositionEncoding::Utf16),
-        SemanticIndexerKind::Python
-        | SemanticIndexerKind::Go
-        | SemanticIndexerKind::Kotlin
-        | SemanticIndexerKind::Rust => None,
+        SemanticIndexerKind::Go => Some(SemanticPositionEncoding::Utf8),
+        SemanticIndexerKind::Python | SemanticIndexerKind::Kotlin | SemanticIndexerKind::Rust => {
+            None
+        }
     }
 }
 

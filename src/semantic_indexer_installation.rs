@@ -235,7 +235,7 @@ fn source_identity(spec: PinnedIndexer) -> String {
             package,
             integrity_sha512,
         } => format!("npm:{package}@{}:sha512-{integrity_sha512}", spec.version),
-        IndexerInstallSource::GoModule { module, commit } => {
+        IndexerInstallSource::GoModule { module, commit, .. } => {
             format!("go:{module}@v{}:{commit}", spec.version)
         }
         IndexerInstallSource::Download(download) => {
