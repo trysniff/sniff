@@ -489,6 +489,15 @@ pub async fn index_semantic_sources(path: &str) -> Result<i32, Box<dyn std::erro
                 ambiguous
             );
         }
+        let joined = crate::semantic_method_join::join_methods(&root, &files, &index)
+            .map_err(IoError::other)?;
+        println!(
+            "       AST identity join: {} resolved, {} compiler-excluded, {} unresolved",
+            joined.resolved_count(),
+            joined.compiler_excluded_count(),
+            joined.unresolved_count()
+        );
+        joined.require_complete().map_err(IoError::other)?;
     }
     println!("SCIP semantic indexing completed. No LLM request was made.");
     Ok(0)
