@@ -130,6 +130,7 @@ pub(super) fn build_run_report_from_parts(
     static_flags: Vec<StaticFlag>,
     verdicts: Vec<LLMVerdict>,
     method_review_records: Vec<MethodReviewRecord>,
+    method_cases: Vec<SlopCase>,
     synthesis_cases: Vec<SlopCase>,
     stats: RunStats,
 ) -> (RunReport, bool) {
@@ -139,7 +140,7 @@ pub(super) fn build_run_report_from_parts(
         &verdicts,
         false,
     );
-    let mut slop_cases = crate::slop_cases::seed_method_cases(&method_review_records);
+    let mut slop_cases = method_cases;
     slop_cases.extend(synthesis_cases);
     let run_report = RunReport {
         file_verdicts,

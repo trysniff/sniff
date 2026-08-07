@@ -24,6 +24,7 @@ pub(super) fn write_markdown_report(
             FindingTier::Slop,
             "Slop Findings",
             None,
+            &run_report.slop_cases,
             &mut md_lines,
         );
         render_method_tier(
@@ -31,6 +32,7 @@ pub(super) fn write_markdown_report(
             FindingTier::KindaSlop,
             "Kinda Slop Findings",
             Some("_These are proven unnecessary, local or minor sources of friction._"),
+            &run_report.slop_cases,
             &mut md_lines,
         );
         render_method_tier(
@@ -40,6 +42,7 @@ pub(super) fn write_markdown_report(
             Some(
                 "_The evidence ladder could not establish a trustworthy verdict. Do not edit from these entries._",
             ),
+            &run_report.slop_cases,
             &mut md_lines,
         );
         render_synthesis_cases(run_report, &mut md_lines);
@@ -225,6 +228,7 @@ fn render_method_tier(
     tier: FindingTier,
     heading: &str,
     note: Option<&str>,
+    cases: &[crate::slop_cases::SlopCase],
     md_lines: &mut Vec<String>,
 ) {
     let matching = verdicts
@@ -243,11 +247,15 @@ fn render_method_tier(
         md_lines.push(String::new());
     }
     for verdict in matching {
-        render_method_verdict_markdown(verdict, md_lines);
+        render_method_verdict_markdown(verdict, cases, md_lines);
     }
 }
 
-fn render_method_verdict_markdown(verdict: &LLMVerdict, md_lines: &mut Vec<String>) {
+fn render_method_verdict_markdown(
+    verdict: &LLMVerdict,
+    cases: &[crate::slop_cases::SlopCase],
+    md_lines: &mut Vec<String>,
+) {
     let method_name = verdict.method_name.as_deref().unwrap_or("<unknown>");
     md_lines.push(format!("### `{}` :: `{method_name}`", verdict.file_path));
     md_lines.push(String::new());
@@ -262,6 +270,27 @@ fn render_method_verdict_markdown(verdict: &LLMVerdict, md_lines: &mut Vec<Strin
         md_lines.push("```text".to_string());
         md_lines.push(verdict.evidence.clone());
         md_lines.push("```".to_string());
+    }
+    if let Some(case) = cases.iter().find(|case| {
+        case.affected_units.len() == 1
+            && case.evidence.iter().any(|evidence| {
+                evidence.file_path == verdict.file_path
+                    && evidence.method_name == method_name
+                    && evidence.start_line == verdict.start_line
+                    && evidence.end_line == verdict.end_line
+            })
+    }) && !case.counterfactual_edits.is_empty()
+    {
+        md_lines.push("- **Syntax-validated counterfactual edits:**".to_string());
+        for edit in &case.counterfactual_edits {
+            md_lines.push(format!(
+                "  - `{}` lines `{}-{}`:",
+                edit.file_path, edit.start_line, edit.end_line
+            ));
+            md_lines.push("    ```text".to_string());
+            md_lines.push(format!("    {}", edit.replacement));
+            md_lines.push("    ```".to_string());
+        }
     }
     md_lines.push(String::new());
 }

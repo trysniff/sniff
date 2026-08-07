@@ -242,6 +242,7 @@ async fn build_run_report(
         review.static_flags,
         review.verdicts,
         review.method_records,
+        review.method_cases,
         review.synthesis_cases,
         stats,
     ))

@@ -49,6 +49,7 @@ pub(super) async fn run_llm_checks(
         Vec<LLMVerdict>,
         Vec<MethodReviewRecord>,
         Vec<SlopCase>,
+        Vec<SlopCase>,
         usize,
         usize,
         usize,
@@ -59,6 +60,7 @@ pub(super) async fn run_llm_checks(
     let llm_total = method_total;
     if llm_total == 0 {
         return Ok((
+            Vec::new(),
             Vec::new(),
             Vec::new(),
             Vec::new(),
@@ -142,8 +144,15 @@ pub(super) async fn run_llm_checks(
         input.budget_usd,
     )
     .await?;
+    let method_cases = crate::slop_cases::seed_method_cases(&analysis.method_records);
+    let method_case_ids = method_cases
+        .iter()
+        .map(|case| case.case_id.clone())
+        .collect::<HashSet<_>>();
+    let mut proof_input = method_cases.clone();
+    proof_input.extend(adjudication.cases);
     let proof = crate::counterfactual::run_counterfactual_proof(
-        &adjudication.cases,
+        &proof_input,
         input.file_records,
         Arc::clone(&client),
         input.journal_path,
@@ -151,10 +160,50 @@ pub(super) async fn run_llm_checks(
         input.budget_usd,
     )
     .await?;
+    let mut verdicts = analysis.verdicts;
+    let mut method_records = analysis.method_records;
+    let proofed_method_cases = proof
+        .cases
+        .iter()
+        .filter(|case| method_case_ids.contains(&case.case_id))
+        .cloned()
+        .collect::<Vec<_>>();
+    for case in &proofed_method_cases {
+        if case.tier != crate::types::FindingTier::Unresolved {
+            continue;
+        }
+        if let Some(record) = method_records
+            .iter_mut()
+            .find(|record| record.unit_id == case.case_id)
+        {
+            record.verdict.tier = crate::types::FindingTier::Unresolved;
+            record.verdict.smelly = false;
+            record.verdict.reason = format!(
+                "Missing evidence: counterfactual preservation could not be established: {}",
+                case.unresolved_assumptions.join("; ")
+            );
+            if let Some(verdict) = verdicts.iter_mut().find(|verdict| {
+                verdict.file_path == record.file_path
+                    && verdict.method_name.as_deref() == Some(record.method_name.as_str())
+                    && verdict.start_line == record.start_line
+                    && verdict.end_line == record.end_line
+            }) {
+                verdict.tier = crate::types::FindingTier::Unresolved;
+                verdict.smelly = false;
+                verdict.reason = record.verdict.reason.clone();
+            }
+        }
+    }
+    let synthesis_cases = proof
+        .cases
+        .into_iter()
+        .filter(|case| !method_case_ids.contains(&case.case_id))
+        .collect();
     Ok((
-        analysis.verdicts,
-        analysis.method_records,
-        proof.cases,
+        verdicts,
+        method_records,
+        proofed_method_cases,
+        synthesis_cases,
         in_tok
             + input.role_input_tokens
             + synthesis.input_tokens
@@ -173,6 +222,7 @@ pub(super) struct ReviewArtifacts {
     pub(super) static_flags: Vec<StaticFlag>,
     pub(super) verdicts: Vec<LLMVerdict>,
     pub(super) method_records: Vec<MethodReviewRecord>,
+    pub(super) method_cases: Vec<SlopCase>,
     pub(super) synthesis_cases: Vec<SlopCase>,
     pub(super) in_tok: usize,
     pub(super) out_tok: usize,
@@ -352,6 +402,7 @@ pub(super) async fn prepare_review_artifacts(
     let (
         verdicts,
         method_records,
+        method_cases,
         synthesis_cases,
         fallback_in_tok,
         fallback_out_tok,
@@ -377,6 +428,7 @@ pub(super) async fn prepare_review_artifacts(
         static_flags,
         verdicts,
         method_records,
+        method_cases,
         synthesis_cases,
         in_tok,
         out_tok,
