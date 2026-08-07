@@ -236,7 +236,9 @@ sniff --yes [PATH]
 ```
 
 Every eligible method is reviewed. Supported source languages are Rust, Python,
-JavaScript, TypeScript, Go, and Kotlin.
+JavaScript, TypeScript, Go, and Kotlin/JVM. Android/KMP Gradle projects are
+detected explicitly and fail closed until an Android-capable SCIP provider is
+available; Sniff does not fall back to name-based graph guesses.
 
 Sniff runs up to four independent review pipelines concurrently and batches up
 to eight same-file methods per request. Tune these with

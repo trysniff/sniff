@@ -1,6 +1,7 @@
 use super::{
     WINDOWS_SCIP_PYTHON_BOOTSTRAP, compact_process_output, files_for_indexer,
-    indexer_arguments_with_project, missing_position_encoding, project_name,
+    gradle_script_uses_android, indexer_arguments_with_project, missing_position_encoding,
+    project_name, reject_unsupported_android_gradle,
 };
 #[cfg(windows)]
 use super::{indexer_arguments_with_workspace, prepare_indexer_workspace};
@@ -129,6 +130,47 @@ fn provider_error_output_keeps_the_actionable_tail() {
     assert!(compact.contains("command context"));
     assert!(compact.contains("failure details"));
     assert!(compact.contains("provider output elided"));
+}
+
+#[test]
+fn android_gradle_detection_is_strict_but_does_not_reject_plugin_catalogs() {
+    assert!(gradle_script_uses_android(
+        r#"plugins { id("com.android.application") }"#
+    ));
+    assert!(gradle_script_uses_android(
+        "android { namespace = \"demo\" }"
+    ));
+    assert!(gradle_script_uses_android("androidTarget()"));
+    assert!(!gradle_script_uses_android(
+        r#"plugins { id("com.android.application") apply false }"#
+    ));
+}
+
+#[test]
+fn android_gradle_projects_fail_before_scip_java_invocation() {
+    let root = std::env::temp_dir().join(format!(
+        "sniff-android-capability-test-{}",
+        std::process::id()
+    ));
+    let source = root.join("apps/android/src/main/kotlin/App.kt");
+    std::fs::create_dir_all(source.parent().unwrap()).unwrap();
+    std::fs::write(
+        root.join("apps/android/build.gradle.kts"),
+        "plugins { id(\"com.android.application\") }\n",
+    )
+    .unwrap();
+    std::fs::write(&source, "fun app() = Unit\n").unwrap();
+    let files = vec![FileRecord {
+        file_path: source.to_string_lossy().to_string(),
+        source: "fun app() = Unit\n".to_string(),
+        language: "kotlin".to_string(),
+        methods: Vec::new(),
+    }];
+
+    let error = reject_unsupported_android_gradle(&root, &files).unwrap_err();
+    assert!(error.contains("does not support Android Gradle integration"));
+    assert!(error.contains("build.gradle.kts"));
+    std::fs::remove_dir_all(root).unwrap();
 }
 
 #[cfg(windows)]

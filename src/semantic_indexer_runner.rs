@@ -4,7 +4,7 @@ use crate::semantic_indexer_manifest::{
     IndexerRuntime, PinnedIndexer, SemanticIndexerKind, pinned_indexer, required_indexers,
 };
 use crate::types::FileRecord;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::fs;
 use std::io::Write;
@@ -61,6 +61,9 @@ pub(crate) async fn run_required_indexers(
     let mut indexes = BTreeMap::new();
     for kind in required_indexers(files) {
         let spec = pinned_indexer(kind)?;
+        if kind == SemanticIndexerKind::Kotlin {
+            reject_unsupported_android_gradle(&root, files)?;
+        }
         let installed = store.verify(spec)?;
         let index_path = root.join("index.scip");
         if index_path.exists() {
@@ -223,6 +226,74 @@ async fn run_one(
         output.status,
         compact_process_output(&output.stdout, &output.stderr)
     ))
+}
+
+fn reject_unsupported_android_gradle(root: &Path, files: &[FileRecord]) -> Result<(), String> {
+    let root = fs::canonicalize(root).map_err(|error| {
+        format!("failed to resolve repository root for Kotlin Gradle capability: {error}")
+    })?;
+    let mut directories = BTreeSet::new();
+    for file in files {
+        if language_kind(file) != Some(SemanticIndexerKind::Kotlin) {
+            continue;
+        }
+        let path = fs::canonicalize(&file.file_path).map_err(|error| {
+            format!(
+                "failed to inspect Kotlin source {} for Gradle capability: {error}",
+                file.file_path
+            )
+        })?;
+        let mut directory = path.parent();
+        while let Some(current) = directory {
+            if !current.starts_with(&root) {
+                return Err(format!(
+                    "Kotlin source {} is outside repository root {}",
+                    file.file_path,
+                    root.display()
+                ));
+            }
+            directories.insert(current.to_path_buf());
+            if current == root.as_path() {
+                break;
+            }
+            directory = current.parent();
+        }
+    }
+
+    for directory in directories {
+        for name in ["build.gradle.kts", "build.gradle"] {
+            let path = directory.join(name);
+            if !path.is_file() {
+                continue;
+            }
+            let source = fs::read_to_string(&path).map_err(|error| {
+                format!(
+                    "failed to inspect Gradle build script {} for Kotlin capability: {error}",
+                    path.display()
+                )
+            })?;
+            if gradle_script_uses_android(&source) {
+                return Err(format!(
+                    "scip-java does not support Android Gradle integration; detected Android module {}. Sniff refuses a weaker Kotlin graph provider",
+                    path.display()
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn gradle_script_uses_android(source: &str) -> bool {
+    source.lines().any(|line| {
+        let line = line.trim();
+        line.starts_with("android {")
+            || line.starts_with("androidLibrary {")
+            || line.starts_with("androidTarget(")
+            || ((line.contains("com.android.application")
+                || line.contains("com.android.library")
+                || line.contains("com.android.kotlin.multiplatform.library"))
+                && !line.contains("apply false"))
+    })
 }
 
 fn indexer_arguments_with_project(
