@@ -59,7 +59,7 @@ fn estimate_succeeds_with_an_unreachable_provider() {
 }
 
 #[test]
-fn doctor_without_probe_succeeds_with_an_unreachable_provider() {
+fn doctor_without_probe_reports_missing_semantic_indexer_without_calling_provider() {
     let root = fixture();
     let output = run_sniff(&[
         "--skip-dotenv",
@@ -68,13 +68,11 @@ fn doctor_without_probe_succeeds_with_an_unreachable_provider() {
     ]);
     std::fs::remove_dir_all(&root).ok();
 
-    assert!(output.status.success(), "{output:?}");
+    assert!(!output.status.success(), "{output:?}");
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("[skip] provider probe"), "{stdout}");
-    assert!(
-        stdout.contains("Doctor passed. No LLM request was made."),
-        "{stdout}"
-    );
+    assert!(stdout.contains("[fail] semantic indexers"), "{stdout}");
+    assert!(!stdout.contains("[paid] provider probe"), "{stdout}");
 }
 
 #[test]

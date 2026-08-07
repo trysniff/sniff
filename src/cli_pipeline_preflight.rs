@@ -352,7 +352,21 @@ pub async fn doctor(
                     "no supported Rust, Python, JavaScript/TypeScript, Go, or Kotlin files found",
                     &mut failures,
                 ),
-                Ok(files) => print_ok("source scan", &run::source_inventory_summary(&files)),
+                Ok(files) => {
+                    print_ok("source scan", &run::source_inventory_summary(&files));
+                    let indexer_failures =
+                        crate::semantic_indexer_doctor::check_required_indexers(&files).await;
+                    if indexer_failures.is_empty() {
+                        print_ok(
+                            "semantic indexers",
+                            "all required pinned indexers are installed and verified",
+                        );
+                    } else {
+                        for failure in indexer_failures {
+                            print_fail("semantic indexers", &failure, &mut failures);
+                        }
+                    }
+                }
                 Err(err) => print_fail("source scan", &err, &mut failures),
             }
             match check_report_writable(&target) {
