@@ -153,7 +153,11 @@ pub(super) fn build_run_report_from_parts(
     let has_method_issues = run_report.llm_verdicts.iter().any(|verdict| {
         verdict.check_type == "method" && verdict.tier != crate::types::FindingTier::Clean
     });
-    let has_issues = has_method_issues;
+    let has_case_issues = run_report
+        .slop_cases
+        .iter()
+        .any(|case| case.tier != crate::types::FindingTier::Clean);
+    let has_issues = has_method_issues || has_case_issues;
 
     (run_report, has_issues)
 }

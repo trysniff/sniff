@@ -282,8 +282,9 @@ pub(crate) async fn run_synthesis(
     })
 }
 
-/// Give every synthesized case an independent adversarial challenge. Only
-/// cases explicitly kept by the verifier reach the report.
+/// Give every synthesized case an independent adversarial challenge. Kept
+/// cases reach findings; unresolved cases reach the report's uncertainty
+/// section, while discarded cases are removed.
 pub(crate) async fn run_case_adjudication(
     cases: &[SlopCase],
     records: &[MethodReviewRecord],
@@ -384,25 +385,7 @@ pub(crate) async fn run_case_adjudication(
             output_tokens += out_tok;
             decisions
         };
-        let decisions = decisions
-            .into_iter()
-            .map(|decision| (decision.case_id.clone(), decision))
-            .collect::<HashMap<_, _>>();
-        for case in chunk {
-            match decisions
-                .get(&case.case_id)
-                .map(|decision| decision.decision)
-            {
-                Some(CaseDecision::Keep) => kept.push(case),
-                Some(CaseDecision::Discard | CaseDecision::Unresolved) => {}
-                None => {
-                    return Err(format!(
-                        "adjudication produced no decision for case {}",
-                        case.case_id
-                    ));
-                }
-            }
-        }
+        kept.extend(apply_case_adjudications(chunk, &decisions)?);
     }
 
     Ok(AdjudicationRunResult {
@@ -410,6 +393,73 @@ pub(crate) async fn run_case_adjudication(
         input_tokens,
         output_tokens,
     })
+}
+
+fn apply_case_adjudications(
+    cases: Vec<SlopCase>,
+    adjudications: &[crate::slop_cases::CaseAdjudication],
+) -> Result<Vec<SlopCase>, String> {
+    let known = cases
+        .iter()
+        .map(|case| case.case_id.as_str())
+        .collect::<HashSet<_>>();
+    if known.len() != cases.len() {
+        return Err("adjudication input repeats a case id".to_string());
+    }
+    let mut decisions = HashMap::with_capacity(adjudications.len());
+    for adjudication in adjudications {
+        if !known.contains(adjudication.case_id.as_str()) {
+            return Err(format!(
+                "adjudication references unknown case {}",
+                adjudication.case_id
+            ));
+        }
+        if decisions
+            .insert(adjudication.case_id.as_str(), adjudication)
+            .is_some()
+        {
+            return Err(format!(
+                "adjudication repeats case {}",
+                adjudication.case_id
+            ));
+        }
+    }
+    if decisions.len() != known.len() {
+        let missing = known
+            .iter()
+            .filter(|case_id| !decisions.contains_key(**case_id))
+            .copied()
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(format!("adjudication omitted cases: {missing}"));
+    }
+
+    let mut kept = Vec::new();
+    for case in cases {
+        let Some(decision) = decisions.get(case.case_id.as_str()) else {
+            return Err(format!(
+                "adjudication produced no decision for case {}",
+                case.case_id
+            ));
+        };
+        match decision.decision {
+            CaseDecision::Keep => kept.push(case),
+            CaseDecision::Discard => {}
+            CaseDecision::Unresolved => {
+                let mut unresolved = case;
+                unresolved.tier = FindingTier::Unresolved;
+                unresolved.pattern = SlopPattern::None;
+                unresolved
+                    .unresolved_assumptions
+                    .push(decision.reason.clone());
+                unresolved
+                    .provenance
+                    .push("adversarial_verifier:unresolved".to_string());
+                kept.push(unresolved);
+            }
+        }
+    }
+    Ok(kept)
 }
 
 fn split_adjudication_cases(
@@ -869,10 +919,12 @@ fn parse_evidence(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_graph_facts, parse_synthesis_cases, render_synthesis_prompt,
-        render_synthesis_prompt_with_graph, run_case_adjudication,
+        apply_case_adjudications, build_graph_facts, parse_synthesis_cases,
+        render_synthesis_prompt, render_synthesis_prompt_with_graph, run_case_adjudication,
     };
+    use crate::product_contract::SlopPattern;
     use crate::report_types::{LLMVerdict, MethodEvidenceRecord, MethodReviewRecord};
+    use crate::slop_cases::{CaseAdjudication, CaseDecision};
     use crate::symbol_graph::SymbolGraph;
     use crate::types::{
         FindingTier, LocalFileSymbols, ResolvedSymbol, SymbolDefinition, SymbolKind,
@@ -1085,6 +1137,39 @@ mod tests {
                 .matches("unit_id=")
                 .count(),
             2
+        );
+    }
+
+    #[test]
+    fn unresolved_adjudication_is_not_left_as_a_finding() {
+        let records = vec![
+            record("keep", "keep", "return keep"),
+            record("maybe", "maybe", "return maybe"),
+        ];
+        let cases = crate::slop_cases::seed_method_cases(&records);
+        let adjudications = vec![
+            CaseAdjudication {
+                case_id: "keep".to_string(),
+                decision: CaseDecision::Keep,
+                reason: "The evidence supports the case.".to_string(),
+            },
+            CaseAdjudication {
+                case_id: "maybe".to_string(),
+                decision: CaseDecision::Unresolved,
+                reason: "The external contract is not known.".to_string(),
+            },
+        ];
+
+        let cases = apply_case_adjudications(cases, &adjudications).unwrap();
+        assert_eq!(cases.len(), 2);
+        let unresolved = cases.iter().find(|case| case.case_id == "maybe").unwrap();
+        assert_eq!(unresolved.tier, FindingTier::Unresolved);
+        assert_eq!(unresolved.pattern, SlopPattern::None);
+        assert!(
+            unresolved
+                .provenance
+                .iter()
+                .any(|source| source == "adversarial_verifier:unresolved")
         );
     }
 

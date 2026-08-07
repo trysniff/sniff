@@ -62,12 +62,15 @@ fn render_synthesis_cases(run_report: &RunReport, md_lines: &mut Vec<String>) {
         .slop_cases
         .iter()
         .filter(|case| {
-            case.provenance
-                .iter()
-                .any(|source| source == "method_census_synthesis")
+            matches!(case.tier, FindingTier::Slop | FindingTier::KindaSlop)
+                && case
+                    .provenance
+                    .iter()
+                    .any(|source| source == "method_census_synthesis")
         })
         .collect::<Vec<_>>();
     if cases.is_empty() {
+        render_unresolved_synthesis_cases(run_report, md_lines);
         return;
     }
 
@@ -78,38 +81,74 @@ fn render_synthesis_cases(run_report: &RunReport, md_lines: &mut Vec<String>) {
     );
     md_lines.push(String::new());
     for case in cases {
-        md_lines.push(format!("### `{}`", case.case_id));
-        md_lines.push(String::new());
-        md_lines.push(format!("- **Verdict:** `{}`", case.tier.label()));
-        md_lines.push(format!("- **Pattern:** `{}`", case.pattern.as_str()));
-        md_lines.push(format!("- **Proof level:** `{}`", case.proof_level.label()));
-        md_lines.push(format!("- **Mechanism:** {}", case.mechanism));
-        md_lines.push(format!("- **Intent:** {}", case.intent));
-        md_lines.push(format!(
-            "- **Affected methods:** {}",
-            case.affected_units
-                .iter()
-                .map(|unit| format!("`{unit}`"))
-                .collect::<Vec<_>>()
-                .join(", ")
-        ));
-        md_lines.push(format!(
-            "- **Contract boundary:** {}",
-            case.contract_boundary
-        ));
-        md_lines.push(format!("- **Counterfactual:** {}", case.counterfactual));
-        md_lines.push("- **Exact evidence:**".to_string());
-        for evidence in &case.evidence {
-            md_lines.push(format!(
-                "  - `{}` lines `{}-{}`:",
-                evidence.unit_id, evidence.start_line, evidence.end_line
-            ));
-            md_lines.push("    ```text".to_string());
-            md_lines.push(format!("    {}", evidence.quote));
-            md_lines.push("    ```".to_string());
-        }
-        md_lines.push(String::new());
+        render_synthesis_case(case, md_lines);
     }
+    render_unresolved_synthesis_cases(run_report, md_lines);
+}
+
+fn render_synthesis_case(case: &crate::slop_cases::SlopCase, md_lines: &mut Vec<String>) {
+    md_lines.push(format!("### `{}`", case.case_id));
+    md_lines.push(String::new());
+    md_lines.push(format!("- **Verdict:** `{}`", case.tier.label()));
+    md_lines.push(format!("- **Pattern:** `{}`", case.pattern.as_str()));
+    md_lines.push(format!("- **Proof level:** `{}`", case.proof_level.label()));
+    md_lines.push(format!("- **Mechanism:** {}", case.mechanism));
+    md_lines.push(format!("- **Intent:** {}", case.intent));
+    md_lines.push(format!(
+        "- **Affected methods:** {}",
+        case.affected_units
+            .iter()
+            .map(|unit| format!("`{unit}`"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    ));
+    md_lines.push(format!(
+        "- **Contract boundary:** {}",
+        case.contract_boundary
+    ));
+    md_lines.push(format!("- **Counterfactual:** {}", case.counterfactual));
+    md_lines.push("- **Exact evidence:**".to_string());
+    for evidence in &case.evidence {
+        md_lines.push(format!(
+            "  - `{}` lines `{}-{}`:",
+            evidence.unit_id, evidence.start_line, evidence.end_line
+        ));
+        md_lines.push("    ```text".to_string());
+        md_lines.push(format!("    {}", evidence.quote));
+        md_lines.push("    ```".to_string());
+    }
+    md_lines.push(String::new());
+}
+
+fn render_unresolved_synthesis_cases(run_report: &RunReport, md_lines: &mut Vec<String>) {
+    let cases = run_report
+        .slop_cases
+        .iter()
+        .filter(|case| {
+            case.tier == FindingTier::Unresolved
+                && case
+                    .provenance
+                    .iter()
+                    .any(|source| source.starts_with("adversarial_verifier:"))
+        })
+        .collect::<Vec<_>>();
+    if cases.is_empty() {
+        return;
+    }
+    md_lines.push("## Unresolved Case Reviews".to_string());
+    md_lines.push(String::new());
+    md_lines.push(
+        "_The verifier could not establish that the proposed simplification preserves behavior. These are not findings._".to_string(),
+    );
+    md_lines.push(String::new());
+    for case in cases {
+        md_lines.push(format!(
+            "- `{}`: {}",
+            case.case_id,
+            case.unresolved_assumptions.join("; ")
+        ));
+    }
+    md_lines.push(String::new());
 }
 
 fn validate_method_report_contract(run_report: &RunReport) -> Result<(), String> {
@@ -298,7 +337,9 @@ pub(super) fn render_file_verdict_markdown(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::product_contract::SlopPattern;
     use crate::report_types::{FileVerdict, LLMVerdict, RunReport, RunStats};
+    use crate::slop_cases::{ProofLevel, SlopCase};
     use crate::types::FindingTier;
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -400,6 +441,45 @@ mod tests {
         assert!(!md.contains("**Action:**"));
         assert!(!md.contains("**Flagged methods:**"));
         assert!(!md.contains("**Recommended action:**"));
+    }
+
+    #[test]
+    fn markdown_report_separates_unresolved_adjudicated_cases() {
+        let report = RunReport {
+            file_verdicts: vec![],
+            static_flags: vec![],
+            llm_verdicts: vec![method_verdict(FindingTier::Clean)],
+            method_review_records: vec![],
+            slop_cases: vec![SlopCase {
+                case_id: "case-maybe".to_string(),
+                tier: FindingTier::Unresolved,
+                pattern: SlopPattern::None,
+                mechanism: "Possible ceremony".to_string(),
+                intent: "Unknown".to_string(),
+                evidence: vec![],
+                affected_units: vec!["unit-maybe".to_string()],
+                contract_boundary: "Unknown".to_string(),
+                counterfactual: "Unknown".to_string(),
+                proof_level: ProofLevel::P0SourceReasoning,
+                unresolved_assumptions: vec!["External contract is unknown".to_string()],
+                provenance: vec!["adversarial_verifier:unresolved".to_string()],
+            }],
+            stats: RunStats {
+                method_reviews_expected: 1,
+                method_reviews_completed: 1,
+                ..RunStats::default()
+            },
+        };
+        let out_path = temp_report_path();
+
+        write_markdown_report(&report, &out_path, "$0.00").unwrap();
+        let md = fs::read_to_string(&out_path).unwrap();
+        let _ = fs::remove_file(&out_path);
+
+        assert!(md.contains("## Unresolved Case Reviews"));
+        assert!(md.contains("case-maybe"));
+        assert!(md.contains("These are not findings"));
+        assert!(!md.contains("## Cross-Method Slop Cases"));
     }
 
     #[test]
