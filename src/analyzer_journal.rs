@@ -1,6 +1,6 @@
 use crate::pricing::PricingRates;
 use crate::report_types::{LLMVerdict, MethodReviewRecord};
-use crate::slop_cases::{CaseAdjudication, SlopCase};
+use crate::slop_cases::{CaseAdjudication, CaseProof, SlopCase};
 use crate::types::{FileRecord, FindingTier};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -21,6 +21,7 @@ pub(crate) enum JournalStage {
     Method,
     Synthesis,
     Adjudication,
+    Proof,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -56,6 +57,8 @@ pub(super) struct JournalEntry {
     pub(super) slop_cases: Vec<SlopCase>,
     #[serde(default)]
     pub(super) case_adjudications: Vec<CaseAdjudication>,
+    #[serde(default)]
+    pub(super) case_proofs: Vec<CaseProof>,
     #[serde(default)]
     role: Option<String>,
     pub(super) in_tok: usize,
@@ -110,6 +113,14 @@ pub(crate) struct JournalSynthesisCompletion {
 
 pub(crate) struct JournalAdjudicationCompletion {
     pub(crate) decisions: Vec<CaseAdjudication>,
+    pub(crate) in_tok: usize,
+    pub(crate) out_tok: usize,
+    pub(crate) cached_in_tok: usize,
+    pub(crate) retry_on_resume: bool,
+}
+
+pub(crate) struct JournalProofCompletion {
+    pub(crate) proofs: Vec<CaseProof>,
     pub(crate) in_tok: usize,
     pub(crate) out_tok: usize,
     pub(crate) cached_in_tok: usize,
@@ -314,6 +325,7 @@ impl JournalStore {
             method_record: completion.method_record,
             slop_cases: Vec::new(),
             case_adjudications: Vec::new(),
+            case_proofs: Vec::new(),
             role: None,
             in_tok: completion.in_tok,
             out_tok: completion.out_tok,
@@ -371,6 +383,13 @@ impl JournalStore {
             })
     }
 
+    pub(crate) fn reusable_proof(&self, unit_id: &str) -> Option<(Vec<CaseProof>, bool)> {
+        self.completed
+            .get(unit_id)
+            .filter(|entry| entry.is_reusable() && entry.stage == JournalStage::Proof)
+            .map(|entry| (entry.case_proofs.clone(), self.is_current_scan(entry)))
+    }
+
     pub(crate) fn record_role(
         &mut self,
         unit_id: String,
@@ -403,6 +422,7 @@ impl JournalStore {
             method_record: None,
             slop_cases: Vec::new(),
             case_adjudications: Vec::new(),
+            case_proofs: Vec::new(),
             role: completion.role,
             in_tok: completion.in_tok,
             out_tok: completion.out_tok,
@@ -462,6 +482,7 @@ impl JournalStore {
             method_record: None,
             slop_cases: Vec::new(),
             case_adjudications: Vec::new(),
+            case_proofs: Vec::new(),
             role: None,
             in_tok,
             out_tok,
@@ -523,6 +544,7 @@ impl JournalStore {
             method_record: None,
             slop_cases: completion.cases,
             case_adjudications: Vec::new(),
+            case_proofs: Vec::new(),
             role: None,
             in_tok: completion.in_tok,
             out_tok: completion.out_tok,
@@ -581,6 +603,7 @@ impl JournalStore {
             method_record: None,
             slop_cases: Vec::new(),
             case_adjudications: completion.decisions,
+            case_proofs: Vec::new(),
             role: None,
             in_tok: completion.in_tok,
             out_tok: completion.out_tok,
@@ -588,6 +611,62 @@ impl JournalStore {
             estimated_cost_usd,
             timestamp_unix_ms: now_unix_ms(),
             proof_level: "not_applicable".to_string(),
+            retry_on_resume: completion.retry_on_resume,
+        };
+        append_entry(&self.path, &entry)?;
+        self.spent_usd += entry.estimated_cost_usd;
+        self.stage_in_tok += entry.in_tok;
+        self.stage_out_tok += entry.out_tok;
+        self.stage_cached_in_tok += entry.cached_in_tok;
+        self.completed.insert(unit_id, entry);
+        Ok(())
+    }
+
+    pub(crate) fn record_proof(
+        &mut self,
+        unit_id: String,
+        source_hash: String,
+        completion: JournalProofCompletion,
+    ) -> Result<(), String> {
+        if self.context.stage != JournalStage::Proof {
+            return Err("proof result cannot be written to a non-proof journal stage".to_string());
+        }
+        let estimated_cost_usd = PricingRates::from_env().cost(
+            completion.in_tok,
+            completion.cached_in_tok,
+            completion.out_tok,
+        );
+        let entry = JournalEntry {
+            version: JOURNAL_VERSION,
+            scan_id: self.context.scan_id.clone(),
+            stage: self.context.stage,
+            is_manifest: false,
+            unit_id: unit_id.clone(),
+            expected_units: self.context.expected_units,
+            source_hash,
+            semantic_index_hash: self.context.semantic_index_hash.clone(),
+            prompt_contract_version: self.context.prompt_contract_version.clone(),
+            provider: self.context.provider.clone(),
+            model: self.context.model.clone(),
+            endpoint: self.context.endpoint.clone(),
+            review_context_hash: self.context.review_context_hash.clone(),
+            status: if completion.retry_on_resume {
+                JournalStatus::RetryableUnresolved
+            } else {
+                JournalStatus::Completed
+            },
+            verdict: None,
+            method_record: None,
+            slop_cases: Vec::new(),
+            case_adjudications: Vec::new(),
+            case_proofs: completion.proofs,
+            role: None,
+            in_tok: completion.in_tok,
+            out_tok: completion.out_tok,
+            cached_in_tok: completion.cached_in_tok,
+            estimated_cost_usd,
+            timestamp_unix_ms: now_unix_ms(),
+            proof_level: "p0".to_string(),
             retry_on_resume: completion.retry_on_resume,
         };
         append_entry(&self.path, &entry)?;
@@ -642,6 +721,7 @@ impl JournalStore {
             method_record: None,
             slop_cases: Vec::new(),
             case_adjudications: Vec::new(),
+            case_proofs: Vec::new(),
             role: None,
             in_tok: 0,
             out_tok: 0,
@@ -682,6 +762,9 @@ pub struct JournalSummary {
     pub expected_adjudication_units: usize,
     pub completed_adjudication_units: usize,
     pub retryable_adjudication_units: usize,
+    pub expected_proof_units: usize,
+    pub completed_proof_units: usize,
+    pub retryable_proof_units: usize,
     pub slop: usize,
     pub kinda_slop: usize,
     pub unresolved: usize,
@@ -723,6 +806,10 @@ pub(super) fn summarize(path: &Path) -> Result<JournalSummary, String> {
                     .expected_adjudication_units
                     .max(entry.expected_units);
             }
+            JournalStage::Proof => {
+                summary.expected_proof_units =
+                    summary.expected_proof_units.max(entry.expected_units);
+            }
         }
         summary.input_tokens += entry.in_tok;
         summary.cached_input_tokens += entry.cached_in_tok;
@@ -760,6 +847,14 @@ pub(super) fn summarize(path: &Path) -> Result<JournalSummary, String> {
                 summary.retryable_adjudication_units += 1;
             } else {
                 summary.completed_adjudication_units += 1;
+            }
+            continue;
+        }
+        if entry.stage == JournalStage::Proof {
+            if entry.retry_on_resume {
+                summary.retryable_proof_units += 1;
+            } else {
+                summary.completed_proof_units += 1;
             }
             continue;
         }

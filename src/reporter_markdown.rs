@@ -107,6 +107,18 @@ fn render_synthesis_case(case: &crate::slop_cases::SlopCase, md_lines: &mut Vec<
         case.contract_boundary
     ));
     md_lines.push(format!("- **Counterfactual:** {}", case.counterfactual));
+    if !case.counterfactual_edits.is_empty() {
+        md_lines.push("- **Syntax-validated counterfactual edits:**".to_string());
+        for edit in &case.counterfactual_edits {
+            md_lines.push(format!(
+                "  - `{}` lines `{}-{}`:",
+                edit.file_path, edit.start_line, edit.end_line
+            ));
+            md_lines.push("    ```text".to_string());
+            md_lines.push(format!("    {}", edit.replacement));
+            md_lines.push("    ```".to_string());
+        }
+    }
     md_lines.push("- **Exact evidence:**".to_string());
     for evidence in &case.evidence {
         md_lines.push(format!(
@@ -126,10 +138,10 @@ fn render_unresolved_synthesis_cases(run_report: &RunReport, md_lines: &mut Vec<
         .iter()
         .filter(|case| {
             case.tier == FindingTier::Unresolved
-                && case
-                    .provenance
-                    .iter()
-                    .any(|source| source.starts_with("adversarial_verifier:"))
+                && case.provenance.iter().any(|source| {
+                    source.starts_with("adversarial_verifier:")
+                        || source.starts_with("counterfactual:")
+                })
         })
         .collect::<Vec<_>>();
     if cases.is_empty() {
@@ -460,6 +472,7 @@ mod tests {
                 affected_units: vec!["unit-maybe".to_string()],
                 contract_boundary: "Unknown".to_string(),
                 counterfactual: "Unknown".to_string(),
+                counterfactual_edits: Vec::new(),
                 proof_level: ProofLevel::P0SourceReasoning,
                 unresolved_assumptions: vec!["External contract is unknown".to_string()],
                 provenance: vec!["adversarial_verifier:unresolved".to_string()],

@@ -22,7 +22,8 @@ pub(super) fn vote_key(schema: ResponseSchema, value: &Value) -> String {
             .to_string(),
         ResponseSchema::MethodIntentBatchReview
         | ResponseSchema::SemanticMethodBatchReview
-        | ResponseSchema::CaseAdjudication => value.to_string(),
+        | ResponseSchema::CaseAdjudication
+        | ResponseSchema::CaseProof => value.to_string(),
     }
 }
 
@@ -86,6 +87,7 @@ fn vote_rank(schema: ResponseSchema, value: &Value) -> usize {
         ResponseSchema::MethodIntentBatchReview
         | ResponseSchema::SemanticMethodBatchReview
         | ResponseSchema::CaseAdjudication
+        | ResponseSchema::CaseProof
         | ResponseSchema::RoleClassification => 0,
     }
 }

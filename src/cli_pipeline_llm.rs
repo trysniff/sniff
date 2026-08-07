@@ -142,12 +142,29 @@ pub(super) async fn run_llm_checks(
         input.budget_usd,
     )
     .await?;
+    let proof = crate::counterfactual::run_counterfactual_proof(
+        &adjudication.cases,
+        input.file_records,
+        Arc::clone(&client),
+        input.journal_path,
+        input.scan_id,
+        input.budget_usd,
+    )
+    .await?;
     Ok((
         analysis.verdicts,
         analysis.method_records,
-        adjudication.cases,
-        in_tok + input.role_input_tokens + synthesis.input_tokens + adjudication.input_tokens,
-        out_tok + input.role_output_tokens + synthesis.output_tokens + adjudication.output_tokens,
+        proof.cases,
+        in_tok
+            + input.role_input_tokens
+            + synthesis.input_tokens
+            + adjudication.input_tokens
+            + proof.input_tokens,
+        out_tok
+            + input.role_output_tokens
+            + synthesis.output_tokens
+            + adjudication.output_tokens
+            + proof.output_tokens,
         usage_client.cached_input_tokens(),
     ))
 }

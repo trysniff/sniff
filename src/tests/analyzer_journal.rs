@@ -1,9 +1,10 @@
 use super::{
-    JournalAdjudicationCompletion, JournalCompletion, JournalRoleCompletion, JournalStage,
-    JournalStore, JournalSynthesisCompletion, scan_id, sha256_text, summarize,
+    JournalAdjudicationCompletion, JournalCompletion, JournalProofCompletion,
+    JournalRoleCompletion, JournalStage, JournalStore, JournalSynthesisCompletion, scan_id,
+    sha256_text, summarize,
 };
 use crate::report_types::LLMVerdict;
-use crate::slop_cases::{CaseAdjudication, CaseDecision};
+use crate::slop_cases::{CaseAdjudication, CaseDecision, CaseProof, CounterfactualDecision};
 use crate::types::{FileRecord, FindingTier};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -384,6 +385,62 @@ fn adjudication_stage_persists_complete_decisions_for_resume() {
     assert_eq!(summary.expected_adjudication_units, 1);
     assert_eq!(summary.completed_adjudication_units, 1);
     assert_eq!(summary.retryable_adjudication_units, 0);
+    loaded.remove().unwrap();
+}
+
+#[test]
+fn proof_stage_persists_complete_counterfactuals_for_resume() {
+    let path = temp_journal_path();
+    let context =
+        "review_contract=semantic-method-v28\nmodel=test\nendpoint=https://example.invalid";
+    let proof = CaseProof {
+        case_id: "case-a".to_string(),
+        decision: CounterfactualDecision::Unresolved,
+        reason: "The contract could not be preserved from the available evidence.".to_string(),
+        edits: Vec::new(),
+    };
+    let mut store = JournalStore::load_for_scan(
+        &path,
+        "run-a",
+        JournalStage::Proof,
+        "proof-index",
+        context,
+        1,
+    )
+    .unwrap();
+    store
+        .record_proof(
+            "proof-unit".to_string(),
+            sha256_text("case-a"),
+            JournalProofCompletion {
+                proofs: vec![proof.clone()],
+                in_tok: 30,
+                out_tok: 4,
+                cached_in_tok: 0,
+                retry_on_resume: false,
+            },
+        )
+        .unwrap();
+
+    let loaded = JournalStore::load_for_scan(
+        &path,
+        "run-a",
+        JournalStage::Proof,
+        "proof-index",
+        context,
+        1,
+    )
+    .unwrap();
+    assert_eq!(
+        loaded.reusable_proof("proof-unit"),
+        Some((vec![proof], true))
+    );
+    let summary = summarize(&path).unwrap();
+    assert_eq!(summary.expected_proof_units, 1);
+    assert_eq!(summary.completed_proof_units, 1);
+    assert_eq!(summary.retryable_proof_units, 0);
+    assert_eq!(summary.input_tokens, 30);
+    assert_eq!(summary.output_tokens, 4);
     loaded.remove().unwrap();
 }
 

@@ -899,6 +899,7 @@ pub fn parse_synthesis_cases(
             affected_units,
             contract_boundary,
             counterfactual,
+            counterfactual_edits: Vec::new(),
             proof_level: ProofLevel::P0SourceReasoning,
             unresolved_assumptions,
             provenance: vec!["method_census_synthesis".to_string()],

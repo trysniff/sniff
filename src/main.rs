@@ -35,6 +35,7 @@ pub mod types;
 pub mod walker;
 
 mod cli_banner;
+mod counterfactual;
 
 use clap::Parser;
 use std::thread;

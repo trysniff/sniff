@@ -60,6 +60,7 @@ pub enum ResponseSchema {
     ScopedTierReview,
     CaseSynthesis,
     CaseAdjudication,
+    CaseProof,
     FileReview,
     RoleClassification,
 }

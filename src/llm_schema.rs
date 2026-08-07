@@ -37,6 +37,10 @@ pub(super) fn schema_description(schema: ResponseSchema) -> String {
             "Required root field: decisions (array). Each decision must contain case_id (string), decision (keep, discard, or unresolved), and reason (string)."
                 .to_string()
         }
+        ResponseSchema::CaseProof => {
+            "Required root field: proofs (array). Return exactly one proof for every case. Each proof must contain case_id (string), decision (validated or unresolved), reason (string), and edits (array). Validated proofs require at least one edit with file_path (string), start_line (positive integer), end_line (positive integer), and replacement (string); unresolved proofs must contain no edits."
+                .to_string()
+        }
         ResponseSchema::FileReview => {
             "Required fields: smelly (bool), tier (string), evidence (string), cohesive (bool), name_accurate (bool), reason (string). Allowed tiers are slop, kinda_slop, clean, unresolved; unresolved means the file-level evidence is insufficient and must use smelly=false."
                 .to_string()
@@ -247,6 +251,11 @@ pub(super) fn validate_schema(
         ResponseSchema::CaseAdjudication => {
             check_decision_array_envelope(obj, &mut missing, &mut wrong_type);
         }
+        ResponseSchema::CaseProof => match obj.get("proofs") {
+            Some(value) if value.is_array() => {}
+            Some(_) => wrong_type.push("proofs".to_string()),
+            None => missing.push("proofs".to_string()),
+        },
         ResponseSchema::FileReview => {
             check_bool(obj, "smelly", &mut missing, &mut wrong_type);
             check_string(obj, "tier", &mut missing, &mut wrong_type);
@@ -383,5 +392,15 @@ mod tests {
         let invalid = serde_json::json!({"reviews": []});
         let error = validate_schema(&invalid, ResponseSchema::CaseSynthesis).unwrap_err();
         assert!(error.contains("missing fields: cases"));
+    }
+
+    #[test]
+    fn proof_schema_requires_proofs_instead_of_cases() {
+        let valid = serde_json::json!({"proofs": []});
+        assert!(validate_schema(&valid, ResponseSchema::CaseProof).is_ok());
+
+        let invalid = serde_json::json!({"cases": []});
+        let error = validate_schema(&invalid, ResponseSchema::CaseProof).unwrap_err();
+        assert!(error.contains("missing fields: proofs"));
     }
 }

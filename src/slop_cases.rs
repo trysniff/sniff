@@ -42,6 +42,28 @@ pub struct CaseEvidence {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CounterfactualEdit {
+    pub file_path: String,
+    pub start_line: usize,
+    pub end_line: usize,
+    pub replacement: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CounterfactualDecision {
+    Validated,
+    Unresolved,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CaseProof {
+    pub case_id: String,
+    pub decision: CounterfactualDecision,
+    pub reason: String,
+    pub edits: Vec<CounterfactualEdit>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SlopCase {
     pub case_id: String,
     pub tier: FindingTier,
@@ -52,6 +74,8 @@ pub struct SlopCase {
     pub affected_units: Vec<String>,
     pub contract_boundary: String,
     pub counterfactual: String,
+    #[serde(default)]
+    pub counterfactual_edits: Vec<CounterfactualEdit>,
     pub proof_level: ProofLevel,
     pub unresolved_assumptions: Vec<String>,
     pub provenance: Vec<String>,
@@ -134,13 +158,150 @@ pub fn parse_case_adjudications(
     }
     if seen.len() != known.len() {
         let missing = known
-            .difference(&seen)
+            .iter()
+            .filter(|case_id| !seen.contains(**case_id))
             .copied()
             .collect::<Vec<_>>()
             .join(", ");
         return Err(format!("case adjudication omitted cases: {missing}"));
     }
     Ok(parsed)
+}
+
+/// Parse the complete counterfactual ledger. A proof response is not allowed
+/// to silently omit a case or invent a case identifier; later validation owns
+/// the source-range and compiler checks.
+pub fn parse_case_proofs(
+    value: &serde_json::Value,
+    cases: &[SlopCase],
+) -> Result<Vec<CaseProof>, String> {
+    let proofs = value
+        .get("proofs")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| "case proof is missing proofs array".to_string())?;
+    let known = cases
+        .iter()
+        .map(|case| case.case_id.as_str())
+        .collect::<std::collections::HashSet<_>>();
+    let mut parsed = Vec::with_capacity(proofs.len());
+    let mut seen = std::collections::HashSet::new();
+    for (index, value) in proofs.iter().enumerate() {
+        let object = value
+            .as_object()
+            .ok_or_else(|| format!("case proof {index} is not an object"))?;
+        let case_id = required_string(object, "case_id", index)?;
+        if !known.contains(case_id.as_str()) {
+            return Err(format!(
+                "case proof {index} references unknown case {case_id}"
+            ));
+        }
+        if !seen.insert(case_id.clone()) {
+            return Err(format!("case proof repeats case {case_id}"));
+        }
+        let decision = match required_string(object, "decision", index)?.as_str() {
+            "validated" => CounterfactualDecision::Validated,
+            "unresolved" => CounterfactualDecision::Unresolved,
+            other => {
+                return Err(format!("case proof {index} has invalid decision {other}"));
+            }
+        };
+        let reason = required_string(object, "reason", index)?;
+        let edits = parse_counterfactual_edits(object, index)?;
+        if matches!(decision, CounterfactualDecision::Validated) && edits.is_empty() {
+            return Err(format!(
+                "case proof {index} marked validated without exact edits"
+            ));
+        }
+        if matches!(decision, CounterfactualDecision::Unresolved) && !edits.is_empty() {
+            return Err(format!(
+                "case proof {index} is unresolved but contains edits"
+            ));
+        }
+        parsed.push(CaseProof {
+            case_id,
+            decision,
+            reason,
+            edits,
+        });
+    }
+    if seen.len() != known.len() {
+        let missing = known
+            .iter()
+            .filter(|case_id| !seen.contains(**case_id))
+            .copied()
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(format!("case proof omitted cases: {missing}"));
+    }
+    Ok(parsed)
+}
+
+fn required_string(
+    object: &serde_json::Map<String, serde_json::Value>,
+    name: &str,
+    index: usize,
+) -> Result<String, String> {
+    object
+        .get(name)
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| format!("case proof {index} is missing non-empty {name}"))
+}
+
+fn parse_counterfactual_edits(
+    object: &serde_json::Map<String, serde_json::Value>,
+    index: usize,
+) -> Result<Vec<CounterfactualEdit>, String> {
+    let edits = object
+        .get("edits")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| format!("case proof {index} is missing edits array"))?;
+    edits
+        .iter()
+        .enumerate()
+        .map(|(edit_index, value)| {
+            let edit = value.as_object().ok_or_else(|| {
+                format!("case proof {index} edits[{edit_index}] is not an object")
+            })?;
+            let file_path = required_string(edit, "file_path", index)?;
+            let start_line = edit
+                .get("start_line")
+                .and_then(serde_json::Value::as_u64)
+                .and_then(|value| usize::try_from(value).ok())
+                .filter(|value| *value > 0)
+                .ok_or_else(|| {
+                    format!("case proof {index} edits[{edit_index}] has invalid start_line")
+                })?;
+            let end_line = edit
+                .get("end_line")
+                .and_then(serde_json::Value::as_u64)
+                .and_then(|value| usize::try_from(value).ok())
+                .filter(|value| *value >= start_line)
+                .ok_or_else(|| {
+                    format!("case proof {index} edits[{edit_index}] has invalid end_line")
+                })?;
+            let replacement = edit
+                .get("replacement")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+                .ok_or_else(|| {
+                    format!("case proof {index} edits[{edit_index}] is missing replacement")
+                })?;
+            if replacement.contains('\0') {
+                return Err(format!(
+                    "case proof {index} edits[{edit_index}] replacement contains NUL"
+                ));
+            }
+            Ok(CounterfactualEdit {
+                file_path,
+                start_line,
+                end_line,
+                replacement,
+            })
+        })
+        .collect()
 }
 
 /// Seed repository cases from the exhaustive method census.
@@ -184,6 +345,7 @@ fn case_from_method_record(record: &MethodReviewRecord) -> SlopCase {
         affected_units: vec![record.unit_id.clone()],
         contract_boundary: record.contract_impact.clone(),
         counterfactual: record.simplification.clone(),
+        counterfactual_edits: Vec::new(),
         proof_level: ProofLevel::P0SourceReasoning,
         unresolved_assumptions: record.missing_evidence.clone(),
         provenance: vec![format!(
@@ -214,8 +376,8 @@ pub fn case_evidence_matches_record(case: &SlopCase, record: &MethodReviewRecord
 #[cfg(test)]
 mod tests {
     use super::{
-        CaseDecision, ProofLevel, case_evidence_matches_record, parse_case_adjudications,
-        seed_method_cases,
+        CaseDecision, CounterfactualDecision, ProofLevel, case_evidence_matches_record,
+        parse_case_adjudications, parse_case_proofs, seed_method_cases,
     };
     use crate::product_contract::SlopPattern;
     use crate::report_types::{LLMVerdict, MethodEvidenceRecord, MethodReviewRecord};
@@ -261,6 +423,48 @@ mod tests {
                 quote: "return value".to_string(),
             }],
         }
+    }
+
+    #[test]
+    fn proof_parser_requires_a_complete_exact_edit_ledger() {
+        let cases = seed_method_cases(&[record(
+            FindingTier::Slop,
+            SlopPattern::CeremonialLogic.as_str(),
+        )]);
+        let value = serde_json::json!({
+            "proofs": [{
+                "case_id": cases[0].case_id,
+                "decision": "validated",
+                "reason": "The replacement is concrete and preserves the stated contract.",
+                "edits": [{
+                    "file_path": "src/demo.py",
+                    "start_line": 4,
+                    "end_line": 8,
+                    "replacement": "return value"
+                }]
+            }]
+        });
+        let parsed = parse_case_proofs(&value, &cases).unwrap();
+        assert_eq!(parsed[0].decision, CounterfactualDecision::Validated);
+        assert_eq!(parsed[0].edits[0].replacement, "return value");
+    }
+
+    #[test]
+    fn proof_parser_rejects_vague_validated_cases() {
+        let cases = seed_method_cases(&[record(
+            FindingTier::Slop,
+            SlopPattern::CeremonialLogic.as_str(),
+        )]);
+        let value = serde_json::json!({
+            "proofs": [{
+                "case_id": cases[0].case_id,
+                "decision": "validated",
+                "reason": "Simplify it.",
+                "edits": []
+            }]
+        });
+        let error = parse_case_proofs(&value, &cases).unwrap_err();
+        assert!(error.contains("without exact edits"));
     }
 
     #[test]

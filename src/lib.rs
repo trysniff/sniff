@@ -3,6 +3,7 @@ pub mod callgraph;
 pub mod cli;
 pub mod config;
 pub mod config_loader;
+pub(crate) mod counterfactual;
 pub mod env_value;
 pub mod file_verdicts;
 pub mod language_adapter;
