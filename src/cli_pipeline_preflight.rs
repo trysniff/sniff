@@ -414,6 +414,39 @@ pub async fn doctor(
     }
 }
 
+pub async fn install_indexers(path: &str, force: bool) -> Result<i32, Box<dyn std::error::Error>> {
+    let target = PathBuf::from(path);
+    if !target.exists() {
+        return Err(IoError::new(
+            ErrorKind::NotFound,
+            format!("target path does not exist: {}", target.display()),
+        )
+        .into());
+    }
+    let files = io::scan_files(path, &crate::config::ResolvedConfig::default())
+        .await
+        .map_err(IoError::other)?;
+    if files.is_empty() {
+        return Err(IoError::new(
+            ErrorKind::InvalidInput,
+            "no supported Rust, Python, JavaScript/TypeScript, Go, or Kotlin files found",
+        )
+        .into());
+    }
+    println!(
+        "Installing pinned semantic indexers for {}",
+        run::source_inventory_summary(&files)
+    );
+    let installed = crate::semantic_indexer_installer::install_required_indexers(&files, force)
+        .await
+        .map_err(IoError::other)?;
+    for indexer in installed {
+        println!("  [ok] semantic indexer: {}", indexer.entrypoint.display());
+    }
+    println!("Pinned semantic indexers are ready. No LLM request was made.");
+    Ok(0)
+}
+
 fn validate_endpoint(endpoint: &str, failures: &mut Vec<String>) {
     if endpoint.trim().is_empty() {
         print_fail(

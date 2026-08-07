@@ -15,5 +15,5 @@ mod run;
 #[path = "cli_pipeline_stats.rs"]
 mod stats;
 
-pub use preflight::{doctor, estimate};
+pub use preflight::{doctor, estimate, install_indexers};
 pub use run::{resume, run, status};

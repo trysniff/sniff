@@ -58,11 +58,18 @@ impl SemanticIndexerStore {
     }
 
     pub(crate) fn verify(&self, spec: PinnedIndexer) -> Result<InstalledIndexer, String> {
-        let root = self.installation_root(spec);
+        self.verify_at(spec, &self.installation_root(spec))
+    }
+
+    pub(crate) fn verify_at(
+        &self,
+        spec: PinnedIndexer,
+        root: &Path,
+    ) -> Result<InstalledIndexer, String> {
         let record_path = root.join(INSTALL_RECORD);
         let record = read_record(&record_path)?;
         validate_record(spec, &record)?;
-        let actual_hash = hash_tree(&root)?;
+        let actual_hash = hash_tree(root)?;
         if actual_hash != record.tree_sha256 {
             return Err(format!(
                 "{} installation checksum mismatch at {}; reinstall the pinned indexer",
@@ -85,12 +92,23 @@ impl SemanticIndexerStore {
                 entrypoint.display()
             ));
         }
-        Ok(InstalledIndexer { root, entrypoint })
+        Ok(InstalledIndexer {
+            root: root.to_path_buf(),
+            entrypoint,
+        })
     }
 
     #[allow(dead_code)]
     pub(crate) fn seal(&self, spec: PinnedIndexer) -> Result<InstalledIndexer, String> {
         let root = self.installation_root(spec);
+        self.seal_at(spec, &root)
+    }
+
+    pub(crate) fn seal_at(
+        &self,
+        spec: PinnedIndexer,
+        root: &Path,
+    ) -> Result<InstalledIndexer, String> {
         let entrypoint_relative = spec.entrypoint_relative_path();
         validate_relative_path(&entrypoint_relative)?;
         let entrypoint = root.join(&entrypoint_relative);
@@ -115,9 +133,44 @@ impl SemanticIndexerStore {
             indexer_version: spec.version.to_string(),
             source_identity: source_identity(spec),
             entrypoint: normalize_path(&entrypoint_relative),
-            tree_sha256: hash_tree(&root)?,
+            tree_sha256: hash_tree(root)?,
         };
         write_record(&root.join(INSTALL_RECORD), &record)?;
+        self.verify_at(spec, root)
+    }
+
+    pub(crate) fn promote_staged(
+        &self,
+        spec: PinnedIndexer,
+        staged_root: &Path,
+    ) -> Result<InstalledIndexer, String> {
+        let final_root = self.installation_root(spec);
+        let parent = final_root.parent().ok_or_else(|| {
+            format!(
+                "semantic indexer installation has no parent: {}",
+                final_root.display()
+            )
+        })?;
+        fs::create_dir_all(parent).map_err(|error| {
+            format!(
+                "failed to create semantic indexer parent {}: {error}",
+                parent.display()
+            )
+        })?;
+        if final_root.exists() {
+            return Err(format!(
+                "pinned {} installation already exists at {}; remove it explicitly before reinstalling",
+                spec.display_name,
+                final_root.display()
+            ));
+        }
+        fs::rename(staged_root, &final_root).map_err(|error| {
+            format!(
+                "failed to promote {} installation into {}: {error}",
+                spec.display_name,
+                final_root.display()
+            )
+        })?;
         self.verify(spec)
     }
 }

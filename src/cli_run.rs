@@ -62,6 +62,11 @@ pub enum CliCommand {
         #[arg(long)]
         probe: bool,
     },
+    /// Install and verify the pinned compiler semantic indexers required by a repository.
+    Indexers {
+        #[command(subcommand)]
+        command: IndexerCommand,
+    },
     /// Show persisted scan progress without loading configuration or contacting a provider.
     Status {
         #[arg(default_value = ".")]
@@ -71,6 +76,19 @@ pub enum CliCommand {
     Resume {
         #[arg(default_value = ".")]
         path: String,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum IndexerCommand {
+    /// Download, verify, and atomically install required indexers.
+    Install {
+        #[arg(default_value = ".")]
+        path: String,
+
+        /// Replace an existing invalid installation after verifying its exact cache path.
+        #[arg(long)]
+        force: bool,
     },
 }
 
@@ -92,6 +110,11 @@ pub async fn run(args: CliArgs) -> Result<i32, Box<dyn std::error::Error>> {
         Some(CliCommand::Doctor { path, probe }) => {
             pipeline::doctor(&path, args.skip_dotenv, probe).await
         }
+        Some(CliCommand::Indexers { command }) => match command {
+            IndexerCommand::Install { path, force } => {
+                pipeline::install_indexers(&path, force).await
+            }
+        },
         Some(CliCommand::Status { path }) => pipeline::status(&path).await,
         Some(CliCommand::Resume { path }) => {
             pipeline::resume(&path, args.skip_dotenv, args.yes, args.budget_usd).await
@@ -103,7 +126,7 @@ pub async fn run(args: CliArgs) -> Result<i32, Box<dyn std::error::Error>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{CliArgs, CliCommand};
+    use super::{CliArgs, CliCommand, IndexerCommand};
     use clap::Parser;
 
     #[test]
@@ -114,6 +137,18 @@ mod tests {
         assert!(matches!(
             args.command,
             Some(CliCommand::Doctor { path, probe }) if path == "repo" && probe
+        ));
+    }
+
+    #[test]
+    fn parses_explicit_indexer_installation() {
+        let args = CliArgs::try_parse_from(["sniff", "indexers", "install", "repo", "--force"])
+            .expect("indexer installation arguments");
+        assert!(matches!(
+            args.command,
+            Some(CliCommand::Indexers {
+                command: IndexerCommand::Install { path, force }
+            }) if path == "repo" && force
         ));
     }
 
