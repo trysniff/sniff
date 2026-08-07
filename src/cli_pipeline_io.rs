@@ -322,7 +322,9 @@ mod tests {
 
         for marker in ["tsconfig.json", "go.mod"] {
             fs::write(project.join(marker), "").unwrap();
-            assert_eq!(repository_root_for_target(&source), project);
+            let expected_project =
+                strip_windows_verbatim_prefix(fs::canonicalize(&project).unwrap());
+            assert_eq!(repository_root_for_target(&source), expected_project);
             fs::remove_file(project.join(marker)).unwrap();
         }
 
