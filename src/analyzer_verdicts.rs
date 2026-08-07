@@ -17,6 +17,7 @@ pub(crate) fn clear_unsupported_verdict(verdict: &mut crate::report_types::LLMVe
 pub(crate) use file_verdicts::normalize_file_verdict;
 pub(crate) use result::{
     IntentMethodReview, SemanticEvidence, SemanticMethodReview, build_file_verdict,
-    build_semantic_method_verdict, evidence_matches_source, parse_adversarial_method_review,
-    parse_intent_method_review, parse_semantic_method_review, validate_file_review,
+    build_method_review_record, build_semantic_method_verdict, evidence_matches_source,
+    parse_adversarial_method_review, parse_intent_method_review, parse_semantic_method_review,
+    validate_file_review,
 };

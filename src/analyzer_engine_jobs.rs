@@ -11,6 +11,7 @@ use tokio::task::JoinSet;
 use super::dossier::MethodDossier;
 use super::method_batch_review::BatchMethodReview;
 use super::method_review::MethodReviewContext;
+use super::verdicts::build_method_review_record;
 use super::{Analyzer, ReviewProgress, ReviewProgressCallback};
 use crate::review_journal::{JournalCompletion, JournalEntry, JournalStore, sha256_text};
 
@@ -562,7 +563,7 @@ async fn run_review_job(
             static_signals,
             dossier,
         } => match analyzer
-            .analyze_method_review_with_context(
+            .analyze_method_record_with_context(
                 &method,
                 &static_signals,
                 MethodReviewContext {
@@ -578,21 +579,25 @@ async fn run_review_job(
             )
             .await
         {
-            Ok((Some(verdict), in_tok, out_tok)) => Ok(ReviewOutcome {
-                index,
-                method_record: Some(MethodReviewRecord::from_method(
+            Ok((Some(analysis), in_tok, out_tok)) => {
+                let verdict = analysis.verdict.clone();
+                let method_record = build_method_review_record(
+                    &analysis.review,
                     unit_id,
                     sha256_text(&method.source),
                     &method,
-                    verdict.clone(),
-                )),
-                verdict: Some(verdict),
-                in_tok,
-                out_tok,
-                cached_in_tok: 0,
-                retry_on_resume: false,
-                persisted: false,
-            }),
+                );
+                Ok(ReviewOutcome {
+                    index,
+                    method_record: Some(method_record),
+                    verdict: Some(verdict),
+                    in_tok,
+                    out_tok,
+                    cached_in_tok: 0,
+                    retry_on_resume: false,
+                    persisted: false,
+                })
+            }
             Ok((None, _, _)) => Err(format!(
                 "LLM review failed: method {}::{} returned no verdict",
                 method.file_path, method.name
@@ -744,78 +749,78 @@ async fn run_review_unit_untracked(
             let completion_count = Arc::clone(&completion_count);
             let completion_keys = keys.clone();
             let completion_indices = indices.clone();
-            Arc::new(move |position: usize, verdict: &LLMVerdict| {
-                let key = completion_keys
-                    .get(position)
-                    .ok_or_else(|| format!("batch completed unknown method position {position}"))?;
-                let index = *completion_indices
-                    .get(position)
-                    .ok_or_else(|| format!("batch completed unknown method position {position}"))?;
-                let outcome = ReviewOutcome {
-                    index,
-                    method_record: Some(MethodReviewRecord::from_method(
-                        key.clone(),
-                        sha256_text(&method_metadata[position].source),
-                        &method_metadata[position],
-                        verdict.clone(),
-                    )),
-                    verdict: Some(verdict.clone()),
-                    in_tok: 0,
-                    out_tok: 0,
-                    cached_in_tok: 0,
-                    retry_on_resume: verdict.tier == FindingTier::Unresolved
-                        && verdict
-                            .reason
-                            .starts_with("AI review could not be validated."),
-                    persisted: true,
-                };
-                callback(key, &outcome)?;
-                completion_count.fetch_add(1, Ordering::SeqCst);
-                Ok(())
-            }) as super::method_batch_review::BatchCompletionCallback
+            Arc::new(
+                move |position: usize,
+                      verdict: &LLMVerdict,
+                      review: &super::verdicts::SemanticMethodReview| {
+                    let key = completion_keys.get(position).ok_or_else(|| {
+                        format!("batch completed unknown method position {position}")
+                    })?;
+                    let index = *completion_indices.get(position).ok_or_else(|| {
+                        format!("batch completed unknown method position {position}")
+                    })?;
+                    let outcome = ReviewOutcome {
+                        index,
+                        method_record: Some(build_method_review_record(
+                            review,
+                            key.clone(),
+                            sha256_text(&method_metadata[position].source),
+                            &method_metadata[position],
+                        )),
+                        verdict: Some(verdict.clone()),
+                        in_tok: 0,
+                        out_tok: 0,
+                        cached_in_tok: 0,
+                        retry_on_resume: verdict.tier == FindingTier::Unresolved
+                            && verdict
+                                .reason
+                                .starts_with("AI review could not be validated."),
+                        persisted: true,
+                    };
+                    callback(key, &outcome)?;
+                    completion_count.fetch_add(1, Ordering::SeqCst);
+                    Ok(())
+                },
+            ) as super::method_batch_review::BatchCompletionCallback
         });
         match analyzer
             .analyze_method_review_batch(&methods, on_progress, on_usage, batch_completion.as_ref())
             .await
         {
-            Ok((verdicts, _, _)) => {
-                if verdicts.len() != methods.len() {
+            Ok((reviews, _, _)) => {
+                if reviews.len() != methods.len() {
                     return Err(format!(
                         "method batch returned {} verdicts for {} methods",
-                        verdicts.len(),
+                        reviews.len(),
                         methods.len()
                     ));
                 }
                 let persisted = batch_completion.is_some();
-                completed.extend(
-                    keys.into_iter()
-                        .zip(indices)
-                        .zip(methods)
-                        .zip(verdicts)
-                        .map(|(((key, index), method), verdict)| {
-                            (
-                                key.clone(),
-                                ReviewOutcome {
-                                    index,
-                                    method_record: Some(MethodReviewRecord::from_method(
-                                        key.clone(),
-                                        sha256_text(&method.method.source),
-                                        &method.method,
-                                        verdict.clone(),
-                                    )),
-                                    retry_on_resume: verdict.tier == FindingTier::Unresolved
-                                        && verdict
-                                            .reason
-                                            .starts_with("AI review could not be validated."),
-                                    verdict: Some(verdict),
-                                    in_tok: 0,
-                                    out_tok: 0,
-                                    cached_in_tok: 0,
-                                    persisted,
-                                },
-                            )
-                        }),
-                );
+                completed.extend(keys.into_iter().zip(indices).zip(methods).zip(reviews).map(
+                    |(((key, index), method), (verdict, review))| {
+                        (
+                            key.clone(),
+                            ReviewOutcome {
+                                index,
+                                method_record: Some(build_method_review_record(
+                                    &review,
+                                    key.clone(),
+                                    sha256_text(&method.method.source),
+                                    &method.method,
+                                )),
+                                retry_on_resume: verdict.tier == FindingTier::Unresolved
+                                    && verdict
+                                        .reason
+                                        .starts_with("AI review could not be validated."),
+                                verdict: Some(verdict),
+                                in_tok: 0,
+                                out_tok: 0,
+                                cached_in_tok: 0,
+                                persisted,
+                            },
+                        )
+                    },
+                ));
             }
             Err(err)
                 if recoverable_method_review_error(&err)

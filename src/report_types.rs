@@ -44,6 +44,28 @@ pub struct LLMVerdict {
     pub end_line: usize,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MethodEvidenceRecord {
+    pub start_line: usize,
+    pub end_line: usize,
+    pub quote: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MethodSemanticFields {
+    pub pattern: String,
+    pub intent: String,
+    pub necessity_check: String,
+    pub contract_status: String,
+    pub contract_impact: String,
+    pub dependency_impact: String,
+    pub simplification: String,
+    pub change_scope: String,
+    pub behavior_status: String,
+    pub missing_evidence: Vec<String>,
+    pub evidence: Vec<MethodEvidenceRecord>,
+}
+
 /// The durable, identity-bearing result of reviewing one eligible method.
 ///
 /// `LLMVerdict` is the presentation-facing verdict. This record keeps the
@@ -59,6 +81,17 @@ pub struct MethodReviewRecord {
     pub end_line: usize,
     pub loc: usize,
     pub verdict: LLMVerdict,
+    pub pattern: String,
+    pub intent: String,
+    pub necessity_check: String,
+    pub contract_status: String,
+    pub contract_impact: String,
+    pub dependency_impact: String,
+    pub simplification: String,
+    pub change_scope: String,
+    pub behavior_status: String,
+    pub missing_evidence: Vec<String>,
+    pub evidence: Vec<MethodEvidenceRecord>,
 }
 
 impl MethodReviewRecord {
@@ -77,7 +110,33 @@ impl MethodReviewRecord {
             end_line: method.end_line,
             loc: method.loc,
             verdict,
+            pattern: "none".to_string(),
+            intent: String::new(),
+            necessity_check: String::new(),
+            contract_status: String::new(),
+            contract_impact: String::new(),
+            dependency_impact: String::new(),
+            simplification: String::new(),
+            change_scope: String::new(),
+            behavior_status: String::new(),
+            missing_evidence: Vec::new(),
+            evidence: Vec::new(),
         }
+    }
+
+    pub fn with_semantic_fields(mut self, fields: MethodSemanticFields) -> Self {
+        self.pattern = fields.pattern;
+        self.intent = fields.intent;
+        self.necessity_check = fields.necessity_check;
+        self.contract_status = fields.contract_status;
+        self.contract_impact = fields.contract_impact;
+        self.dependency_impact = fields.dependency_impact;
+        self.simplification = fields.simplification;
+        self.change_scope = fields.change_scope;
+        self.behavior_status = fields.behavior_status;
+        self.missing_evidence = fields.missing_evidence;
+        self.evidence = fields.evidence;
+        self
     }
 
     pub fn matches_method(&self, unit_id: &str, source_hash: &str, method: &MethodRecord) -> bool {

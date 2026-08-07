@@ -22,6 +22,11 @@ pub(super) struct MethodReviewContext<'a> {
     pub(super) stale_discard_signature_proof: Option<&'a StaleDiscardSignatureProof>,
 }
 
+pub(super) struct MethodReviewAnalysis {
+    pub(super) verdict: LLMVerdict,
+    pub(super) review: SemanticMethodReview,
+}
+
 pub(super) fn compact_method_context(context: &str) -> &str {
     context
         .find("Method dossier:\n")
@@ -479,29 +484,6 @@ pub(super) fn requires_ai_adjudication(
 #[path = "tests/analyzer_method.rs"]
 mod tests;
 
-pub(super) async fn analyze_method_review(
-    analyzer: &Analyzer,
-    method: &MethodRecord,
-    static_signals: &[String],
-    on_progress: Option<&ReviewProgressCallback>,
-) -> Result<(Option<LLMVerdict>, usize, usize), String> {
-    analyze_method_review_with_context(
-        analyzer,
-        method,
-        static_signals,
-        MethodReviewContext {
-            file_context: "",
-            project_root: None,
-            callee_context: &[],
-            boundary_requirements: &[],
-            repository_private_unused_candidate: false,
-            stale_discard_signature_proof: None,
-        },
-        on_progress,
-    )
-    .await
-}
-
 pub(super) async fn analyze_method_review_with_context(
     analyzer: &Analyzer,
     method: &MethodRecord,
@@ -509,6 +491,23 @@ pub(super) async fn analyze_method_review_with_context(
     context: MethodReviewContext<'_>,
     on_progress: Option<&ReviewProgressCallback>,
 ) -> Result<(Option<LLMVerdict>, usize, usize), String> {
+    let (analysis, input_tokens, output_tokens) =
+        analyze_method_record_with_context(analyzer, method, static_signals, context, on_progress)
+            .await?;
+    Ok((
+        analysis.map(|analysis| analysis.verdict),
+        input_tokens,
+        output_tokens,
+    ))
+}
+
+pub(super) async fn analyze_method_record_with_context(
+    analyzer: &Analyzer,
+    method: &MethodRecord,
+    static_signals: &[String],
+    context: MethodReviewContext<'_>,
+    on_progress: Option<&ReviewProgressCallback>,
+) -> Result<(Option<MethodReviewAnalysis>, usize, usize), String> {
     let MethodReviewContext {
         file_context,
         project_root,
@@ -677,7 +676,14 @@ pub(super) async fn analyze_method_review_with_context(
         method.start_line,
         method.end_line,
     );
-    Ok((Some(verdict), input_tokens, output_tokens))
+    Ok((
+        Some(MethodReviewAnalysis {
+            verdict,
+            review: final_review,
+        }),
+        input_tokens,
+        output_tokens,
+    ))
 }
 
 pub(super) fn enforce_dead_code_proof(

@@ -1099,7 +1099,7 @@ async fn batch_completion_is_fsynced_before_a_later_item_fails() {
         .map(|item| crate::review_journal::sha256_text(&item.method.source))
         .collect::<Vec<_>>();
     let completion_callback: super::super::method_batch_review::BatchCompletionCallback =
-        Arc::new(move |index, verdict| {
+        Arc::new(move |index, verdict, _review| {
             if index == 1 {
                 return Err("injected interruption after the first completed item".to_string());
             }

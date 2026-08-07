@@ -59,7 +59,20 @@ impl Analyzer {
         method: &MethodRecord,
         static_signals: &[String],
     ) -> Result<(Option<LLMVerdict>, usize, usize), String> {
-        method_review::analyze_method_review(self, method, static_signals, None).await
+        self.analyze_method_review_with_context(
+            method,
+            static_signals,
+            method_review::MethodReviewContext {
+                file_context: "",
+                project_root: None,
+                callee_context: &[],
+                boundary_requirements: &[],
+                repository_private_unused_candidate: false,
+                stale_discard_signature_proof: None,
+            },
+            None,
+        )
+        .await
     }
 
     async fn analyze_method_review_with_context(
@@ -85,13 +98,37 @@ impl Analyzer {
         on_progress: Option<&ReviewProgressCallback>,
         on_usage: Option<&method_batch_review::BatchUsageCallback>,
         on_completed: Option<&method_batch_review::BatchCompletionCallback>,
-    ) -> Result<(Vec<LLMVerdict>, usize, usize), String> {
+    ) -> Result<
+        (
+            Vec<(LLMVerdict, verdicts::SemanticMethodReview)>,
+            usize,
+            usize,
+        ),
+        String,
+    > {
         method_batch_review::analyze_method_review_batch(
             self,
             items,
             on_progress,
             on_usage,
             on_completed,
+        )
+        .await
+    }
+
+    async fn analyze_method_record_with_context(
+        &self,
+        method: &MethodRecord,
+        static_signals: &[String],
+        context: method_review::MethodReviewContext<'_>,
+        on_progress: Option<&ReviewProgressCallback>,
+    ) -> Result<(Option<method_review::MethodReviewAnalysis>, usize, usize), String> {
+        method_review::analyze_method_record_with_context(
+            self,
+            method,
+            static_signals,
+            context,
+            on_progress,
         )
         .await
     }
