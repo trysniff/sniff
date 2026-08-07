@@ -301,19 +301,20 @@ fn unpack_zip(root: &Path, spec: PinnedIndexer, bytes: &[u8]) -> Result<(), Stri
                     spec.display_name
                 )
             })?;
-        if file_name != expected_name
-            || name.components().any(|component| {
-                matches!(
-                    component,
-                    Component::ParentDir | Component::RootDir | Component::Prefix(_)
-                )
-            })
-        {
+        if name.components().any(|component| {
+            matches!(
+                component,
+                Component::ParentDir | Component::RootDir | Component::Prefix(_)
+            )
+        }) {
             return Err(format!(
-                "{} archive contains unexpected entry {}",
+                "{} archive contains an unsafe entry {}",
                 spec.display_name,
                 entry.name()
             ));
+        }
+        if file_name != expected_name {
+            continue;
         }
         let mut unpacked = Vec::new();
         entry

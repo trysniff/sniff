@@ -478,6 +478,17 @@ pub async fn index_semantic_sources(path: &str) -> Result<i32, Box<dyn std::erro
             index.symbols.len(),
             index.calls.len()
         );
+        let ambiguous = index
+            .symbols
+            .values()
+            .filter(|symbol| !symbol.ambiguity_notes.is_empty())
+            .count();
+        if ambiguous > 0 {
+            println!(
+                "       unresolved semantic ambiguity: {} symbol(s); those facts are not trusted",
+                ambiguous
+            );
+        }
     }
     println!("SCIP semantic indexing completed. No LLM request was made.");
     Ok(0)

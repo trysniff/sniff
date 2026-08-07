@@ -96,6 +96,7 @@ pub(super) fn ingest_symbol_information(
         } else {
             SemanticSymbolOrigin::Repository
         },
+        ambiguity_notes: Vec::new(),
     };
     merge_symbol(index, candidate)?;
 
@@ -234,6 +235,7 @@ pub(super) fn ensure_placeholder(
             visibility: SemanticVisibility::Unknown,
             surfaces: BTreeSet::new(),
             origin,
+            ambiguity_notes: Vec::new(),
         });
 }
 
@@ -269,12 +271,15 @@ fn merge_symbol(index: &mut SemanticIndex, incoming: SemanticSymbol) -> Result<(
             incoming.id.0, existing.kind.provider_name, incoming.kind.provider_name
         ));
     }
-    merge_optional(
+    if let Err(detail) = merge_optional(
         &mut existing.signature,
         incoming.signature,
         &incoming.id,
         "signature",
-    )?;
+    ) {
+        existing.signature = None;
+        existing.ambiguity_notes.push(detail);
+    }
     merge_optional(&mut existing.owner, incoming.owner, &incoming.id, "owner")?;
     for documentation in incoming.documentation {
         if !existing.documentation.contains(&documentation) {
@@ -293,7 +298,7 @@ fn merge_symbol(index: &mut SemanticIndex, incoming: SemanticSymbol) -> Result<(
     Ok(())
 }
 
-fn merge_optional<T: PartialEq>(
+fn merge_optional<T: PartialEq + std::fmt::Debug>(
     existing: &mut Option<T>,
     incoming: Option<T>,
     id: &SemanticSymbolId,
@@ -303,8 +308,8 @@ fn merge_optional<T: PartialEq>(
         (None, Some(value)) => *existing = Some(value),
         (Some(left), Some(right)) if left != &right => {
             return Err(format!(
-                "conflicting SCIP symbol {field} values for {}",
-                id.0
+                "conflicting SCIP symbol {field} values for {}: existing={left:?}, incoming={right:?}",
+                id.0,
             ));
         }
         _ => {}

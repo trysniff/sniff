@@ -109,6 +109,7 @@ pub struct SemanticSymbol {
     pub visibility: SemanticVisibility,
     pub surfaces: BTreeSet<SemanticSurface>,
     pub origin: SemanticSymbolOrigin,
+    pub ambiguity_notes: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
