@@ -1,3 +1,5 @@
+type Payload = Record<string, unknown>;
+
 export function clean_parse_tokens(text: string): string[] {
   const tokens: string[] = [];
   let current = "";

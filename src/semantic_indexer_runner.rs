@@ -1,4 +1,4 @@
-use crate::semantic_index::{RepositoryPath, SemanticIndex};
+use crate::semantic_index::{RepositoryPath, SemanticIndex, SemanticPositionEncoding};
 use crate::semantic_indexer_installation::SemanticIndexerStore;
 use crate::semantic_indexer_manifest::{
     IndexerRuntime, PinnedIndexer, SemanticIndexerKind, pinned_indexer, required_indexers,
@@ -40,8 +40,15 @@ pub(crate) async fn run_required_indexers(
             let _ = fs::remove_file(&index_path);
             return Err(error);
         }
-        let result = crate::semantic_index_scip::ingest_scip_file(&root, &index_path)
-            .and_then(|index| validate_expected_documents(&root, files, kind, index));
+        let index_files = files_for_indexer(files, kind);
+        let expected_languages = expected_document_languages(&root, &index_files)?;
+        let result = crate::semantic_index_scip::ingest_scip_file_with_expected_languages(
+            &root,
+            &index_path,
+            Some(&expected_languages),
+            missing_position_encoding(kind),
+        )
+        .and_then(|index| validate_expected_documents(&root, files, kind, index));
         let cleanup = fs::remove_file(&index_path);
         if let Err(error) = cleanup
             && result.is_ok()
@@ -65,6 +72,31 @@ pub(crate) fn files_for_indexer(
         .filter(|file| language_kind(file) == Some(kind))
         .cloned()
         .collect()
+}
+
+fn expected_document_languages(
+    root: &Path,
+    files: &[FileRecord],
+) -> Result<BTreeMap<RepositoryPath, String>, String> {
+    files
+        .iter()
+        .map(|file| {
+            Ok((
+                repository_relative_path(root, Path::new(&file.file_path))?,
+                file.language.clone(),
+            ))
+        })
+        .collect()
+}
+
+fn missing_position_encoding(kind: SemanticIndexerKind) -> Option<SemanticPositionEncoding> {
+    match kind {
+        SemanticIndexerKind::TypeScriptJavaScript => Some(SemanticPositionEncoding::Utf16),
+        SemanticIndexerKind::Python
+        | SemanticIndexerKind::Go
+        | SemanticIndexerKind::Kotlin
+        | SemanticIndexerKind::Rust => None,
+    }
 }
 
 async fn run_one(

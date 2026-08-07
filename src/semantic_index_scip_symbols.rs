@@ -84,7 +84,7 @@ pub(super) fn ingest_symbol_information(
         provider_identity: information.symbol.clone(),
         display_name: (!information.display_name.is_empty())
             .then(|| information.display_name.clone()),
-        kind: symbol_kind(information.kind.value())?,
+        kind: symbol_kind(information.kind.value(), &information.symbol)?,
         documentation: information.documentation.clone(),
         signature: signature.value,
         owner,
@@ -317,10 +317,13 @@ fn merge_optional<T: PartialEq + std::fmt::Debug>(
     Ok(())
 }
 
-fn symbol_kind(raw: i32) -> Result<SemanticSymbolKind, String> {
+fn symbol_kind(raw: i32, provider_identity: &str) -> Result<SemanticSymbolKind, String> {
     let kind =
         Kind::from_i32(raw).ok_or_else(|| format!("SCIP symbol uses unknown kind value {raw}"))?;
     let category = match kind {
+        Kind::UnspecifiedKind if provider_identity.ends_with("().") => {
+            SemanticSymbolCategory::Callable
+        }
         Kind::UnspecifiedKind => SemanticSymbolCategory::Unknown,
         Kind::Function | Kind::Getter | Kind::Setter | Kind::Operator | Kind::Accessor => {
             SemanticSymbolCategory::Callable

@@ -1,5 +1,7 @@
 package gold
 
+type Payload struct{}
+
 var (
 	_ = cleanParseTokens("")
 	_ = cleanValidateContract(map[string]any{"tier": "clean", "smelly": false})

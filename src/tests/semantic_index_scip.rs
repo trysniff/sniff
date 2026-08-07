@@ -9,6 +9,7 @@ use scip::types::{
     Relationship, Signature, SingleLineRange, SymbolInformation, TextEncoding, ToolInfo,
     symbol_information::Kind,
 };
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -360,5 +361,77 @@ fn file_ingestion_uses_the_same_strict_contract() {
         Some(crate::semantic_index::SemanticTextEncoding::Utf8)
     );
     assert_eq!(imported.documents.len(), 1);
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn missing_document_language_requires_an_explicit_expected_source_language() {
+    let root = root("language");
+    let mut index = base_index();
+    let mut source = document("src/main.ts");
+    source.language.clear();
+    source.position_encoding = EnumOrUnknown::new(PositionEncoding::UnspecifiedPositionEncoding);
+    index.documents.push(source);
+    let path = root.join("index.scip");
+    fs::write(&path, index.write_to_bytes().unwrap()).unwrap();
+
+    let error = ingest_scip_file(&root, &path).unwrap_err();
+    assert!(error.contains("has no language"), "{error}");
+
+    let expected = BTreeMap::from([(
+        crate::semantic_index::RepositoryPath("src/main.ts".to_string()),
+        "typescript".to_string(),
+    )]);
+    let imported = super::ingest_scip_file_with_expected_languages(
+        &root,
+        &path,
+        Some(&expected),
+        Some(crate::semantic_index::SemanticPositionEncoding::Utf16),
+    )
+    .unwrap();
+    assert_eq!(
+        imported.documents[&crate::semantic_index::RepositoryPath("src/main.ts".to_string())]
+            .language,
+        "typescript"
+    );
+    assert_eq!(
+        imported.documents[&crate::semantic_index::RepositoryPath("src/main.ts".to_string())]
+            .position_encoding,
+        crate::semantic_index::SemanticPositionEncoding::Utf16
+    );
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn unspecified_callable_identities_are_classified_without_promoting_types() {
+    let root = root("unspecified-kind");
+    let mut index = base_index();
+    let mut source = document("src/main.ts");
+    let mut function = SymbolInformation::new();
+    function.symbol = "scip-typescript npm . . demo/`main.ts`/target().".to_string();
+    function.kind = EnumOrUnknown::new(Kind::UnspecifiedKind);
+    source
+        .occurrences
+        .push(single_line(&function.symbol, 1, 0, 6, 1));
+    source.symbols.push(function);
+    let mut type_information = SymbolInformation::new();
+    type_information.symbol = "scip-typescript npm . . demo/`main.ts`/Payload#".to_string();
+    type_information.kind = EnumOrUnknown::new(Kind::UnspecifiedKind);
+    source.symbols.push(type_information);
+    index.documents.push(source);
+
+    let imported = ingest(&root, &index).unwrap();
+    let callable = imported
+        .symbols
+        .values()
+        .find(|symbol| symbol.provider_identity.ends_with("target()."))
+        .unwrap();
+    let type_symbol = imported
+        .symbols
+        .values()
+        .find(|symbol| symbol.provider_identity.ends_with("Payload#"))
+        .unwrap();
+    assert_eq!(callable.kind.category, SemanticSymbolCategory::Callable);
+    assert_eq!(type_symbol.kind.category, SemanticSymbolCategory::Unknown);
     fs::remove_dir_all(root).ok();
 }

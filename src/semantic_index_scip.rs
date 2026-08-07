@@ -21,6 +21,15 @@ pub fn ingest_scip_file(
     repository_root: &Path,
     index_path: &Path,
 ) -> Result<SemanticIndex, String> {
+    ingest_scip_file_with_expected_languages(repository_root, index_path, None, None)
+}
+
+pub(crate) fn ingest_scip_file_with_expected_languages(
+    repository_root: &Path,
+    index_path: &Path,
+    expected_languages: Option<&BTreeMap<RepositoryPath, String>>,
+    missing_position_encoding: Option<crate::semantic_index::SemanticPositionEncoding>,
+) -> Result<SemanticIndex, String> {
     let file = File::open(index_path).map_err(|error| {
         format!(
             "failed to open SCIP index {}: {error}",
@@ -42,10 +51,24 @@ pub fn ingest_scip_file(
     }
     let mut bytes = Vec::with_capacity(metadata.len() as usize);
     read_bounded(file.take(MAX_SCIP_INDEX_BYTES + 1), &mut bytes, index_path)?;
-    ingest_scip_bytes(repository_root, &bytes)
+    ingest_scip_bytes_with_expected_languages(
+        repository_root,
+        &bytes,
+        expected_languages,
+        missing_position_encoding,
+    )
 }
 
 pub fn ingest_scip_bytes(repository_root: &Path, bytes: &[u8]) -> Result<SemanticIndex, String> {
+    ingest_scip_bytes_with_expected_languages(repository_root, bytes, None, None)
+}
+
+fn ingest_scip_bytes_with_expected_languages(
+    repository_root: &Path,
+    bytes: &[u8],
+    expected_languages: Option<&BTreeMap<RepositoryPath, String>>,
+    missing_position_encoding: Option<crate::semantic_index::SemanticPositionEncoding>,
+) -> Result<SemanticIndex, String> {
     if bytes.len() as u64 > MAX_SCIP_INDEX_BYTES {
         return Err(format!(
             "SCIP index exceeds the {} byte safety limit",
@@ -66,7 +89,7 @@ pub fn ingest_scip_bytes(repository_root: &Path, bytes: &[u8]) -> Result<Semanti
     }
     let source = Index::parse_from_bytes(bytes)
         .map_err(|error| format!("failed to decode SCIP protobuf: {error}"))?;
-    ingest_index(&root, source)
+    ingest_index(&root, source, expected_languages, missing_position_encoding)
 }
 
 fn read_bounded(mut reader: Take<File>, bytes: &mut Vec<u8>, path: &Path) -> Result<(), String> {
@@ -83,7 +106,12 @@ fn read_bounded(mut reader: Take<File>, bytes: &mut Vec<u8>, path: &Path) -> Res
     Ok(())
 }
 
-fn ingest_index(repository_root: &Path, source: Index) -> Result<SemanticIndex, String> {
+fn ingest_index(
+    repository_root: &Path,
+    source: Index,
+    expected_languages: Option<&BTreeMap<RepositoryPath, String>>,
+    missing_position_encoding: Option<crate::semantic_index::SemanticPositionEncoding>,
+) -> Result<SemanticIndex, String> {
     let metadata = source
         .metadata
         .as_ref()
@@ -94,7 +122,12 @@ fn ingest_index(repository_root: &Path, source: Index) -> Result<SemanticIndex, 
         symbols::ingest_symbol_information(&mut index, information, None, true)?;
     }
     for document in &source.documents {
-        ingest_document(&mut index, document)?;
+        ingest_document(
+            &mut index,
+            document,
+            expected_languages,
+            missing_position_encoding,
+        )?;
     }
     Ok(index)
 }
@@ -133,15 +166,32 @@ fn empty_index(repository_root: &Path, metadata: &Metadata) -> Result<SemanticIn
     })
 }
 
-fn ingest_document(index: &mut SemanticIndex, document: &Document) -> Result<(), String> {
+fn ingest_document(
+    index: &mut SemanticIndex,
+    document: &Document,
+    expected_languages: Option<&BTreeMap<RepositoryPath, String>>,
+    missing_position_encoding: Option<crate::semantic_index::SemanticPositionEncoding>,
+) -> Result<(), String> {
     let path = ranges::normalize_repository_path(&document.relative_path)?;
-    if document.language.trim().is_empty() {
-        return Err(format!("SCIP document {} has no language", path.0));
-    }
+    let language = if document.language.trim().is_empty() {
+        expected_languages
+            .and_then(|languages| languages.get(&path))
+            .filter(|language| !language.trim().is_empty())
+            .cloned()
+            .ok_or_else(|| format!("SCIP document {} has no language", path.0))?
+    } else {
+        document.language.clone()
+    };
     if index.documents.contains_key(&path) {
         return Err(format!("SCIP index contains duplicate document {}", path.0));
     }
-    let encoding = ranges::position_encoding(document)?;
+    let encoding = match ranges::position_encoding(document) {
+        Ok(encoding) => encoding,
+        Err(error) if document.position_encoding.value() == 0 => {
+            missing_position_encoding.ok_or(error)?
+        }
+        Err(error) => return Err(error),
+    };
 
     for information in &document.symbols {
         symbols::ingest_symbol_information(index, information, Some(&path), false)?;
@@ -155,7 +205,7 @@ fn ingest_document(index: &mut SemanticIndex, document: &Document) -> Result<(),
         path.clone(),
         SemanticDocument {
             path,
-            language: document.language.clone(),
+            language,
             position_encoding: encoding,
             embedded_text: (!document.text.is_empty()).then(|| document.text.clone()),
             occurrences,

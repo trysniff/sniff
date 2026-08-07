@@ -5,8 +5,11 @@ use std::path::{Path, PathBuf};
 const REPOSITORY_MARKERS: &[&str] = &[
     ".git",
     "Cargo.toml",
+    "go.mod",
+    "go.work",
     "pyproject.toml",
     "package.json",
+    "tsconfig.json",
     "settings.gradle",
     "settings.gradle.kts",
 ];
@@ -302,6 +305,28 @@ mod tests {
                 .any(|file| file.file_path.ends_with("test_target.py"))
         );
         fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn compiler_project_markers_bound_the_semantic_index_root() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let outer = std::env::temp_dir().join(format!("sniff-index-root-{nanos}"));
+        let project = outer.join("project");
+        let source = project.join("src").join("main.ts");
+        fs::create_dir_all(source.parent().unwrap()).unwrap();
+        fs::create_dir_all(outer.join(".git")).unwrap();
+        fs::write(&source, "export function target() {}\n").unwrap();
+
+        for marker in ["tsconfig.json", "go.mod"] {
+            fs::write(project.join(marker), "").unwrap();
+            assert_eq!(repository_root_for_target(&source), project);
+            fs::remove_file(project.join(marker)).unwrap();
+        }
+
+        fs::remove_dir_all(outer).ok();
     }
 
     #[tokio::test]
