@@ -1108,6 +1108,7 @@ async fn batch_completion_is_fsynced_before_a_later_item_fails() {
                 completion_sources[index].clone(),
                 crate::review_journal::JournalCompletion {
                     verdict: Some(verdict.clone()),
+                    method_record: None,
                     in_tok: 0,
                     out_tok: 0,
                     cached_in_tok: 0,

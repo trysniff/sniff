@@ -37,6 +37,7 @@ fn clean_completion() -> JournalCompletion {
             start_line: 1,
             end_line: 1,
         }),
+        method_record: None,
         in_tok: 120,
         out_tok: 12,
         cached_in_tok: 80,

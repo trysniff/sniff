@@ -1,5 +1,5 @@
 use crate::pricing::PricingRates;
-use crate::report_types::LLMVerdict;
+use crate::report_types::{LLMVerdict, MethodReviewRecord};
 use crate::types::{FileRecord, FindingTier};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const JOURNAL_VERSION: u32 = 2;
+const JOURNAL_VERSION: u32 = 3;
 const BUDGET_PAUSE_PREFIX: &str = "Sniff budget pause:";
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -48,6 +48,8 @@ pub(super) struct JournalEntry {
     status: JournalStatus,
     pub(super) verdict: Option<LLMVerdict>,
     #[serde(default)]
+    pub(super) method_record: Option<MethodReviewRecord>,
+    #[serde(default)]
     role: Option<String>,
     pub(super) in_tok: usize,
     pub(super) out_tok: usize,
@@ -61,13 +63,22 @@ pub(super) struct JournalEntry {
 
 impl JournalEntry {
     pub(super) fn is_reusable(&self) -> bool {
-        !self.retry_on_resume
+        if self.retry_on_resume {
+            return false;
+        }
+        if self.stage != JournalStage::Method {
+            return true;
+        }
+        self.verdict
+            .as_ref()
+            .is_some_and(|verdict| verdict.check_type != "method" || self.method_record.is_some())
     }
 }
 
 #[derive(Debug, Clone)]
 pub(super) struct JournalCompletion {
     pub(super) verdict: Option<LLMVerdict>,
+    pub(super) method_record: Option<MethodReviewRecord>,
     pub(super) in_tok: usize,
     pub(super) out_tok: usize,
     pub(super) cached_in_tok: usize,
@@ -277,6 +288,7 @@ impl JournalStore {
             review_context_hash: self.context.review_context_hash.clone(),
             status,
             verdict: completion.verdict,
+            method_record: completion.method_record,
             role: None,
             in_tok: completion.in_tok,
             out_tok: completion.out_tok,
@@ -341,6 +353,7 @@ impl JournalStore {
                 JournalStatus::Completed
             },
             verdict: None,
+            method_record: None,
             role: completion.role,
             in_tok: completion.in_tok,
             out_tok: completion.out_tok,
@@ -397,6 +410,7 @@ impl JournalStore {
             review_context_hash: self.context.review_context_hash.clone(),
             status: JournalStatus::Completed,
             verdict: None,
+            method_record: None,
             role: None,
             in_tok,
             out_tok,
@@ -454,6 +468,7 @@ impl JournalStore {
             review_context_hash: self.context.review_context_hash.clone(),
             status: JournalStatus::Completed,
             verdict: None,
+            method_record: None,
             role: None,
             in_tok: 0,
             out_tok: 0,

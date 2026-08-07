@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::types::FindingTier;
+use crate::types::{FindingTier, MethodRecord};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StaticFlag {
@@ -26,7 +26,7 @@ pub struct FileVerdict {
     pub recommended_action: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct LLMVerdict {
     #[serde(rename = "type")]
     pub verdict_type: String,
@@ -42,6 +42,59 @@ pub struct LLMVerdict {
     pub loc: usize,
     pub start_line: usize,
     pub end_line: usize,
+}
+
+/// The durable, identity-bearing result of reviewing one eligible method.
+///
+/// `LLMVerdict` is the presentation-facing verdict. This record keeps the
+/// source identity alongside it so coverage and resume logic cannot confuse
+/// two same-named methods or count an unrelated verdict as completed work.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MethodReviewRecord {
+    pub unit_id: String,
+    pub source_hash: String,
+    pub file_path: String,
+    pub method_name: String,
+    pub start_line: usize,
+    pub end_line: usize,
+    pub loc: usize,
+    pub verdict: LLMVerdict,
+}
+
+impl MethodReviewRecord {
+    pub fn from_method(
+        unit_id: impl Into<String>,
+        source_hash: impl Into<String>,
+        method: &MethodRecord,
+        verdict: LLMVerdict,
+    ) -> Self {
+        Self {
+            unit_id: unit_id.into(),
+            source_hash: source_hash.into(),
+            file_path: method.file_path.clone(),
+            method_name: method.name.clone(),
+            start_line: method.start_line,
+            end_line: method.end_line,
+            loc: method.loc,
+            verdict,
+        }
+    }
+
+    pub fn matches_method(&self, unit_id: &str, source_hash: &str, method: &MethodRecord) -> bool {
+        self.unit_id == unit_id
+            && self.source_hash == source_hash
+            && self.file_path == method.file_path
+            && self.method_name == method.name
+            && self.start_line == method.start_line
+            && self.end_line == method.end_line
+            && self.loc == method.loc
+            && self.verdict.check_type == "method"
+            && self.verdict.file_path == method.file_path
+            && self.verdict.method_name.as_deref() == Some(method.name.as_str())
+            && self.verdict.loc == method.loc
+            && self.verdict.start_line == method.start_line
+            && self.verdict.end_line == method.end_line
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
