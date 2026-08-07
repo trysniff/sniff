@@ -120,8 +120,18 @@ fn format_journal_status(
             summary.retryable_adjudication_units
         )
     };
+    let proof = if summary.expected_proof_units == 0 {
+        String::new()
+    } else {
+        format!(
+            "\nProof: {}/{} completed ({} retryable)",
+            summary.completed_proof_units,
+            summary.expected_proof_units,
+            summary.retryable_proof_units
+        )
+    };
     format!(
-        "Journal: {}\nProgress: {}/{} completed ({progress})\nRemaining: {remaining} ({} retryable)\nRole metadata: {}/{} completed ({} retryable){adjudication}\nFindings so far: {} slop, {} kinda slop, {} unresolved\nUsage so far: {} input, {} cached input, {} output tokens; ${:.4} estimated\nProvider: {} / {}",
+        "Journal: {}\nProgress: {}/{} completed ({progress})\nRemaining: {remaining} ({} retryable)\nRole metadata: {}/{} completed ({} retryable){adjudication}{proof}\nFindings so far: {} slop, {} kinda slop, {} unresolved\nUsage so far: {} input, {} cached input, {} output tokens; ${:.4} estimated\nProvider: {} / {}",
         journal_path.display(),
         summary.completed_units,
         summary.expected_units,
