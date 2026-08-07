@@ -18,6 +18,7 @@ pub(crate) struct SynthesisRunResult {
 pub(crate) struct GraphFacts {
     edges: Vec<GraphEdge>,
     unresolved_references: usize,
+    external_references: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -78,8 +79,14 @@ pub(crate) fn build_graph_facts(records: &[MethodReviewRecord], graph: &SymbolGr
                 Some(ResolvedSymbol::External {
                     definition_id: None,
                     ..
-                })
-                | None => None,
+                }) => {
+                    facts.external_references += 1;
+                    continue;
+                }
+                None => {
+                    facts.unresolved_references += 1;
+                    continue;
+                }
             };
             let Some(callee_unit_id) = target else {
                 facts.unresolved_references += 1;
@@ -125,8 +132,8 @@ impl GraphFacts {
             .collect::<Vec<_>>()
             .join("\n");
         format!(
-            "unresolved={}\nedges:\n{}",
-            self.unresolved_references, edges
+            "unresolved={}\nexternal={}\nedges:\n{}",
+            self.unresolved_references, self.external_references, edges
         )
     }
 }
@@ -349,9 +356,11 @@ CASE FIELDS: tier (`slop` or `kinda_slop`), pattern (one typed pattern), mechani
 RESOLVED GRAPH FACTS:\n\
 {graph_packet}\n\
 UNRESOLVED CALLABLE REFERENCES IN REPOSITORY: {unresolved_references}\n\
+EXTERNAL CALLABLE REFERENCES OUTSIDE THE INDEX: {external_references}\n\
 METHOD CENSUS:\n---\n{packet}\n---",
         graph_packet = graph_packet,
-        unresolved_references = graph_facts.unresolved_references
+        unresolved_references = graph_facts.unresolved_references,
+        external_references = graph_facts.external_references
     )
 }
 
@@ -773,6 +782,18 @@ mod tests {
                     is_callable_value: false,
                     resolved_symbol: None,
                 },
+                SymbolReference {
+                    name: "library_call".to_string(),
+                    line: 3,
+                    snippet: "library_call()".to_string(),
+                    is_member_call: false,
+                    is_callable_value: false,
+                    resolved_symbol: Some(ResolvedSymbol::External {
+                        file_path: "<external>".to_string(),
+                        symbol_name: "library_call".to_string(),
+                        definition_id: None,
+                    }),
+                },
             ],
         });
 
@@ -781,6 +802,7 @@ mod tests {
 
         assert!(prompt.contains("caller=caller callee=target line=3"));
         assert!(prompt.contains("UNRESOLVED CALLABLE REFERENCES IN REPOSITORY: 1"));
+        assert!(prompt.contains("EXTERNAL CALLABLE REFERENCES OUTSIDE THE INDEX: 1"));
         assert_eq!(
             render_synthesis_prompt(&records)
                 .matches("unit_id=")
