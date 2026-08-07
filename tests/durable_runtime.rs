@@ -211,6 +211,19 @@ fn completed_method_units(journal: &Path) -> usize {
         .count()
 }
 
+fn completed_synthesis_units(journal: &Path) -> usize {
+    std::fs::read_to_string(journal)
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .filter(|entry| {
+            entry["stage"] == "synthesis"
+                && entry["is_manifest"] == false
+                && entry["status"] == "completed"
+        })
+        .count()
+}
+
 fn wait_for_output(mut child: Child, timeout: Duration) -> Output {
     let deadline = Instant::now() + timeout;
     loop {
@@ -318,6 +331,50 @@ fn forced_process_termination_resumes_without_repeating_completed_method() {
         hits.load(Ordering::SeqCst),
         6,
         "resume repeated a completed method; requests={:?}",
+        requests.lock().expect("request log")
+    );
+    assert!(root.join("sniff-report.md").exists());
+
+    std::fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn forced_process_termination_during_synthesis_resumes_without_repeating_methods() {
+    let root = method_fixture();
+    let journal = root.join(".sniff-journal.jsonl");
+    let (endpoint, hits, requests) = spawn_provider(vec![
+        ProviderAction::Json(intent_response()),
+        ProviderAction::Json(clean_response()),
+        ProviderAction::Json(intent_response()),
+        ProviderAction::Json(clean_response()),
+        ProviderAction::Stall,
+        ProviderAction::Json(synthesis_response()),
+    ]);
+
+    let mut interrupted = spawn_sniff(&root, &endpoint, false);
+    wait_until(Duration::from_secs(15), || {
+        completed_method_units(&journal) == 2 && hits.load(Ordering::SeqCst) >= 5
+    });
+    interrupted.kill().expect("force terminate sniff");
+    interrupted.wait().expect("reap terminated sniff process");
+
+    assert_eq!(completed_method_units(&journal), 2);
+    assert_eq!(completed_synthesis_units(&journal), 0);
+    assert!(!root.join("sniff-report.md").exists());
+
+    let resumed = wait_for_output(spawn_sniff(&root, &endpoint, true), Duration::from_secs(20));
+    assert!(
+        resumed.status.success(),
+        "stdout={}\nstderr={}",
+        String::from_utf8_lossy(&resumed.stdout),
+        String::from_utf8_lossy(&resumed.stderr)
+    );
+    assert_eq!(completed_method_units(&journal), 2);
+    assert_eq!(completed_synthesis_units(&journal), 1);
+    assert_eq!(
+        hits.load(Ordering::SeqCst),
+        6,
+        "resume repeated completed work; requests={:?}",
         requests.lock().expect("request log")
     );
     assert!(root.join("sniff-report.md").exists());
