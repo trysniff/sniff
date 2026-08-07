@@ -1,5 +1,98 @@
 use super::*;
 
+fn role_response(role: &str) -> String {
+    serde_json::json!({
+        "choices": [{
+            "message": {
+                "content": serde_json::json!({
+                    "role": role,
+                    "reason": "The file provides repository library behavior."
+                })
+                .to_string()
+            }
+        }],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 1}
+    })
+    .to_string()
+}
+
+fn ambiguous_role_files() -> Vec<FileRecord> {
+    vec![
+        FileRecord {
+            file_path: "reporting_one.rs".to_string(),
+            source: "pub fn first_role_fixture() {}\n".to_string(),
+            language: "rust".to_string(),
+            methods: vec![],
+        },
+        FileRecord {
+            file_path: "reporting_two.rs".to_string(),
+            source: "pub fn second_role_fixture() {}\n".to_string(),
+            language: "rust".to_string(),
+            methods: vec![],
+        },
+    ]
+}
+
+fn role_journal_path(label: &str) -> std::path::PathBuf {
+    std::env::temp_dir().join(format!(
+        "sniff-role-{label}-journal-test-{}-{}.jsonl",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ))
+}
+
+async fn assert_role_transport_failure_preserves_completed_work(
+    failure: ScriptedRoleAction,
+    expected_error: &str,
+) {
+    let _role_lock = ROLE_TEST_LOCK
+        .get_or_init(|| std::sync::Mutex::new(()))
+        .lock()
+        .unwrap();
+    clear_file_role_cache();
+    let files = ambiguous_role_files();
+    let (endpoint, hits) = spawn_scripted_role_server(vec![
+        ScriptedRoleAction::Json(role_response("library")),
+        failure,
+        ScriptedRoleAction::Json(role_response("adapter_integration")),
+    ]);
+    let client = Arc::new(
+        LLMClient::new(cfg(&endpoint), Some("test-key".to_string())).with_max_attempt_count(1),
+    );
+    let journal_path = role_journal_path("transport");
+
+    let error = resolve_file_roles_with_journal(
+        &files,
+        Arc::clone(&client),
+        Some(&journal_path),
+        Some("run-a"),
+        None,
+    )
+    .await
+    .expect_err("the second role request should fail");
+    assert!(error.contains("Role resolution failed"), "{error}");
+    assert!(error.contains(expected_error), "{error}");
+    assert_eq!(hits.load(Ordering::SeqCst), 2);
+    let interrupted = crate::review_journal::summarize(&journal_path).unwrap();
+    assert_eq!(interrupted.completed_role_units, 1);
+    assert_eq!(interrupted.retryable_role_units, 1);
+
+    clear_file_role_cache();
+    resolve_file_roles_with_journal(&files, client, Some(&journal_path), Some("run-b"), None)
+        .await
+        .expect("resume should reuse the first role and retry only the second");
+    assert_eq!(hits.load(Ordering::SeqCst), 3);
+    let resumed = crate::review_journal::summarize(&journal_path).unwrap();
+    assert_eq!(resumed.expected_role_units, 2);
+    assert_eq!(resumed.completed_role_units, 2);
+    assert_eq!(resumed.retryable_role_units, 0);
+
+    std::fs::remove_file(journal_path).unwrap();
+}
+
 #[tokio::test]
 async fn ambiguous_role_uses_llm_and_is_cached() {
     let _role_lock = ROLE_TEST_LOCK
@@ -67,6 +160,84 @@ async fn ambiguous_role_failure_aborts_resolution() {
     let summary = crate::review_journal::summarize(&journal_path).unwrap();
     assert_eq!(summary.completed_role_units, 0);
     assert_eq!(summary.retryable_role_units, 1);
+    std::fs::remove_file(journal_path).unwrap();
+}
+
+#[tokio::test]
+async fn role_http_402_preserves_completed_work_for_resume() {
+    assert_role_transport_failure_preserves_completed_work(
+        ScriptedRoleAction::Status(402, r#"{"error":"insufficient balance"}"#.to_string()),
+        "HTTP 402",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn role_network_loss_preserves_completed_work_for_resume() {
+    assert_role_transport_failure_preserves_completed_work(
+        ScriptedRoleAction::Disconnect,
+        "error sending request",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn cancelled_role_stage_resumes_without_repeating_completed_work() {
+    let _role_lock = ROLE_TEST_LOCK
+        .get_or_init(|| std::sync::Mutex::new(()))
+        .lock()
+        .unwrap();
+    clear_file_role_cache();
+    let files = ambiguous_role_files();
+    let (endpoint, hits) = spawn_scripted_role_server(vec![
+        ScriptedRoleAction::Json(role_response("library")),
+        ScriptedRoleAction::Stall,
+        ScriptedRoleAction::Json(role_response("adapter_integration")),
+    ]);
+    let client = Arc::new(
+        LLMClient::new(cfg(&endpoint), Some("test-key".to_string())).with_max_attempt_count(1),
+    );
+    let journal_path = role_journal_path("cancelled");
+    let task_files = files.clone();
+    let task_client = Arc::clone(&client);
+    let task_journal = journal_path.clone();
+    let task = tokio::spawn(async move {
+        resolve_file_roles_with_journal(
+            &task_files,
+            task_client,
+            Some(&task_journal),
+            Some("run-a"),
+            None,
+        )
+        .await
+    });
+
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while hits.load(Ordering::SeqCst) < 2 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the second role request should start");
+    task.abort();
+    assert!(
+        task.await
+            .expect_err("role task should be cancelled")
+            .is_cancelled()
+    );
+
+    let interrupted = crate::review_journal::summarize(&journal_path).unwrap();
+    assert_eq!(interrupted.completed_role_units, 1);
+    assert_eq!(interrupted.retryable_role_units, 0);
+
+    clear_file_role_cache();
+    resolve_file_roles_with_journal(&files, client, Some(&journal_path), Some("run-b"), None)
+        .await
+        .expect("resume should reuse the completed role and retry the interrupted role");
+    assert_eq!(hits.load(Ordering::SeqCst), 3);
+    let resumed = crate::review_journal::summarize(&journal_path).unwrap();
+    assert_eq!(resumed.completed_role_units, 2);
+
     std::fs::remove_file(journal_path).unwrap();
 }
 

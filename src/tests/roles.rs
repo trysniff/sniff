@@ -5,7 +5,7 @@ use crate::config::{LLMConfig, ResolvedConfig, ThresholdsConfig};
 use crate::roles::{ROLE_TEST_LOCK, is_compatibility_shim_record};
 use crate::types::{FileRecord, MethodRecord};
 use std::io::{Read, Write};
-use std::net::{Shutdown, TcpListener};
+use std::net::{Shutdown, TcpListener, TcpStream};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
@@ -182,6 +182,89 @@ fn spawn_http_status_server(status: u16, body: &'static str) -> (String, Arc<Ato
     let _ = ready_rx.recv();
 
     (format!("http://{}", addr), hits)
+}
+
+enum ScriptedRoleAction {
+    Json(String),
+    Status(u16, String),
+    Disconnect,
+    Stall,
+}
+
+fn read_scripted_request(stream: &mut TcpStream) {
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+    let mut request = Vec::new();
+    let mut buffer = [0u8; 4096];
+    let mut expected_total = None;
+    while let Ok(read) = stream.read(&mut buffer) {
+        if read == 0 {
+            break;
+        }
+        request.extend_from_slice(&buffer[..read]);
+        if expected_total.is_none()
+            && let Some(header_offset) = request.windows(4).position(|part| part == b"\r\n\r\n")
+        {
+            let header_end = header_offset + 4;
+            let headers = String::from_utf8_lossy(&request[..header_end]);
+            let content_length = headers
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().ok())
+                        .flatten()
+                })
+                .unwrap_or(0);
+            expected_total = Some(header_end + content_length);
+        }
+        if expected_total.is_some_and(|expected| request.len() >= expected) {
+            break;
+        }
+    }
+}
+
+fn spawn_scripted_role_server(actions: Vec<ScriptedRoleAction>) -> (String, Arc<AtomicUsize>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let hits = Arc::new(AtomicUsize::new(0));
+    let server_hits = Arc::clone(&hits);
+
+    thread::spawn(move || {
+        for action in actions {
+            let Ok((mut stream, _)) = listener.accept() else {
+                return;
+            };
+            server_hits.fetch_add(1, Ordering::SeqCst);
+            thread::spawn(move || {
+                read_scripted_request(&mut stream);
+                match action {
+                    ScriptedRoleAction::Json(body) => {
+                        let response = format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                            body.len(),
+                            body
+                        );
+                        let _ = stream.write_all(response.as_bytes());
+                        let _ = stream.flush();
+                    }
+                    ScriptedRoleAction::Status(status, body) => {
+                        let response = format!(
+                            "HTTP/1.1 {status} ERROR\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                            body.len(),
+                            body
+                        );
+                        let _ = stream.write_all(response.as_bytes());
+                        let _ = stream.flush();
+                    }
+                    ScriptedRoleAction::Disconnect => {}
+                    ScriptedRoleAction::Stall => thread::sleep(Duration::from_secs(5)),
+                }
+                let _ = stream.shutdown(Shutdown::Both);
+            });
+        }
+    });
+
+    (format!("http://{addr}"), hits)
 }
 
 #[path = "roles/classification.rs"]
