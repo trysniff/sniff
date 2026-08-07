@@ -232,6 +232,7 @@ async fn build_run_report(
         review.static_flags,
         review.verdicts,
         review.method_records,
+        review.synthesis_cases,
         stats,
     ))
 }
@@ -405,6 +406,9 @@ mod tests {
             expected_role_units: 0,
             completed_role_units: 0,
             retryable_role_units: 0,
+            expected_synthesis_units: 0,
+            completed_synthesis_units: 0,
+            retryable_synthesis_units: 0,
             slop: 1,
             kinda_slop: 2,
             unresolved: 0,

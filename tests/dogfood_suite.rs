@@ -732,7 +732,9 @@ fn spawn_openai_style_server() -> (String, Arc<AtomicUsize>) {
             };
             hits_clone.fetch_add(1, Ordering::SeqCst);
             let (stream_back, request) = read_http_request(stream);
-            let body = if request.contains("You classify codebase file roles for Sniff.")
+            let body = if request.contains("CASE FIELDS:") {
+                r#"{"choices":[{"message":{"content":"{\"cases\":[]}"}}]}"#
+            } else if request.contains("You classify codebase file roles for Sniff.")
                 || (request.contains("probe")
                     && request.contains("Return exactly one JSON object with this shape"))
             {
@@ -769,7 +771,9 @@ fn spawn_unresolved_method_server() -> String {
             };
             let (mut stream, request) = read_http_request(stream);
             let prompt = request_prompt(&request);
-            let content = if prompt.contains("You classify codebase file roles for Sniff.")
+            let content = if prompt.contains("CASE FIELDS:") {
+                r#"{"cases":[]}"#
+            } else if prompt.contains("You classify codebase file roles for Sniff.")
                 || (request.contains("probe")
                     && request.contains("Return exactly one JSON object with this shape"))
             {
@@ -817,7 +821,9 @@ fn spawn_prompt_logging_server() -> (String, Arc<AtomicUsize>, Arc<Mutex<Vec<Str
                 locked.push(request.clone());
             }
 
-            let body = if request.contains("Return exactly one JSON object with this shape")
+            let body = if request.contains("CASE FIELDS:") {
+                r#"{"choices":[{"message":{"content":"{\"cases\":[]}"}}]}"#
+            } else if request.contains("Return exactly one JSON object with this shape")
                 || request.contains("You classify codebase file roles for Sniff.")
             {
                 r#"{"choices":[{"message":{"content":"{\"role\":\"mixed\",\"reason\":\"mock\"}"}}]}"#
@@ -961,7 +967,9 @@ fn spawn_bumpkin_shape_server() -> (String, Arc<AtomicUsize>, Arc<Mutex<Vec<Stri
                 locked.push(request.clone());
             }
 
-            let body = if request.contains("Return exactly one JSON object with this shape") {
+            let body = if request.contains("CASE FIELDS:") {
+                r#"{"choices":[{"message":{"content":"{\"cases\":[]}"}}]}"#
+            } else if request.contains("Return exactly one JSON object with this shape") {
                 r#"{"choices":[{"message":{"content":"{\"role\":\"mixed\",\"reason\":\"probe\"}"}}]}"#
             } else if request.contains("Filename: checkout-rpc.ts")
                 || request.contains("Filename: domain-gateway.ts")
@@ -1020,7 +1028,9 @@ fn spawn_bumpkin_github_integration_server() -> (String, ManagedChild) {
             };
             let (mut stream, request) = read_http_request(stream);
             hits_clone.fetch_add(1, Ordering::SeqCst);
-            let body = if request.contains("Return exactly one JSON object with this shape") {
+            let body = if request.contains("CASE FIELDS:") {
+                r#"{"choices":[{"message":{"content":"{\"cases\":[]}"}}]}"#
+            } else if request.contains("Return exactly one JSON object with this shape") {
                 r#"{"choices":[{"message":{"content":"{\"role\":\"mixed\",\"reason\":\"probe\"}"}}]}"#
             } else if request.contains("Filename: contracts.py")
                 || request.contains("Filename: ingress.py")

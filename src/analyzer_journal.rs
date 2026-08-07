@@ -1,5 +1,6 @@
 use crate::pricing::PricingRates;
 use crate::report_types::{LLMVerdict, MethodReviewRecord};
+use crate::slop_cases::SlopCase;
 use crate::types::{FileRecord, FindingTier};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -18,6 +19,7 @@ pub(crate) enum JournalStage {
     Role,
     #[default]
     Method,
+    Synthesis,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -49,6 +51,8 @@ pub(super) struct JournalEntry {
     pub(super) verdict: Option<LLMVerdict>,
     #[serde(default)]
     pub(super) method_record: Option<MethodReviewRecord>,
+    #[serde(default)]
+    pub(super) slop_cases: Vec<SlopCase>,
     #[serde(default)]
     role: Option<String>,
     pub(super) in_tok: usize,
@@ -87,6 +91,14 @@ pub(super) struct JournalCompletion {
 
 pub(crate) struct JournalRoleCompletion {
     pub(crate) role: Option<String>,
+    pub(crate) in_tok: usize,
+    pub(crate) out_tok: usize,
+    pub(crate) cached_in_tok: usize,
+    pub(crate) retry_on_resume: bool,
+}
+
+pub(crate) struct JournalSynthesisCompletion {
+    pub(crate) cases: Vec<SlopCase>,
     pub(crate) in_tok: usize,
     pub(crate) out_tok: usize,
     pub(crate) cached_in_tok: usize,
@@ -289,6 +301,7 @@ impl JournalStore {
             status,
             verdict: completion.verdict,
             method_record: completion.method_record,
+            slop_cases: Vec::new(),
             role: None,
             in_tok: completion.in_tok,
             out_tok: completion.out_tok,
@@ -324,6 +337,13 @@ impl JournalStore {
             })
     }
 
+    pub(crate) fn reusable_synthesis(&self, unit_id: &str) -> Option<(Vec<SlopCase>, bool)> {
+        self.completed
+            .get(unit_id)
+            .filter(|entry| entry.is_reusable() && entry.stage == JournalStage::Synthesis)
+            .map(|entry| (entry.slop_cases.clone(), self.is_current_scan(entry)))
+    }
+
     pub(crate) fn record_role(
         &mut self,
         unit_id: String,
@@ -354,6 +374,7 @@ impl JournalStore {
             },
             verdict: None,
             method_record: None,
+            slop_cases: Vec::new(),
             role: completion.role,
             in_tok: completion.in_tok,
             out_tok: completion.out_tok,
@@ -411,6 +432,7 @@ impl JournalStore {
             status: JournalStatus::Completed,
             verdict: None,
             method_record: None,
+            slop_cases: Vec::new(),
             role: None,
             in_tok,
             out_tok,
@@ -425,6 +447,67 @@ impl JournalStore {
         self.stage_in_tok += in_tok;
         self.stage_out_tok += out_tok;
         self.stage_cached_in_tok += cached_in_tok;
+        Ok(())
+    }
+
+    pub(crate) fn record_synthesis(
+        &mut self,
+        unit_id: String,
+        source_hash: String,
+        completion: JournalSynthesisCompletion,
+    ) -> Result<(), String> {
+        if self.context.stage != JournalStage::Synthesis {
+            return Err(
+                "synthesis result cannot be written to a non-synthesis journal stage".to_string(),
+            );
+        }
+        let proof_level = completion
+            .cases
+            .first()
+            .map(|case| format!("{:?}", case.proof_level).to_ascii_lowercase())
+            .unwrap_or_else(|| "not_applicable".to_string());
+        let estimated_cost_usd = PricingRates::from_env().cost(
+            completion.in_tok,
+            completion.cached_in_tok,
+            completion.out_tok,
+        );
+        let entry = JournalEntry {
+            version: JOURNAL_VERSION,
+            scan_id: self.context.scan_id.clone(),
+            stage: self.context.stage,
+            is_manifest: false,
+            unit_id: unit_id.clone(),
+            expected_units: self.context.expected_units,
+            source_hash,
+            semantic_index_hash: self.context.semantic_index_hash.clone(),
+            prompt_contract_version: self.context.prompt_contract_version.clone(),
+            provider: self.context.provider.clone(),
+            model: self.context.model.clone(),
+            endpoint: self.context.endpoint.clone(),
+            review_context_hash: self.context.review_context_hash.clone(),
+            status: if completion.retry_on_resume {
+                JournalStatus::RetryableUnresolved
+            } else {
+                JournalStatus::Completed
+            },
+            verdict: None,
+            method_record: None,
+            slop_cases: completion.cases,
+            role: None,
+            in_tok: completion.in_tok,
+            out_tok: completion.out_tok,
+            cached_in_tok: completion.cached_in_tok,
+            estimated_cost_usd,
+            timestamp_unix_ms: now_unix_ms(),
+            proof_level,
+            retry_on_resume: completion.retry_on_resume,
+        };
+        append_entry(&self.path, &entry)?;
+        self.spent_usd += entry.estimated_cost_usd;
+        self.stage_in_tok += entry.in_tok;
+        self.stage_out_tok += entry.out_tok;
+        self.stage_cached_in_tok += entry.cached_in_tok;
+        self.completed.insert(unit_id, entry);
         Ok(())
     }
 
@@ -469,6 +552,7 @@ impl JournalStore {
             status: JournalStatus::Completed,
             verdict: None,
             method_record: None,
+            slop_cases: Vec::new(),
             role: None,
             in_tok: 0,
             out_tok: 0,
@@ -503,6 +587,9 @@ pub struct JournalSummary {
     pub expected_role_units: usize,
     pub completed_role_units: usize,
     pub retryable_role_units: usize,
+    pub expected_synthesis_units: usize,
+    pub completed_synthesis_units: usize,
+    pub retryable_synthesis_units: usize,
     pub slop: usize,
     pub kinda_slop: usize,
     pub unresolved: usize,
@@ -535,6 +622,10 @@ pub(super) fn summarize(path: &Path) -> Result<JournalSummary, String> {
             JournalStage::Role => {
                 summary.expected_role_units = summary.expected_role_units.max(entry.expected_units);
             }
+            JournalStage::Synthesis => {
+                summary.expected_synthesis_units =
+                    summary.expected_synthesis_units.max(entry.expected_units);
+            }
         }
         summary.input_tokens += entry.in_tok;
         summary.cached_input_tokens += entry.cached_in_tok;
@@ -556,6 +647,14 @@ pub(super) fn summarize(path: &Path) -> Result<JournalSummary, String> {
                 summary.retryable_role_units += 1;
             } else {
                 summary.completed_role_units += 1;
+            }
+            continue;
+        }
+        if entry.stage == JournalStage::Synthesis {
+            if entry.retry_on_resume {
+                summary.retryable_synthesis_units += 1;
+            } else {
+                summary.completed_synthesis_units += 1;
             }
             continue;
         }

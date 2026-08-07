@@ -1,4 +1,5 @@
 use crate::report_types::{LLMVerdict, MethodReviewRecord, RunReport, RunStats, StaticFlag};
+use crate::slop_cases::SlopCase;
 use crate::types::{FileRecord, FindingTier};
 
 pub(super) struct StatsInput<'a> {
@@ -129,6 +130,7 @@ pub(super) fn build_run_report_from_parts(
     static_flags: Vec<StaticFlag>,
     verdicts: Vec<LLMVerdict>,
     method_review_records: Vec<MethodReviewRecord>,
+    synthesis_cases: Vec<SlopCase>,
     stats: RunStats,
 ) -> (RunReport, bool) {
     let file_verdicts = crate::file_verdicts::build_file_verdicts_with_mode(
@@ -137,7 +139,8 @@ pub(super) fn build_run_report_from_parts(
         &verdicts,
         false,
     );
-    let slop_cases = crate::slop_cases::seed_method_cases(&method_review_records);
+    let mut slop_cases = crate::slop_cases::seed_method_cases(&method_review_records);
+    slop_cases.extend(synthesis_cases);
     let run_report = RunReport {
         file_verdicts,
         static_flags,

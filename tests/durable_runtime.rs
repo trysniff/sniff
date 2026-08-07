@@ -159,6 +159,10 @@ fn clean_response() -> String {
     }))
 }
 
+fn synthesis_response() -> String {
+    openai_response(serde_json::json!({"cases": []}))
+}
+
 fn spawn_sniff(root: &Path, endpoint: &str, resume: bool) -> Child {
     let mut command = Command::new(env!("CARGO_BIN_EXE_sniff"));
     command
@@ -231,6 +235,7 @@ fn assert_method_transport_failure_resumes(failure: ProviderAction, expected_err
         failure,
         ProviderAction::Json(intent_response()),
         ProviderAction::Json(clean_response()),
+        ProviderAction::Json(synthesis_response()),
     ]);
 
     let interrupted = wait_for_output(
@@ -257,7 +262,7 @@ fn assert_method_transport_failure_resumes(failure: ProviderAction, expected_err
     assert_eq!(completed_method_units(&journal), 2);
     assert_eq!(
         hits.load(Ordering::SeqCst),
-        5,
+        6,
         "resume repeated a completed method; requests={:?}",
         requests.lock().expect("request log")
     );
@@ -288,6 +293,7 @@ fn forced_process_termination_resumes_without_repeating_completed_method() {
         ProviderAction::Stall,
         ProviderAction::Json(intent_response()),
         ProviderAction::Json(clean_response()),
+        ProviderAction::Json(synthesis_response()),
     ]);
 
     let mut interrupted = spawn_sniff(&root, &endpoint, false);
@@ -310,7 +316,7 @@ fn forced_process_termination_resumes_without_repeating_completed_method() {
     assert_eq!(completed_method_units(&journal), 2);
     assert_eq!(
         hits.load(Ordering::SeqCst),
-        5,
+        6,
         "resume repeated a completed method; requests={:?}",
         requests.lock().expect("request log")
     );

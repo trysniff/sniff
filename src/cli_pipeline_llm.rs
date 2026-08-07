@@ -2,6 +2,7 @@ use crate::analyzer::{ReviewProgress, ReviewProgressCallback};
 use crate::config::ResolvedConfig;
 use crate::llm::LLMClient;
 use crate::report_types::{LLMVerdict, MethodReviewRecord, StaticFlag};
+use crate::slop_cases::SlopCase;
 use crate::types::FileRecord;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use std::collections::HashSet;
@@ -47,6 +48,7 @@ pub(super) async fn run_llm_checks(
     (
         Vec<LLMVerdict>,
         Vec<MethodReviewRecord>,
+        Vec<SlopCase>,
         usize,
         usize,
         usize,
@@ -57,6 +59,7 @@ pub(super) async fn run_llm_checks(
     let llm_total = method_total;
     if llm_total == 0 {
         return Ok((
+            Vec::new(),
             Vec::new(),
             Vec::new(),
             input.role_input_tokens,
@@ -113,18 +116,27 @@ pub(super) async fn run_llm_checks(
                 scan_id: input.scan_id,
                 budget_usd: input.budget_usd,
             },
-            client,
+            Arc::clone(&client),
             Some(on_progress),
         )
         .await;
     status_line.finish_and_clear();
     pb_llm.finish_and_clear();
     let (analysis, in_tok, out_tok) = result?;
+    let synthesis = crate::synthesis::run_synthesis(
+        &analysis.method_records,
+        Arc::clone(&client),
+        input.journal_path,
+        input.scan_id,
+        input.budget_usd,
+    )
+    .await?;
     Ok((
         analysis.verdicts,
         analysis.method_records,
-        in_tok + input.role_input_tokens,
-        out_tok + input.role_output_tokens,
+        synthesis.cases,
+        in_tok + input.role_input_tokens + synthesis.input_tokens,
+        out_tok + input.role_output_tokens + synthesis.output_tokens,
         usage_client.cached_input_tokens(),
     ))
 }
@@ -133,6 +145,7 @@ pub(super) struct ReviewArtifacts {
     pub(super) static_flags: Vec<StaticFlag>,
     pub(super) verdicts: Vec<LLMVerdict>,
     pub(super) method_records: Vec<MethodReviewRecord>,
+    pub(super) synthesis_cases: Vec<SlopCase>,
     pub(super) in_tok: usize,
     pub(super) out_tok: usize,
     pub(super) cached_in_tok: usize,
@@ -308,8 +321,14 @@ pub(super) async fn prepare_review_artifacts(
     .await
     .map_err(IoError::other);
 
-    let (verdicts, method_records, fallback_in_tok, fallback_out_tok, fallback_cached_in_tok) =
-        review_result?;
+    let (
+        verdicts,
+        method_records,
+        synthesis_cases,
+        fallback_in_tok,
+        fallback_out_tok,
+        fallback_cached_in_tok,
+    ) = review_result?;
     let journal_usage = journal_path
         .map(crate::review_journal::summarize)
         .transpose()
@@ -330,6 +349,7 @@ pub(super) async fn prepare_review_artifacts(
         static_flags,
         verdicts,
         method_records,
+        synthesis_cases,
         in_tok,
         out_tok,
         cached_in_tok,

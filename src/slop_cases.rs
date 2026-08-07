@@ -18,6 +18,19 @@ pub enum ProofLevel {
     P5ClosedWorldValidated,
 }
 
+impl ProofLevel {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::P0SourceReasoning => "P0 source reasoning",
+            Self::P1CompilerValidated => "P1 compiler validated",
+            Self::P2TestsValidated => "P2 tests validated",
+            Self::P3SurfaceValidated => "P3 surface validated",
+            Self::P4DifferentialValidated => "P4 differential validated",
+            Self::P5ClosedWorldValidated => "P5 closed-world validated",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CaseEvidence {
     pub unit_id: String,

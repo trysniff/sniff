@@ -42,6 +42,7 @@ pub(super) fn write_markdown_report(
             ),
             &mut md_lines,
         );
+        render_synthesis_cases(run_report, &mut md_lines);
     }
     append_footer(
         &mut md_lines,
@@ -54,6 +55,61 @@ pub(super) fn write_markdown_report(
     f.write_all(md_lines.join("\n").as_bytes())
         .map_err(|err| format!("failed to write report file {out_path}: {}", err))?;
     Ok(())
+}
+
+fn render_synthesis_cases(run_report: &RunReport, md_lines: &mut Vec<String>) {
+    let cases = run_report
+        .slop_cases
+        .iter()
+        .filter(|case| {
+            case.provenance
+                .iter()
+                .any(|source| source == "method_census_synthesis")
+        })
+        .collect::<Vec<_>>();
+    if cases.is_empty() {
+        return;
+    }
+
+    md_lines.push("## Cross-Method Slop Cases".to_string());
+    md_lines.push(String::new());
+    md_lines.push(
+        "_These cases were synthesized from multiple independently reviewed methods._".to_string(),
+    );
+    md_lines.push(String::new());
+    for case in cases {
+        md_lines.push(format!("### `{}`", case.case_id));
+        md_lines.push(String::new());
+        md_lines.push(format!("- **Verdict:** `{}`", case.tier.label()));
+        md_lines.push(format!("- **Pattern:** `{}`", case.pattern.as_str()));
+        md_lines.push(format!("- **Proof level:** `{}`", case.proof_level.label()));
+        md_lines.push(format!("- **Mechanism:** {}", case.mechanism));
+        md_lines.push(format!("- **Intent:** {}", case.intent));
+        md_lines.push(format!(
+            "- **Affected methods:** {}",
+            case.affected_units
+                .iter()
+                .map(|unit| format!("`{unit}`"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+        md_lines.push(format!(
+            "- **Contract boundary:** {}",
+            case.contract_boundary
+        ));
+        md_lines.push(format!("- **Counterfactual:** {}", case.counterfactual));
+        md_lines.push("- **Exact evidence:**".to_string());
+        for evidence in &case.evidence {
+            md_lines.push(format!(
+                "  - `{}` lines `{}-{}`:",
+                evidence.unit_id, evidence.start_line, evidence.end_line
+            ));
+            md_lines.push("    ```text".to_string());
+            md_lines.push(format!("    {}", evidence.quote));
+            md_lines.push("    ```".to_string());
+        }
+        md_lines.push(String::new());
+    }
 }
 
 fn validate_method_report_contract(run_report: &RunReport) -> Result<(), String> {

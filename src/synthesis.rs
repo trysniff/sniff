@@ -1,8 +1,180 @@
+use crate::llm::{LLMClient, ResponseSchema};
 use crate::product_contract::{SLOP_DEFINITION, SlopPattern};
 use crate::report_types::MethodReviewRecord;
 use crate::slop_cases::{CaseEvidence, ProofLevel, SlopCase};
 use crate::types::FindingTier;
 use std::collections::{HashMap, HashSet};
+use std::path::Path;
+use std::sync::Arc;
+
+pub(crate) struct SynthesisRunResult {
+    pub(crate) cases: Vec<SlopCase>,
+    pub(crate) input_tokens: usize,
+    pub(crate) output_tokens: usize,
+}
+
+/// Run the mandatory relationship pass with one durable unit per compact
+/// census chunk. Empty results are journaled too, so a resumed scan does not
+/// pay to rediscover that a chunk had no cross-method case.
+pub(crate) async fn run_synthesis(
+    records: &[MethodReviewRecord],
+    client: Arc<LLMClient>,
+    journal_path: Option<&Path>,
+    scan_id: Option<&str>,
+    budget_usd: Option<f64>,
+) -> Result<SynthesisRunResult, String> {
+    if records.is_empty() {
+        return Ok(SynthesisRunResult {
+            cases: Vec::new(),
+            input_tokens: 0,
+            output_tokens: 0,
+        });
+    }
+    let chunks = split_records(records, client.max_prompt_chars())?;
+    let synthesis_hash = crate::review_journal::sha256_text(
+        &records
+            .iter()
+            .map(|record| format!("{}:{}", record.unit_id, record.source_hash))
+            .collect::<Vec<_>>()
+            .join("\n"),
+    );
+    let review_context = format!("{}\nstage=synthesis", client.review_context_key());
+    let mut journal = match (journal_path, scan_id) {
+        (Some(path), Some(scan_id)) => Some(crate::review_journal::JournalStore::load_for_scan(
+            path,
+            scan_id,
+            crate::review_journal::JournalStage::Synthesis,
+            &synthesis_hash,
+            &review_context,
+            chunks.len(),
+        )?),
+        (None, None) => None,
+        (Some(_), None) => {
+            return Err("synthesis journal path requires a scan id".to_string());
+        }
+        (None, Some(_)) => None,
+    };
+    if budget_usd.is_some() && journal.is_none() {
+        return Err("--budget-usd requires a durable synthesis journal".to_string());
+    }
+
+    let mut cases = Vec::new();
+    let mut input_tokens = 0;
+    let mut output_tokens = 0;
+    for chunk in chunks {
+        let unit_id = synthesis_unit_id(&chunk);
+        let source_hash = crate::review_journal::sha256_text(
+            &chunk
+                .iter()
+                .map(|record| record.source_hash.as_str())
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
+        if let Some(store) = journal.as_mut()
+            && let Some((cached_cases, is_current_scan)) = store.reusable_synthesis(&unit_id)
+        {
+            if !is_current_scan {
+                store.record_synthesis(
+                    unit_id,
+                    source_hash,
+                    crate::review_journal::JournalSynthesisCompletion {
+                        cases: cached_cases.clone(),
+                        in_tok: 0,
+                        out_tok: 0,
+                        cached_in_tok: 0,
+                        retry_on_resume: false,
+                    },
+                )?;
+            }
+            cases.extend(cached_cases);
+            continue;
+        }
+        if let (Some(limit), Some(store)) = (budget_usd, journal.as_ref())
+            && store.spent_usd() >= limit
+        {
+            return Err(crate::review_journal::budget_pause(
+                store.spent_usd(),
+                limit,
+            ));
+        }
+        let prompt = render_synthesis_prompt(&chunk);
+        let (value, in_tok, out_tok) = client
+            .call_single(&prompt, ResponseSchema::CaseSynthesis)
+            .await?;
+        let value = value.ok_or_else(|| {
+            format!("synthesis unit {unit_id} returned no validated case payload")
+        })?;
+        let chunk_cases = parse_synthesis_cases(&value, &chunk)?;
+        if let Some(store) = journal.as_mut() {
+            store.record_synthesis(
+                unit_id,
+                source_hash,
+                crate::review_journal::JournalSynthesisCompletion {
+                    cases: chunk_cases.clone(),
+                    in_tok,
+                    out_tok,
+                    cached_in_tok: 0,
+                    retry_on_resume: false,
+                },
+            )?;
+        }
+        input_tokens += in_tok;
+        output_tokens += out_tok;
+        cases.extend(chunk_cases);
+    }
+
+    Ok(SynthesisRunResult {
+        cases,
+        input_tokens,
+        output_tokens,
+    })
+}
+
+fn split_records(
+    records: &[MethodReviewRecord],
+    max_prompt_chars: usize,
+) -> Result<Vec<Vec<MethodReviewRecord>>, String> {
+    let mut chunks = Vec::new();
+    let mut current = Vec::new();
+    for record in records {
+        let mut candidate = current.clone();
+        candidate.push(record.clone());
+        if render_synthesis_prompt(&candidate).len() <= max_prompt_chars {
+            current = candidate;
+            continue;
+        }
+        if current.is_empty() {
+            return Err(format!(
+                "synthesis method record {} exceeds the configured prompt limit {}; increase the limit explicitly",
+                record.unit_id, max_prompt_chars
+            ));
+        }
+        chunks.push(current);
+        current = vec![record.clone()];
+        if render_synthesis_prompt(&current).len() > max_prompt_chars {
+            return Err(format!(
+                "synthesis method record {} exceeds the configured prompt limit {}; increase the limit explicitly",
+                record.unit_id, max_prompt_chars
+            ));
+        }
+    }
+    if !current.is_empty() {
+        chunks.push(current);
+    }
+    Ok(chunks)
+}
+
+fn synthesis_unit_id(records: &[MethodReviewRecord]) -> String {
+    let identity = records
+        .iter()
+        .map(|record| record.unit_id.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!(
+        "synthesis:{}",
+        crate::review_journal::sha256_text(&identity)
+    )
+}
 
 /// Render the compact method census packet used by repository-scale synthesis.
 ///

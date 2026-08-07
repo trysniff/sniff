@@ -24,7 +24,9 @@ fn medication_numeric_rules_still_surface_as_real_slop_end_to_end() {
             if let Ok(mut locked) = prompts_clone.lock() {
                 locked.push(request.clone());
             }
-            let body = if request.contains("Return exactly one JSON object with this shape") {
+            let body = if request.contains("CASE FIELDS:") {
+                r#"{"choices":[{"message":{"content":"{\"cases\":[]}"}}]}"#
+            } else if request.contains("Return exactly one JSON object with this shape") {
                 r#"{"choices":[{"message":{"content":"{\"role\":\"mixed\",\"reason\":\"probe\"}"}}]}"#
             } else if request.contains("MedicationNumericRules.kt") {
                 slop_hits_clone.fetch_add(1, Ordering::SeqCst);

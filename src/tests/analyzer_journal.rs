@@ -1,6 +1,6 @@
 use super::{
-    JournalCompletion, JournalRoleCompletion, JournalStage, JournalStore, scan_id, sha256_text,
-    summarize,
+    JournalCompletion, JournalRoleCompletion, JournalStage, JournalStore,
+    JournalSynthesisCompletion, scan_id, sha256_text, summarize,
 };
 use crate::report_types::LLMVerdict;
 use crate::types::{FileRecord, FindingTier};
@@ -281,6 +281,56 @@ fn one_scan_summary_combines_role_and_method_usage_without_mixing_coverage() {
     assert_eq!(summary.cached_input_tokens, 4);
     assert_eq!(methods.spent_usd(), summary.estimated_cost_usd);
     methods.remove().unwrap();
+}
+
+#[test]
+fn synthesis_stage_persists_empty_case_results_for_resume() {
+    let path = temp_journal_path();
+    let context =
+        "review_contract=semantic-method-v28\nmodel=test\nendpoint=https://example.invalid";
+    let mut synthesis = JournalStore::load_for_scan(
+        &path,
+        "run-a",
+        JournalStage::Synthesis,
+        "synthesis-index",
+        context,
+        1,
+    )
+    .unwrap();
+    synthesis
+        .record_synthesis(
+            "synthesis-unit".to_string(),
+            sha256_text("methods"),
+            JournalSynthesisCompletion {
+                cases: Vec::new(),
+                in_tok: 40,
+                out_tok: 4,
+                cached_in_tok: 0,
+                retry_on_resume: false,
+            },
+        )
+        .unwrap();
+
+    let loaded = JournalStore::load_for_scan(
+        &path,
+        "run-a",
+        JournalStage::Synthesis,
+        "synthesis-index",
+        context,
+        1,
+    )
+    .unwrap();
+    assert_eq!(
+        loaded.reusable_synthesis("synthesis-unit"),
+        Some((Vec::new(), true))
+    );
+    let summary = summarize(&path).unwrap();
+    assert_eq!(summary.expected_synthesis_units, 1);
+    assert_eq!(summary.completed_synthesis_units, 1);
+    assert_eq!(summary.retryable_synthesis_units, 0);
+    assert_eq!(summary.input_tokens, 40);
+    assert_eq!(summary.output_tokens, 4);
+    loaded.remove().unwrap();
 }
 
 #[test]

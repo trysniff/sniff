@@ -186,6 +186,18 @@ pub(super) fn validate_schema(
         }
     }
 
+    fn check_case_array_envelope(
+        obj: &serde_json::Map<String, serde_json::Value>,
+        missing: &mut Vec<String>,
+        wrong_type: &mut Vec<String>,
+    ) {
+        match obj.get("cases") {
+            Some(value) if value.is_array() => {}
+            Some(_) => wrong_type.push("cases".to_string()),
+            None => missing.push("cases".to_string()),
+        }
+    }
+
     match schema {
         ResponseSchema::MethodReview => {
             check_bool(obj, "smelly", &mut missing, &mut wrong_type);
@@ -214,7 +226,7 @@ pub(super) fn validate_schema(
             check_string(obj, "reason", &mut missing, &mut wrong_type);
         }
         ResponseSchema::CaseSynthesis => {
-            check_review_array_envelope(obj, &mut missing, &mut wrong_type);
+            check_case_array_envelope(obj, &mut missing, &mut wrong_type);
         }
         ResponseSchema::FileReview => {
             check_bool(obj, "smelly", &mut missing, &mut wrong_type);
@@ -342,5 +354,15 @@ mod tests {
         }
         assert!(!description.contains("intent_hidden"));
         assert!(!description.contains("dead_code"));
+    }
+
+    #[test]
+    fn synthesis_schema_requires_cases_instead_of_reviews() {
+        let valid = serde_json::json!({"cases": []});
+        assert!(validate_schema(&valid, ResponseSchema::CaseSynthesis).is_ok());
+
+        let invalid = serde_json::json!({"reviews": []});
+        let error = validate_schema(&invalid, ResponseSchema::CaseSynthesis).unwrap_err();
+        assert!(error.contains("missing fields: cases"));
     }
 }
