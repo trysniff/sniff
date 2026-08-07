@@ -66,12 +66,27 @@ pub(super) async fn scan_files_with_cache(
     parse_files(&file_paths, semantic_cache).await
 }
 
-#[cfg(test)]
 pub(super) async fn scan_evidence_files(
     path: &str,
     config: &ResolvedConfig,
 ) -> Result<Vec<FileRecord>, String> {
     scan_evidence_files_with_cache(path, config, None).await
+}
+
+pub(super) async fn scan_semantic_files(
+    path: &str,
+    config: &ResolvedConfig,
+) -> Result<Vec<FileRecord>, String> {
+    let mut files = scan_files(path, config).await?;
+    for evidence_file in scan_evidence_files(path, config).await? {
+        if !files
+            .iter()
+            .any(|file| file.file_path == evidence_file.file_path)
+        {
+            files.push(evidence_file);
+        }
+    }
+    Ok(files)
 }
 
 async fn scan_evidence_files_with_cache(

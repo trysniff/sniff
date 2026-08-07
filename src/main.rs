@@ -38,6 +38,9 @@ use clap::Parser;
 use std::thread;
 
 fn main() {
+    if let Some(code) = run_internal_windows_gradle_launcher() {
+        std::process::exit(code);
+    }
     let args = cli::CliArgs::parse();
     cli_banner::print();
     let handle = match thread::Builder::new()
@@ -70,5 +73,51 @@ fn main() {
             eprintln!("Fatal error: sniff runner thread panicked");
             std::process::exit(2);
         }
+    }
+}
+
+fn run_internal_windows_gradle_launcher() -> Option<i32> {
+    #[cfg(windows)]
+    {
+        if std::env::var_os("SNIFF_INTERNAL_GRADLE_LAUNCHER").as_deref()
+            != Some(std::ffi::OsStr::new("1"))
+        {
+            return None;
+        }
+        let wrapper = match std::env::var_os("SNIFF_GRADLE_WRAPPER") {
+            Some(wrapper) => wrapper,
+            None => {
+                eprintln!("internal Gradle launcher missing SNIFF_GRADLE_WRAPPER");
+                return Some(2);
+            }
+        };
+        let project = match std::env::var_os("SNIFF_GRADLE_PROJECT") {
+            Some(project) => project,
+            None => {
+                eprintln!("internal Gradle launcher missing SNIFF_GRADLE_PROJECT");
+                return Some(2);
+            }
+        };
+        let status = std::process::Command::new("cmd.exe")
+            .arg("/d")
+            .arg("/c")
+            .arg("call")
+            .arg(wrapper)
+            .arg("-p")
+            .arg(project)
+            .args(std::env::args_os().skip(1))
+            .status();
+        Some(match status {
+            Ok(status) => status.code().unwrap_or(1),
+            Err(error) => {
+                eprintln!("internal Gradle launcher failed: {error}");
+                2
+            }
+        })
+    }
+
+    #[cfg(not(windows))]
+    {
+        None
     }
 }

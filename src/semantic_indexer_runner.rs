@@ -5,8 +5,10 @@ use crate::semantic_indexer_manifest::{
 };
 use crate::types::FileRecord;
 use std::collections::BTreeMap;
+use std::ffi::OsString;
 use std::fs;
-use std::path::Path;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::process::Command;
 use tokio::time::timeout;
@@ -14,17 +16,47 @@ use tokio::time::timeout;
 const INDEX_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 const MAX_PROCESS_OUTPUT: usize = 2 * 1024 * 1024;
 const MAX_COMPACT_ERROR_OUTPUT: usize = 8 * 1024;
+const WINDOWS_SCIP_PYTHON_BOOTSTRAP: &str = "const path=require('path'); const NativeRegExp=RegExp; function PatchedRegExp(pattern, flags) { if (pattern === path.sep) pattern = path.sep + path.sep; return new NativeRegExp(pattern, flags); } PatchedRegExp.prototype=NativeRegExp.prototype; Object.setPrototypeOf(PatchedRegExp, NativeRegExp); global.RegExp=PatchedRegExp; require(process.argv[1]);";
+
+struct TemporaryIndexerWorkspace {
+    directory: PathBuf,
+    path_prefix: PathBuf,
+    gradle_wrapper: PathBuf,
+    project_root: PathBuf,
+}
+
+impl TemporaryIndexerWorkspace {
+    fn path_environment(&self) -> OsString {
+        let mut path = self.path_prefix.as_os_str().to_os_string();
+        if let Some(existing) = std::env::var_os("PATH") {
+            path.push(";");
+            path.push(existing);
+        }
+        path
+    }
+
+    fn cleanup(self, indexer_name: &str) -> Result<(), String> {
+        fs::remove_dir_all(&self.directory).map_err(|error| {
+            format!(
+                "{} indexing completed but temporary workspace cleanup failed for {}: {error}",
+                indexer_name,
+                self.directory.display()
+            )
+        })
+    }
+}
 
 pub(crate) async fn run_required_indexers(
     repository_root: &Path,
     files: &[FileRecord],
 ) -> Result<BTreeMap<SemanticIndexerKind, SemanticIndex>, String> {
-    let root = fs::canonicalize(repository_root).map_err(|error| {
-        format!(
-            "failed to resolve semantic index repository root {}: {error}",
-            repository_root.display()
-        )
-    })?;
+    let root =
+        strip_windows_verbatim_prefix(fs::canonicalize(repository_root).map_err(|error| {
+            format!(
+                "failed to resolve semantic index repository root {}: {error}",
+                repository_root.display()
+            )
+        })?);
     let store = SemanticIndexerStore::for_user()?;
     let mut indexes = BTreeMap::new();
     for kind in required_indexers(files) {
@@ -106,37 +138,83 @@ async fn run_one(
     entrypoint: &Path,
     files: &[FileRecord],
 ) -> Result<(), String> {
+    let workspace = prepare_indexer_workspace(spec, root)?;
+    let temporary_project = prepare_mixed_typescript_javascript_project(spec, root, files)?;
+    let arguments = indexer_arguments_with_workspace(
+        spec,
+        root,
+        files,
+        temporary_project.as_deref(),
+        workspace.as_ref(),
+    );
     let mut command = match spec.runtime {
         IndexerRuntime::NodeScript => {
             let mut command = Command::new("node");
-            command.arg(entrypoint);
-            command.args(indexer_arguments(spec, root, files));
+            if spec.kind == SemanticIndexerKind::Python && cfg!(windows) {
+                command
+                    .arg("-e")
+                    .arg(WINDOWS_SCIP_PYTHON_BOOTSTRAP)
+                    .arg(entrypoint);
+            } else {
+                command.arg(entrypoint);
+            }
+            command.args(arguments);
             command
         }
         IndexerRuntime::Native => {
             let mut command = Command::new(entrypoint);
-            command.args(indexer_arguments(spec, root, files));
+            command.args(arguments);
             command
         }
         IndexerRuntime::JavaJar => {
             let mut command = Command::new("java");
             command.arg("-jar").arg(entrypoint);
-            command.args(indexer_arguments(spec, root, files));
+            command.args(arguments);
             command
         }
     };
     command.current_dir(root).kill_on_drop(true);
-    let output = timeout(INDEX_TIMEOUT, command.output())
-        .await
-        .map_err(|_| {
-            format!(
-                "{} indexing timed out after {} minutes",
-                spec.display_name,
-                INDEX_TIMEOUT.as_secs() / 60
-            )
-        })?
-        .map_err(|error| format!("{} indexing could not start: {error}", spec.display_name))?;
+    if let Some(workspace) = workspace.as_ref() {
+        command
+            .env("PATH", workspace.path_environment())
+            .env("SNIFF_INTERNAL_GRADLE_LAUNCHER", "1")
+            .env("SNIFF_GRADLE_WRAPPER", &workspace.gradle_wrapper)
+            .env("SNIFF_GRADLE_PROJECT", &workspace.project_root);
+    }
+    let output = match timeout(INDEX_TIMEOUT, command.output()).await {
+        Err(_) => Err(format!(
+            "{} indexing timed out after {} minutes",
+            spec.display_name,
+            INDEX_TIMEOUT.as_secs() / 60
+        )),
+        Ok(Err(error)) => Err(format!(
+            "{} indexing could not start: {error}",
+            spec.display_name
+        )),
+        Ok(Ok(output)) => Ok(output),
+    };
+    let temporary_project_cleanup = cleanup_temporary_project(temporary_project, spec.display_name);
+    let workspace_cleanup = workspace
+        .map(|workspace| workspace.cleanup(spec.display_name))
+        .transpose();
+    match (temporary_project_cleanup, workspace_cleanup) {
+        (Ok(()), Ok(_)) => {}
+        (Err(error), Ok(_)) | (Ok(()), Err(error)) => return Err(error),
+        (Err(project_error), Err(workspace_error)) => {
+            return Err(format!("{project_error}; additionally, {workspace_error}"));
+        }
+    }
+    let output = output?;
     if output.status.success() {
+        let index_path = root.join("index.scip");
+        if !index_path.is_file() {
+            return Err(format!(
+                "{} exited successfully but did not emit SCIP index {}; output: {}",
+                spec.display_name,
+                index_path.display(),
+                compact_process_output(&output.stdout, &output.stderr)
+            ));
+        }
         return Ok(());
     }
     Err(format!(
@@ -147,7 +225,12 @@ async fn run_one(
     ))
 }
 
-fn indexer_arguments(spec: PinnedIndexer, root: &Path, files: &[FileRecord]) -> Vec<String> {
+fn indexer_arguments_with_project(
+    spec: PinnedIndexer,
+    root: &Path,
+    files: &[FileRecord],
+    extra_project: Option<&Path>,
+) -> Vec<String> {
     match spec.kind {
         SemanticIndexerKind::TypeScriptJavaScript => {
             let mut arguments = vec!["index".to_string()];
@@ -155,6 +238,10 @@ fn indexer_arguments(spec: PinnedIndexer, root: &Path, files: &[FileRecord]) -> 
             let has_javascript = files
                 .iter()
                 .any(|file| file.language.eq_ignore_ascii_case("javascript"));
+            if let Some(extra_project) = extra_project {
+                arguments.push(".".to_string());
+                arguments.push(extra_project.to_string_lossy().to_string());
+            }
             if !has_typescript && has_javascript {
                 arguments.push("--infer-tsconfig".to_string());
             }
@@ -170,6 +257,231 @@ fn indexer_arguments(spec: PinnedIndexer, root: &Path, files: &[FileRecord]) -> 
         SemanticIndexerKind::Kotlin => vec!["index".to_string()],
         SemanticIndexerKind::Rust => vec!["scip".to_string(), ".".to_string()],
     }
+}
+
+fn indexer_arguments_with_workspace(
+    spec: PinnedIndexer,
+    root: &Path,
+    files: &[FileRecord],
+    extra_project: Option<&Path>,
+    workspace: Option<&TemporaryIndexerWorkspace>,
+) -> Vec<String> {
+    let arguments = indexer_arguments_with_project(spec, root, files, extra_project);
+    let Some(workspace) = workspace else {
+        return arguments;
+    };
+
+    let mut wrapped = vec![
+        "--cwd".to_string(),
+        workspace.directory.to_string_lossy().to_string(),
+        "index".to_string(),
+        "--build-tool".to_string(),
+        "Gradle".to_string(),
+        "--output".to_string(),
+        root.join("index.scip").to_string_lossy().to_string(),
+    ];
+    wrapped.extend(arguments.into_iter().skip(1));
+    wrapped
+}
+
+fn prepare_indexer_workspace(
+    spec: PinnedIndexer,
+    root: &Path,
+) -> Result<Option<TemporaryIndexerWorkspace>, String> {
+    if spec.kind != SemanticIndexerKind::Kotlin {
+        return Ok(None);
+    }
+
+    #[cfg(windows)]
+    {
+        prepare_windows_kotlin_workspace(root)
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = root;
+        Ok(None)
+    }
+}
+
+#[cfg(windows)]
+fn prepare_windows_kotlin_workspace(
+    root: &Path,
+) -> Result<Option<TemporaryIndexerWorkspace>, String> {
+    let unix_wrapper = root.join("gradlew");
+    if !unix_wrapper.is_file() {
+        return Ok(None);
+    }
+
+    let gradle_wrapper = root.join("gradlew.bat");
+    if !gradle_wrapper.is_file() {
+        return Err(format!(
+            "scip-java cannot index this Windows Gradle project: {} exists but {} is missing; refusing to use a weaker system-Gradle fallback",
+            unix_wrapper.display(),
+            gradle_wrapper.display()
+        ));
+    }
+
+    let directory = create_temporary_workspace("sniff-kotlin-gradle")?;
+    let result = (|| {
+        let path_prefix = directory.join("bin");
+        fs::create_dir(&path_prefix).map_err(|error| {
+            format!(
+                "failed to create temporary Kotlin Gradle launcher directory {}: {error}",
+                path_prefix.display()
+            )
+        })?;
+        fs::write(
+            directory.join("build.gradle.kts"),
+            "// Sniff marker: the launcher delegates the build to the target project.\r\n",
+        )
+        .map_err(|error| {
+            format!(
+                "failed to create temporary Kotlin Gradle project marker {}: {error}",
+                directory.join("build.gradle.kts").display()
+            )
+        })?;
+        // Java ProcessBuilder cannot launch a Windows batch file by the bare
+        // `gradle` name, so reuse Sniff as a temporary launcher instead of
+        // shipping another executable.
+        fs::write(path_prefix.join("gradle.exe"), current_executable_bytes()?).map_err(
+            |error| {
+                format!(
+                    "failed to create temporary Windows Gradle launcher {}: {error}",
+                    path_prefix.join("gradle.exe").display()
+                )
+            },
+        )?;
+        Ok(TemporaryIndexerWorkspace {
+            directory: directory.clone(),
+            path_prefix,
+            gradle_wrapper,
+            project_root: root.to_path_buf(),
+        })
+    })();
+
+    match result {
+        Ok(workspace) => Ok(Some(workspace)),
+        Err(error) => {
+            let _ = fs::remove_dir_all(&directory);
+            Err(error)
+        }
+    }
+}
+
+#[cfg(windows)]
+fn current_executable_bytes() -> Result<Vec<u8>, String> {
+    let executable = std::env::current_exe().map_err(|error| {
+        format!("failed to resolve Sniff executable for Gradle launcher: {error}")
+    })?;
+    fs::read(&executable).map_err(|error| {
+        format!(
+            "failed to read Sniff executable {} for Gradle launcher: {error}",
+            executable.display()
+        )
+    })
+}
+
+#[cfg(windows)]
+fn create_temporary_workspace(prefix: &str) -> Result<PathBuf, String> {
+    let base = std::env::temp_dir();
+    let pid = std::process::id();
+    for attempt in 0..1000u32 {
+        let directory = base.join(format!("{prefix}-{pid}-{attempt}"));
+        match fs::create_dir(&directory) {
+            Ok(()) => return Ok(directory),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => {
+                return Err(format!(
+                    "failed to create temporary semantic indexer workspace {}: {error}",
+                    directory.display()
+                ));
+            }
+        }
+    }
+    Err(format!(
+        "failed to allocate a unique temporary semantic indexer workspace under {}",
+        base.display()
+    ))
+}
+
+fn prepare_mixed_typescript_javascript_project(
+    spec: PinnedIndexer,
+    root: &Path,
+    files: &[FileRecord],
+) -> Result<Option<PathBuf>, String> {
+    if spec.kind != SemanticIndexerKind::TypeScriptJavaScript {
+        return Ok(None);
+    }
+    let has_typescript = files
+        .iter()
+        .any(|file| file.language.eq_ignore_ascii_case("typescript"));
+    let javascript_files = files
+        .iter()
+        .filter(|file| file.language.eq_ignore_ascii_case("javascript"))
+        .map(|file| repository_relative_path(root, Path::new(&file.file_path)))
+        .collect::<Result<Vec<_>, _>>()?;
+    if !has_typescript || javascript_files.is_empty() {
+        return Ok(None);
+    }
+
+    let path = root.join(format!(".sniff-jsconfig-{}.json", std::process::id()));
+    let file_list = javascript_files
+        .into_iter()
+        .map(|path| path.0)
+        .collect::<Vec<_>>();
+    let config = serde_json::json!({
+        "compilerOptions": {
+            "allowJs": true,
+            "checkJs": false,
+            "noEmit": true
+        },
+        "files": file_list
+    });
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .map_err(|error| {
+            format!(
+                "failed to create temporary JavaScript semantic project {}: {error}",
+                path.display()
+            )
+        })?;
+    let bytes = serde_json::to_vec_pretty(&config).map_err(|error| {
+        format!("failed to serialize temporary JavaScript semantic project: {error}")
+    })?;
+    file.write_all(&bytes).map_err(|error| {
+        format!(
+            "failed to write temporary JavaScript semantic project {}: {error}",
+            path.display()
+        )
+    })?;
+    Ok(Some(path))
+}
+
+fn cleanup_temporary_project(path: Option<PathBuf>, indexer_name: &str) -> Result<(), String> {
+    let Some(path) = path else {
+        return Ok(());
+    };
+    fs::remove_file(&path).map_err(|error| {
+        format!(
+            "{} indexing completed but temporary semantic project cleanup failed for {}: {error}",
+            indexer_name,
+            path.display()
+        )
+    })
+}
+
+fn strip_windows_verbatim_prefix(path: PathBuf) -> PathBuf {
+    let text = path.to_string_lossy();
+    if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+        return PathBuf::from(format!(r"\\{}", rest));
+    }
+    if let Some(rest) = text.strip_prefix(r"\\?\") {
+        return PathBuf::from(rest);
+    }
+    path
 }
 
 fn project_name(root: &Path) -> String {
@@ -209,17 +521,18 @@ fn validate_expected_documents(
 }
 
 fn repository_relative_path(root: &Path, file: &Path) -> Result<RepositoryPath, String> {
-    let canonical = fs::canonicalize(file).map_err(|error| {
+    let canonical = strip_windows_verbatim_prefix(fs::canonicalize(file).map_err(|error| {
         format!(
             "failed to resolve expected semantic source {}: {error}",
             file.display()
         )
-    })?;
-    let relative = canonical.strip_prefix(root).map_err(|_| {
+    })?);
+    let normalized_root = strip_windows_verbatim_prefix(root.to_path_buf());
+    let relative = canonical.strip_prefix(&normalized_root).map_err(|_| {
         format!(
             "semantic source {} is outside repository root {}",
             file.display(),
-            root.display()
+            normalized_root.display()
         )
     })?;
     let text = relative.to_string_lossy().replace('\\', "/");

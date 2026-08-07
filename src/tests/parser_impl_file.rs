@@ -3,6 +3,32 @@ use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[test]
+fn python_string_fixtures_do_not_become_methods() {
+    let root = std::env::temp_dir().join(format!(
+        "sniff-python-string-methods-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&root).unwrap();
+    let path = root.join("fixture.py");
+    std::fs::write(
+        &path,
+        "def real_method():\n    return 1\n\nfixture = \"\"\"\ndef fake_method():\n    return 2\n\"\"\"\n# def fake_comment():\n",
+    )
+    .unwrap();
+
+    let record = parse_file_checked(&path.to_string_lossy()).unwrap();
+    assert_eq!(
+        record
+            .methods
+            .iter()
+            .map(|method| method.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["real_method"]
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn python_all_controls_top_level_export_visibility() {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)

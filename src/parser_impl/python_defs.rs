@@ -366,7 +366,9 @@ pub(super) fn scan_python_defs_and_imports(
     }
     extractor.scanned = true;
 
-    let lines: Vec<&str> = extractor.source.lines().collect();
+    let source_lines: Vec<&str> = extractor.source.lines().collect();
+    let masked_source = mask_python_non_code(extractor.source);
+    let lines: Vec<&str> = masked_source.lines().collect();
     let mut idx = 0usize;
     let mut spans = Vec::new();
     let mut class_ranges = Vec::<(usize, usize, String)>::new();
@@ -445,7 +447,7 @@ pub(super) fn scan_python_defs_and_imports(
             extractor.references.push(SymbolReference {
                 name: reference.name,
                 line: idx + 1,
-                snippet: trimmed.to_string(),
+                snippet: source_lines[idx].trim().to_string(),
                 is_member_call: reference.is_member_call,
                 is_callable_value: false,
                 resolved_symbol: None,

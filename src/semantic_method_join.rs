@@ -171,14 +171,31 @@ fn bind_method(
     };
     let (definition_line, compiler_excluded) =
         rust_method_info(file, method).unwrap_or((key.start_line.saturating_sub(1), false));
+    let js_like = file.language.eq_ignore_ascii_case("javascript")
+        || file.language.eq_ignore_ascii_case("typescript");
+    let source_name_range = js_like.then(|| method_name_range(file, method));
     let mut candidates = BTreeMap::<SemanticSymbolId, SemanticLocation>::new();
     for symbol in index.symbols.values() {
-        if !matches!(
+        let callable = matches!(
             symbol.kind.category,
             SemanticSymbolCategory::Callable
                 | SemanticSymbolCategory::Constructor
                 | SemanticSymbolCategory::Method
-        ) {
+        );
+        let named_javascript_definition = js_like
+            && !method.name.starts_with("<anonymous@")
+            && (symbol.display_name.as_deref() == Some(method.name.as_str())
+                || source_name_range
+                    .flatten()
+                    .is_some_and(|(line, start, end)| {
+                        symbol.definitions.iter().any(|definition| {
+                            definition.document == document.path
+                                && definition.range.start.line == line
+                                && definition.range.start.character == start
+                                && definition.range.end.character == end
+                        })
+                    }));
+        if !callable && !named_javascript_definition {
             continue;
         }
         for definition in &symbol.definitions {
@@ -191,6 +208,21 @@ fn bind_method(
     }
 
     if candidates.is_empty() {
+        if let Some(reason) = compiler_excluded_reason(file, method) {
+            return SemanticMethodBinding {
+                method: key.clone(),
+                symbol: SemanticResolution::Unresolved {
+                    reason: SemanticUnresolvedReason::MissingIndexerFact,
+                    raw_target: Some(method.name.clone()),
+                    detail: format!(
+                        "{}::{} is compiler-excluded: {reason}",
+                        key.file.0, key.name
+                    ),
+                },
+                definition: None,
+                coverage: SemanticMethodCoverage::CompilerExcluded { reason },
+            };
+        }
         if compiler_excluded {
             return SemanticMethodBinding {
                 method: key.clone(),
@@ -258,6 +290,60 @@ fn bind_method(
         definition: Some(definition),
         coverage: SemanticMethodCoverage::Indexed,
     }
+}
+
+fn compiler_excluded_reason(file: &FileRecord, method: &MethodRecord) -> Option<String> {
+    let language = file.language.to_ascii_lowercase();
+    if language == "javascript" || language == "typescript" {
+        if method.name.starts_with("<anonymous@") {
+            return Some(
+                "scip-typescript does not emit a stable callable definition for inline anonymous function expressions"
+                    .to_string(),
+            );
+        }
+        let first_line = method
+            .start_line
+            .checked_sub(1)
+            .and_then(|line| file.source.lines().nth(line))
+            .map(str::trim_start);
+        if first_line.as_ref().is_some_and(|line| line.contains("=>")) {
+            return Some(
+                "scip-typescript emitted no stable callable definition for this function expression"
+                    .to_string(),
+            );
+        }
+        if let Some(first_line) = first_line {
+            let name_call = format!("{}(", method.name);
+            let name_generic = format!("{}<", method.name);
+            let top_level_declaration = first_line.starts_with("function ")
+                || first_line.starts_with("async function ")
+                || first_line.starts_with("export function ")
+                || first_line.starts_with("export async function ")
+                || first_line.starts_with("const ")
+                || first_line.starts_with("let ")
+                || first_line.starts_with("var ");
+            if (method.name == "constructor" && first_line.contains("constructor"))
+                || (!top_level_declaration
+                    && (first_line.contains(&name_call) || first_line.contains(&name_generic)))
+                || (first_line.contains("function ") && first_line.contains(&method.name))
+            {
+                return Some(
+                    "scip-typescript emitted no stable definition occurrence for this member or returned function construct"
+                        .to_string(),
+                );
+            }
+        }
+    }
+    None
+}
+
+fn method_name_range(file: &FileRecord, method: &MethodRecord) -> Option<(u32, u32, u32)> {
+    let line_number = method.start_line.checked_sub(1)?;
+    let line = file.source.lines().nth(line_number)?;
+    let byte_start = line.find(&method.name)?;
+    let start = line[..byte_start].encode_utf16().count() as u32;
+    let width = method.name.encode_utf16().count() as u32;
+    Some((line_number as u32, start, start + width))
 }
 
 fn rust_method_info(file: &FileRecord, method: &MethodRecord) -> Option<(u32, bool)> {
@@ -576,6 +662,75 @@ mod tests {
     fn records_cfg_test_methods_as_explicitly_compiler_excluded() {
         let (root, files, index) = fixture(Vec::new(), 1, false, true);
         let join = join_methods(&root, &files, &index).unwrap();
+        assert_eq!(join.resolved_count(), 0);
+        assert_eq!(join.compiler_excluded_count(), 1);
+        assert_eq!(join.unresolved_count(), 0);
+        join.require_complete().unwrap();
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn records_inline_javascript_callbacks_as_explicitly_compiler_excluded() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("sniff-semantic-method-join-js-{nonce}"));
+        fs::create_dir_all(root.join("src")).unwrap();
+        let path = root.join("src").join("main.js");
+        let source = "items.map((item) => item)\n";
+        fs::write(&path, source).unwrap();
+        let file_path = path.to_string_lossy().to_string();
+        let file = FileRecord {
+            file_path: file_path.clone(),
+            source: source.to_string(),
+            language: "javascript".to_string(),
+            methods: vec![MethodRecord {
+                name: "<anonymous@1>".to_string(),
+                file_path,
+                source: source.to_string(),
+                loc: 1,
+                param_count: 1,
+                start_line: 1,
+                end_line: 1,
+                is_exported: false,
+                language: "javascript".to_string(),
+                nesting_depth: 0,
+                references: Vec::new(),
+                real_ref_count: 0,
+            }],
+        };
+        let document_path = RepositoryPath("src/main.js".to_string());
+        let index = SemanticIndex {
+            format_version: 1,
+            repository_root: root.to_string_lossy().replace('\\', "/"),
+            provenance: SemanticIndexProvenance {
+                format: "scip".to_string(),
+                tool_name: "scip-typescript".to_string(),
+                tool_version: None,
+                arguments: Vec::new(),
+                source_text_encoding: None,
+                diagnostics: Vec::new(),
+            },
+            documents: BTreeMap::from([(
+                document_path.clone(),
+                SemanticDocument {
+                    path: document_path,
+                    language: "javascript".to_string(),
+                    position_encoding: SemanticPositionEncoding::Utf16,
+                    embedded_text: None,
+                    occurrences: Vec::new(),
+                },
+            )]),
+            symbols: BTreeMap::new(),
+            relationships: BTreeSet::new(),
+            imports: BTreeSet::new(),
+            calls: BTreeSet::new(),
+            test_relationships: BTreeSet::new(),
+            unresolved_edges: BTreeSet::new(),
+        };
+
+        let join = join_methods(&root, &[file], &index).unwrap();
         assert_eq!(join.resolved_count(), 0);
         assert_eq!(join.compiler_excluded_count(), 1);
         assert_eq!(join.unresolved_count(), 0);

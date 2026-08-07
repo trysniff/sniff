@@ -1,7 +1,9 @@
 use super::{
-    compact_process_output, files_for_indexer, indexer_arguments, missing_position_encoding,
-    project_name,
+    WINDOWS_SCIP_PYTHON_BOOTSTRAP, compact_process_output, files_for_indexer,
+    indexer_arguments_with_project, missing_position_encoding, project_name,
 };
+#[cfg(windows)]
+use super::{indexer_arguments_with_workspace, prepare_indexer_workspace};
 use crate::semantic_index::SemanticPositionEncoding;
 use crate::semantic_indexer_manifest::{SemanticIndexerKind, pinned_indexer};
 use crate::types::FileRecord;
@@ -48,7 +50,7 @@ fn synthetic_root() -> &'static Path {
 #[test]
 fn python_arguments_include_a_stable_project_name() {
     let spec = pinned_indexer(SemanticIndexerKind::Python).unwrap();
-    let arguments = indexer_arguments(spec, synthetic_python_root(), &[]);
+    let arguments = indexer_arguments_with_project(spec, synthetic_python_root(), &[], None);
     assert_eq!(arguments, ["index", ".", "--project-name", "bumpkin"]);
 }
 
@@ -58,7 +60,7 @@ fn javascript_projects_without_tsconfig_use_inference() {
     std::fs::create_dir_all(&temp).unwrap();
     let spec = pinned_indexer(SemanticIndexerKind::TypeScriptJavaScript).unwrap();
     assert_eq!(
-        indexer_arguments(spec, &temp, &[javascript_file()]),
+        indexer_arguments_with_project(spec, &temp, &[javascript_file()], None),
         ["index", "--infer-tsconfig"]
     );
     let _ = std::fs::remove_dir_all(temp);
@@ -83,6 +85,16 @@ fn providers_with_missing_positions_use_explicit_encoding_contracts() {
         missing_position_encoding(SemanticIndexerKind::Kotlin),
         Some(SemanticPositionEncoding::Utf16)
     );
+}
+
+#[test]
+fn windows_python_provider_bootstrap_loads_the_real_entrypoint() {
+    assert!(
+        WINDOWS_SCIP_PYTHON_BOOTSTRAP.contains("NativeRegExp")
+            && WINDOWS_SCIP_PYTHON_BOOTSTRAP.contains("PatchedRegExp")
+            && WINDOWS_SCIP_PYTHON_BOOTSTRAP.contains("process.argv[1]")
+    );
+    assert!(!WINDOWS_SCIP_PYTHON_BOOTSTRAP.contains("sep='/';"));
 }
 
 #[test]
@@ -117,4 +129,40 @@ fn provider_error_output_keeps_the_actionable_tail() {
     assert!(compact.contains("command context"));
     assert!(compact.contains("failure details"));
     assert!(compact.contains("provider output elided"));
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_kotlin_workspace_uses_the_project_batch_wrapper() {
+    let root = std::env::temp_dir().join(format!(
+        "sniff-kotlin-workspace-test-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("gradlew"), "#!/usr/bin/env sh\n").unwrap();
+    std::fs::write(root.join("gradlew.bat"), "@echo off\r\n").unwrap();
+
+    let spec = pinned_indexer(SemanticIndexerKind::Kotlin).unwrap();
+    let workspace = prepare_indexer_workspace(spec, &root).unwrap().unwrap();
+    assert_ne!(workspace.directory, root);
+    assert!(workspace.directory.join("build.gradle.kts").is_file());
+    assert!(workspace.path_prefix.join("gradle.exe").is_file());
+
+    let arguments = indexer_arguments_with_workspace(spec, &root, &[], None, Some(&workspace));
+    assert_eq!(arguments[0], "--cwd");
+    assert_eq!(arguments[2], "index");
+    assert!(
+        arguments
+            .windows(2)
+            .any(|pair| pair[0] == "--build-tool" && pair[1] == "Gradle")
+    );
+    let output = root.join("index.scip").to_string_lossy().to_string();
+    assert!(
+        arguments
+            .windows(2)
+            .any(|pair| pair[0] == "--output" && pair[1] == output)
+    );
+
+    workspace.cleanup(spec.display_name).unwrap();
+    std::fs::remove_dir_all(root).unwrap();
 }

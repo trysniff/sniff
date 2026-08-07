@@ -423,7 +423,7 @@ pub async fn install_indexers(path: &str, force: bool) -> Result<i32, Box<dyn st
         )
         .into());
     }
-    let files = io::scan_files(path, &crate::config::ResolvedConfig::default())
+    let files = io::scan_semantic_files(path, &crate::config::ResolvedConfig::default())
         .await
         .map_err(IoError::other)?;
     if files.is_empty() {
@@ -456,7 +456,7 @@ pub async fn index_semantic_sources(path: &str) -> Result<i32, Box<dyn std::erro
         )
         .into());
     }
-    let files = io::scan_files(path, &ResolvedConfig::default())
+    let files = io::scan_semantic_files(path, &ResolvedConfig::default())
         .await
         .map_err(IoError::other)?;
     if files.is_empty() {

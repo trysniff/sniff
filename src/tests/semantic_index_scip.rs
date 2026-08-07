@@ -489,6 +489,116 @@ fn missing_document_language_requires_an_explicit_expected_source_language() {
 }
 
 #[test]
+fn typescript_repository_prefixed_documents_use_explicit_inventory_paths() {
+    let root = root("typescript-prefix");
+    let repository_name = root.file_name().unwrap().to_string_lossy();
+    let mut index = base_index();
+    index
+        .metadata
+        .as_mut()
+        .unwrap()
+        .tool_info
+        .as_mut()
+        .unwrap()
+        .name = "scip-typescript".to_string();
+    let mut source = document(&format!("{repository_name}/src/main.ts"));
+    source.language.clear();
+    source.position_encoding = EnumOrUnknown::new(PositionEncoding::UnspecifiedPositionEncoding);
+    index.documents.push(source);
+    let mut excluded = document(&format!("{repository_name}/generated/next-env.d.ts"));
+    excluded.language.clear();
+    excluded.position_encoding = EnumOrUnknown::new(PositionEncoding::UnspecifiedPositionEncoding);
+    index.documents.push(excluded);
+    let path = root.join("index.scip");
+    fs::write(&path, index.write_to_bytes().unwrap()).unwrap();
+
+    let expected = BTreeMap::from([(
+        crate::semantic_index::RepositoryPath("src/main.ts".to_string()),
+        "typescript".to_string(),
+    )]);
+    let imported = super::ingest_scip_file_with_expected_languages(
+        &root,
+        &path,
+        Some(&expected),
+        Some(crate::semantic_index::SemanticPositionEncoding::Utf16),
+    )
+    .unwrap();
+
+    assert!(
+        imported
+            .documents
+            .contains_key(&crate::semantic_index::RepositoryPath(
+                "src/main.ts".to_string(),
+            ))
+    );
+    assert!(
+        imported
+            .provenance
+            .diagnostics
+            .iter()
+            .any(|diagnostic| { diagnostic.contains("repository-prefixed document paths") })
+    );
+    assert!(
+        imported
+            .provenance
+            .diagnostics
+            .iter()
+            .any(|diagnostic| { diagnostic.contains("outside Sniff's semantic inventory") })
+    );
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn typescript_absolute_documents_use_repository_relative_inventory_paths() {
+    let root = root("typescript-absolute");
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::write(root.join("src/main.ts"), "export function main() {}\n").unwrap();
+    let mut index = base_index();
+    index
+        .metadata
+        .as_mut()
+        .unwrap()
+        .tool_info
+        .as_mut()
+        .unwrap()
+        .name = "scip-typescript".to_string();
+    let mut source = document(&root.join("src/main.ts").to_string_lossy());
+    source.language.clear();
+    source.position_encoding = EnumOrUnknown::new(PositionEncoding::UnspecifiedPositionEncoding);
+    index.documents.push(source);
+    let path = root.join("index.scip");
+    fs::write(&path, index.write_to_bytes().unwrap()).unwrap();
+
+    let expected = BTreeMap::from([(
+        crate::semantic_index::RepositoryPath("src/main.ts".to_string()),
+        "typescript".to_string(),
+    )]);
+    let imported = super::ingest_scip_file_with_expected_languages(
+        &root,
+        &path,
+        Some(&expected),
+        Some(crate::semantic_index::SemanticPositionEncoding::Utf16),
+    )
+    .unwrap();
+
+    assert!(
+        imported
+            .documents
+            .contains_key(&crate::semantic_index::RepositoryPath(
+                "src/main.ts".to_string(),
+            ))
+    );
+    assert!(
+        imported
+            .provenance
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.contains("absolute document paths"))
+    );
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
 fn unspecified_callable_identities_are_classified_without_promoting_types() {
     let root = root("unspecified-kind");
     let mut index = base_index();

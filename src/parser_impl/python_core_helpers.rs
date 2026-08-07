@@ -6,6 +6,84 @@ pub(super) fn line_indent(line: &str) -> usize {
     line.chars().take_while(|c| c.is_whitespace()).count()
 }
 
+pub(super) fn mask_python_non_code(source: &str) -> String {
+    let chars = source.chars().collect::<Vec<_>>();
+    let mut masked = String::with_capacity(source.len());
+    let mut quote: Option<(char, bool)> = None;
+    let mut index = 0;
+
+    while index < chars.len() {
+        let current = chars[index];
+        if let Some((delimiter, triple)) = quote {
+            if current == '\n' || current == '\r' {
+                masked.push(current);
+                index += 1;
+            } else if current == '\\' {
+                masked.push(' ');
+                index += 1;
+                if index < chars.len() {
+                    if chars[index] == '\n' || chars[index] == '\r' {
+                        masked.push(chars[index]);
+                    } else {
+                        masked.push(' ');
+                    }
+                    index += 1;
+                }
+            } else if triple
+                && current == delimiter
+                && index + 2 < chars.len()
+                && chars[index + 1] == delimiter
+                && chars[index + 2] == delimiter
+            {
+                masked.push(' ');
+                masked.push(' ');
+                masked.push(' ');
+                index += 3;
+                quote = None;
+            } else if !triple && current == delimiter {
+                masked.push(' ');
+                index += 1;
+                quote = None;
+            } else {
+                masked.push(' ');
+                index += 1;
+            }
+            continue;
+        }
+
+        if current == '#' {
+            masked.push(' ');
+            index += 1;
+            while index < chars.len() && chars[index] != '\n' && chars[index] != '\r' {
+                masked.push(' ');
+                index += 1;
+            }
+            continue;
+        }
+
+        if current == '\'' || current == '"' {
+            let triple = index + 2 < chars.len()
+                && chars[index + 1] == current
+                && chars[index + 2] == current;
+            masked.push(' ');
+            if triple {
+                masked.push(' ');
+                masked.push(' ');
+                index += 3;
+            } else {
+                index += 1;
+            }
+            quote = Some((current, triple));
+            continue;
+        }
+
+        masked.push(current);
+        index += 1;
+    }
+
+    masked
+}
+
 pub(super) fn parse_python_name(trimmed: &str) -> Option<String> {
     trimmed
         .strip_prefix("def ")?
