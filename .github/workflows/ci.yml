@@ -68,9 +68,6 @@ jobs:
             cargo run --quiet -- indexers install "tests/semantic_gold_fixtures/${fixture}" --yes
           done
       - run: cargo test --all-targets --locked
-      - name: Capture macOS sandbox denials
-        if: failure() && runner.os == 'macOS'
-        run: log show --last 2m --style compact --predicate 'eventMessage CONTAINS "Sandbox:"' | tail -n 100
 
   msrv:
     name: msrv-1.88
