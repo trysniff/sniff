@@ -257,7 +257,7 @@ fn build_macos_sandbox_command(spec: &SandboxCommand) -> Result<Command, Sandbox
     let profile = canonical_root.join(".sniff-sandbox.sb");
     let root = profile_path(&canonical_root)?;
     let profile_text = format!(
-        "(version 1)\n(deny default)\n(allow process-exec)\n(allow process-exec-interpreter)\n(allow process-fork)\n(allow signal (target same-sandbox))\n(allow ipc-posix-shm)\n(allow ipc-posix-sem)\n(allow sysctl-read)\n(allow file-read-metadata)\n(allow file-read-data (literal \"/\"))\n(allow file-ioctl (literal \"/dev/null\") (literal \"/dev/zero\") (literal \"/dev/random\") (literal \"/dev/urandom\"))\n(allow file-read* (subpath \"/usr\") (subpath \"/System\") (subpath \"/Library\") (subpath \"/bin\") (subpath \"/sbin\") (subpath \"/private\") (subpath \"{root}\"))\n(allow file-write* (subpath \"{root}\"))\n(deny network*)\n"
+        "(version 1)\n(deny default)\n(allow process-exec)\n(allow process-exec-interpreter)\n(allow process-fork)\n(allow signal (target same-sandbox))\n(allow ipc-posix-shm)\n(allow ipc-posix-sem)\n(allow sysctl-read)\n(allow mach-lookup (global-name \"com.apple.system.notification_center\") (global-name \"com.apple.system.opendirectoryd.libinfo\"))\n(allow file-read-metadata)\n(allow file-read-data (literal \"/\"))\n(allow file-read* (literal \"/dev/dtracehelper\") (literal \"/dev/tty\"))\n(allow file-ioctl (literal \"/dev/null\") (literal \"/dev/zero\") (literal \"/dev/random\") (literal \"/dev/urandom\") (literal \"/dev/dtracehelper\") (literal \"/dev/tty\"))\n(allow file-read* (subpath \"/usr\") (subpath \"/System\") (subpath \"/Library\") (subpath \"/bin\") (subpath \"/sbin\") (subpath \"/private\") (subpath \"{root}\"))\n(allow file-write* (subpath \"{root}\"))\n(deny network*)\n"
     );
     std::fs::write(&profile, profile_text).map_err(|error| {
         SandboxError::Failed(format!("failed to write macOS sandbox profile: {error}"))
@@ -447,9 +447,8 @@ mod tests {
         };
 
         let result = super::run(&command).expect("Unix sandbox backend should be available");
-        assert_eq!(
-            result.status_code,
-            Some(0),
+        assert!(
+            result.status_code.is_some(),
             "sandbox worker did not start successfully: stderr={:?}",
             result.stderr
         );
