@@ -137,7 +137,11 @@ pub(super) async fn run_llm_checks(
     status_line.finish_and_clear();
     pb_llm.finish_and_clear();
     let (analysis, in_tok, out_tok) = result?;
-    let graph_facts = crate::synthesis::build_graph_facts(&analysis.method_records, input.graph);
+    let graph_facts = crate::synthesis::build_graph_facts_with_compiler(
+        &analysis.method_records,
+        input.graph,
+        input.compiler_method_contexts,
+    );
     let synthesis = crate::synthesis::run_synthesis(
         &analysis.method_records,
         &graph_facts,
@@ -164,13 +168,14 @@ pub(super) async fn run_llm_checks(
     let mut proof_input = method_cases.clone();
     proof_input.extend(adjudication.cases);
     proof_input = crate::slop_cases::deduplicate_cases(proof_input)?;
-    let proof = crate::counterfactual::run_counterfactual_proof(
+    let proof = crate::counterfactual::run_counterfactual_proof_with_compiler(
         &proof_input,
         input.file_records,
         Arc::clone(&client),
         input.journal_path,
         input.scan_id,
         input.budget_usd,
+        input.compiler_method_contexts,
     )
     .await?;
     let mut verdicts = analysis.verdicts;

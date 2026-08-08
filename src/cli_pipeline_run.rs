@@ -214,9 +214,13 @@ async fn build_run_report(
     file_records: &mut [crate::types::FileRecord],
     execution: llm::ReviewExecutionContext<'_>,
 ) -> Result<(RunReport, bool), Box<dyn std::error::Error>> {
+    let compiler_methods_expected = file_records.iter().map(|file| file.methods.len()).sum();
+    let compiler_methods_covered = execution
+        .compiler_method_contexts
+        .map_or(0, std::collections::BTreeMap::len);
     let review = llm::prepare_review_artifacts(path, config, file_records, execution).await?;
 
-    let stats = stats::generate_stats(stats::StatsInput {
+    let mut stats = stats::generate_stats(stats::StatsInput {
         file_records,
         static_flags: &review.static_flags,
         verdicts: &review.verdicts,
@@ -226,6 +230,8 @@ async fn build_run_report(
         ai_expected_reviews: review.ai_expected_reviews,
         method_reviews_expected: review.method_reviews_expected,
     });
+    stats.compiler_methods_expected = compiler_methods_expected;
+    stats.compiler_methods_covered = compiler_methods_covered;
 
     if stats.ai_failed_reviews > 0 {
         return Err(IoError::other(format!(

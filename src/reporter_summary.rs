@@ -54,6 +54,10 @@ pub(super) fn append_footer(
             unresolved,
             s.method_review_failures
         ),
+        format!(
+            "**Compiler semantic coverage:** {} of {} methods",
+            s.compiler_methods_covered, s.compiler_methods_expected
+        ),
         format!("**Slop findings:** {} slop | {} kinda slop", slop, kinda),
         unresolved_summary,
         "**Note:** verdict counts come from exhaustive AI method reviews, not static signals or file-level summaries.".to_string(),

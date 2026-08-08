@@ -180,6 +180,10 @@ pub struct RunStats {
     pub method_reviews_expected: usize,
     pub method_review_failures: usize,
     pub unresolved_methods: usize,
+    #[serde(default)]
+    pub compiler_methods_covered: usize,
+    #[serde(default)]
+    pub compiler_methods_expected: usize,
     pub dead_methods: usize,
     pub inline_candidates: usize,
     pub input_tokens: usize,
