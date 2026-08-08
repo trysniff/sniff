@@ -156,6 +156,14 @@ async fn run_one(
     );
     let sandbox_command =
         build_indexer_sandbox_command(spec, root, installed, arguments, workspace.as_ref())?;
+    if let Some(cache_root) = &cache_root {
+        fs::create_dir(cache_root).map_err(|error| {
+            format!(
+                "failed to create private semantic indexer cache {}: {error}",
+                cache_root.display()
+            )
+        })?;
+    }
     let output = if spec.kind == SemanticIndexerKind::Kotlin {
         let mut preparation = sandbox_command.clone();
         preparation.allow_network = true;
@@ -314,6 +322,10 @@ fn build_indexer_sandbox_command(
                 "-Duser.home={}",
                 sandbox_repository_argument(root, &root.to_string_lossy())
             ));
+            args.push(format!(
+                "-Djava.io.tmpdir={}",
+                sandbox_repository_argument(root, &root.join(INDEXER_CACHE_DIR).to_string_lossy(),)
+            ));
             #[cfg(windows)]
             if spec.kind == SemanticIndexerKind::Kotlin {
                 let patch_dir = entrypoint
@@ -447,8 +459,13 @@ fn runtime_dependency_paths(runtime: &Path) -> Result<Vec<PathBuf>, String> {
             ));
         }
         if let Some(parent) = dependency.parent() {
+            paths.push(parent.to_path_buf());
             paths.push(macos_dependency_mount_root(parent));
         }
+    }
+    let homebrew_opt = Path::new("/opt/homebrew/opt");
+    if runtime.starts_with("/opt/homebrew") && homebrew_opt.is_dir() {
+        paths.push(homebrew_opt.to_path_buf());
     }
     Ok(paths)
 }

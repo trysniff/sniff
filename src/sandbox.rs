@@ -236,16 +236,11 @@ fn build_bubblewrap_command(spec: &SandboxCommand) -> Result<Command, SandboxErr
     let mut command = Command::new(bwrap);
     command.args(["--die-with-parent", "--new-session", "--clearenv"]);
     if !spec.allow_network {
-        command.arg("--unshare-net");
+        command.arg("--unshare-all");
     } else {
-        command.arg("--share-net");
+        command.args(["--unshare-all", "--share-net"]);
     }
     command.args([
-        "--unshare-pid",
-        "--unshare-uts",
-        "--unshare-ipc",
-        "--unshare-cgroup",
-        "--unshare-user",
         "--ro-bind",
         "/usr",
         "/usr",
