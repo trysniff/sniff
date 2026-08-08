@@ -264,6 +264,14 @@ fn patch_scip_java_windows(root: &Path, spec: PinnedIndexer) -> Result<(), Strin
             std::process::Command::new("jar")
                 .current_dir(&classes)
                 .arg("xf")
+                .arg(&aggregator)
+                .arg("org/scip_code/scip_java/aggregator/ScipAggregatorOptions.class"),
+            "extract scip-java Windows aggregator options class",
+        )?;
+        run_patch_tool(
+            std::process::Command::new("jar")
+                .current_dir(&classes)
+                .arg("xf")
                 .arg(&bindings)
                 .arg("org/scip_code/scip"),
             "extract scip-java Windows compatibility SCIP bindings",
@@ -290,7 +298,11 @@ fn patch_scip_java_windows(root: &Path, spec: PinnedIndexer) -> Result<(), Strin
             .map_err(|error| format!("failed to create scip-java patch directory: {error}"))?;
         fs::create_dir_all(&scip_package)
             .map_err(|error| format!("failed to create scip-java bindings directory: {error}"))?;
-        for class_name in ["ScipWriter.class", "ScipOutputStream.class"] {
+        for class_name in [
+            "ScipWriter.class",
+            "ScipOutputStream.class",
+            "ScipAggregatorOptions.class",
+        ] {
             let source_class = classes
                 .join("org/scip_code/scip_java/aggregator")
                 .join(class_name);
