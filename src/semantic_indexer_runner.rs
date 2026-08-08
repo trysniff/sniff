@@ -1,4 +1,4 @@
-use crate::sandbox::SandboxCommand;
+use crate::sandbox::{SandboxCommand, sandbox_path};
 use crate::semantic_index::{RepositoryPath, SemanticIndex, SemanticPositionEncoding};
 use crate::semantic_indexer_installation::{InstalledIndexer, SemanticIndexerStore};
 use crate::semantic_indexer_manifest::{
@@ -7,7 +7,6 @@ use crate::semantic_indexer_manifest::{
 use crate::types::FileRecord;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
-use std::ffi::OsString;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -27,15 +26,6 @@ struct TemporaryIndexerWorkspace {
 }
 
 impl TemporaryIndexerWorkspace {
-    fn path_environment(&self) -> OsString {
-        let mut path = self.path_prefix.as_os_str().to_os_string();
-        if let Some(existing) = std::env::var_os("PATH") {
-            path.push(";");
-            path.push(existing);
-        }
-        path
-    }
-
     fn cleanup(self, indexer_name: &str) -> Result<(), String> {
         fs::remove_dir_all(&self.directory).map_err(|error| {
             format!(
@@ -288,6 +278,16 @@ fn build_indexer_sandbox_command(
     );
 
     let mut read_only_paths = vec![installed_root, runtime_mount_root(&runtime_path)];
+    let mut path_prefixes = Vec::new();
+    if spec.kind == SemanticIndexerKind::Go {
+        let go = resolve_runtime("go")?;
+        read_only_paths.push(runtime_mount_root(&go));
+        path_prefixes.push(
+            go.parent()
+                .ok_or_else(|| "go runtime has no parent directory".to_string())?
+                .to_path_buf(),
+        );
+    }
     let mut env = Vec::new();
     if let Some(workspace) = workspace {
         read_only_paths.push(fs::canonicalize(&workspace.directory).map_err(|error| {
@@ -302,10 +302,7 @@ fn build_indexer_sandbox_command(
                 workspace.path_prefix.display()
             )
         })?);
-        env.push((
-            "PATH".to_string(),
-            workspace.path_environment().to_string_lossy().to_string(),
-        ));
+        path_prefixes.push(workspace.path_prefix.clone());
         env.push((
             "SNIFF_INTERNAL_GRADLE_LAUNCHER".to_string(),
             "1".to_string(),
@@ -318,6 +315,12 @@ fn build_indexer_sandbox_command(
             "SNIFF_GRADLE_PROJECT".to_string(),
             sandbox_repository_argument(root, &workspace.project_root.to_string_lossy()),
         ));
+    }
+    if !path_prefixes.is_empty() {
+        path_prefixes.extend(std::env::split_paths(std::ffi::OsStr::new(sandbox_path())));
+        let path = std::env::join_paths(path_prefixes)
+            .map_err(|error| format!("failed to build sandbox PATH: {error}"))?;
+        env.push(("PATH".to_string(), path.to_string_lossy().to_string()));
     }
     read_only_paths.sort();
     read_only_paths.dedup();

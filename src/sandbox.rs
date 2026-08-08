@@ -381,7 +381,7 @@ fn find_on_path(program: &str) -> Option<PathBuf> {
     None
 }
 
-fn sandbox_path() -> &'static str {
+pub(crate) fn sandbox_path() -> &'static str {
     if cfg!(target_os = "windows") {
         r"C:\Windows\System32"
     } else {
