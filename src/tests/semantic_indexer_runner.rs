@@ -137,7 +137,7 @@ fn gradle_jvm_arguments_require_one_installed_instrumentation_agent() {
 
     let args = gradle_indexer_jvm_args(&bin.join("gradle")).unwrap();
     assert!(args.starts_with(GRADLE_INDEXER_BASE_JVM_ARGS));
-    assert!(args.contains("-javaagent="));
+    assert!(args.contains("-javaagent:"));
     let agent_path = std::fs::canonicalize(agent).unwrap();
     let agent_text = agent_path.to_string_lossy();
     assert!(args.contains(agent_text.as_ref()));

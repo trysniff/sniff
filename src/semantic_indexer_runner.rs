@@ -614,7 +614,7 @@ fn gradle_indexer_jvm_args(gradle: &Path) -> Result<String, String> {
         )
     })?;
     Ok(format!(
-        "{GRADLE_INDEXER_BASE_JVM_ARGS} -javaagent={}",
+        "{GRADLE_INDEXER_BASE_JVM_ARGS} -javaagent:{}",
         agent.display()
     ))
 }
