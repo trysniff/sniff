@@ -1,5 +1,6 @@
+use crate::sandbox::SandboxCommand;
 use crate::semantic_index::{RepositoryPath, SemanticIndex, SemanticPositionEncoding};
-use crate::semantic_indexer_installation::SemanticIndexerStore;
+use crate::semantic_indexer_installation::{InstalledIndexer, SemanticIndexerStore};
 use crate::semantic_indexer_manifest::{
     IndexerRuntime, PinnedIndexer, SemanticIndexerKind, pinned_indexer, required_indexers,
 };
@@ -11,7 +12,6 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
-use tokio::process::Command;
 use tokio::time::timeout;
 
 const INDEX_TIMEOUT: Duration = Duration::from_secs(60 * 60);
@@ -73,7 +73,7 @@ pub(crate) async fn run_required_indexers(
                 index_path.display()
             ));
         }
-        if let Err(error) = run_one(spec, &root, &installed.entrypoint, files).await {
+        if let Err(error) = run_one(spec, &root, &installed, files).await {
             let _ = fs::remove_file(&index_path);
             return Err(error);
         }
@@ -139,7 +139,7 @@ fn missing_position_encoding(kind: SemanticIndexerKind) -> Option<SemanticPositi
 async fn run_one(
     spec: PinnedIndexer,
     root: &Path,
-    entrypoint: &Path,
+    installed: &InstalledIndexer,
     files: &[FileRecord],
 ) -> Result<(), String> {
     let source_digest_before = source_integrity_digest(files)?;
@@ -151,65 +151,28 @@ async fn run_one(
         temporary_project.as_deref(),
         workspace.as_ref(),
     );
-    let mut command = match spec.runtime {
-        IndexerRuntime::NodeScript => {
-            let mut command = Command::new("node");
-            if spec.kind == SemanticIndexerKind::Python && cfg!(windows) {
-                command
-                    .arg("-e")
-                    .arg(WINDOWS_SCIP_PYTHON_BOOTSTRAP)
-                    .arg(entrypoint);
-            } else {
-                command.arg(entrypoint);
-            }
-            command.args(arguments);
-            command
-        }
-        IndexerRuntime::Native => {
-            let mut command = Command::new(entrypoint);
-            command.args(arguments);
-            command
-        }
-        IndexerRuntime::JavaJar => {
-            let mut command = Command::new("java");
-            #[cfg(windows)]
-            if spec.kind == SemanticIndexerKind::Kotlin {
-                let patch_dir = entrypoint
-                    .parent()
-                    .ok_or_else(|| "scip-java entrypoint has no parent directory".to_string())?
-                    .join("scip-java-v0.13.1-patch");
-                command
-                    .arg("-cp")
-                    .arg(format!("{};{}", patch_dir.display(), entrypoint.display()))
-                    .arg("coursier.bootstrap.launcher.ResourcesLauncher");
-            } else {
-                command.arg("-jar").arg(entrypoint);
-            }
-            #[cfg(not(windows))]
-            command.arg("-jar").arg(entrypoint);
-            command.args(arguments);
-            command
-        }
-    };
-    command.current_dir(root).kill_on_drop(true);
-    if let Some(workspace) = workspace.as_ref() {
-        command
-            .env("PATH", workspace.path_environment())
-            .env("SNIFF_INTERNAL_GRADLE_LAUNCHER", "1")
-            .env("SNIFF_GRADLE_WRAPPER", &workspace.gradle_wrapper)
-            .env("SNIFF_GRADLE_PROJECT", &workspace.project_root);
-    }
-    let output = match timeout(INDEX_TIMEOUT, command.output()).await {
+    let sandbox_command =
+        build_indexer_sandbox_command(spec, root, installed, arguments, workspace.as_ref())?;
+    let output = match timeout(
+        INDEX_TIMEOUT,
+        tokio::task::spawn_blocking(move || crate::sandbox::run(&sandbox_command)),
+    )
+    .await
+    {
         Err(_) => Err(format!(
             "{} indexing timed out after {} minutes",
             spec.display_name,
             INDEX_TIMEOUT.as_secs() / 60
         )),
         Ok(Err(error)) => Err(format!(
-            "{} indexing could not start: {error}",
+            "{} indexing worker failed: {error}",
             spec.display_name
         )),
-        Ok(Ok(output)) => Ok(output),
+        Ok(Ok(Err(error))) => Err(format!(
+            "{} indexing could not start in the sandbox: {error}",
+            spec.display_name
+        )),
+        Ok(Ok(Ok(output))) => Ok(output),
     };
     let temporary_project_cleanup = cleanup_temporary_project(temporary_project, spec.display_name);
     let workspace_cleanup = workspace
@@ -230,14 +193,21 @@ async fn run_one(
         ));
     }
     let output = output?;
-    if output.status.success() {
+    if output.timed_out {
+        return Err(format!(
+            "{} indexing timed out after {} minutes",
+            spec.display_name,
+            INDEX_TIMEOUT.as_secs() / 60
+        ));
+    }
+    if output.status_code == Some(0) {
         let index_path = root.join("index.scip");
         if !index_path.is_file() {
             return Err(format!(
                 "{} exited successfully but did not emit SCIP index {}; output: {}",
                 spec.display_name,
                 index_path.display(),
-                compact_process_output(&output.stdout, &output.stderr)
+                compact_process_output(output.stdout.as_bytes(), output.stderr.as_bytes())
             ));
         }
         return Ok(());
@@ -245,9 +215,182 @@ async fn run_one(
     Err(format!(
         "{} indexing failed with {}; output: {}",
         spec.display_name,
-        output.status,
-        compact_process_output(&output.stdout, &output.stderr)
+        output
+            .status_code
+            .map_or_else(|| "signal".to_string(), |status| status.to_string()),
+        compact_process_output(output.stdout.as_bytes(), output.stderr.as_bytes())
     ))
+}
+
+fn build_indexer_sandbox_command(
+    spec: PinnedIndexer,
+    root: &Path,
+    installed: &InstalledIndexer,
+    arguments: Vec<String>,
+    workspace: Option<&TemporaryIndexerWorkspace>,
+) -> Result<SandboxCommand, String> {
+    let installed_root = fs::canonicalize(&installed.root).map_err(|error| {
+        format!(
+            "failed to resolve {} installation root {}: {error}",
+            spec.display_name,
+            installed.root.display()
+        )
+    })?;
+    let entrypoint = fs::canonicalize(&installed.entrypoint).map_err(|error| {
+        format!(
+            "failed to resolve {} entrypoint {}: {error}",
+            spec.display_name,
+            installed.entrypoint.display()
+        )
+    })?;
+    let (program, mut args, runtime_path) = match spec.runtime {
+        IndexerRuntime::NodeScript => {
+            let node = resolve_runtime("node")?;
+            let mut args = Vec::new();
+            if spec.kind == SemanticIndexerKind::Python && cfg!(windows) {
+                args.push("-e".to_string());
+                args.push(WINDOWS_SCIP_PYTHON_BOOTSTRAP.to_string());
+            }
+            args.push(entrypoint.to_string_lossy().to_string());
+            (node.to_string_lossy().to_string(), args, node)
+        }
+        IndexerRuntime::Native => (
+            entrypoint.to_string_lossy().to_string(),
+            Vec::new(),
+            entrypoint.clone(),
+        ),
+        IndexerRuntime::JavaJar => {
+            let java = resolve_runtime("java")?;
+            let mut args = Vec::new();
+            #[cfg(windows)]
+            if spec.kind == SemanticIndexerKind::Kotlin {
+                let patch_dir = entrypoint
+                    .parent()
+                    .ok_or_else(|| "scip-java entrypoint has no parent directory".to_string())?
+                    .join("scip-java-v0.13.1-patch");
+                args.extend([
+                    "-cp".to_string(),
+                    format!("{};{}", patch_dir.display(), entrypoint.display()),
+                    "coursier.bootstrap.launcher.ResourcesLauncher".to_string(),
+                ]);
+            } else {
+                args.extend(["-jar".to_string(), entrypoint.to_string_lossy().to_string()]);
+            }
+            #[cfg(not(windows))]
+            args.extend(["-jar".to_string(), entrypoint.to_string_lossy().to_string()]);
+            (java.clone().to_string_lossy().to_string(), args, java)
+        }
+    };
+    args.extend(
+        arguments
+            .into_iter()
+            .map(|argument| sandbox_repository_argument(root, &argument)),
+    );
+
+    let mut read_only_paths = vec![installed_root, runtime_mount_root(&runtime_path)];
+    let mut env = Vec::new();
+    if let Some(workspace) = workspace {
+        read_only_paths.push(fs::canonicalize(&workspace.directory).map_err(|error| {
+            format!(
+                "failed to resolve temporary indexer workspace {}: {error}",
+                workspace.directory.display()
+            )
+        })?);
+        read_only_paths.push(fs::canonicalize(&workspace.path_prefix).map_err(|error| {
+            format!(
+                "failed to resolve temporary indexer launcher directory {}: {error}",
+                workspace.path_prefix.display()
+            )
+        })?);
+        env.push((
+            "PATH".to_string(),
+            workspace.path_environment().to_string_lossy().to_string(),
+        ));
+        env.push((
+            "SNIFF_INTERNAL_GRADLE_LAUNCHER".to_string(),
+            "1".to_string(),
+        ));
+        env.push((
+            "SNIFF_GRADLE_WRAPPER".to_string(),
+            workspace.gradle_wrapper.to_string_lossy().to_string(),
+        ));
+        env.push((
+            "SNIFF_GRADLE_PROJECT".to_string(),
+            sandbox_repository_argument(root, &workspace.project_root.to_string_lossy()),
+        ));
+    }
+    read_only_paths.sort();
+    read_only_paths.dedup();
+
+    Ok(SandboxCommand {
+        root: root.to_path_buf(),
+        workdir: PathBuf::from("."),
+        program,
+        args,
+        read_only_paths,
+        env,
+        timeout: INDEX_TIMEOUT,
+        output_limit: MAX_PROCESS_OUTPUT,
+    })
+}
+
+fn resolve_runtime(name: &str) -> Result<PathBuf, String> {
+    let path = std::env::var_os("PATH")
+        .ok_or_else(|| format!("{} runtime is unavailable because PATH is not set", name))?;
+    for directory in std::env::split_paths(&path) {
+        let candidate = directory.join(name);
+        if candidate.is_file() {
+            return fs::canonicalize(&candidate).map_err(|error| {
+                format!(
+                    "failed to resolve {} runtime {}: {error}",
+                    name,
+                    candidate.display()
+                )
+            });
+        }
+        #[cfg(windows)]
+        {
+            let candidate = directory.join(format!("{name}.exe"));
+            if candidate.is_file() {
+                return fs::canonicalize(&candidate).map_err(|error| {
+                    format!(
+                        "failed to resolve {} runtime {}: {error}",
+                        name,
+                        candidate.display()
+                    )
+                });
+            }
+        }
+    }
+    Err(format!(
+        "{} runtime is required for semantic indexing",
+        name
+    ))
+}
+
+fn runtime_mount_root(runtime: &Path) -> PathBuf {
+    runtime
+        .parent()
+        .and_then(Path::parent)
+        .unwrap_or_else(|| runtime.parent().unwrap_or(runtime))
+        .to_path_buf()
+}
+
+#[cfg(target_os = "linux")]
+fn sandbox_repository_argument(root: &Path, argument: &str) -> String {
+    let path = Path::new(argument);
+    let Ok(relative) = path.strip_prefix(root) else {
+        return argument.to_string();
+    };
+    Path::new("/workspace")
+        .join(relative)
+        .to_string_lossy()
+        .to_string()
+}
+
+#[cfg(not(target_os = "linux"))]
+fn sandbox_repository_argument(_root: &Path, argument: &str) -> String {
+    argument.to_string()
 }
 
 fn source_integrity_digest(files: &[FileRecord]) -> Result<String, String> {

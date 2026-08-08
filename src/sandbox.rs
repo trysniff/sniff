@@ -260,6 +260,9 @@ fn build_bubblewrap_command(spec: &SandboxCommand) -> Result<Command, SandboxErr
     ]);
     command.arg(&spec.root).arg("/workspace");
     for path in &spec.read_only_paths {
+        if linux_system_mount_is_already_bound(path) {
+            continue;
+        }
         command.arg("--ro-bind").arg(path).arg(path);
     }
     let sandbox_workdir = if spec.workdir == Path::new(".") {
@@ -291,6 +294,13 @@ fn build_bubblewrap_command(spec: &SandboxCommand) -> Result<Command, SandboxErr
         .arg(&spec.program)
         .args(&spec.args);
     Ok(command)
+}
+
+#[cfg(target_os = "linux")]
+fn linux_system_mount_is_already_bound(path: &Path) -> bool {
+    ["/usr", "/bin", "/lib", "/lib64", "/etc"]
+        .iter()
+        .any(|bound| Path::new(bound) == path)
 }
 
 #[cfg(target_os = "macos")]
