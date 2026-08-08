@@ -378,6 +378,16 @@ fn build_indexer_sandbox_command(
     read_only_paths.extend(runtime_dependency_paths(&runtime_path)?);
     let mut path_prefixes = Vec::new();
     let mut env = Vec::new();
+    #[cfg(target_os = "macos")]
+    if spec.kind == SemanticIndexerKind::Python
+        && let Some(developer_dir) = macos_developer_directory()
+    {
+        read_only_paths.push(developer_dir.clone());
+        env.push((
+            "DEVELOPER_DIR".to_string(),
+            developer_dir.to_string_lossy().to_string(),
+        ));
+    }
     if spec.kind == SemanticIndexerKind::Go {
         let go = resolve_runtime("go")?;
         read_only_paths.push(runtime_mount_root(&go));
@@ -478,7 +488,18 @@ fn build_indexer_sandbox_command(
         let cache = sandbox_repository_argument(root, &cache_root.to_string_lossy());
         env.push(("COURSIER_CACHE".to_string(), cache.clone()));
         env.push(("COURSIER_CACHE_DIR".to_string(), cache.clone()));
-        env.push(("GRADLE_USER_HOME".to_string(), cache));
+        env.push(("GRADLE_USER_HOME".to_string(), cache.clone()));
+        env.push((
+            "MAVEN_USER_HOME".to_string(),
+            sandbox_repository_argument(root, &cache_root.to_string_lossy()),
+        ));
+        env.push((
+            "GRADLE_OPTS".to_string(),
+            format!(
+                "-Duser.home={}",
+                sandbox_repository_argument(root, &root.to_string_lossy())
+            ),
+        ));
     }
     if !path_prefixes.is_empty() {
         path_prefixes.extend(std::env::split_paths(std::ffi::OsStr::new(sandbox_path())));
@@ -507,6 +528,16 @@ fn runtime_bin_directory(runtime: &Path, name: &str) -> Result<PathBuf, String> 
         .parent()
         .ok_or_else(|| format!("{name} runtime has no parent directory"))
         .map(Path::to_path_buf)
+}
+
+#[cfg(target_os = "macos")]
+fn macos_developer_directory() -> Option<PathBuf> {
+    let output = Command::new("xcode-select").arg("-p").output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let path = PathBuf::from(String::from_utf8_lossy(&output.stdout).trim());
+    path.is_dir().then_some(path)
 }
 
 #[cfg(target_os = "macos")]
@@ -756,6 +787,11 @@ fn indexer_arguments_with_project(
             ".".to_string(),
             "--project-name".to_string(),
             project_name(root),
+            // scip-python 0.6.6 assumes a project version exists while
+            // normalizing symbols. A stable synthetic version keeps
+            // dependency-free repositories valid without touching them.
+            "--project-version".to_string(),
+            "_".to_string(),
         ],
         SemanticIndexerKind::Go => Vec::new(),
         SemanticIndexerKind::Kotlin => vec!["index".to_string()],

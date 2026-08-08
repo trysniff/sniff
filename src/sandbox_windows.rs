@@ -57,12 +57,17 @@ pub(super) fn run(spec: &SandboxCommand) -> Result<SandboxOutput, SandboxError> 
     }
 
     let mut app_container_sid = std::ptr::null_mut();
+    let capability_pointer = if capabilities.is_empty() {
+        std::ptr::null()
+    } else {
+        capabilities.as_ptr()
+    };
     let profile_result = unsafe {
         CreateAppContainerProfile(
             profile_name_w.as_ptr(),
             display_name.as_ptr(),
             description.as_ptr(),
-            capabilities.as_ptr(),
+            capability_pointer,
             capabilities.len() as u32,
             &mut app_container_sid,
         )

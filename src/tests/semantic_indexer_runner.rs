@@ -49,10 +49,20 @@ fn synthetic_root() -> &'static Path {
 }
 
 #[test]
-fn python_arguments_include_a_stable_project_name() {
+fn python_arguments_include_stable_project_identity() {
     let spec = pinned_indexer(SemanticIndexerKind::Python).unwrap();
     let arguments = indexer_arguments_with_project(spec, synthetic_python_root(), None);
-    assert_eq!(arguments, ["index", ".", "--project-name", "bumpkin"]);
+    assert_eq!(
+        arguments,
+        [
+            "index",
+            ".",
+            "--project-name",
+            "bumpkin",
+            "--project-version",
+            "_"
+        ]
+    );
 }
 
 #[test]
