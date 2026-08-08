@@ -292,8 +292,8 @@ pub async fn run(
         super::preflight::build_compiler_method_contexts(&repository_root, &file_records)
             .await
             .map_err(|err| IoError::other(format!("compiler semantic indexing failed: {err}")))?;
-    let proof_test_command =
-        crate::config_loader::resolve_proof_test_command(target_path).map_err(IoError::other)?;
+    let proof_commands =
+        crate::config_loader::resolve_proof_commands(target_path).map_err(IoError::other)?;
     eprintln!(
         "Compiler semantic context ready for {} methods.",
         compiler_method_contexts.len()
@@ -318,7 +318,8 @@ pub async fn run(
             budget_usd,
             compiler_method_contexts: Some(&compiler_method_contexts),
             repository_root: &repository_root,
-            proof_test_command: proof_test_command.as_deref(),
+            proof_test_command: proof_commands.test_command.as_deref(),
+            proof_differential_command: proof_commands.differential_command.as_deref(),
         },
     )
     .await;

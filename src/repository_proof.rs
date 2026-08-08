@@ -34,6 +34,12 @@ const SAFE_MANIFESTS: &[&str] = &[
 pub(crate) struct RepositoryProofContext<'a> {
     pub(crate) repository_root: &'a Path,
     pub(crate) test_command: Option<&'a [String]>,
+    pub(crate) differential_command: Option<&'a [String]>,
+}
+
+struct RepositoryProofResult {
+    tests_validated: bool,
+    differential_validated: bool,
 }
 
 /// Execute the explicitly configured repository test command against the
@@ -43,13 +49,19 @@ pub(crate) fn validate_repository_tests(
     files: &[FileRecord],
     context: RepositoryProofContext<'_>,
 ) -> Vec<SlopCase> {
-    let Some(test_command) = context.test_command else {
+    if context.test_command.is_none() && context.differential_command.is_none() {
         return cases.to_vec();
-    };
-    if test_command.is_empty() {
+    }
+    if context
+        .test_command
+        .is_some_and(|command| command.is_empty())
+        || context
+            .differential_command
+            .is_some_and(|command| command.is_empty())
+    {
         return mark_unresolved(
             cases,
-            "repository test proof was requested with an empty test command",
+            "repository proof was requested with an empty command",
         );
     }
 
@@ -59,15 +71,32 @@ pub(crate) fn validate_repository_tests(
             if case.tier == FindingTier::Unresolved || case.counterfactual_edits.is_empty() {
                 return case.clone();
             }
-            match run_case_tests(case, files, context.repository_root, test_command) {
-                Ok(()) => {
+            match run_case_tests(
+                case,
+                files,
+                context.repository_root,
+                context.test_command,
+                context.differential_command,
+            ) {
+                Ok(proof) => {
                     let mut output = case.clone();
-                    if output.proof_level < ProofLevel::P2TestsValidated {
+                    if proof.differential_validated {
+                        output.proof_level = ProofLevel::P4DifferentialValidated;
+                    } else if proof.tests_validated
+                        && output.proof_level < ProofLevel::P2TestsValidated
+                    {
                         output.proof_level = ProofLevel::P2TestsValidated;
                     }
-                    output
-                        .provenance
-                        .push("counterfactual:tests_validated".to_string());
+                    if proof.tests_validated {
+                        output
+                            .provenance
+                            .push("counterfactual:tests_validated".to_string());
+                    }
+                    if proof.differential_validated {
+                        output
+                            .provenance
+                            .push("counterfactual:differential_validated".to_string());
+                    }
                     output
                 }
                 Err(reason) => unresolved_case(case, reason),
@@ -80,34 +109,64 @@ fn run_case_tests(
     case: &SlopCase,
     files: &[FileRecord],
     repository_root: &Path,
-    test_command: &[String],
-) -> Result<(), String> {
+    test_command: Option<&[String]>,
+    differential_command: Option<&[String]>,
+) -> Result<RepositoryProofResult, String> {
+    if test_command.is_none() && differential_command.is_none() {
+        return Ok(RepositoryProofResult {
+            tests_validated: false,
+            differential_validated: false,
+        });
+    }
     let original_root = create_snapshot(files, repository_root, "original")?;
     let candidate_root = create_snapshot(files, repository_root, "candidate")?;
     let result = (|| {
         apply_edits_to_snapshot(&candidate_root, files, &case.counterfactual_edits)?;
-        let original = run_test_command(&original_root, test_command)?;
-        if original.status_code != Some(0) {
-            return Err(format!(
-                "baseline repository test command did not pass (status {:?})",
-                original.status_code
-            ));
+        let tests_validated = if let Some(test_command) = test_command {
+            let original = run_proof_command(&original_root, test_command)?;
+            if original.status_code != Some(0) {
+                return Err(format!(
+                    "baseline repository test command did not pass (status {:?})",
+                    original.status_code
+                ));
+            }
+            let candidate = run_proof_command(&candidate_root, test_command)?;
+            if candidate.status_code != Some(0) {
+                return Err(format!(
+                    "counterfactual repository test command did not pass (status {:?})",
+                    candidate.status_code
+                ));
+            }
+            true
+        } else {
+            false
+        };
+        let differential_validated = if let Some(differential_command) = differential_command {
+            let original = run_proof_command(&original_root, differential_command)?;
+            let candidate = run_proof_command(&candidate_root, differential_command)?;
+            if original != candidate {
+                return Err(
+                    "differential command produced different status or bounded output".to_string(),
+                );
+            }
+            true
+        } else {
+            false
+        };
+        if !tests_validated && !differential_validated {
+            return Err("repository proof produced no validated execution result".to_string());
         }
-        let candidate = run_test_command(&candidate_root, test_command)?;
-        if candidate.status_code != Some(0) {
-            return Err(format!(
-                "counterfactual repository test command did not pass (status {:?})",
-                candidate.status_code
-            ));
-        }
-        Ok(())
+        Ok(RepositoryProofResult {
+            tests_validated,
+            differential_validated,
+        })
     })();
     let original_cleanup = std::fs::remove_dir_all(&original_root);
     let candidate_cleanup = std::fs::remove_dir_all(&candidate_root);
     match (result, original_cleanup, candidate_cleanup) {
-        (Ok(()), Ok(()), Ok(())) => Ok(()),
+        (Ok(proof), Ok(()), Ok(())) => Ok(proof),
         (Err(error), Ok(()), Ok(())) => Err(error),
-        (Ok(()), original, candidate) => Err(format!(
+        (Ok(_proof), original, candidate) => Err(format!(
             "repository proof cleanup failed (original: {:?}, candidate: {:?})",
             original.err(),
             candidate.err()
@@ -120,7 +179,7 @@ fn run_case_tests(
     }
 }
 
-fn run_test_command(root: &Path, command: &[String]) -> Result<sandbox::SandboxOutput, String> {
+fn run_proof_command(root: &Path, command: &[String]) -> Result<sandbox::SandboxOutput, String> {
     let program = command
         .first()
         .ok_or_else(|| "repository test command is empty".to_string())?;
@@ -384,6 +443,7 @@ mod tests {
         let context = RepositoryProofContext {
             repository_root: Path::new("."),
             test_command: None,
+            differential_command: None,
         };
         assert!(context.test_command.is_none());
         assert_eq!(

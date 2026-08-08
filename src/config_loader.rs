@@ -17,6 +17,12 @@ fn find_config_path(cwd: &Path) -> Option<PathBuf> {
     None
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ProofCommands {
+    pub test_command: Option<Vec<String>>,
+    pub differential_command: Option<Vec<String>>,
+}
+
 pub fn resolve_config(cwd: &Path) -> Result<ResolvedConfig, String> {
     let mut config = ResolvedConfig::default();
 
@@ -41,22 +47,37 @@ pub fn resolve_config(cwd: &Path) -> Result<ResolvedConfig, String> {
 /// Read the optional shell-free repository test argv without widening the
 /// main runtime configuration contract. Sniff never guesses a test runner.
 pub fn resolve_proof_test_command(cwd: &Path) -> Result<Option<Vec<String>>, String> {
+    Ok(resolve_proof_commands(cwd)?.test_command)
+}
+
+pub fn resolve_proof_commands(cwd: &Path) -> Result<ProofCommands, String> {
     let Some(config_path) = find_config_path(cwd) else {
-        return Ok(None);
+        return Ok(ProofCommands::default());
     };
     let content = fs::read_to_string(&config_path)
         .map_err(|err| format!("failed to read config {}: {err}", config_path.display()))?;
     let value = toml::from_str::<toml::Value>(&content)
         .map_err(|err| format!("failed to parse config {}: {err}", config_path.display()))?;
-    let Some(command) = value
-        .get("proof")
-        .and_then(|proof| proof.get("test_command"))
-    else {
+    let proof = value.get("proof");
+    let test_command = parse_proof_command(proof, "test_command", &config_path)?;
+    let differential_command = parse_proof_command(proof, "differential_command", &config_path)?;
+    Ok(ProofCommands {
+        test_command,
+        differential_command,
+    })
+}
+
+fn parse_proof_command(
+    proof: Option<&toml::Value>,
+    field: &str,
+    config_path: &Path,
+) -> Result<Option<Vec<String>>, String> {
+    let Some(command) = proof.and_then(|proof| proof.get(field)) else {
         return Ok(None);
     };
     let values = command.as_array().ok_or_else(|| {
         format!(
-            "proof.test_command in {} must be an argv array",
+            "proof.{field} in {} must be an argv array",
             config_path.display()
         )
     })?;
@@ -64,13 +85,13 @@ pub fn resolve_proof_test_command(cwd: &Path) -> Result<Option<Vec<String>>, Str
     for (index, value) in values.iter().enumerate() {
         let argument = value.as_str().ok_or_else(|| {
             format!(
-                "proof.test_command argument {index} in {} must be a string",
+                "proof.{field} argument {index} in {} must be a string",
                 config_path.display()
             )
         })?;
         if argument.is_empty() || argument.contains('\0') {
             return Err(format!(
-                "proof.test_command argument {index} in {} is empty or contains NUL",
+                "proof.{field} argument {index} in {} is empty or contains NUL",
                 config_path.display()
             ));
         }
@@ -78,7 +99,7 @@ pub fn resolve_proof_test_command(cwd: &Path) -> Result<Option<Vec<String>>, Str
     }
     if argv.is_empty() {
         return Err(format!(
-            "proof.test_command in {} cannot be empty",
+            "proof.{field} in {} cannot be empty",
             config_path.display()
         ));
     }
@@ -87,7 +108,7 @@ pub fn resolve_proof_test_command(cwd: &Path) -> Result<Option<Vec<String>>, Str
 
 #[cfg(test)]
 mod tests {
-    use super::{resolve_config, resolve_proof_test_command};
+    use super::{resolve_config, resolve_proof_commands, resolve_proof_test_command};
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -129,6 +150,33 @@ mod tests {
                 "-m".to_string(),
                 "pytest".to_string(),
                 "tests".to_string(),
+            ])
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn proof_differential_command_is_loaded_separately() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("sniff-diff-proof-config-{unique}"));
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("sniff.config.toml"),
+            "[proof]\ndifferential_command = [\"python\", \"scripts\", \"probe.py\"]\n",
+        )
+        .unwrap();
+
+        let commands = resolve_proof_commands(&root).unwrap();
+        assert_eq!(commands.test_command, None);
+        assert_eq!(
+            commands.differential_command,
+            Some(vec![
+                "python".to_string(),
+                "scripts".to_string(),
+                "probe.py".to_string(),
             ])
         );
         let _ = fs::remove_dir_all(&root);

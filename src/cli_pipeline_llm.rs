@@ -29,6 +29,7 @@ pub(super) struct LlmCheckInput<'a> {
         Option<&'a crate::semantic_method_join::CompilerMethodContexts>,
     pub(super) repository_root: &'a Path,
     pub(super) proof_test_command: Option<&'a [String]>,
+    pub(super) proof_differential_command: Option<&'a [String]>,
 }
 
 pub(super) struct ReviewExecutionContext<'a> {
@@ -40,6 +41,7 @@ pub(super) struct ReviewExecutionContext<'a> {
         Option<&'a crate::semantic_method_join::CompilerMethodContexts>,
     pub(super) repository_root: &'a Path,
     pub(super) proof_test_command: Option<&'a [String]>,
+    pub(super) proof_differential_command: Option<&'a [String]>,
 }
 
 const MAX_PROGRESS_LABEL_CHARS: usize = 76;
@@ -185,6 +187,7 @@ pub(super) async fn run_llm_checks(
             repository_context: Some(crate::repository_proof::RepositoryProofContext {
                 repository_root: input.repository_root,
                 test_command: input.proof_test_command,
+                differential_command: input.proof_differential_command,
             }),
         },
     )
@@ -429,6 +432,7 @@ pub(super) async fn prepare_review_artifacts(
         compiler_method_contexts: execution.compiler_method_contexts,
         repository_root: execution.repository_root,
         proof_test_command: execution.proof_test_command,
+        proof_differential_command: execution.proof_differential_command,
     })
     .await
     .map_err(IoError::other);
