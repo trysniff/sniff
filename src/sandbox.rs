@@ -17,6 +17,7 @@ pub(crate) struct SandboxCommand {
     pub(crate) args: Vec<String>,
     pub(crate) read_only_paths: Vec<PathBuf>,
     pub(crate) env: Vec<(String, String)>,
+    pub(crate) allow_network: bool,
     pub(crate) timeout: Duration,
     pub(crate) output_limit: usize,
 }
@@ -187,6 +188,11 @@ fn build_command(spec: &SandboxCommand) -> Result<Command, SandboxError> {
                     OsString::from(format!("{key}={value}")),
                 ]
             }))
+            .arg(if spec.allow_network {
+                "--allow-network"
+            } else {
+                "--deny-network"
+            })
             .arg("--")
             .arg(&spec.program)
             .args(&spec.args);
@@ -231,7 +237,6 @@ fn build_bubblewrap_command(spec: &SandboxCommand) -> Result<Command, SandboxErr
     command.args([
         "--die-with-parent",
         "--new-session",
-        "--unshare-all",
         "--clearenv",
         "--ro-bind",
         "/usr",
@@ -257,6 +262,16 @@ fn build_bubblewrap_command(spec: &SandboxCommand) -> Result<Command, SandboxErr
         "--tmpfs",
         "/home",
         "--bind",
+    ]);
+    if !spec.allow_network {
+        command.arg("--unshare-net");
+    }
+    command.args([
+        "--unshare-pid",
+        "--unshare-uts",
+        "--unshare-ipc",
+        "--unshare-cgroup",
+        "--unshare-user",
     ]);
     command.arg(&spec.root).arg("/workspace");
     for path in &spec.read_only_paths {
@@ -326,8 +341,13 @@ fn build_macos_sandbox_command(spec: &SandboxCommand) -> Result<Command, Sandbox
             Ok::<_, SandboxError>(format!("(allow file-read* {filter})\n"))
         })
         .collect::<Result<String, _>>()?;
+    let network_rule = if spec.allow_network {
+        "(allow network*)\n"
+    } else {
+        "(deny network*)\n"
+    };
     let profile_text = format!(
-        "(version 1)\n(deny default)\n(allow process-exec)\n(allow process-exec-interpreter)\n(allow process-fork)\n(allow signal (target same-sandbox))\n(allow ipc-posix-shm)\n(allow ipc-posix-sem)\n(allow sysctl-read)\n(allow mach-lookup (global-name \"com.apple.system.notification_center\") (global-name \"com.apple.system.opendirectoryd.libinfo\"))\n(allow file-read-metadata)\n(allow file-read-data (literal \"/\"))\n(allow file-read* (literal \"/dev/dtracehelper\") (literal \"/dev/tty\"))\n(allow file-ioctl (literal \"/dev/null\") (literal \"/dev/zero\") (literal \"/dev/random\") (literal \"/dev/urandom\") (literal \"/dev/dtracehelper\") (literal \"/dev/tty\"))\n(allow file-read* (subpath \"/usr\") (subpath \"/System\") (subpath \"/Library\") (subpath \"/bin\") (subpath \"/sbin\") (subpath \"/private\") (subpath \"{root}\"))\n{read_only_rules}(allow file-write* (subpath \"{root}\"))\n(deny network*)\n"
+        "(version 1)\n(deny default)\n(allow process-exec)\n(allow process-exec-interpreter)\n(allow process-fork)\n(allow signal (target same-sandbox))\n(allow ipc-posix-shm)\n(allow ipc-posix-sem)\n(allow sysctl-read)\n(allow mach-lookup (global-name \"com.apple.system.notification_center\") (global-name \"com.apple.system.opendirectoryd.libinfo\"))\n(allow file-read-metadata)\n(allow file-read-data (literal \"/\"))\n(allow file-read* (literal \"/dev/dtracehelper\") (literal \"/dev/tty\"))\n(allow file-ioctl (literal \"/dev/null\") (literal \"/dev/zero\") (literal \"/dev/random\") (literal \"/dev/urandom\") (literal \"/dev/dtracehelper\") (literal \"/dev/tty\"))\n(allow file-read* (subpath \"/usr\") (subpath \"/System\") (subpath \"/Library\") (subpath \"/bin\") (subpath \"/sbin\") (subpath \"/private\") (subpath \"{root}\"))\n{read_only_rules}(allow file-write* (subpath \"{root}\"))\n{network_rule}"
     );
     std::fs::write(&profile, profile_text).map_err(|error| {
         SandboxError::Failed(format!("failed to write macOS sandbox profile: {error}"))
@@ -442,6 +462,7 @@ mod tests {
             args: Vec::new(),
             read_only_paths: Vec::new(),
             env: Vec::new(),
+            allow_network: false,
             timeout: Duration::from_secs(1),
             output_limit: 32,
         }
@@ -534,6 +555,7 @@ mod tests {
             args: vec!["-c".to_string(), format!("touch ../{outside_name}")],
             read_only_paths: Vec::new(),
             env: Vec::new(),
+            allow_network: false,
             timeout: Duration::from_secs(2),
             output_limit: 1024,
         };
@@ -568,6 +590,7 @@ mod tests {
             args: vec!["-c".to_string(), "while :; do :; done".to_string()],
             read_only_paths: Vec::new(),
             env: Vec::new(),
+            allow_network: false,
             timeout: Duration::from_millis(100),
             output_limit: 1024,
         };

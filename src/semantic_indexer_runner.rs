@@ -10,12 +10,15 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+#[cfg(target_os = "macos")]
+use std::process::Command;
 use std::time::Duration;
 use tokio::time::timeout;
 
 const INDEX_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 const MAX_PROCESS_OUTPUT: usize = 2 * 1024 * 1024;
 const MAX_COMPACT_ERROR_OUTPUT: usize = 8 * 1024;
+const INDEXER_CACHE_DIR: &str = ".sniff-indexer-cache";
 pub(crate) const WINDOWS_SCIP_PYTHON_BOOTSTRAP: &str = "const path=require('path'); const NativeRegExp=RegExp; function PatchedRegExp(pattern, flags) { if (pattern === path.sep) pattern = path.sep + path.sep; return new NativeRegExp(pattern, flags); } PatchedRegExp.prototype=NativeRegExp.prototype; Object.setPrototypeOf(PatchedRegExp, NativeRegExp); global.RegExp=PatchedRegExp; require(process.argv[1]);";
 
 struct TemporaryIndexerWorkspace {
@@ -133,6 +136,16 @@ async fn run_one(
     files: &[FileRecord],
 ) -> Result<(), String> {
     let source_digest_before = source_integrity_digest(files)?;
+    let cache_root =
+        (spec.kind == SemanticIndexerKind::Kotlin).then(|| root.join(INDEXER_CACHE_DIR));
+    if let Some(cache_root) = &cache_root
+        && cache_root.exists()
+    {
+        return Err(format!(
+            "refusing to reuse an unexpected semantic indexer cache {}; remove it before indexing",
+            cache_root.display()
+        ));
+    }
     let workspace = prepare_indexer_workspace(spec, root)?;
     let temporary_project = prepare_mixed_typescript_javascript_project(spec, root, files)?;
     let arguments = indexer_arguments_with_workspace(
@@ -143,26 +156,36 @@ async fn run_one(
     );
     let sandbox_command =
         build_indexer_sandbox_command(spec, root, installed, arguments, workspace.as_ref())?;
-    let output = match timeout(
-        INDEX_TIMEOUT,
-        tokio::task::spawn_blocking(move || crate::sandbox::run(&sandbox_command)),
-    )
-    .await
-    {
-        Err(_) => Err(format!(
-            "{} indexing timed out after {} minutes",
-            spec.display_name,
-            INDEX_TIMEOUT.as_secs() / 60
-        )),
-        Ok(Err(error)) => Err(format!(
-            "{} indexing worker failed: {error}",
-            spec.display_name
-        )),
-        Ok(Ok(Err(error))) => Err(format!(
-            "{} indexing could not start in the sandbox: {error}",
-            spec.display_name
-        )),
-        Ok(Ok(Ok(output))) => Ok(output),
+    let output = if spec.kind == SemanticIndexerKind::Kotlin {
+        let mut preparation = sandbox_command.clone();
+        preparation.allow_network = true;
+        let preparation = run_sandbox_command(preparation, spec.display_name).await;
+        match preparation {
+            Ok(output) if output.status_code == Some(0) && !output.timed_out => {
+                let index_path = root.join("index.scip");
+                if let Err(error) = fs::remove_file(&index_path)
+                    && error.kind() != std::io::ErrorKind::NotFound
+                {
+                    Err(format!(
+                        "{} dependency preparation emitted an index that could not be cleared: {error}",
+                        spec.display_name
+                    ))
+                } else {
+                    run_sandbox_command(sandbox_command, spec.display_name).await
+                }
+            }
+            Ok(output) => Err(format!(
+                "{} dependency preparation failed with {}; output: {}",
+                spec.display_name,
+                output
+                    .status_code
+                    .map_or_else(|| "signal".to_string(), |status| status.to_string()),
+                compact_process_output(output.stdout.as_bytes(), output.stderr.as_bytes())
+            )),
+            Err(error) => Err(error),
+        }
+    } else {
+        run_sandbox_command(sandbox_command, spec.display_name).await
     };
     let temporary_project_cleanup = cleanup_temporary_project(temporary_project, spec.display_name);
     let workspace_cleanup = workspace
@@ -174,6 +197,17 @@ async fn run_one(
         (Err(project_error), Err(workspace_error)) => {
             return Err(format!("{project_error}; additionally, {workspace_error}"));
         }
+    }
+    if let Some(cache_root) = cache_root
+        && cache_root.exists()
+    {
+        fs::remove_dir_all(&cache_root).map_err(|error| {
+            format!(
+                "{} indexing completed but private cache cleanup failed for {}: {error}",
+                spec.display_name,
+                cache_root.display()
+            )
+        })?;
     }
     let source_digest_after = source_integrity_digest(files)?;
     if source_digest_before != source_digest_after {
@@ -210,6 +244,30 @@ async fn run_one(
             .map_or_else(|| "signal".to_string(), |status| status.to_string()),
         compact_process_output(output.stdout.as_bytes(), output.stderr.as_bytes())
     ))
+}
+
+async fn run_sandbox_command(
+    sandbox_command: SandboxCommand,
+    indexer_name: &str,
+) -> Result<crate::sandbox::SandboxOutput, String> {
+    match timeout(
+        INDEX_TIMEOUT,
+        tokio::task::spawn_blocking(move || crate::sandbox::run(&sandbox_command)),
+    )
+    .await
+    {
+        Err(_) => Err(format!(
+            "{} indexing timed out after {} minutes",
+            indexer_name,
+            INDEX_TIMEOUT.as_secs() / 60
+        )),
+        Ok(Err(error)) => Err(format!("{} indexing worker failed: {error}", indexer_name)),
+        Ok(Ok(Err(error))) => Err(format!(
+            "{} indexing could not start in the sandbox: {error}",
+            indexer_name
+        )),
+        Ok(Ok(Ok(output))) => Ok(output),
+    }
 }
 
 fn build_indexer_sandbox_command(
@@ -278,6 +336,7 @@ fn build_indexer_sandbox_command(
     );
 
     let mut read_only_paths = vec![installed_root, runtime_mount_root(&runtime_path)];
+    read_only_paths.extend(runtime_dependency_paths(&runtime_path)?);
     let mut path_prefixes = Vec::new();
     if spec.kind == SemanticIndexerKind::Go {
         let go = resolve_runtime("go")?;
@@ -316,6 +375,13 @@ fn build_indexer_sandbox_command(
             sandbox_repository_argument(root, &workspace.project_root.to_string_lossy()),
         ));
     }
+    if spec.kind == SemanticIndexerKind::Kotlin {
+        let cache_root = root.join(INDEXER_CACHE_DIR);
+        let cache = sandbox_repository_argument(root, &cache_root.to_string_lossy());
+        env.push(("COURSIER_CACHE".to_string(), cache.clone()));
+        env.push(("COURSIER_CACHE_DIR".to_string(), cache.clone()));
+        env.push(("GRADLE_USER_HOME".to_string(), cache));
+    }
     if !path_prefixes.is_empty() {
         path_prefixes.extend(std::env::split_paths(std::ffi::OsStr::new(sandbox_path())));
         let path = std::env::join_paths(path_prefixes)
@@ -332,9 +398,60 @@ fn build_indexer_sandbox_command(
         args,
         read_only_paths,
         env,
+        allow_network: false,
         timeout: INDEX_TIMEOUT,
         output_limit: MAX_PROCESS_OUTPUT,
     })
+}
+
+#[cfg(target_os = "macos")]
+fn runtime_dependency_paths(runtime: &Path) -> Result<Vec<PathBuf>, String> {
+    let output = Command::new("otool")
+        .arg("-L")
+        .arg(runtime)
+        .output()
+        .map_err(|error| {
+            format!(
+                "failed to inspect runtime dependencies for {}: {error}",
+                runtime.display()
+            )
+        })?;
+    if !output.status.success() {
+        return Err(format!(
+            "otool could not inspect runtime dependencies for {}",
+            runtime.display()
+        ));
+    }
+    let mut paths = Vec::new();
+    for dependency in String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .skip(1)
+        .filter_map(|line| line.split_whitespace().next())
+        .filter(|path| path.starts_with('/'))
+        .filter(|path| {
+            !path.starts_with("/usr/")
+                && !path.starts_with("/System/")
+                && !path.starts_with("/Library/")
+                && !path.starts_with("/private/")
+        })
+    {
+        let dependency = PathBuf::from(dependency);
+        if !dependency.is_file() {
+            return Err(format!(
+                "runtime dependency is unavailable: {}",
+                dependency.display()
+            ));
+        }
+        if let Some(parent) = dependency.parent() {
+            paths.push(parent.to_path_buf());
+        }
+    }
+    Ok(paths)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn runtime_dependency_paths(_runtime: &Path) -> Result<Vec<PathBuf>, String> {
+    Ok(Vec::new())
 }
 
 fn resolve_runtime(name: &str) -> Result<PathBuf, String> {
