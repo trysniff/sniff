@@ -476,11 +476,7 @@ mod tests {
         };
 
         let result = super::run(&command).expect("Unix sandbox backend should be available");
-        assert!(
-            result.timed_out,
-            "worker should be marked as timed out: status={:?}, stdout={:?}, stderr={:?}",
-            result.status_code, result.stdout, result.stderr
-        );
+        assert!(result.timed_out, "worker should be marked as timed out");
         assert_ne!(
             result.status_code,
             Some(0),

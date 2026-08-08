@@ -57,6 +57,9 @@ jobs:
       - name: Install Linux proof sandbox
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install --no-install-recommends -y bubblewrap
+      - name: Enable Linux user namespaces for proof sandbox
+        if: runner.os == 'Linux'
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - name: Install pinned semantic indexers for dogfood
         shell: bash
         run: |
