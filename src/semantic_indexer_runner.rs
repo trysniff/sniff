@@ -20,6 +20,7 @@ const MAX_PROCESS_OUTPUT: usize = 2 * 1024 * 1024;
 const MAX_COMPACT_ERROR_OUTPUT: usize = 8 * 1024;
 const INDEXER_CACHE_DIR: &str = ".sniff-indexer-cache";
 const INDEXER_TEMP_DIR: &str = ".sniff-indexer-tmp";
+const GRADLE_INDEXER_JVM_ARGS: &str = "-Xmx512m -XX:MaxMetaspaceSize=384m -Dfile.encoding=US-ASCII";
 pub(crate) const WINDOWS_SCIP_PYTHON_BOOTSTRAP: &str = "const path=require('path'); const NativeRegExp=RegExp; function PatchedRegExp(pattern, flags) { if (pattern === path.sep) pattern = path.sep + path.sep; return new NativeRegExp(pattern, flags); } PatchedRegExp.prototype=NativeRegExp.prototype; Object.setPrototypeOf(PatchedRegExp, NativeRegExp); global.RegExp=PatchedRegExp; require(process.argv[1]);";
 
 struct TemporaryIndexerWorkspace {
@@ -502,6 +503,13 @@ fn build_indexer_sandbox_command(
         env.push(("COURSIER_CACHE".to_string(), cache.clone()));
         env.push(("COURSIER_CACHE_DIR".to_string(), cache.clone()));
         env.push(("GRADLE_USER_HOME".to_string(), cache.clone()));
+        // Match Gradle's client JVM to org.gradle.jvmargs so --no-daemon does
+        // not fork a single-use daemon that needs a network listener.
+        env.push(("JAVA_OPTS".to_string(), GRADLE_INDEXER_JVM_ARGS.to_string()));
+        env.push((
+            "GRADLE_OPTS".to_string(),
+            GRADLE_INDEXER_JVM_ARGS.to_string(),
+        ));
         env.push((
             "MAVEN_USER_HOME".to_string(),
             sandbox_repository_argument(root, &cache_root.to_string_lossy()),
@@ -536,7 +544,7 @@ fn write_private_gradle_properties(root: &Path, cache_root: &Path) -> Result<(),
     fs::write(
         cache_root.join("gradle.properties"),
         format!(
-            "systemProp.user.home={home}\norg.gradle.daemon=false\norg.gradle.jvmargs=\norg.gradle.parallel=false\n"
+            "systemProp.user.home={home}\norg.gradle.daemon=false\norg.gradle.jvmargs={GRADLE_INDEXER_JVM_ARGS}\norg.gradle.parallel=false\n"
         ),
     )
     .map_err(|error| {

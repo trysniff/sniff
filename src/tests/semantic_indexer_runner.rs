@@ -1,8 +1,8 @@
 use super::{
-    WINDOWS_SCIP_PYTHON_BOOTSTRAP, compact_process_output, files_for_indexer,
-    gradle_script_uses_android, indexer_arguments_with_project, missing_position_encoding,
-    project_name, reject_unsupported_android_gradle, sandbox_repository_argument,
-    source_integrity_digest, write_private_gradle_properties,
+    GRADLE_INDEXER_JVM_ARGS, WINDOWS_SCIP_PYTHON_BOOTSTRAP, compact_process_output,
+    files_for_indexer, gradle_script_uses_android, indexer_arguments_with_project,
+    missing_position_encoding, project_name, reject_unsupported_android_gradle,
+    sandbox_repository_argument, source_integrity_digest, write_private_gradle_properties,
 };
 #[cfg(windows)]
 use super::{indexer_arguments_with_workspace, prepare_indexer_workspace};
@@ -115,7 +115,7 @@ fn private_gradle_properties_disable_daemons_without_host_home_access() {
 
     assert!(properties.contains(&format!("systemProp.user.home={expected_home}")));
     assert!(properties.contains("org.gradle.daemon=false"));
-    assert!(properties.contains("org.gradle.jvmargs=\n"));
+    assert!(properties.contains(&format!("org.gradle.jvmargs={GRADLE_INDEXER_JVM_ARGS}\n")));
     assert!(properties.contains("org.gradle.parallel=false"));
 
     std::fs::remove_dir_all(root).unwrap();
