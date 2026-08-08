@@ -11,6 +11,8 @@ pub struct BenchmarkCase {
     pub language: String,
     pub expected_tier: FindingTier,
     pub expected_pattern: String,
+    #[serde(default)]
+    pub intentional_boundary: bool,
 }
 
 /// The normalized prediction recorded for one benchmark unit.
@@ -40,6 +42,9 @@ pub struct LanguageMetrics {
     pub combined_precision: f64,
     pub combined_recall: f64,
     pub false_positive_rate: f64,
+    pub intentional_boundary_cases: usize,
+    pub intentional_boundary_false_positives: usize,
+    pub intentional_boundary_false_positive_rate: f64,
     pub evidence_validity: f64,
     pub pattern_accuracy: f64,
 }
@@ -62,6 +67,9 @@ pub struct BenchmarkMetrics {
     pub combined_precision: f64,
     pub combined_recall: f64,
     pub false_positive_rate: f64,
+    pub intentional_boundary_cases: usize,
+    pub intentional_boundary_false_positives: usize,
+    pub intentional_boundary_false_positive_rate: f64,
     pub evidence_validity: f64,
     pub pattern_accuracy: f64,
     pub by_language: BTreeMap<String, LanguageMetrics>,
@@ -98,10 +106,10 @@ impl BenchmarkMetrics {
             self.evidence_validity,
             1.0,
         );
-        if self.false_positive_rate > 0.02 {
+        if self.intentional_boundary_false_positive_rate > 0.02 {
             errors.push(format!(
                 "intentional-boundary false-positive rate {:.2}% exceeds 2.00%",
-                self.false_positive_rate * 100.0
+                self.intentional_boundary_false_positive_rate * 100.0
             ));
         }
         for (language, metrics) in &self.by_language {
@@ -164,11 +172,17 @@ pub fn evaluate(
             .get(&case.case_id)
             .expect("complete prediction map was validated above");
         let language = by_language.entry(case.language.clone()).or_default();
-        language.observe(case.expected_tier, &case.expected_pattern, prediction);
+        language.observe(
+            case.expected_tier,
+            &case.expected_pattern,
+            case.intentional_boundary,
+            prediction,
+        );
         observe_global(
             &mut metrics,
             case.expected_tier,
             &case.expected_pattern,
+            case.intentional_boundary,
             prediction,
         );
     }
@@ -229,6 +243,8 @@ struct LanguageAccumulator {
     predicted_findings: usize,
     combined_true_positives: usize,
     false_positives: usize,
+    intentional_boundary_cases: usize,
+    intentional_boundary_false_positives: usize,
     evidence_valid_findings: usize,
     pattern_opportunities: usize,
     pattern_true_positives: usize,
@@ -239,10 +255,17 @@ impl LanguageAccumulator {
         &mut self,
         expected: FindingTier,
         expected_pattern: &str,
+        intentional_boundary: bool,
         prediction: &BenchmarkPrediction,
     ) {
         self.case_count += 1;
-        observe_counts(self, expected, prediction.tier, prediction.evidence_valid);
+        observe_counts(
+            self,
+            expected,
+            intentional_boundary,
+            prediction.tier,
+            prediction.evidence_valid,
+        );
         observe_pattern(self, expected, expected_pattern, prediction);
     }
 
@@ -256,6 +279,12 @@ impl LanguageAccumulator {
             predicted_findings: self.predicted_findings,
             combined_true_positives: self.combined_true_positives,
             false_positives: self.false_positives,
+            intentional_boundary_cases: self.intentional_boundary_cases,
+            intentional_boundary_false_positives: self.intentional_boundary_false_positives,
+            intentional_boundary_false_positive_rate: ratio_or_zero(
+                self.intentional_boundary_false_positives,
+                self.intentional_boundary_cases,
+            ),
             evidence_valid_findings: self.evidence_valid_findings,
             pattern_opportunities: self.pattern_opportunities,
             pattern_true_positives: self.pattern_true_positives,
@@ -277,11 +306,13 @@ fn observe_global(
     metrics: &mut BenchmarkMetrics,
     expected: FindingTier,
     expected_pattern: &str,
+    intentional_boundary: bool,
     prediction: &BenchmarkPrediction,
 ) {
     observe_counts(
         metrics,
         expected,
+        intentional_boundary,
         prediction.tier,
         prediction.evidence_valid,
     );
@@ -305,9 +336,16 @@ fn observe_pattern<T: PatternFields>(
 fn observe_counts<T: CountFields>(
     sink: &mut T,
     expected: FindingTier,
+    intentional_boundary: bool,
     predicted: FindingTier,
     evidence_valid: bool,
 ) {
+    if intentional_boundary {
+        *sink.intentional_boundary_cases_mut() += 1;
+        if !is_finding(expected) && is_finding(predicted) {
+            *sink.intentional_boundary_false_positives_mut() += 1;
+        }
+    }
     if expected == FindingTier::Slop {
         *sink.expected_slop_mut() += 1;
     }
@@ -342,6 +380,8 @@ trait CountFields {
     fn predicted_findings_mut(&mut self) -> &mut usize;
     fn combined_true_positives_mut(&mut self) -> &mut usize;
     fn false_positives_mut(&mut self) -> &mut usize;
+    fn intentional_boundary_cases_mut(&mut self) -> &mut usize;
+    fn intentional_boundary_false_positives_mut(&mut self) -> &mut usize;
     fn evidence_valid_findings_mut(&mut self) -> &mut usize;
 }
 
@@ -374,6 +414,12 @@ macro_rules! impl_count_fields {
             fn false_positives_mut(&mut self) -> &mut usize {
                 &mut self.false_positives
             }
+            fn intentional_boundary_cases_mut(&mut self) -> &mut usize {
+                &mut self.intentional_boundary_cases
+            }
+            fn intentional_boundary_false_positives_mut(&mut self) -> &mut usize {
+                &mut self.intentional_boundary_false_positives
+            }
             fn evidence_valid_findings_mut(&mut self) -> &mut usize {
                 &mut self.evidence_valid_findings
             }
@@ -401,6 +447,10 @@ fn finalize_metrics(metrics: &mut BenchmarkMetrics) {
     metrics.false_positive_rate = ratio_or_zero(
         metrics.false_positives,
         metrics.case_count.saturating_sub(metrics.expected_findings),
+    );
+    metrics.intentional_boundary_false_positive_rate = ratio_or_zero(
+        metrics.intentional_boundary_false_positives,
+        metrics.intentional_boundary_cases,
     );
     metrics.evidence_validity = ratio(metrics.evidence_valid_findings, metrics.predicted_findings);
     metrics.pattern_accuracy = ratio(
@@ -541,6 +591,7 @@ mod tests {
             } else {
                 "none".to_string()
             },
+            intentional_boundary: false,
         }
     }
 
@@ -579,6 +630,29 @@ mod tests {
         assert_eq!(metrics.combined_recall, 1.0);
         assert_eq!(metrics.pattern_accuracy, 1.0);
         assert!(metrics.slop_precision < 1.0);
+    }
+
+    #[test]
+    fn intentional_boundary_false_positive_rate_uses_explicit_labels() {
+        let mut boundary = case("boundary", "python", FindingTier::Clean);
+        boundary.intentional_boundary = true;
+        let cases = vec![boundary, case("ordinary", "python", FindingTier::Clean)];
+        let predictions = vec![
+            prediction("boundary", FindingTier::Slop),
+            prediction("ordinary", FindingTier::Slop),
+        ];
+
+        let metrics = evaluate(&cases, &predictions).unwrap();
+
+        assert_eq!(metrics.intentional_boundary_cases, 1);
+        assert_eq!(metrics.intentional_boundary_false_positives, 1);
+        assert_eq!(metrics.intentional_boundary_false_positive_rate, 1.0);
+        assert!(
+            metrics
+                .release_gate_errors()
+                .iter()
+                .any(|error| error.contains("intentional-boundary"))
+        );
     }
 
     #[test]

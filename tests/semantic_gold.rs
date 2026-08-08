@@ -36,6 +36,8 @@ struct GoldCase {
     explanation: String,
     #[serde(default)]
     change_scope: Option<String>,
+    #[serde(default)]
+    intentional_boundary: bool,
 }
 
 fn read_http_request(stream: TcpStream) -> (TcpStream, String) {
@@ -381,6 +383,7 @@ fn spawn_gold_server(cases: Vec<GoldCase>) -> GoldServer {
                                     "The deterministic gold server could not match the method target."
                                         .to_string(),
                                 change_scope: None,
+                                intentional_boundary: false,
                             };
                             semantic_response(&request, &unmatched)
                         }
@@ -614,6 +617,7 @@ async fn semantic_gold_corpus_runs_through_complete_method_pipeline() {
                 other => panic!("invalid expected tier {other}"),
             },
             expected_pattern: case.pattern.clone(),
+            intentional_boundary: case.intentional_boundary,
         })
         .collect::<Vec<_>>();
     let benchmark_predictions = manifest
