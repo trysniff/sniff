@@ -2,7 +2,6 @@ use crate::slop_cases::{CaseProof, CounterfactualDecision, SlopCase};
 use crate::types::{FileRecord, FindingTier, LocalFileSymbols};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -11,6 +10,14 @@ pub(crate) struct CounterfactualProofRunResult {
     pub(crate) cases: Vec<SlopCase>,
     pub(crate) input_tokens: usize,
     pub(crate) output_tokens: usize,
+}
+
+pub(crate) struct CounterfactualRunContext<'a> {
+    pub(crate) journal_path: Option<&'a Path>,
+    pub(crate) scan_id: Option<&'a str>,
+    pub(crate) budget_usd: Option<f64>,
+    pub(crate) compiler_contexts: Option<&'a crate::semantic_method_join::CompilerMethodContexts>,
+    pub(crate) repository_context: Option<crate::repository_proof::RepositoryProofContext<'a>>,
 }
 
 /// Ask for concrete edits only after adversarial adjudication, then validate
@@ -24,29 +31,36 @@ pub(crate) async fn run_counterfactual_proof(
     scan_id: Option<&str>,
     budget_usd: Option<f64>,
 ) -> Result<CounterfactualProofRunResult, String> {
-    run_counterfactual_proof_with_compiler(
+    run_counterfactual_proof_with_context(
         cases,
         files,
         client,
-        journal_path,
-        scan_id,
-        budget_usd,
-        None,
+        CounterfactualRunContext {
+            journal_path,
+            scan_id,
+            budget_usd,
+            compiler_contexts: None,
+            repository_context: None,
+        },
     )
     .await
 }
 
 /// Run proof with the same compiler-resolved method context used by census
 /// and synthesis. A proof cannot rely only on prose or a weaker name graph.
-pub(crate) async fn run_counterfactual_proof_with_compiler(
+pub(crate) async fn run_counterfactual_proof_with_context(
     cases: &[SlopCase],
     files: &[FileRecord],
     client: Arc<crate::llm::LLMClient>,
-    journal_path: Option<&Path>,
-    scan_id: Option<&str>,
-    budget_usd: Option<f64>,
-    compiler_contexts: Option<&crate::semantic_method_join::CompilerMethodContexts>,
+    context: CounterfactualRunContext<'_>,
 ) -> Result<CounterfactualProofRunResult, String> {
+    let CounterfactualRunContext {
+        journal_path,
+        scan_id,
+        budget_usd,
+        compiler_contexts,
+        repository_context,
+    } = context;
     let candidates = cases
         .iter()
         .filter(|case| matches!(case.tier, FindingTier::Slop | FindingTier::KindaSlop))
@@ -169,6 +183,9 @@ pub(crate) async fn run_counterfactual_proof_with_compiler(
     }
 
     let validated = validate_case_proofs(&candidates, &proofs, files)?;
+    let validated = repository_context.map_or(validated.clone(), |context| {
+        crate::repository_proof::validate_repository_tests(&validated, files, context)
+    });
     let by_id = validated
         .into_iter()
         .map(|case| (case.case_id.clone(), case))
@@ -646,85 +663,66 @@ fn standalone_compiler_check(file_path: &str, source: &str) -> Result<bool, Stri
         let output_path = root.join("compiled-output");
         std::fs::create_dir_all(&output_path)
             .map_err(|error| format!("failed to create compiler output directory: {error}"))?;
-        let mut command = match extension.to_ascii_lowercase().as_str() {
-            "py" => {
-                let mut command = Command::new("python");
-                command.args(["-m", "py_compile"]);
-                command.arg(&candidate);
-                command
-            }
-            "js" | "jsx" | "mjs" | "cjs" => {
-                let mut command = Command::new("node");
-                command.args(["--check"]).arg(&candidate);
-                command
-            }
-            "ts" | "tsx" => {
-                let mut command = Command::new("tsc");
-                command.args([
+        let (program, args) = match extension.to_ascii_lowercase().as_str() {
+            "py" => ("python", vec!["-m", "py_compile", "candidate.py"]),
+            "js" | "jsx" | "mjs" | "cjs" => ("node", vec!["--check", "candidate.js"]),
+            "ts" | "tsx" => (
+                "tsc",
+                vec![
                     "--noEmit",
                     "--pretty",
                     "false",
                     "--skipLibCheck",
                     "--target",
                     "ES2022",
-                ]);
-                command.arg(&candidate);
-                command
-            }
-            "go" => {
-                let mut command = Command::new("go");
-                command.args(["tool", "compile", "-p", "sniff_counterfactual"]);
-                command.arg(&candidate);
-                command
-            }
-            "rs" => {
-                let mut command = Command::new("rustc");
-                command
-                    .args(["--crate-type", "lib", "--emit", "metadata"])
-                    .arg(&candidate)
-                    .arg("--out-dir")
-                    .arg(&output_path);
-                command
-            }
-            "kt" | "kts" => {
-                let mut command = Command::new("kotlinc");
-                command.arg(&candidate).arg("-d").arg(&output_path);
-                command
-            }
+                    "candidate.ts",
+                ],
+            ),
+            "go" => (
+                "go",
+                vec![
+                    "tool",
+                    "compile",
+                    "-p",
+                    "sniff_counterfactual",
+                    "candidate.go",
+                ],
+            ),
+            "rs" => (
+                "rustc",
+                vec![
+                    "--crate-type",
+                    "lib",
+                    "--emit",
+                    "metadata",
+                    "candidate.rs",
+                    "--out-dir",
+                    "compiled-output",
+                ],
+            ),
+            "kt" | "kts" => ("kotlinc", vec!["candidate.kt", "-d", "compiled-output"]),
             _ => return Ok(false),
         };
-        let Some(mut child) = command
-            .current_dir(&root)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .env_remove("SNIFF_API_KEY")
-            .env_remove("SNIFF_ENDPOINT")
-            .env_remove("SNIFF_MODEL")
-            .spawn()
-            .ok()
-        else {
-            return Ok(false);
-        };
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-        loop {
-            if let Some(status) = child
-                .try_wait()
-                .map_err(|error| format!("compiler candidate status failed: {error}"))?
-            {
-                if status.success() {
-                    return Ok(true);
+        let args = args.into_iter().map(str::to_string).collect();
+        let output = crate::sandbox::run(&crate::sandbox::SandboxCommand {
+            root: root.clone(),
+            workdir: PathBuf::from("."),
+            program: program.to_string(),
+            args,
+            timeout: std::time::Duration::from_secs(30),
+            output_limit: crate::sandbox::DEFAULT_OUTPUT_LIMIT,
+        });
+        match output {
+            Ok(output) => {
+                if output.timed_out {
+                    return Err(format!(
+                        "standalone compiler timed out for {file_path} after 30 seconds"
+                    ));
                 }
-                return Ok(false);
+                Ok(output.status_code == Some(0))
             }
-            if std::time::Instant::now() >= deadline {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(format!(
-                    "standalone compiler timed out for {file_path} after 30 seconds"
-                ));
-            }
-            std::thread::sleep(std::time::Duration::from_millis(25));
+            Err(crate::sandbox::SandboxError::Unavailable(_)) => Ok(false),
+            Err(error) => Err(error.to_string()),
         }
     })();
     let cleanup = std::fs::remove_dir_all(&root);

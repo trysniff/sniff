@@ -15,9 +15,11 @@ pub mod pricing;
 pub mod product_contract;
 pub mod report_types;
 pub mod reporter;
+pub(crate) mod repository_proof;
 #[path = "analyzer_journal.rs"]
 pub(crate) mod review_journal;
 pub mod roles;
+pub(crate) mod sandbox;
 pub mod scorer;
 pub(crate) mod semantic_cache;
 pub mod semantic_index;

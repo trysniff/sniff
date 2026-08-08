@@ -27,6 +27,8 @@ pub(super) struct LlmCheckInput<'a> {
     pub(super) budget_usd: Option<f64>,
     pub(super) compiler_method_contexts:
         Option<&'a crate::semantic_method_join::CompilerMethodContexts>,
+    pub(super) repository_root: &'a Path,
+    pub(super) proof_test_command: Option<&'a [String]>,
 }
 
 pub(super) struct ReviewExecutionContext<'a> {
@@ -36,6 +38,8 @@ pub(super) struct ReviewExecutionContext<'a> {
     pub(super) budget_usd: Option<f64>,
     pub(super) compiler_method_contexts:
         Option<&'a crate::semantic_method_join::CompilerMethodContexts>,
+    pub(super) repository_root: &'a Path,
+    pub(super) proof_test_command: Option<&'a [String]>,
 }
 
 const MAX_PROGRESS_LABEL_CHARS: usize = 76;
@@ -169,14 +173,20 @@ pub(super) async fn run_llm_checks(
     let mut proof_input = method_cases.clone();
     proof_input.extend(adjudication.cases);
     proof_input = crate::slop_cases::deduplicate_cases(proof_input)?;
-    let proof = crate::counterfactual::run_counterfactual_proof_with_compiler(
+    let proof = crate::counterfactual::run_counterfactual_proof_with_context(
         &proof_input,
-        input.file_records,
+        input.context_file_records,
         Arc::clone(&client),
-        input.journal_path,
-        input.scan_id,
-        input.budget_usd,
-        input.compiler_method_contexts,
+        crate::counterfactual::CounterfactualRunContext {
+            journal_path: input.journal_path,
+            scan_id: input.scan_id,
+            budget_usd: input.budget_usd,
+            compiler_contexts: input.compiler_method_contexts,
+            repository_context: Some(crate::repository_proof::RepositoryProofContext {
+                repository_root: input.repository_root,
+                test_command: input.proof_test_command,
+            }),
+        },
     )
     .await?;
     let mut verdicts = analysis.verdicts;
@@ -417,6 +427,8 @@ pub(super) async fn prepare_review_artifacts(
         scan_id: scan_id.as_deref(),
         budget_usd: execution.budget_usd,
         compiler_method_contexts: execution.compiler_method_contexts,
+        repository_root: execution.repository_root,
+        proof_test_command: execution.proof_test_command,
     })
     .await
     .map_err(IoError::other);

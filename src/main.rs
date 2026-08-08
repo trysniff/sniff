@@ -13,6 +13,7 @@ pub mod pricing;
 pub mod product_contract;
 pub mod report_types;
 pub mod reporter;
+mod repository_proof;
 #[path = "analyzer_journal.rs"]
 pub(crate) mod review_journal;
 pub mod roles;
@@ -36,6 +37,7 @@ pub mod walker;
 
 mod cli_banner;
 mod counterfactual;
+mod sandbox;
 mod source_privacy;
 
 use clap::Parser;
