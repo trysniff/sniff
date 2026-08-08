@@ -411,4 +411,41 @@ mod tests {
             matches!(error, SandboxError::Unavailable(message) if message.contains("absolute"))
         );
     }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_backend_denies_writes_outside_repository_root() {
+        let root = std::env::temp_dir().join(format!(
+            "sniff-sandbox-root-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock should be after the Unix epoch")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).expect("create sandbox root");
+        let outside_name = format!("sniff-sandbox-escape-{}", std::process::id());
+        let outside = root
+            .parent()
+            .expect("sandbox root has a parent")
+            .join(&outside_name);
+        let command = SandboxCommand {
+            root: root.clone(),
+            workdir: PathBuf::from("."),
+            program: "sh".to_string(),
+            args: vec!["-c".to_string(), format!("touch ../{outside_name}")],
+            timeout: Duration::from_secs(2),
+            output_limit: 1024,
+        };
+
+        let result = super::run(&command).expect("Unix sandbox backend should be available");
+        assert_ne!(
+            result.status_code,
+            Some(0),
+            "escape attempt unexpectedly succeeded"
+        );
+        assert!(!outside.exists(), "sandbox wrote outside repository root");
+        let _ = std::fs::remove_dir_all(root);
+        let _ = std::fs::remove_file(outside);
+    }
 }
