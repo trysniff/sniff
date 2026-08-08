@@ -217,9 +217,7 @@ fn patch_scip_java_windows(root: &Path, spec: PinnedIndexer) -> Result<(), Strin
             std::process::Command::new("jar")
                 .current_dir(&patch_root)
                 .arg("xf")
-                .arg(&entrypoint)
-                .arg(aggregator_relative)
-                .arg(bindings_relative),
+                .arg(&entrypoint),
             "extract scip-java runtime jars",
         )?;
 
@@ -231,7 +229,10 @@ fn patch_scip_java_windows(root: &Path, spec: PinnedIndexer) -> Result<(), Strin
             )
         })?;
         let classpath = format!(
-            "{};{}",
+            "{};{};{}",
+            patch_root
+                .join("coursier/bootstrap/launcher/jars/*")
+                .display(),
             patch_root.join(aggregator_relative).display(),
             patch_root.join(bindings_relative).display()
         );

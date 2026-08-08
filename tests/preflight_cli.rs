@@ -19,12 +19,62 @@ fn fixture() -> PathBuf {
         "def greet(name: str) -> str:\n    return f\"Hello, {name}\"\n",
     )
     .expect("fixture source");
+    std::fs::write(
+        root.join("pyproject.toml"),
+        "[project]\nname = \"sniff-offline-cli\"\nversion = \"0.1.0\"\n",
+    )
+    .expect("fixture project metadata");
+    let git = std::process::Command::new("git")
+        .args(["init", "--quiet"])
+        .current_dir(&root)
+        .output()
+        .expect("git must be available for compiler fixtures");
+    assert!(git.status.success(), "git init failed: {:?}", git);
+    let commit = std::process::Command::new("git")
+        .args([
+            "-c",
+            "user.name=Sniff Tests",
+            "-c",
+            "user.email=sniff-tests@example.invalid",
+            "add",
+            ".",
+        ])
+        .current_dir(&root)
+        .output()
+        .expect("git add must be available for compiler fixtures");
+    assert!(commit.status.success(), "git add failed: {:?}", commit);
+    let commit = std::process::Command::new("git")
+        .args([
+            "-c",
+            "user.name=Sniff Tests",
+            "-c",
+            "user.email=sniff-tests@example.invalid",
+            "commit",
+            "--quiet",
+            "-m",
+            "fixture",
+        ])
+        .current_dir(&root)
+        .output()
+        .expect("git commit must be available for compiler fixtures");
+    assert!(commit.status.success(), "git commit failed: {:?}", commit);
     root
 }
 
 fn run_sniff(arguments: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_sniff"))
         .args(arguments)
+        .env("SNIFF_API_KEY", "offline-test-key")
+        .env("SNIFF_ENDPOINT", "http://127.0.0.1:9")
+        .env("SNIFF_MODEL", "offline-test-model")
+        .output()
+        .expect("sniff process should start")
+}
+
+fn run_sniff_with_cache(arguments: &[&str], cache: &std::path::Path) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_sniff"))
+        .args(arguments)
+        .env("SNIFF_CACHE_DIR", cache)
         .env("SNIFF_API_KEY", "offline-test-key")
         .env("SNIFF_ENDPOINT", "http://127.0.0.1:9")
         .env("SNIFF_MODEL", "offline-test-model")
@@ -61,11 +111,14 @@ fn estimate_succeeds_with_an_unreachable_provider() {
 #[test]
 fn doctor_without_probe_reports_missing_semantic_indexer_without_calling_provider() {
     let root = fixture();
-    let output = run_sniff(&[
-        "--skip-dotenv",
-        "doctor",
-        root.to_str().expect("UTF-8 fixture path"),
-    ]);
+    let output = run_sniff_with_cache(
+        &[
+            "--skip-dotenv",
+            "doctor",
+            root.to_str().expect("UTF-8 fixture path"),
+        ],
+        &root.join("missing-cache"),
+    );
     std::fs::remove_dir_all(&root).ok();
 
     assert!(!output.status.success(), "{output:?}");
