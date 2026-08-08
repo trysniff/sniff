@@ -268,9 +268,18 @@ fn patch_scip_java_windows(root: &Path, spec: PinnedIndexer) -> Result<(), Strin
                 .arg("org/scip_code/scip"),
             "extract scip-java Windows compatibility SCIP bindings",
         )?;
+        run_patch_tool(
+            std::process::Command::new("jar")
+                .current_dir(&classes)
+                .arg("xf")
+                .arg(&protobuf)
+                .arg("com/google/protobuf"),
+            "extract scip-java Windows compatibility protobuf runtime",
+        )?;
         let patch_dir = root.join("bin/scip-java-v0.13.1-patch");
         let patch_package = patch_dir.join("org/scip_code/scip_java/aggregator");
         let scip_package = patch_dir.join("org/scip_code/scip");
+        let protobuf_package = patch_dir.join("com/google/protobuf");
         if patch_package.exists() {
             return Err(format!(
                 "scip-java compatibility patch directory already exists: {}",
@@ -299,31 +308,16 @@ fn patch_scip_java_windows(root: &Path, spec: PinnedIndexer) -> Result<(), Strin
                 )
             })?;
         }
-        let extracted_bindings = classes.join("org/scip_code/scip");
-        for entry in fs::read_dir(&extracted_bindings).map_err(|error| {
-            format!(
-                "failed to read extracted scip-java bindings {}: {error}",
-                extracted_bindings.display()
-            )
-        })? {
-            let entry = entry.map_err(|error| {
-                format!(
-                    "failed to enumerate extracted scip-java bindings {}: {error}",
-                    extracted_bindings.display()
-                )
-            })?;
-            let source_class = entry.path();
-            if !source_class.is_file() {
-                continue;
-            }
-            let patch_class = scip_package.join(entry.file_name());
-            fs::copy(&source_class, &patch_class).map_err(|error| {
-                format!(
-                    "failed to write scip-java binding class {}: {error}",
-                    patch_class.display()
-                )
-            })?;
-        }
+        copy_patch_tree(
+            &classes.join("org/scip_code/scip"),
+            &scip_package,
+            "scip-java bindings",
+        )?;
+        copy_patch_tree(
+            &classes.join("com/google/protobuf"),
+            &protobuf_package,
+            "protobuf runtime",
+        )?;
         Ok(())
     })();
     let cleanup = fs::remove_dir_all(&patch_root);
@@ -336,6 +330,48 @@ fn patch_scip_java_windows(root: &Path, spec: PinnedIndexer) -> Result<(), Strin
             patch_root.display()
         )),
     }
+}
+
+#[cfg(windows)]
+fn copy_patch_tree(source: &Path, target: &Path, label: &str) -> Result<(), String> {
+    if !source.is_dir() {
+        return Err(format!(
+            "extracted {label} directory is missing: {}",
+            source.display()
+        ));
+    }
+    fs::create_dir_all(target).map_err(|error| {
+        format!(
+            "failed to create {label} directory {}: {error}",
+            target.display()
+        )
+    })?;
+    for entry in fs::read_dir(source).map_err(|error| {
+        format!(
+            "failed to read {label} directory {}: {error}",
+            source.display()
+        )
+    })? {
+        let entry = entry.map_err(|error| {
+            format!(
+                "failed to enumerate {label} directory {}: {error}",
+                source.display()
+            )
+        })?;
+        let source_path = entry.path();
+        let target_path = target.join(entry.file_name());
+        if source_path.is_dir() {
+            copy_patch_tree(&source_path, &target_path, label)?;
+        } else if source_path.is_file() {
+            fs::copy(&source_path, &target_path).map_err(|error| {
+                format!(
+                    "failed to write {label} class {}: {error}",
+                    target_path.display()
+                )
+            })?;
+        }
+    }
+    Ok(())
 }
 
 #[cfg(windows)]
