@@ -290,6 +290,31 @@ async fn run_one(
     ))
 }
 
+fn stage_node_runtime(root: &Path, runtime: &Path) -> Result<PathBuf, String> {
+    #[cfg(windows)]
+    {
+        let staged = root.join(INDEXER_TEMP_DIR).join("node.exe");
+        fs::copy(runtime, &staged).map_err(|error| {
+            format!(
+                "failed to stage Node runtime {} into {}: {error}",
+                runtime.display(),
+                staged.display()
+            )
+        })?;
+        fs::canonicalize(&staged).map_err(|error| {
+            format!(
+                "failed to resolve staged Node runtime {}: {error}",
+                staged.display()
+            )
+        })
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = root;
+        Ok(runtime.to_path_buf())
+    }
+}
+
 async fn run_sandbox_command(
     sandbox_command: SandboxCommand,
     indexer_name: &str,
@@ -337,7 +362,7 @@ fn build_indexer_sandbox_command(
     })?;
     let (program, mut args, runtime_path) = match spec.runtime {
         IndexerRuntime::NodeScript => {
-            let node = resolve_runtime("node")?;
+            let node = stage_node_runtime(root, &resolve_runtime("node")?)?;
             let mut args = Vec::new();
             if cfg!(windows) {
                 args.push("-e".to_string());
@@ -349,14 +374,7 @@ fn build_indexer_sandbox_command(
                     }
                     .to_string(),
                 );
-                args.push(
-                    if spec.kind == SemanticIndexerKind::Python {
-                        "@sourcegraph/scip-python"
-                    } else {
-                        "@sourcegraph/scip-typescript"
-                    }
-                    .to_string(),
-                );
+                args.push(entrypoint.to_string_lossy().to_string());
             } else {
                 args.push(entrypoint.to_string_lossy().to_string());
             }
@@ -403,7 +421,12 @@ fn build_indexer_sandbox_command(
             .map(|argument| sandbox_repository_argument(root, &argument)),
     );
 
-    let mut read_only_paths = vec![installed_root.clone(), runtime_mount_root(&runtime_path)];
+    let runtime_root = if spec.runtime == IndexerRuntime::NodeScript {
+        runtime_path.parent().unwrap_or(&runtime_path).to_path_buf()
+    } else {
+        runtime_mount_root(&runtime_path)
+    };
+    let mut read_only_paths = vec![installed_root.clone(), runtime_root];
     read_only_paths.extend(runtime_dependency_paths(&runtime_path)?);
     let mut path_prefixes = Vec::new();
     let mut env = Vec::new();

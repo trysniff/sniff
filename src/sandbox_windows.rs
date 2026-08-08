@@ -552,14 +552,17 @@ fn grant_acl(path: &Path, sid: &str, permission: &str) -> Result<(), SandboxErro
     if path.is_dir() {
         command.arg("/T");
     }
-    let output = command.output().map_err(|error| {
-        SandboxError::Unavailable(format!("Windows AppContainer requires icacls: {error}"))
+    let output = run_icacls(command).map_err(|error| match error {
+        SandboxError::Unavailable(message) => {
+            SandboxError::Unavailable(format!("Windows AppContainer requires icacls: {message}"))
+        }
+        other => other,
     })?;
-    if !output.status.success() {
+    if !output.success {
         return Err(SandboxError::Failed(format!(
             "grant Windows AppContainer access to {} failed: {}",
             path.display(),
-            String::from_utf8_lossy(&output.stderr)
+            output.error_text()
         )));
     }
     Ok(())
@@ -694,10 +697,10 @@ impl AclGuard {
             std::iter::once(root).chain(read_only_paths.iter().map(std::path::PathBuf::as_path))
         {
             if requires_runtime_traversal {
-                let volume_root = is_system_runtime_path(path)
-                    .then(|| path.ancestors().last())
-                    .flatten();
-                let ancestors = volume_root.into_iter().chain(path.parent());
+                // Grant only the immediate parent. The drive root is not
+                // writable by normal users, and Windows already provides the
+                // base traversal needed to reach an explicitly granted path.
+                let ancestors = path.parent().into_iter();
                 for ancestor in ancestors {
                     if grants.iter().any(|grant: &AclGrant| grant.path == ancestor) {
                         continue;
@@ -747,13 +750,6 @@ impl AclGuard {
             Err(SandboxError::Failed(failures.join("; ")))
         }
     }
-}
-
-fn is_system_runtime_path(path: &Path) -> bool {
-    ["ProgramFiles", "ProgramFiles(x86)"]
-        .into_iter()
-        .filter_map(|name| std::env::var_os(name).map(std::path::PathBuf::from))
-        .any(|root| path.starts_with(root))
 }
 
 impl Drop for AclGuard {
