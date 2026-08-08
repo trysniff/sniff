@@ -22,6 +22,8 @@ pub(crate) struct AdjudicationRunResult {
     pub(crate) output_tokens: usize,
 }
 
+const SYNTHESIS_LAYOUT_VERSION: &str = "relationship-aware-v2";
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct GraphFacts {
     edges: Vec<GraphEdge>,
@@ -222,7 +224,8 @@ pub(crate) async fn run_synthesis(
     }
     let chunks = split_records(records, graph_facts, client.max_prompt_chars())?;
     let synthesis_hash = crate::review_journal::sha256_text(&format!(
-        "{}\ngraph={}",
+        "layout={}\n{}\ngraph={}",
+        SYNTHESIS_LAYOUT_VERSION,
         records
             .iter()
             .map(|record| format!("{}:{}", record.unit_id, record.source_hash))
@@ -316,7 +319,7 @@ pub(crate) async fn run_synthesis(
     }
 
     Ok(SynthesisRunResult {
-        cases,
+        cases: crate::slop_cases::deduplicate_cases(cases)?,
         input_tokens,
         output_tokens,
     })
@@ -611,34 +614,177 @@ fn split_records(
     graph_facts: &GraphFacts,
     max_prompt_chars: usize,
 ) -> Result<Vec<Vec<MethodReviewRecord>>, String> {
+    if records.is_empty() {
+        return Ok(Vec::new());
+    }
+    let unit_indices = records
+        .iter()
+        .enumerate()
+        .map(|(index, record)| (record.unit_id.as_str(), index))
+        .collect::<HashMap<_, _>>();
+    let components = relationship_components(records.len(), graph_facts, &unit_indices);
+    let mut primary_groups = Vec::new();
+    for component in components {
+        if render_index_prompt(records, &component, graph_facts).len() <= max_prompt_chars {
+            primary_groups.push(component);
+        } else {
+            primary_groups.extend(pack_index_groups(
+                records,
+                component.into_iter().map(|index| vec![index]).collect(),
+                graph_facts,
+                max_prompt_chars,
+            )?);
+        }
+    }
+
+    let packed_groups = pack_index_groups(records, primary_groups, graph_facts, max_prompt_chars)?;
+    let mut chunks = packed_groups
+        .iter()
+        .map(|group| {
+            group
+                .iter()
+                .map(|&index| records[index].clone())
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    let mut chunk_membership = HashMap::<usize, usize>::new();
+    for (chunk_index, group) in packed_groups.iter().enumerate() {
+        for &index in group {
+            chunk_membership.insert(index, chunk_index);
+        }
+    }
+
+    // If a large community had to be split, add the smallest explicit unit
+    // that keeps each cross-chunk resolved edge visible to synthesis.
+    let mut relationship_pairs = HashSet::new();
+    for edge in &graph_facts.edges {
+        let (Some(&caller), Some(&callee)) = (
+            unit_indices.get(edge.caller_unit_id.as_str()),
+            unit_indices.get(edge.callee_unit_id.as_str()),
+        ) else {
+            continue;
+        };
+        if chunk_membership.get(&caller) == chunk_membership.get(&callee) {
+            continue;
+        }
+        let pair = if caller < callee {
+            (caller, callee)
+        } else {
+            (callee, caller)
+        };
+        relationship_pairs.insert(pair);
+    }
+    let mut relationship_pairs = relationship_pairs.into_iter().collect::<Vec<_>>();
+    relationship_pairs.sort_unstable();
+    for (left, right) in relationship_pairs {
+        let pair = vec![records[left].clone(), records[right].clone()];
+        if render_synthesis_prompt_with_graph(&pair, graph_facts).len() > max_prompt_chars {
+            return Err(format!(
+                "resolved relationship between {} and {} exceeds the configured synthesis prompt limit {}; increase the limit explicitly",
+                records[left].unit_id, records[right].unit_id, max_prompt_chars
+            ));
+        }
+        chunks.push(pair);
+    }
+    Ok(chunks)
+}
+
+fn relationship_components(
+    record_count: usize,
+    graph_facts: &GraphFacts,
+    unit_indices: &HashMap<&str, usize>,
+) -> Vec<Vec<usize>> {
+    let mut adjacency = vec![Vec::<usize>::new(); record_count];
+    for edge in &graph_facts.edges {
+        let (Some(&caller), Some(&callee)) = (
+            unit_indices.get(edge.caller_unit_id.as_str()),
+            unit_indices.get(edge.callee_unit_id.as_str()),
+        ) else {
+            continue;
+        };
+        if caller == callee {
+            continue;
+        }
+        adjacency[caller].push(callee);
+        adjacency[callee].push(caller);
+    }
+    for neighbors in &mut adjacency {
+        neighbors.sort_unstable();
+        neighbors.dedup();
+    }
+
+    let mut visited = vec![false; record_count];
+    let mut components = Vec::new();
+    for start in 0..record_count {
+        if visited[start] {
+            continue;
+        }
+        let mut stack = vec![start];
+        let mut component = Vec::new();
+        visited[start] = true;
+        while let Some(index) = stack.pop() {
+            component.push(index);
+            for &neighbor in &adjacency[index] {
+                if !visited[neighbor] {
+                    visited[neighbor] = true;
+                    stack.push(neighbor);
+                }
+            }
+        }
+        component.sort_unstable();
+        components.push(component);
+    }
+    components
+}
+
+fn pack_index_groups(
+    records: &[MethodReviewRecord],
+    groups: Vec<Vec<usize>>,
+    graph_facts: &GraphFacts,
+    max_prompt_chars: usize,
+) -> Result<Vec<Vec<usize>>, String> {
     let mut chunks = Vec::new();
     let mut current = Vec::new();
-    for record in records {
-        let mut candidate = current.clone();
-        candidate.push(record.clone());
-        if render_synthesis_prompt_with_graph(&candidate, graph_facts).len() <= max_prompt_chars {
-            current = candidate;
+    for group in groups {
+        let mut candidate_indices = current.clone();
+        candidate_indices.extend(group.iter().copied());
+        if render_index_prompt(records, &candidate_indices, graph_facts).len() <= max_prompt_chars {
+            current.extend(group);
             continue;
         }
         if current.is_empty() {
+            let first = &records[group[0]];
             return Err(format!(
                 "synthesis method record {} exceeds the configured prompt limit {}; increase the limit explicitly",
-                record.unit_id, max_prompt_chars
+                first.unit_id, max_prompt_chars
             ));
         }
-        chunks.push(current);
-        current = vec![record.clone()];
-        if render_synthesis_prompt_with_graph(&current, graph_facts).len() > max_prompt_chars {
+        chunks.push(std::mem::take(&mut current));
+        if render_index_prompt(records, &group, graph_facts).len() > max_prompt_chars {
+            let first = &records[group[0]];
             return Err(format!(
                 "synthesis method record {} exceeds the configured prompt limit {}; increase the limit explicitly",
-                record.unit_id, max_prompt_chars
+                first.unit_id, max_prompt_chars
             ));
         }
+        current.extend(group);
     }
     if !current.is_empty() {
         chunks.push(current);
     }
     Ok(chunks)
+}
+
+fn render_index_prompt(
+    records: &[MethodReviewRecord],
+    indices: &[usize],
+    graph_facts: &GraphFacts,
+) -> String {
+    let selected = indices
+        .iter()
+        .map(|&index| records[index].clone())
+        .collect::<Vec<_>>();
+    render_synthesis_prompt_with_graph(&selected, graph_facts)
 }
 
 fn synthesis_unit_id(records: &[MethodReviewRecord]) -> String {
@@ -680,7 +826,7 @@ fn render_synthesis_prompt_with_graph(
         .iter()
         .filter(|edge| {
             units.contains(edge.caller_unit_id.as_str())
-                || units.contains(edge.callee_unit_id.as_str())
+                && units.contains(edge.callee_unit_id.as_str())
         })
         .map(|edge| {
             format!(
@@ -1029,6 +1175,7 @@ mod tests {
     use super::{
         apply_case_adjudications, build_graph_facts, parse_synthesis_cases,
         render_synthesis_prompt, render_synthesis_prompt_with_graph, run_case_adjudication,
+        split_records,
     };
     use crate::product_contract::SlopPattern;
     use crate::report_types::{LLMVerdict, MethodEvidenceRecord, MethodReviewRecord};
@@ -1038,6 +1185,7 @@ mod tests {
         FindingTier, LocalFileSymbols, ResolvedSymbol, SymbolDefinition, SymbolKind,
         SymbolReference,
     };
+    use std::collections::HashSet;
     use std::io::{Read, Write};
     use std::net::TcpListener;
     use std::sync::Arc;
@@ -1250,6 +1398,81 @@ mod tests {
                 .count(),
             2
         );
+    }
+
+    #[test]
+    fn synthesis_units_keep_a_split_resolved_relationship_visible() {
+        let records = vec![
+            record("caller", "caller", "call target"),
+            record("unrelated", "unrelated", "return value"),
+            record("target", "target", "return value"),
+        ];
+        let facts = super::GraphFacts {
+            edges: vec![super::GraphEdge {
+                caller_unit_id: "caller".to_string(),
+                callee_unit_id: "target".to_string(),
+                line: 2,
+                snippet: "target()".to_string(),
+            }],
+            ..super::GraphFacts::default()
+        };
+        let relationship = vec![records[0].clone(), records[2].clone()];
+        let max_prompt_chars = render_synthesis_prompt_with_graph(&relationship, &facts).len();
+
+        let chunks = split_records(&records, &facts, max_prompt_chars).unwrap();
+
+        assert!(chunks.iter().any(|chunk| {
+            let ids = chunk
+                .iter()
+                .map(|record| record.unit_id.as_str())
+                .collect::<HashSet<_>>();
+            ids.contains("caller") && ids.contains("target")
+        }));
+    }
+
+    #[test]
+    fn oversized_graph_community_gets_pair_packets_for_boundary_edges() {
+        let records = vec![
+            record("first", "first", "call second"),
+            record("second", "second", "call third"),
+            record("third", "third", "return value"),
+        ];
+        let facts = super::GraphFacts {
+            edges: vec![
+                super::GraphEdge {
+                    caller_unit_id: "first".to_string(),
+                    callee_unit_id: "second".to_string(),
+                    line: 2,
+                    snippet: "second()".to_string(),
+                },
+                super::GraphEdge {
+                    caller_unit_id: "second".to_string(),
+                    callee_unit_id: "third".to_string(),
+                    line: 2,
+                    snippet: "third()".to_string(),
+                },
+            ],
+            ..super::GraphFacts::default()
+        };
+        let pair = vec![records[0].clone(), records[1].clone()];
+        let max_prompt_chars = render_synthesis_prompt_with_graph(&pair, &facts).len();
+
+        let chunks = split_records(&records, &facts, max_prompt_chars).unwrap();
+
+        assert!(chunks.iter().any(|chunk| {
+            let ids = chunk
+                .iter()
+                .map(|record| record.unit_id.as_str())
+                .collect::<HashSet<_>>();
+            ids.contains("second") && ids.contains("third")
+        }));
+        assert!(chunks.iter().any(|chunk| {
+            let ids = chunk
+                .iter()
+                .map(|record| record.unit_id.as_str())
+                .collect::<HashSet<_>>();
+            ids.contains("first") && ids.contains("second")
+        }));
     }
 
     #[test]

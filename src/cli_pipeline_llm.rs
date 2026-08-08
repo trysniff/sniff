@@ -151,6 +151,7 @@ pub(super) async fn run_llm_checks(
         .collect::<HashSet<_>>();
     let mut proof_input = method_cases.clone();
     proof_input.extend(adjudication.cases);
+    proof_input = crate::slop_cases::deduplicate_cases(proof_input)?;
     let proof = crate::counterfactual::run_counterfactual_proof(
         &proof_input,
         input.file_records,

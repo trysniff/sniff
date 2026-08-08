@@ -95,6 +95,47 @@ pub struct CaseAdjudication {
     pub reason: String,
 }
 
+/// Merge only byte-for-byte equivalent cases produced by overlapping
+/// synthesis units. Similar-looking cases are intentionally left separate;
+/// semantic merging belongs to an explicit model judgment, not a heuristic.
+pub fn deduplicate_cases(cases: Vec<SlopCase>) -> Result<Vec<SlopCase>, String> {
+    let mut positions = std::collections::HashMap::<String, usize>::new();
+    let mut unique = Vec::with_capacity(cases.len());
+    for case in cases {
+        let Some(&position) = positions.get(&case.case_id) else {
+            positions.insert(case.case_id.clone(), unique.len());
+            unique.push(case);
+            continue;
+        };
+        let existing = &mut unique[position];
+        if !same_case_content(existing, &case) {
+            return Err(format!(
+                "case {} was produced more than once with conflicting evidence or reasoning",
+                case.case_id
+            ));
+        }
+        existing.provenance.extend(case.provenance);
+        existing.provenance.sort();
+        existing.provenance.dedup();
+    }
+    Ok(unique)
+}
+
+fn same_case_content(left: &SlopCase, right: &SlopCase) -> bool {
+    left.case_id == right.case_id
+        && left.tier == right.tier
+        && left.pattern == right.pattern
+        && left.mechanism == right.mechanism
+        && left.intent == right.intent
+        && left.evidence == right.evidence
+        && left.affected_units == right.affected_units
+        && left.contract_boundary == right.contract_boundary
+        && left.counterfactual == right.counterfactual
+        && left.counterfactual_edits == right.counterfactual_edits
+        && left.proof_level == right.proof_level
+        && left.unresolved_assumptions == right.unresolved_assumptions
+}
+
 /// Parse the verifier response as a complete, fail-closed decision ledger.
 pub fn parse_case_adjudications(
     value: &serde_json::Value,
@@ -377,7 +418,7 @@ pub fn case_evidence_matches_record(case: &SlopCase, record: &MethodReviewRecord
 mod tests {
     use super::{
         CaseDecision, CounterfactualDecision, ProofLevel, case_evidence_matches_record,
-        parse_case_adjudications, parse_case_proofs, seed_method_cases,
+        deduplicate_cases, parse_case_adjudications, parse_case_proofs, seed_method_cases,
     };
     use crate::product_contract::SlopPattern;
     use crate::report_types::{LLMVerdict, MethodEvidenceRecord, MethodReviewRecord};
@@ -490,6 +531,23 @@ mod tests {
 
         assert_eq!(cases[0].pattern, SlopPattern::Other);
         assert_eq!(cases[0].affected_units, vec!["unit-1"]);
+    }
+
+    #[test]
+    fn duplicate_case_ids_merge_only_when_the_payload_agrees() {
+        let original =
+            seed_method_cases(&[record(FindingTier::Slop, "ceremonial_logic")])[0].clone();
+        let mut duplicate = original.clone();
+        duplicate.provenance = vec!["overlapping-synthesis-unit".to_string()];
+
+        let merged = deduplicate_cases(vec![original.clone(), duplicate]).unwrap();
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].provenance.len(), 2);
+
+        let mut conflicting = original;
+        conflicting.mechanism = "A different mechanism".to_string();
+        let error = deduplicate_cases(vec![merged[0].clone(), conflicting]).unwrap_err();
+        assert!(error.contains("conflicting evidence or reasoning"));
     }
 
     #[test]
