@@ -49,7 +49,7 @@ jobs:
           java-version: "17"
       - uses: actions/setup-go@v6
         with:
-          go-version: "1.24"
+          go-version: "1.25"
           cache: false
       - uses: gradle/actions/setup-gradle@v6
         with:
