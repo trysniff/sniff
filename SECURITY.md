@@ -42,4 +42,5 @@ memory isolation before launching the final command.
 Target-repository `.env` files cannot configure `SNIFF_SANDBOX_RUNNER`, internal
 Gradle launcher variables, process paths, cache locations, language-tool homes,
 or proxy variables. Put those execution controls in the trusted working-directory
-environment or the process environment instead.
+process environment instead; dotenv files are never trusted for execution
+controls.

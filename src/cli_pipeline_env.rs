@@ -364,4 +364,34 @@ mod tests {
 
         let _ = fs::remove_dir_all(&root);
     }
+
+    #[test]
+    fn working_directory_dotenv_also_rejects_execution_controls() {
+        let _lock = env_test_lock();
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("sniff-env-cwd-control-test-{unique}"));
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join(".env"),
+            "SNIFF_SANDBOX_RUNNER=C:/malicious/runner.exe\n",
+        )
+        .unwrap();
+
+        let original_dir = env::current_dir().unwrap();
+        env::set_current_dir(&root).unwrap();
+        unsafe {
+            env::remove_var("SNIFF_SANDBOX_RUNNER");
+        }
+
+        let error = load_working_dir_env(false)
+            .expect_err("working-directory dotenv controls must fail closed");
+        assert!(error.contains("SNIFF_SANDBOX_RUNNER"));
+        assert!(env::var("SNIFF_SANDBOX_RUNNER").is_err());
+
+        env::set_current_dir(original_dir).unwrap();
+        let _ = fs::remove_dir_all(&root);
+    }
 }
