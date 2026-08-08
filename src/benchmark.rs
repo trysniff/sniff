@@ -10,6 +10,7 @@ pub struct BenchmarkCase {
     pub case_id: String,
     pub language: String,
     pub expected_tier: FindingTier,
+    pub expected_pattern: String,
 }
 
 /// The normalized prediction recorded for one benchmark unit.
@@ -32,12 +33,15 @@ pub struct LanguageMetrics {
     pub combined_true_positives: usize,
     pub false_positives: usize,
     pub evidence_valid_findings: usize,
+    pub pattern_opportunities: usize,
+    pub pattern_true_positives: usize,
     pub slop_precision: f64,
     pub slop_recall: f64,
     pub combined_precision: f64,
     pub combined_recall: f64,
     pub false_positive_rate: f64,
     pub evidence_validity: f64,
+    pub pattern_accuracy: f64,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -51,12 +55,15 @@ pub struct BenchmarkMetrics {
     pub combined_true_positives: usize,
     pub false_positives: usize,
     pub evidence_valid_findings: usize,
+    pub pattern_opportunities: usize,
+    pub pattern_true_positives: usize,
     pub slop_precision: f64,
     pub slop_recall: f64,
     pub combined_precision: f64,
     pub combined_recall: f64,
     pub false_positive_rate: f64,
     pub evidence_validity: f64,
+    pub pattern_accuracy: f64,
     pub by_language: BTreeMap<String, LanguageMetrics>,
 }
 
@@ -157,8 +164,13 @@ pub fn evaluate(
             .get(&case.case_id)
             .expect("complete prediction map was validated above");
         let language = by_language.entry(case.language.clone()).or_default();
-        language.observe(case.expected_tier, prediction);
-        observe_global(&mut metrics, case.expected_tier, prediction);
+        language.observe(case.expected_tier, &case.expected_pattern, prediction);
+        observe_global(
+            &mut metrics,
+            case.expected_tier,
+            &case.expected_pattern,
+            prediction,
+        );
     }
     metrics.by_language = by_language
         .into_iter()
@@ -218,12 +230,20 @@ struct LanguageAccumulator {
     combined_true_positives: usize,
     false_positives: usize,
     evidence_valid_findings: usize,
+    pattern_opportunities: usize,
+    pattern_true_positives: usize,
 }
 
 impl LanguageAccumulator {
-    fn observe(&mut self, expected: FindingTier, prediction: &BenchmarkPrediction) {
+    fn observe(
+        &mut self,
+        expected: FindingTier,
+        expected_pattern: &str,
+        prediction: &BenchmarkPrediction,
+    ) {
         self.case_count += 1;
         observe_counts(self, expected, prediction.tier, prediction.evidence_valid);
+        observe_pattern(self, expected, expected_pattern, prediction);
     }
 
     fn finish(self) -> LanguageMetrics {
@@ -237,6 +257,8 @@ impl LanguageAccumulator {
             combined_true_positives: self.combined_true_positives,
             false_positives: self.false_positives,
             evidence_valid_findings: self.evidence_valid_findings,
+            pattern_opportunities: self.pattern_opportunities,
+            pattern_true_positives: self.pattern_true_positives,
             slop_precision: ratio(self.slop_true_positives, self.predicted_slop),
             slop_recall: ratio(self.slop_true_positives, self.expected_slop),
             combined_precision: ratio(self.combined_true_positives, self.predicted_findings),
@@ -246,6 +268,7 @@ impl LanguageAccumulator {
                 self.case_count.saturating_sub(self.expected_findings),
             ),
             evidence_validity: ratio(self.evidence_valid_findings, self.predicted_findings),
+            pattern_accuracy: ratio(self.pattern_true_positives, self.pattern_opportunities),
         }
     }
 }
@@ -253,6 +276,7 @@ impl LanguageAccumulator {
 fn observe_global(
     metrics: &mut BenchmarkMetrics,
     expected: FindingTier,
+    expected_pattern: &str,
     prediction: &BenchmarkPrediction,
 ) {
     observe_counts(
@@ -261,6 +285,21 @@ fn observe_global(
         prediction.tier,
         prediction.evidence_valid,
     );
+    observe_pattern(metrics, expected, expected_pattern, prediction);
+}
+
+fn observe_pattern<T: PatternFields>(
+    sink: &mut T,
+    expected: FindingTier,
+    expected_pattern: &str,
+    prediction: &BenchmarkPrediction,
+) {
+    if is_finding(expected) && is_finding(prediction.tier) {
+        *sink.pattern_opportunities_mut() += 1;
+        if expected_pattern == prediction.pattern {
+            *sink.pattern_true_positives_mut() += 1;
+        }
+    }
 }
 
 fn observe_counts<T: CountFields>(
@@ -306,6 +345,11 @@ trait CountFields {
     fn evidence_valid_findings_mut(&mut self) -> &mut usize;
 }
 
+trait PatternFields {
+    fn pattern_opportunities_mut(&mut self) -> &mut usize;
+    fn pattern_true_positives_mut(&mut self) -> &mut usize;
+}
+
 macro_rules! impl_count_fields {
     ($type:ty) => {
         impl CountFields for $type {
@@ -334,6 +378,15 @@ macro_rules! impl_count_fields {
                 &mut self.evidence_valid_findings
             }
         }
+
+        impl PatternFields for $type {
+            fn pattern_opportunities_mut(&mut self) -> &mut usize {
+                &mut self.pattern_opportunities
+            }
+            fn pattern_true_positives_mut(&mut self) -> &mut usize {
+                &mut self.pattern_true_positives
+            }
+        }
     };
 }
 
@@ -350,6 +403,10 @@ fn finalize_metrics(metrics: &mut BenchmarkMetrics) {
         metrics.case_count.saturating_sub(metrics.expected_findings),
     );
     metrics.evidence_validity = ratio(metrics.evidence_valid_findings, metrics.predicted_findings);
+    metrics.pattern_accuracy = ratio(
+        metrics.pattern_true_positives,
+        metrics.pattern_opportunities,
+    );
 }
 
 fn require_at_least(errors: &mut Vec<String>, label: &str, value: f64, minimum: f64) {
@@ -387,6 +444,20 @@ fn unique_case_map(cases: &[BenchmarkCase]) -> Result<HashMap<String, BenchmarkC
     for case in cases {
         if case.case_id.trim().is_empty() || case.language.trim().is_empty() {
             return Err("benchmark cases require non-empty case_id and language".to_string());
+        }
+        let pattern = SlopPattern::parse(&case.expected_pattern).ok_or_else(|| {
+            format!(
+                "benchmark case {} has an unknown typed pattern {}",
+                case.case_id, case.expected_pattern
+            )
+        })?;
+        if !pattern.is_valid_for(case.expected_tier) {
+            return Err(format!(
+                "benchmark case {} uses pattern {} with tier {}",
+                case.case_id,
+                pattern,
+                case.expected_tier.label()
+            ));
         }
         if map.insert(case.case_id.clone(), case.clone()).is_some() {
             return Err(format!("benchmark corpus repeats case {}", case.case_id));
@@ -465,6 +536,11 @@ mod tests {
             case_id: case_id.to_string(),
             language: language.to_string(),
             expected_tier: tier,
+            expected_pattern: if super::is_finding(tier) {
+                "ceremonial_logic".to_string()
+            } else {
+                "none".to_string()
+            },
         }
     }
 
@@ -501,6 +577,7 @@ mod tests {
         assert_eq!(metrics.false_positives, 0);
         assert_eq!(metrics.by_language["python"].case_count, 3);
         assert_eq!(metrics.combined_recall, 1.0);
+        assert_eq!(metrics.pattern_accuracy, 1.0);
         assert!(metrics.slop_precision < 1.0);
     }
 
