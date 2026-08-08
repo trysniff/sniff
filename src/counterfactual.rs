@@ -1,5 +1,5 @@
 use crate::slop_cases::{CaseProof, CounterfactualDecision, SlopCase};
-use crate::types::{FileRecord, FindingTier};
+use crate::types::{FileRecord, FindingTier, LocalFileSymbols};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -310,9 +310,13 @@ pub(crate) fn validate_case_proofs(
             CounterfactualDecision::Validated => {
                 validate_edits(case, &proof.edits, &files_by_path)?;
                 output.counterfactual_edits = proof.edits.clone();
+                output.proof_level = crate::slop_cases::ProofLevel::P3SurfaceValidated;
                 output
                     .provenance
                     .push("counterfactual:syntax_validated".to_string());
+                output
+                    .provenance
+                    .push("counterfactual:surface_validated".to_string());
             }
         }
         result.push(output);
@@ -401,8 +405,76 @@ fn validate_edits(
             ));
         }
         syntax_check(file_path, &reconstructed)?;
+        surface_check(file_path, &file.source, &reconstructed)?;
     }
     Ok(())
+}
+
+fn surface_check(
+    file_path: &str,
+    original_source: &str,
+    candidate_source: &str,
+) -> Result<(), String> {
+    let root = create_sandbox()?;
+    let extension = Path::new(file_path)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .ok_or_else(|| format!("counterfactual file has no extension: {file_path}"))?;
+    let original_path = root.join(format!("original.{extension}"));
+    let candidate_path = root.join(format!("candidate.{extension}"));
+    let result = (|| {
+        std::fs::write(&original_path, original_source)
+            .map_err(|err| format!("failed to write original surface: {err}"))?;
+        std::fs::write(&candidate_path, candidate_source)
+            .map_err(|err| format!("failed to write surface candidate: {err}"))?;
+        let original = crate::parser::parse_file_symbols_checked(&original_path.to_string_lossy())
+            .map_err(|err| {
+                format!("counterfactual original surface failed for {file_path}: {err}")
+            })?;
+        let candidate = crate::parser::parse_file_symbols_checked(
+            &candidate_path.to_string_lossy(),
+        )
+        .map_err(|err| format!("counterfactual candidate surface failed for {file_path}: {err}"))?;
+        let original_signature = public_surface_signature(&original);
+        let candidate_signature = public_surface_signature(&candidate);
+        if original_signature != candidate_signature {
+            return Err(format!(
+                "counterfactual public surface changed for {file_path}"
+            ));
+        }
+        Ok(())
+    })();
+    let _ = std::fs::remove_dir_all(&root);
+    result
+}
+
+fn public_surface_signature(symbols: &LocalFileSymbols) -> Vec<String> {
+    let mut signature = symbols
+        .definitions
+        .iter()
+        .filter(|definition| definition.is_exported)
+        .map(|definition| {
+            format!(
+                "definition:{}:{:?}:{:?}:{:?}:{:?}",
+                definition.name,
+                definition.kind,
+                definition.owner_type,
+                definition.receiver_type,
+                definition.value_type
+            )
+        })
+        .chain(symbols.exports.iter().map(|export| {
+            format!(
+                "export:{}:{}:{:?}:{:?}",
+                export.exported_name,
+                export.local_symbol_name,
+                export.source_module,
+                export.source_symbol_name
+            )
+        }))
+        .collect::<Vec<_>>();
+    signature.sort();
+    signature
 }
 
 fn ranges_overlap(
@@ -559,12 +631,30 @@ mod tests {
         }];
         let result = validate_case_proofs(&[case()], &proofs, &[file()]).unwrap();
         assert_eq!(result[0].counterfactual_edits.len(), 1);
+        assert_eq!(result[0].proof_level, ProofLevel::P3SurfaceValidated);
         assert!(
             result[0]
                 .provenance
                 .iter()
                 .any(|value| value == "counterfactual:syntax_validated")
         );
+        assert!(
+            result[0]
+                .provenance
+                .iter()
+                .any(|value| value == "counterfactual:surface_validated")
+        );
+    }
+
+    #[test]
+    fn rejects_a_counterfactual_that_changes_an_exported_symbol() {
+        let error = super::surface_check(
+            "src/demo.py",
+            "def demo(value):\n    return value\n",
+            "def renamed(value):\n    return value\n",
+        )
+        .unwrap_err();
+        assert!(error.contains("public surface changed"));
     }
 
     #[test]
