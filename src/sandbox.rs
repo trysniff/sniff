@@ -158,7 +158,7 @@ fn build_command(spec: &SandboxCommand) -> Result<Command, SandboxError> {
 
     #[cfg(target_os = "linux")]
     {
-        return build_bubblewrap_command(spec);
+        build_bubblewrap_command(spec)
     }
 
     #[cfg(target_os = "macos")]
