@@ -267,14 +267,7 @@ fn build_bubblewrap_command(spec: &SandboxCommand) -> Result<Command, SandboxErr
         "--bind",
     ]);
     if spec.allow_network {
-        command.args([
-            "--ro-bind-try",
-            "/run/systemd/resolve",
-            "/run/systemd/resolve",
-            "--ro-bind-try",
-            "/etc/resolv.conf",
-            "/etc/resolv.conf",
-        ]);
+        command.args(["--ro-bind", "/run", "/run"]);
     }
     command.arg(&spec.root).arg("/workspace");
     for path in &spec.read_only_paths {
