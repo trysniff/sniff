@@ -234,10 +234,16 @@ fn build_bubblewrap_command(spec: &SandboxCommand) -> Result<Command, SandboxErr
         )
     })?;
     let mut command = Command::new(bwrap);
+    command.args(["--die-with-parent", "--new-session", "--clearenv"]);
+    if !spec.allow_network {
+        command.arg("--unshare-net");
+    }
     command.args([
-        "--die-with-parent",
-        "--new-session",
-        "--clearenv",
+        "--unshare-pid",
+        "--unshare-uts",
+        "--unshare-ipc",
+        "--unshare-cgroup",
+        "--unshare-user",
         "--ro-bind",
         "/usr",
         "/usr",
@@ -262,16 +268,6 @@ fn build_bubblewrap_command(spec: &SandboxCommand) -> Result<Command, SandboxErr
         "--tmpfs",
         "/home",
         "--bind",
-    ]);
-    if !spec.allow_network {
-        command.arg("--unshare-net");
-    }
-    command.args([
-        "--unshare-pid",
-        "--unshare-uts",
-        "--unshare-ipc",
-        "--unshare-cgroup",
-        "--unshare-user",
     ]);
     command.arg(&spec.root).arg("/workspace");
     for path in &spec.read_only_paths {
