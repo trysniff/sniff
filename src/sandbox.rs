@@ -448,4 +448,35 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
         let _ = std::fs::remove_file(outside);
     }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_backend_terminates_a_timed_out_worker() {
+        let root = std::env::temp_dir().join(format!(
+            "sniff-sandbox-timeout-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock should be after the Unix epoch")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).expect("create sandbox root");
+        let command = SandboxCommand {
+            root: root.clone(),
+            workdir: PathBuf::from("."),
+            program: "sh".to_string(),
+            args: vec!["-c".to_string(), "sleep 5".to_string()],
+            timeout: Duration::from_millis(100),
+            output_limit: 1024,
+        };
+
+        let result = super::run(&command).expect("Unix sandbox backend should be available");
+        assert!(result.timed_out, "worker should be marked as timed out");
+        assert_ne!(
+            result.status_code,
+            Some(0),
+            "timed-out worker unexpectedly passed"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
 }
