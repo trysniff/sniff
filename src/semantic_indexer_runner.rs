@@ -354,16 +354,51 @@ fn build_indexer_sandbox_command(
     let mut read_only_paths = vec![installed_root, runtime_mount_root(&runtime_path)];
     read_only_paths.extend(runtime_dependency_paths(&runtime_path)?);
     let mut path_prefixes = Vec::new();
+    let mut env = Vec::new();
     if spec.kind == SemanticIndexerKind::Go {
         let go = resolve_runtime("go")?;
         read_only_paths.push(runtime_mount_root(&go));
         path_prefixes.push(runtime_bin_directory(&go, "go")?);
     }
     if spec.kind == SemanticIndexerKind::Rust {
+        let cargo = resolve_runtime("cargo")?;
         for name in ["cargo", "rustc"] {
             let runtime = resolve_runtime(name)?;
             read_only_paths.push(runtime_mount_root(&runtime));
             path_prefixes.push(runtime_bin_directory(&runtime, name)?);
+        }
+        let cargo_home = std::env::var_os("CARGO_HOME")
+            .map(PathBuf::from)
+            .filter(|path| path.is_dir())
+            .or_else(|| {
+                cargo
+                    .parent()
+                    .and_then(Path::parent)
+                    .map(Path::to_path_buf)
+                    .filter(|path| path.is_dir())
+            });
+        if let Some(cargo_home) = cargo_home {
+            read_only_paths.push(cargo_home.clone());
+            env.push((
+                "CARGO_HOME".to_string(),
+                cargo_home.to_string_lossy().to_string(),
+            ));
+            let rustup_home = std::env::var_os("RUSTUP_HOME")
+                .map(PathBuf::from)
+                .filter(|path| path.is_dir())
+                .or_else(|| {
+                    cargo_home
+                        .parent()
+                        .map(|path| path.join(".rustup"))
+                        .filter(|path| path.is_dir())
+                });
+            if let Some(rustup_home) = rustup_home {
+                read_only_paths.push(rustup_home.clone());
+                env.push((
+                    "RUSTUP_HOME".to_string(),
+                    rustup_home.to_string_lossy().to_string(),
+                ));
+            }
         }
     }
     if spec.kind == SemanticIndexerKind::Kotlin {
@@ -371,7 +406,6 @@ fn build_indexer_sandbox_command(
         read_only_paths.push(runtime_mount_root(&gradle));
         path_prefixes.push(runtime_bin_directory(&gradle, "gradle")?);
     }
-    let mut env = Vec::new();
     if let Some(workspace) = workspace {
         read_only_paths.push(fs::canonicalize(&workspace.directory).map_err(|error| {
             format!(
@@ -478,9 +512,9 @@ fn runtime_dependency_paths(runtime: &Path) -> Result<Vec<PathBuf>, String> {
             paths.push(macos_dependency_mount_root(parent));
         }
     }
-    let homebrew_opt = Path::new("/opt/homebrew/opt");
-    if runtime.starts_with("/opt/homebrew") && homebrew_opt.is_dir() {
-        paths.push(homebrew_opt.to_path_buf());
+    let homebrew_root = Path::new("/opt/homebrew");
+    if runtime.starts_with(homebrew_root) && homebrew_root.is_dir() {
+        paths.push(homebrew_root.to_path_buf());
     }
     Ok(paths)
 }

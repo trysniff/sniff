@@ -43,6 +43,8 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
+      - name: Configure the Rust toolchain for sandboxed Rust indexing
+        run: rustup default stable
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
@@ -91,6 +93,8 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
+      - name: Configure the Rust toolchain for sandboxed Rust indexing
+        run: rustup default stable
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
