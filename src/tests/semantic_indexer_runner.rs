@@ -109,16 +109,14 @@ fn private_gradle_properties_disable_daemons_without_host_home_access() {
     let cache = root.join(".sniff-indexer-cache");
     std::fs::create_dir_all(&cache).unwrap();
 
-    write_private_gradle_properties(&root, &cache, GRADLE_INDEXER_BASE_JVM_ARGS).unwrap();
+    write_private_gradle_properties(&root, &cache).unwrap();
     let properties = std::fs::read_to_string(cache.join("gradle.properties")).unwrap();
     let expected_home =
         sandbox_repository_argument(&root, &root.to_string_lossy()).replace('\\', "\\\\");
 
     assert!(properties.contains(&format!("systemProp.user.home={expected_home}")));
     assert!(properties.contains("org.gradle.daemon=false"));
-    assert!(properties.contains(&format!(
-        "org.gradle.jvmargs={GRADLE_INDEXER_BASE_JVM_ARGS}\n"
-    )));
+    assert!(!properties.contains("org.gradle.jvmargs"));
     assert!(properties.contains("org.gradle.parallel=false"));
 
     std::fs::remove_dir_all(root).unwrap();
