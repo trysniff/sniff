@@ -69,7 +69,12 @@ jobs:
           for fixture in typescript javascript python go kotlin rust; do
             cargo run --quiet -- indexers install "tests/semantic_gold_fixtures/${fixture}" --yes
           done
-      - run: cargo test --all-targets --locked
+      - name: Run tests
+        if: runner.os != 'Windows'
+        run: cargo test --all-targets --locked
+      - name: Run Windows tests without concurrent ACL-heavy dogfood processes
+        if: runner.os == 'Windows'
+        run: cargo test --all-targets --locked -- --test-threads=1
 
   msrv:
     name: msrv-1.88
