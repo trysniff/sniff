@@ -186,6 +186,7 @@ async fn run_one(
                 cache_root.display()
             )
         })?;
+        write_private_gradle_properties(root, cache_root)?;
     }
     let output = if spec.kind == SemanticIndexerKind::Kotlin {
         let mut preparation = sandbox_command.clone();
@@ -505,17 +506,6 @@ fn build_indexer_sandbox_command(
             "MAVEN_USER_HOME".to_string(),
             sandbox_repository_argument(root, &cache_root.to_string_lossy()),
         ));
-        env.push((
-            "GRADLE_OPTS".to_string(),
-            format!(
-                "-Duser.home={}",
-                sandbox_repository_argument(root, &root.to_string_lossy())
-            ),
-        ));
-        env.push((
-            "JAVA_TOOL_OPTIONS".to_string(),
-            format!("-Duser.home={sandbox_home}"),
-        ));
     }
     if !path_prefixes.is_empty() {
         path_prefixes.extend(std::env::split_paths(std::ffi::OsStr::new(sandbox_path())));
@@ -536,6 +526,22 @@ fn build_indexer_sandbox_command(
         allow_network: false,
         timeout: INDEX_TIMEOUT,
         output_limit: MAX_PROCESS_OUTPUT,
+    })
+}
+
+fn write_private_gradle_properties(root: &Path, cache_root: &Path) -> Result<(), String> {
+    let home = sandbox_repository_argument(root, &root.to_string_lossy()).replace('\\', "\\\\");
+    fs::write(
+        cache_root.join("gradle.properties"),
+        format!(
+            "systemProp.user.home={home}\norg.gradle.daemon=false\norg.gradle.parallel=false\n"
+        ),
+    )
+    .map_err(|error| {
+        format!(
+            "failed to create private Gradle properties in {}: {error}",
+            cache_root.display()
+        )
     })
 }
 

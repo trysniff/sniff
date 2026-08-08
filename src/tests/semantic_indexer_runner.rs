@@ -2,6 +2,7 @@ use super::{
     WINDOWS_SCIP_PYTHON_BOOTSTRAP, compact_process_output, files_for_indexer,
     gradle_script_uses_android, indexer_arguments_with_project, missing_position_encoding,
     project_name, reject_unsupported_android_gradle, source_integrity_digest,
+    write_private_gradle_properties,
 };
 #[cfg(windows)]
 use super::{indexer_arguments_with_workspace, prepare_indexer_workspace};
@@ -96,6 +97,26 @@ fn providers_with_missing_positions_use_explicit_encoding_contracts() {
         missing_position_encoding(SemanticIndexerKind::Kotlin),
         Some(SemanticPositionEncoding::Utf16)
     );
+}
+
+#[test]
+fn private_gradle_properties_disable_daemons_without_host_home_access() {
+    let root = std::env::temp_dir().join(format!(
+        "sniff-gradle-properties-test-{}",
+        std::process::id()
+    ));
+    let cache = root.join(".sniff-indexer-cache");
+    std::fs::create_dir_all(&cache).unwrap();
+
+    write_private_gradle_properties(&root, &cache).unwrap();
+    let properties = std::fs::read_to_string(cache.join("gradle.properties")).unwrap();
+    let expected_home = root.to_string_lossy().replace('\\', "\\\\");
+
+    assert!(properties.contains(&format!("systemProp.user.home={expected_home}")));
+    assert!(properties.contains("org.gradle.daemon=false"));
+    assert!(properties.contains("org.gradle.parallel=false"));
+
+    std::fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
