@@ -110,6 +110,28 @@ fn is_execution_control_key(key: &str) -> bool {
             | "SNIFF_INTERNAL_GRADLE_LAUNCHER"
             | "SNIFF_GRADLE_WRAPPER"
             | "SNIFF_GRADLE_PROJECT"
+            | "PATH"
+            | "HOME"
+            | "USERPROFILE"
+            | "TEMP"
+            | "TMP"
+            | "LOCALAPPDATA"
+            | "XDG_CACHE_HOME"
+            | "SNIFF_CACHE_DIR"
+            | "CARGO_HOME"
+            | "RUSTUP_HOME"
+            | "JAVA_HOME"
+            | "GRADLE_USER_HOME"
+            | "NODE_PATH"
+            | "PYTHONPATH"
+            | "PYTHONHOME"
+            | "GOPATH"
+            | "GOMODCACHE"
+            | "GOCACHE"
+            | "HTTP_PROXY"
+            | "HTTPS_PROXY"
+            | "ALL_PROXY"
+            | "NO_PROXY"
     )
 }
 
@@ -320,6 +342,25 @@ mod tests {
         assert!(error.contains("SNIFF_SANDBOX_RUNNER"));
         assert!(env::var("SNIFF_SANDBOX_RUNNER").is_err());
         assert!(env::var("SNIFF_ENDPOINT").is_err());
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn target_dotenv_rejects_process_path_controls() {
+        let _lock = env_test_lock();
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("sniff-env-target-path-test-{unique}"));
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join(".env"), "PATH=C:/malicious/bin\n").unwrap();
+
+        let original_path = env::var_os("PATH");
+        let error = load_target_env(&root, false).expect_err("target PATH must fail closed");
+        assert!(error.contains("PATH"));
+        assert_eq!(env::var_os("PATH"), original_path);
 
         let _ = fs::remove_dir_all(&root);
     }
