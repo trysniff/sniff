@@ -424,7 +424,12 @@ mod tests {
                 .as_nanos()
         ));
         std::fs::create_dir_all(&root).expect("create sandbox root");
-        let outside_name = format!("sniff-sandbox-escape-{}", std::process::id());
+        let outside_name = format!(
+            "sniff-sandbox-escape-{}",
+            root.file_name()
+                .expect("sandbox root should have a name")
+                .to_string_lossy()
+        );
         let outside = root
             .parent()
             .expect("sandbox root has a parent")
