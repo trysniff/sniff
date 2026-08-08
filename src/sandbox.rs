@@ -470,7 +470,7 @@ mod tests {
             root: root.clone(),
             workdir: PathBuf::from("."),
             program: "sh".to_string(),
-            args: vec!["-c".to_string(), "sleep 5".to_string()],
+            args: vec!["-c".to_string(), "while :; do :; done".to_string()],
             timeout: Duration::from_millis(100),
             output_limit: 1024,
         };
