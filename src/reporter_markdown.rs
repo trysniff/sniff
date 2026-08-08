@@ -19,20 +19,18 @@ pub(super) fn write_markdown_report(
     if method_verdicts.is_empty() && run_report.stats.method_reviews_expected == 0 {
         render_file_only_findings(run_report, &mut md_lines);
     } else {
-        render_method_tier(
-            &method_verdicts,
+        render_case_tier(
+            &run_report.slop_cases,
             FindingTier::Slop,
             "Slop Findings",
             None,
-            &run_report.slop_cases,
             &mut md_lines,
         );
-        render_method_tier(
-            &method_verdicts,
+        render_case_tier(
+            &run_report.slop_cases,
             FindingTier::KindaSlop,
             "Kinda Slop Findings",
             Some("_These are proven unnecessary, local or minor sources of friction._"),
-            &run_report.slop_cases,
             &mut md_lines,
         );
         render_method_tier(
@@ -45,7 +43,7 @@ pub(super) fn write_markdown_report(
             &run_report.slop_cases,
             &mut md_lines,
         );
-        render_synthesis_cases(run_report, &mut md_lines);
+        render_unresolved_synthesis_cases(run_report, &mut md_lines);
     }
     append_footer(
         &mut md_lines,
@@ -60,41 +58,49 @@ pub(super) fn write_markdown_report(
     Ok(())
 }
 
-fn render_synthesis_cases(run_report: &RunReport, md_lines: &mut Vec<String>) {
-    let cases = run_report
-        .slop_cases
-        .iter()
-        .filter(|case| {
-            matches!(case.tier, FindingTier::Slop | FindingTier::KindaSlop)
-                && case
-                    .provenance
-                    .iter()
-                    .any(|source| source == "method_census_synthesis")
-        })
-        .collect::<Vec<_>>();
-    if cases.is_empty() {
-        render_unresolved_synthesis_cases(run_report, md_lines);
+fn render_case_tier(
+    cases: &[crate::slop_cases::SlopCase],
+    tier: FindingTier,
+    heading: &str,
+    note: Option<&str>,
+    md_lines: &mut Vec<String>,
+) {
+    let matching = cases.iter().filter(|case| case.tier == tier);
+    if !cases.iter().any(|case| case.tier == tier) {
         return;
     }
 
-    md_lines.push("## Cross-Method Slop Cases".to_string());
+    md_lines.push(format!("## {heading}"));
     md_lines.push(String::new());
-    md_lines.push(
-        "_These cases were synthesized from multiple independently reviewed methods._".to_string(),
-    );
-    md_lines.push(String::new());
-    for case in cases {
-        render_synthesis_case(case, md_lines);
+    if let Some(note) = note {
+        md_lines.push(note.to_string());
+        md_lines.push(String::new());
     }
-    render_unresolved_synthesis_cases(run_report, md_lines);
+    for case in matching {
+        render_case(case, md_lines);
+    }
 }
 
-fn render_synthesis_case(case: &crate::slop_cases::SlopCase, md_lines: &mut Vec<String>) {
-    md_lines.push(format!("### `{}`", case.case_id));
+fn render_case(case: &crate::slop_cases::SlopCase, md_lines: &mut Vec<String>) {
+    let title = if case.affected_units.len() == 1 {
+        case.evidence
+            .first()
+            .map(|evidence| format!("`{}` :: `{}`", evidence.file_path, evidence.method_name))
+            .unwrap_or_else(|| format!("`{}`", case.case_id))
+    } else {
+        format!("`{}`", case.case_id)
+    };
+    md_lines.push(format!("### {title}"));
     md_lines.push(String::new());
     md_lines.push(format!("- **Verdict:** `{}`", case.tier.label()));
     md_lines.push(format!("- **Pattern:** `{}`", case.pattern.as_str()));
     md_lines.push(format!("- **Proof level:** `{}`", case.proof_level.label()));
+    if let Some(evidence) = case.evidence.first() {
+        md_lines.push(format!(
+            "- **Lines:** `{}-{}`",
+            evidence.start_line, evidence.end_line
+        ));
+    }
     md_lines.push(format!("- **Mechanism:** {}", case.mechanism));
     md_lines.push(format!("- **Intent:** {}", case.intent));
     md_lines.push(format!(
@@ -531,7 +537,28 @@ mod tests {
             static_flags: vec![],
             llm_verdicts: vec![method_verdict(FindingTier::Slop)],
             method_review_records: vec![],
-            slop_cases: vec![],
+            slop_cases: vec![SlopCase {
+                case_id: "unit-demo".to_string(),
+                tier: FindingTier::Slop,
+                pattern: SlopPattern::CeremonialLogic,
+                mechanism: "The branch adds no distinct behavior.".to_string(),
+                intent: "Return the value.".to_string(),
+                evidence: vec![crate::slop_cases::CaseEvidence {
+                    unit_id: "unit-demo".to_string(),
+                    file_path: "src/demo.py".to_string(),
+                    method_name: "demo".to_string(),
+                    start_line: 10,
+                    end_line: 12,
+                    quote: "if enabled:\n    return value".to_string(),
+                }],
+                affected_units: vec!["unit-demo".to_string()],
+                contract_boundary: "The signature and behavior stay unchanged.".to_string(),
+                counterfactual: "Return value directly.".to_string(),
+                counterfactual_edits: Vec::new(),
+                proof_level: ProofLevel::P0SourceReasoning,
+                unresolved_assumptions: Vec::new(),
+                provenance: vec!["method:src/demo.py:demo:10-12".to_string()],
+            }],
             stats: RunStats {
                 files_scanned: 1,
                 methods_analyzed: 1,
@@ -549,7 +576,7 @@ mod tests {
         assert!(md.contains("## Slop Findings"));
         assert!(md.contains("`src/demo.py` :: `demo`"));
         assert!(md.contains("**Lines:** `10-12`"));
-        assert!(md.contains("Simplification: return value directly"));
+        assert!(md.contains("**Counterfactual:** Return value directly."));
         assert!(md.contains("if enabled:"));
     }
 
