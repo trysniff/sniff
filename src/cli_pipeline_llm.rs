@@ -391,6 +391,9 @@ pub(super) async fn prepare_review_artifacts(
             .await
             .map_err(IoError::other)?;
     evidence_records.retain(|file| !production_paths.contains(&file.file_path));
+    let mut remote_records = file_records.to_vec();
+    remote_records.extend(evidence_records.iter().cloned());
+    crate::source_privacy::reject_likely_secrets(&remote_records).map_err(IoError::other)?;
     let (static_flags, graph) = super::graph::build_static_flags(
         file_records,
         &evidence_records,

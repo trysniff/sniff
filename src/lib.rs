@@ -31,6 +31,7 @@ pub(crate) mod semantic_method_join;
 pub mod signal_layers;
 pub mod slop_cases;
 pub(crate) mod slop_reason;
+pub(crate) mod source_privacy;
 pub mod symbol_graph;
 pub mod synthesis;
 pub mod types;

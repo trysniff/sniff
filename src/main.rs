@@ -36,6 +36,7 @@ pub mod walker;
 
 mod cli_banner;
 mod counterfactual;
+mod source_privacy;
 
 use clap::Parser;
 use std::thread;
