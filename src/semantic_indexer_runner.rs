@@ -357,11 +357,19 @@ fn build_indexer_sandbox_command(
     if spec.kind == SemanticIndexerKind::Go {
         let go = resolve_runtime("go")?;
         read_only_paths.push(runtime_mount_root(&go));
-        path_prefixes.push(
-            go.parent()
-                .ok_or_else(|| "go runtime has no parent directory".to_string())?
-                .to_path_buf(),
-        );
+        path_prefixes.push(runtime_bin_directory(&go, "go")?);
+    }
+    if spec.kind == SemanticIndexerKind::Rust {
+        for name in ["cargo", "rustc"] {
+            let runtime = resolve_runtime(name)?;
+            read_only_paths.push(runtime_mount_root(&runtime));
+            path_prefixes.push(runtime_bin_directory(&runtime, name)?);
+        }
+    }
+    if spec.kind == SemanticIndexerKind::Kotlin {
+        let gradle = resolve_runtime("gradle")?;
+        read_only_paths.push(runtime_mount_root(&gradle));
+        path_prefixes.push(runtime_bin_directory(&gradle, "gradle")?);
     }
     let mut env = Vec::new();
     if let Some(workspace) = workspace {
@@ -418,6 +426,13 @@ fn build_indexer_sandbox_command(
         timeout: INDEX_TIMEOUT,
         output_limit: MAX_PROCESS_OUTPUT,
     })
+}
+
+fn runtime_bin_directory(runtime: &Path, name: &str) -> Result<PathBuf, String> {
+    runtime
+        .parent()
+        .ok_or_else(|| format!("{name} runtime has no parent directory"))
+        .map(Path::to_path_buf)
 }
 
 #[cfg(target_os = "macos")]
