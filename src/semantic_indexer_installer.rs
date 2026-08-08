@@ -209,17 +209,25 @@ fn patch_scip_java_windows(root: &Path, spec: PinnedIndexer) -> Result<(), Strin
             format!("failed to write the Windows scip-java compatibility source: {error}")
         })?;
 
-        let aggregator_relative =
-            Path::new("coursier/bootstrap/launcher/jars/scip-aggregator-0.13.1.jar");
-        let bindings_relative =
-            Path::new("coursier/bootstrap/launcher/jars/scip-java-bindings-0.9.0.jar");
         run_patch_tool(
             std::process::Command::new("jar")
                 .current_dir(&patch_root)
                 .arg("xf")
                 .arg(&entrypoint),
-            "extract scip-java runtime jars",
+            "extract scip-java Windows compatibility patch dependencies",
         )?;
+        let jars = patch_root.join("coursier/bootstrap/launcher/jars");
+        let aggregator = jars.join("scip-aggregator-0.13.1.jar");
+        let bindings = jars.join("scip-java-bindings-0.9.0.jar");
+        let protobuf = jars.join("protobuf-java-4.34.2.jar");
+        for path in [&aggregator, &bindings, &protobuf] {
+            if !path.is_file() {
+                return Err(format!(
+                    "scip-java runtime is missing patch dependency {}",
+                    path.display()
+                ));
+            }
+        }
 
         let classes = patch_root.join("classes");
         fs::create_dir_all(&classes).map_err(|error| {
@@ -230,11 +238,9 @@ fn patch_scip_java_windows(root: &Path, spec: PinnedIndexer) -> Result<(), Strin
         })?;
         let classpath = format!(
             "{};{};{}",
-            patch_root
-                .join("coursier/bootstrap/launcher/jars/*")
-                .display(),
-            patch_root.join(aggregator_relative).display(),
-            patch_root.join(bindings_relative).display()
+            aggregator.display(),
+            bindings.display(),
+            protobuf.display()
         );
         run_patch_tool(
             std::process::Command::new("javac")
@@ -246,24 +252,22 @@ fn patch_scip_java_windows(root: &Path, spec: PinnedIndexer) -> Result<(), Strin
                 .arg(&source),
             "compile scip-java Windows compatibility patch",
         )?;
-        run_patch_tool(
-            std::process::Command::new("jar")
-                .current_dir(&patch_root)
-                .arg("uf")
-                .arg(aggregator_relative)
-                .arg("-C")
-                .arg(&classes)
-                .arg("org/scip_code/scip_java/aggregator/ScipWriter.class"),
-            "update scip-java aggregator jar",
-        )?;
-        run_patch_tool(
-            std::process::Command::new("jar")
-                .current_dir(&patch_root)
-                .arg("uf")
-                .arg(&entrypoint)
-                .arg(aggregator_relative),
-            "update scip-java runtime jar",
-        )?;
+        let patched_class =
+            fs::read(classes.join("org/scip_code/scip_java/aggregator/ScipWriter.class")).map_err(
+                |error| format!("failed to read compiled scip-java compatibility patch: {error}"),
+            )?;
+        let patch_dir = root.join("bin/scip-java-v0.13.1-patch");
+        let patch_class = patch_dir.join("org/scip_code/scip_java/aggregator/ScipWriter.class");
+        if let Some(parent) = patch_class.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|error| format!("failed to create scip-java patch directory: {error}"))?;
+        }
+        fs::write(&patch_class, patched_class).map_err(|error| {
+            format!(
+                "failed to write scip-java compatibility class {}: {error}",
+                patch_class.display()
+            )
+        })?;
         Ok(())
     })();
     let cleanup = fs::remove_dir_all(&patch_root);

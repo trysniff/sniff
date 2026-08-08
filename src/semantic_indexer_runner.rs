@@ -170,6 +170,20 @@ async fn run_one(
         }
         IndexerRuntime::JavaJar => {
             let mut command = Command::new("java");
+            #[cfg(windows)]
+            if spec.kind == SemanticIndexerKind::Kotlin {
+                let patch_dir = entrypoint
+                    .parent()
+                    .ok_or_else(|| "scip-java entrypoint has no parent directory".to_string())?
+                    .join("scip-java-v0.13.1-patch");
+                command
+                    .arg("-cp")
+                    .arg(format!("{};{}", patch_dir.display(), entrypoint.display()))
+                    .arg("coursier.bootstrap.launcher.ResourcesLauncher");
+            } else {
+                command.arg("-jar").arg(entrypoint);
+            }
+            #[cfg(not(windows))]
             command.arg("-jar").arg(entrypoint);
             command.args(arguments);
             command
