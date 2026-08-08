@@ -251,10 +251,13 @@ fn build_macos_sandbox_command(spec: &SandboxCommand) -> Result<Command, Sandbox
     let sandbox_exec = find_on_path("sandbox-exec").ok_or_else(|| {
         SandboxError::Unavailable("macOS repository execution requires sandbox-exec".to_string())
     })?;
-    let profile = spec.root.join(".sniff-sandbox.sb");
-    let root = profile_path(&spec.root)?;
+    let canonical_root = std::fs::canonicalize(&spec.root).map_err(|error| {
+        SandboxError::Invalid(format!("sandbox root could not be canonicalized: {error}"))
+    })?;
+    let profile = canonical_root.join(".sniff-sandbox.sb");
+    let root = profile_path(&canonical_root)?;
     let profile_text = format!(
-        "(version 1)\n(deny default)\n(allow process*)\n(allow file-read* (subpath \"/usr\") (subpath \"/System\") (subpath \"/Library\") (subpath \"/bin\") (subpath \"/sbin\") (subpath \"{root}\"))\n(allow file-write* (subpath \"{root}\"))\n(deny network*)\n"
+        "(version 1)\n(deny default)\n(allow process-exec)\n(allow process-fork)\n(allow signal (target same-sandbox))\n(allow ipc-posix-shm)\n(allow ipc-posix-sem)\n(allow sysctl-read)\n(allow file-read-metadata)\n(allow file-ioctl (literal \"/dev/null\") (literal \"/dev/zero\") (literal \"/dev/random\") (literal \"/dev/urandom\"))\n(allow file-read* (subpath \"/usr\") (subpath \"/System\") (subpath \"/Library\") (subpath \"/bin\") (subpath \"/sbin\") (subpath \"{root}\"))\n(allow file-write* (subpath \"{root}\"))\n(deny network*)\n"
     );
     std::fs::write(&profile, profile_text).map_err(|error| {
         SandboxError::Failed(format!("failed to write macOS sandbox profile: {error}"))
@@ -266,7 +269,7 @@ fn build_macos_sandbox_command(spec: &SandboxCommand) -> Result<Command, Sandbox
         .arg("--")
         .arg(&spec.program)
         .args(&spec.args)
-        .current_dir(spec.root.join(&spec.workdir));
+        .current_dir(canonical_root.join(&spec.workdir));
     Ok(command)
 }
 
