@@ -101,6 +101,13 @@ fn run_internal_windows_gradle_launcher() -> Option<i32> {
                 return Some(2);
             }
         };
+        let arguments: Vec<_> = std::env::args_os().skip(1).collect();
+        if let Err(error) = normalize_gradle_init_script_paths(&arguments) {
+            eprintln!(
+                "internal Gradle launcher could not normalize scip-java init script: {error}"
+            );
+            return Some(2);
+        }
         let status = std::process::Command::new("cmd.exe")
             .arg("/d")
             .arg("/c")
@@ -108,7 +115,7 @@ fn run_internal_windows_gradle_launcher() -> Option<i32> {
             .arg(wrapper)
             .arg("-p")
             .arg(project)
-            .args(std::env::args_os().skip(1))
+            .args(arguments)
             .status();
         Some(match status {
             Ok(status) => status.code().unwrap_or(1),
@@ -123,4 +130,31 @@ fn run_internal_windows_gradle_launcher() -> Option<i32> {
     {
         None
     }
+}
+
+#[cfg(windows)]
+fn normalize_gradle_init_script_paths(arguments: &[std::ffi::OsString]) -> Result<(), String> {
+    let Some(index) = arguments.iter().position(|argument| {
+        argument == std::ffi::OsStr::new("--init-script") || argument == std::ffi::OsStr::new("-I")
+    }) else {
+        return Ok(());
+    };
+    let script = arguments
+        .get(index + 1)
+        .ok_or_else(|| "Gradle init-script flag has no path".to_string())?;
+    let script = std::path::Path::new(script);
+    let contents = std::fs::read_to_string(script).map_err(|error| {
+        format!(
+            "failed to read Gradle init script {}: {error}",
+            script.display()
+        )
+    })?;
+    let normalized = contents.replace('\\', "/");
+    std::fs::write(script, normalized).map_err(|error| {
+        format!(
+            "failed to rewrite Gradle init script {}: {error}",
+            script.display()
+        )
+    })?;
+    Ok(())
 }

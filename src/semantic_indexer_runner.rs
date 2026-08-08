@@ -377,16 +377,12 @@ fn prepare_windows_kotlin_workspace(
     root: &Path,
 ) -> Result<Option<TemporaryIndexerWorkspace>, String> {
     let unix_wrapper = root.join("gradlew");
-    if !unix_wrapper.is_file() {
-        return Ok(None);
-    }
-
-    let gradle_wrapper = root.join("gradlew.bat");
-    if !gradle_wrapper.is_file() {
+    let project_gradle_wrapper = root.join("gradlew.bat");
+    if unix_wrapper.is_file() && !project_gradle_wrapper.is_file() {
         return Err(format!(
             "scip-java cannot index this Windows Gradle project: {} exists but {} is missing; refusing to use a weaker system-Gradle fallback",
             unix_wrapper.display(),
-            gradle_wrapper.display()
+            project_gradle_wrapper.display()
         ));
     }
 
@@ -409,6 +405,23 @@ fn prepare_windows_kotlin_workspace(
                 directory.join("build.gradle.kts").display()
             )
         })?;
+        let gradle_wrapper = if project_gradle_wrapper.is_file() {
+            project_gradle_wrapper.clone()
+        } else {
+            let system_gradle = find_system_gradle()?;
+            let generated_wrapper = directory.join("gradlew.bat");
+            fs::write(
+                &generated_wrapper,
+                format!("@echo off\r\ncall \"{}\" %*\r\n", system_gradle.display()),
+            )
+            .map_err(|error| {
+                format!(
+                    "failed to create temporary Gradle wrapper {}: {error}",
+                    generated_wrapper.display()
+                )
+            })?;
+            generated_wrapper
+        };
         // Java ProcessBuilder cannot launch a Windows batch file by the bare
         // `gradle` name, so reuse Sniff as a temporary launcher instead of
         // shipping another executable.
@@ -435,6 +448,26 @@ fn prepare_windows_kotlin_workspace(
             Err(error)
         }
     }
+}
+
+#[cfg(windows)]
+fn find_system_gradle() -> Result<PathBuf, String> {
+    let output = std::process::Command::new("where.exe")
+        .arg("gradle")
+        .output()
+        .map_err(|error| format!("could not locate system Gradle with where.exe: {error}"))?;
+    if !output.status.success() {
+        return Err(
+            "Kotlin indexing requires gradlew.bat or a system Gradle executable; neither was found"
+                .to_string(),
+        );
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map(PathBuf::from)
+        .ok_or_else(|| "where.exe reported no usable system Gradle executable".to_string())
 }
 
 #[cfg(windows)]

@@ -110,6 +110,16 @@ fn write_file(root: &Path, relative: &str, contents: &str) {
     if relative.ends_with(".go") && !root.join("go.mod").is_file() {
         fs::write(root.join("go.mod"), "module sniff-dogfood\n\ngo 1.25\n").unwrap();
     }
+    if relative.ends_with(".rs") && !root.join("Cargo.toml").is_file() {
+        let lib_path = relative.replace('\\', "/");
+        fs::write(
+            root.join("Cargo.toml"),
+            format!(
+                "[package]\nname = \"sniff-dogfood\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lib]\npath = \"{lib_path}\"\n"
+            ),
+        )
+        .unwrap();
+    }
     if relative.ends_with(".kt") && !root.join("build.gradle.kts").is_file() {
         fs::write(
             root.join("settings.gradle.kts"),
@@ -118,7 +128,7 @@ fn write_file(root: &Path, relative: &str, contents: &str) {
         .unwrap();
         fs::write(
             root.join("build.gradle.kts"),
-            "plugins { kotlin(\"jvm\") version \"2.2.0\" }\n\nrepositories { mavenCentral() }\n\nkotlin { jvmToolchain(17) }\n",
+            "plugins { kotlin(\"jvm\") version \"2.2.0\" }\n\nrepositories { mavenCentral() }\n\nkotlin { jvmToolchain(17) }\n\nsourceSets {\n    named(\"main\") {\n        kotlin.srcDirs(\n            \"src/main/kotlin\",\n            \"shared/contract/src/commonMain/kotlin\",\n            \"shared/ui-compose/src/commonMain/kotlin\"\n        )\n    }\n}\n",
         )
         .unwrap();
     }
