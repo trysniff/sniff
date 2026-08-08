@@ -37,10 +37,13 @@ pub(crate) struct RepositoryProofContext<'a> {
     pub(crate) differential_command: Option<&'a [String]>,
 }
 
+#[derive(Debug)]
 struct RepositoryProofResult {
     tests_validated: bool,
     differential_validated: bool,
 }
+
+type ProofExecutor = dyn Fn(&Path, &[String]) -> Result<sandbox::SandboxOutput, String>;
 
 /// Execute the explicitly configured repository test command against the
 /// original and counterfactual snapshots. No command means no test claim.
@@ -112,6 +115,24 @@ fn run_case_tests(
     test_command: Option<&[String]>,
     differential_command: Option<&[String]>,
 ) -> Result<RepositoryProofResult, String> {
+    run_case_tests_with_executor(
+        case,
+        files,
+        repository_root,
+        test_command,
+        differential_command,
+        &run_proof_command,
+    )
+}
+
+fn run_case_tests_with_executor(
+    case: &SlopCase,
+    files: &[FileRecord],
+    repository_root: &Path,
+    test_command: Option<&[String]>,
+    differential_command: Option<&[String]>,
+    execute: &ProofExecutor,
+) -> Result<RepositoryProofResult, String> {
     if test_command.is_none() && differential_command.is_none() {
         return Ok(RepositoryProofResult {
             tests_validated: false,
@@ -123,14 +144,14 @@ fn run_case_tests(
     let result = (|| {
         apply_edits_to_snapshot(&candidate_root, files, &case.counterfactual_edits)?;
         let tests_validated = if let Some(test_command) = test_command {
-            let original = run_proof_command(&original_root, test_command)?;
+            let original = execute(&original_root, test_command)?;
             if original.status_code != Some(0) {
                 return Err(format!(
                     "baseline repository test command did not pass (status {:?})",
                     original.status_code
                 ));
             }
-            let candidate = run_proof_command(&candidate_root, test_command)?;
+            let candidate = execute(&candidate_root, test_command)?;
             if candidate.status_code != Some(0) {
                 return Err(format!(
                     "counterfactual repository test command did not pass (status {:?})",
@@ -142,8 +163,8 @@ fn run_case_tests(
             false
         };
         let differential_validated = if let Some(differential_command) = differential_command {
-            let original = run_proof_command(&original_root, differential_command)?;
-            let candidate = run_proof_command(&candidate_root, differential_command)?;
+            let original = execute(&original_root, differential_command)?;
+            let candidate = execute(&candidate_root, differential_command)?;
             if original != candidate {
                 return Err(
                     "differential command produced different status or bounded output".to_string(),
@@ -397,9 +418,14 @@ fn mark_unresolved(cases: &[SlopCase], reason: &str) -> Vec<SlopCase> {
 
 #[cfg(test)]
 mod tests {
-    use super::{RepositoryProofContext, create_snapshot, safe_relative_path};
+    use super::{
+        RepositoryProofContext, create_snapshot, run_case_tests_with_executor, safe_relative_path,
+    };
+    use crate::slop_cases::{CounterfactualEdit, ProofLevel, SlopCase};
     use crate::types::FileRecord;
+    use crate::{product_contract::SlopPattern, sandbox::SandboxOutput};
     use std::path::Path;
+    use std::path::PathBuf;
 
     fn file(path: &str, source: &str) -> FileRecord {
         FileRecord {
@@ -408,6 +434,45 @@ mod tests {
             language: "python".to_string(),
             methods: Vec::new(),
         }
+    }
+
+    fn proof_case() -> SlopCase {
+        SlopCase {
+            case_id: "case-proof".to_string(),
+            tier: crate::types::FindingTier::Slop,
+            pattern: SlopPattern::CeremonialLogic,
+            mechanism: "The branch adds no distinct behavior.".to_string(),
+            intent: "Return the value.".to_string(),
+            evidence: Vec::new(),
+            affected_units: vec!["case-proof".to_string()],
+            contract_boundary: "The return contract is unchanged.".to_string(),
+            counterfactual: "Return the value directly.".to_string(),
+            counterfactual_edits: vec![CounterfactualEdit {
+                file_path: "src/demo.py".to_string(),
+                start_line: 2,
+                end_line: 2,
+                replacement: "    return 1\n".to_string(),
+            }],
+            proof_level: ProofLevel::P0SourceReasoning,
+            unresolved_assumptions: Vec::new(),
+            provenance: Vec::new(),
+        }
+    }
+
+    fn output(stdout: &str) -> SandboxOutput {
+        SandboxOutput {
+            status_code: Some(0),
+            stdout: stdout.to_string(),
+            stderr: String::new(),
+            timed_out: false,
+        }
+    }
+
+    fn proof_root(label: &str) -> PathBuf {
+        let root =
+            std::env::temp_dir().join(format!("sniff-proof-test-{label}-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        root
     }
 
     #[test]
@@ -450,5 +515,68 @@ mod tests {
             safe_relative_path("src/main.py").unwrap().to_string_lossy(),
             "src/main.py"
         );
+    }
+
+    #[test]
+    fn differential_fixture_upgrades_only_when_both_snapshots_match() {
+        let root = proof_root("differential");
+        let files = vec![file("src/demo.py", "def demo():\n    return 1\n")];
+        let command = vec!["python".to_string(), "probe.py".to_string()];
+        let case = proof_case();
+        let result =
+            run_case_tests_with_executor(&case, &files, &root, None, Some(&command), &|_, _| {
+                Ok(output("same\n"))
+            })
+            .unwrap();
+        assert!(!result.tests_validated);
+        assert!(result.differential_validated);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn differential_fixture_rejects_changed_output() {
+        let root = proof_root("differential-mismatch");
+        let files = vec![file("src/demo.py", "def demo():\n    return 1\n")];
+        let command = vec!["python".to_string(), "probe.py".to_string()];
+        let case = proof_case();
+        let result = run_case_tests_with_executor(
+            &case,
+            &files,
+            &root,
+            None,
+            Some(&command),
+            &|snapshot, _| {
+                if snapshot
+                    .file_name()
+                    .is_some_and(|name| name.to_string_lossy().contains("candidate"))
+                {
+                    Ok(output("changed\n"))
+                } else {
+                    Ok(output("same\n"))
+                }
+            },
+        );
+        assert!(
+            result
+                .expect_err("changed differential output must fail closed")
+                .contains("different status or bounded output")
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn test_fixture_requires_both_baseline_and_candidate_to_pass() {
+        let root = proof_root("tests");
+        let files = vec![file("src/demo.py", "def demo():\n    return 1\n")];
+        let command = vec!["python".to_string(), "-m".to_string(), "pytest".to_string()];
+        let case = proof_case();
+        let result =
+            run_case_tests_with_executor(&case, &files, &root, Some(&command), None, &|_, _| {
+                Ok(output("passed\n"))
+            })
+            .unwrap();
+        assert!(result.tests_validated);
+        assert!(!result.differential_validated);
+        let _ = std::fs::remove_dir_all(root);
     }
 }
