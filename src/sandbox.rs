@@ -444,10 +444,11 @@ mod tests {
         };
 
         let result = super::run(&command).expect("Unix sandbox backend should be available");
-        assert_ne!(
+        assert_eq!(
             result.status_code,
             Some(0),
-            "escape attempt unexpectedly succeeded"
+            "sandbox worker did not start successfully: stderr={:?}",
+            result.stderr
         );
         assert!(!outside.exists(), "sandbox wrote outside repository root");
         let _ = std::fs::remove_dir_all(root);
