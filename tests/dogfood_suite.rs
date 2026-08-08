@@ -107,6 +107,21 @@ fn unique_root(label: &str) -> PathBuf {
 }
 
 fn write_file(root: &Path, relative: &str, contents: &str) {
+    if relative.ends_with(".go") && !root.join("go.mod").is_file() {
+        fs::write(root.join("go.mod"), "module sniff-dogfood\n\ngo 1.25\n").unwrap();
+    }
+    if relative.ends_with(".kt") && !root.join("build.gradle.kts").is_file() {
+        fs::write(
+            root.join("settings.gradle.kts"),
+            "rootProject.name = \"sniff-dogfood-kotlin\"\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("build.gradle.kts"),
+            "plugins { kotlin(\"jvm\") version \"2.2.0\" }\n\nrepositories { mavenCentral() }\n\nkotlin { jvmToolchain(17) }\n",
+        )
+        .unwrap();
+    }
     let path = root.join(relative);
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).unwrap();
