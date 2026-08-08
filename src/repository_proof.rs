@@ -229,6 +229,8 @@ fn run_proof_command(root: &Path, command: &[String]) -> Result<sandbox::Sandbox
         workdir: PathBuf::from("."),
         program: program.clone(),
         args: command.iter().skip(1).cloned().collect(),
+        read_only_paths: Vec::new(),
+        env: Vec::new(),
         timeout: Duration::from_secs(300),
         output_limit: sandbox::DEFAULT_OUTPUT_LIMIT,
     })

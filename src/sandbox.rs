@@ -1,3 +1,4 @@
+use std::ffi::OsString;
 use std::io::{Read, Result as IoResult};
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::path::Path;
@@ -14,6 +15,8 @@ pub(crate) struct SandboxCommand {
     pub(crate) workdir: PathBuf,
     pub(crate) program: String,
     pub(crate) args: Vec<String>,
+    pub(crate) read_only_paths: Vec<PathBuf>,
+    pub(crate) env: Vec<(String, String)>,
     pub(crate) timeout: Duration,
     pub(crate) output_limit: usize,
 }
@@ -54,6 +57,7 @@ pub(crate) fn run(spec: &SandboxCommand) -> Result<SandboxOutput, SandboxError> 
         .env("HOME", sandbox_home(spec))
         .env("LANG", "C")
         .env("LC_ALL", "C")
+        .envs(spec.env.iter().map(|(key, value)| (key, value)))
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -137,6 +141,27 @@ fn validate_spec(spec: &SandboxCommand) -> Result<(), SandboxError> {
             "sandbox worker timeout must be positive".to_string(),
         ));
     }
+    for path in &spec.read_only_paths {
+        let metadata = std::fs::symlink_metadata(path).map_err(|error| {
+            SandboxError::Invalid(format!(
+                "sandbox read-only path must exist: {} ({error})",
+                path.display()
+            ))
+        })?;
+        if !path.is_absolute() || metadata.file_type().is_symlink() {
+            return Err(SandboxError::Invalid(format!(
+                "sandbox read-only path must be an absolute non-symlink path: {}",
+                path.display()
+            )));
+        }
+    }
+    for (key, value) in &spec.env {
+        if key.is_empty() || key.contains('=') || key.contains('\0') || value.contains('\0') {
+            return Err(SandboxError::Invalid(
+                "sandbox environment entries must have valid names and values".to_string(),
+            ));
+        }
+    }
     Ok(())
 }
 
@@ -150,6 +175,18 @@ fn build_command(spec: &SandboxCommand) -> Result<Command, SandboxError> {
             .arg(&spec.workdir)
             .arg("--timeout-ms")
             .arg(spec.timeout.as_millis().to_string())
+            .args(spec.read_only_paths.iter().flat_map(|path| {
+                [
+                    OsString::from("--read-only-path"),
+                    path.as_os_str().to_os_string(),
+                ]
+            }))
+            .args(spec.env.iter().flat_map(|(key, value)| {
+                [
+                    OsString::from("--env"),
+                    OsString::from(format!("{key}={value}")),
+                ]
+            }))
             .arg("--")
             .arg(&spec.program)
             .args(&spec.args);
@@ -222,6 +259,9 @@ fn build_bubblewrap_command(spec: &SandboxCommand) -> Result<Command, SandboxErr
         "--bind",
     ]);
     command.arg(&spec.root).arg("/workspace");
+    for path in &spec.read_only_paths {
+        command.arg("--ro-bind").arg(path).arg(path);
+    }
     let sandbox_workdir = if spec.workdir == Path::new(".") {
         "/workspace".to_string()
     } else {
@@ -241,6 +281,13 @@ fn build_bubblewrap_command(spec: &SandboxCommand) -> Result<Command, SandboxErr
         .arg("--setenv")
         .arg("LC_ALL")
         .arg("C")
+        .args(spec.env.iter().flat_map(|(key, value)| {
+            [
+                OsString::from("--setenv"),
+                OsString::from(key),
+                OsString::from(value),
+            ]
+        }))
         .arg(&spec.program)
         .args(&spec.args);
     Ok(command)
@@ -256,8 +303,21 @@ fn build_macos_sandbox_command(spec: &SandboxCommand) -> Result<Command, Sandbox
     })?;
     let profile = canonical_root.join(".sniff-sandbox.sb");
     let root = profile_path(&canonical_root)?;
+    let read_only_rules = spec
+        .read_only_paths
+        .iter()
+        .map(|path| {
+            let path_text = profile_path(path)?;
+            let filter = if path.is_dir() {
+                format!("(subpath \"{path_text}\")")
+            } else {
+                format!("(literal \"{path_text}\")")
+            };
+            Ok::<_, SandboxError>(format!("(allow file-read* {filter})\n"))
+        })
+        .collect::<Result<String, _>>()?;
     let profile_text = format!(
-        "(version 1)\n(deny default)\n(allow process-exec)\n(allow process-exec-interpreter)\n(allow process-fork)\n(allow signal (target same-sandbox))\n(allow ipc-posix-shm)\n(allow ipc-posix-sem)\n(allow sysctl-read)\n(allow mach-lookup (global-name \"com.apple.system.notification_center\") (global-name \"com.apple.system.opendirectoryd.libinfo\"))\n(allow file-read-metadata)\n(allow file-read-data (literal \"/\"))\n(allow file-read* (literal \"/dev/dtracehelper\") (literal \"/dev/tty\"))\n(allow file-ioctl (literal \"/dev/null\") (literal \"/dev/zero\") (literal \"/dev/random\") (literal \"/dev/urandom\") (literal \"/dev/dtracehelper\") (literal \"/dev/tty\"))\n(allow file-read* (subpath \"/usr\") (subpath \"/System\") (subpath \"/Library\") (subpath \"/bin\") (subpath \"/sbin\") (subpath \"/private\") (subpath \"{root}\"))\n(allow file-write* (subpath \"{root}\"))\n(deny network*)\n"
+        "(version 1)\n(deny default)\n(allow process-exec)\n(allow process-exec-interpreter)\n(allow process-fork)\n(allow signal (target same-sandbox))\n(allow ipc-posix-shm)\n(allow ipc-posix-sem)\n(allow sysctl-read)\n(allow mach-lookup (global-name \"com.apple.system.notification_center\") (global-name \"com.apple.system.opendirectoryd.libinfo\"))\n(allow file-read-metadata)\n(allow file-read-data (literal \"/\"))\n(allow file-read* (literal \"/dev/dtracehelper\") (literal \"/dev/tty\"))\n(allow file-ioctl (literal \"/dev/null\") (literal \"/dev/zero\") (literal \"/dev/random\") (literal \"/dev/urandom\") (literal \"/dev/dtracehelper\") (literal \"/dev/tty\"))\n(allow file-read* (subpath \"/usr\") (subpath \"/System\") (subpath \"/Library\") (subpath \"/bin\") (subpath \"/sbin\") (subpath \"/private\") (subpath \"{root}\"))\n{read_only_rules}(allow file-write* (subpath \"{root}\"))\n(deny network*)\n"
     );
     std::fs::write(&profile, profile_text).map_err(|error| {
         SandboxError::Failed(format!("failed to write macOS sandbox profile: {error}"))
@@ -370,6 +430,8 @@ mod tests {
             workdir: PathBuf::from("."),
             program: "test".to_string(),
             args: Vec::new(),
+            read_only_paths: Vec::new(),
+            env: Vec::new(),
             timeout: Duration::from_secs(1),
             output_limit: 32,
         }
@@ -397,6 +459,24 @@ mod tests {
 
         let error = validate_spec(&command).unwrap_err();
         assert!(matches!(error, SandboxError::Invalid(message) if message.contains("positive")));
+    }
+
+    #[test]
+    fn rejects_invalid_read_only_mounts() {
+        let mut command = spec(std::env::temp_dir());
+        command.read_only_paths = vec![PathBuf::from("relative")];
+
+        let error = validate_spec(&command).unwrap_err();
+        assert!(matches!(error, SandboxError::Invalid(message) if message.contains("read-only")));
+    }
+
+    #[test]
+    fn rejects_invalid_environment_entries() {
+        let mut command = spec(std::env::temp_dir());
+        command.env = vec![("BAD=NAME".to_string(), "value".to_string())];
+
+        let error = validate_spec(&command).unwrap_err();
+        assert!(matches!(error, SandboxError::Invalid(message) if message.contains("environment")));
     }
 
     #[test]
@@ -442,6 +522,8 @@ mod tests {
             workdir: PathBuf::from("."),
             program: "/bin/sh".to_string(),
             args: vec!["-c".to_string(), format!("touch ../{outside_name}")],
+            read_only_paths: Vec::new(),
+            env: Vec::new(),
             timeout: Duration::from_secs(2),
             output_limit: 1024,
         };
@@ -474,6 +556,8 @@ mod tests {
             workdir: PathBuf::from("."),
             program: "/bin/sh".to_string(),
             args: vec!["-c".to_string(), "while :; do :; done".to_string()],
+            read_only_paths: Vec::new(),
+            env: Vec::new(),
             timeout: Duration::from_millis(100),
             output_limit: 1024,
         };

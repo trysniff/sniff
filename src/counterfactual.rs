@@ -709,6 +709,8 @@ fn standalone_compiler_check(file_path: &str, source: &str) -> Result<bool, Stri
             workdir: PathBuf::from("."),
             program: program.to_string(),
             args,
+            read_only_paths: Vec::new(),
+            env: Vec::new(),
             timeout: std::time::Duration::from_secs(30),
             output_limit: crate::sandbox::DEFAULT_OUTPUT_LIMIT,
         });
