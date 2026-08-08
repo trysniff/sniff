@@ -2,6 +2,7 @@ use crate::slop_cases::{CaseProof, CounterfactualDecision, SlopCase};
 use crate::types::{FileRecord, FindingTier, LocalFileSymbols};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -357,15 +358,24 @@ pub(crate) fn validate_case_proofs(
                     .push("counterfactual:unresolved".to_string());
             }
             CounterfactualDecision::Validated => {
-                validate_edits(case, &proof.edits, &files_by_path)?;
+                let compiler_validated = validate_edits(case, &proof.edits, &files_by_path)?;
                 output.counterfactual_edits = proof.edits.clone();
-                output.proof_level = crate::slop_cases::ProofLevel::P3SurfaceValidated;
+                output.proof_level = if compiler_validated {
+                    crate::slop_cases::ProofLevel::P1CompilerValidated
+                } else {
+                    crate::slop_cases::ProofLevel::P3SurfaceValidated
+                };
                 output
                     .provenance
                     .push("counterfactual:syntax_validated".to_string());
                 output
                     .provenance
                     .push("counterfactual:surface_validated".to_string());
+                if compiler_validated {
+                    output
+                        .provenance
+                        .push("counterfactual:compiler_validated".to_string());
+                }
             }
         }
         result.push(output);
@@ -377,7 +387,7 @@ fn validate_edits(
     case: &SlopCase,
     edits: &[crate::slop_cases::CounterfactualEdit],
     files_by_path: &HashMap<&str, &FileRecord>,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     if edits.is_empty() {
         return Err(format!(
             "counterfactual case {} has no exact edits",
@@ -427,6 +437,7 @@ fn validate_edits(
         let _ = (start, end);
     }
 
+    let mut compiler_validated = true;
     for (file_path, file_edits) in by_file {
         let file = files_by_path
             .get(file_path)
@@ -455,8 +466,9 @@ fn validate_edits(
         }
         syntax_check(file_path, &reconstructed)?;
         surface_check(file_path, &file.source, &reconstructed)?;
+        compiler_validated &= standalone_compiler_check(file_path, &reconstructed)?;
     }
-    Ok(())
+    Ok(compiler_validated)
 }
 
 fn surface_check(
@@ -616,11 +628,121 @@ fn syntax_check(file_path: &str, source: &str) -> Result<(), String> {
     result
 }
 
+/// Compile a standalone candidate only when the language has a compiler mode
+/// that does not load the repository build graph. Missing toolchains retain
+/// the already-proven P3 surface grade rather than creating a false claim.
+fn standalone_compiler_check(file_path: &str, source: &str) -> Result<bool, String> {
+    let Some(extension) = Path::new(file_path)
+        .extension()
+        .and_then(|extension| extension.to_str())
+    else {
+        return Ok(false);
+    };
+    let root = create_sandbox()?;
+    let candidate = root.join(format!("candidate.{extension}"));
+    let result = (|| {
+        std::fs::write(&candidate, source)
+            .map_err(|error| format!("failed to write compiler candidate: {error}"))?;
+        let output_path = root.join("compiled-output");
+        std::fs::create_dir_all(&output_path)
+            .map_err(|error| format!("failed to create compiler output directory: {error}"))?;
+        let mut command = match extension.to_ascii_lowercase().as_str() {
+            "py" => {
+                let mut command = Command::new("python");
+                command.args(["-m", "py_compile"]);
+                command.arg(&candidate);
+                command
+            }
+            "js" | "jsx" | "mjs" | "cjs" => {
+                let mut command = Command::new("node");
+                command.args(["--check"]).arg(&candidate);
+                command
+            }
+            "ts" | "tsx" => {
+                let mut command = Command::new("tsc");
+                command.args([
+                    "--noEmit",
+                    "--pretty",
+                    "false",
+                    "--skipLibCheck",
+                    "--target",
+                    "ES2022",
+                ]);
+                command.arg(&candidate);
+                command
+            }
+            "go" => {
+                let mut command = Command::new("go");
+                command.args(["tool", "compile", "-p", "sniff_counterfactual"]);
+                command.arg(&candidate);
+                command
+            }
+            "rs" => {
+                let mut command = Command::new("rustc");
+                command
+                    .args(["--crate-type", "lib", "--emit", "metadata"])
+                    .arg(&candidate)
+                    .arg("--out-dir")
+                    .arg(&output_path);
+                command
+            }
+            "kt" | "kts" => {
+                let mut command = Command::new("kotlinc");
+                command.arg(&candidate).arg("-d").arg(&output_path);
+                command
+            }
+            _ => return Ok(false),
+        };
+        let Some(mut child) = command
+            .current_dir(&root)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .env_remove("SNIFF_API_KEY")
+            .env_remove("SNIFF_ENDPOINT")
+            .env_remove("SNIFF_MODEL")
+            .spawn()
+            .ok()
+        else {
+            return Ok(false);
+        };
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            if let Some(status) = child
+                .try_wait()
+                .map_err(|error| format!("compiler candidate status failed: {error}"))?
+            {
+                if status.success() {
+                    return Ok(true);
+                }
+                return Ok(false);
+            }
+            if std::time::Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!(
+                    "standalone compiler timed out for {file_path} after 30 seconds"
+                ));
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+    })();
+    let cleanup = std::fs::remove_dir_all(&root);
+    match (result, cleanup) {
+        (Ok(value), Ok(())) => Ok(value),
+        (Err(error), Ok(())) => Err(error),
+        (Ok(_), Err(error)) => Err(format!("compiler proof cleanup failed: {error}")),
+        (Err(proof_error), Err(cleanup_error)) => Err(format!(
+            "{proof_error}; compiler proof cleanup failed: {cleanup_error}"
+        )),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        render_proof_prompt_with_compiler, run_counterfactual_proof, syntax_check,
-        validate_case_proofs,
+        render_proof_prompt_with_compiler, run_counterfactual_proof, standalone_compiler_check,
+        syntax_check, validate_case_proofs,
     };
     use crate::product_contract::SlopPattern;
     use crate::slop_cases::{
@@ -684,7 +806,17 @@ mod tests {
         }];
         let result = validate_case_proofs(&[case()], &proofs, &[file()]).unwrap();
         assert_eq!(result[0].counterfactual_edits.len(), 1);
-        assert_eq!(result[0].proof_level, ProofLevel::P3SurfaceValidated);
+        let expected_level = if standalone_compiler_check(
+            "src/demo.py",
+            "def demo(value):\n    return value\n# unrelated\n",
+        )
+        .unwrap()
+        {
+            ProofLevel::P1CompilerValidated
+        } else {
+            ProofLevel::P3SurfaceValidated
+        };
+        assert_eq!(result[0].proof_level, expected_level);
         assert!(
             result[0]
                 .provenance
@@ -697,6 +829,14 @@ mod tests {
                 .iter()
                 .any(|value| value == "counterfactual:surface_validated")
         );
+        if expected_level == ProofLevel::P1CompilerValidated {
+            assert!(
+                result[0]
+                    .provenance
+                    .iter()
+                    .any(|value| value == "counterfactual:compiler_validated")
+            );
+        }
     }
 
     #[test]

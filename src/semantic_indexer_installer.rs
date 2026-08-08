@@ -260,8 +260,17 @@ fn patch_scip_java_windows(root: &Path, spec: PinnedIndexer) -> Result<(), Strin
                 .arg("org/scip_code/scip_java/aggregator/ScipOutputStream.class"),
             "extract scip-java Windows compatibility runtime class",
         )?;
+        run_patch_tool(
+            std::process::Command::new("jar")
+                .current_dir(&classes)
+                .arg("xf")
+                .arg(&bindings)
+                .arg("org/scip_code/scip"),
+            "extract scip-java Windows compatibility SCIP bindings",
+        )?;
         let patch_dir = root.join("bin/scip-java-v0.13.1-patch");
         let patch_package = patch_dir.join("org/scip_code/scip_java/aggregator");
+        let scip_package = patch_dir.join("org/scip_code/scip");
         if patch_package.exists() {
             return Err(format!(
                 "scip-java compatibility patch directory already exists: {}",
@@ -270,6 +279,8 @@ fn patch_scip_java_windows(root: &Path, spec: PinnedIndexer) -> Result<(), Strin
         }
         fs::create_dir_all(&patch_package)
             .map_err(|error| format!("failed to create scip-java patch directory: {error}"))?;
+        fs::create_dir_all(&scip_package)
+            .map_err(|error| format!("failed to create scip-java bindings directory: {error}"))?;
         for class_name in ["ScipWriter.class", "ScipOutputStream.class"] {
             let source_class = classes
                 .join("org/scip_code/scip_java/aggregator")
@@ -284,6 +295,31 @@ fn patch_scip_java_windows(root: &Path, spec: PinnedIndexer) -> Result<(), Strin
             fs::copy(&source_class, &patch_class).map_err(|error| {
                 format!(
                     "failed to write scip-java compatibility class {}: {error}",
+                    patch_class.display()
+                )
+            })?;
+        }
+        let extracted_bindings = classes.join("org/scip_code/scip");
+        for entry in fs::read_dir(&extracted_bindings).map_err(|error| {
+            format!(
+                "failed to read extracted scip-java bindings {}: {error}",
+                extracted_bindings.display()
+            )
+        })? {
+            let entry = entry.map_err(|error| {
+                format!(
+                    "failed to enumerate extracted scip-java bindings {}: {error}",
+                    extracted_bindings.display()
+                )
+            })?;
+            let source_class = entry.path();
+            if !source_class.is_file() {
+                continue;
+            }
+            let patch_class = scip_package.join(entry.file_name());
+            fs::copy(&source_class, &patch_class).map_err(|error| {
+                format!(
+                    "failed to write scip-java binding class {}: {error}",
                     patch_class.display()
                 )
             })?;
