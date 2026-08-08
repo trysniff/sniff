@@ -378,6 +378,8 @@ fn build_indexer_sandbox_command(
     read_only_paths.extend(runtime_dependency_paths(&runtime_path)?);
     let mut path_prefixes = Vec::new();
     let mut env = Vec::new();
+    let sandbox_home = sandbox_repository_argument(root, &root.to_string_lossy());
+    env.push(("HOME".to_string(), sandbox_home.clone()));
     #[cfg(target_os = "macos")]
     if spec.kind == SemanticIndexerKind::Python
         && let Some(developer_dir) = macos_developer_directory()
@@ -392,6 +394,16 @@ fn build_indexer_sandbox_command(
         let go = resolve_runtime("go")?;
         read_only_paths.push(runtime_mount_root(&go));
         path_prefixes.push(runtime_bin_directory(&go, "go")?);
+        env.push((
+            "GOCACHE".to_string(),
+            sandbox_repository_argument(
+                root,
+                &root
+                    .join(INDEXER_TEMP_DIR)
+                    .join("go-build")
+                    .to_string_lossy(),
+            ),
+        ));
     }
     if spec.kind == SemanticIndexerKind::Rust {
         let cargo = resolve_runtime("cargo")?;
@@ -499,6 +511,10 @@ fn build_indexer_sandbox_command(
                 "-Duser.home={}",
                 sandbox_repository_argument(root, &root.to_string_lossy())
             ),
+        ));
+        env.push((
+            "JAVA_TOOL_OPTIONS".to_string(),
+            format!("-Duser.home={sandbox_home}"),
         ));
     }
     if !path_prefixes.is_empty() {
