@@ -20,7 +20,8 @@ const MAX_PROCESS_OUTPUT: usize = 2 * 1024 * 1024;
 const MAX_COMPACT_ERROR_OUTPUT: usize = 8 * 1024;
 const INDEXER_CACHE_DIR: &str = ".sniff-indexer-cache";
 const INDEXER_TEMP_DIR: &str = ".sniff-indexer-tmp";
-const GRADLE_INDEXER_JVM_ARGS: &str = "-Xmx512m -XX:MaxMetaspaceSize=384m -Dfile.encoding=US-ASCII";
+const GRADLE_INDEXER_BASE_JVM_ARGS: &str =
+    "-Xmx512m -XX:MaxMetaspaceSize=384m -Dfile.encoding=US-ASCII";
 pub(crate) const WINDOWS_SCIP_PYTHON_BOOTSTRAP: &str = "const path=require('path'); const NativeRegExp=RegExp; function PatchedRegExp(pattern, flags) { if (pattern === path.sep) pattern = path.sep + path.sep; return new NativeRegExp(pattern, flags); } PatchedRegExp.prototype=NativeRegExp.prototype; Object.setPrototypeOf(PatchedRegExp, NativeRegExp); global.RegExp=PatchedRegExp; require(process.argv[1]);";
 
 struct TemporaryIndexerWorkspace {
@@ -187,7 +188,9 @@ async fn run_one(
                 cache_root.display()
             )
         })?;
-        write_private_gradle_properties(root, cache_root)?;
+        let gradle = resolve_runtime("gradle")?;
+        let gradle_jvm_args = gradle_indexer_jvm_args(&gradle)?;
+        write_private_gradle_properties(root, cache_root, &gradle_jvm_args)?;
     }
     let output = if spec.kind == SemanticIndexerKind::Kotlin {
         let mut preparation = sandbox_command.clone();
@@ -448,11 +451,15 @@ fn build_indexer_sandbox_command(
             }
         }
     }
-    if spec.kind == SemanticIndexerKind::Kotlin {
+    let gradle_jvm_args = if spec.kind == SemanticIndexerKind::Kotlin {
         let gradle = resolve_runtime("gradle")?;
+        let gradle_jvm_args = gradle_indexer_jvm_args(&gradle)?;
         read_only_paths.push(runtime_mount_root(&gradle));
         path_prefixes.push(runtime_bin_directory(&gradle, "gradle")?);
-    }
+        Some(gradle_jvm_args)
+    } else {
+        None
+    };
     let temp_directory =
         sandbox_repository_argument(root, &root.join(INDEXER_TEMP_DIR).to_string_lossy());
     env.extend([
@@ -505,11 +512,11 @@ fn build_indexer_sandbox_command(
         env.push(("GRADLE_USER_HOME".to_string(), cache.clone()));
         // Match Gradle's client JVM to org.gradle.jvmargs so --no-daemon does
         // not fork a single-use daemon that needs a network listener.
-        env.push(("JAVA_OPTS".to_string(), GRADLE_INDEXER_JVM_ARGS.to_string()));
-        env.push((
-            "GRADLE_OPTS".to_string(),
-            GRADLE_INDEXER_JVM_ARGS.to_string(),
-        ));
+        let gradle_jvm_args = gradle_jvm_args
+            .as_deref()
+            .ok_or_else(|| "Kotlin indexer Gradle JVM arguments were not prepared".to_string())?;
+        env.push(("JAVA_OPTS".to_string(), gradle_jvm_args.to_string()));
+        env.push(("GRADLE_OPTS".to_string(), gradle_jvm_args.to_string()));
         env.push((
             "MAVEN_USER_HOME".to_string(),
             sandbox_repository_argument(root, &cache_root.to_string_lossy()),
@@ -539,12 +546,16 @@ fn build_indexer_sandbox_command(
     })
 }
 
-fn write_private_gradle_properties(root: &Path, cache_root: &Path) -> Result<(), String> {
+fn write_private_gradle_properties(
+    root: &Path,
+    cache_root: &Path,
+    gradle_jvm_args: &str,
+) -> Result<(), String> {
     let home = sandbox_repository_argument(root, &root.to_string_lossy()).replace('\\', "\\\\");
     fs::write(
         cache_root.join("gradle.properties"),
         format!(
-            "systemProp.user.home={home}\norg.gradle.daemon=false\norg.gradle.jvmargs={GRADLE_INDEXER_JVM_ARGS}\norg.gradle.parallel=false\n"
+            "systemProp.user.home={home}\norg.gradle.daemon=false\norg.gradle.jvmargs={gradle_jvm_args}\norg.gradle.parallel=false\n"
         ),
     )
     .map_err(|error| {
@@ -553,6 +564,59 @@ fn write_private_gradle_properties(root: &Path, cache_root: &Path) -> Result<(),
             cache_root.display()
         )
     })
+}
+
+fn gradle_indexer_jvm_args(gradle: &Path) -> Result<String, String> {
+    let installation = gradle.parent().and_then(Path::parent).ok_or_else(|| {
+        format!(
+            "Gradle runtime has no installation root: {}",
+            gradle.display()
+        )
+    })?;
+    let agents = installation.join("lib").join("agents");
+    let mut matches = fs::read_dir(&agents)
+        .map_err(|error| {
+            format!(
+                "failed to inspect Gradle instrumentation agents in {}: {error}",
+                agents.display()
+            )
+        })?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| {
+            format!(
+                "failed to read Gradle instrumentation agents in {}: {error}",
+                agents.display()
+            )
+        })?
+        .into_iter()
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.is_file()
+                && path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| {
+                        name.starts_with("gradle-instrumentation-agent-") && name.ends_with(".jar")
+                    })
+        })
+        .collect::<Vec<_>>();
+    if matches.len() != 1 {
+        return Err(format!(
+            "expected exactly one Gradle instrumentation agent in {}, found {}",
+            agents.display(),
+            matches.len()
+        ));
+    }
+    let agent = fs::canonicalize(matches.pop().expect("one agent was found")).map_err(|error| {
+        format!(
+            "failed to resolve Gradle instrumentation agent in {}: {error}",
+            agents.display()
+        )
+    })?;
+    Ok(format!(
+        "{GRADLE_INDEXER_BASE_JVM_ARGS} -javaagent={}",
+        agent.display()
+    ))
 }
 
 fn runtime_bin_directory(runtime: &Path, name: &str) -> Result<PathBuf, String> {

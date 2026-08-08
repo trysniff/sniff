@@ -1,8 +1,9 @@
 use super::{
-    GRADLE_INDEXER_JVM_ARGS, WINDOWS_SCIP_PYTHON_BOOTSTRAP, compact_process_output,
-    files_for_indexer, gradle_script_uses_android, indexer_arguments_with_project,
-    missing_position_encoding, project_name, reject_unsupported_android_gradle,
-    sandbox_repository_argument, source_integrity_digest, write_private_gradle_properties,
+    GRADLE_INDEXER_BASE_JVM_ARGS, WINDOWS_SCIP_PYTHON_BOOTSTRAP, compact_process_output,
+    files_for_indexer, gradle_indexer_jvm_args, gradle_script_uses_android,
+    indexer_arguments_with_project, missing_position_encoding, project_name,
+    reject_unsupported_android_gradle, sandbox_repository_argument, source_integrity_digest,
+    write_private_gradle_properties,
 };
 #[cfg(windows)]
 use super::{indexer_arguments_with_workspace, prepare_indexer_workspace};
@@ -108,15 +109,38 @@ fn private_gradle_properties_disable_daemons_without_host_home_access() {
     let cache = root.join(".sniff-indexer-cache");
     std::fs::create_dir_all(&cache).unwrap();
 
-    write_private_gradle_properties(&root, &cache).unwrap();
+    write_private_gradle_properties(&root, &cache, GRADLE_INDEXER_BASE_JVM_ARGS).unwrap();
     let properties = std::fs::read_to_string(cache.join("gradle.properties")).unwrap();
     let expected_home =
         sandbox_repository_argument(&root, &root.to_string_lossy()).replace('\\', "\\\\");
 
     assert!(properties.contains(&format!("systemProp.user.home={expected_home}")));
     assert!(properties.contains("org.gradle.daemon=false"));
-    assert!(properties.contains(&format!("org.gradle.jvmargs={GRADLE_INDEXER_JVM_ARGS}\n")));
+    assert!(properties.contains(&format!(
+        "org.gradle.jvmargs={GRADLE_INDEXER_BASE_JVM_ARGS}\n"
+    )));
     assert!(properties.contains("org.gradle.parallel=false"));
+
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn gradle_jvm_arguments_require_one_installed_instrumentation_agent() {
+    let root = std::env::temp_dir().join(format!("sniff-gradle-agent-test-{}", std::process::id()));
+    let bin = root.join("bin");
+    let agents = root.join("lib/agents");
+    std::fs::create_dir_all(&bin).unwrap();
+    std::fs::create_dir_all(&agents).unwrap();
+    std::fs::write(bin.join("gradle"), "").unwrap();
+    let agent = agents.join("gradle-instrumentation-agent-8.8.jar");
+    std::fs::write(&agent, "agent").unwrap();
+
+    let args = gradle_indexer_jvm_args(&bin.join("gradle")).unwrap();
+    assert!(args.starts_with(GRADLE_INDEXER_BASE_JVM_ARGS));
+    assert!(args.contains("-javaagent="));
+    let agent_path = std::fs::canonicalize(agent).unwrap();
+    let agent_text = agent_path.to_string_lossy();
+    assert!(args.contains(agent_text.as_ref()));
 
     std::fs::remove_dir_all(root).unwrap();
 }
