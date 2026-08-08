@@ -503,6 +503,28 @@ mod tests {
         let _ = std::fs::remove_dir_all(repository_root);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn snapshot_rejects_symlinked_manifests() {
+        use std::os::unix::fs::symlink;
+
+        let repository_root =
+            std::env::temp_dir().join(format!("sniff-proof-symlink-{}", std::process::id()));
+        std::fs::create_dir_all(&repository_root).unwrap();
+        let target = repository_root.join("real-manifest.toml");
+        std::fs::write(&target, "[package]\n").unwrap();
+        symlink(&target, repository_root.join("Cargo.toml")).unwrap();
+
+        let error = create_snapshot(
+            &[file("tests/example.py", "def test_example(): pass\n")],
+            &repository_root,
+            "symlink",
+        )
+        .expect_err("symlinked manifests must fail closed");
+        assert!(error.contains("refuses symlinked manifest"));
+        let _ = std::fs::remove_dir_all(repository_root);
+    }
+
     #[test]
     fn context_requires_a_repository_root_and_explicit_command() {
         let context = RepositoryProofContext {

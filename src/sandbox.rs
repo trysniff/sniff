@@ -355,7 +355,9 @@ fn terminate(child: &mut Child) -> Result<(), SandboxError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{SandboxCommand, SandboxError, validate_external_runner, validate_spec};
+    use super::{
+        SandboxCommand, SandboxError, read_limited, validate_external_runner, validate_spec,
+    };
     use std::path::PathBuf;
     use std::time::Duration;
 
@@ -383,6 +385,22 @@ mod tests {
     fn rejects_relative_root() {
         let error = validate_spec(&spec(PathBuf::from("relative"))).unwrap_err();
         assert!(matches!(error, SandboxError::Invalid(message) if message.contains("absolute")));
+    }
+
+    #[test]
+    fn rejects_zero_timeout() {
+        let mut command = spec(std::env::temp_dir());
+        command.timeout = Duration::ZERO;
+
+        let error = validate_spec(&command).unwrap_err();
+        assert!(matches!(error, SandboxError::Invalid(message) if message.contains("positive")));
+    }
+
+    #[test]
+    fn limits_worker_output_without_unbounded_buffering() {
+        let output = read_limited("0123456789".as_bytes(), 4).unwrap();
+
+        assert_eq!(output, "0123\n[output truncated by Sniff]");
     }
 
     #[test]
