@@ -1,8 +1,9 @@
 use crate::slop_cases::{CaseProof, CounterfactualDecision, SlopCase};
 use crate::types::{FileRecord, FindingTier};
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub(crate) struct CounterfactualProofRunResult {
@@ -456,14 +457,32 @@ fn apply_edits(
     Ok(output)
 }
 
-fn syntax_check(file_path: &str, source: &str) -> Result<(), String> {
+static SANDBOX_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+fn create_sandbox() -> Result<PathBuf, String> {
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|err| format!("counterfactual clock failed: {err}"))?
         .as_nanos();
-    let root = std::env::temp_dir().join(format!("sniff-counterfactual-{nonce}"));
-    std::fs::create_dir(&root)
-        .map_err(|err| format!("failed to create counterfactual sandbox: {err}"))?;
+    let process_id = std::process::id();
+    for _ in 0..128 {
+        let counter = SANDBOX_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!(
+            "sniff-counterfactual-{process_id}-{nonce}-{counter}"
+        ));
+        match std::fs::create_dir(&root) {
+            Ok(()) => return Ok(root),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => {
+                return Err(format!("failed to create counterfactual sandbox: {error}"));
+            }
+        }
+    }
+    Err("failed to create a unique counterfactual sandbox after 128 attempts".to_string())
+}
+
+fn syntax_check(file_path: &str, source: &str) -> Result<(), String> {
+    let root = create_sandbox()?;
     let extension = Path::new(file_path)
         .extension()
         .and_then(|extension| extension.to_str())
@@ -482,7 +501,7 @@ fn syntax_check(file_path: &str, source: &str) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{run_counterfactual_proof, validate_case_proofs};
+    use super::{run_counterfactual_proof, syntax_check, validate_case_proofs};
     use crate::product_contract::SlopPattern;
     use crate::slop_cases::{
         CaseEvidence, CaseProof, CounterfactualDecision, CounterfactualEdit, ProofLevel, SlopCase,
@@ -567,6 +586,17 @@ mod tests {
         }];
         let error = validate_case_proofs(&[case()], &proofs, &[file()]).unwrap_err();
         assert!(error.contains("does not overlap exact evidence"));
+    }
+
+    #[test]
+    fn parallel_syntax_checks_allocate_distinct_sandboxes() {
+        let workers = (0..32)
+            .map(|_| std::thread::spawn(|| syntax_check("src/demo.py", "value = 1\n")))
+            .collect::<Vec<_>>();
+
+        for worker in workers {
+            worker.join().unwrap().unwrap();
+        }
     }
 
     #[tokio::test]
