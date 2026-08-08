@@ -10,6 +10,7 @@ pub(super) fn write_markdown_report(
     cost_str: &str,
 ) -> Result<(), String> {
     validate_method_report_contract(run_report)?;
+    validate_case_report_contract(run_report)?;
     let mut md_lines = vec!["# Sniff Report".to_string(), "".to_string()];
     let method_verdicts = run_report
         .llm_verdicts
@@ -55,6 +56,35 @@ pub(super) fn write_markdown_report(
         .map_err(|err| format!("failed to create report file {out_path}: {}", err))?;
     f.write_all(md_lines.join("\n").as_bytes())
         .map_err(|err| format!("failed to write report file {out_path}: {}", err))?;
+    Ok(())
+}
+
+fn validate_case_report_contract(run_report: &RunReport) -> Result<(), String> {
+    for record in run_report.method_review_records.iter().filter(|record| {
+        matches!(
+            record.verdict.tier,
+            FindingTier::Slop | FindingTier::KindaSlop
+        )
+    }) {
+        let Some(case) = run_report
+            .slop_cases
+            .iter()
+            .find(|case| case.case_id == record.unit_id)
+        else {
+            return Err(format!(
+                "case report gate rejected {}::{}: missing typed case {}",
+                record.file_path, record.method_name, record.unit_id
+            ));
+        };
+        if case.evidence.is_empty()
+            || !crate::slop_cases::case_evidence_matches_record(case, record)
+        {
+            return Err(format!(
+                "case report gate rejected {}::{}: typed case has no exact method evidence",
+                record.file_path, record.method_name
+            ));
+        }
+    }
     Ok(())
 }
 
