@@ -1,3 +1,5 @@
+#[path = "cli_pipeline_benchmark.rs"]
+mod benchmark_run;
 #[path = "cli_pipeline_env.rs"]
 mod env;
 #[path = "cli_pipeline_graph.rs"]
@@ -15,5 +17,6 @@ mod run;
 #[path = "cli_pipeline_stats.rs"]
 mod stats;
 
+pub(crate) use benchmark_run::benchmark;
 pub use preflight::{doctor, estimate, index_semantic_sources, install_indexers};
 pub use run::{resume, run, status};

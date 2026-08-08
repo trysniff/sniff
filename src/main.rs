@@ -43,6 +43,8 @@ mod source_privacy;
 use clap::Parser;
 use std::thread;
 
+pub mod benchmark;
+
 fn main() {
     if let Some(code) = run_internal_windows_gradle_launcher() {
         std::process::exit(code);

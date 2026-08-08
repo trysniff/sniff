@@ -77,6 +77,13 @@ pub enum CliCommand {
         #[arg(default_value = ".")]
         path: String,
     },
+    /// Evaluate a complete held-out SniffBench prediction ledger without contacting a provider.
+    Benchmark {
+        /// JSON array of labeled benchmark cases.
+        cases: String,
+        /// JSON array of predictions produced by a completed benchmark run.
+        predictions: String,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -124,6 +131,9 @@ pub async fn run(args: CliArgs) -> Result<i32, Box<dyn std::error::Error>> {
         Some(CliCommand::Status { path }) => pipeline::status(&path).await,
         Some(CliCommand::Resume { path }) => {
             pipeline::resume(&path, args.skip_dotenv, args.yes, args.budget_usd).await
+        }
+        Some(CliCommand::Benchmark { cases, predictions }) => {
+            pipeline::benchmark(&cases, &predictions)
         }
         None if args.estimate => pipeline::estimate(&args.path, args.skip_dotenv).await,
         None => pipeline::run(&args.path, args.skip_dotenv, args.yes, args.budget_usd).await,
@@ -186,6 +196,19 @@ mod tests {
         assert!(matches!(
             args.command,
             Some(CliCommand::Status { path }) if path == "repo"
+        ));
+    }
+
+    #[test]
+    fn parses_offline_benchmark_ledgers() {
+        let args =
+            CliArgs::try_parse_from(["sniff", "benchmark", "cases.json", "predictions.json"])
+                .expect("benchmark arguments");
+
+        assert!(matches!(
+            args.command,
+            Some(CliCommand::Benchmark { cases, predictions })
+                if cases == "cases.json" && predictions == "predictions.json"
         ));
     }
 
