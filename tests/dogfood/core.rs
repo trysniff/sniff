@@ -263,12 +263,12 @@ fn support_facades_are_reviewed_and_real_slop_still_surfaces_end_to_end() {
     write_file(&root, "src/bumpkin/core/lib.rs", "pub fn run() {}\n");
     write_file(
         &root,
-        "src/bumpkin/core/server.go",
+        "server.go",
         "package core\n\nfunc Run() {}\n",
     );
     write_file(
         &root,
-        "src/bumpkin/core/Helper.kt",
+        "src/main/kotlin/Helper.kt",
         "fun helper(): Int = 1\n",
     );
 

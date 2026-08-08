@@ -149,12 +149,12 @@ fn default_scan_reviews_every_supported_language_end_to_end() {
     );
     write_file(
         &root,
-        "src/main.go",
+        "main.go",
         "package main\n\nfunc normalizeValue(value string) string {\n    return value\n}\n\nvar _ = normalizeValue(\"\")\n",
     );
     write_file(
         &root,
-        "src/Main.kt",
+        "src/main/kotlin/Main.kt",
         "fun normalizeValue(value: String): String {\n    return value.trim()\n}\n",
     );
 
