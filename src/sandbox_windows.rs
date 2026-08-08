@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use std::ffi::c_void;
 use std::os::windows::io::FromRawHandle;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -38,6 +38,8 @@ const INTERNET_CLIENT_SID: &str = "S-1-15-3-1";
 const SE_GROUP_ENABLED: u32 = 0x00000004;
 const MAX_PROCESS_MEMORY: usize = 1024 * 1024 * 1024;
 const MAX_ACTIVE_PROCESSES: u32 = 128;
+const ACL_COMMAND_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+const ACL_COMMAND_OUTPUT_LIMIT: usize = 64 * 1024;
 const WINDOWS_SANDBOX_LOCK_NAME: &str = r"Local\SniffWindowsSandboxAclLock";
 const WINDOWS_SANDBOX_LOCK_TIMEOUT: Duration = Duration::from_secs(2 * 60 * 60);
 static WINDOWS_SANDBOX_LOCK: Mutex<()> = Mutex::new(());
@@ -100,10 +102,15 @@ pub(super) fn run(spec: &SandboxCommand) -> Result<SandboxOutput, SandboxError> 
     };
 
     let sid_string = sid_string(profile_guard.sid)?;
+    let requires_runtime_traversal = spec
+        .env
+        .iter()
+        .any(|(key, value)| key == "SNIFF_INTERNAL_INDEXER" && value == "1");
     let mut acl_guard = AclGuard::grant(
         &effective_spec.root,
         &effective_spec.read_only_paths,
         &sid_string,
+        requires_runtime_traversal,
     )?;
     // AppContainer file-read permission is not enough to launch an executable.
     grant_acl(&program, &sid_string, "RX")?;
@@ -558,24 +565,120 @@ fn grant_acl(path: &Path, sid: &str, permission: &str) -> Result<(), SandboxErro
     Ok(())
 }
 
-fn revoke_acl(path: &Path, sid: &str) -> Result<(), String> {
+fn grant_traverse_acl(path: &Path, sid: &str) -> Result<(), SandboxError> {
+    let rule = format!("*{sid}:(RX)");
+    let mut command = Command::new("icacls");
+    command.arg(path).arg("/grant").arg(rule).arg("/C");
+    let output = run_icacls(command).map_err(|error| match error {
+        SandboxError::Unavailable(message) => SandboxError::Unavailable(format!(
+            "Windows AppContainer requires icacls for parent traversal: {message}"
+        )),
+        other => other,
+    })?;
+    if !output.success {
+        return Err(SandboxError::Failed(format!(
+            "grant Windows AppContainer traversal to {} failed: {}",
+            path.display(),
+            output.error_text()
+        )));
+    }
+    Ok(())
+}
+
+fn revoke_acl(path: &Path, sid: &str, recursive: bool) -> Result<(), String> {
     let mut command = Command::new("icacls");
     command.arg(path).arg("/remove").arg(format!("*{sid}"));
-    if path.is_dir() {
+    if recursive {
         command.args(["/T", "/C"]);
+    } else {
+        command.arg("/C");
     }
-    let output = command
-        .output()
-        .map_err(|error| format!("icacls could not run: {error}"))?;
-    if output.status.success() {
+    let output = run_icacls(command).map_err(|error| error.to_string())?;
+    if output.success {
         Ok(())
     } else {
-        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+        Err(output.error_text())
     }
 }
 
+struct IcalcsOutput {
+    success: bool,
+    stdout: String,
+    stderr: String,
+}
+
+impl IcalcsOutput {
+    fn error_text(&self) -> String {
+        let text = format!("{}\n{}", self.stderr.trim(), self.stdout.trim());
+        text.trim().to_string()
+    }
+}
+
+fn run_icacls(mut command: Command) -> Result<IcalcsOutput, SandboxError> {
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = command
+        .spawn()
+        .map_err(|error| SandboxError::Unavailable(format!("icacls could not run: {error}")))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| SandboxError::Failed("icacls stdout was not captured".to_string()))?;
+    let stdout_reader = thread::spawn(move || read_limited(stdout, ACL_COMMAND_OUTPUT_LIMIT));
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| SandboxError::Failed("icacls stderr was not captured".to_string()))?;
+    let stderr_reader = thread::spawn(move || read_limited(stderr, ACL_COMMAND_OUTPUT_LIMIT));
+    let started = Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if started.elapsed() >= ACL_COMMAND_TIMEOUT => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = stdout_reader.join();
+                let _ = stderr_reader.join();
+                return Err(SandboxError::Failed(format!(
+                    "icacls timed out after {} seconds",
+                    ACL_COMMAND_TIMEOUT.as_secs()
+                )));
+            }
+            Ok(None) => thread::sleep(Duration::from_millis(25)),
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = stdout_reader.join();
+                let _ = stderr_reader.join();
+                return Err(SandboxError::Failed(format!(
+                    "icacls status check failed: {error}"
+                )));
+            }
+        }
+    };
+    let stdout = stdout_reader
+        .join()
+        .map_err(|_| SandboxError::Failed("icacls stdout reader panicked".to_string()))?
+        .map_err(|error| SandboxError::Failed(format!("icacls stdout read failed: {error}")))?;
+    let stderr = stderr_reader
+        .join()
+        .map_err(|_| SandboxError::Failed("icacls stderr reader panicked".to_string()))?
+        .map_err(|error| SandboxError::Failed(format!("icacls stderr read failed: {error}")))?;
+    let reported_failures =
+        stdout.contains("Failed processing") && !stdout.contains("Failed processing 0 files");
+    Ok(IcalcsOutput {
+        success: status.success() && !reported_failures,
+        stdout,
+        stderr,
+    })
+}
+
+struct AclGrant {
+    path: std::path::PathBuf,
+    recursive: bool,
+}
+
 struct AclGuard {
-    paths: Vec<std::path::PathBuf>,
+    grants: Vec<AclGrant>,
     sid: String,
 }
 
@@ -584,30 +687,58 @@ impl AclGuard {
         root: &Path,
         read_only_paths: &[std::path::PathBuf],
         sid: &str,
+        requires_runtime_traversal: bool,
     ) -> Result<Self, SandboxError> {
-        grant_acl(root, sid, "M")?;
-        let mut paths = Vec::with_capacity(read_only_paths.len() + 1);
-        paths.push(root.to_path_buf());
-        for path in read_only_paths {
-            if let Err(error) = grant_acl(path, sid, "R") {
-                for granted in paths.iter().rev() {
-                    let _ = revoke_acl(granted, sid);
+        let mut grants = Vec::with_capacity(read_only_paths.len() + 1);
+        for path in
+            std::iter::once(root).chain(read_only_paths.iter().map(std::path::PathBuf::as_path))
+        {
+            if requires_runtime_traversal {
+                let volume_root = is_system_runtime_path(path)
+                    .then(|| path.ancestors().last())
+                    .flatten();
+                let ancestors = volume_root.into_iter().chain(path.parent());
+                for ancestor in ancestors {
+                    if grants.iter().any(|grant: &AclGrant| grant.path == ancestor) {
+                        continue;
+                    }
+                    if let Err(error) = grant_traverse_acl(ancestor, sid) {
+                        for granted in grants.iter().rev() {
+                            let _ = revoke_acl(&granted.path, sid, granted.recursive);
+                        }
+                        return Err(error);
+                    }
+                    grants.push(AclGrant {
+                        path: ancestor.to_path_buf(),
+                        recursive: false,
+                    });
+                }
+            }
+
+            let recursive = path.is_dir();
+            let permission = if path == root { "M" } else { "R" };
+            if let Err(error) = grant_acl(path, sid, permission) {
+                for granted in grants.iter().rev() {
+                    let _ = revoke_acl(&granted.path, sid, granted.recursive);
                 }
                 return Err(error);
             }
-            paths.push(path.clone());
+            grants.push(AclGrant {
+                path: path.to_path_buf(),
+                recursive,
+            });
         }
         Ok(Self {
-            paths,
+            grants,
             sid: sid.to_string(),
         })
     }
 
     fn revoke(&mut self) -> Result<(), SandboxError> {
         let mut failures = Vec::new();
-        for path in self.paths.drain(..).rev() {
-            if let Err(error) = revoke_acl(&path, &self.sid) {
-                failures.push(format!("{}: {error}", path.display()));
+        for grant in self.grants.drain(..).rev() {
+            if let Err(error) = revoke_acl(&grant.path, &self.sid, grant.recursive) {
+                failures.push(format!("{}: {error}", grant.path.display()));
             }
         }
         if failures.is_empty() {
@@ -616,6 +747,13 @@ impl AclGuard {
             Err(SandboxError::Failed(failures.join("; ")))
         }
     }
+}
+
+fn is_system_runtime_path(path: &Path) -> bool {
+    ["ProgramFiles", "ProgramFiles(x86)"]
+        .into_iter()
+        .filter_map(|name| std::env::var_os(name).map(std::path::PathBuf::from))
+        .any(|root| path.starts_with(root))
 }
 
 impl Drop for AclGuard {

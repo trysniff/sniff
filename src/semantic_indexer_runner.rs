@@ -32,6 +32,7 @@ const GRADLE_INDEXER_BASE_JVM_ARGS: &str = concat!(
     "-Duser.country=US -Duser.language=en -Duser.variant=",
 );
 pub(crate) const WINDOWS_SCIP_PYTHON_BOOTSTRAP: &str = "const path=require('path'); const NativeRegExp=RegExp; function PatchedRegExp(pattern, flags) { if (pattern === path.sep) pattern = path.sep + path.sep; return new NativeRegExp(pattern, flags); } PatchedRegExp.prototype=NativeRegExp.prototype; Object.setPrototypeOf(PatchedRegExp, NativeRegExp); global.RegExp=PatchedRegExp; require(process.argv[1]);";
+const WINDOWS_SCIP_NODE_BOOTSTRAP: &str = "require(process.argv[1]);";
 
 struct TemporaryIndexerWorkspace {
     directory: PathBuf,
@@ -338,11 +339,27 @@ fn build_indexer_sandbox_command(
         IndexerRuntime::NodeScript => {
             let node = resolve_runtime("node")?;
             let mut args = Vec::new();
-            if spec.kind == SemanticIndexerKind::Python && cfg!(windows) {
+            if cfg!(windows) {
                 args.push("-e".to_string());
-                args.push(WINDOWS_SCIP_PYTHON_BOOTSTRAP.to_string());
+                args.push(
+                    if spec.kind == SemanticIndexerKind::Python {
+                        WINDOWS_SCIP_PYTHON_BOOTSTRAP
+                    } else {
+                        WINDOWS_SCIP_NODE_BOOTSTRAP
+                    }
+                    .to_string(),
+                );
+                args.push(
+                    if spec.kind == SemanticIndexerKind::Python {
+                        "@sourcegraph/scip-python"
+                    } else {
+                        "@sourcegraph/scip-typescript"
+                    }
+                    .to_string(),
+                );
+            } else {
+                args.push(entrypoint.to_string_lossy().to_string());
             }
-            args.push(entrypoint.to_string_lossy().to_string());
             (node.to_string_lossy().to_string(), args, node)
         }
         IndexerRuntime::Native => (
@@ -386,12 +403,22 @@ fn build_indexer_sandbox_command(
             .map(|argument| sandbox_repository_argument(root, &argument)),
     );
 
-    let mut read_only_paths = vec![installed_root, runtime_mount_root(&runtime_path)];
+    let mut read_only_paths = vec![installed_root.clone(), runtime_mount_root(&runtime_path)];
     read_only_paths.extend(runtime_dependency_paths(&runtime_path)?);
     let mut path_prefixes = Vec::new();
     let mut env = Vec::new();
     let sandbox_home = sandbox_repository_argument(root, &root.to_string_lossy());
     env.push(("HOME".to_string(), sandbox_home.clone()));
+    env.push(("SNIFF_INTERNAL_INDEXER".to_string(), "1".to_string()));
+    if cfg!(windows) && spec.runtime == IndexerRuntime::NodeScript {
+        env.push((
+            "NODE_PATH".to_string(),
+            installed_root
+                .join("node_modules")
+                .to_string_lossy()
+                .into_owned(),
+        ));
+    }
     #[cfg(target_os = "macos")]
     if spec.kind == SemanticIndexerKind::Python
         && let Some(developer_dir) = macos_developer_directory()
