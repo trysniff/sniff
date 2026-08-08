@@ -650,6 +650,11 @@ async fn semantic_gold_corpus_runs_through_complete_method_pipeline() {
     let benchmark_metrics = evaluate(&benchmark_cases, &benchmark_predictions)
         .expect("semantic gold benchmark ledger should be complete");
     assert!(benchmark_metrics.release_gate_errors().is_empty());
+    assert!(benchmark_metrics.intentional_boundary_cases > 0);
+    assert_eq!(
+        benchmark_metrics.intentional_boundary_false_positive_rate,
+        0.0
+    );
     let mut slop_true_positive = 0usize;
     let mut slop_false_positive = 0usize;
     let mut slop_false_negative = 0usize;
