@@ -43,6 +43,23 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.24"
+      - uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: "8.8"
+      - name: Install pinned semantic indexers for dogfood
+        shell: bash
+        run: |
+          set -euo pipefail
+          for fixture in typescript javascript python go kotlin rust; do
+            cargo run --quiet -- indexers install "tests/semantic_gold_fixtures/${fixture}" --yes
+          done
       - run: cargo test --all-targets --locked
 
   msrv:
