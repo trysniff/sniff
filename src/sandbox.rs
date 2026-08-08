@@ -1,5 +1,5 @@
 use std::io::{Read, Result as IoResult};
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
