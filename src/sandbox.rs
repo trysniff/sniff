@@ -266,6 +266,9 @@ fn build_bubblewrap_command(spec: &SandboxCommand) -> Result<Command, SandboxErr
         "/home",
         "--bind",
     ]);
+    if spec.allow_network {
+        command.args(["--ro-bind-try", "/etc/resolv.conf", "/etc/resolv.conf"]);
+    }
     command.arg(&spec.root).arg("/workspace");
     for path in &spec.read_only_paths {
         if linux_system_mount_is_already_bound(path) {
