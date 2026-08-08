@@ -146,7 +146,6 @@ async fn run_one(
     let arguments = indexer_arguments_with_workspace(
         spec,
         root,
-        files,
         temporary_project.as_deref(),
         workspace.as_ref(),
     );
@@ -299,21 +298,20 @@ fn gradle_script_uses_android(source: &str) -> bool {
 fn indexer_arguments_with_project(
     spec: PinnedIndexer,
     root: &Path,
-    files: &[FileRecord],
     extra_project: Option<&Path>,
 ) -> Vec<String> {
     match spec.kind {
         SemanticIndexerKind::TypeScriptJavaScript => {
             let mut arguments = vec!["index".to_string()];
             let has_typescript = root.join("tsconfig.json").is_file();
-            let has_javascript = files
-                .iter()
-                .any(|file| file.language.eq_ignore_ascii_case("javascript"));
             if let Some(extra_project) = extra_project {
                 arguments.push(".".to_string());
                 arguments.push(extra_project.to_string_lossy().to_string());
             }
-            if !has_typescript && has_javascript {
+            // scip-typescript requires an explicit project when no root
+            // tsconfig exists. Its inference mode is the strict compiler
+            // project for standalone fixtures and mixed JS/TS repositories.
+            if !has_typescript {
                 arguments.push("--infer-tsconfig".to_string());
             }
             arguments
@@ -333,11 +331,10 @@ fn indexer_arguments_with_project(
 fn indexer_arguments_with_workspace(
     spec: PinnedIndexer,
     root: &Path,
-    files: &[FileRecord],
     extra_project: Option<&Path>,
     workspace: Option<&TemporaryIndexerWorkspace>,
 ) -> Vec<String> {
-    let arguments = indexer_arguments_with_project(spec, root, files, extra_project);
+    let arguments = indexer_arguments_with_project(spec, root, extra_project);
     let Some(workspace) = workspace else {
         return arguments;
     };

@@ -212,21 +212,9 @@ async fn build_run_report(
     path: &str,
     config: &crate::config::ResolvedConfig,
     file_records: &mut [crate::types::FileRecord],
-    bar_style: &ProgressStyle,
-    journal_path: &std::path::Path,
-    semantic_cache: &crate::semantic_cache::SemanticIndexCache,
-    budget_usd: Option<f64>,
+    execution: llm::ReviewExecutionContext<'_>,
 ) -> Result<(RunReport, bool), Box<dyn std::error::Error>> {
-    let review = llm::prepare_review_artifacts(
-        path,
-        config,
-        file_records,
-        bar_style,
-        Some(journal_path),
-        semantic_cache,
-        budget_usd,
-    )
-    .await?;
+    let review = llm::prepare_review_artifacts(path, config, file_records, execution).await?;
 
     let stats = stats::generate_stats(stats::StatsInput {
         file_records,
@@ -293,6 +281,15 @@ pub async fn run(
     let estimate = super::preflight::ScanEstimate::from_files(&file_records);
     super::preflight::print_scan_cost_summary(&estimate);
     super::preflight::confirm_expensive_scan(&estimate, assume_yes)?;
+    eprintln!("Building compiler semantic index...");
+    let compiler_method_contexts =
+        super::preflight::build_compiler_method_contexts(&repository_root, &file_records)
+            .await
+            .map_err(|err| IoError::other(format!("compiler semantic indexing failed: {err}")))?;
+    eprintln!(
+        "Compiler semantic context ready for {} methods.",
+        compiler_method_contexts.len()
+    );
     if journal_path.exists() {
         eprintln!("Resuming completed reviews from {}", journal_path.display());
     }
@@ -306,10 +303,13 @@ pub async fn run(
         path,
         &config,
         &mut file_records,
-        &bar_style,
-        &journal_path,
-        &semantic_cache,
-        budget_usd,
+        llm::ReviewExecutionContext {
+            bar_style: &bar_style,
+            journal_path: Some(&journal_path),
+            semantic_cache: &semantic_cache,
+            budget_usd,
+            compiler_method_contexts: Some(&compiler_method_contexts),
+        },
     )
     .await;
     let (run_report, has_issues) = match report_result {

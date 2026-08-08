@@ -51,7 +51,7 @@ fn synthetic_root() -> &'static Path {
 #[test]
 fn python_arguments_include_a_stable_project_name() {
     let spec = pinned_indexer(SemanticIndexerKind::Python).unwrap();
-    let arguments = indexer_arguments_with_project(spec, synthetic_python_root(), &[], None);
+    let arguments = indexer_arguments_with_project(spec, synthetic_python_root(), None);
     assert_eq!(arguments, ["index", ".", "--project-name", "bumpkin"]);
 }
 
@@ -61,7 +61,7 @@ fn javascript_projects_without_tsconfig_use_inference() {
     std::fs::create_dir_all(&temp).unwrap();
     let spec = pinned_indexer(SemanticIndexerKind::TypeScriptJavaScript).unwrap();
     assert_eq!(
-        indexer_arguments_with_project(spec, &temp, &[javascript_file()], None),
+        indexer_arguments_with_project(spec, &temp, None),
         ["index", "--infer-tsconfig"]
     );
     let _ = std::fs::remove_dir_all(temp);
@@ -190,7 +190,7 @@ fn windows_kotlin_workspace_uses_the_project_batch_wrapper() {
     assert!(workspace.directory.join("build.gradle.kts").is_file());
     assert!(workspace.path_prefix.join("gradle.exe").is_file());
 
-    let arguments = indexer_arguments_with_workspace(spec, &root, &[], None, Some(&workspace));
+    let arguments = indexer_arguments_with_workspace(spec, &root, None, Some(&workspace));
     assert_eq!(arguments[0], "--cwd");
     assert_eq!(arguments[2], "index");
     assert!(

@@ -566,6 +566,7 @@ async fn semantic_gold_corpus_runs_through_complete_method_pipeline() {
             journal_path: None,
             scan_id: None,
             budget_usd: None,
+            compiler_method_contexts: None,
         },
         client,
         None,

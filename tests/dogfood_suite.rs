@@ -71,7 +71,39 @@ fn unique_root(label: &str) -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    std::env::temp_dir().join(format!("{label}-{nanos}"))
+    let root = std::env::temp_dir().join(format!("{label}-{nanos}"));
+    fs::create_dir_all(&root).unwrap();
+    let git = std::process::Command::new("git")
+        .args(["init", "--quiet"])
+        .current_dir(&root)
+        .output()
+        .expect("git must be available for isolated compiler-index fixtures");
+    assert!(
+        git.status.success(),
+        "failed to initialize isolated compiler-index fixture repository: {}",
+        String::from_utf8_lossy(&git.stderr)
+    );
+    let commit = std::process::Command::new("git")
+        .args([
+            "-c",
+            "user.name=Sniff Tests",
+            "-c",
+            "user.email=sniff-tests@example.invalid",
+            "commit",
+            "--allow-empty",
+            "--quiet",
+            "-m",
+            "fixture",
+        ])
+        .current_dir(&root)
+        .output()
+        .expect("git commit must be available for isolated compiler-index fixtures");
+    assert!(
+        commit.status.success(),
+        "failed to create isolated compiler-index fixture HEAD: {}",
+        String::from_utf8_lossy(&commit.stderr)
+    );
+    root
 }
 
 fn write_file(root: &Path, relative: &str, contents: &str) {

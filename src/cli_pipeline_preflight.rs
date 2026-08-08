@@ -16,6 +16,45 @@ const LOWER_SECONDS_PER_REQUEST: usize = 5;
 // 60-second ceiling. Keep the public estimate conservative across providers.
 const UPPER_SECONDS_PER_REQUEST: usize = 120;
 
+/// Run every required pinned compiler indexer and render its resolved facts
+/// for the exact AST methods that will be reviewed. A missing or unresolved
+/// indexed method is fatal; the normal scan never substitutes the custom graph
+/// for a missing compiler fact.
+pub(super) async fn build_compiler_method_contexts(
+    repository_root: &Path,
+    files: &[FileRecord],
+) -> Result<crate::semantic_method_join::CompilerMethodContexts, String> {
+    let indexes =
+        crate::semantic_indexer_runner::run_required_indexers(repository_root, files).await?;
+    let mut contexts = BTreeMap::new();
+    for (kind, index) in indexes {
+        let index_files = crate::semantic_indexer_runner::files_for_indexer(files, kind);
+        let join =
+            crate::semantic_method_join::join_methods(repository_root, &index_files, &index)?;
+        join.require_complete()?;
+        let provider_contexts = crate::semantic_method_join::render_compiler_method_contexts(
+            repository_root,
+            &index_files,
+            &index,
+            &join,
+        )?;
+        for (key, context) in provider_contexts {
+            if contexts.insert(key.clone(), context).is_some() {
+                return Err(format!("compiler semantic context repeats method {key}"));
+            }
+        }
+    }
+    let expected = files.iter().map(|file| file.methods.len()).sum::<usize>();
+    if contexts.len() != expected {
+        return Err(format!(
+            "compiler semantic context covered {} of {} methods",
+            contexts.len(),
+            expected
+        ));
+    }
+    Ok(contexts)
+}
+
 #[derive(Debug, Clone)]
 pub(super) struct ScanEstimate {
     pub files: usize,

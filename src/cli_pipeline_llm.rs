@@ -25,6 +25,17 @@ pub(super) struct LlmCheckInput<'a> {
     pub(super) journal_path: Option<&'a Path>,
     pub(super) scan_id: Option<&'a str>,
     pub(super) budget_usd: Option<f64>,
+    pub(super) compiler_method_contexts:
+        Option<&'a crate::semantic_method_join::CompilerMethodContexts>,
+}
+
+pub(super) struct ReviewExecutionContext<'a> {
+    pub(super) bar_style: &'a ProgressStyle,
+    pub(super) journal_path: Option<&'a Path>,
+    pub(super) semantic_cache: &'a crate::semantic_cache::SemanticIndexCache,
+    pub(super) budget_usd: Option<f64>,
+    pub(super) compiler_method_contexts:
+        Option<&'a crate::semantic_method_join::CompilerMethodContexts>,
 }
 
 const MAX_PROGRESS_LABEL_CHARS: usize = 76;
@@ -117,6 +128,7 @@ pub(super) async fn run_llm_checks(
                 journal_path: input.journal_path,
                 scan_id: input.scan_id,
                 budget_usd: input.budget_usd,
+                compiler_method_contexts: input.compiler_method_contexts,
             },
             Arc::clone(&client),
             Some(on_progress),
@@ -319,10 +331,7 @@ pub(super) async fn prepare_review_artifacts(
     path: &str,
     config: &ResolvedConfig,
     file_records: &mut [FileRecord],
-    bar_style: &ProgressStyle,
-    journal_path: Option<&Path>,
-    semantic_cache: &crate::semantic_cache::SemanticIndexCache,
-    budget_usd: Option<f64>,
+    execution: ReviewExecutionContext<'_>,
 ) -> Result<ReviewArtifacts, Box<dyn std::error::Error>> {
     let ai_expected_reviews_before_roles =
         super::stats::expected_ai_reviews_after_role_resolution(file_records);
@@ -340,9 +349,11 @@ pub(super) async fn prepare_review_artifacts(
     let scan_id = llm_client
         .as_ref()
         .map(|client| crate::review_journal::scan_id(file_records, &client.review_context_key()));
-    if let (Some(journal_path), Some(scan_id), Some(client)) =
-        (journal_path, scan_id.as_deref(), llm_client.as_ref())
-    {
+    if let (Some(journal_path), Some(scan_id), Some(client)) = (
+        execution.journal_path,
+        scan_id.as_deref(),
+        llm_client.as_ref(),
+    ) {
         crate::review_journal::initialize_method_stage(
             journal_path,
             scan_id,
@@ -356,9 +367,9 @@ pub(super) async fn prepare_review_artifacts(
     let (role_in_tok, role_out_tok, llm_client) = resolve_roles(
         file_records,
         llm_client_for_roles,
-        journal_path,
+        execution.journal_path,
         scan_id.as_deref(),
-        budget_usd,
+        execution.budget_usd,
     )
     .await
     .map_err(IoError::other)?;
@@ -370,7 +381,7 @@ pub(super) async fn prepare_review_artifacts(
         .map(|file| file.file_path.clone())
         .collect::<HashSet<_>>();
     let (context_root, mut evidence_records) =
-        super::io::scan_context_files_with_cache(path, config, Some(semantic_cache))
+        super::io::scan_context_files_with_cache(path, config, Some(execution.semantic_cache))
             .await
             .map_err(IoError::other)?;
     evidence_records.retain(|file| !production_paths.contains(&file.file_path));
@@ -379,7 +390,7 @@ pub(super) async fn prepare_review_artifacts(
         &evidence_records,
         &context_root.to_string_lossy(),
         config,
-        Some(semantic_cache),
+        Some(execution.semantic_cache),
     )
     .map_err(IoError::other)?;
     let mut context_file_records = file_records.to_vec();
@@ -389,13 +400,14 @@ pub(super) async fn prepare_review_artifacts(
         context_file_records: &context_file_records,
         static_flags: &static_flags,
         graph: &graph,
-        bar_style: bar_style.clone(),
+        bar_style: execution.bar_style.clone(),
         llm_client,
         role_input_tokens: role_in_tok,
         role_output_tokens: role_out_tok,
-        journal_path,
+        journal_path: execution.journal_path,
         scan_id: scan_id.as_deref(),
-        budget_usd,
+        budget_usd: execution.budget_usd,
+        compiler_method_contexts: execution.compiler_method_contexts,
     })
     .await
     .map_err(IoError::other);
@@ -409,7 +421,8 @@ pub(super) async fn prepare_review_artifacts(
         fallback_out_tok,
         fallback_cached_in_tok,
     ) = review_result?;
-    let journal_usage = journal_path
+    let journal_usage = execution
+        .journal_path
         .map(crate::review_journal::summarize)
         .transpose()
         .map_err(IoError::other)?

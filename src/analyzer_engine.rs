@@ -47,6 +47,7 @@ pub struct AnalysisRun<'a> {
     pub journal_path: Option<&'a std::path::Path>,
     pub scan_id: Option<&'a str>,
     pub budget_usd: Option<f64>,
+    pub compiler_method_contexts: Option<&'a crate::semantic_method_join::CompilerMethodContexts>,
 }
 
 pub struct AnalysisResult {
@@ -213,6 +214,7 @@ pub async fn analyze_with_client_and_graph_and_journal(
             journal_path,
             scan_id: None,
             budget_usd: None,
+            compiler_method_contexts: None,
         },
         client,
         on_progress,
@@ -249,6 +251,7 @@ pub async fn analyze_with_client_and_graph_and_journal_with_context_and_records(
         journal_path,
         scan_id,
         budget_usd,
+        compiler_method_contexts,
     } = run;
     let analyzer = Arc::new(Analyzer {
         llm_client: client,
@@ -280,12 +283,29 @@ pub async fn analyze_with_client_and_graph_and_journal_with_context_and_records(
                 ))
                 .cloned()
                 .unwrap_or_default();
-            let dossier = dossier::build_method_dossier_with_index(
+            let mut dossier = dossier::build_method_dossier_with_index(
                 file,
                 method,
                 &dossier_index,
                 callee_context,
             );
+            if let Some(contexts) = compiler_method_contexts {
+                let context_key = crate::semantic_method_join::method_context_key(
+                    &method.file_path,
+                    &method.name,
+                    method.start_line,
+                );
+                let compiler_context = contexts.get(&context_key).ok_or_else(|| {
+                    format!(
+                        "compiler semantic context is missing for {}::{}:{}",
+                        method.file_path, method.name, method.start_line
+                    )
+                })?;
+                dossier
+                    .context
+                    .push_str("\n\nCompiler-resolved semantic facts:\n");
+                dossier.context.push_str(compiler_context);
+            }
             jobs.push(jobs::ReviewJob::Method {
                 index: review_index,
                 method: method.clone(),

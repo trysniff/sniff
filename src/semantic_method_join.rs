@@ -36,6 +36,169 @@ pub struct SemanticMethodJoin {
     pub bindings: BTreeMap<SemanticMethodKey, SemanticMethodBinding>,
 }
 
+/// Compiler-resolved facts keyed by the exact AST method identity used by the
+/// analyzer. The text is deliberately rendered from typed SCIP data here so
+/// prompts cannot silently replace compiler facts with name-based guesses.
+pub type CompilerMethodContexts = BTreeMap<String, String>;
+
+pub fn method_context_key(file_path: &str, method_name: &str, start_line: usize) -> String {
+    format!(
+        "{}::{}:{}",
+        file_path.replace('\\', "/"),
+        method_name,
+        start_line
+    )
+}
+
+pub fn render_compiler_method_contexts(
+    repository_root: &Path,
+    files: &[FileRecord],
+    index: &SemanticIndex,
+    join: &SemanticMethodJoin,
+) -> Result<CompilerMethodContexts, String> {
+    let canonical_root = fs::canonicalize(repository_root).map_err(|error| {
+        format!(
+            "failed to resolve compiler semantic context repository root {}: {error}",
+            repository_root.display()
+        )
+    })?;
+    let mut contexts = BTreeMap::new();
+    for binding in join.bindings.values() {
+        let file = files
+            .iter()
+            .find(|file| {
+                repository_relative_path(&canonical_root, Path::new(&file.file_path))
+                    .ok()
+                    .as_ref()
+                    == Some(&binding.method.file)
+            })
+            .ok_or_else(|| {
+                format!(
+                    "semantic method join file disappeared: {}",
+                    binding.method.file.0
+                )
+            })?;
+        let key = method_context_key(
+            &file.file_path,
+            &binding.method.name,
+            binding.method.start_line as usize,
+        );
+        let context = render_binding_context(index, binding);
+        if contexts.insert(key.clone(), context).is_some() {
+            return Err(format!("duplicate compiler method context: {key}"));
+        }
+    }
+    Ok(contexts)
+}
+
+fn render_binding_context(index: &SemanticIndex, binding: &SemanticMethodBinding) -> String {
+    let mut lines = vec![format!("SCIP provider: {}", index.provenance.tool_name)];
+    match (&binding.coverage, &binding.symbol) {
+        (SemanticMethodCoverage::CompilerExcluded { reason }, _) => {
+            lines.push(format!("compiler coverage: excluded ({reason})"));
+        }
+        (_, SemanticResolution::Unresolved { reason, detail, .. }) => {
+            lines.push(format!(
+                "compiler symbol: unresolved ({reason:?}): {detail}"
+            ));
+        }
+        (_, SemanticResolution::Resolved { value }) => {
+            lines.push(format!("compiler symbol: resolved {}", value.0));
+            if let Some(symbol) = index.symbols.get(value) {
+                lines.push(format!(
+                    "compiler kind: {:?}; visibility: {:?}; origin: {:?}",
+                    symbol.kind.category, symbol.visibility, symbol.origin
+                ));
+                if !symbol.surfaces.is_empty() {
+                    lines.push(format!("compiler surfaces: {:?}", symbol.surfaces));
+                }
+                if let Some(signature) = &symbol.signature {
+                    lines.push(format!("compiler signature: {}", signature.text));
+                }
+                if !symbol.ambiguity_notes.is_empty() {
+                    lines.push(format!(
+                        "compiler ambiguity notes: {}",
+                        symbol.ambiguity_notes.join("; ")
+                    ));
+                }
+            }
+            let callers = index
+                .calls
+                .iter()
+                .filter_map(|edge| match &edge.callee {
+                    SemanticResolution::Resolved { value: callee } if callee == value => {
+                        Some(format_call_edge(index, edge, "caller"))
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            if !callers.is_empty() {
+                lines.push(format!(
+                    "compiler-resolved callers: {}",
+                    callers.join(" | ")
+                ));
+            }
+            let callees = index
+                .calls
+                .iter()
+                .filter(|edge| edge.caller == *value)
+                .map(|edge| format_call_edge(index, edge, "callee"))
+                .collect::<Vec<_>>();
+            if !callees.is_empty() {
+                lines.push(format!(
+                    "compiler-resolved callees: {}",
+                    callees.join(" | ")
+                ));
+            }
+            let unresolved = index
+                .unresolved_edges
+                .iter()
+                .filter(|edge| edge.source.as_ref() == Some(value))
+                .map(|edge| format!("{:?}: {}", edge.reason, edge.detail))
+                .collect::<Vec<_>>();
+            if !unresolved.is_empty() {
+                lines.push(format!(
+                    "compiler-unresolved edges: {}",
+                    unresolved.join(" | ")
+                ));
+            }
+        }
+    }
+    lines.join("\n")
+}
+
+fn format_call_edge(
+    index: &SemanticIndex,
+    edge: &crate::semantic_index::SemanticCallEdge,
+    role: &str,
+) -> String {
+    let other = if role == "caller" {
+        &edge.caller
+    } else {
+        match &edge.callee {
+            SemanticResolution::Resolved { value } => value,
+            SemanticResolution::Unresolved { .. } => {
+                return format!(
+                    "{role} unresolved at {}:{}",
+                    edge.callsite.document.0,
+                    edge.callsite.range.start.line + 1
+                );
+            }
+        }
+    };
+    let display = index
+        .symbols
+        .get(other)
+        .and_then(|symbol| symbol.display_name.as_deref())
+        .unwrap_or(other.0.as_str());
+    format!(
+        "{role} {display} at {}:{} ({:?})",
+        edge.callsite.document.0,
+        edge.callsite.range.start.line + 1,
+        edge.dispatch
+    )
+}
+
 impl SemanticMethodJoin {
     pub fn resolved_count(&self) -> usize {
         self.bindings
@@ -627,6 +790,18 @@ mod tests {
         assert_eq!(join.resolved_count(), 1);
         assert_eq!(join.unresolved_count(), 0);
         join.require_complete().unwrap();
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn renders_compiler_facts_for_the_exact_joined_method() {
+        let (root, files, index) = fixture(Vec::new(), 0, false, false);
+        let join = join_methods(&root, &files, &index).unwrap();
+        let contexts = render_compiler_method_contexts(&root, &files, &index, &join).unwrap();
+        let key = method_context_key(&files[0].file_path, "process", 1);
+        let context = contexts.get(&key).expect("compiler method context");
+        assert!(context.contains("compiler symbol: resolved rust test process"));
+        assert!(context.contains("compiler signature: fn process(value: i32) -> i32"));
         let _ = fs::remove_dir_all(root);
     }
 
