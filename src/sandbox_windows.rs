@@ -37,6 +37,10 @@ const MAX_PROCESS_MEMORY: usize = 1024 * 1024 * 1024;
 const MAX_ACTIVE_PROCESSES: u32 = 128;
 
 pub(super) fn run(spec: &SandboxCommand) -> Result<SandboxOutput, SandboxError> {
+    let program = resolve_program(&spec.program)?;
+    let mut effective_spec = spec.clone();
+    effective_spec.program = program.to_string_lossy().into_owned();
+    effective_spec.read_only_paths.push(program.clone());
     let profile_name = unique_profile_name();
     let profile_name_w = wide_null(&profile_name);
     let display_name = wide_null("Sniff temporary sandbox");
@@ -86,8 +90,12 @@ pub(super) fn run(spec: &SandboxCommand) -> Result<SandboxOutput, SandboxError> 
     };
 
     let sid_string = sid_string(profile_guard.sid)?;
-    let mut acl_guard = AclGuard::grant(&spec.root, &spec.read_only_paths, &sid_string)?;
-    let result = run_process(spec, profile_guard.sid, &mut capabilities);
+    let mut acl_guard = AclGuard::grant(
+        &effective_spec.root,
+        &effective_spec.read_only_paths,
+        &sid_string,
+    )?;
+    let result = run_process(&effective_spec, profile_guard.sid, &mut capabilities);
     let revoke = acl_guard.revoke();
     match (result, revoke) {
         (Ok(output), Ok(())) => Ok(output),
@@ -97,6 +105,41 @@ pub(super) fn run(spec: &SandboxCommand) -> Result<SandboxOutput, SandboxError> 
             "{error}; additionally, Windows sandbox ACL cleanup failed: {cleanup_error}"
         ))),
     }
+}
+
+fn resolve_program(program: &str) -> Result<std::path::PathBuf, SandboxError> {
+    let candidate = std::path::Path::new(program);
+    if candidate.is_absolute() || program.contains(['\\', '/']) {
+        return std::fs::canonicalize(candidate).map_err(|error| {
+            SandboxError::Failed(format!(
+                "sandbox program {} is unavailable: {error}",
+                candidate.display()
+            ))
+        });
+    }
+    let path = std::env::var_os("PATH").ok_or_else(|| {
+        SandboxError::Unavailable("sandbox program resolution requires PATH".to_string())
+    })?;
+    for directory in std::env::split_paths(&path) {
+        let base = directory.join(program);
+        for candidate in [
+            base.clone(),
+            base.with_extension("exe"),
+            base.with_extension("cmd"),
+        ] {
+            if candidate.is_file() {
+                return std::fs::canonicalize(&candidate).map_err(|error| {
+                    SandboxError::Failed(format!(
+                        "sandbox program {} could not be resolved: {error}",
+                        candidate.display()
+                    ))
+                });
+            }
+        }
+    }
+    Err(SandboxError::Failed(format!(
+        "sandbox program {program} was not found on the host PATH"
+    )))
 }
 
 fn run_process(
@@ -151,6 +194,7 @@ fn run_process(
     startup.StartupInfo.hStdError = stderr_write;
     startup.lpAttributeList = attributes as _;
 
+    let program_w = wide_null(&spec.program);
     let mut command_line = command_line(spec);
     let mut environment = environment(spec);
     let current_directory = spec.root.join(&spec.workdir);
@@ -160,7 +204,7 @@ fn run_process(
         EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW;
     let created = unsafe {
         CreateProcessW(
-            std::ptr::null(),
+            program_w.as_ptr(),
             command_line.as_mut_ptr(),
             std::ptr::null(),
             std::ptr::null(),
@@ -330,6 +374,40 @@ fn environment(spec: &SandboxCommand) -> Vec<u16> {
         ("LANG".to_string(), "C".to_string()),
         ("LC_ALL".to_string(), "C".to_string()),
     ]);
+    let root = spec.root.to_string_lossy();
+    if root.as_bytes().get(1) == Some(&b':') {
+        values.insert(format!("={}", &root[..2]), root.to_string());
+    }
+    for key in [
+        "ALLUSERSPROFILE",
+        "APPDATA",
+        "CommonProgramFiles",
+        "CommonProgramFiles(x86)",
+        "CommonProgramW6432",
+        "ComSpec",
+        "HOMEDRIVE",
+        "HOMEPATH",
+        "LOCALAPPDATA",
+        "OS",
+        "PATHEXT",
+        "PROCESSOR_ARCHITECTURE",
+        "ProgramData",
+        "ProgramFiles",
+        "ProgramFiles(x86)",
+        "ProgramW6432",
+        "SystemDrive",
+        "SystemRoot",
+        "TEMP",
+        "TMP",
+        "USERDOMAIN",
+        "USERNAME",
+        "USERPROFILE",
+        "WINDIR",
+    ] {
+        if let Some(value) = std::env::var_os(key) {
+            values.insert(key.to_string(), value.to_string_lossy().into_owned());
+        }
+    }
     for (key, value) in &spec.env {
         values.insert(key.clone(), value.clone());
     }
@@ -340,6 +418,8 @@ fn environment(spec: &SandboxCommand) -> Vec<u16> {
         .join("\0")
         .encode_utf16()
         .collect::<Vec<_>>();
+    // CreateProcessW requires an environment block terminated by two NULs.
+    block.push(0);
     block.push(0);
     block
 }
