@@ -27,8 +27,9 @@ use windows_sys::Win32::System::Pipes::CreatePipe;
 use windows_sys::Win32::System::Threading::{
     CREATE_NO_WINDOW, CREATE_UNICODE_ENVIRONMENT, CreateProcessW, DeleteProcThreadAttributeList,
     EXTENDED_STARTUPINFO_PRESENT, GetExitCodeProcess, InitializeProcThreadAttributeList,
-    PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES, PROCESS_INFORMATION, STARTF_USESTDHANDLES,
-    STARTUPINFOEXW, TerminateProcess, UpdateProcThreadAttribute, WaitForSingleObject,
+    PROC_THREAD_ATTRIBUTE_HANDLE_LIST, PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES,
+    PROCESS_INFORMATION, STARTF_USESTDHANDLES, STARTUPINFOEXW, TerminateProcess,
+    UpdateProcThreadAttribute, WaitForSingleObject,
 };
 
 const INTERNET_CLIENT_SID: &str = "S-1-15-3-1";
@@ -95,6 +96,8 @@ pub(super) fn run(spec: &SandboxCommand) -> Result<SandboxOutput, SandboxError> 
         &effective_spec.read_only_paths,
         &sid_string,
     )?;
+    // AppContainer file-read permission is not enough to launch an executable.
+    grant_acl(&program, &sid_string, "RX")?;
     let result = run_process(&effective_spec, profile_guard.sid, &mut capabilities);
     let revoke = acl_guard.revoke();
     match (result, revoke) {
@@ -110,12 +113,14 @@ pub(super) fn run(spec: &SandboxCommand) -> Result<SandboxOutput, SandboxError> 
 fn resolve_program(program: &str) -> Result<std::path::PathBuf, SandboxError> {
     let candidate = std::path::Path::new(program);
     if candidate.is_absolute() || program.contains(['\\', '/']) {
-        return std::fs::canonicalize(candidate).map_err(|error| {
-            SandboxError::Failed(format!(
-                "sandbox program {} is unavailable: {error}",
-                candidate.display()
-            ))
-        });
+        return std::fs::canonicalize(candidate)
+            .map(normalize_windows_path)
+            .map_err(|error| {
+                SandboxError::Failed(format!(
+                    "sandbox program {} is unavailable: {error}",
+                    candidate.display()
+                ))
+            });
     }
     let path = std::env::var_os("PATH").ok_or_else(|| {
         SandboxError::Unavailable("sandbox program resolution requires PATH".to_string())
@@ -128,18 +133,29 @@ fn resolve_program(program: &str) -> Result<std::path::PathBuf, SandboxError> {
             base.with_extension("cmd"),
         ] {
             if candidate.is_file() {
-                return std::fs::canonicalize(&candidate).map_err(|error| {
-                    SandboxError::Failed(format!(
-                        "sandbox program {} could not be resolved: {error}",
-                        candidate.display()
-                    ))
-                });
+                return std::fs::canonicalize(&candidate)
+                    .map(normalize_windows_path)
+                    .map_err(|error| {
+                        SandboxError::Failed(format!(
+                            "sandbox program {} could not be resolved: {error}",
+                            candidate.display()
+                        ))
+                    });
             }
         }
     }
     Err(SandboxError::Failed(format!(
         "sandbox program {program} was not found on the host PATH"
     )))
+}
+
+fn normalize_windows_path(path: std::path::PathBuf) -> std::path::PathBuf {
+    let text = path.to_string_lossy().into_owned();
+    if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+        return std::path::PathBuf::from(format!(r"\\{}", rest));
+    }
+    text.strip_prefix(r"\\?\")
+        .map_or(path, std::path::PathBuf::from)
 }
 
 fn run_process(
@@ -151,7 +167,7 @@ fn run_process(
     let (stderr_read, stderr_write) = create_pipe()?;
     let mut attributes_size = 0usize;
     unsafe {
-        InitializeProcThreadAttributeList(std::ptr::null_mut(), 1, 0, &mut attributes_size);
+        InitializeProcThreadAttributeList(std::ptr::null_mut(), 2, 0, &mut attributes_size);
     }
     if attributes_size == 0 {
         close_handles([stdout_read, stdout_write, stderr_read, stderr_write]);
@@ -160,14 +176,19 @@ fn run_process(
     let mut attributes_buffer = vec![0u8; attributes_size];
     let attributes = attributes_buffer.as_mut_ptr() as *mut c_void;
     if unsafe {
-        InitializeProcThreadAttributeList(attributes as _, 1, 0, &mut attributes_size) == 0
+        InitializeProcThreadAttributeList(attributes as _, 2, 0, &mut attributes_size) == 0
     } {
         close_handles([stdout_read, stdout_write, stderr_read, stderr_write]);
         return Err(last_error("initialize Windows process attribute list"));
     }
+    let capability_pointer = if capabilities.is_empty() {
+        std::ptr::null_mut()
+    } else {
+        capabilities.as_mut_ptr()
+    };
     let mut security = SECURITY_CAPABILITIES {
         AppContainerSid: app_container_sid,
-        Capabilities: capabilities.as_mut_ptr(),
+        Capabilities: capability_pointer,
         CapabilityCount: capabilities.len() as u32,
         Reserved: 0,
     };
@@ -186,6 +207,22 @@ fn run_process(
         close_handles([stdout_read, stdout_write, stderr_read, stderr_write]);
         return Err(last_error("configure Windows AppContainer process"));
     }
+    let inherited_handles = [stdout_write, stderr_write];
+    if unsafe {
+        UpdateProcThreadAttribute(
+            attributes as _,
+            0,
+            PROC_THREAD_ATTRIBUTE_HANDLE_LIST as usize,
+            inherited_handles.as_ptr() as _,
+            std::mem::size_of_val(&inherited_handles),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        ) == 0
+    } {
+        unsafe { DeleteProcThreadAttributeList(attributes as _) };
+        close_handles([stdout_read, stdout_write, stderr_read, stderr_write]);
+        return Err(last_error("configure Windows AppContainer output handles"));
+    }
 
     let mut startup = STARTUPINFOEXW::default();
     startup.StartupInfo.cb = std::mem::size_of::<STARTUPINFOEXW>() as u32;
@@ -194,7 +231,6 @@ fn run_process(
     startup.StartupInfo.hStdError = stderr_write;
     startup.lpAttributeList = attributes as _;
 
-    let program_w = wide_null(&spec.program);
     let mut command_line = command_line(spec);
     let mut environment = environment(spec);
     let current_directory = spec.root.join(&spec.workdir);
@@ -204,7 +240,7 @@ fn run_process(
         EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW;
     let created = unsafe {
         CreateProcessW(
-            program_w.as_ptr(),
+            std::ptr::null(),
             command_line.as_mut_ptr(),
             std::ptr::null(),
             std::ptr::null(),
