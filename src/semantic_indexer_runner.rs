@@ -534,7 +534,7 @@ fn write_private_gradle_properties(root: &Path, cache_root: &Path) -> Result<(),
     fs::write(
         cache_root.join("gradle.properties"),
         format!(
-            "systemProp.user.home={home}\norg.gradle.daemon=false\norg.gradle.parallel=false\n"
+            "systemProp.user.home={home}\norg.gradle.daemon=false\norg.gradle.jvmargs=\norg.gradle.parallel=false\n"
         ),
     )
     .map_err(|error| {
