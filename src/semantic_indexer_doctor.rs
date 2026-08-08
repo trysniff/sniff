@@ -47,6 +47,17 @@ async fn check_version(spec: PinnedIndexer, entrypoint: &Path) -> Result<(), Str
     let mut command = match spec.runtime {
         IndexerRuntime::NodeScript => {
             let mut command = Command::new("node");
+            #[cfg(windows)]
+            if spec.kind == crate::semantic_indexer_manifest::SemanticIndexerKind::Python {
+                command
+                    .arg("-e")
+                    .arg(crate::semantic_indexer_runner::WINDOWS_SCIP_PYTHON_BOOTSTRAP)
+                    .arg(entrypoint)
+                    .arg("--version");
+            } else {
+                command.arg(entrypoint).arg("--version");
+            }
+            #[cfg(not(windows))]
             command.arg(entrypoint).arg("--version");
             command
         }

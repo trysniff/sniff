@@ -16,7 +16,7 @@ use tokio::time::timeout;
 const INDEX_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 const MAX_PROCESS_OUTPUT: usize = 2 * 1024 * 1024;
 const MAX_COMPACT_ERROR_OUTPUT: usize = 8 * 1024;
-const WINDOWS_SCIP_PYTHON_BOOTSTRAP: &str = "const path=require('path'); const NativeRegExp=RegExp; function PatchedRegExp(pattern, flags) { if (pattern === path.sep) pattern = path.sep + path.sep; return new NativeRegExp(pattern, flags); } PatchedRegExp.prototype=NativeRegExp.prototype; Object.setPrototypeOf(PatchedRegExp, NativeRegExp); global.RegExp=PatchedRegExp; require(process.argv[1]);";
+pub(crate) const WINDOWS_SCIP_PYTHON_BOOTSTRAP: &str = "const path=require('path'); const NativeRegExp=RegExp; function PatchedRegExp(pattern, flags) { if (pattern === path.sep) pattern = path.sep + path.sep; return new NativeRegExp(pattern, flags); } PatchedRegExp.prototype=NativeRegExp.prototype; Object.setPrototypeOf(PatchedRegExp, NativeRegExp); global.RegExp=PatchedRegExp; require(process.argv[1]);";
 
 struct TemporaryIndexerWorkspace {
     directory: PathBuf,
