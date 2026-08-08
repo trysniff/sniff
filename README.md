@@ -61,6 +61,9 @@ sniff resume
 
 # Optionally pause after about $0.50 of cumulative estimated scan spend.
 sniff --budget-usd 0.50
+
+# Evaluate a completed held-out benchmark ledger without contacting a provider.
+sniff benchmark cases.json predictions.json
 ```
 
 Sniff writes `sniff-report.md` at the scanned repository root. A successful run
@@ -80,6 +83,16 @@ does not write an incomplete report. Continue with a higher limit, for example
 above the limit, and configured token rates may differ from the provider's
 invoice, so this is a resumable admission control rather than an exact billing
 cap.
+
+## SniffBench Evaluation
+
+`sniff benchmark CASES PREDICTIONS` evaluates two JSON arrays: labeled
+`BenchmarkCase` records and the complete `BenchmarkPrediction` ledger produced
+by a run. Labels are used only after predictions are collected. Missing,
+duplicate, invented, or incorrectly typed records fail closed. The command
+prints precision, recall, evidence validity, and per-language metrics, then
+returns a nonzero exit code when the release thresholds are not met. It never
+loads provider configuration or sends source code to an API.
 
 ## What A Finding Looks Like
 
