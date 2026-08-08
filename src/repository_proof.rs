@@ -142,7 +142,12 @@ fn run_case_tests_with_executor(
     let original_root = create_snapshot(files, repository_root, "original")?;
     let candidate_root = create_snapshot(files, repository_root, "candidate")?;
     let result = (|| {
-        apply_edits_to_snapshot(&candidate_root, files, &case.counterfactual_edits)?;
+        apply_edits_to_snapshot(
+            &candidate_root,
+            files,
+            repository_root,
+            &case.counterfactual_edits,
+        )?;
         let tests_validated = if let Some(test_command) = test_command {
             let original = execute(&original_root, test_command)?;
             if original.status_code != Some(0) {
@@ -237,7 +242,7 @@ fn create_snapshot(
     let result = (|| {
         let mut written = HashMap::<PathBuf, String>::new();
         for file in files {
-            let relative = safe_relative_path(&file.file_path)?;
+            let relative = repository_relative_path(&file.file_path, repository_root)?;
             let destination = root.join(&relative);
             if let Some(existing) = written.get(&relative) {
                 if existing != &file.source {
@@ -300,40 +305,63 @@ fn create_snapshot(
 fn apply_edits_to_snapshot(
     root: &Path,
     files: &[FileRecord],
+    repository_root: &Path,
     edits: &[CounterfactualEdit],
 ) -> Result<(), String> {
     let sources = files
         .iter()
-        .map(|file| (file.file_path.as_str(), file.source.as_str()))
-        .collect::<HashMap<_, _>>();
-    let mut by_file = HashMap::<&str, Vec<&CounterfactualEdit>>::new();
+        .map(|file| {
+            repository_relative_path(&file.file_path, repository_root)
+                .map(|path| (path, file.source.as_str()))
+        })
+        .collect::<Result<HashMap<_, _>, _>>()?;
+    let mut by_file = HashMap::<PathBuf, Vec<&CounterfactualEdit>>::new();
     for edit in edits {
-        safe_relative_path(&edit.file_path)?;
-        if !sources.contains_key(edit.file_path.as_str()) {
+        let relative = repository_relative_path(&edit.file_path, repository_root)?;
+        if !sources.contains_key(&relative) {
             return Err(format!(
                 "repository proof edit references unknown file {}",
                 edit.file_path
             ));
         }
-        by_file.entry(&edit.file_path).or_default().push(edit);
+        by_file.entry(relative).or_default().push(edit);
     }
     for (file_path, mut file_edits) in by_file {
         file_edits.sort_by_key(|edit| (edit.start_line, edit.end_line));
         for pair in file_edits.windows(2) {
             if pair[0].start_line <= pair[1].end_line && pair[1].start_line <= pair[0].end_line {
-                return Err(format!("repository proof edits overlap in {file_path}"));
+                return Err(format!(
+                    "repository proof edits overlap in {}",
+                    file_path.display()
+                ));
             }
         }
-        let mut source = sources[file_path].to_string();
+        let mut source = sources[&file_path].to_string();
         for edit in file_edits.into_iter().rev() {
             let (start, end) = line_byte_range(&source, edit.start_line, edit.end_line)?;
             source.replace_range(start..end, &edit.replacement);
         }
-        let destination = root.join(safe_relative_path(file_path)?);
-        std::fs::write(destination, source)
-            .map_err(|error| format!("failed to write candidate edit {file_path}: {error}"))?;
+        let destination = root.join(&file_path);
+        std::fs::write(&destination, source).map_err(|error| {
+            format!(
+                "failed to write candidate edit {}: {error}",
+                file_path.display()
+            )
+        })?;
     }
     Ok(())
+}
+
+fn repository_relative_path(path: &str, repository_root: &Path) -> Result<PathBuf, String> {
+    let candidate = Path::new(path);
+    let relative = if candidate.is_absolute() {
+        candidate
+            .strip_prefix(repository_root)
+            .map_err(|_| format!("repository proof path escapes the snapshot: {path}"))?
+    } else {
+        candidate
+    };
+    safe_relative_path(&relative.to_string_lossy())
 }
 
 fn safe_relative_path(path: &str) -> Result<PathBuf, String> {
@@ -419,7 +447,8 @@ fn mark_unresolved(cases: &[SlopCase], reason: &str) -> Vec<SlopCase> {
 #[cfg(test)]
 mod tests {
     use super::{
-        RepositoryProofContext, create_snapshot, run_case_tests_with_executor, safe_relative_path,
+        RepositoryProofContext, create_snapshot, repository_relative_path,
+        run_case_tests_with_executor, safe_relative_path,
     };
     use crate::slop_cases::{CounterfactualEdit, ProofLevel, SlopCase};
     use crate::types::FileRecord;
@@ -499,6 +528,31 @@ mod tests {
         assert!(snapshot.join("tests/example.py").is_file());
         assert!(snapshot.join("Cargo.toml").is_file());
         assert!(!snapshot.join(".env").exists());
+        let _ = std::fs::remove_dir_all(snapshot);
+        let _ = std::fs::remove_dir_all(repository_root);
+    }
+
+    #[test]
+    fn snapshot_normalizes_absolute_repository_paths() {
+        let repository_root = std::env::temp_dir().join(format!(
+            "sniff-proof-absolute-source-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(repository_root.join("src")).unwrap();
+        let absolute_path = repository_root.join("src/demo.py");
+        let snapshot = create_snapshot(
+            &[file(&absolute_path.to_string_lossy(), "def demo(): pass\n")],
+            &repository_root,
+            "absolute",
+        )
+        .unwrap();
+        assert!(snapshot.join("src/demo.py").is_file());
+        assert_eq!(
+            repository_relative_path(&absolute_path.to_string_lossy(), &repository_root)
+                .unwrap()
+                .to_string_lossy(),
+            "src/demo.py"
+        );
         let _ = std::fs::remove_dir_all(snapshot);
         let _ = std::fs::remove_dir_all(repository_root);
     }
