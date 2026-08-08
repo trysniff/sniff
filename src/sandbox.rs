@@ -7,6 +7,10 @@ use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
+#[cfg(windows)]
+#[path = "sandbox_windows.rs"]
+mod sandbox_windows;
+
 pub(crate) const DEFAULT_OUTPUT_LIMIT: usize = 256 * 1024;
 
 #[derive(Debug, Clone)]
@@ -51,6 +55,16 @@ impl std::error::Error for SandboxError {}
 
 pub(crate) fn run(spec: &SandboxCommand) -> Result<SandboxOutput, SandboxError> {
     validate_spec(spec)?;
+    #[cfg(windows)]
+    {
+        if external_runner()?.is_none() {
+            return sandbox_windows::run(spec);
+        }
+    }
+    run_external(spec)
+}
+
+fn run_external(spec: &SandboxCommand) -> Result<SandboxOutput, SandboxError> {
     let mut command = build_command(spec)?;
     command
         .env_clear()
@@ -213,7 +227,7 @@ fn build_command(spec: &SandboxCommand) -> Result<Command, SandboxError> {
     {
         let _ = spec;
         Err(SandboxError::Unavailable(
-            "sandboxed execution is unavailable on Windows; configure SNIFF_SANDBOX_RUNNER with a hardened runner".to_string(),
+            "Windows sandbox backend must be invoked through sandbox::run".to_string(),
         ))
     }
 

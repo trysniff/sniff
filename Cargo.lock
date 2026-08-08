@@ -1876,6 +1876,7 @@ dependencies = [
  "tree-sitter",
  "tree-sitter-go",
  "tree-sitter-kotlin-ng",
+ "windows-sys 0.61.2",
  "zip",
 ]
 
