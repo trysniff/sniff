@@ -38,3 +38,7 @@ executed on the host. Windows users must provide a hardened executable through
 `runner --root <snapshot> --workdir <relative-dir> --timeout-ms <limit> -- <program> <args...>`.
 The runner is responsible for enforcing filesystem, network, process, CPU, and
 memory isolation before launching the final command.
+
+Target-repository `.env` files cannot configure `SNIFF_SANDBOX_RUNNER` or the
+internal Gradle launcher variables. Put those execution controls in the trusted
+working-directory environment or the process environment instead.
