@@ -524,6 +524,8 @@ fn build_indexer_sandbox_command(
         read_only_paths,
         env,
         allow_network: false,
+        #[cfg(target_os = "macos")]
+        allow_local_network: spec.kind == SemanticIndexerKind::Kotlin,
         timeout: INDEX_TIMEOUT,
         output_limit: MAX_PROCESS_OUTPUT,
     })

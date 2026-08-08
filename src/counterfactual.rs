@@ -712,6 +712,8 @@ fn standalone_compiler_check(file_path: &str, source: &str) -> Result<bool, Stri
             read_only_paths: Vec::new(),
             env: Vec::new(),
             allow_network: false,
+            #[cfg(target_os = "macos")]
+            allow_local_network: false,
             timeout: std::time::Duration::from_secs(30),
             output_limit: crate::sandbox::DEFAULT_OUTPUT_LIMIT,
         });

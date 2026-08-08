@@ -232,6 +232,8 @@ fn run_proof_command(root: &Path, command: &[String]) -> Result<sandbox::Sandbox
         read_only_paths: Vec::new(),
         env: Vec::new(),
         allow_network: false,
+        #[cfg(target_os = "macos")]
+        allow_local_network: false,
         timeout: Duration::from_secs(300),
         output_limit: sandbox::DEFAULT_OUTPUT_LIMIT,
     })

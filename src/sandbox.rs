@@ -22,6 +22,8 @@ pub(crate) struct SandboxCommand {
     pub(crate) read_only_paths: Vec<PathBuf>,
     pub(crate) env: Vec<(String, String)>,
     pub(crate) allow_network: bool,
+    #[cfg(target_os = "macos")]
+    pub(crate) allow_local_network: bool,
     pub(crate) timeout: Duration,
     pub(crate) output_limit: usize,
 }
@@ -353,6 +355,8 @@ fn build_macos_sandbox_command(spec: &SandboxCommand) -> Result<Command, Sandbox
         .collect::<Result<String, _>>()?;
     let network_rule = if spec.allow_network {
         "(allow network*)\n"
+    } else if spec.allow_local_network {
+        "(allow network-inbound (local ip \"localhost:*\"))\n(allow network* (remote ip \"localhost:*\"))\n(allow network* (remote unix-socket))\n"
     } else {
         "(deny network*)\n"
     };
@@ -473,6 +477,8 @@ mod tests {
             read_only_paths: Vec::new(),
             env: Vec::new(),
             allow_network: false,
+            #[cfg(target_os = "macos")]
+            allow_local_network: false,
             timeout: Duration::from_secs(1),
             output_limit: 32,
         }
@@ -566,6 +572,8 @@ mod tests {
             read_only_paths: Vec::new(),
             env: Vec::new(),
             allow_network: false,
+            #[cfg(target_os = "macos")]
+            allow_local_network: false,
             timeout: Duration::from_secs(2),
             output_limit: 1024,
         };
@@ -601,6 +609,8 @@ mod tests {
             read_only_paths: Vec::new(),
             env: Vec::new(),
             allow_network: false,
+            #[cfg(target_os = "macos")]
+            allow_local_network: false,
             timeout: Duration::from_millis(100),
             output_limit: 1024,
         };
