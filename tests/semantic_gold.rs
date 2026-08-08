@@ -1,5 +1,6 @@
 use serde::Deserialize;
 use sniff::analyzer::analyze_with_client_and_graph;
+use sniff::benchmark::{BenchmarkCase, BenchmarkPrediction, evaluate};
 use sniff::callgraph::build_references;
 use sniff::config::{LLMConfig, ResolvedConfig, ThresholdsConfig};
 use sniff::llm::LLMClient;
@@ -582,6 +583,52 @@ async fn semantic_gold_corpus_runs_through_complete_method_pipeline() {
             .join("\n---\n")
     );
     assert_eq!(method_verdicts.len(), manifest.cases.len());
+    let benchmark_cases = manifest
+        .cases
+        .iter()
+        .map(|case| BenchmarkCase {
+            case_id: format!("{}:{}:{}", case.language, case.path, case.method),
+            language: case.language.clone(),
+            expected_tier: match case.tier.as_str() {
+                "slop" => FindingTier::Slop,
+                "kinda_slop" => FindingTier::KindaSlop,
+                "clean" => FindingTier::Clean,
+                "unresolved" => FindingTier::Unresolved,
+                other => panic!("invalid expected tier {other}"),
+            },
+        })
+        .collect::<Vec<_>>();
+    let benchmark_predictions = manifest
+        .cases
+        .iter()
+        .map(|case| {
+            let verdict = method_verdicts
+                .iter()
+                .find(|verdict| {
+                    verdict.method_name.as_deref() == Some(case.method.as_str())
+                        && verdict.file_path.replace('\\', "/").ends_with(
+                            &staged_relative_path(&case.path)
+                                .to_string_lossy()
+                                .replace('\\', "/"),
+                        )
+                })
+                .unwrap_or_else(|| panic!("missing benchmark verdict for {}", case.method));
+            BenchmarkPrediction {
+                case_id: format!("{}:{}:{}", case.language, case.path, case.method),
+                tier: verdict.tier,
+                pattern: if matches!(verdict.tier, FindingTier::Slop | FindingTier::KindaSlop) {
+                    "other".to_string()
+                } else {
+                    "none".to_string()
+                },
+                evidence_valid: !matches!(verdict.tier, FindingTier::Slop | FindingTier::KindaSlop)
+                    || !verdict.evidence.trim().is_empty(),
+            }
+        })
+        .collect::<Vec<_>>();
+    let benchmark_metrics = evaluate(&benchmark_cases, &benchmark_predictions)
+        .expect("semantic gold benchmark ledger should be complete");
+    assert!(benchmark_metrics.release_gate_errors().is_empty());
     let mut slop_true_positive = 0usize;
     let mut slop_false_positive = 0usize;
     let mut slop_false_negative = 0usize;

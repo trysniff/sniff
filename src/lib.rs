@@ -1,4 +1,5 @@
 pub mod analyzer;
+pub mod benchmark;
 pub mod callgraph;
 pub mod cli;
 pub mod config;
