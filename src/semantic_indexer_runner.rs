@@ -310,6 +310,10 @@ fn build_indexer_sandbox_command(
         IndexerRuntime::JavaJar => {
             let java = resolve_runtime("java")?;
             let mut args = Vec::new();
+            args.push(format!(
+                "-Duser.home={}",
+                sandbox_repository_argument(root, &root.to_string_lossy())
+            ));
             #[cfg(windows)]
             if spec.kind == SemanticIndexerKind::Kotlin {
                 let patch_dir = entrypoint
@@ -443,10 +447,25 @@ fn runtime_dependency_paths(runtime: &Path) -> Result<Vec<PathBuf>, String> {
             ));
         }
         if let Some(parent) = dependency.parent() {
-            paths.push(parent.to_path_buf());
+            paths.push(macos_dependency_mount_root(parent));
         }
     }
     Ok(paths)
+}
+
+#[cfg(target_os = "macos")]
+fn macos_dependency_mount_root(path: &Path) -> PathBuf {
+    let mut current = PathBuf::new();
+    for component in path.components() {
+        current.push(component.as_os_str());
+        if std::fs::symlink_metadata(&current)
+            .map(|metadata| metadata.file_type().is_symlink())
+            .unwrap_or(false)
+        {
+            return current.parent().unwrap_or(path).to_path_buf();
+        }
+    }
+    path.to_path_buf()
 }
 
 #[cfg(not(target_os = "macos"))]

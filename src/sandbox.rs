@@ -237,6 +237,8 @@ fn build_bubblewrap_command(spec: &SandboxCommand) -> Result<Command, SandboxErr
     command.args(["--die-with-parent", "--new-session", "--clearenv"]);
     if !spec.allow_network {
         command.arg("--unshare-net");
+    } else {
+        command.arg("--share-net");
     }
     command.args([
         "--unshare-pid",
