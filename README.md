@@ -235,6 +235,25 @@ sniff --skip-dotenv [PATH]
 sniff --yes [PATH]
 ```
 
+### Optional behavioral proof
+
+Sniff never guesses or shells out to a repository test runner. To let a
+counterfactual earn test or differential proof, declare argv explicitly in
+`sniff.config.toml`:
+
+```toml
+[proof]
+test_command = ["python", "-m", "pytest", "tests"]
+# Optional: a deterministic probe whose bounded output must match exactly.
+differential_command = ["python", "scripts", "behavior_probe.py"]
+```
+
+The original and edited snapshots run through an isolated worker. Missing
+commands, failing baselines, output differences, or unavailable platform
+isolation remain unresolved; Sniff never falls back to executing repository
+code on the host. Windows requires a hardened runner configured through
+`SNIFF_SANDBOX_RUNNER`.
+
 Every eligible method is reviewed. Supported source languages are Rust, Python,
 JavaScript, TypeScript, Go, and Kotlin/JVM. Android/KMP Gradle projects are
 detected explicitly and fail closed until an Android-capable SCIP provider is
