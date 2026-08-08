@@ -244,7 +244,7 @@ fn source_identity(spec: PinnedIndexer) -> String {
     };
     #[cfg(windows)]
     if spec.kind == SemanticIndexerKind::Kotlin {
-        return format!("{source}:sniff-windows-patch-v2");
+        return format!("{source}:sniff-windows-patch-v3");
     }
     source
 }

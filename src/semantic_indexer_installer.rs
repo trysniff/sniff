@@ -252,22 +252,42 @@ fn patch_scip_java_windows(root: &Path, spec: PinnedIndexer) -> Result<(), Strin
                 .arg(&source),
             "compile scip-java Windows compatibility patch",
         )?;
-        let patched_class =
-            fs::read(classes.join("org/scip_code/scip_java/aggregator/ScipWriter.class")).map_err(
-                |error| format!("failed to read compiled scip-java compatibility patch: {error}"),
-            )?;
+        run_patch_tool(
+            std::process::Command::new("jar")
+                .current_dir(&classes)
+                .arg("xf")
+                .arg(&aggregator)
+                .arg("org/scip_code/scip_java/aggregator/ScipOutputStream.class"),
+            "extract scip-java Windows compatibility runtime class",
+        )?;
         let patch_dir = root.join("bin/scip-java-v0.13.1-patch");
-        let patch_class = patch_dir.join("org/scip_code/scip_java/aggregator/ScipWriter.class");
-        if let Some(parent) = patch_class.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|error| format!("failed to create scip-java patch directory: {error}"))?;
+        let patch_package = patch_dir.join("org/scip_code/scip_java/aggregator");
+        if patch_package.exists() {
+            return Err(format!(
+                "scip-java compatibility patch directory already exists: {}",
+                patch_dir.display()
+            ));
         }
-        fs::write(&patch_class, patched_class).map_err(|error| {
-            format!(
-                "failed to write scip-java compatibility class {}: {error}",
-                patch_class.display()
-            )
-        })?;
+        fs::create_dir_all(&patch_package)
+            .map_err(|error| format!("failed to create scip-java patch directory: {error}"))?;
+        for class_name in ["ScipWriter.class", "ScipOutputStream.class"] {
+            let source_class = classes
+                .join("org/scip_code/scip_java/aggregator")
+                .join(class_name);
+            let patch_class = patch_package.join(class_name);
+            if !source_class.is_file() {
+                return Err(format!(
+                    "scip-java compatibility class is missing: {}",
+                    source_class.display()
+                ));
+            }
+            fs::copy(&source_class, &patch_class).map_err(|error| {
+                format!(
+                    "failed to write scip-java compatibility class {}: {error}",
+                    patch_class.display()
+                )
+            })?;
+        }
         Ok(())
     })();
     let cleanup = fs::remove_dir_all(&patch_root);
