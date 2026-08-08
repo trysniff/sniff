@@ -8,8 +8,8 @@ use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use windows_sys::Win32::Foundation::{
-    CloseHandle, HANDLE, HANDLE_FLAG_INHERIT, LocalFree, SetHandleInformation, WAIT_OBJECT_0,
-    WAIT_TIMEOUT,
+    CloseHandle, HANDLE, HANDLE_FLAG_INHERIT, LocalFree, SetHandleInformation, WAIT_ABANDONED,
+    WAIT_OBJECT_0, WAIT_TIMEOUT,
 };
 use windows_sys::Win32::Security::Authorization::{ConvertSidToStringSidW, ConvertStringSidToSidW};
 use windows_sys::Win32::Security::Isolation::{
@@ -26,23 +26,27 @@ use windows_sys::Win32::System::JobObjects::{
 };
 use windows_sys::Win32::System::Pipes::CreatePipe;
 use windows_sys::Win32::System::Threading::{
-    CREATE_NO_WINDOW, CREATE_UNICODE_ENVIRONMENT, CreateProcessW, DeleteProcThreadAttributeList,
-    EXTENDED_STARTUPINFO_PRESENT, GetExitCodeProcess, InitializeProcThreadAttributeList,
-    PROC_THREAD_ATTRIBUTE_HANDLE_LIST, PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES,
-    PROCESS_INFORMATION, STARTF_USESTDHANDLES, STARTUPINFOEXW, TerminateProcess,
-    UpdateProcThreadAttribute, WaitForSingleObject,
+    CREATE_NO_WINDOW, CREATE_UNICODE_ENVIRONMENT, CreateMutexW, CreateProcessW,
+    DeleteProcThreadAttributeList, EXTENDED_STARTUPINFO_PRESENT, GetExitCodeProcess,
+    InitializeProcThreadAttributeList, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+    PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES, PROCESS_INFORMATION, ReleaseMutex,
+    STARTF_USESTDHANDLES, STARTUPINFOEXW, TerminateProcess, UpdateProcThreadAttribute,
+    WaitForSingleObject,
 };
 
 const INTERNET_CLIENT_SID: &str = "S-1-15-3-1";
 const SE_GROUP_ENABLED: u32 = 0x00000004;
 const MAX_PROCESS_MEMORY: usize = 1024 * 1024 * 1024;
 const MAX_ACTIVE_PROCESSES: u32 = 128;
+const WINDOWS_SANDBOX_LOCK_NAME: &str = r"Local\SniffWindowsSandboxAclLock";
+const WINDOWS_SANDBOX_LOCK_TIMEOUT: Duration = Duration::from_secs(2 * 60 * 60);
 static WINDOWS_SANDBOX_LOCK: Mutex<()> = Mutex::new(());
 
 pub(super) fn run(spec: &SandboxCommand) -> Result<SandboxOutput, SandboxError> {
     let _sandbox_lock = WINDOWS_SANDBOX_LOCK.lock().map_err(|_| {
         SandboxError::Failed("Windows sandbox coordination lock was poisoned".to_string())
     })?;
+    let _cross_process_lock = CrossProcessLock::acquire()?;
     let program = resolve_program(&spec.program)?;
     let mut effective_spec = spec.clone();
     effective_spec.program = program.to_string_lossy().into_owned();
@@ -112,6 +116,46 @@ pub(super) fn run(spec: &SandboxCommand) -> Result<SandboxOutput, SandboxError> 
         (Err(error), Err(cleanup_error)) => Err(SandboxError::Failed(format!(
             "{error}; additionally, Windows sandbox ACL cleanup failed: {cleanup_error}"
         ))),
+    }
+}
+
+struct CrossProcessLock {
+    handle: HANDLE,
+}
+
+impl CrossProcessLock {
+    fn acquire() -> Result<Self, SandboxError> {
+        let name = wide_null(WINDOWS_SANDBOX_LOCK_NAME);
+        let handle = unsafe { CreateMutexW(std::ptr::null(), 0, name.as_ptr()) };
+        if handle.is_null() {
+            return Err(last_error("create Windows sandbox coordination mutex"));
+        }
+
+        let wait =
+            unsafe { WaitForSingleObject(handle, WINDOWS_SANDBOX_LOCK_TIMEOUT.as_millis() as u32) };
+        if wait == WAIT_OBJECT_0 || wait == WAIT_ABANDONED {
+            return Ok(Self { handle });
+        }
+
+        unsafe {
+            CloseHandle(handle);
+        }
+        if wait == WAIT_TIMEOUT {
+            return Err(SandboxError::Failed(format!(
+                "Windows sandbox coordination mutex was not acquired within {} seconds",
+                WINDOWS_SANDBOX_LOCK_TIMEOUT.as_secs()
+            )));
+        }
+        Err(last_error("wait for Windows sandbox coordination mutex"))
+    }
+}
+
+impl Drop for CrossProcessLock {
+    fn drop(&mut self) {
+        unsafe {
+            ReleaseMutex(self.handle);
+            CloseHandle(self.handle);
+        }
     }
 }
 
