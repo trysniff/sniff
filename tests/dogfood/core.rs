@@ -261,11 +261,7 @@ fn support_facades_are_reviewed_and_real_slop_still_surfaces_end_to_end() {
         "export function buildApp() {\n  return null;\n}\n",
     );
     write_file(&root, "src/bumpkin/core/lib.rs", "pub fn run() {}\n");
-    write_file(
-        &root,
-        "server.go",
-        "package core\n\nfunc Run() {}\n",
-    );
+    write_file(&root, "server.go", "package core\n\nfunc Run() {}\n");
     write_file(
         &root,
         "src/main/kotlin/Helper.kt",
