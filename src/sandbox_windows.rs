@@ -4,6 +4,7 @@ use std::ffi::c_void;
 use std::os::windows::io::FromRawHandle;
 use std::path::Path;
 use std::process::Command;
+use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use windows_sys::Win32::Foundation::{
@@ -36,8 +37,12 @@ const INTERNET_CLIENT_SID: &str = "S-1-15-3-1";
 const SE_GROUP_ENABLED: u32 = 0x00000004;
 const MAX_PROCESS_MEMORY: usize = 1024 * 1024 * 1024;
 const MAX_ACTIVE_PROCESSES: u32 = 128;
+static WINDOWS_SANDBOX_LOCK: Mutex<()> = Mutex::new(());
 
 pub(super) fn run(spec: &SandboxCommand) -> Result<SandboxOutput, SandboxError> {
+    let _sandbox_lock = WINDOWS_SANDBOX_LOCK.lock().map_err(|_| {
+        SandboxError::Failed("Windows sandbox coordination lock was poisoned".to_string())
+    })?;
     let program = resolve_program(&spec.program)?;
     let mut effective_spec = spec.clone();
     effective_spec.program = program.to_string_lossy().into_owned();
