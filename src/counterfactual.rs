@@ -353,15 +353,11 @@ fn validate_edits(
         let (start, end) = line_byte_range(&file.source, edit.start_line, edit.end_line)?;
         if !case.evidence.iter().any(|evidence| {
             evidence.file_path == edit.file_path
-                && ranges_overlap(
-                    edit.start_line,
-                    edit.end_line,
-                    evidence.start_line,
-                    evidence.end_line,
-                )
+                && edit.start_line >= evidence.start_line
+                && edit.end_line <= evidence.end_line
         }) {
             return Err(format!(
-                "counterfactual case {} edit {}:{}-{} does not overlap exact evidence",
+                "counterfactual case {} edit {}:{}-{} is outside an exact evidence range",
                 case.case_id, edit.file_path, edit.start_line, edit.end_line
             ));
         }
@@ -585,7 +581,24 @@ mod tests {
             }],
         }];
         let error = validate_case_proofs(&[case()], &proofs, &[file()]).unwrap_err();
-        assert!(error.contains("does not overlap exact evidence"));
+        assert!(error.contains("outside an exact evidence range"));
+    }
+
+    #[test]
+    fn rejects_an_edit_that_extends_beyond_exact_evidence() {
+        let proofs = vec![CaseProof {
+            case_id: "case-a".to_string(),
+            decision: CounterfactualDecision::Validated,
+            reason: "candidate".to_string(),
+            edits: vec![CounterfactualEdit {
+                file_path: "src/demo.py".to_string(),
+                start_line: 2,
+                end_line: 4,
+                replacement: "    return value\n# changed\n".to_string(),
+            }],
+        }];
+        let error = validate_case_proofs(&[case()], &proofs, &[file()]).unwrap_err();
+        assert!(error.contains("outside an exact evidence range"));
     }
 
     #[test]
