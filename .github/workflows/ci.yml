@@ -110,6 +110,7 @@ jobs:
           bwrap --die-with-parent --unshare-all --share-net --clearenv \
             --ro-bind /usr /usr --ro-bind /bin /bin --ro-bind /lib /lib \
             --ro-bind-try /lib64 /lib64 --ro-bind-try /etc /etc \
+            --ro-bind-try /run/systemd/resolve /run/systemd/resolve \
             --proc /proc --dev /dev --tmpfs /tmp -- \
             /usr/bin/curl --fail --silent --show-error --head \
             https://plugins.gradle.org/m2/org/jetbrains/kotlin/jvm/org.jetbrains.kotlin.jvm.gradle.plugin/2.2.0/org.jetbrains.kotlin.jvm.gradle.plugin-2.2.0.pom
