@@ -36,7 +36,7 @@ fn load_env_from_dir(path: &Path, skip_dotenv: bool) -> Result<(), String> {
     }
 
     if let Some(env_path) = find_target_env_path(path) {
-        load_env_file(&env_path)
+        load_env_file_with_policy(&env_path, false)
             .map_err(|err| format!("failed to load env file {}: {err}", env_path.display()))?;
     }
 
@@ -53,7 +53,10 @@ pub(super) fn load_target_env(path: &Path, skip_dotenv: bool) -> Result<(), Stri
     load_env_from_dir(path, skip_dotenv)
 }
 
-fn load_env_file(path: &Path) -> Result<(), std::io::Error> {
+fn load_env_file_with_policy(
+    path: &Path,
+    allow_execution_controls: bool,
+) -> Result<(), std::io::Error> {
     let content = fs::read_to_string(path)?;
 
     for raw_line in content.lines() {
@@ -70,6 +73,14 @@ fn load_env_file(path: &Path) -> Result<(), std::io::Error> {
         let key = raw_key.trim();
         if key.is_empty() {
             continue;
+        }
+        if !allow_execution_controls && is_execution_control_key(key) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                format!(
+                    "target .env cannot configure execution control {key}; set it in the trusted working-directory environment instead"
+                ),
+            ));
         }
 
         let mut value = raw_value.trim().to_string();
@@ -92,9 +103,21 @@ fn load_env_file(path: &Path) -> Result<(), std::io::Error> {
     Ok(())
 }
 
+fn is_execution_control_key(key: &str) -> bool {
+    matches!(
+        key,
+        "SNIFF_SANDBOX_RUNNER"
+            | "SNIFF_INTERNAL_GRADLE_LAUNCHER"
+            | "SNIFF_GRADLE_WRAPPER"
+            | "SNIFF_GRADLE_PROJECT"
+    )
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{find_target_env_path, load_env_file, load_target_env, load_working_dir_env};
+    use super::{
+        find_target_env_path, load_env_file_with_policy, load_target_env, load_working_dir_env,
+    };
     use std::env;
     use std::fs;
     use std::sync::{Mutex, MutexGuard, OnceLock};
@@ -146,7 +169,7 @@ mod tests {
             env::set_var("SNIFF_ENDPOINT", "https://old.invalid/openai");
         }
 
-        load_env_file(&env_path).unwrap();
+        load_env_file_with_policy(&env_path, true).unwrap();
         assert_eq!(
             env::var("SNIFF_ENDPOINT").unwrap(),
             "https://example.invalid/anthropic"
@@ -267,6 +290,35 @@ mod tests {
         }
 
         load_target_env(&root, true).expect("skipped dotenv should not fail");
+        assert!(env::var("SNIFF_ENDPOINT").is_err());
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn target_dotenv_rejects_execution_control_variables() {
+        let _lock = env_test_lock();
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("sniff-env-target-control-test-{unique}"));
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join(".env"),
+            "SNIFF_SANDBOX_RUNNER=C:/malicious/runner.exe\nSNIFF_ENDPOINT=https://provider.example/api\n",
+        )
+        .unwrap();
+
+        unsafe {
+            env::remove_var("SNIFF_SANDBOX_RUNNER");
+            env::remove_var("SNIFF_ENDPOINT");
+        }
+
+        let error =
+            load_target_env(&root, false).expect_err("target execution controls must fail closed");
+        assert!(error.contains("SNIFF_SANDBOX_RUNNER"));
+        assert!(env::var("SNIFF_SANDBOX_RUNNER").is_err());
         assert!(env::var("SNIFF_ENDPOINT").is_err());
 
         let _ = fs::remove_dir_all(&root);
