@@ -169,7 +169,19 @@ fn run_case_tests_with_executor(
         };
         let differential_validated = if let Some(differential_command) = differential_command {
             let original = execute(&original_root, differential_command)?;
+            if original.status_code != Some(0) {
+                return Err(format!(
+                    "baseline differential command did not pass (status {:?})",
+                    original.status_code
+                ));
+            }
             let candidate = execute(&candidate_root, differential_command)?;
+            if candidate.status_code != Some(0) {
+                return Err(format!(
+                    "counterfactual differential command did not pass (status {:?})",
+                    candidate.status_code
+                ));
+            }
             if original != candidate {
                 return Err(
                     "differential command produced different status or bounded output".to_string(),
@@ -636,6 +648,29 @@ mod tests {
             result
                 .expect_err("changed differential output must fail closed")
                 .contains("different status or bounded output")
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn differential_fixture_rejects_matching_failed_commands() {
+        let root = proof_root("differential-failed");
+        let files = vec![file("src/demo.py", "def demo():\n    return 1\n")];
+        let command = vec!["python".to_string(), "probe.py".to_string()];
+        let case = proof_case();
+        let result =
+            run_case_tests_with_executor(&case, &files, &root, None, Some(&command), &|_, _| {
+                Ok(SandboxOutput {
+                    status_code: Some(1),
+                    stdout: "same failure\n".to_string(),
+                    stderr: String::new(),
+                    timed_out: false,
+                })
+            });
+        assert!(
+            result
+                .expect_err("matching failed probes must not earn P4")
+                .contains("baseline differential command did not pass")
         );
         let _ = std::fs::remove_dir_all(root);
     }
