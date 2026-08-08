@@ -20,8 +20,17 @@ const MAX_PROCESS_OUTPUT: usize = 2 * 1024 * 1024;
 const MAX_COMPACT_ERROR_OUTPUT: usize = 8 * 1024;
 const INDEXER_CACHE_DIR: &str = ".sniff-indexer-cache";
 const INDEXER_TEMP_DIR: &str = ".sniff-indexer-tmp";
-const GRADLE_INDEXER_BASE_JVM_ARGS: &str =
-    "-Xmx512m -XX:MaxMetaspaceSize=384m -Dfile.encoding=US-ASCII";
+const GRADLE_INDEXER_BASE_JVM_ARGS: &str = concat!(
+    "--add-opens=java.base/java.util=ALL-UNNAMED ",
+    "--add-opens=java.base/java.lang=ALL-UNNAMED ",
+    "--add-opens=java.base/java.lang.invoke=ALL-UNNAMED ",
+    "--add-opens=java.prefs/java.util.prefs=ALL-UNNAMED ",
+    "--add-opens=java.base/java.nio.charset=ALL-UNNAMED ",
+    "--add-opens=java.base/java.net=ALL-UNNAMED ",
+    "--add-opens=java.base/java.util.concurrent.atomic=ALL-UNNAMED ",
+    "-Xmx512m -XX:MaxMetaspaceSize=384m -Dfile.encoding=US-ASCII ",
+    "-Duser.country=US -Duser.language=en -Duser.variant=",
+);
 pub(crate) const WINDOWS_SCIP_PYTHON_BOOTSTRAP: &str = "const path=require('path'); const NativeRegExp=RegExp; function PatchedRegExp(pattern, flags) { if (pattern === path.sep) pattern = path.sep + path.sep; return new NativeRegExp(pattern, flags); } PatchedRegExp.prototype=NativeRegExp.prototype; Object.setPrototypeOf(PatchedRegExp, NativeRegExp); global.RegExp=PatchedRegExp; require(process.argv[1]);";
 
 struct TemporaryIndexerWorkspace {
