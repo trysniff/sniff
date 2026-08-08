@@ -34,7 +34,7 @@ pub(super) fn schema_description(schema: ResponseSchema) -> String {
                 .to_string()
         }
         ResponseSchema::CaseAdjudication => {
-            "Required root field: decisions (array). Each decision must contain case_id (string), decision (keep, discard, or unresolved), and reason (string)."
+            "Required root field: decisions (array). Each decision must contain case_id (string), decision (keep, discard, unresolved, or merge), and reason (string). A merge decision must also contain merge_into_case_id naming a different existing case; use merge only when the mechanism, contract boundary, and counterfactual are the same."
                 .to_string()
         }
         ResponseSchema::CaseProof => {

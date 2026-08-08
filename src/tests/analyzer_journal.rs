@@ -353,6 +353,7 @@ fn adjudication_stage_persists_complete_decisions_for_resume() {
         case_id: "case-a".to_string(),
         decision: CaseDecision::Keep,
         reason: "The challenge found no contract dependency.".to_string(),
+        merge_into_case_id: None,
     };
     adjudication
         .record_adjudication(

@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 /// Keeping this explicit prevents a semantic review from being presented as
 /// compiler or behavioral proof merely because it contains a confident prose
 /// verdict.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum ProofLevel {
     P0SourceReasoning,
     P1CompilerValidated,
@@ -86,6 +86,7 @@ pub enum CaseDecision {
     Keep,
     Discard,
     Unresolved,
+    Merge,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -93,6 +94,8 @@ pub struct CaseAdjudication {
     pub case_id: String,
     pub decision: CaseDecision,
     pub reason: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub merge_into_case_id: Option<String>,
 }
 
 /// Merge only byte-for-byte equivalent cases produced by overlapping
@@ -177,6 +180,7 @@ pub fn parse_case_adjudications(
             Some("keep") => CaseDecision::Keep,
             Some("discard") => CaseDecision::Discard,
             Some("unresolved") => CaseDecision::Unresolved,
+            Some("merge") => CaseDecision::Merge,
             Some(other) => {
                 return Err(format!(
                     "case adjudication {index} has invalid decision {other}"
@@ -191,10 +195,42 @@ pub fn parse_case_adjudications(
             .filter(|value| !value.is_empty())
             .map(str::to_string)
             .ok_or_else(|| format!("case adjudication {index} is missing reason"))?;
+        let merge_into_case_id = object
+            .get("merge_into_case_id")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string);
+        match decision {
+            CaseDecision::Merge => {
+                let Some(target) = merge_into_case_id.as_ref() else {
+                    return Err(format!(
+                        "case adjudication {index} marked merge without merge_into_case_id"
+                    ));
+                };
+                if target == case_id {
+                    return Err(format!(
+                        "case adjudication {index} cannot merge case {case_id} into itself"
+                    ));
+                }
+                if !known.contains(target.as_str()) {
+                    return Err(format!(
+                        "case adjudication {index} merge target {target} is unknown"
+                    ));
+                }
+            }
+            _ if merge_into_case_id.is_some() => {
+                return Err(format!(
+                    "case adjudication {index} supplies merge_into_case_id for a non-merge decision"
+                ));
+            }
+            _ => {}
+        }
         parsed.push(CaseAdjudication {
             case_id: case_id.to_string(),
             decision,
             reason,
+            merge_into_case_id,
         });
     }
     if seen.len() != known.len() {
@@ -584,5 +620,31 @@ mod tests {
         let error = parse_case_adjudications(&value, &cases).unwrap_err();
 
         assert!(error.contains("unknown case invented"));
+    }
+
+    #[test]
+    fn case_adjudication_accepts_only_a_known_merge_target() {
+        let original =
+            seed_method_cases(&[record(FindingTier::Slop, "ceremonial_logic")])[0].clone();
+        let mut second = original.clone();
+        second.case_id = "unit-2".to_string();
+        let cases = vec![original, second];
+        let value = serde_json::json!({
+            "decisions": [{
+                "case_id": "unit-1",
+                "decision": "keep",
+                "reason": "Canonical case."
+            }, {
+                "case_id": "unit-2",
+                "decision": "merge",
+                "merge_into_case_id": "unit-1",
+                "reason": "Same mechanism and counterfactual."
+            }]
+        });
+
+        let parsed = parse_case_adjudications(&value, &cases).unwrap();
+
+        assert_eq!(parsed[1].decision, CaseDecision::Merge);
+        assert_eq!(parsed[1].merge_into_case_id.as_deref(), Some("unit-1"));
     }
 }

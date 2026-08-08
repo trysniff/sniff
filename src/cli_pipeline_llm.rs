@@ -154,6 +154,7 @@ pub(super) async fn run_llm_checks(
     let adjudication = crate::synthesis::run_case_adjudication(
         &synthesis.cases,
         &analysis.method_records,
+        &graph_facts,
         Arc::clone(&client),
         input.journal_path,
         input.scan_id,
