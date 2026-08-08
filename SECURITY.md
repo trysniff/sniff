@@ -34,4 +34,7 @@ Repository tests and differential probes are opt-in through explicit argv in
 platform sandbox worker; it does not invoke a shell or guess a test command.
 If the platform sandbox is unavailable, proof is left unresolved rather than
 executed on the host. Windows users must provide a hardened executable through
-`SNIFF_SANDBOX_RUNNER`.
+`SNIFF_SANDBOX_RUNNER`. Sniff invokes it without a shell as:
+`runner --root <snapshot> --workdir <relative-dir> --timeout-ms <limit> -- <program> <args...>`.
+The runner is responsible for enforcing filesystem, network, process, CPU, and
+memory isolation before launching the final command.

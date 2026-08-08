@@ -271,7 +271,13 @@ fn build_macos_sandbox_command(spec: &SandboxCommand) -> Result<Command, Sandbox
 }
 
 fn external_runner() -> Result<Option<PathBuf>, SandboxError> {
-    let Some(value) = std::env::var_os("SNIFF_SANDBOX_RUNNER") else {
+    validate_external_runner(std::env::var_os("SNIFF_SANDBOX_RUNNER"))
+}
+
+fn validate_external_runner(
+    value: Option<std::ffi::OsString>,
+) -> Result<Option<PathBuf>, SandboxError> {
+    let Some(value) = value else {
         return Ok(None);
     };
     let path = PathBuf::from(value);
@@ -349,7 +355,7 @@ fn terminate(child: &mut Child) -> Result<(), SandboxError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{SandboxCommand, SandboxError, validate_spec};
+    use super::{SandboxCommand, SandboxError, validate_external_runner, validate_spec};
     use std::path::PathBuf;
     use std::time::Duration;
 
@@ -377,5 +383,14 @@ mod tests {
     fn rejects_relative_root() {
         let error = validate_spec(&spec(PathBuf::from("relative"))).unwrap_err();
         assert!(matches!(error, SandboxError::Invalid(message) if message.contains("absolute")));
+    }
+
+    #[test]
+    fn invalid_external_runner_does_not_fall_through_to_a_platform_backend() {
+        let error = validate_external_runner(Some(std::ffi::OsString::from("relative-runner")))
+            .unwrap_err();
+        assert!(
+            matches!(error, SandboxError::Unavailable(message) if message.contains("absolute"))
+        );
     }
 }
