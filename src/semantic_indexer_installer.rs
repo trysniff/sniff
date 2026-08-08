@@ -136,7 +136,168 @@ async fn install_source(spec: PinnedIndexer, root: &Path) -> Result<(), String> 
             commit,
         } => install_go(spec, root, module, package, commit).await,
         IndexerInstallSource::Download(download) => install_download(spec, root, download).await,
+    }?;
+    #[cfg(windows)]
+    if spec.kind == crate::semantic_indexer_manifest::SemanticIndexerKind::Kotlin {
+        patch_scip_java_windows(root, spec)?;
     }
+    Ok(())
+}
+
+#[cfg(windows)]
+const WINDOWS_SCIP_JAVA_WRITER: &str = r#"package org.scip_code.scip_java.aggregator;
+
+import java.io.BufferedOutputStream;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import org.scip_code.scip.Index;
+
+public class ScipWriter implements AutoCloseable {
+  private final Path tmp;
+  private final ScipOutputStream output;
+  private final ScipAggregatorOptions options;
+
+  public ScipWriter(ScipAggregatorOptions options) throws IOException {
+    this.tmp = Files.createTempFile("scip-aggregator", "index.scip");
+    this.output = new ScipOutputStream(new BufferedOutputStream(Files.newOutputStream(tmp)));
+    this.options = options;
+  }
+
+  public void emitTyped(Index index) {
+    this.output.write(index.toByteArray());
+  }
+
+  public void build() throws IOException {
+    close();
+    Files.move(tmp, options.output(), StandardCopyOption.REPLACE_EXISTING);
+  }
+
+  @Override
+  public void close() throws IOException {
+    output.flush();
+  }
+
+  public void flush() {
+    try {
+      output.flush();
+    } catch (IOException e) {
+      options.reporter().error(e);
+    }
+  }
+}
+"#;
+
+#[cfg(windows)]
+fn patch_scip_java_windows(root: &Path, spec: PinnedIndexer) -> Result<(), String> {
+    let entrypoint = root.join(spec.entrypoint_relative_path());
+    let patch_root = std::env::temp_dir().join(format!(
+        "sniff-scip-java-patch-{}-{}",
+        std::process::id(),
+        unique_patch_suffix()
+    ));
+    fs::create_dir_all(&patch_root).map_err(|error| {
+        format!(
+            "failed to create temporary scip-java patch directory {}: {error}",
+            patch_root.display()
+        )
+    })?;
+    let result: Result<(), String> = (|| {
+        let source = patch_root.join("ScipWriter.java");
+        fs::write(&source, WINDOWS_SCIP_JAVA_WRITER).map_err(|error| {
+            format!("failed to write the Windows scip-java compatibility source: {error}")
+        })?;
+
+        let aggregator_relative =
+            Path::new("coursier/bootstrap/launcher/jars/scip-aggregator-0.13.1.jar");
+        let bindings_relative =
+            Path::new("coursier/bootstrap/launcher/jars/scip-java-bindings-0.9.0.jar");
+        run_patch_tool(
+            std::process::Command::new("jar")
+                .current_dir(&patch_root)
+                .arg("xf")
+                .arg(&entrypoint)
+                .arg(aggregator_relative)
+                .arg(bindings_relative),
+            "extract scip-java runtime jars",
+        )?;
+
+        let classes = patch_root.join("classes");
+        fs::create_dir_all(&classes).map_err(|error| {
+            format!(
+                "failed to create scip-java patch classes directory {}: {error}",
+                classes.display()
+            )
+        })?;
+        let classpath = format!(
+            "{};{}",
+            patch_root.join(aggregator_relative).display(),
+            patch_root.join(bindings_relative).display()
+        );
+        run_patch_tool(
+            std::process::Command::new("javac")
+                .current_dir(&patch_root)
+                .arg("-cp")
+                .arg(&classpath)
+                .arg("-d")
+                .arg(&classes)
+                .arg(&source),
+            "compile scip-java Windows compatibility patch",
+        )?;
+        run_patch_tool(
+            std::process::Command::new("jar")
+                .current_dir(&patch_root)
+                .arg("uf")
+                .arg(aggregator_relative)
+                .arg("-C")
+                .arg(&classes)
+                .arg("org/scip_code/scip_java/aggregator/ScipWriter.class"),
+            "update scip-java aggregator jar",
+        )?;
+        run_patch_tool(
+            std::process::Command::new("jar")
+                .current_dir(&patch_root)
+                .arg("uf")
+                .arg(&entrypoint)
+                .arg(aggregator_relative),
+            "update scip-java runtime jar",
+        )?;
+        Ok(())
+    })();
+    let cleanup = fs::remove_dir_all(&patch_root);
+    match (result, cleanup) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(error), Ok(())) => Err(error),
+        (Ok(()), Err(error)) => Err(error.to_string()),
+        (Err(patch_error), Err(cleanup_error)) => Err(format!(
+            "{patch_error}; additionally failed to remove patch directory {}: {cleanup_error}",
+            patch_root.display()
+        )),
+    }
+}
+
+#[cfg(windows)]
+fn run_patch_tool(command: &mut std::process::Command, label: &str) -> Result<(), String> {
+    let output = command
+        .output()
+        .map_err(|error| format!("{label} could not start: {error}"))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "{label} failed with {}: {}",
+            output.status,
+            compact_output(&output.stderr)
+        ))
+    }
+}
+
+#[cfg(windows)]
+fn unique_patch_suffix() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_nanos())
 }
 
 async fn install_npm(spec: PinnedIndexer, root: &Path, package: &str) -> Result<(), String> {

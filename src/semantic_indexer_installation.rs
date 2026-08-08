@@ -230,7 +230,7 @@ fn validate_record(spec: PinnedIndexer, record: &IndexerInstallationRecord) -> R
 }
 
 fn source_identity(spec: PinnedIndexer) -> String {
-    match spec.source {
+    let source = match spec.source {
         IndexerInstallSource::Npm {
             package,
             integrity_sha512,
@@ -241,7 +241,12 @@ fn source_identity(spec: PinnedIndexer) -> String {
         IndexerInstallSource::Download(download) => {
             format!("download:{}:sha256-{}", download.url, download.sha256)
         }
+    };
+    #[cfg(windows)]
+    if spec.kind == SemanticIndexerKind::Kotlin {
+        return format!("{source}:sniff-windows-patch-v1");
     }
+    source
 }
 
 fn hash_tree(root: &Path) -> Result<String, String> {
