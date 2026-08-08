@@ -1,7 +1,7 @@
 use super::{
     WINDOWS_SCIP_PYTHON_BOOTSTRAP, compact_process_output, files_for_indexer,
     gradle_script_uses_android, indexer_arguments_with_project, missing_position_encoding,
-    project_name, reject_unsupported_android_gradle,
+    project_name, reject_unsupported_android_gradle, source_integrity_digest,
 };
 #[cfg(windows)]
 use super::{indexer_arguments_with_workspace, prepare_indexer_workspace};
@@ -130,6 +130,30 @@ fn provider_error_output_keeps_the_actionable_tail() {
     assert!(compact.contains("command context"));
     assert!(compact.contains("failure details"));
     assert!(compact.contains("provider output elided"));
+}
+
+#[test]
+fn source_integrity_digest_changes_when_an_eligible_file_changes() {
+    let root = std::env::temp_dir().join(format!(
+        "sniff-source-integrity-test-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&root).unwrap();
+    let source = root.join("main.py");
+    std::fs::write(&source, "def main():\n    return 1\n").unwrap();
+    let files = vec![FileRecord {
+        file_path: source.to_string_lossy().to_string(),
+        source: String::new(),
+        language: "python".to_string(),
+        methods: Vec::new(),
+    }];
+
+    let before = source_integrity_digest(&files).unwrap();
+    std::fs::write(&source, "def main():\n    return 2\n").unwrap();
+    let after = source_integrity_digest(&files).unwrap();
+
+    assert_ne!(before, after);
+    std::fs::remove_dir_all(root).unwrap();
 }
 
 #[test]

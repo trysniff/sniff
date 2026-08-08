@@ -4,6 +4,7 @@ use crate::semantic_indexer_manifest::{
     IndexerRuntime, PinnedIndexer, SemanticIndexerKind, pinned_indexer, required_indexers,
 };
 use crate::types::FileRecord;
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::fs;
@@ -141,6 +142,7 @@ async fn run_one(
     entrypoint: &Path,
     files: &[FileRecord],
 ) -> Result<(), String> {
+    let source_digest_before = source_integrity_digest(files)?;
     let workspace = prepare_indexer_workspace(spec, root)?;
     let temporary_project = prepare_mixed_typescript_javascript_project(spec, root, files)?;
     let arguments = indexer_arguments_with_workspace(
@@ -220,6 +222,13 @@ async fn run_one(
             return Err(format!("{project_error}; additionally, {workspace_error}"));
         }
     }
+    let source_digest_after = source_integrity_digest(files)?;
+    if source_digest_before != source_digest_after {
+        return Err(format!(
+            "{} indexing changed an eligible source file; refusing to trust its SCIP output",
+            spec.display_name
+        ));
+    }
     let output = output?;
     if output.status.success() {
         let index_path = root.join("index.scip");
@@ -239,6 +248,30 @@ async fn run_one(
         output.status,
         compact_process_output(&output.stdout, &output.stderr)
     ))
+}
+
+fn source_integrity_digest(files: &[FileRecord]) -> Result<String, String> {
+    let mut paths = files
+        .iter()
+        .map(|file| PathBuf::from(&file.file_path))
+        .collect::<Vec<_>>();
+    paths.sort();
+    paths.dedup();
+
+    let mut digest = Sha256::new();
+    for path in paths {
+        let bytes = fs::read(&path).map_err(|error| {
+            format!(
+                "failed to hash eligible source file {}: {error}",
+                path.display()
+            )
+        })?;
+        let path_text = path.to_string_lossy();
+        digest.update(path_text.as_bytes());
+        digest.update((bytes.len() as u64).to_le_bytes());
+        digest.update(bytes);
+    }
+    Ok(format!("{:x}", digest.finalize()))
 }
 
 fn reject_unsupported_android_gradle(root: &Path, files: &[FileRecord]) -> Result<(), String> {
