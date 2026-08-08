@@ -19,6 +19,7 @@ const INDEX_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 const MAX_PROCESS_OUTPUT: usize = 2 * 1024 * 1024;
 const MAX_COMPACT_ERROR_OUTPUT: usize = 8 * 1024;
 const INDEXER_CACHE_DIR: &str = ".sniff-indexer-cache";
+const INDEXER_TEMP_DIR: &str = ".sniff-indexer-tmp";
 pub(crate) const WINDOWS_SCIP_PYTHON_BOOTSTRAP: &str = "const path=require('path'); const NativeRegExp=RegExp; function PatchedRegExp(pattern, flags) { if (pattern === path.sep) pattern = path.sep + path.sep; return new NativeRegExp(pattern, flags); } PatchedRegExp.prototype=NativeRegExp.prototype; Object.setPrototypeOf(PatchedRegExp, NativeRegExp); global.RegExp=PatchedRegExp; require(process.argv[1]);";
 
 struct TemporaryIndexerWorkspace {
@@ -26,6 +27,14 @@ struct TemporaryIndexerWorkspace {
     path_prefix: PathBuf,
     gradle_wrapper: PathBuf,
     project_root: PathBuf,
+}
+
+struct TemporaryIndexerDirectory(PathBuf);
+
+impl Drop for TemporaryIndexerDirectory {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
 }
 
 impl TemporaryIndexerWorkspace {
@@ -146,6 +155,20 @@ async fn run_one(
             cache_root.display()
         ));
     }
+    let temporary_dir = root.join(INDEXER_TEMP_DIR);
+    if temporary_dir.exists() {
+        return Err(format!(
+            "refusing to reuse an unexpected semantic indexer temp directory {}; remove it before indexing",
+            temporary_dir.display()
+        ));
+    }
+    fs::create_dir(&temporary_dir).map_err(|error| {
+        format!(
+            "failed to create private semantic indexer temp directory {}: {error}",
+            temporary_dir.display()
+        )
+    })?;
+    let _temporary_dir_cleanup = TemporaryIndexerDirectory(temporary_dir);
     let workspace = prepare_indexer_workspace(spec, root)?;
     let temporary_project = prepare_mixed_typescript_javascript_project(spec, root, files)?;
     let arguments = indexer_arguments_with_workspace(
@@ -405,6 +428,23 @@ fn build_indexer_sandbox_command(
         let gradle = resolve_runtime("gradle")?;
         read_only_paths.push(runtime_mount_root(&gradle));
         path_prefixes.push(runtime_bin_directory(&gradle, "gradle")?);
+    }
+    let temp_directory =
+        sandbox_repository_argument(root, &root.join(INDEXER_TEMP_DIR).to_string_lossy());
+    env.extend([
+        ("TMPDIR".to_string(), temp_directory.clone()),
+        ("TMP".to_string(), temp_directory.clone()),
+        ("TEMP".to_string(), temp_directory),
+    ]);
+    if spec.runtime == IndexerRuntime::JavaJar {
+        let java_home = runtime_path
+            .parent()
+            .and_then(Path::parent)
+            .ok_or_else(|| "Java runtime has no JAVA_HOME parent".to_string())?;
+        env.push((
+            "JAVA_HOME".to_string(),
+            java_home.to_string_lossy().to_string(),
+        ));
     }
     if let Some(workspace) = workspace {
         read_only_paths.push(fs::canonicalize(&workspace.directory).map_err(|error| {
