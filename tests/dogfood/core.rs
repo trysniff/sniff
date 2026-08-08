@@ -208,7 +208,7 @@ fn differential_proof_runs_through_the_cli_sandbox() {
     fs::write(
         root.join("sniff.config.toml"),
         r#"[proof]
-differential_command = ["python3", "-c", "print('stable')"]
+        differential_command = ["sh", "-c", "printf stable"]
 "#,
     )
     .unwrap();
