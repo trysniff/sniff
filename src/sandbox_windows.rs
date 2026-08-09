@@ -551,10 +551,16 @@ fn grant_acl(path: &Path, sid: &str, permission: &str) -> Result<(), SandboxErro
     let mut command = Command::new("icacls");
     command.arg(&path).arg("/grant").arg(rule).arg("/C");
     let output = run_icacls(command).map_err(|error| match error {
-        SandboxError::Unavailable(message) => {
-            SandboxError::Unavailable(format!("Windows AppContainer requires icacls: {message}"))
+        SandboxError::Unavailable(message) => SandboxError::Unavailable(format!(
+            "Windows AppContainer requires icacls for {}: {message}",
+            path.display()
+        )),
+        SandboxError::Invalid(message) => {
+            SandboxError::Invalid(format!("icacls failed for {}: {message}", path.display()))
         }
-        other => other,
+        SandboxError::Failed(message) => {
+            SandboxError::Failed(format!("icacls failed for {}: {message}", path.display()))
+        }
     })?;
     if !output.success {
         return Err(SandboxError::Failed(format!(
@@ -573,9 +579,17 @@ fn grant_traverse_acl(path: &Path, sid: &str) -> Result<(), SandboxError> {
     command.arg(&path).arg("/grant").arg(rule).arg("/C");
     let output = run_icacls(command).map_err(|error| match error {
         SandboxError::Unavailable(message) => SandboxError::Unavailable(format!(
-            "Windows AppContainer requires icacls for parent traversal: {message}"
+            "Windows AppContainer requires icacls for parent traversal at {}: {message}",
+            path.display()
         )),
-        other => other,
+        SandboxError::Invalid(message) => SandboxError::Invalid(format!(
+            "icacls traversal failed for {}: {message}",
+            path.display()
+        )),
+        SandboxError::Failed(message) => SandboxError::Failed(format!(
+            "icacls traversal failed for {}: {message}",
+            path.display()
+        )),
     })?;
     if !output.success {
         return Err(SandboxError::Failed(format!(
