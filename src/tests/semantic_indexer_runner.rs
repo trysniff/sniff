@@ -1,9 +1,9 @@
 use super::{
     GRADLE_INDEXER_BASE_JVM_ARGS, WINDOWS_SCIP_NODE_BOOTSTRAP, WINDOWS_SCIP_PYTHON_BOOTSTRAP,
-    compact_process_output, files_for_indexer, gradle_indexer_jvm_args, gradle_script_uses_android,
-    indexer_arguments_with_project, missing_position_encoding, project_name,
-    reject_unsupported_android_gradle, sandbox_repository_argument, source_integrity_digest,
-    write_private_gradle_properties,
+    compact_process_output, files_for_indexer, format_timeout, gradle_indexer_jvm_args,
+    gradle_script_uses_android, indexer_arguments_with_project, missing_position_encoding,
+    project_name, push_external_read_only, reject_unsupported_android_gradle,
+    sandbox_repository_argument, source_integrity_digest, write_private_gradle_properties,
 };
 #[cfg(windows)]
 use super::{indexer_arguments_with_workspace, prepare_indexer_workspace};
@@ -11,6 +11,7 @@ use crate::semantic_index::SemanticPositionEncoding;
 use crate::semantic_indexer_manifest::{SemanticIndexerKind, pinned_indexer};
 use crate::types::FileRecord;
 use std::path::Path;
+use std::time::Duration;
 
 fn javascript_file() -> FileRecord {
     FileRecord {
@@ -150,6 +151,9 @@ fn windows_python_provider_bootstrap_loads_the_real_entrypoint() {
             && WINDOWS_SCIP_PYTHON_BOOTSTRAP.contains("PatchedRegExp")
             && WINDOWS_SCIP_PYTHON_BOOTSTRAP.contains("process.argv[1]")
     );
+    assert!(WINDOWS_SCIP_PYTHON_BOOTSTRAP.contains("execFileSync=denyProcess"));
+    assert!(WINDOWS_SCIP_PYTHON_BOOTSTRAP.contains("spawnSync=denyProcess"));
+    assert!(WINDOWS_SCIP_PYTHON_BOOTSTRAP.contains("spawn=denyProcess"));
     assert!(!WINDOWS_SCIP_PYTHON_BOOTSTRAP.contains("sep='/';"));
 }
 
@@ -158,6 +162,20 @@ fn windows_node_provider_bootstrap_invokes_the_exported_cli() {
     assert!(WINDOWS_SCIP_NODE_BOOTSTRAP.contains("indexer.main()"));
     assert!(WINDOWS_SCIP_NODE_BOOTSTRAP.contains("process.argv[1]"));
     assert!(WINDOWS_SCIP_NODE_BOOTSTRAP.contains("does not export main"));
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_verbatim_repository_paths_are_not_persistently_granted() {
+    let mut paths = Vec::new();
+
+    push_external_read_only(
+        Path::new(r"C:\work\repository"),
+        &mut paths,
+        std::path::PathBuf::from(r"\\?\C:\work\repository\.sniff-indexer-tmp"),
+    );
+
+    assert!(paths.is_empty());
 }
 
 #[test]
@@ -192,6 +210,13 @@ fn provider_error_output_keeps_the_actionable_tail() {
     assert!(compact.contains("command context"));
     assert!(compact.contains("failure details"));
     assert!(compact.contains("provider output elided"));
+}
+
+#[test]
+fn indexer_timeouts_never_round_subminute_values_to_zero() {
+    assert_eq!(format_timeout(Duration::from_secs(30)), "30 seconds");
+    assert_eq!(format_timeout(Duration::from_secs(60)), "1 minute");
+    assert_eq!(format_timeout(Duration::from_secs(3_600)), "60 minutes");
 }
 
 #[test]

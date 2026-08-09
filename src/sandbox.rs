@@ -20,12 +20,23 @@ pub(crate) struct SandboxCommand {
     pub(crate) program: String,
     pub(crate) args: Vec<String>,
     pub(crate) read_only_paths: Vec<PathBuf>,
+    /// Host-controlled toolchains that may retain a read-only sandbox grant.
+    /// Repository content must never be placed in this collection.
+    pub(crate) persistent_read_only_paths: Vec<PathBuf>,
     pub(crate) env: Vec<(String, String)>,
     pub(crate) allow_network: bool,
     #[cfg(target_os = "macos")]
     pub(crate) allow_local_network: bool,
     pub(crate) timeout: Duration,
     pub(crate) output_limit: usize,
+}
+
+impl SandboxCommand {
+    fn all_read_only_paths(&self) -> impl Iterator<Item = &PathBuf> {
+        self.read_only_paths
+            .iter()
+            .chain(self.persistent_read_only_paths.iter())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -158,7 +169,7 @@ fn validate_spec(spec: &SandboxCommand) -> Result<(), SandboxError> {
             "sandbox worker timeout must be positive".to_string(),
         ));
     }
-    for path in &spec.read_only_paths {
+    for path in spec.all_read_only_paths() {
         let metadata = std::fs::symlink_metadata(path).map_err(|error| {
             SandboxError::Invalid(format!(
                 "sandbox read-only path must exist: {} ({error})",
@@ -168,6 +179,25 @@ fn validate_spec(spec: &SandboxCommand) -> Result<(), SandboxError> {
         if !path.is_absolute() || metadata.file_type().is_symlink() {
             return Err(SandboxError::Invalid(format!(
                 "sandbox read-only path must be an absolute non-symlink path: {}",
+                path.display()
+            )));
+        }
+    }
+    let canonical_root = std::fs::canonicalize(&spec.root).map_err(|error| {
+        SandboxError::Invalid(format!("sandbox root could not be canonicalized: {error}"))
+    })?;
+    for path in &spec.persistent_read_only_paths {
+        let canonical_path = std::fs::canonicalize(path).map_err(|error| {
+            SandboxError::Invalid(format!(
+                "persistent sandbox path could not be canonicalized: {} ({error})",
+                path.display()
+            ))
+        })?;
+        if canonical_path.starts_with(&canonical_root)
+            || canonical_root.starts_with(&canonical_path)
+        {
+            return Err(SandboxError::Invalid(format!(
+                "persistent sandbox read-only paths must not overlap the repository root: {}",
                 path.display()
             )));
         }
@@ -192,7 +222,7 @@ fn build_command(spec: &SandboxCommand) -> Result<Command, SandboxError> {
             .arg(&spec.workdir)
             .arg("--timeout-ms")
             .arg(spec.timeout.as_millis().to_string())
-            .args(spec.read_only_paths.iter().flat_map(|path| {
+            .args(spec.all_read_only_paths().flat_map(|path| {
                 [
                     OsString::from("--read-only-path"),
                     path.as_os_str().to_os_string(),
@@ -286,7 +316,7 @@ fn build_bubblewrap_command(spec: &SandboxCommand) -> Result<Command, SandboxErr
     if spec.allow_network {
         command.args(["--ro-bind", "/run", "/run"]);
     }
-    for path in &spec.read_only_paths {
+    for path in spec.all_read_only_paths() {
         if linux_system_mount_is_already_bound(path) {
             continue;
         }
@@ -341,8 +371,7 @@ fn build_macos_sandbox_command(spec: &SandboxCommand) -> Result<Command, Sandbox
     let profile = canonical_root.join(".sniff-sandbox.sb");
     let root = profile_path(&canonical_root)?;
     let read_only_rules = spec
-        .read_only_paths
-        .iter()
+        .all_read_only_paths()
         .map(|path| {
             let path_text = profile_path(path)?;
             let filter = if path.is_dir() {
@@ -500,6 +529,7 @@ mod tests {
             program: "test".to_string(),
             args: Vec::new(),
             read_only_paths: Vec::new(),
+            persistent_read_only_paths: Vec::new(),
             env: Vec::new(),
             allow_network: false,
             #[cfg(target_os = "macos")]
@@ -543,6 +573,42 @@ mod tests {
     }
 
     #[test]
+    fn rejects_persistent_access_to_repository_content() {
+        let root =
+            std::env::temp_dir().join(format!("sniff-persistent-root-test-{}", std::process::id()));
+        let nested = root.join("tool");
+        std::fs::create_dir_all(&nested).unwrap();
+        let mut command = spec(root.clone());
+        command.persistent_read_only_paths = vec![nested];
+
+        let error = validate_spec(&command).unwrap_err();
+
+        assert!(
+            matches!(error, SandboxError::Invalid(message) if message.contains("must not overlap"))
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rejects_persistent_access_to_repository_ancestors() {
+        let parent = std::env::temp_dir().join(format!(
+            "sniff-persistent-parent-test-{}",
+            std::process::id()
+        ));
+        let root = parent.join("repository");
+        std::fs::create_dir_all(&root).unwrap();
+        let mut command = spec(root);
+        command.persistent_read_only_paths = vec![parent.clone()];
+
+        let error = validate_spec(&command).unwrap_err();
+
+        assert!(
+            matches!(error, SandboxError::Invalid(message) if message.contains("must not overlap"))
+        );
+        std::fs::remove_dir_all(parent).unwrap();
+    }
+
+    #[test]
     fn rejects_invalid_environment_entries() {
         let mut command = spec(std::env::temp_dir());
         command.env = vec![("BAD=NAME".to_string(), "value".to_string())];
@@ -579,6 +645,102 @@ mod tests {
         );
     }
 
+    #[cfg(windows)]
+    fn windows_test_root(label: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "sniff-sandbox-{label}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock should be after the Unix epoch")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).expect("create Windows sandbox test root");
+        root
+    }
+
+    #[cfg(windows)]
+    fn windows_command(root: PathBuf, script: String) -> SandboxCommand {
+        let system_root = std::env::var_os("SystemRoot").expect("SystemRoot should be defined");
+        let source = PathBuf::from(system_root).join("System32").join("cmd.exe");
+        let program = root.join("sniff-test-worker.exe");
+        std::fs::copy(source, &program).expect("stage Windows sandbox test worker");
+        SandboxCommand {
+            root,
+            workdir: PathBuf::from("."),
+            program: program.to_string_lossy().into_owned(),
+            args: vec!["/D".to_string(), "/S".to_string(), "/C".to_string(), script],
+            read_only_paths: Vec::new(),
+            persistent_read_only_paths: Vec::new(),
+            env: Vec::new(),
+            allow_network: false,
+            timeout: Duration::from_secs(2),
+            output_limit: 1024,
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_backend_denies_writes_outside_repository_root() {
+        let root = windows_test_root("escape");
+        let outside = root.with_extension("outside");
+        let mut command =
+            windows_command(root.clone(), format!("type nul > {}", outside.display()));
+        command.timeout = Duration::from_secs(5);
+
+        let _ = super::run(&command).expect("Windows AppContainer should start");
+
+        assert!(!outside.exists(), "sandbox wrote outside repository root");
+        std::fs::remove_dir_all(root).unwrap();
+        let _ = std::fs::remove_file(outside);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_backend_reads_only_explicit_external_toolchains() {
+        let root = windows_test_root("persistent-read");
+        let external = windows_test_root("external-toolchain");
+        let evidence = external.join("evidence.txt");
+        std::fs::write(&evidence, "trusted-toolchain-evidence").unwrap();
+
+        let denied = windows_command(root.clone(), format!("type {}", evidence.display()));
+        let denied_output = super::run(&denied).expect("Windows AppContainer should start");
+        assert_ne!(denied_output.status_code, Some(0));
+        assert!(!denied_output.stdout.contains("trusted-toolchain-evidence"));
+
+        let mut allowed = windows_command(root.clone(), format!("type {}", evidence.display()));
+        allowed.persistent_read_only_paths = vec![external.clone()];
+        let allowed_output = super::run(&allowed).expect("persistent read capability should work");
+        assert_eq!(
+            allowed_output.status_code,
+            Some(0),
+            "stdout={:?} stderr={:?}",
+            allowed_output.stdout,
+            allowed_output.stderr
+        );
+        assert!(allowed_output.stdout.contains("trusted-toolchain-evidence"));
+
+        std::fs::remove_dir_all(root).unwrap();
+        std::fs::remove_dir_all(external).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_backend_terminates_a_timed_out_worker() {
+        let root = windows_test_root("timeout");
+        let mut command = windows_command(
+            root.clone(),
+            "for /L %i in (1,1,2147483647) do @rem".to_string(),
+        );
+        command.timeout = Duration::from_millis(100);
+
+        let output = super::run(&command).expect("Windows AppContainer should start");
+
+        assert!(output.timed_out, "worker should be marked as timed out");
+        assert_ne!(output.status_code, Some(0));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     #[cfg(unix)]
     #[test]
     fn unix_backend_denies_writes_outside_repository_root() {
@@ -607,6 +769,7 @@ mod tests {
             program: "/bin/sh".to_string(),
             args: vec!["-c".to_string(), format!("touch ../{outside_name}")],
             read_only_paths: Vec::new(),
+            persistent_read_only_paths: Vec::new(),
             env: Vec::new(),
             allow_network: false,
             #[cfg(target_os = "macos")]
@@ -644,6 +807,7 @@ mod tests {
             program: "/bin/sh".to_string(),
             args: vec!["-c".to_string(), "while :; do :; done".to_string()],
             read_only_paths: Vec::new(),
+            persistent_read_only_paths: Vec::new(),
             env: Vec::new(),
             allow_network: false,
             #[cfg(target_os = "macos")]

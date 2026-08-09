@@ -230,6 +230,7 @@ fn run_proof_command(root: &Path, command: &[String]) -> Result<sandbox::Sandbox
         program: program.clone(),
         args: command.iter().skip(1).cloned().collect(),
         read_only_paths: Vec::new(),
+        persistent_read_only_paths: Vec::new(),
         env: Vec::new(),
         allow_network: false,
         #[cfg(target_os = "macos")]

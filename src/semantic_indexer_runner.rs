@@ -10,10 +10,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-#[cfg(any(target_os = "macos", windows))]
+#[cfg(target_os = "macos")]
 use std::process::Command;
 use std::time::Duration;
-use tokio::time::timeout;
 
 const INDEX_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 #[cfg(debug_assertions)]
@@ -33,7 +32,7 @@ const GRADLE_INDEXER_BASE_JVM_ARGS: &str = concat!(
     "-Xmx512m -XX:MaxMetaspaceSize=384m -Dfile.encoding=US-ASCII ",
     "-Duser.country=US -Duser.language=en -Duser.variant=",
 );
-pub(crate) const WINDOWS_SCIP_PYTHON_BOOTSTRAP: &str = "const path=require('path'); const NativeRegExp=RegExp; function PatchedRegExp(pattern, flags) { if (pattern === path.sep) pattern = path.sep + path.sep; return new NativeRegExp(pattern, flags); } PatchedRegExp.prototype=NativeRegExp.prototype; Object.setPrototypeOf(PatchedRegExp, NativeRegExp); global.RegExp=PatchedRegExp; require(process.argv[1]);";
+pub(crate) const WINDOWS_SCIP_PYTHON_BOOTSTRAP: &str = "const child_process=require('child_process'); const denyProcess=(...args)=>{ throw new Error('Sniff denied scip-python subprocess: '+String(args[0])); }; child_process.execFileSync=denyProcess; child_process.spawnSync=denyProcess; child_process.spawn=denyProcess; const path=require('path'); const NativeRegExp=RegExp; function PatchedRegExp(pattern, flags) { if (pattern === path.sep) pattern = path.sep + path.sep; return new NativeRegExp(pattern, flags); } PatchedRegExp.prototype=NativeRegExp.prototype; Object.setPrototypeOf(PatchedRegExp, NativeRegExp); global.RegExp=PatchedRegExp; require(process.argv[1]);";
 const WINDOWS_SCIP_NODE_BOOTSTRAP: &str = "const indexer=require(process.argv[1]); if (typeof indexer.main !== 'function') throw new Error('SCIP Node indexer does not export main()'); indexer.main();";
 
 struct TemporaryIndexerWorkspace {
@@ -316,9 +315,9 @@ async fn run_one(
     let output = output?;
     if output.timed_out {
         return Err(format!(
-            "{} indexing timed out after {} minutes",
+            "{} indexing timed out after {}",
             spec.display_name,
-            INDEX_TIMEOUT.as_secs() / 60
+            format_timeout(index_timeout())
         ));
     }
     if output.status_code == Some(0) {
@@ -383,93 +382,17 @@ fn stage_node_runtime(root: &Path, runtime: &Path) -> Result<PathBuf, String> {
     }
 }
 
-fn stage_node_indexer(
-    root: &Path,
-    installed_root: &Path,
-    entrypoint: &Path,
-) -> Result<(PathBuf, PathBuf), String> {
-    #[cfg(windows)]
-    {
-        let source = strip_windows_verbatim_prefix(installed_root.to_path_buf());
-        let entrypoint = strip_windows_verbatim_prefix(entrypoint.to_path_buf());
-        let relative_entrypoint = entrypoint.strip_prefix(&source).map_err(|error| {
-            format!(
-                "Node indexer entrypoint {} is outside its installation {}: {error}",
-                entrypoint.display(),
-                source.display()
-            )
-        })?;
-        let staged_root = root.join(INDEXER_TEMP_DIR).join("node-indexer");
-        copy_node_indexer_tree(&source, &staged_root)?;
-        Ok((staged_root.clone(), staged_root.join(relative_entrypoint)))
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = root;
-        Ok((installed_root.to_path_buf(), entrypoint.to_path_buf()))
-    }
-}
-
-#[cfg(windows)]
-fn copy_node_indexer_tree(source: &Path, destination: &Path) -> Result<(), String> {
-    fs::create_dir_all(destination).map_err(|error| {
-        format!(
-            "failed to create staged Node indexer directory {}: {error}",
-            destination.display()
-        )
-    })?;
-    let output = Command::new("robocopy")
-        .arg(source)
-        .arg(destination)
-        .args([
-            "/E",
-            "/COPY:DAT",
-            "/DCOPY:DAT",
-            "/R:0",
-            "/W:0",
-            "/NFL",
-            "/NDL",
-            "/NJH",
-            "/NJS",
-            "/NP",
-        ])
-        .output()
-        .map_err(|error| format!("failed to start robocopy for Node indexer staging: {error}"))?;
-    let status = output.status.code().unwrap_or(-1);
-    if status > 7 {
-        return Err(format!(
-            "robocopy failed to stage Node indexer {} into {} with exit code {}",
-            source.display(),
-            destination.display(),
-            status
-        ));
-    }
-    Ok(())
-}
-
 async fn run_sandbox_command(
     sandbox_command: SandboxCommand,
     indexer_name: &str,
 ) -> Result<crate::sandbox::SandboxOutput, String> {
-    let index_timeout = sandbox_command.timeout;
-    let worker_timeout = index_timeout.saturating_add(Duration::from_secs(30));
-    match timeout(
-        worker_timeout,
-        tokio::task::spawn_blocking(move || crate::sandbox::run(&sandbox_command)),
-    )
-    .await
-    {
-        Err(_) => Err(format!(
-            "{} indexing timed out after {} minutes",
-            indexer_name,
-            index_timeout.as_secs() / 60
-        )),
-        Ok(Err(error)) => Err(format!("{} indexing worker failed: {error}", indexer_name)),
-        Ok(Ok(Err(error))) => Err(format!(
+    match tokio::task::spawn_blocking(move || crate::sandbox::run(&sandbox_command)).await {
+        Err(error) => Err(format!("{} indexing worker failed: {error}", indexer_name)),
+        Ok(Err(error)) => Err(format!(
             "{} indexing could not start in the sandbox: {error}",
             indexer_name
         )),
-        Ok(Ok(Ok(output))) => Ok(output),
+        Ok(Ok(output)) => Ok(output),
     }
 }
 
@@ -494,17 +417,16 @@ fn build_indexer_sandbox_command(
             installed.entrypoint.display()
         )
     })?;
-    let (installed_root, entrypoint) =
-        if cfg!(windows) && spec.runtime == IndexerRuntime::NodeScript {
-            stage_node_indexer(root, &installed_root, &entrypoint)?
-        } else {
-            (installed_root, entrypoint)
-        };
     let (program, mut args, runtime_path) = match spec.runtime {
         IndexerRuntime::NodeScript => {
             let node = stage_node_runtime(root, &resolve_runtime("node")?)?;
             let mut args = Vec::new();
             if cfg!(windows) {
+                // AppContainers cannot inspect a volume root. These flags keep
+                // CommonJS resolution on the explicitly granted paths instead
+                // of canonicalizing every module through that root.
+                args.push("--preserve-symlinks".to_string());
+                args.push("--preserve-symlinks-main".to_string());
                 args.push("-e".to_string());
                 args.push(
                     if spec.kind == SemanticIndexerKind::Python {
@@ -514,7 +436,7 @@ fn build_indexer_sandbox_command(
                     }
                     .to_string(),
                 );
-                args.push(entrypoint.to_string_lossy().to_string());
+                args.push(windows_node_entrypoint_argument(root, &entrypoint)?);
             } else {
                 args.push(entrypoint.to_string_lossy().to_string());
             }
@@ -566,8 +488,17 @@ fn build_indexer_sandbox_command(
     } else {
         runtime_mount_root(&runtime_path)
     };
-    let mut read_only_paths = vec![installed_root.clone(), runtime_root];
-    read_only_paths.extend(runtime_dependency_paths(&runtime_path)?);
+    let mut read_only_paths = Vec::new();
+    let mut persistent_read_only_paths = Vec::new();
+    push_external_read_only(
+        root,
+        &mut persistent_read_only_paths,
+        installed_root.clone(),
+    );
+    push_external_read_only(root, &mut persistent_read_only_paths, runtime_root);
+    for dependency in runtime_dependency_paths(&runtime_path)? {
+        push_external_read_only(root, &mut persistent_read_only_paths, dependency);
+    }
     let mut path_prefixes = Vec::new();
     let mut env = Vec::new();
     let sandbox_home = sandbox_repository_argument(root, &root.to_string_lossy());
@@ -582,20 +513,11 @@ fn build_indexer_sandbox_command(
                 .into_owned(),
         ));
     }
-    #[cfg(windows)]
-    if spec.kind == SemanticIndexerKind::Python {
-        // Pyright needs the host Python installation to resolve its standard
-        // library, but the explicit environment manifest keeps it from
-        // launching pip or discovering arbitrary host packages.
-        let python = resolve_runtime("python")?;
-        read_only_paths.push(runtime_mount_root(&python));
-        path_prefixes.push(runtime_bin_directory(&python, "python")?);
-    }
     #[cfg(target_os = "macos")]
     if spec.kind == SemanticIndexerKind::Python
         && let Some(developer_dir) = macos_developer_directory()
     {
-        read_only_paths.push(developer_dir.clone());
+        push_external_read_only(root, &mut persistent_read_only_paths, developer_dir.clone());
         env.push((
             "DEVELOPER_DIR".to_string(),
             developer_dir.to_string_lossy().to_string(),
@@ -603,7 +525,11 @@ fn build_indexer_sandbox_command(
     }
     if spec.kind == SemanticIndexerKind::Go {
         let go = resolve_runtime("go")?;
-        read_only_paths.push(runtime_mount_root(&go));
+        push_external_read_only(
+            root,
+            &mut persistent_read_only_paths,
+            runtime_mount_root(&go),
+        );
         path_prefixes.push(runtime_bin_directory(&go, "go")?);
         env.push((
             "GOCACHE".to_string(),
@@ -620,7 +546,11 @@ fn build_indexer_sandbox_command(
         let cargo = resolve_runtime("cargo")?;
         for name in ["cargo", "rustc"] {
             let runtime = resolve_runtime(name)?;
-            read_only_paths.push(runtime_mount_root(&runtime));
+            push_external_read_only(
+                root,
+                &mut persistent_read_only_paths,
+                runtime_mount_root(&runtime),
+            );
             path_prefixes.push(runtime_bin_directory(&runtime, name)?);
         }
         let cargo_home = std::env::var_os("CARGO_HOME")
@@ -634,7 +564,7 @@ fn build_indexer_sandbox_command(
                     .filter(|path| path.is_dir())
             });
         if let Some(cargo_home) = cargo_home {
-            read_only_paths.push(cargo_home.clone());
+            push_external_read_only(root, &mut persistent_read_only_paths, cargo_home.clone());
             env.push((
                 "CARGO_HOME".to_string(),
                 cargo_home.to_string_lossy().to_string(),
@@ -649,7 +579,7 @@ fn build_indexer_sandbox_command(
                         .filter(|path| path.is_dir())
                 });
             if let Some(rustup_home) = rustup_home {
-                read_only_paths.push(rustup_home.clone());
+                push_external_read_only(root, &mut persistent_read_only_paths, rustup_home.clone());
                 env.push((
                     "RUSTUP_HOME".to_string(),
                     rustup_home.to_string_lossy().to_string(),
@@ -660,7 +590,11 @@ fn build_indexer_sandbox_command(
     let gradle_jvm_args = if spec.kind == SemanticIndexerKind::Kotlin {
         let gradle = resolve_runtime("gradle")?;
         let gradle_jvm_args = gradle_indexer_jvm_args(&gradle)?;
-        read_only_paths.push(runtime_mount_root(&gradle));
+        push_external_read_only(
+            root,
+            &mut persistent_read_only_paths,
+            runtime_mount_root(&gradle),
+        );
         path_prefixes.push(runtime_bin_directory(&gradle, "gradle")?);
         Some(gradle_jvm_args)
     } else {
@@ -736,6 +670,8 @@ fn build_indexer_sandbox_command(
     }
     read_only_paths.sort();
     read_only_paths.dedup();
+    persistent_read_only_paths.sort();
+    persistent_read_only_paths.dedup();
 
     Ok(SandboxCommand {
         root: root.to_path_buf(),
@@ -743,6 +679,7 @@ fn build_indexer_sandbox_command(
         program,
         args,
         read_only_paths,
+        persistent_read_only_paths,
         env,
         allow_network: false,
         #[cfg(target_os = "macos")]
@@ -750,6 +687,21 @@ fn build_indexer_sandbox_command(
         timeout: index_timeout(),
         output_limit: MAX_PROCESS_OUTPUT,
     })
+}
+
+fn push_external_read_only(root: &Path, paths: &mut Vec<PathBuf>, path: PathBuf) {
+    let path = strip_windows_verbatim_prefix(path);
+    let root = strip_windows_verbatim_prefix(root.to_path_buf());
+    if !path.starts_with(&root) {
+        paths.push(path);
+    }
+}
+
+fn windows_node_entrypoint_argument(root: &Path, entrypoint: &Path) -> Result<String, String> {
+    Ok(entrypoint.strip_prefix(root).map_or_else(
+        |_| entrypoint.to_string_lossy().into_owned(),
+        |relative| format!(r".\{}", relative.to_string_lossy()),
+    ))
 }
 
 fn index_timeout() -> Duration {
@@ -761,6 +713,17 @@ fn index_timeout() -> Duration {
         return Duration::from_secs(seconds);
     }
     INDEX_TIMEOUT
+}
+
+fn format_timeout(duration: Duration) -> String {
+    let seconds = duration.as_secs();
+    if seconds >= 60 && seconds.is_multiple_of(60) {
+        let minutes = seconds / 60;
+        let unit = if minutes == 1 { "minute" } else { "minutes" };
+        format!("{minutes} {unit}")
+    } else {
+        format!("{seconds} seconds")
+    }
 }
 
 fn write_private_gradle_properties(root: &Path, cache_root: &Path) -> Result<(), String> {

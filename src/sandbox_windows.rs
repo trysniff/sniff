@@ -4,7 +4,7 @@ use super::{
 use std::collections::BTreeMap;
 use std::ffi::c_void;
 use std::os::windows::io::FromRawHandle;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Mutex;
 use std::thread;
@@ -15,15 +15,17 @@ use windows_sys::Win32::Foundation::{
 };
 use windows_sys::Win32::Security::Authorization::{
     ConvertSidToStringSidW, ConvertStringSidToSidW, EXPLICIT_ACCESS_W, GRANT_ACCESS,
-    GetNamedSecurityInfoW, REVOKE_ACCESS, SE_FILE_OBJECT, SetEntriesInAclW, SetNamedSecurityInfoW,
-    TRUSTEE_IS_SID, TRUSTEE_IS_WELL_KNOWN_GROUP, TRUSTEE_W,
+    GetExplicitEntriesFromAclW, GetNamedSecurityInfoW, REVOKE_ACCESS, SE_FILE_OBJECT, SET_ACCESS,
+    SetEntriesInAclW, SetNamedSecurityInfoW, TRUSTEE_IS_SID, TRUSTEE_IS_WELL_KNOWN_GROUP,
+    TRUSTEE_W,
 };
 use windows_sys::Win32::Security::Isolation::{
     CreateAppContainerProfile, DeleteAppContainerProfile,
 };
 use windows_sys::Win32::Security::{
-    DACL_SECURITY_INFORMATION, NO_INHERITANCE, SECURITY_ATTRIBUTES, SECURITY_CAPABILITIES,
-    SID_AND_ATTRIBUTES,
+    DACL_SECURITY_INFORMATION, DeriveCapabilitySidsFromName, EqualSid, NO_INHERITANCE,
+    SECURITY_ATTRIBUTES, SECURITY_CAPABILITIES, SID_AND_ATTRIBUTES,
+    SUB_CONTAINERS_AND_OBJECTS_INHERIT,
 };
 use windows_sys::Win32::System::JobObjects::{
     AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_ACTIVE_PROCESS,
@@ -42,12 +44,13 @@ use windows_sys::Win32::System::Threading::{
 };
 
 const INTERNET_CLIENT_SID: &str = "S-1-15-3-1";
+const PERSISTENT_READ_CAPABILITY: &str = "trysniff.semantic-indexer-read.v1";
 const SE_GROUP_ENABLED: u32 = 0x00000004;
+const FILE_GENERIC_READ_ACCESS: u32 = 0x0012_0089;
 const MAX_PROCESS_MEMORY: usize = 1024 * 1024 * 1024;
 const MAX_ACTIVE_PROCESSES: u32 = 128;
 const ACL_COMMAND_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const ACL_COMMAND_OUTPUT_LIMIT: usize = 64 * 1024;
-const TRAVERSE_ACL_PERMISSIONS: u32 = 0x20 | 0x80 | 0x20_000;
 const WINDOWS_SANDBOX_LOCK_NAME: &str = r"Local\SniffWindowsSandboxAclLock";
 const WINDOWS_SANDBOX_LOCK_TIMEOUT: Duration = Duration::from_secs(2 * 60 * 60);
 const SANDBOX_PROCESS_CREATION_FLAGS: u32 =
@@ -55,10 +58,12 @@ const SANDBOX_PROCESS_CREATION_FLAGS: u32 =
 static WINDOWS_SANDBOX_LOCK: Mutex<()> = Mutex::new(());
 
 pub(super) fn run(spec: &SandboxCommand) -> Result<SandboxOutput, SandboxError> {
+    let started = Instant::now();
     let _sandbox_lock = WINDOWS_SANDBOX_LOCK.lock().map_err(|_| {
         SandboxError::Failed("Windows sandbox coordination lock was poisoned".to_string())
     })?;
     let _cross_process_lock = CrossProcessLock::acquire()?;
+    trace_phase(started, "coordination lock acquired");
     let program = resolve_program(&spec.program)?;
     let mut effective_spec = spec.clone();
     effective_spec.program = program.to_string_lossy().into_owned();
@@ -81,6 +86,16 @@ pub(super) fn run(spec: &SandboxCommand) -> Result<SandboxOutput, SandboxError> 
             Attributes: SE_GROUP_ENABLED,
         });
     }
+    let persistent_read_capability = if spec.persistent_read_only_paths.is_empty() {
+        None
+    } else {
+        let capability = CapabilitySid::derive(PERSISTENT_READ_CAPABILITY)?;
+        capabilities.push(SID_AND_ATTRIBUTES {
+            Sid: capability.sid,
+            Attributes: SE_GROUP_ENABLED,
+        });
+        Some(capability)
+    };
 
     let mut app_container_sid = std::ptr::null_mut();
     let capability_pointer = if capabilities.is_empty() {
@@ -110,22 +125,29 @@ pub(super) fn run(spec: &SandboxCommand) -> Result<SandboxOutput, SandboxError> 
         sid: app_container_sid,
         network_sid,
     };
+    trace_phase(started, "AppContainer profile created");
 
-    let sid_string = sid_string(profile_guard.sid)?;
-    let requires_runtime_traversal = spec
-        .env
-        .iter()
-        .any(|(key, value)| key == "SNIFF_INTERNAL_INDEXER" && value == "1");
+    let app_container_sid_text = sid_string(profile_guard.sid)?;
+    if let Some(capability) = &persistent_read_capability {
+        let capability_sid = sid_string(capability.sid)?;
+        for path in &effective_spec.persistent_read_only_paths {
+            ensure_persistent_read_acl(path, capability.sid, &capability_sid)?;
+        }
+        trace_phase(started, "persistent toolchain access verified");
+    }
     let mut acl_guard = AclGuard::grant(
         &effective_spec.root,
         &effective_spec.read_only_paths,
-        &sid_string,
-        requires_runtime_traversal,
+        &app_container_sid_text,
     )?;
+    trace_phase(started, "filesystem access granted");
     // AppContainer file-read permission is not enough to launch an executable.
-    grant_acl(&program, &sid_string, "RX")?;
+    grant_acl(&program, &app_container_sid_text, "RX")?;
+    trace_phase(started, "program execution granted");
     let result = run_process(&effective_spec, profile_guard.sid, &mut capabilities);
+    trace_phase(started, "sandbox process returned");
     let revoke = acl_guard.revoke();
+    trace_phase(started, "filesystem access revoked");
     match (result, revoke) {
         (Ok(output), Ok(())) => Ok(output),
         (Err(error), Ok(())) => Err(error),
@@ -133,6 +155,78 @@ pub(super) fn run(spec: &SandboxCommand) -> Result<SandboxOutput, SandboxError> 
         (Err(error), Err(cleanup_error)) => Err(SandboxError::Failed(format!(
             "{error}; additionally, Windows sandbox ACL cleanup failed: {cleanup_error}"
         ))),
+    }
+}
+
+struct CapabilitySid {
+    sid: *mut c_void,
+}
+
+impl CapabilitySid {
+    fn derive(name: &str) -> Result<Self, SandboxError> {
+        let name = wide_null(name);
+        let mut group_sids = std::ptr::null_mut();
+        let mut group_count = 0_u32;
+        let mut capability_sids = std::ptr::null_mut();
+        let mut capability_count = 0_u32;
+        let derived = unsafe {
+            DeriveCapabilitySidsFromName(
+                name.as_ptr(),
+                &mut group_sids,
+                &mut group_count,
+                &mut capability_sids,
+                &mut capability_count,
+            )
+        };
+        if derived == 0 {
+            return Err(last_error("derive Windows sandbox capability SID"));
+        }
+
+        let capability_sid = if capability_count == 1 && !capability_sids.is_null() {
+            unsafe { *capability_sids }
+        } else {
+            std::ptr::null_mut()
+        };
+        unsafe {
+            free_sid_array(group_sids, group_count, std::ptr::null_mut());
+            free_sid_array(capability_sids, capability_count, capability_sid);
+        }
+        if capability_sid.is_null() {
+            return Err(SandboxError::Failed(format!(
+                "Windows returned {capability_count} SIDs for sandbox capability {PERSISTENT_READ_CAPABILITY}; expected exactly one"
+            )));
+        }
+        Ok(Self {
+            sid: capability_sid,
+        })
+    }
+}
+
+impl Drop for CapabilitySid {
+    fn drop(&mut self) {
+        free_sid(self.sid);
+    }
+}
+
+unsafe fn free_sid_array(array: *mut *mut c_void, count: u32, retained: *mut c_void) {
+    if array.is_null() {
+        return;
+    }
+    for index in 0..count as usize {
+        let sid = unsafe { *array.add(index) };
+        if sid != retained {
+            free_sid(sid);
+        }
+    }
+    unsafe { LocalFree(array as _) };
+}
+
+fn trace_phase(started: Instant, phase: &str) {
+    if std::env::var_os("SNIFF_DEBUG_INDEXERS").is_some() {
+        eprintln!(
+            "[sniff] Windows sandbox {phase}: {:.3}s",
+            started.elapsed().as_secs_f64()
+        );
     }
 }
 
@@ -614,37 +708,86 @@ fn grant_acl(path: &Path, sid: &str, permission: &str) -> Result<(), SandboxErro
     Ok(())
 }
 
-fn grant_traverse_acl(path: &Path, sid: &str) -> Result<(), SandboxError> {
-    let path = normalize_windows_path(path.to_path_buf());
-    // Node resolves absolute Windows paths by reading metadata from every
-    // parent before traversing to the explicitly granted target.
-    update_acl_entry(&path, sid, TRAVERSE_ACL_PERMISSIONS, GRANT_ACCESS).map_err(|error| {
-        SandboxError::Failed(format!(
-            "Windows traversal ACL failed for {}: {error}",
-            path.display()
-        ))
-    })
+fn ensure_persistent_read_acl(
+    path: &Path,
+    capability_sid: *mut c_void,
+    capability_sid_text: &str,
+) -> Result<(), SandboxError> {
+    if persistent_read_acl_exists(path, capability_sid)? {
+        return Ok(());
+    }
+    grant_acl(path, capability_sid_text, "R")
 }
 
-fn revoke_acl(path: &Path, sid: &str, recursive: bool) -> Result<(), String> {
+fn persistent_read_acl_exists(
+    path: &Path,
+    capability_sid: *mut c_void,
+) -> Result<bool, SandboxError> {
     let path = normalize_windows_path(path.to_path_buf());
-    if !recursive {
-        return update_acl_entry(&path, sid, 0, REVOKE_ACCESS)
-            .map_err(|error| format!("native ACL revoke failed for {}: {error}", path.display()));
+    let path_w = wide_null(&path.to_string_lossy());
+    let mut acl = std::ptr::null_mut();
+    let mut descriptor = std::ptr::null_mut();
+    let get_status = unsafe {
+        GetNamedSecurityInfoW(
+            path_w.as_ptr(),
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &mut acl,
+            std::ptr::null_mut(),
+            &mut descriptor,
+        )
+    };
+    if get_status != 0 {
+        return Err(SandboxError::Failed(format!(
+            "read persistent sandbox DACL for {} failed with Windows error {get_status}",
+            path.display()
+        )));
     }
-    let mut command = Command::new("icacls");
-    command.arg(path).arg("/remove").arg(format!("*{sid}"));
-    if recursive {
-        command.args(["/T", "/C"]);
+
+    let mut entries = std::ptr::null_mut();
+    let mut entry_count = 0_u32;
+    let explicit_status =
+        unsafe { GetExplicitEntriesFromAclW(acl, &mut entry_count, &mut entries) };
+    let result = if explicit_status != 0 {
+        Err(SandboxError::Failed(format!(
+            "inspect persistent sandbox DACL for {} failed with Windows error {explicit_status}",
+            path.display()
+        )))
     } else {
-        command.arg("/C");
+        let entries = if entries.is_null() {
+            &[][..]
+        } else {
+            unsafe { std::slice::from_raw_parts(entries, entry_count as usize) }
+        };
+        Ok(entries.iter().any(|entry| {
+            let trustee_sid = entry.Trustee.ptstrName as *mut c_void;
+            entry.Trustee.TrusteeForm == TRUSTEE_IS_SID
+                && !trustee_sid.is_null()
+                && unsafe { EqualSid(trustee_sid, capability_sid) != 0 }
+                && matches!(entry.grfAccessMode, GRANT_ACCESS | SET_ACCESS)
+                && entry.grfAccessPermissions & FILE_GENERIC_READ_ACCESS == FILE_GENERIC_READ_ACCESS
+                && (!path.is_dir()
+                    || entry.grfInheritance & SUB_CONTAINERS_AND_OBJECTS_INHERIT
+                        == SUB_CONTAINERS_AND_OBJECTS_INHERIT)
+        }))
+    };
+    unsafe {
+        if !entries.is_null() {
+            LocalFree(entries as _);
+        }
+        if !descriptor.is_null() {
+            LocalFree(descriptor);
+        }
     }
-    let output = run_icacls(command).map_err(|error| error.to_string())?;
-    if output.success {
-        Ok(())
-    } else {
-        Err(output.error_text())
-    }
+    result
+}
+
+fn revoke_acl(path: &Path, sid: &str) -> Result<(), String> {
+    let path = normalize_windows_path(path.to_path_buf());
+    update_acl_entry(&path, sid, 0, REVOKE_ACCESS)
+        .map_err(|error| format!("native ACL revoke failed for {}: {error}", path.display()))
 }
 
 fn update_acl_entry(
@@ -807,7 +950,6 @@ fn run_icacls(mut command: Command) -> Result<IcalcsOutput, SandboxError> {
 
 struct AclGrant {
     path: std::path::PathBuf,
-    recursive: bool,
 }
 
 struct AclGuard {
@@ -820,55 +962,21 @@ impl AclGuard {
         root: &Path,
         read_only_paths: &[std::path::PathBuf],
         sid: &str,
-        requires_runtime_traversal: bool,
     ) -> Result<Self, SandboxError> {
-        let mut grants = Vec::with_capacity(read_only_paths.len() + 1);
-        for path in
-            std::iter::once(root).chain(read_only_paths.iter().map(std::path::PathBuf::as_path))
-        {
-            if requires_runtime_traversal {
-                // Absolute Windows paths are resolved through the drive root.
-                // Grant traversal only, never recursive access, so Node and
-                // other runtimes can resolve a staged path without scanning
-                // the drive or a system installation tree.
-                let mut ancestors = path
-                    .ancestors()
-                    .filter(|ancestor| !ancestor.as_os_str().is_empty())
-                    .map(std::path::Path::to_path_buf)
-                    .collect::<Vec<_>>();
-                ancestors.reverse();
-                for ancestor in ancestors {
-                    if grants.iter().any(|grant: &AclGrant| grant.path == ancestor) {
-                        continue;
-                    }
-                    if let Err(error) = grant_traverse_acl(&ancestor, sid) {
-                        for granted in grants.iter().rev() {
-                            let _ = revoke_acl(&granted.path, sid, granted.recursive);
-                        }
-                        return Err(error);
-                    }
-                    grants.push(AclGrant {
-                        path: ancestor.to_path_buf(),
-                        recursive: false,
-                    });
-                }
-            }
-
+        let paths = explicit_acl_paths(root, read_only_paths);
+        let mut grants: Vec<AclGrant> = Vec::with_capacity(paths.len());
+        for path in paths {
             // Directory grants use inheritance rather than recursively
             // walking every dependency file. Cleanup removes the parent ACE;
             // inherited child access then disappears with it.
-            let recursive = false;
-            let permission = if path == root { "M" } else { "R" };
-            if let Err(error) = grant_acl(path, sid, permission) {
+            let permission = if path.as_path() == root { "M" } else { "R" };
+            if let Err(error) = grant_acl(&path, sid, permission) {
                 for granted in grants.iter().rev() {
-                    let _ = revoke_acl(&granted.path, sid, granted.recursive);
+                    let _ = revoke_acl(&granted.path, sid);
                 }
                 return Err(error);
             }
-            grants.push(AclGrant {
-                path: path.to_path_buf(),
-                recursive,
-            });
+            grants.push(AclGrant { path });
         }
         Ok(Self {
             grants,
@@ -879,7 +987,7 @@ impl AclGuard {
     fn revoke(&mut self) -> Result<(), SandboxError> {
         let mut failures = Vec::new();
         for grant in self.grants.drain(..).rev() {
-            if let Err(error) = revoke_acl(&grant.path, &self.sid, grant.recursive) {
+            if let Err(error) = revoke_acl(&grant.path, &self.sid) {
                 failures.push(format!("{}: {error}", grant.path.display()));
             }
         }
@@ -889,6 +997,16 @@ impl AclGuard {
             Err(SandboxError::Failed(failures.join("; ")))
         }
     }
+}
+
+fn explicit_acl_paths(root: &Path, read_only_paths: &[std::path::PathBuf]) -> Vec<PathBuf> {
+    let mut paths = Vec::with_capacity(read_only_paths.len() + 1);
+    for path in std::iter::once(root.to_path_buf()).chain(read_only_paths.iter().cloned()) {
+        if !paths.contains(&path) {
+            paths.push(path);
+        }
+    }
+    paths
 }
 
 impl Drop for AclGuard {
@@ -905,6 +1023,7 @@ struct ProfileGuard {
 
 impl Drop for ProfileGuard {
     fn drop(&mut self) {
+        let started = Instant::now();
         unsafe {
             DeleteAppContainerProfile(self.name.as_ptr());
             if !self.sid.is_null() {
@@ -913,6 +1032,12 @@ impl Drop for ProfileGuard {
             if !self.network_sid.is_null() {
                 LocalFree(self.network_sid);
             }
+        }
+        if std::env::var_os("SNIFF_DEBUG_INDEXERS").is_some() {
+            eprintln!(
+                "[sniff] Windows sandbox AppContainer profile deleted: {:.3}s",
+                started.elapsed().as_secs_f64()
+            );
         }
     }
 }
@@ -968,10 +1093,57 @@ fn last_error(action: &str) -> SandboxError {
 
 #[cfg(test)]
 mod tests {
-    use super::{CREATE_SUSPENDED, SANDBOX_PROCESS_CREATION_FLAGS};
+    use super::{
+        CREATE_SUSPENDED, CapabilitySid, SANDBOX_PROCESS_CREATION_FLAGS,
+        ensure_persistent_read_acl, explicit_acl_paths, persistent_read_acl_exists, sid_string,
+    };
+    use std::path::{Path, PathBuf};
+    use windows_sys::Win32::Security::EqualSid;
 
     #[test]
     fn appcontainer_process_starts_suspended_before_job_assignment() {
         assert_ne!(SANDBOX_PROCESS_CREATION_FLAGS & CREATE_SUSPENDED, 0);
+    }
+
+    #[test]
+    fn repository_acl_targets_never_include_ancestors() {
+        let root = Path::new(r"C:\work\repository");
+        let tool = PathBuf::from(r"C:\tools\node.exe");
+
+        let paths = explicit_acl_paths(root, std::slice::from_ref(&tool));
+
+        assert_eq!(paths, [root.to_path_buf(), tool]);
+        assert!(!paths.contains(&PathBuf::from(r"C:\")));
+        assert!(!paths.contains(&PathBuf::from(r"C:\work")));
+    }
+
+    #[test]
+    fn named_persistent_read_capability_is_stable() {
+        let first = CapabilitySid::derive(super::PERSISTENT_READ_CAPABILITY).unwrap();
+        let second = CapabilitySid::derive(super::PERSISTENT_READ_CAPABILITY).unwrap();
+
+        assert_ne!(first.sid, second.sid);
+        assert_ne!(unsafe { EqualSid(first.sid, second.sid) }, 0);
+    }
+
+    #[test]
+    fn persistent_read_acl_is_granted_once_and_detected() {
+        let root = std::env::temp_dir().join(format!(
+            "sniff-persistent-acl-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let capability = CapabilitySid::derive(super::PERSISTENT_READ_CAPABILITY).unwrap();
+        let capability_text = sid_string(capability.sid).unwrap();
+
+        assert!(!persistent_read_acl_exists(&root, capability.sid).unwrap());
+        ensure_persistent_read_acl(&root, capability.sid, &capability_text).unwrap();
+        assert!(persistent_read_acl_exists(&root, capability.sid).unwrap());
+
+        std::fs::remove_dir_all(root).unwrap();
     }
 }
