@@ -98,7 +98,7 @@ jobs:
         run: |
           $env:SNIFF_DEBUG_INDEXERS = "1"
           $env:SNIFF_INTERNAL_INDEXER_TIMEOUT_SECS = "300"
-          cargo run --quiet --locked -- indexers run tests/semantic_gold_fixtures/python
+          cargo run --quiet --locked -- indexers index tests/semantic_gold_fixtures/python
 
   msrv:
     name: msrv-1.88
