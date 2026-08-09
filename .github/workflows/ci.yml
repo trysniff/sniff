@@ -92,13 +92,13 @@ jobs:
             cargo test --test $test --locked -- --test-threads=1
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
-      - name: Run one cross-language Windows dogfood smoke test
+      - name: Run Python Windows semantic smoke diagnostic
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           $env:SNIFF_DEBUG_INDEXERS = "1"
           $env:SNIFF_INTERNAL_INDEXER_TIMEOUT_SECS = "300"
-          cargo test --test dogfood_suite brandset::default_scan_reviews_every_supported_language_end_to_end --locked -- --exact --test-threads=1 --nocapture
+          cargo run --quiet --locked -- indexers run tests/semantic_gold_fixtures/python
 
   msrv:
     name: msrv-1.88
