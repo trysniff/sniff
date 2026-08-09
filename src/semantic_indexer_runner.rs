@@ -17,6 +17,7 @@ use tokio::time::timeout;
 
 const INDEX_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 const MAX_PROCESS_OUTPUT: usize = 2 * 1024 * 1024;
+#[cfg(windows)]
 const MAX_PYTHON_ENVIRONMENT_OUTPUT: usize = 64 * 1024 * 1024;
 const MAX_COMPACT_ERROR_OUTPUT: usize = 8 * 1024;
 const INDEXER_CACHE_DIR: &str = ".sniff-indexer-cache";
