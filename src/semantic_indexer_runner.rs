@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 use std::process::Command;
 use std::time::Duration;
 use tokio::time::timeout;
@@ -348,47 +348,31 @@ fn copy_node_indexer_tree(source: &Path, destination: &Path) -> Result<(), Strin
             destination.display()
         )
     })?;
-    for entry in fs::read_dir(source).map_err(|error| {
-        format!(
-            "failed to read Node indexer installation {}: {error}",
-            source.display()
-        )
-    })? {
-        let entry = entry.map_err(|error| {
-            format!(
-                "failed to inspect Node indexer installation {}: {error}",
-                source.display()
-            )
-        })?;
-        let source_path = entry.path();
-        let destination_path = destination.join(entry.file_name());
-        let metadata = fs::symlink_metadata(&source_path).map_err(|error| {
-            format!(
-                "failed to inspect staged Node indexer source {}: {error}",
-                source_path.display()
-            )
-        })?;
-        if metadata.file_type().is_symlink() {
-            return Err(format!(
-                "refusing to stage symlinked Node indexer path {}",
-                source_path.display()
-            ));
-        }
-        if metadata.is_dir() {
-            copy_node_indexer_tree(&source_path, &destination_path)?;
-        } else if metadata.is_file() {
-            fs::copy(&source_path, &destination_path).map_err(|error| {
-                format!(
-                    "failed to stage Node indexer file {}: {error}",
-                    source_path.display()
-                )
-            })?;
-        } else {
-            return Err(format!(
-                "refusing to stage unsupported Node indexer path {}",
-                source_path.display()
-            ));
-        }
+    let output = Command::new("robocopy")
+        .arg(source)
+        .arg(destination)
+        .args([
+            "/E",
+            "/COPY:DAT",
+            "/DCOPY:DAT",
+            "/R:0",
+            "/W:0",
+            "/NFL",
+            "/NDL",
+            "/NJH",
+            "/NJS",
+            "/NP",
+        ])
+        .output()
+        .map_err(|error| format!("failed to start robocopy for Node indexer staging: {error}"))?;
+    let status = output.status.code().unwrap_or(-1);
+    if status > 7 {
+        return Err(format!(
+            "robocopy failed to stage Node indexer {} into {} with exit code {}",
+            source.display(),
+            destination.display(),
+            status
+        ));
     }
     Ok(())
 }
