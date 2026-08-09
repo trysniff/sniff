@@ -315,6 +315,84 @@ fn stage_node_runtime(root: &Path, runtime: &Path) -> Result<PathBuf, String> {
     }
 }
 
+fn stage_node_indexer(
+    root: &Path,
+    installed_root: &Path,
+    entrypoint: &Path,
+) -> Result<(PathBuf, PathBuf), String> {
+    #[cfg(windows)]
+    {
+        let relative_entrypoint = entrypoint.strip_prefix(installed_root).map_err(|error| {
+            format!(
+                "Node indexer entrypoint {} is outside its installation {}: {error}",
+                entrypoint.display(),
+                installed_root.display()
+            )
+        })?;
+        let staged_root = root.join(INDEXER_TEMP_DIR).join("node-indexer");
+        copy_node_indexer_tree(installed_root, &staged_root)?;
+        Ok((staged_root.clone(), staged_root.join(relative_entrypoint)))
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = root;
+        Ok((installed_root.to_path_buf(), entrypoint.to_path_buf()))
+    }
+}
+
+#[cfg(windows)]
+fn copy_node_indexer_tree(source: &Path, destination: &Path) -> Result<(), String> {
+    fs::create_dir_all(destination).map_err(|error| {
+        format!(
+            "failed to create staged Node indexer directory {}: {error}",
+            destination.display()
+        )
+    })?;
+    for entry in fs::read_dir(source).map_err(|error| {
+        format!(
+            "failed to read Node indexer installation {}: {error}",
+            source.display()
+        )
+    })? {
+        let entry = entry.map_err(|error| {
+            format!(
+                "failed to inspect Node indexer installation {}: {error}",
+                source.display()
+            )
+        })?;
+        let source_path = entry.path();
+        let destination_path = destination.join(entry.file_name());
+        let metadata = fs::symlink_metadata(&source_path).map_err(|error| {
+            format!(
+                "failed to inspect staged Node indexer source {}: {error}",
+                source_path.display()
+            )
+        })?;
+        if metadata.file_type().is_symlink() {
+            return Err(format!(
+                "refusing to stage symlinked Node indexer path {}",
+                source_path.display()
+            ));
+        }
+        if metadata.is_dir() {
+            copy_node_indexer_tree(&source_path, &destination_path)?;
+        } else if metadata.is_file() {
+            fs::copy(&source_path, &destination_path).map_err(|error| {
+                format!(
+                    "failed to stage Node indexer file {}: {error}",
+                    source_path.display()
+                )
+            })?;
+        } else {
+            return Err(format!(
+                "refusing to stage unsupported Node indexer path {}",
+                source_path.display()
+            ));
+        }
+    }
+    Ok(())
+}
+
 async fn run_sandbox_command(
     sandbox_command: SandboxCommand,
     indexer_name: &str,
@@ -360,6 +438,12 @@ fn build_indexer_sandbox_command(
             installed.entrypoint.display()
         )
     })?;
+    let (installed_root, entrypoint) =
+        if cfg!(windows) && spec.runtime == IndexerRuntime::NodeScript {
+            stage_node_indexer(root, &installed_root, &entrypoint)?
+        } else {
+            (installed_root, entrypoint)
+        };
     let (program, mut args, runtime_path) = match spec.runtime {
         IndexerRuntime::NodeScript => {
             let node = stage_node_runtime(root, &resolve_runtime("node")?)?;
