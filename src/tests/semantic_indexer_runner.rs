@@ -1,6 +1,6 @@
 use super::{
-    GRADLE_INDEXER_BASE_JVM_ARGS, WINDOWS_SCIP_PYTHON_BOOTSTRAP, compact_process_output,
-    files_for_indexer, gradle_indexer_jvm_args, gradle_script_uses_android,
+    GRADLE_INDEXER_BASE_JVM_ARGS, WINDOWS_SCIP_NODE_BOOTSTRAP, WINDOWS_SCIP_PYTHON_BOOTSTRAP,
+    compact_process_output, files_for_indexer, gradle_indexer_jvm_args, gradle_script_uses_android,
     indexer_arguments_with_project, missing_position_encoding, project_name,
     reject_unsupported_android_gradle, sandbox_repository_argument, source_integrity_digest,
     write_private_gradle_properties,
@@ -151,6 +151,13 @@ fn windows_python_provider_bootstrap_loads_the_real_entrypoint() {
             && WINDOWS_SCIP_PYTHON_BOOTSTRAP.contains("process.argv[1]")
     );
     assert!(!WINDOWS_SCIP_PYTHON_BOOTSTRAP.contains("sep='/';"));
+}
+
+#[test]
+fn windows_node_provider_bootstrap_invokes_the_exported_cli() {
+    assert!(WINDOWS_SCIP_NODE_BOOTSTRAP.contains("indexer.main()"));
+    assert!(WINDOWS_SCIP_NODE_BOOTSTRAP.contains("process.argv[1]"));
+    assert!(WINDOWS_SCIP_NODE_BOOTSTRAP.contains("does not export main"));
 }
 
 #[test]

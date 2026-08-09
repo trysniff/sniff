@@ -32,7 +32,7 @@ const GRADLE_INDEXER_BASE_JVM_ARGS: &str = concat!(
     "-Duser.country=US -Duser.language=en -Duser.variant=",
 );
 pub(crate) const WINDOWS_SCIP_PYTHON_BOOTSTRAP: &str = "const path=require('path'); const NativeRegExp=RegExp; function PatchedRegExp(pattern, flags) { if (pattern === path.sep) pattern = path.sep + path.sep; return new NativeRegExp(pattern, flags); } PatchedRegExp.prototype=NativeRegExp.prototype; Object.setPrototypeOf(PatchedRegExp, NativeRegExp); global.RegExp=PatchedRegExp; require(process.argv[1]);";
-const WINDOWS_SCIP_NODE_BOOTSTRAP: &str = "require(process.argv[1]);";
+const WINDOWS_SCIP_NODE_BOOTSTRAP: &str = "const indexer=require(process.argv[1]); if (typeof indexer.main !== 'function') throw new Error('SCIP Node indexer does not export main()'); indexer.main();";
 
 struct TemporaryIndexerWorkspace {
     directory: PathBuf,
