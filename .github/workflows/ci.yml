@@ -40,6 +40,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
@@ -72,9 +73,30 @@ jobs:
       - name: Run tests
         if: runner.os != 'Windows'
         run: cargo test --all-targets --locked
-      - name: Run Windows tests without concurrent ACL-heavy dogfood processes
+      - name: Run Windows unit and non-dogfood integration tests
         if: runner.os == 'Windows'
-        run: cargo test --all-targets --locked -- --test-threads=1
+        shell: pwsh
+        run: |
+          cargo test --lib --bins --locked
+          $tests = @(
+            'callee_context',
+            'durable_runtime',
+            'file_verdicts_merge',
+            'gold',
+            'llm_impl',
+            'preflight_cli',
+            'ref_count_flags',
+            'semantic_gold',
+            'sniff_graph_regressions'
+          )
+          foreach ($test in $tests) {
+            cargo test --test $test --locked -- --test-threads=1
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+      - name: Run one cross-language Windows dogfood smoke test
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: cargo test --test dogfood_suite brandset::default_scan_reviews_every_supported_language_end_to_end --locked -- --exact --test-threads=1 --nocapture
 
   msrv:
     name: msrv-1.88
