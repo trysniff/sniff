@@ -568,8 +568,7 @@ fn grant_acl(path: &Path, sid: &str, permission: &str) -> Result<(), SandboxErro
 
 fn grant_traverse_acl(path: &Path, sid: &str) -> Result<(), SandboxError> {
     let path = normalize_windows_path(path.to_path_buf());
-    let inheritance = if path.is_dir() { "(OI)(CI)" } else { "" };
-    let rule = format!("*{sid}:{inheritance}(RX)");
+    let rule = format!("*{sid}:(RX)");
     let mut command = Command::new("icacls");
     command.arg(&path).arg("/grant").arg(rule).arg("/C");
     let output = run_icacls(command).map_err(|error| match error {
@@ -702,13 +701,17 @@ impl AclGuard {
                 // Grant traversal only, never recursive access, so Node and
                 // other runtimes can resolve a staged path without scanning
                 // the drive or a system installation tree.
-                let volume_root = path.ancestors().last();
-                let ancestors = volume_root.into_iter().chain(path.parent());
+                let mut ancestors = path
+                    .ancestors()
+                    .filter(|ancestor| !ancestor.as_os_str().is_empty())
+                    .map(std::path::Path::to_path_buf)
+                    .collect::<Vec<_>>();
+                ancestors.reverse();
                 for ancestor in ancestors {
                     if grants.iter().any(|grant: &AclGrant| grant.path == ancestor) {
                         continue;
                     }
-                    if let Err(error) = grant_traverse_acl(ancestor, sid) {
+                    if let Err(error) = grant_traverse_acl(&ancestor, sid) {
                         for granted in grants.iter().rev() {
                             let _ = revoke_acl(&granted.path, sid, granted.recursive);
                         }
