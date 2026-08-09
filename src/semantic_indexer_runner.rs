@@ -113,9 +113,15 @@ pub(crate) async fn run_required_indexers(
                 index_path.display()
             ));
         }
+        if std::env::var_os("SNIFF_DEBUG_INDEXERS").is_some() {
+            eprintln!("[sniff] semantic indexer start: {}", spec.display_name);
+        }
         if let Err(error) = run_one(spec, &root, &installed, files).await {
             let _ = fs::remove_file(&index_path);
             return Err(error);
+        }
+        if std::env::var_os("SNIFF_DEBUG_INDEXERS").is_some() {
+            eprintln!("[sniff] semantic indexer complete: {}", spec.display_name);
         }
         let index_files = files_for_indexer(files, kind);
         let expected_languages = expected_document_languages(&root, &index_files)?;
