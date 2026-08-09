@@ -11,12 +11,17 @@ use windows_sys::Win32::Foundation::{
     CloseHandle, HANDLE, HANDLE_FLAG_INHERIT, LocalFree, SetHandleInformation, WAIT_ABANDONED,
     WAIT_OBJECT_0, WAIT_TIMEOUT,
 };
-use windows_sys::Win32::Security::Authorization::{ConvertSidToStringSidW, ConvertStringSidToSidW};
+use windows_sys::Win32::Security::Authorization::{
+    ConvertSidToStringSidW, ConvertStringSidToSidW, EXPLICIT_ACCESS_W, GRANT_ACCESS,
+    GetNamedSecurityInfoW, REVOKE_ACCESS, SE_FILE_OBJECT, SetEntriesInAclW, SetNamedSecurityInfoW,
+    TRUSTEE_IS_SID, TRUSTEE_IS_WELL_KNOWN_GROUP, TRUSTEE_W,
+};
 use windows_sys::Win32::Security::Isolation::{
     CreateAppContainerProfile, DeleteAppContainerProfile,
 };
 use windows_sys::Win32::Security::{
-    SECURITY_ATTRIBUTES, SECURITY_CAPABILITIES, SID_AND_ATTRIBUTES,
+    DACL_SECURITY_INFORMATION, NO_INHERITANCE, SECURITY_ATTRIBUTES, SECURITY_CAPABILITIES,
+    SID_AND_ATTRIBUTES,
 };
 use windows_sys::Win32::System::JobObjects::{
     AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_ACTIVE_PROCESS,
@@ -40,6 +45,7 @@ const MAX_PROCESS_MEMORY: usize = 1024 * 1024 * 1024;
 const MAX_ACTIVE_PROCESSES: u32 = 128;
 const ACL_COMMAND_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const ACL_COMMAND_OUTPUT_LIMIT: usize = 64 * 1024;
+const TRAVERSE_ACL_PERMISSIONS: u32 = 0x20 | 0x80 | 0x20_000;
 const WINDOWS_SANDBOX_LOCK_NAME: &str = r"Local\SniffWindowsSandboxAclLock";
 const WINDOWS_SANDBOX_LOCK_TIMEOUT: Duration = Duration::from_secs(2 * 60 * 60);
 static WINDOWS_SANDBOX_LOCK: Mutex<()> = Mutex::new(());
@@ -576,35 +582,20 @@ fn grant_traverse_acl(path: &Path, sid: &str) -> Result<(), SandboxError> {
     let path = normalize_windows_path(path.to_path_buf());
     // Node resolves absolute Windows paths by reading metadata from every
     // parent before traversing to the explicitly granted target.
-    let rule = format!("*{sid}:(RA,RC,X)");
-    let mut command = Command::new("icacls");
-    command.arg(&path).arg("/grant").arg(rule).arg("/C");
-    let output = run_icacls(command).map_err(|error| match error {
-        SandboxError::Unavailable(message) => SandboxError::Unavailable(format!(
-            "Windows AppContainer requires icacls for parent traversal at {}: {message}",
+    update_acl_entry(&path, sid, TRAVERSE_ACL_PERMISSIONS, GRANT_ACCESS).map_err(|error| {
+        SandboxError::Failed(format!(
+            "Windows traversal ACL failed for {}: {error}",
             path.display()
-        )),
-        SandboxError::Invalid(message) => SandboxError::Invalid(format!(
-            "icacls traversal failed for {}: {message}",
-            path.display()
-        )),
-        SandboxError::Failed(message) => SandboxError::Failed(format!(
-            "icacls traversal failed for {}: {message}",
-            path.display()
-        )),
-    })?;
-    if !output.success {
-        return Err(SandboxError::Failed(format!(
-            "grant Windows AppContainer traversal to {} failed: {}",
-            path.display(),
-            output.error_text()
-        )));
-    }
-    Ok(())
+        ))
+    })
 }
 
 fn revoke_acl(path: &Path, sid: &str, recursive: bool) -> Result<(), String> {
     let path = normalize_windows_path(path.to_path_buf());
+    if !recursive {
+        return update_acl_entry(&path, sid, 0, REVOKE_ACCESS)
+            .map_err(|error| format!("native ACL revoke failed for {}: {error}", path.display()));
+    }
     let mut command = Command::new("icacls");
     command.arg(path).arg("/remove").arg(format!("*{sid}"));
     if recursive {
@@ -618,6 +609,93 @@ fn revoke_acl(path: &Path, sid: &str, recursive: bool) -> Result<(), String> {
     } else {
         Err(output.error_text())
     }
+}
+
+fn update_acl_entry(
+    path: &Path,
+    sid: &str,
+    permissions: u32,
+    access_mode: i32,
+) -> Result<(), String> {
+    let sid_w = wide_null(sid);
+    let mut sid_ptr = std::ptr::null_mut();
+    if unsafe { ConvertStringSidToSidW(sid_w.as_ptr(), &mut sid_ptr) } == 0 {
+        return Err(format!(
+            "convert AppContainer SID failed: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+
+    let path_w = wide_null(&path.to_string_lossy());
+    let mut old_acl = std::ptr::null_mut();
+    let mut descriptor = std::ptr::null_mut();
+    let get_status = unsafe {
+        GetNamedSecurityInfoW(
+            path_w.as_ptr(),
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &mut old_acl,
+            std::ptr::null_mut(),
+            &mut descriptor,
+        )
+    };
+    if get_status != 0 {
+        unsafe {
+            LocalFree(sid_ptr);
+        }
+        return Err(format!("read DACL failed with Windows error {get_status}"));
+    }
+
+    let trustee = TRUSTEE_W {
+        TrusteeForm: TRUSTEE_IS_SID,
+        TrusteeType: TRUSTEE_IS_WELL_KNOWN_GROUP,
+        ptstrName: sid_ptr as _,
+        ..Default::default()
+    };
+    let entry = EXPLICIT_ACCESS_W {
+        grfAccessPermissions: permissions,
+        grfAccessMode: access_mode,
+        grfInheritance: NO_INHERITANCE,
+        Trustee: trustee,
+    };
+    let mut new_acl = std::ptr::null_mut();
+    let set_status = unsafe { SetEntriesInAclW(1, &entry, old_acl, &mut new_acl) };
+    let result = if set_status != 0 {
+        Err(format!(
+            "build updated DACL failed with Windows error {set_status}"
+        ))
+    } else {
+        let write_status = unsafe {
+            SetNamedSecurityInfoW(
+                path_w.as_ptr(),
+                SE_FILE_OBJECT,
+                DACL_SECURITY_INFORMATION,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                new_acl,
+                std::ptr::null_mut(),
+            )
+        };
+        if write_status == 0 {
+            Ok(())
+        } else {
+            Err(format!(
+                "write updated DACL failed with Windows error {write_status}"
+            ))
+        }
+    };
+    unsafe {
+        if !new_acl.is_null() {
+            LocalFree(new_acl as _);
+        }
+        if !descriptor.is_null() {
+            LocalFree(descriptor);
+        }
+        LocalFree(sid_ptr);
+    }
+    result
 }
 
 struct IcalcsOutput {
