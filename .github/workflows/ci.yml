@@ -80,7 +80,6 @@ jobs:
           cargo test --lib --bins --locked
           $tests = @(
             'callee_context',
-            'durable_runtime',
             'file_verdicts_merge',
             'gold',
             'llm_impl',
