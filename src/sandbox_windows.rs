@@ -574,14 +574,9 @@ fn grant_acl(path: &Path, sid: &str, permission: &str) -> Result<(), SandboxErro
 
 fn grant_traverse_acl(path: &Path, sid: &str) -> Result<(), SandboxError> {
     let path = normalize_windows_path(path.to_path_buf());
-    let permission = if path.parent().is_none() {
-        // Node resolves absolute Windows paths by reading metadata from the
-        // volume root before traversing the explicitly granted parents.
-        "(RA,RC,X)"
-    } else {
-        "(X)"
-    };
-    let rule = format!("*{sid}:{permission}");
+    // Node resolves absolute Windows paths by reading metadata from every
+    // parent before traversing to the explicitly granted target.
+    let rule = format!("*{sid}:(RA,RC,X)");
     let mut command = Command::new("icacls");
     command.arg(&path).arg("/grant").arg(rule).arg("/C");
     let output = run_icacls(command).map_err(|error| match error {
