@@ -549,9 +549,6 @@ fn grant_acl(path: &Path, sid: &str, permission: &str) -> Result<(), SandboxErro
     let rule = format!("*{sid}:{inheritance}{permission}");
     let mut command = Command::new("icacls");
     command.arg(path).arg("/grant").arg(rule).arg("/C");
-    if path.is_dir() {
-        command.arg("/T");
-    }
     let output = run_icacls(command).map_err(|error| match error {
         SandboxError::Unavailable(message) => {
             SandboxError::Unavailable(format!("Windows AppContainer requires icacls: {message}"))
@@ -720,7 +717,10 @@ impl AclGuard {
                 }
             }
 
-            let recursive = path.is_dir();
+            // Directory grants use inheritance rather than recursively
+            // walking every dependency file. Cleanup removes the parent ACE;
+            // inherited child access then disappears with it.
+            let recursive = false;
             let permission = if path == root { "M" } else { "R" };
             if let Err(error) = grant_acl(path, sid, permission) {
                 for granted in grants.iter().rev() {
