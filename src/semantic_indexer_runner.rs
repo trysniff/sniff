@@ -188,7 +188,20 @@ async fn run_one(
     })?;
     let _temporary_dir_cleanup = TemporaryIndexerDirectory(temporary_dir.clone());
     let workspace = prepare_indexer_workspace(spec, root)?;
-    let temporary_project = prepare_mixed_typescript_javascript_project(spec, root, files)?;
+    let temporary_project = if spec.kind == SemanticIndexerKind::TypeScriptJavaScript {
+        prepare_mixed_typescript_javascript_project(spec, root, files)?
+    } else {
+        #[cfg(windows)]
+        if spec.kind == SemanticIndexerKind::Python {
+            prepare_windows_python_project(root, files)?
+        } else {
+            None
+        }
+        #[cfg(not(windows))]
+        {
+            None
+        }
+    };
     #[cfg(windows)]
     let python_environment = if spec.kind == SemanticIndexerKind::Python {
         Some(prepare_windows_python_environment(&temporary_dir)?)
@@ -1307,6 +1320,52 @@ fn prepare_mixed_typescript_javascript_project(
     file.write_all(&bytes).map_err(|error| {
         format!(
             "failed to write temporary JavaScript semantic project {}: {error}",
+            path.display()
+        )
+    })?;
+    Ok(Some(path))
+}
+
+#[cfg(windows)]
+fn prepare_windows_python_project(
+    root: &Path,
+    files: &[FileRecord],
+) -> Result<Option<PathBuf>, String> {
+    let python_files = files
+        .iter()
+        .filter(|file| file.language.eq_ignore_ascii_case("python"))
+        .map(|file| repository_relative_path(root, Path::new(&file.file_path)))
+        .collect::<Result<Vec<_>, _>>()?;
+    if python_files.is_empty() {
+        return Ok(None);
+    }
+
+    let path = root.join("scip-pyrightconfig.json");
+    if path.exists() {
+        return Err(format!(
+            "refusing to overwrite existing Python semantic config {}",
+            path.display()
+        ));
+    }
+    let config = serde_json::json!({
+        "include": python_files.into_iter().map(|path| path.0).collect::<Vec<_>>()
+    });
+    let bytes = serde_json::to_vec_pretty(&config).map_err(|error| {
+        format!("failed to serialize temporary Python semantic config: {error}")
+    })?;
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .map_err(|error| {
+            format!(
+                "failed to create temporary Python semantic config {}: {error}",
+                path.display()
+            )
+        })?;
+    file.write_all(&bytes).map_err(|error| {
+        format!(
+            "failed to write temporary Python semantic config {}: {error}",
             path.display()
         )
     })?;
