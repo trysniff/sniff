@@ -38,9 +38,12 @@ const WINDOWS_SCIP_NODE_BOOTSTRAP: &str = "const indexer=require(process.argv[1]
 #[cfg(windows)]
 const WINDOWS_PYTHON_ENVIRONMENT_SCRIPT: &str = r#"import importlib.metadata
 import json
+import sysconfig
 
 packages = []
-for distribution in importlib.metadata.distributions():
+paths = sysconfig.get_paths()
+site_directories = sorted({paths.get("purelib"), paths.get("platlib")} - {None})
+for distribution in importlib.metadata.distributions(path=site_directories):
     name = distribution.metadata.get("Name")
     if not name:
         continue
@@ -342,6 +345,7 @@ async fn prepare_windows_python_environment(directory: &Path) -> Result<PathBuf,
     let output = timeout(
         Duration::from_secs(60),
         tokio::process::Command::new(&python)
+            .arg("-S")
             .arg("-c")
             .arg(WINDOWS_PYTHON_ENVIRONMENT_SCRIPT)
             .kill_on_drop(true)
