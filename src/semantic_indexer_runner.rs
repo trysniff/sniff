@@ -17,8 +17,6 @@ use tokio::time::timeout;
 
 const INDEX_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 const MAX_PROCESS_OUTPUT: usize = 2 * 1024 * 1024;
-#[cfg(windows)]
-const MAX_PYTHON_ENVIRONMENT_OUTPUT: usize = 64 * 1024 * 1024;
 const MAX_COMPACT_ERROR_OUTPUT: usize = 8 * 1024;
 const INDEXER_CACHE_DIR: &str = ".sniff-indexer-cache";
 const INDEXER_TEMP_DIR: &str = ".sniff-indexer-tmp";
@@ -35,33 +33,6 @@ const GRADLE_INDEXER_BASE_JVM_ARGS: &str = concat!(
 );
 pub(crate) const WINDOWS_SCIP_PYTHON_BOOTSTRAP: &str = "const path=require('path'); const NativeRegExp=RegExp; function PatchedRegExp(pattern, flags) { if (pattern === path.sep) pattern = path.sep + path.sep; return new NativeRegExp(pattern, flags); } PatchedRegExp.prototype=NativeRegExp.prototype; Object.setPrototypeOf(PatchedRegExp, NativeRegExp); global.RegExp=PatchedRegExp; require(process.argv[1]);";
 const WINDOWS_SCIP_NODE_BOOTSTRAP: &str = "const indexer=require(process.argv[1]); if (typeof indexer.main !== 'function') throw new Error('SCIP Node indexer does not export main()'); indexer.main();";
-#[cfg(windows)]
-const WINDOWS_PYTHON_ENVIRONMENT_SCRIPT: &str = r#"import importlib.metadata
-import json
-import sysconfig
-
-packages = []
-paths = sysconfig.get_paths()
-site_directories = sorted({paths.get("purelib"), paths.get("platlib")} - {None})
-for distribution in importlib.metadata.distributions(path=site_directories):
-    name = distribution.metadata.get("Name")
-    if not name:
-        continue
-    files = []
-    for file_path in distribution.files or ():
-        file_text = str(file_path)
-        if file_text.startswith("..") or "__pycache__" in file_text:
-            continue
-        if file_text.endswith((".py", ".pyi")):
-            files.append(file_text)
-    packages.append({
-        "name": name,
-        "version": distribution.version,
-        "files": files,
-    })
-
-print(json.dumps(packages))
-"#;
 
 struct TemporaryIndexerWorkspace {
     directory: PathBuf,
@@ -220,7 +191,7 @@ async fn run_one(
     let temporary_project = prepare_mixed_typescript_javascript_project(spec, root, files)?;
     #[cfg(windows)]
     let python_environment = if spec.kind == SemanticIndexerKind::Python {
-        Some(prepare_windows_python_environment(&temporary_dir).await?)
+        Some(prepare_windows_python_environment(&temporary_dir)?)
     } else {
         None
     };
@@ -340,42 +311,14 @@ async fn run_one(
 }
 
 #[cfg(windows)]
-async fn prepare_windows_python_environment(directory: &Path) -> Result<PathBuf, String> {
-    let python = resolve_runtime("python")?;
-    let output = timeout(
-        Duration::from_secs(60),
-        tokio::process::Command::new(&python)
-            .arg("-S")
-            .arg("-c")
-            .arg(WINDOWS_PYTHON_ENVIRONMENT_SCRIPT)
-            .kill_on_drop(true)
-            .output(),
-    )
-    .await
-    .map_err(|_| "Python environment discovery timed out after 60 seconds".to_string())?
-    .map_err(|error| format!("failed to start Python environment discovery: {error}"))?;
-    if !output.status.success() {
-        return Err(format!(
-            "Python environment discovery failed with {}; output: {}",
-            output.status,
-            compact_process_output(&output.stdout, &output.stderr)
-        ));
-    }
-    if output.stdout.len() > MAX_PYTHON_ENVIRONMENT_OUTPUT {
-        return Err(format!(
-            "Python environment metadata exceeded {} bytes",
-            MAX_PYTHON_ENVIRONMENT_OUTPUT
-        ));
-    }
-    let metadata: serde_json::Value = serde_json::from_slice(&output.stdout)
-        .map_err(|error| format!("Python environment metadata was not valid JSON: {error}"))?;
-    if !metadata.is_array() {
-        return Err("Python environment metadata was not a JSON array".to_string());
-    }
+fn prepare_windows_python_environment(directory: &Path) -> Result<PathBuf, String> {
+    // scip-python accepts an explicit environment manifest. Keeping this
+    // empty on Windows avoids unbounded host `pip` discovery inside the
+    // AppContainer; external package facts remain unresolved, never guessed.
     let path = directory.join("python-environment.json");
-    fs::write(&path, &output.stdout).map_err(|error| {
+    fs::write(&path, b"[]").map_err(|error| {
         format!(
-            "failed to write Python environment metadata {}: {error}",
+            "failed to write explicit Python environment manifest {}: {error}",
             path.display()
         )
     })?;
@@ -603,18 +546,6 @@ fn build_indexer_sandbox_command(
                 .to_string_lossy()
                 .into_owned(),
         ));
-    }
-    #[cfg(windows)]
-    if spec.kind == SemanticIndexerKind::Python {
-        // scip-python resolves package metadata by invoking Python and pip.
-        // Expose those runtimes explicitly; the Windows sandbox PATH otherwise
-        // contains only System32 and the provider can stall during discovery.
-        let python = resolve_runtime("python")?;
-        let pip = resolve_runtime("pip")?;
-        for (name, runtime) in [("python", python), ("pip", pip)] {
-            read_only_paths.push(runtime_mount_root(&runtime));
-            path_prefixes.push(runtime_bin_directory(&runtime, name)?);
-        }
     }
     #[cfg(target_os = "macos")]
     if spec.kind == SemanticIndexerKind::Python
