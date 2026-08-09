@@ -6,9 +6,7 @@ use super::{
     source_integrity_digest, write_private_gradle_properties,
 };
 #[cfg(windows)]
-use super::{
-    indexer_arguments_with_workspace, prepare_indexer_workspace, push_external_read_only,
-};
+use super::{indexer_arguments_with_workspace, prepare_indexer_workspace, push_external_read_only};
 use crate::semantic_index::SemanticPositionEncoding;
 use crate::semantic_indexer_manifest::{SemanticIndexerKind, pinned_indexer};
 use crate::types::FileRecord;
