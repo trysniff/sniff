@@ -16,6 +16,8 @@ use std::time::Duration;
 use tokio::time::timeout;
 
 const INDEX_TIMEOUT: Duration = Duration::from_secs(60 * 60);
+#[cfg(debug_assertions)]
+const INDEXER_TIMEOUT_ENV: &str = "SNIFF_INTERNAL_INDEXER_TIMEOUT_SECS";
 const MAX_PROCESS_OUTPUT: usize = 2 * 1024 * 1024;
 const MAX_COMPACT_ERROR_OUTPUT: usize = 8 * 1024;
 const INDEXER_CACHE_DIR: &str = ".sniff-indexer-cache";
@@ -449,8 +451,10 @@ async fn run_sandbox_command(
     sandbox_command: SandboxCommand,
     indexer_name: &str,
 ) -> Result<crate::sandbox::SandboxOutput, String> {
+    let index_timeout = sandbox_command.timeout;
+    let worker_timeout = index_timeout.saturating_add(Duration::from_secs(30));
     match timeout(
-        INDEX_TIMEOUT,
+        worker_timeout,
         tokio::task::spawn_blocking(move || crate::sandbox::run(&sandbox_command)),
     )
     .await
@@ -458,7 +462,7 @@ async fn run_sandbox_command(
         Err(_) => Err(format!(
             "{} indexing timed out after {} minutes",
             indexer_name,
-            INDEX_TIMEOUT.as_secs() / 60
+            index_timeout.as_secs() / 60
         )),
         Ok(Err(error)) => Err(format!("{} indexing worker failed: {error}", indexer_name)),
         Ok(Ok(Err(error))) => Err(format!(
@@ -743,9 +747,20 @@ fn build_indexer_sandbox_command(
         allow_network: false,
         #[cfg(target_os = "macos")]
         allow_local_network: spec.kind == SemanticIndexerKind::Kotlin,
-        timeout: INDEX_TIMEOUT,
+        timeout: index_timeout(),
         output_limit: MAX_PROCESS_OUTPUT,
     })
+}
+
+fn index_timeout() -> Duration {
+    #[cfg(debug_assertions)]
+    if let Ok(value) = std::env::var(INDEXER_TIMEOUT_ENV)
+        && let Ok(seconds) = value.parse::<u64>()
+        && seconds > 0
+    {
+        return Duration::from_secs(seconds);
+    }
+    INDEX_TIMEOUT
 }
 
 fn write_private_gradle_properties(root: &Path, cache_root: &Path) -> Result<(), String> {

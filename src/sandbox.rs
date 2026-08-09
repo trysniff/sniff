@@ -439,7 +439,19 @@ fn profile_path(path: &Path) -> Result<String, SandboxError> {
     Ok(text.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
-fn read_limited<R: Read>(mut reader: R, limit: usize) -> IoResult<String> {
+fn read_limited<R: Read>(reader: R, limit: usize) -> IoResult<String> {
+    read_limited_with_observer(reader, limit, |_| {})
+}
+
+fn read_limited_with_observer<R, F>(
+    mut reader: R,
+    limit: usize,
+    mut observer: F,
+) -> IoResult<String>
+where
+    R: Read,
+    F: FnMut(&[u8]),
+{
     let mut bytes = Vec::new();
     let mut buffer = [0u8; 8192];
     let mut truncated = false;
@@ -448,6 +460,7 @@ fn read_limited<R: Read>(mut reader: R, limit: usize) -> IoResult<String> {
         if count == 0 {
             break;
         }
+        observer(&buffer[..count]);
         if bytes.len() < limit {
             let retained = count.min(limit - bytes.len());
             bytes.extend_from_slice(&buffer[..retained]);
@@ -474,7 +487,8 @@ fn terminate(child: &mut Child) -> Result<(), SandboxError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        SandboxCommand, SandboxError, read_limited, validate_external_runner, validate_spec,
+        SandboxCommand, SandboxError, read_limited, read_limited_with_observer,
+        validate_external_runner, validate_spec,
     };
     use std::path::PathBuf;
     use std::time::Duration;
@@ -541,6 +555,18 @@ mod tests {
     fn limits_worker_output_without_unbounded_buffering() {
         let output = read_limited("0123456789".as_bytes(), 4).unwrap();
 
+        assert_eq!(output, "0123\n[output truncated by Sniff]");
+    }
+
+    #[test]
+    fn observes_all_worker_output_while_retaining_only_the_limit() {
+        let mut observed = Vec::new();
+        let output = read_limited_with_observer("0123456789".as_bytes(), 4, |chunk| {
+            observed.extend_from_slice(chunk);
+        })
+        .unwrap();
+
+        assert_eq!(observed, b"0123456789");
         assert_eq!(output, "0123\n[output truncated by Sniff]");
     }
 

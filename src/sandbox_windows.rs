@@ -1,4 +1,6 @@
-use super::{SandboxCommand, SandboxError, SandboxOutput, read_limited};
+use super::{
+    SandboxCommand, SandboxError, SandboxOutput, read_limited, read_limited_with_observer,
+};
 use std::collections::BTreeMap;
 use std::ffi::c_void;
 use std::os::windows::io::FromRawHandle;
@@ -349,8 +351,8 @@ fn run_process(
         return Err(last_error("assign Windows AppContainer process to job"));
     }
 
-    let stdout_thread = read_thread(stdout_read, spec.output_limit);
-    let stderr_thread = read_thread(stderr_read, spec.output_limit);
+    let stdout_thread = read_thread(stdout_read, spec.output_limit, "stdout");
+    let stderr_thread = read_thread(stderr_read, spec.output_limit, "stderr");
     let started = Instant::now();
     let mut timed_out = false;
     loop {
@@ -445,10 +447,31 @@ fn create_pipe() -> Result<(HANDLE, HANDLE), SandboxError> {
     Ok((read, write))
 }
 
-fn read_thread(handle: HANDLE, limit: usize) -> thread::JoinHandle<std::io::Result<String>> {
+fn read_thread(
+    handle: HANDLE,
+    limit: usize,
+    stream_name: &'static str,
+) -> thread::JoinHandle<std::io::Result<String>> {
     let handle_value = handle as isize;
+    let debug = std::env::var_os("SNIFF_DEBUG_INDEXERS").is_some();
     thread::spawn(move || unsafe {
-        read_limited(std::fs::File::from_raw_handle(handle_value as _), limit)
+        let file = std::fs::File::from_raw_handle(handle_value as _);
+        if debug {
+            let mut traced = 0usize;
+            read_limited_with_observer(file, limit, |chunk| {
+                if traced >= limit {
+                    return;
+                }
+                let count = chunk.len().min(limit - traced);
+                eprintln!(
+                    "[sniff] semantic indexer {stream_name}: {}",
+                    String::from_utf8_lossy(&chunk[..count])
+                );
+                traced += count;
+            })
+        } else {
+            read_limited(file, limit)
+        }
     })
 }
 
