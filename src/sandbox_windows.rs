@@ -545,6 +545,7 @@ fn quote_arg(value: &str) -> String {
 }
 
 fn grant_acl(path: &Path, sid: &str, permission: &str) -> Result<(), SandboxError> {
+    let path = normalize_windows_path(path.to_path_buf());
     let inheritance = if path.is_dir() { "(OI)(CI)" } else { "" };
     let rule = format!("*{sid}:{inheritance}{permission}");
     let mut command = Command::new("icacls");
@@ -566,6 +567,7 @@ fn grant_acl(path: &Path, sid: &str, permission: &str) -> Result<(), SandboxErro
 }
 
 fn grant_traverse_acl(path: &Path, sid: &str) -> Result<(), SandboxError> {
+    let path = normalize_windows_path(path.to_path_buf());
     let rule = format!("*{sid}:(RX)");
     let mut command = Command::new("icacls");
     command.arg(path).arg("/grant").arg(rule).arg("/C");
@@ -586,6 +588,7 @@ fn grant_traverse_acl(path: &Path, sid: &str) -> Result<(), SandboxError> {
 }
 
 fn revoke_acl(path: &Path, sid: &str, recursive: bool) -> Result<(), String> {
+    let path = normalize_windows_path(path.to_path_buf());
     let mut command = Command::new("icacls");
     command.arg(path).arg("/remove").arg(format!("*{sid}"));
     if recursive {
