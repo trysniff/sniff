@@ -211,6 +211,12 @@ async fn run_one(
     }
     let sandbox_command =
         build_indexer_sandbox_command(spec, root, installed, arguments, workspace.as_ref())?;
+    if std::env::var_os("SNIFF_DEBUG_INDEXERS").is_some() {
+        eprintln!(
+            "[sniff] semantic indexer sandbox ready: {}",
+            spec.display_name
+        );
+    }
     if let Some(cache_root) = &cache_root {
         fs::create_dir(cache_root).map_err(|error| {
             format!(
@@ -249,8 +255,20 @@ async fn run_one(
             Err(error) => Err(error),
         }
     } else {
+        if std::env::var_os("SNIFF_DEBUG_INDEXERS").is_some() {
+            eprintln!(
+                "[sniff] semantic indexer process start: {}",
+                spec.display_name
+            );
+        }
         run_sandbox_command(sandbox_command, spec.display_name).await
     };
+    if std::env::var_os("SNIFF_DEBUG_INDEXERS").is_some() {
+        eprintln!(
+            "[sniff] semantic indexer process returned: {}",
+            spec.display_name
+        );
+    }
     let temporary_project_cleanup = cleanup_temporary_project(temporary_project, spec.display_name);
     let workspace_cleanup = workspace
         .map(|workspace| workspace.cleanup(spec.display_name))
