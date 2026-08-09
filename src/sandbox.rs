@@ -441,12 +441,23 @@ fn profile_path(path: &Path) -> Result<String, SandboxError> {
 
 fn read_limited<R: Read>(mut reader: R, limit: usize) -> IoResult<String> {
     let mut bytes = Vec::new();
-    reader
-        .by_ref()
-        .take((limit as u64).saturating_add(1))
-        .read_to_end(&mut bytes)?;
-    let truncated = bytes.len() > limit;
-    bytes.truncate(limit);
+    let mut buffer = [0u8; 8192];
+    let mut truncated = false;
+    loop {
+        let count = reader.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        if bytes.len() < limit {
+            let retained = count.min(limit - bytes.len());
+            bytes.extend_from_slice(&buffer[..retained]);
+            if retained < count {
+                truncated = true;
+            }
+        } else {
+            truncated = true;
+        }
+    }
     let mut text = String::from_utf8_lossy(&bytes).into_owned();
     if truncated {
         text.push_str("\n[output truncated by Sniff]");
