@@ -322,15 +322,17 @@ fn stage_node_indexer(
 ) -> Result<(PathBuf, PathBuf), String> {
     #[cfg(windows)]
     {
-        let relative_entrypoint = entrypoint.strip_prefix(installed_root).map_err(|error| {
+        let source = strip_windows_verbatim_prefix(installed_root.to_path_buf());
+        let entrypoint = strip_windows_verbatim_prefix(entrypoint.to_path_buf());
+        let relative_entrypoint = entrypoint.strip_prefix(&source).map_err(|error| {
             format!(
                 "Node indexer entrypoint {} is outside its installation {}: {error}",
                 entrypoint.display(),
-                installed_root.display()
+                source.display()
             )
         })?;
         let staged_root = root.join(INDEXER_TEMP_DIR).join("node-indexer");
-        copy_node_indexer_tree(installed_root, &staged_root)?;
+        copy_node_indexer_tree(&source, &staged_root)?;
         Ok((staged_root.clone(), staged_root.join(relative_entrypoint)))
     }
     #[cfg(not(windows))]
