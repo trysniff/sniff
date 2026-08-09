@@ -17,6 +17,7 @@ use tokio::time::timeout;
 
 const INDEX_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 const MAX_PROCESS_OUTPUT: usize = 2 * 1024 * 1024;
+const MAX_PYTHON_ENVIRONMENT_OUTPUT: usize = 64 * 1024 * 1024;
 const MAX_COMPACT_ERROR_OUTPUT: usize = 8 * 1024;
 const INDEXER_CACHE_DIR: &str = ".sniff-indexer-cache";
 const INDEXER_TEMP_DIR: &str = ".sniff-indexer-tmp";
@@ -33,6 +34,30 @@ const GRADLE_INDEXER_BASE_JVM_ARGS: &str = concat!(
 );
 pub(crate) const WINDOWS_SCIP_PYTHON_BOOTSTRAP: &str = "const path=require('path'); const NativeRegExp=RegExp; function PatchedRegExp(pattern, flags) { if (pattern === path.sep) pattern = path.sep + path.sep; return new NativeRegExp(pattern, flags); } PatchedRegExp.prototype=NativeRegExp.prototype; Object.setPrototypeOf(PatchedRegExp, NativeRegExp); global.RegExp=PatchedRegExp; require(process.argv[1]);";
 const WINDOWS_SCIP_NODE_BOOTSTRAP: &str = "const indexer=require(process.argv[1]); if (typeof indexer.main !== 'function') throw new Error('SCIP Node indexer does not export main()'); indexer.main();";
+#[cfg(windows)]
+const WINDOWS_PYTHON_ENVIRONMENT_SCRIPT: &str = r#"import importlib.metadata
+import json
+
+packages = []
+for distribution in importlib.metadata.distributions():
+    name = distribution.metadata.get("Name")
+    if not name:
+        continue
+    files = []
+    for file_path in distribution.files or ():
+        file_text = str(file_path)
+        if file_text.startswith("..") or "__pycache__" in file_text:
+            continue
+        if file_text.endswith((".py", ".pyi")):
+            files.append(file_text)
+    packages.append({
+        "name": name,
+        "version": distribution.version,
+        "files": files,
+    })
+
+print(json.dumps(packages))
+"#;
 
 struct TemporaryIndexerWorkspace {
     directory: PathBuf,
@@ -180,15 +205,29 @@ async fn run_one(
             temporary_dir.display()
         )
     })?;
-    let _temporary_dir_cleanup = TemporaryIndexerDirectory(temporary_dir);
+    let _temporary_dir_cleanup = TemporaryIndexerDirectory(temporary_dir.clone());
     let workspace = prepare_indexer_workspace(spec, root)?;
     let temporary_project = prepare_mixed_typescript_javascript_project(spec, root, files)?;
-    let arguments = indexer_arguments_with_workspace(
+    #[cfg(windows)]
+    let python_environment = if spec.kind == SemanticIndexerKind::Python {
+        Some(prepare_windows_python_environment(&temporary_dir).await?)
+    } else {
+        None
+    };
+    #[cfg(not(windows))]
+    let python_environment: Option<PathBuf> = None;
+    let mut arguments = indexer_arguments_with_workspace(
         spec,
         root,
         temporary_project.as_deref(),
         workspace.as_ref(),
     );
+    if let Some(environment) = python_environment {
+        arguments.extend([
+            "--environment".to_string(),
+            environment.to_string_lossy().to_string(),
+        ]);
+    }
     let sandbox_command =
         build_indexer_sandbox_command(spec, root, installed, arguments, workspace.as_ref())?;
     if let Some(cache_root) = &cache_root {
@@ -288,6 +327,48 @@ async fn run_one(
             .map_or_else(|| "signal".to_string(), |status| status.to_string()),
         compact_process_output(output.stdout.as_bytes(), output.stderr.as_bytes())
     ))
+}
+
+#[cfg(windows)]
+async fn prepare_windows_python_environment(directory: &Path) -> Result<PathBuf, String> {
+    let python = resolve_runtime("python3").or_else(|_| resolve_runtime("python"))?;
+    let output = timeout(
+        Duration::from_secs(60),
+        tokio::process::Command::new(&python)
+            .arg("-c")
+            .arg(WINDOWS_PYTHON_ENVIRONMENT_SCRIPT)
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .map_err(|_| "Python environment discovery timed out after 60 seconds".to_string())?
+    .map_err(|error| format!("failed to start Python environment discovery: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "Python environment discovery failed with {}; output: {}",
+            output.status,
+            compact_process_output(&output.stdout, &output.stderr)
+        ));
+    }
+    if output.stdout.len() > MAX_PYTHON_ENVIRONMENT_OUTPUT {
+        return Err(format!(
+            "Python environment metadata exceeded {} bytes",
+            MAX_PYTHON_ENVIRONMENT_OUTPUT
+        ));
+    }
+    let metadata: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .map_err(|error| format!("Python environment metadata was not valid JSON: {error}"))?;
+    if !metadata.is_array() {
+        return Err("Python environment metadata was not a JSON array".to_string());
+    }
+    let path = directory.join("python-environment.json");
+    fs::write(&path, &output.stdout).map_err(|error| {
+        format!(
+            "failed to write Python environment metadata {}: {error}",
+            path.display()
+        )
+    })?;
+    Ok(path)
 }
 
 fn stage_node_runtime(root: &Path, runtime: &Path) -> Result<PathBuf, String> {
