@@ -341,7 +341,7 @@ async fn run_one(
 
 #[cfg(windows)]
 async fn prepare_windows_python_environment(directory: &Path) -> Result<PathBuf, String> {
-    let python = resolve_runtime("python3").or_else(|_| resolve_runtime("python"))?;
+    let python = resolve_runtime("python")?;
     let output = timeout(
         Duration::from_secs(60),
         tokio::process::Command::new(&python)
@@ -609,8 +609,8 @@ fn build_indexer_sandbox_command(
         // scip-python resolves package metadata by invoking Python and pip.
         // Expose those runtimes explicitly; the Windows sandbox PATH otherwise
         // contains only System32 and the provider can stall during discovery.
-        let python = resolve_runtime("python3").or_else(|_| resolve_runtime("python"))?;
-        let pip = resolve_runtime("pip3").or_else(|_| resolve_runtime("pip"))?;
+        let python = resolve_runtime("python")?;
+        let pip = resolve_runtime("pip")?;
         for (name, runtime) in [("python", python), ("pip", pip)] {
             read_only_paths.push(runtime_mount_root(&runtime));
             path_prefixes.push(runtime_bin_directory(&runtime, name)?);
