@@ -33,10 +33,10 @@ use windows_sys::Win32::System::JobObjects::{
 };
 use windows_sys::Win32::System::Pipes::CreatePipe;
 use windows_sys::Win32::System::Threading::{
-    CREATE_NO_WINDOW, CREATE_UNICODE_ENVIRONMENT, CreateMutexW, CreateProcessW,
+    CREATE_NO_WINDOW, CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT, CreateMutexW, CreateProcessW,
     DeleteProcThreadAttributeList, EXTENDED_STARTUPINFO_PRESENT, GetExitCodeProcess,
     InitializeProcThreadAttributeList, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
-    PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES, PROCESS_INFORMATION, ReleaseMutex,
+    PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES, PROCESS_INFORMATION, ReleaseMutex, ResumeThread,
     STARTF_USESTDHANDLES, STARTUPINFOEXW, TerminateProcess, UpdateProcThreadAttribute,
     WaitForSingleObject,
 };
@@ -50,6 +50,8 @@ const ACL_COMMAND_OUTPUT_LIMIT: usize = 64 * 1024;
 const TRAVERSE_ACL_PERMISSIONS: u32 = 0x20 | 0x80 | 0x20_000;
 const WINDOWS_SANDBOX_LOCK_NAME: &str = r"Local\SniffWindowsSandboxAclLock";
 const WINDOWS_SANDBOX_LOCK_TIMEOUT: Duration = Duration::from_secs(2 * 60 * 60);
+const SANDBOX_PROCESS_CREATION_FLAGS: u32 =
+    EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW | CREATE_SUSPENDED;
 static WINDOWS_SANDBOX_LOCK: Mutex<()> = Mutex::new(());
 
 pub(super) fn run(spec: &SandboxCommand) -> Result<SandboxOutput, SandboxError> {
@@ -300,8 +302,6 @@ fn run_process(
     let current_directory = spec.root.join(&spec.workdir);
     let current_directory_w = wide_null(&current_directory.to_string_lossy());
     let mut process_info = PROCESS_INFORMATION::default();
-    let creation_flags =
-        EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW;
     let created = unsafe {
         CreateProcessW(
             std::ptr::null(),
@@ -309,7 +309,7 @@ fn run_process(
             std::ptr::null(),
             std::ptr::null(),
             1,
-            creation_flags,
+            SANDBOX_PROCESS_CREATION_FLAGS,
             environment.as_mut_ptr() as _,
             current_directory_w.as_ptr(),
             &startup.StartupInfo,
@@ -325,11 +325,10 @@ fn run_process(
         close_handles([stdout_read, stderr_read]);
         return Err(last_error("start Windows AppContainer process"));
     }
-    unsafe { CloseHandle(process_info.hThread) };
-
     let job = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
     if job.is_null() {
         terminate_process_and_close(process_info.hProcess);
+        unsafe { CloseHandle(process_info.hThread) };
         close_handles([stdout_read, stderr_read]);
         return Err(last_error("create Windows sandbox job"));
     }
@@ -337,6 +336,7 @@ fn run_process(
         terminate_process_and_close(process_info.hProcess);
         unsafe {
             CloseHandle(job);
+            CloseHandle(process_info.hThread);
         }
         close_handles([stdout_read, stderr_read]);
         return Err(error);
@@ -346,9 +346,22 @@ fn run_process(
             TerminateJobObject(job, 1);
             CloseHandle(job);
             CloseHandle(process_info.hProcess);
+            CloseHandle(process_info.hThread);
         }
         close_handles([stdout_read, stderr_read]);
         return Err(last_error("assign Windows AppContainer process to job"));
+    }
+    let resumed = unsafe { ResumeThread(process_info.hThread) };
+    unsafe { CloseHandle(process_info.hThread) };
+    if resumed == u32::MAX {
+        let error = last_error("resume Windows AppContainer process");
+        unsafe {
+            TerminateJobObject(job, 1);
+            CloseHandle(job);
+            CloseHandle(process_info.hProcess);
+        }
+        close_handles([stdout_read, stderr_read]);
+        return Err(error);
     }
 
     let stdout_thread = read_thread(stdout_read, spec.output_limit, "stdout");
@@ -951,4 +964,14 @@ fn last_error(action: &str) -> SandboxError {
         "{action} failed with Windows error {}",
         std::io::Error::last_os_error()
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CREATE_SUSPENDED, SANDBOX_PROCESS_CREATION_FLAGS};
+
+    #[test]
+    fn appcontainer_process_starts_suspended_before_job_assignment() {
+        assert_ne!(SANDBOX_PROCESS_CREATION_FLAGS & CREATE_SUSPENDED, 0);
+    }
 }
