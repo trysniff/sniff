@@ -1,4 +1,5 @@
 use super::*;
+use std::process::{Output, Stdio};
 
 #[test]
 fn brandset_signup_wrapper_survives_end_to_end() {
@@ -158,11 +159,22 @@ fn default_scan_reviews_every_supported_language_end_to_end() {
         "fun normalizeValue(value: String): String {\n    return value.trim()\n}\n",
     );
 
-    let output = Command::new(env!("CARGO_BIN_EXE_sniff"))
-        .current_dir(&root)
-        .arg(&root)
-        .output()
-        .unwrap();
+    let mut command = Command::new(env!("CARGO_BIN_EXE_sniff"));
+    command.current_dir(&root).arg(&root);
+    let output = if std::env::var_os("SNIFF_DEBUG_INDEXERS").is_some() {
+        let status = command
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit())
+            .status()
+            .unwrap();
+        Output {
+            status,
+            stdout: Vec::new(),
+            stderr: Vec::new(),
+        }
+    } else {
+        command.output().unwrap()
+    };
 
     assert!(
         output.status.success(),
