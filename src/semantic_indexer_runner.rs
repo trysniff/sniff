@@ -565,6 +565,15 @@ fn build_indexer_sandbox_command(
                 .into_owned(),
         ));
     }
+    #[cfg(windows)]
+    if spec.kind == SemanticIndexerKind::Python {
+        // Pyright needs the host Python installation to resolve its standard
+        // library, but the explicit environment manifest keeps it from
+        // launching pip or discovering arbitrary host packages.
+        let python = resolve_runtime("python")?;
+        read_only_paths.push(runtime_mount_root(&python));
+        path_prefixes.push(runtime_bin_directory(&python, "python")?);
+    }
     #[cfg(target_os = "macos")]
     if spec.kind == SemanticIndexerKind::Python
         && let Some(developer_dir) = macos_developer_directory()
