@@ -697,10 +697,12 @@ impl AclGuard {
             std::iter::once(root).chain(read_only_paths.iter().map(std::path::PathBuf::as_path))
         {
             if requires_runtime_traversal {
-                // Grant only the immediate parent. The drive root is not
-                // writable by normal users, and Windows already provides the
-                // base traversal needed to reach an explicitly granted path.
-                let ancestors = path.parent().into_iter();
+                // Absolute Windows paths are resolved through the drive root.
+                // Grant traversal only, never recursive access, so Node and
+                // other runtimes can resolve a staged path without scanning
+                // the drive or a system installation tree.
+                let volume_root = path.ancestors().last();
+                let ancestors = volume_root.into_iter().chain(path.parent());
                 for ancestor in ancestors {
                     if grants.iter().any(|grant: &AclGrant| grant.path == ancestor) {
                         continue;
