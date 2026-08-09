@@ -287,6 +287,22 @@ pub async fn run(
     let estimate = super::preflight::ScanEstimate::from_files(&file_records);
     super::preflight::print_scan_cost_summary(&estimate);
     super::preflight::confirm_expensive_scan(&estimate, assume_yes)?;
+    if budget_usd == Some(0.0) {
+        let context_client =
+            crate::llm::LLMClient::try_new(config.clone(), None).map_err(IoError::other)?;
+        let review_context = context_client.review_context_key();
+        let scan_id = crate::review_journal::scan_id(&file_records, &review_context);
+        crate::review_journal::initialize_method_stage(
+            &journal_path,
+            &scan_id,
+            &review_context,
+            estimate.methods,
+        )
+        .map_err(IoError::other)?;
+        let message = crate::review_journal::budget_pause(0.0, 0.0);
+        eprintln!("{message}");
+        return Ok(3);
+    }
     eprintln!("Building compiler semantic index...");
     let compiler_method_contexts =
         super::preflight::build_compiler_method_contexts(&repository_root, &file_records)
