@@ -5,7 +5,7 @@ use crate::semantic_indexer_manifest::{
 use crate::types::FileRecord;
 use flate2::read::GzDecoder;
 use reqwest::Client;
-use serde_json::{Deserializer, Value};
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::ffi::OsString;
 use std::fs::{self, OpenOptions};
@@ -15,6 +15,9 @@ use std::time::Duration;
 use tokio::process::Command;
 use tokio::time::timeout;
 use zip::ZipArchive;
+
+#[path = "semantic_indexer_go_installer.rs"]
+mod go_installer;
 
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(20 * 60);
 const MAX_DOWNLOAD_BYTES: u64 = 256 * 1024 * 1024;
@@ -134,7 +137,7 @@ async fn install_source(spec: PinnedIndexer, root: &Path) -> Result<(), String> 
             module,
             package,
             commit,
-        } => install_go(spec, root, module, package, commit).await,
+        } => go_installer::install(spec, root, module, package, commit).await,
         IndexerInstallSource::Download(download) => install_download(spec, root, download).await,
     }?;
     #[cfg(windows)]
@@ -454,39 +457,6 @@ async fn install_npm(spec: PinnedIndexer, root: &Path, package: &str) -> Result<
         .map(|_| ())
 }
 
-async fn install_go(
-    spec: PinnedIndexer,
-    root: &Path,
-    module: &str,
-    package: &str,
-    commit: &str,
-) -> Result<(), String> {
-    let module_spec = format!("{module}@v{}", spec.version);
-    let mut metadata_command = Command::new(go_executable_name());
-    metadata_command
-        .args(["mod", "download", "-json"])
-        .arg(&module_spec);
-    let metadata = run_json_command(&mut metadata_command, "Go module pin verification").await?;
-    let origin_hash = parse_go_origin_hash(&metadata, module)?;
-    if origin_hash != commit {
-        return Err(format!(
-            "{} Go commit mismatch; expected {}, received {}",
-            spec.display_name, commit, origin_hash
-        ));
-    }
-    let bin = root.join("bin");
-    fs::create_dir_all(&bin)
-        .map_err(|error| format!("failed to create Go bin directory: {error}"))?;
-    let mut command = Command::new(go_executable_name());
-    command
-        .args(["install"])
-        .arg(format!("{package}@v{}", spec.version))
-        .env("GOBIN", &bin);
-    run_command(&mut command, "Go indexer installation")
-        .await
-        .map(|_| ())
-}
-
 async fn install_download(
     spec: PinnedIndexer,
     root: &Path,
@@ -668,28 +638,6 @@ async fn run_json_command(command: &mut Command, label: &str) -> Result<Vec<u8>,
     ))
 }
 
-fn parse_go_origin_hash(bytes: &[u8], module: &str) -> Result<String, String> {
-    let values = Deserializer::from_slice(bytes)
-        .into_iter::<Value>()
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| format!("Go module metadata is not valid JSON: {error}"))?;
-    values
-        .into_iter()
-        .find(|value| value.get("Path").and_then(Value::as_str) == Some(module))
-        .and_then(|value| {
-            value
-                .get("Origin")
-                .and_then(|origin| origin.get("Hash"))
-                .and_then(Value::as_str)
-                .map(str::to_string)
-        })
-        .ok_or_else(|| {
-            format!(
-                "Go module metadata omitted Origin.Hash for {module}; refusing unverified install"
-            )
-        })
-}
-
 fn parse_json_string(bytes: &[u8], label: &str) -> Result<String, String> {
     let value: Value = serde_json::from_slice(bytes)
         .map_err(|error| format!("{label} returned invalid JSON: {error}"))?;
@@ -714,14 +662,6 @@ fn executable_name(name: &str) -> OsString {
         OsString::from(format!("{name}.cmd"))
     } else {
         OsString::from(name)
-    }
-}
-
-fn go_executable_name() -> OsString {
-    if cfg!(windows) {
-        OsString::from("go.exe")
-    } else {
-        OsString::from("go")
     }
 }
 
