@@ -637,7 +637,7 @@ fn build_indexer_sandbox_command(
             .ok_or_else(|| "Java runtime has no JAVA_HOME parent".to_string())?;
         env.push((
             "JAVA_HOME".to_string(),
-            java_home_environment_value(java_home),
+            external_runtime_path_value(java_home),
         ));
     }
     if let Some(workspace) = workspace {
@@ -937,7 +937,7 @@ fn gradle_indexer_jvm_args(gradle: &Path) -> Result<String, String> {
     })?;
     Ok(format!(
         "{GRADLE_INDEXER_BASE_JVM_ARGS} -javaagent:{}",
-        agent.display()
+        external_runtime_path_value(&agent)
     ))
 }
 
@@ -1569,8 +1569,8 @@ fn strip_windows_verbatim_prefix(path: PathBuf) -> PathBuf {
     path
 }
 
-fn java_home_environment_value(java_home: &Path) -> String {
-    strip_windows_verbatim_prefix(java_home.to_path_buf())
+fn external_runtime_path_value(path: &Path) -> String {
+    strip_windows_verbatim_prefix(path.to_path_buf())
         .to_string_lossy()
         .into_owned()
 }

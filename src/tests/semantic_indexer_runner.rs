@@ -7,7 +7,7 @@ use super::{
 };
 #[cfg(windows)]
 use super::{
-    collect_windows_runtime_images, indexer_arguments_with_workspace, java_home_environment_value,
+    collect_windows_runtime_images, external_runtime_path_value, indexer_arguments_with_workspace,
     prepare_indexer_workspace, push_external_read_only, system_gradle_launcher_jar,
     windows_java_classpath,
 };
@@ -58,7 +58,7 @@ fn windows_java_classpath_removes_verbatim_prefixes() {
 #[cfg(windows)]
 #[test]
 fn windows_java_home_environment_removes_verbatim_prefixes() {
-    let java_home = java_home_environment_value(Path::new(
+    let java_home = external_runtime_path_value(Path::new(
         r"\\?\C:\hostedtoolcache\windows\Java_Temurin-Hotspot_jdk\17\x64",
     ));
 
@@ -222,8 +222,10 @@ fn gradle_jvm_arguments_require_one_installed_instrumentation_agent() {
     assert!(args.starts_with(GRADLE_INDEXER_BASE_JVM_ARGS));
     assert!(args.contains("-javaagent:"));
     let agent_path = std::fs::canonicalize(agent).unwrap();
-    let agent_text = agent_path.to_string_lossy();
-    assert!(args.contains(agent_text.as_ref()));
+    let agent_text = super::external_runtime_path_value(&agent_path);
+    assert!(args.contains(&agent_text));
+    #[cfg(windows)]
+    assert!(!args.contains(r"\\?\"));
 
     std::fs::remove_dir_all(root).unwrap();
 }
