@@ -60,6 +60,23 @@ fn version_matching_is_exact_or_token_exact() {
     assert!(go.accepts_version_output("scip-go version 0.2.7"));
     assert!(!go.accepts_version_output("scip-go 0.2.70"));
     assert!(!go.accepts_version_output("v0.2.7"));
+
+    let rust = pinned_indexer(SemanticIndexerKind::Rust).unwrap();
+    assert!(
+        rust.accepts_version_output("rust-analyzer 0.3.2997-standalone (b54a82b32 2026-08-02)")
+    );
+    assert!(
+        rust.accepts_version_output("rust-analyzer 0.3.2997-standalone (b54a82b321 2026-08-02)")
+    );
+    assert!(
+        !rust.accepts_version_output("rust-analyzer 0.3.2997-standalone (b54a82b3 2026-08-02)")
+    );
+    assert!(
+        !rust.accepts_version_output("rust-analyzer 0.3.2997-standalone (b54a82b33f 2026-08-02)")
+    );
+    assert!(
+        !rust.accepts_version_output("rust-analyzer 0.3.2997-standalone (b54a82b32 2026-08-03)")
+    );
 }
 
 #[test]

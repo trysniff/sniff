@@ -70,6 +70,12 @@ pub(crate) struct PinnedIndexer {
 pub(crate) enum VersionOutput {
     Exact(&'static str),
     ContainsToken(&'static str),
+    GitCommit {
+        prefix: &'static str,
+        commit: &'static str,
+        suffix: &'static str,
+        min_abbreviation: usize,
+    },
 }
 
 impl PinnedIndexer {
@@ -112,6 +118,19 @@ impl PinnedIndexer {
             VersionOutput::ContainsToken(expected) => output
                 .split(|character: char| character.is_ascii_whitespace() || character == ',')
                 .any(|token| token == expected),
+            VersionOutput::GitCommit {
+                prefix,
+                commit,
+                suffix,
+                min_abbreviation,
+            } => output
+                .strip_prefix(prefix)
+                .and_then(|output| output.strip_suffix(suffix))
+                .is_some_and(|abbreviation| {
+                    abbreviation.len() >= min_abbreviation
+                        && abbreviation.bytes().all(|byte| byte.is_ascii_hexdigit())
+                        && commit.starts_with(abbreviation)
+                }),
         }
     }
 }
@@ -186,9 +205,12 @@ pub(crate) fn pinned_indexer(kind: SemanticIndexerKind) -> Result<PinnedIndexer,
             },
             runtime: IndexerRuntime::Native,
             source: IndexerInstallSource::Download(rust_analyzer_download()?),
-            version_output: VersionOutput::Exact(
-                "rust-analyzer 0.3.2997-standalone (b54a82b321 2026-08-02)",
-            ),
+            version_output: VersionOutput::GitCommit {
+                prefix: "rust-analyzer 0.3.2997-standalone (",
+                commit: "b54a82b321c9617c5cf0b07ac0f12c08f7bc5902",
+                suffix: " 2026-08-02)",
+                min_abbreviation: 9,
+            },
         }),
     }
 }

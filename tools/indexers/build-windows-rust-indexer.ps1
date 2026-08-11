@@ -185,8 +185,12 @@ Copy-Item -LiteralPath $Cargo -Destination (Join-Path $Bin "cargo.exe")
 
 $RustAnalyzerVersion = (& (Join-Path $Bin "rust-analyzer.exe") --version).Trim()
 $CargoVersion = (& (Join-Path $Bin "cargo.exe") -Vv) -join "`n"
-if ($RustAnalyzerVersion -ne "rust-analyzer 0.3.2997-standalone (b54a82b321 2026-08-02)") {
+if ($RustAnalyzerVersion -notmatch '^rust-analyzer 0\.3\.2997-standalone \(([0-9a-f]+) 2026-08-02\)$') {
     throw "Unexpected rust-analyzer identity: $RustAnalyzerVersion"
+}
+$RustAnalyzerCommitPrefix = $Matches[1]
+if ($RustAnalyzerCommitPrefix.Length -lt 9 -or -not $RustAnalyzerCommit.StartsWith($RustAnalyzerCommitPrefix)) {
+    throw "Unexpected rust-analyzer commit abbreviation: $RustAnalyzerCommitPrefix"
 }
 if (-not $CargoVersion.Contains("commit-hash: $CargoCommit")) {
     throw "Unexpected Cargo identity: $CargoVersion"
