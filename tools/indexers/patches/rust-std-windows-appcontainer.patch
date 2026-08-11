@@ -1,0 +1,94 @@
+diff --git a/library/std/src/sys/process/windows/child_pipe.rs b/library/std/src/sys/process/windows/child_pipe.rs
+--- a/library/std/src/sys/process/windows/child_pipe.rs
++++ b/library/std/src/sys/process/windows/child_pipe.rs
+@@ -3,7 +3,10 @@ use crate::ops::Neg;
+ use crate::os::windows::prelude::*;
+ use crate::sys::handle::Handle;
+ use crate::sys::{FromInner, IntoInner, api, c};
++use crate::sync::atomic::{AtomicU64, Ordering};
+ use crate::{mem, ptr};
++
++static CHILD_PIPE_ID: AtomicU64 = AtomicU64::new(0);
+
+ pub struct ChildPipe {
+     inner: Handle,
+@@ -70,42 +73,21 @@ pub(super) fn child_pipe(ours_readable: bool, their_handle_inheritable: bool) ->
+         let mut object_attributes = c::OBJECT_ATTRIBUTES::default();
+         object_attributes.Length = size_of::<c::OBJECT_ATTRIBUTES>() as u32;
+
+-        // Open a handle to the pipe filesystem (`\??\PIPE\`).
+-        // This will be used when creating a new annon pipe.
+-        let pipe_fs = {
+-            let path = api::unicode_str!(r"\??\PIPE\");
+-            object_attributes.ObjectName = path.as_ptr();
+-            let mut pipe_fs = ptr::null_mut();
+-            let status = c::NtOpenFile(
+-                &mut pipe_fs,
+-                c::SYNCHRONIZE | c::GENERIC_READ,
+-                &object_attributes,
+-                &mut io_status,
+-                c::FILE_SHARE_READ | c::FILE_SHARE_WRITE,
+-                c::FILE_SYNCHRONOUS_IO_NONALERT, // synchronous access
+-            );
+-            if c::nt_success(status) {
+-                Handle::from_raw_handle(pipe_fs)
+-            } else {
+-                return Err(io::Error::from_raw_os_error(c::RtlNtStatusToDosError(status) as i32));
+-            }
++        let pipe_id = CHILD_PIPE_ID.fetch_add(1, Ordering::Relaxed);
++        let pipe_path: Vec<u16> =
++            crate::format!(r"\??\PIPE\LOCAL\rust-std-{}-{pipe_id}", crate::process::id())
++                .encode_utf16()
++                .collect();
++        let pipe_name = c::UNICODE_STRING {
++            Length: (pipe_path.len() * size_of::<u16>()) as u16,
++            MaximumLength: (pipe_path.len() * size_of::<u16>()) as u16,
++            Buffer: pipe_path.as_ptr() as *mut u16,
+         };
+-
+-        // From now on we're using handles instead of paths to create and open pipes.
+-        // So set the `ObjectName` to a zero length string.
+-        // As a (perhaps overzealous) mitigation for #143078, we use the null pointer
+-        // for empty.Buffer instead of unicode_str!("").
+-        // There's no difference to the OS itself but it's possible that third party
+-        // DLLs which hook in to processes could be relying on the exact form of this string.
+-        let empty = c::UNICODE_STRING::default();
+-        object_attributes.ObjectName = &raw const empty;
++        object_attributes.ObjectName = &raw const pipe_name;
++        object_attributes.RootDirectory = ptr::null_mut();
+
+         // Create our side of the pipe for async access.
+         let ours = {
+-            // Use the pipe filesystem as the root directory.
+-            // With no name provided, an anonymous pipe will be created.
+-            object_attributes.RootDirectory = pipe_fs.as_raw_handle();
+-
+             // A negative timeout value is a relative time (rather than an absolute time).
+             // The time is given in 100's of nanoseconds so this is 50 milliseconds.
+             // This value was chosen to be consistent with the default timeout set by `CreateNamedPipeW`
+@@ -139,10 +121,6 @@ pub(super) fn child_pipe(ours_readable: bool, their_handle_inheritable: bool) ->
+
+         // Open their side of the pipe for synchronous access.
+         let theirs = {
+-            // We can reopen the anonymous pipe without a name by setting
+-            // RootDirectory to the pipe handle and not setting a path name,
+-            object_attributes.RootDirectory = ours.as_raw_handle();
+-
+             if their_handle_inheritable {
+                 object_attributes.Attributes |= c::OBJ_INHERIT;
+             }
+diff --git a/library/std/src/sys/process/windows.rs b/library/std/src/sys/process/windows.rs
+--- a/library/std/src/sys/process/windows.rs
++++ b/library/std/src/sys/process/windows.rs
+@@ -632,6 +632,11 @@ impl Stdio {
+             // permissions as well as the ability to be inherited to child
+             // processes (as this is about to be inherited).
+             Stdio::Null => {
++                if stdio_id == c::STD_INPUT_HANDLE {
++                    let pipes = child_pipe::child_pipe(false, true)?;
++                    drop(pipes.ours);
++                    return Ok(pipes.theirs.into_handle());
++                }
+                 let mut opts = OpenOptions::new();
+                 opts.read(stdio_id == c::STD_INPUT_HANDLE);
+                 opts.write(stdio_id != c::STD_INPUT_HANDLE);

@@ -78,20 +78,7 @@ impl SemanticIndexerStore {
             ));
         }
         let entrypoint = root.join(&record.entrypoint);
-        let metadata = fs::symlink_metadata(&entrypoint).map_err(|error| {
-            format!(
-                "{} entrypoint is missing at {}: {error}",
-                spec.display_name,
-                entrypoint.display()
-            )
-        })?;
-        if !metadata.is_file() || metadata.file_type().is_symlink() {
-            return Err(format!(
-                "{} entrypoint is not a regular file: {}",
-                spec.display_name,
-                entrypoint.display()
-            ));
-        }
+        validate_runtime_files(spec, root)?;
         Ok(InstalledIndexer {
             root: root.to_path_buf(),
             entrypoint,
@@ -111,21 +98,7 @@ impl SemanticIndexerStore {
     ) -> Result<InstalledIndexer, String> {
         let entrypoint_relative = spec.entrypoint_relative_path();
         validate_relative_path(&entrypoint_relative)?;
-        let entrypoint = root.join(&entrypoint_relative);
-        let metadata = fs::symlink_metadata(&entrypoint).map_err(|error| {
-            format!(
-                "cannot seal {} because its entrypoint is missing at {}: {error}",
-                spec.display_name,
-                entrypoint.display()
-            )
-        })?;
-        if !metadata.is_file() || metadata.file_type().is_symlink() {
-            return Err(format!(
-                "cannot seal non-regular {} entrypoint {}",
-                spec.display_name,
-                entrypoint.display()
-            ));
-        }
+        validate_runtime_files(spec, root)?;
         let record = IndexerInstallationRecord {
             version: INSTALL_RECORD_VERSION,
             install_contract: INDEXER_INSTALL_CONTRACT.to_string(),
@@ -229,6 +202,30 @@ fn validate_record(spec: PinnedIndexer, record: &IndexerInstallationRecord) -> R
     validate_relative_path(Path::new(&record.entrypoint))
 }
 
+fn validate_runtime_files(spec: PinnedIndexer, root: &Path) -> Result<(), String> {
+    let mut paths = vec![spec.entrypoint_relative_path()];
+    paths.extend(spec.companion_relative_paths());
+    for relative in paths {
+        validate_relative_path(&relative)?;
+        let path = root.join(&relative);
+        let metadata = fs::symlink_metadata(&path).map_err(|error| {
+            format!(
+                "{} runtime file is missing at {}: {error}",
+                spec.display_name,
+                path.display()
+            )
+        })?;
+        if !metadata.is_file() || metadata.file_type().is_symlink() {
+            return Err(format!(
+                "{} runtime file is not a regular file: {}",
+                spec.display_name,
+                path.display()
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn source_identity(spec: PinnedIndexer) -> String {
     let source = match spec.source {
         IndexerInstallSource::Npm {
@@ -254,6 +251,13 @@ fn source_identity(spec: PinnedIndexer) -> String {
         return format!(
             "{source}:sniff-windows-patch-{}",
             crate::semantic_indexer_manifest::WINDOWS_SCIP_GO_PATCH_ID
+        );
+    }
+    #[cfg(windows)]
+    if spec.kind == SemanticIndexerKind::Rust {
+        return format!(
+            "{source}:sniff-windows-patch-{}",
+            crate::semantic_indexer_manifest::WINDOWS_RUST_INDEXER_PATCH_ID
         );
     }
     source

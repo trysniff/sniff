@@ -1053,12 +1053,19 @@ async fn install_download(
 fn unpack_zip(root: &Path, spec: PinnedIndexer, bytes: &[u8]) -> Result<(), String> {
     let mut archive = ZipArchive::new(Cursor::new(bytes))
         .map_err(|error| format!("failed to open {} archive: {error}", spec.display_name))?;
-    let entrypoint_relative = spec.entrypoint_relative_path();
-    let expected_name = entrypoint_relative
-        .file_name()
-        .and_then(|name| name.to_str())
-        .ok_or_else(|| format!("{} has an invalid entrypoint name", spec.display_name))?;
-    let mut found = false;
+    let mut expected = vec![spec.entrypoint_relative_path()];
+    expected.extend(spec.companion_relative_paths());
+    let expected = expected
+        .into_iter()
+        .map(|relative| {
+            let name = relative
+                .file_name()
+                .and_then(|name| name.to_str())
+                .ok_or_else(|| format!("{} has an invalid runtime file name", spec.display_name))?;
+            Ok((name.to_string(), relative))
+        })
+        .collect::<Result<std::collections::BTreeMap<_, _>, String>>()?;
+    let mut found = std::collections::BTreeSet::new();
     for index in 0..archive.len() {
         let mut entry = archive
             .by_index(index)
@@ -1088,23 +1095,34 @@ fn unpack_zip(root: &Path, spec: PinnedIndexer, bytes: &[u8]) -> Result<(), Stri
                 entry.name()
             ));
         }
-        if file_name != expected_name {
+        let Some(relative) = expected.get(file_name) else {
             continue;
+        };
+        if !found.insert(file_name.to_string()) {
+            return Err(format!(
+                "{} archive contains duplicate runtime file {}",
+                spec.display_name, file_name
+            ));
         }
         let mut unpacked = Vec::new();
         entry
             .read_to_end(&mut unpacked)
             .map_err(|error| format!("failed to unpack {}: {error}", spec.display_name))?;
-        write_binary(root, &entrypoint_relative, &unpacked)?;
-        found = true;
+        write_binary(root, relative, &unpacked)?;
     }
-    if found {
-        Ok(())
-    } else {
+    let missing = expected
+        .keys()
+        .filter(|name| !found.contains(*name))
+        .cloned()
+        .collect::<Vec<_>>();
+    if !missing.is_empty() {
         Err(format!(
-            "{} archive did not contain its entrypoint",
-            spec.display_name
+            "{} archive did not contain required runtime files: {}",
+            spec.display_name,
+            missing.join(", ")
         ))
+    } else {
+        Ok(())
     }
 }
 

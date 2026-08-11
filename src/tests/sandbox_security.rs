@@ -98,11 +98,22 @@ fn main() {
                     children.push(child);
                 }
             }
+            // Keep the hostile fan-out alive long enough for sampled sandbox
+            // monitors to observe it before this worker performs its cleanup.
+            std::thread::sleep(Duration::from_millis(100));
             println!("spawned={}", children.len());
             for child in &mut children {
                 let _ = child.kill();
                 let _ = child.wait();
             }
+        }
+        Some("spawn") => {
+            let executable = args.next().expect("missing child executable");
+            let status = Command::new(executable)
+                .args(args)
+                .status()
+                .expect("launch trusted child executable");
+            println!("child-status={}", status.code().unwrap_or(-1));
         }
         Some("child") => std::thread::sleep(Duration::from_secs(10)),
         _ => panic!("unknown malicious-worker mode"),
@@ -200,7 +211,7 @@ fn compile_java_real_path_probe(root: &Path, runtime_parent: &Path) -> (PathBuf,
 }
 
 #[cfg(windows)]
-fn java_runtime_images(java_home: &Path) -> Vec<PathBuf> {
+fn windows_runtime_images(java_home: &Path) -> Vec<PathBuf> {
     let mut images = Vec::new();
     let mut pending = vec![java_home.to_path_buf()];
     while let Some(directory) = pending.pop() {
@@ -243,7 +254,7 @@ fn windows_java_can_resolve_a_moved_sandbox_artifact() {
         ],
     );
     spec.persistent_read_only_paths.push(java_runtime.clone());
-    spec.executable_paths = java_runtime_images(&java_runtime);
+    spec.executable_paths = windows_runtime_images(&java_runtime);
     spec.windows_virtualized_paths = vec![repository.path().to_path_buf(), java_runtime];
 
     let output = run(&spec).expect("Java path probe sandbox should start");
@@ -264,6 +275,87 @@ fn windows_java_can_resolve_a_moved_sandbox_artifact() {
         !Path::new(mapped_root).exists(),
         "sandbox drive mapping survived process completion: {mapped_root}"
     );
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_mapped_external_child_can_start() {
+    let repository = tempfile::tempdir().expect("create Java child-probe repository");
+    let toolchain = tempfile::tempdir().expect("create external Java child-probe toolchain");
+    let worker = compile_worker(repository.path());
+    let (java, java_runtime) = compile_java_real_path_probe(repository.path(), toolchain.path());
+    let mut spec = command(
+        repository.path(),
+        &worker,
+        vec![
+            "spawn".to_string(),
+            java.to_string_lossy().into_owned(),
+            "-cp".to_string(),
+            repository.path().to_string_lossy().into_owned(),
+            "SniffRealPathProbe".to_string(),
+            repository.path().to_string_lossy().into_owned(),
+        ],
+    );
+    spec.persistent_read_only_paths.push(java_runtime.clone());
+    spec.executable_paths = windows_runtime_images(&java_runtime);
+    spec.windows_virtualized_paths = vec![repository.path().to_path_buf(), java_runtime];
+
+    let output = run(&spec).expect("nested Java path probe sandbox should start");
+
+    assert_eq!(
+        output.status_code,
+        Some(0),
+        "stdout={:?} stderr={:?}",
+        output.stdout,
+        output.stderr
+    );
+    assert!(output.stdout.contains(r"cache\group\artifact.jar"));
+    assert!(output.stdout.contains("child-status=0"));
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_mapped_rust_toolchain_child_can_start() {
+    let repository = tempfile::tempdir().expect("create Rust child-probe repository");
+    let worker = compile_worker(repository.path());
+    let cargo_output = Command::new("rustup")
+        .args(["which", "cargo"])
+        .output()
+        .expect("resolve active cargo through rustup");
+    assert!(
+        cargo_output.status.success(),
+        "rustup could not resolve cargo"
+    );
+    let cargo = PathBuf::from(String::from_utf8(cargo_output.stdout).unwrap().trim());
+    let toolchain = cargo
+        .parent()
+        .and_then(Path::parent)
+        .expect("cargo should live inside a toolchain")
+        .to_path_buf();
+    let mut spec = command(
+        repository.path(),
+        &worker,
+        vec![
+            "spawn".to_string(),
+            cargo.to_string_lossy().into_owned(),
+            "--version".to_string(),
+        ],
+    );
+    spec.persistent_read_only_paths.push(toolchain.clone());
+    spec.executable_paths = windows_runtime_images(&toolchain);
+    spec.windows_virtualized_paths = vec![repository.path().to_path_buf(), toolchain];
+
+    let output = run(&spec).expect("mapped cargo child sandbox should start");
+
+    assert_eq!(
+        output.status_code,
+        Some(0),
+        "stdout={:?} stderr={:?}",
+        output.stdout,
+        output.stderr
+    );
+    assert!(output.stdout.contains("cargo "));
+    assert!(output.stdout.contains("child-status=0"));
 }
 
 #[test]

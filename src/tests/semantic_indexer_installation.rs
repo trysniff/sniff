@@ -87,6 +87,23 @@ fn missing_installation_fails_closed() {
     assert!(error.contains("not installed"));
 }
 
+#[cfg(windows)]
+#[test]
+fn windows_rust_installation_requires_the_pinned_cargo_companion() {
+    let temp = temp_dir();
+    let store = SemanticIndexerStore::at(temp.0.join("indexers"));
+    let spec = pinned_indexer(SemanticIndexerKind::Rust).unwrap();
+    let root = store.installation_root(spec);
+    let entrypoint = root.join(spec.entrypoint_relative_path());
+    fs::create_dir_all(entrypoint.parent().unwrap()).unwrap();
+    fs::write(entrypoint, b"rust-analyzer").unwrap();
+
+    let error = store.seal(spec).unwrap_err();
+
+    assert!(error.contains("cargo.exe"), "{error}");
+    assert!(error.contains("runtime file is missing"), "{error}");
+}
+
 #[cfg(unix)]
 #[test]
 fn symlinked_entrypoint_is_rejected() {

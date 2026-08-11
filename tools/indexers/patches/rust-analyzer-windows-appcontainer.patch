@@ -1,0 +1,12 @@
+diff --git a/crates/toolchain/src/lib.rs b/crates/toolchain/src/lib.rs
+index 1ee28a591..e7ee2890c 100644
+--- a/crates/toolchain/src/lib.rs
++++ b/crates/toolchain/src/lib.rs
+@@ -37,6 +37,6 @@ impl Tool {
+     /// 4) If all else fails, we just try to use the executable name directly
+     pub fn prefer_proxy(self) -> Utf8PathBuf {
+-        invoke(&[cargo_proxy, lookup_as_env_var, lookup_in_path], self.name())
++        invoke(&[lookup_as_env_var, cargo_proxy, lookup_in_path], self.name())
+     }
+
+     /// Return a `PathBuf` to use for the given executable.

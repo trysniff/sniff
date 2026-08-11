@@ -3,6 +3,8 @@ use super::gradle_windows::{
     TEMP_CLASS as WINDOWS_GRADLE_TEMP_CLASS, java_classpath as windows_java_classpath,
     prepare_system_overlay,
 };
+#[cfg(windows)]
+use super::run_one;
 use super::{
     GRADLE_INDEXER_BASE_JVM_ARGS, WINDOWS_SCIP_NODE_BOOTSTRAP, WINDOWS_SCIP_PYTHON_BOOTSTRAP,
     compact_process_output, files_for_indexer, format_timeout, go_sandbox_environment,
@@ -17,12 +19,62 @@ use super::{
     system_gradle_launcher_jar,
 };
 use crate::semantic_index::SemanticPositionEncoding;
+#[cfg(windows)]
+use crate::semantic_indexer_installation::InstalledIndexer;
 use crate::semantic_indexer_manifest::{SemanticIndexerKind, pinned_indexer};
 use crate::types::FileRecord;
 #[cfg(windows)]
 use std::io::{Read, Write};
 use std::path::Path;
 use std::time::Duration;
+
+#[cfg(windows)]
+#[tokio::test]
+#[ignore = "requires a prebuilt AppContainer-compatible rust-analyzer"]
+async fn windows_compatible_rust_analyzer_emits_scip_inside_appcontainer() {
+    let entrypoint = std::env::var_os("SNIFF_TEST_WINDOWS_RUST_ANALYZER")
+        .map(std::path::PathBuf::from)
+        .expect("SNIFF_TEST_WINDOWS_RUST_ANALYZER must name the compatibility artifact");
+    let entrypoint = std::fs::canonicalize(entrypoint).expect("resolve compatibility artifact");
+    let installation_root = entrypoint
+        .parent()
+        .and_then(std::path::Path::parent)
+        .expect("compatibility artifact should be installed below bin")
+        .to_path_buf();
+    let repository = tempfile::tempdir().expect("create Rust SCIP probe repository");
+    let source_dir = repository.path().join("src");
+    std::fs::create_dir(&source_dir).expect("create Rust source directory");
+    std::fs::write(
+        repository.path().join("Cargo.toml"),
+        "[package]\nname = \"sniff-rust-probe\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+    )
+    .expect("write Rust probe manifest");
+    let source_path = source_dir.join("lib.rs");
+    let source = "pub fn answer() -> u32 { 42 }\n";
+    std::fs::write(&source_path, source).expect("write Rust probe source");
+    let files = vec![FileRecord {
+        file_path: source_path.to_string_lossy().into_owned(),
+        source: source.to_string(),
+        language: "rust".to_string(),
+        methods: Vec::new(),
+    }];
+    let spec = pinned_indexer(SemanticIndexerKind::Rust).expect("pinned Rust indexer");
+    let installed = InstalledIndexer {
+        root: installation_root,
+        entrypoint,
+    };
+
+    run_one(spec, repository.path(), &installed, &files)
+        .await
+        .expect("compatibility artifact should index inside AppContainer");
+
+    let index = repository.path().join("index.scip");
+    assert!(index.is_file(), "rust-analyzer did not emit index.scip");
+    assert!(
+        std::fs::metadata(index).unwrap().len() > 0,
+        "rust-analyzer emitted an empty SCIP index"
+    );
+}
 
 fn javascript_file() -> FileRecord {
     FileRecord {

@@ -8,6 +8,8 @@ pub(crate) const INDEXER_INSTALL_CONTRACT: &str = "semantic-indexers-v1";
 pub(crate) const WINDOWS_SCIP_GO_PATCH_ID: &str = "x-tools-v0.45.0-and-go-tool-explicit-stdin-v4";
 #[cfg(windows)]
 pub(crate) const WINDOWS_SCIP_JAVA_PATCH_ID: &str = "isolated-gradle-file-temp-overlay-v19";
+#[cfg(windows)]
+pub(crate) const WINDOWS_RUST_INDEXER_PATCH_ID: &str = "appcontainer-process-transport-v1";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -95,6 +97,14 @@ impl PinnedIndexer {
         }
     }
 
+    pub(crate) fn companion_relative_paths(self) -> Vec<PathBuf> {
+        if cfg!(windows) && self.kind == SemanticIndexerKind::Rust {
+            vec![PathBuf::from("bin").join(executable("cargo"))]
+        } else {
+            Vec::new()
+        }
+    }
+
     pub(crate) fn accepts_version_output(self, output: &str) -> bool {
         let output = output.trim();
         match self.version_output {
@@ -169,7 +179,11 @@ pub(crate) fn pinned_indexer(kind: SemanticIndexerKind) -> Result<PinnedIndexer,
         SemanticIndexerKind::Rust => Ok(PinnedIndexer {
             kind,
             display_name: "rust-analyzer",
-            version: "2026-08-03",
+            version: if cfg!(windows) {
+                "2026-08-03-sniff.1"
+            } else {
+                "2026-08-03"
+            },
             runtime: IndexerRuntime::Native,
             source: IndexerInstallSource::Download(rust_analyzer_download()?),
             version_output: VersionOutput::Exact(
@@ -205,8 +219,8 @@ fn rust_analyzer_download() -> Result<IndexerDownload, String> {
     let target = (std::env::consts::OS, std::env::consts::ARCH);
     let download = match target {
         ("windows", "x86_64") => IndexerDownload {
-            url: "https://github.com/rust-lang/rust-analyzer/releases/download/2026-08-03/rust-analyzer-x86_64-pc-windows-msvc.zip",
-            sha256: "a446ba5482b2a43d4010180031d2033b6761dd295117f3d0277af5777c4d8ee5",
+            url: "https://github.com/trysniff/sniff/releases/download/semantic-indexers-v1/sniff-rust-indexer-x86_64-pc-windows-msvc.zip",
+            sha256: "a0d49152280dba80ffb6adac59e5d93c231784b09301831e68c49aa78e8566bf",
             archive: DownloadArchive::Zip,
         },
         ("windows", "aarch64") => IndexerDownload {

@@ -583,20 +583,25 @@ fn build_indexer_sandbox_command(
         env.extend(go_sandbox_environment(root, &go_root));
     }
     if spec.kind == SemanticIndexerKind::Rust {
+        #[cfg(windows)]
+        let cargo = fs::canonicalize(installed_root.join("bin").join("cargo.exe"))
+            .map(strip_windows_verbatim_prefix)
+            .map_err(|error| {
+                format!(
+                    "Windows rust-analyzer bundle is missing its pinned Cargo companion: {error}"
+                )
+            })?;
+        #[cfg(not(windows))]
         let cargo = resolve_rust_compiler_runtime("cargo")?;
         let rustc = resolve_rust_compiler_runtime("rustc")?;
         #[cfg(windows)]
         {
             let cargo_toolchain = runtime_mount_root(&cargo);
             let rustc_toolchain = runtime_mount_root(&rustc);
-            if cargo_toolchain != rustc_toolchain {
-                return Err(format!(
-                    "active Rust cargo and rustc resolve to different toolchains: {} and {}",
-                    cargo_toolchain.display(),
-                    rustc_toolchain.display()
-                ));
+            for toolchain in [&cargo_toolchain, &rustc_toolchain] {
+                collect_windows_runtime_images(root, &mut executable_paths, toolchain)?;
+                windows_virtualized_paths.push(toolchain.clone());
             }
-            windows_virtualized_paths.push(cargo_toolchain);
         }
         for (name, runtime) in [("cargo", &cargo), ("rustc", &rustc)] {
             let runtime_root = runtime_mount_root(runtime);
@@ -647,12 +652,6 @@ fn build_indexer_sandbox_command(
                 });
             if let Some(rustup_home) = rustup_home {
                 push_external_read_only(root, &mut persistent_read_only_paths, rustup_home.clone());
-                #[cfg(windows)]
-                collect_windows_runtime_images(
-                    root,
-                    &mut executable_paths,
-                    &rustup_home.join("toolchains"),
-                )?;
                 env.push((
                     "RUSTUP_HOME".to_string(),
                     rustup_home.to_string_lossy().to_string(),
@@ -863,7 +862,8 @@ fn collect_windows_runtime_images(
     executable_paths: &mut Vec<PathBuf>,
     runtime_root: &Path,
 ) -> Result<(), String> {
-    const MAX_RUNTIME_ENTRIES: usize = 20_000;
+    const MAX_RUNTIME_ENTRIES: usize = 100_000;
+    const MAX_RUNTIME_IMAGES: usize = 4_096;
 
     if !runtime_root.is_dir() {
         return Err(format!(
@@ -929,6 +929,12 @@ fn collect_windows_runtime_images(
                     ));
                 }
                 push_external_read_only(repository_root, executable_paths, path);
+                if executable_paths.len() > MAX_RUNTIME_IMAGES {
+                    return Err(format!(
+                        "Windows compiler runtime exceeds {MAX_RUNTIME_IMAGES} executable images: {}",
+                        runtime_root.display()
+                    ));
+                }
             }
         }
     }

@@ -1,4 +1,6 @@
 #[cfg(windows)]
+use super::unpack_zip;
+#[cfg(windows)]
 use super::{
     WINDOWS_GRADLE_TEMP_FILES, WINDOWS_SCIP_JAVA_PROCESS_RUNNER,
     install_rebuilt_zip_preserving_prefix, patch_scip_java_windows,
@@ -21,6 +23,62 @@ fn command_output_is_bounded_and_compacted() {
     let long = compact_output(&vec![b'x'; 500]);
     assert_eq!(long.len(), 403);
     assert!(long.ends_with("..."));
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_rust_bundle_requires_and_extracts_one_runtime_pair() {
+    use crate::semantic_indexer_manifest::{SemanticIndexerKind, pinned_indexer};
+    use std::io::{Cursor, Write};
+    use zip::write::SimpleFileOptions;
+
+    fn archive(include_cargo: bool, duplicate_cargo: bool) -> Vec<u8> {
+        let mut bytes = Cursor::new(Vec::new());
+        {
+            let mut writer = zip::ZipWriter::new(&mut bytes);
+            writer
+                .start_file("payload/rust-analyzer.exe", SimpleFileOptions::default())
+                .unwrap();
+            writer.write_all(b"rust-analyzer").unwrap();
+            if include_cargo {
+                writer
+                    .start_file("payload/cargo.exe", SimpleFileOptions::default())
+                    .unwrap();
+                writer.write_all(b"cargo").unwrap();
+            }
+            if duplicate_cargo {
+                writer
+                    .start_file("other/cargo.exe", SimpleFileOptions::default())
+                    .unwrap();
+                writer.write_all(b"duplicate").unwrap();
+            }
+            writer.finish().unwrap();
+        }
+        bytes.into_inner()
+    }
+
+    let spec = pinned_indexer(SemanticIndexerKind::Rust).unwrap();
+    let missing = tempfile::tempdir().unwrap();
+    let error = unpack_zip(missing.path(), spec, &archive(false, false)).unwrap_err();
+    assert!(error.contains("cargo.exe"), "{error}");
+
+    let duplicate = tempfile::tempdir().unwrap();
+    let error = unpack_zip(duplicate.path(), spec, &archive(true, true)).unwrap_err();
+    assert!(
+        error.contains("duplicate runtime file cargo.exe"),
+        "{error}"
+    );
+
+    let installed = tempfile::tempdir().unwrap();
+    unpack_zip(installed.path(), spec, &archive(true, false)).unwrap();
+    assert_eq!(
+        std::fs::read(installed.path().join(spec.entrypoint_relative_path())).unwrap(),
+        b"rust-analyzer"
+    );
+    assert_eq!(
+        std::fs::read(installed.path().join("bin/cargo.exe")).unwrap(),
+        b"cargo"
+    );
 }
 
 #[cfg(windows)]
