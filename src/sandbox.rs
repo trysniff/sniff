@@ -342,7 +342,7 @@ fn current_user_process_count() -> IoResult<u64> {
 
 #[cfg(target_os = "macos")]
 fn current_user_process_count() -> IoResult<u64> {
-    const PROC_UID_ONLY: u32 = 2;
+    const PROC_UID_ONLY: u32 = 4;
     unsafe extern "C" {
         fn proc_listpids(
             process_type: u32,
@@ -522,9 +522,30 @@ fn build_bubblewrap_command(spec: &SandboxCommand) -> Result<Command, SandboxErr
                 OsString::from(value),
             ]
         }))
-        .arg(&spec.program)
+        .arg(linux_sandbox_program(spec)?)
         .args(&spec.args);
     Ok(command)
+}
+
+#[cfg(target_os = "linux")]
+fn linux_sandbox_program(spec: &SandboxCommand) -> Result<OsString, SandboxError> {
+    let program = Path::new(&spec.program);
+    if !program.is_absolute() {
+        return Ok(program.as_os_str().to_os_string());
+    }
+    let canonical_program = std::fs::canonicalize(program).map_err(|error| {
+        SandboxError::Invalid(format!(
+            "sandbox worker program could not be canonicalized: {} ({error})",
+            program.display()
+        ))
+    })?;
+    let canonical_root = std::fs::canonicalize(&spec.root).map_err(|error| {
+        SandboxError::Invalid(format!("sandbox root could not be canonicalized: {error}"))
+    })?;
+    let Ok(relative) = canonical_program.strip_prefix(&canonical_root) else {
+        return Ok(canonical_program.into_os_string());
+    };
+    Ok(Path::new("/workspace").join(relative).into_os_string())
 }
 
 #[cfg(target_os = "linux")]
@@ -689,6 +710,8 @@ fn terminate(child: &mut Child) -> Result<(), SandboxError> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(target_os = "linux")]
+    use super::linux_sandbox_program;
     use super::{
         DEFAULT_MEMORY_LIMIT, DEFAULT_PROCESS_LIMIT, SandboxCommand, SandboxError, read_limited,
         read_limited_with_observer, validate_external_runner, validate_spec,
@@ -808,6 +831,21 @@ mod tests {
 
         let error = validate_spec(&command).unwrap_err();
         assert!(matches!(error, SandboxError::Invalid(message) if message.contains("environment")));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_repository_program_uses_the_workspace_mount() {
+        let root = tempfile::tempdir().unwrap();
+        let executable = root.path().join("worker");
+        std::fs::write(&executable, b"worker").unwrap();
+        let mut command = spec(root.path().to_path_buf());
+        command.program = executable.to_string_lossy().into_owned();
+
+        assert_eq!(
+            linux_sandbox_program(&command).unwrap(),
+            std::ffi::OsString::from("/workspace/worker")
+        );
     }
 
     #[test]
