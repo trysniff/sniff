@@ -301,7 +301,7 @@ fn set_unix_memory_limit(limit: libc::rlim_t) -> IoResult<()> {
 
 #[cfg(target_os = "macos")]
 fn set_unix_memory_limit(limit: libc::rlim_t) -> IoResult<()> {
-    set_unix_resource_limit(libc::RLIMIT_DATA, limit)
+    set_unix_resource_limit(libc::RLIMIT_AS, limit)
 }
 
 #[cfg(target_os = "linux")]

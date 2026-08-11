@@ -2,14 +2,14 @@ use super::{
     GRADLE_INDEXER_BASE_JVM_ARGS, WINDOWS_SCIP_NODE_BOOTSTRAP, WINDOWS_SCIP_PYTHON_BOOTSTRAP,
     compact_process_output, files_for_indexer, format_timeout, go_sandbox_environment,
     gradle_indexer_jvm_args, gradle_script_uses_android, indexer_arguments_with_project,
-    java_home_environment_value, missing_position_encoding, project_name,
-    reject_unsupported_android_gradle, sandbox_repository_argument, source_integrity_digest,
-    write_private_gradle_properties,
+    missing_position_encoding, project_name, reject_unsupported_android_gradle,
+    sandbox_repository_argument, source_integrity_digest, write_private_gradle_properties,
 };
 #[cfg(windows)]
 use super::{
-    collect_windows_runtime_images, indexer_arguments_with_workspace, prepare_indexer_workspace,
-    push_external_read_only, system_gradle_launcher_jar, windows_java_classpath,
+    collect_windows_runtime_images, indexer_arguments_with_workspace, java_home_environment_value,
+    prepare_indexer_workspace, push_external_read_only, system_gradle_launcher_jar,
+    windows_java_classpath,
 };
 use crate::semantic_index::SemanticPositionEncoding;
 use crate::semantic_indexer_manifest::{SemanticIndexerKind, pinned_indexer};
