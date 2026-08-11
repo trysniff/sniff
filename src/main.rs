@@ -92,10 +92,24 @@ fn run_internal_windows_gradle_launcher() -> Option<i32> {
         {
             return None;
         }
-        let wrapper = match std::env::var_os("SNIFF_GRADLE_WRAPPER") {
-            Some(wrapper) => wrapper,
+        let launcher_jar = match std::env::var_os("SNIFF_GRADLE_LAUNCHER_JAR") {
+            Some(launcher_jar) => launcher_jar,
             None => {
-                eprintln!("internal Gradle launcher missing SNIFF_GRADLE_WRAPPER");
+                eprintln!("internal Gradle launcher missing SNIFF_GRADLE_LAUNCHER_JAR");
+                return Some(2);
+            }
+        };
+        let main_class = match std::env::var("SNIFF_GRADLE_MAIN_CLASS") {
+            Ok(main_class)
+                if matches!(
+                    main_class.as_str(),
+                    "org.gradle.wrapper.GradleWrapperMain" | "org.gradle.launcher.GradleMain"
+                ) =>
+            {
+                main_class
+            }
+            _ => {
+                eprintln!("internal Gradle launcher has an unsupported main class");
                 return Some(2);
             }
         };
@@ -113,14 +127,42 @@ fn run_internal_windows_gradle_launcher() -> Option<i32> {
             );
             return Some(2);
         }
-        let status = std::process::Command::new("cmd.exe")
-            .arg("/d")
-            .arg("/c")
-            .arg("call")
-            .arg(wrapper)
+        let java_home = match std::env::var_os("JAVA_HOME") {
+            Some(java_home) => java_home,
+            None => {
+                eprintln!("internal Gradle launcher missing JAVA_HOME");
+                return Some(2);
+            }
+        };
+        let java = std::path::PathBuf::from(java_home).join("bin/java.exe");
+        let mut command = std::process::Command::new(java);
+        let java_options = match std::env::var("JAVA_OPTS") {
+            Ok(options) => options,
+            Err(_) => {
+                eprintln!("internal Gradle launcher missing JAVA_OPTS");
+                return Some(2);
+            }
+        };
+        let Some((base_options, agent)) = java_options.rsplit_once(" -javaagent:") else {
+            eprintln!("internal Gradle launcher has malformed JAVA_OPTS");
+            return Some(2);
+        };
+        if base_options != semantic_indexer_runner::GRADLE_INDEXER_BASE_JVM_ARGS || agent.is_empty()
+        {
+            eprintln!("internal Gradle launcher rejected unexpected JAVA_OPTS");
+            return Some(2);
+        }
+        command.args(base_options.split_ascii_whitespace());
+        command.arg(format!("-javaagent:{agent}"));
+        let status = command
+            .arg("-Dorg.gradle.appname=gradle")
+            .arg("-classpath")
+            .arg(launcher_jar)
+            .arg(main_class)
             .arg("-p")
-            .arg(project)
+            .arg(&project)
             .args(arguments)
+            .current_dir(project)
             .status();
         Some(match status {
             Ok(status) => status.code().unwrap_or(1),

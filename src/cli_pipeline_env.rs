@@ -108,7 +108,8 @@ fn is_execution_control_key(key: &str) -> bool {
         key,
         "SNIFF_SANDBOX_RUNNER"
             | "SNIFF_INTERNAL_GRADLE_LAUNCHER"
-            | "SNIFF_GRADLE_WRAPPER"
+            | "SNIFF_GRADLE_LAUNCHER_JAR"
+            | "SNIFF_GRADLE_MAIN_CLASS"
             | "SNIFF_GRADLE_PROJECT"
             | "PATH"
             | "HOME"

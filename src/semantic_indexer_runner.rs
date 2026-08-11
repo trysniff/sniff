@@ -23,7 +23,7 @@ const MAX_PROCESS_OUTPUT: usize = 2 * 1024 * 1024;
 const MAX_COMPACT_ERROR_OUTPUT: usize = 8 * 1024;
 const INDEXER_CACHE_DIR: &str = ".sniff-indexer-cache";
 const INDEXER_TEMP_DIR: &str = ".sniff-indexer-tmp";
-const GRADLE_INDEXER_BASE_JVM_ARGS: &str = concat!(
+pub(crate) const GRADLE_INDEXER_BASE_JVM_ARGS: &str = concat!(
     "--add-opens=java.base/java.util=ALL-UNNAMED ",
     "--add-opens=java.base/java.lang=ALL-UNNAMED ",
     "--add-opens=java.base/java.lang.invoke=ALL-UNNAMED ",
@@ -40,7 +40,8 @@ const WINDOWS_SCIP_NODE_BOOTSTRAP: &str = "const indexer=require(process.argv[1]
 struct TemporaryIndexerWorkspace {
     directory: PathBuf,
     path_prefix: PathBuf,
-    gradle_wrapper: PathBuf,
+    gradle_launcher_jar: PathBuf,
+    gradle_main_class: &'static str,
     project_root: PathBuf,
 }
 
@@ -654,7 +655,6 @@ fn build_indexer_sandbox_command(
                     )
                 })?;
             push_external_read_only(root, &mut executable_paths, gradle_launcher);
-            push_external_read_only(root, &mut executable_paths, resolve_runtime("cmd")?);
         }
         path_prefixes.push(workspace.path_prefix.clone());
         env.push((
@@ -662,8 +662,12 @@ fn build_indexer_sandbox_command(
             "1".to_string(),
         ));
         env.push((
-            "SNIFF_GRADLE_WRAPPER".to_string(),
-            workspace.gradle_wrapper.to_string_lossy().to_string(),
+            "SNIFF_GRADLE_LAUNCHER_JAR".to_string(),
+            sandbox_repository_argument(root, &workspace.gradle_launcher_jar.to_string_lossy()),
+        ));
+        env.push((
+            "SNIFF_GRADLE_MAIN_CLASS".to_string(),
+            workspace.gradle_main_class.to_string(),
         ));
         env.push((
             "SNIFF_GRADLE_PROJECT".to_string(),
@@ -1292,22 +1296,21 @@ fn prepare_windows_kotlin_workspace(
                 directory.join("build.gradle.kts").display()
             )
         })?;
-        let gradle_wrapper = if project_gradle_wrapper.is_file() {
-            project_gradle_wrapper.clone()
+        let (gradle_launcher_jar, gradle_main_class) = if project_gradle_wrapper.is_file() {
+            let wrapper_jar = root.join("gradle/wrapper/gradle-wrapper.jar");
+            if !wrapper_jar.is_file() {
+                return Err(format!(
+                    "Gradle wrapper launcher is missing at {}; refusing to execute the batch wrapper through a shell",
+                    wrapper_jar.display()
+                ));
+            }
+            (wrapper_jar, "org.gradle.wrapper.GradleWrapperMain")
         } else {
             let system_gradle = find_system_gradle()?;
-            let generated_wrapper = directory.join("gradlew.bat");
-            fs::write(
-                &generated_wrapper,
-                format!("@echo off\r\ncall \"{}\" %*\r\n", system_gradle.display()),
+            (
+                system_gradle_launcher_jar(&system_gradle)?,
+                "org.gradle.launcher.GradleMain",
             )
-            .map_err(|error| {
-                format!(
-                    "failed to create temporary Gradle wrapper {}: {error}",
-                    generated_wrapper.display()
-                )
-            })?;
-            generated_wrapper
         };
         // Java ProcessBuilder cannot launch a Windows batch file by the bare
         // `gradle` name, so reuse Sniff as a temporary launcher instead of
@@ -1323,7 +1326,8 @@ fn prepare_windows_kotlin_workspace(
         Ok(TemporaryIndexerWorkspace {
             directory: directory.clone(),
             path_prefix,
-            gradle_wrapper,
+            gradle_launcher_jar,
+            gradle_main_class,
             project_root: root.to_path_buf(),
         })
     })();
@@ -1355,6 +1359,50 @@ fn find_system_gradle() -> Result<PathBuf, String> {
         .find(|line| !line.is_empty())
         .map(PathBuf::from)
         .ok_or_else(|| "where.exe reported no usable system Gradle executable".to_string())
+}
+
+#[cfg(windows)]
+fn system_gradle_launcher_jar(gradle: &Path) -> Result<PathBuf, String> {
+    let home = gradle.parent().and_then(Path::parent).ok_or_else(|| {
+        format!(
+            "system Gradle has no installation root: {}",
+            gradle.display()
+        )
+    })?;
+    let lib = home.join("lib");
+    let mut candidates = fs::read_dir(&lib)
+        .map_err(|error| {
+            format!(
+                "failed to inspect system Gradle libraries at {}: {error}",
+                lib.display()
+            )
+        })?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| {
+            let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+                return false;
+            };
+            path.is_file()
+                && name.ends_with(".jar")
+                && (name.starts_with("gradle-gradle-cli-main-")
+                    || name.starts_with("gradle-launcher-"))
+        })
+        .collect::<Vec<_>>();
+    candidates.sort();
+    match candidates.as_slice() {
+        [launcher] => Ok(launcher.clone()),
+        [] => Err(format!(
+            "system Gradle at {} has no supported launcher jar in {}; reinstall Gradle",
+            gradle.display(),
+            lib.display()
+        )),
+        _ => Err(format!(
+            "system Gradle at {} has multiple launcher jars in {}; refusing an ambiguous runtime",
+            gradle.display(),
+            lib.display()
+        )),
+    }
 }
 
 #[cfg(windows)]

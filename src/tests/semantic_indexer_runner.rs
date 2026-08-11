@@ -8,7 +8,7 @@ use super::{
 #[cfg(windows)]
 use super::{
     collect_windows_runtime_executables, indexer_arguments_with_workspace,
-    prepare_indexer_workspace, push_external_read_only,
+    prepare_indexer_workspace, push_external_read_only, system_gradle_launcher_jar,
 };
 use crate::semantic_index::SemanticPositionEncoding;
 use crate::semantic_indexer_manifest::{SemanticIndexerKind, pinned_indexer};
@@ -333,7 +333,7 @@ fn android_gradle_projects_fail_before_scip_java_invocation() {
 
 #[cfg(windows)]
 #[test]
-fn windows_kotlin_workspace_uses_the_project_batch_wrapper() {
+fn windows_kotlin_workspace_launches_the_project_wrapper_jar_directly() {
     let root = std::env::temp_dir().join(format!(
         "sniff-kotlin-workspace-test-{}",
         std::process::id()
@@ -341,12 +341,26 @@ fn windows_kotlin_workspace_uses_the_project_batch_wrapper() {
     std::fs::create_dir_all(&root).unwrap();
     std::fs::write(root.join("gradlew"), "#!/usr/bin/env sh\n").unwrap();
     std::fs::write(root.join("gradlew.bat"), "@echo off\r\n").unwrap();
+    std::fs::create_dir_all(root.join("gradle/wrapper")).unwrap();
+    std::fs::write(
+        root.join("gradle/wrapper/gradle-wrapper.jar"),
+        b"wrapper fixture",
+    )
+    .unwrap();
 
     let spec = pinned_indexer(SemanticIndexerKind::Kotlin).unwrap();
     let workspace = prepare_indexer_workspace(spec, &root).unwrap().unwrap();
     assert_ne!(workspace.directory, root);
     assert!(workspace.directory.join("build.gradle.kts").is_file());
     assert!(workspace.path_prefix.join("gradle.exe").is_file());
+    assert_eq!(
+        workspace.gradle_launcher_jar,
+        root.join("gradle/wrapper/gradle-wrapper.jar")
+    );
+    assert_eq!(
+        workspace.gradle_main_class,
+        "org.gradle.wrapper.GradleWrapperMain"
+    );
 
     let arguments = indexer_arguments_with_workspace(spec, &root, None, Some(&workspace));
     assert_eq!(arguments[0], "--cwd");
@@ -365,6 +379,47 @@ fn windows_kotlin_workspace_uses_the_project_batch_wrapper() {
 
     workspace.cleanup(spec.display_name).unwrap();
     std::fs::remove_dir_all(root).unwrap();
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_system_gradle_requires_one_known_launcher_jar() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("gradle");
+    let bin = home.join("bin");
+    let lib = home.join("lib");
+    std::fs::create_dir_all(&bin).unwrap();
+    std::fs::create_dir_all(&lib).unwrap();
+    let command = bin.join("gradle.bat");
+    std::fs::write(&command, "@echo off\r\n").unwrap();
+
+    let launcher = lib.join("gradle-launcher-8.14.jar");
+    std::fs::write(&launcher, b"launcher fixture").unwrap();
+    assert_eq!(system_gradle_launcher_jar(&command).unwrap(), launcher);
+
+    std::fs::write(
+        lib.join("gradle-gradle-cli-main-9.0.jar"),
+        b"ambiguous fixture",
+    )
+    .unwrap();
+    let error = system_gradle_launcher_jar(&command).unwrap_err();
+    assert!(error.contains("multiple launcher jars"));
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_project_wrapper_without_its_jar_fails_closed() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(root.path().join("gradlew.bat"), "@echo off\r\n").unwrap();
+
+    let spec = pinned_indexer(SemanticIndexerKind::Kotlin).unwrap();
+    let error = match prepare_indexer_workspace(spec, root.path()) {
+        Err(error) => error,
+        Ok(_) => panic!("missing Gradle wrapper jar should fail closed"),
+    };
+
+    assert!(error.contains("gradle-wrapper.jar"));
+    assert!(error.contains("refusing to execute the batch wrapper through a shell"));
 }
 
 #[cfg(windows)]
