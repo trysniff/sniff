@@ -296,6 +296,7 @@ public final class ProcessRunner {
     }
     String project = requiredEnvironment("SNIFF_GRADLE_PROJECT");
     String projectCache = requiredEnvironment("SNIFF_GRADLE_PROJECT_CACHE");
+    String temporaryDirectory = requiredEnvironment("SNIFF_GRADLE_TEMP");
     String javaOptions = requiredEnvironment("JAVA_OPTS");
     int agentSeparator = javaOptions.lastIndexOf(" -javaagent:");
     if (agentSeparator < 0 || !javaOptions.substring(0, agentSeparator).equals(BASE_JVM_OPTIONS)) {
@@ -309,6 +310,7 @@ public final class ProcessRunner {
     Collections.addAll(rewritten, BASE_JVM_OPTIONS.split(" "));
     rewritten.add("-javaagent:" + agent);
     rewritten.add("-Dorg.gradle.appname=gradle");
+    rewritten.add("-Djava.io.tmpdir=" + temporaryDirectory);
     rewritten.add("-classpath");
     rewritten.add(launcher);
     rewritten.add(mainClass);
