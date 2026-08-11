@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 pub(crate) const INDEXER_INSTALL_CONTRACT: &str = "semantic-indexers-v1";
 #[cfg(windows)]
-pub(crate) const WINDOWS_SCIP_GO_PATCH_ID: &str = "x-tools-v0.45.0-explicit-stdin-v1";
+pub(crate) const WINDOWS_SCIP_GO_PATCH_ID: &str = "x-tools-v0.45.0-explicit-stdin-debug-v2";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]

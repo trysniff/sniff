@@ -39,6 +39,21 @@ const SCIP_GO_STDIN_AFTER: &str = concat!(
     "\tcmd.Stdout = stdout\n",
     "\tcmd.Stderr = stderr\n"
 );
+#[cfg(windows)]
+const SCIP_GO_TRACE_BEFORE: &str = "\treturn runCmdContext(ctx, cmd)\n";
+#[cfg(windows)]
+const SCIP_GO_TRACE_AFTER: &str = concat!(
+    "\tresult := runCmdContext(ctx, cmd)\n",
+    "\tif os.Getenv(\"SNIFF_DEBUG_INDEXERS\") != \"\" {\n",
+    "\t\tstdoutBytes := -1\n",
+    "\t\tif buffer, ok := stdout.(*bytes.Buffer); ok {\n",
+    "\t\t\tstdoutBytes = buffer.Len()\n",
+    "\t\t}\n",
+    "\t\tstderrText := fmt.Sprint(stderr)\n",
+    "\t\tfmt.Fprintf(os.Stderr, \"[sniff] go command: %s; stdout bytes: %d; result: %v; stderr: %q\\n\", debugStr, stdoutBytes, result, stderrText)\n",
+    "\t}\n",
+    "\treturn result\n"
+);
 
 #[derive(Debug, PartialEq, Eq)]
 struct GoModuleMetadata {
@@ -141,7 +156,7 @@ async fn install_windows_inner(
         .current_dir(&source_root)
         .args(["mod", "vendor"]);
     run_command(&mut vendor_command, "scip-go dependency vendoring").await?;
-    patch_go_command_stdin(&source_root.join(SCIP_GO_INVOKE_PATH))?;
+    patch_go_command_compatibility(&source_root.join(SCIP_GO_INVOKE_PATH))?;
 
     let relative_package = package.strip_prefix(module).ok_or_else(|| {
         format!("scip-go package {package} is outside the pinned module {module}")
@@ -178,7 +193,7 @@ fn verify_go_requirement(go_mod: &Path) -> Result<(), String> {
 }
 
 #[cfg(windows)]
-fn patch_go_command_stdin(invoke_path: &Path) -> Result<(), String> {
+fn patch_go_command_compatibility(invoke_path: &Path) -> Result<(), String> {
     let source = fs::read(invoke_path).map_err(|error| {
         format!(
             "failed to read pinned x/tools command runner {}: {error}",
@@ -193,13 +208,21 @@ fn patch_go_command_stdin(invoke_path: &Path) -> Result<(), String> {
     }
     let source = String::from_utf8(source)
         .map_err(|error| format!("pinned x/tools command runner is not UTF-8: {error}"))?;
-    let count = source.matches(SCIP_GO_STDIN_BEFORE).count();
-    if count != 1 {
+    let stdin_count = source.matches(SCIP_GO_STDIN_BEFORE).count();
+    if stdin_count != 1 {
         return Err(format!(
-            "pinned x/tools command runner has {count} compatible go-command sites; expected exactly one"
+            "pinned x/tools command runner has {stdin_count} compatible go-command sites; expected exactly one"
         ));
     }
-    let patched = source.replacen(SCIP_GO_STDIN_BEFORE, SCIP_GO_STDIN_AFTER, 1);
+    let trace_count = source.matches(SCIP_GO_TRACE_BEFORE).count();
+    if trace_count != 1 {
+        return Err(format!(
+            "pinned x/tools command runner has {trace_count} traceable go-command return sites; expected exactly one"
+        ));
+    }
+    let patched = source
+        .replacen(SCIP_GO_STDIN_BEFORE, SCIP_GO_STDIN_AFTER, 1)
+        .replacen(SCIP_GO_TRACE_BEFORE, SCIP_GO_TRACE_AFTER, 1);
     fs::write(invoke_path, patched).map_err(|error| {
         format!(
             "failed to write the scip-go Windows stdin compatibility patch {}: {error}",
