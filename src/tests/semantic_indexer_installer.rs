@@ -41,7 +41,10 @@ fn rebuilt_launcher_preserves_executable_prefix_and_required_entries() {
         .unwrap();
     writer.write_all(b"Main-Class: example.Main\n").unwrap();
     writer
-        .start_file("nested/runtime.jar", SimpleFileOptions::default())
+        .start_file(
+            "nested/runtime.jar",
+            SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored),
+        )
         .unwrap();
     writer.write_all(b"original runtime").unwrap();
     writer
@@ -112,13 +115,12 @@ fn rebuilt_launcher_preserves_executable_prefix_and_required_entries() {
         .read_to_string(&mut manifest)
         .unwrap();
     assert_eq!(manifest, "Main-Class: example.Main\n");
+    let mut runtime_entry = archive.by_name("nested/runtime.jar").unwrap();
+    assert_eq!(runtime_entry.compression(), zip::CompressionMethod::Stored);
     let mut runtime = String::new();
-    archive
-        .by_name("nested/runtime.jar")
-        .unwrap()
-        .read_to_string(&mut runtime)
-        .unwrap();
+    runtime_entry.read_to_string(&mut runtime).unwrap();
     assert_eq!(runtime, "patched runtime");
+    drop(runtime_entry);
     let mut lowercase = String::new();
     archive
         .by_name("launcher/y.class")
