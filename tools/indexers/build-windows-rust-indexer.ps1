@@ -123,7 +123,16 @@ if (Test-Path -LiteralPath $OutputDirectory) {
 }
 New-Item -ItemType Directory -Path $WorkDirectory | Out-Null
 New-Item -ItemType Directory -Path $OutputDirectory | Out-Null
+$PhysicalWorkDirectory = (Resolve-Path -LiteralPath $WorkDirectory).Path
+$BuildDrive = "R:"
+$BuildDriveRoot = "$BuildDrive\"
+if (Test-Path -LiteralPath $BuildDriveRoot) {
+    throw "Deterministic build drive is already in use: $BuildDrive"
+}
+Invoke-Checked -Executable "subst.exe" -ArgumentList @($BuildDrive, $PhysicalWorkDirectory)
+$WorkDirectory = $BuildDriveRoot
 
+try {
 Invoke-Checked -Executable "rustup" -ArgumentList @(
     "toolchain", "install", $RustToolchain, "--profile", "minimal", "--component", "rust-src"
 )
@@ -147,16 +156,20 @@ if ($LASTEXITCODE -ne 0) {
     throw "Failed to resolve the pinned Rust sysroot"
 }
 $RustSource = Join-Path $Sysroot "lib\rustlib\src\rust"
-$CargoHome = if ($env:CARGO_HOME) {
-    (Resolve-Path -LiteralPath $env:CARGO_HOME).Path
-} else {
-    (Resolve-Path -LiteralPath (Join-Path $env:USERPROFILE ".cargo")).Path
-}
+$CargoHome = Join-Path $WorkDirectory "cargo-home"
+New-Item -ItemType Directory -Path $CargoHome | Out-Null
 $PathRemaps = @(
+    [ordered]@{ Source = $env:USERPROFILE; Destination = "Z:\host-home" }
     [ordered]@{ Source = $RepositoryRoot; Destination = "Z:\sniff-source" }
-    [ordered]@{ Source = $WorkDirectory; Destination = "Z:\sniff-build" }
+    [ordered]@{ Source = $PhysicalWorkDirectory; Destination = "Z:\sniff-build" }
     [ordered]@{ Source = $CargoHome; Destination = "Z:\cargo-home" }
     [ordered]@{ Source = $Sysroot; Destination = "Z:\rust-toolchain" }
+)
+$RejectedHostPaths = @(
+    $env:USERPROFILE
+    $RepositoryRoot
+    $PhysicalWorkDirectory
+    $Sysroot
 )
 $EncodedRustFlags = [System.Collections.Generic.List[string]]::new()
 foreach ($remap in $PathRemaps) {
@@ -269,7 +282,7 @@ Copy-Item -LiteralPath $RustAnalyzer -Destination (Join-Path $Bin "rust-analyzer
 Copy-Item -LiteralPath $Cargo -Destination (Join-Path $Bin "cargo.exe")
 Assert-NoHostBuildPaths `
     -BinaryPaths @((Join-Path $Bin "rust-analyzer.exe"), (Join-Path $Bin "cargo.exe")) `
-    -HostPaths ($PathRemaps.Source)
+    -HostPaths $RejectedHostPaths
 
 $RustAnalyzerVersion = (& (Join-Path $Bin "rust-analyzer.exe") --version).Trim()
 $CargoVersion = (& (Join-Path $Bin "cargo.exe") -Vv) -join "`n"
@@ -323,3 +336,6 @@ $ProvenancePath = Join-Path $OutputDirectory "$AssetName.provenance.json"
 )
 Write-Output "ARCHIVE=$Archive"
 Write-Output "SHA256=$ArchiveHash"
+} finally {
+    Invoke-Checked -Executable "subst.exe" -ArgumentList @($BuildDrive, "/D")
+}
