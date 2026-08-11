@@ -1,3 +1,4 @@
+use super::combine_run_and_integrity;
 #[cfg(windows)]
 use super::gradle_windows::{
     TEMP_CLASS as WINDOWS_GRADLE_TEMP_CLASS, java_classpath as windows_java_classpath,
@@ -10,7 +11,8 @@ use super::{
     compact_process_output, files_for_indexer, format_timeout, go_sandbox_environment,
     gradle_indexer_jvm_args, gradle_script_uses_android, indexer_arguments_with_project,
     missing_position_encoding, project_name, reject_unsupported_android_gradle,
-    sandbox_repository_argument, source_integrity_digest, write_private_gradle_properties,
+    runtime_file_identities, sandbox_repository_argument, source_integrity_digest,
+    verify_runtime_identities_unchanged, write_private_gradle_properties,
 };
 #[cfg(windows)]
 use super::{
@@ -470,6 +472,37 @@ fn source_integrity_digest_changes_when_an_eligible_file_changes() {
 
     assert_ne!(before, after);
     std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn runtime_identity_detects_same_length_replacement() {
+    let root = tempfile::tempdir().unwrap();
+    let runtime = root.path().join("runtime.bin");
+    std::fs::write(&runtime, b"trusted").unwrap();
+    let paths = vec![runtime.clone()];
+
+    let before = runtime_file_identities(&paths).unwrap();
+    std::fs::write(&runtime, b"changed").unwrap();
+    let after = runtime_file_identities(&paths).unwrap();
+
+    let error =
+        verify_runtime_identities_unchanged("fixture indexer", &before, &after).unwrap_err();
+    assert!(error.contains("executable runtime changed while indexing"));
+    assert!(error.contains(&runtime.to_string_lossy().to_string()));
+}
+
+#[test]
+fn runtime_integrity_error_does_not_hide_execution_error() {
+    let error = combine_run_and_integrity::<()>(
+        Err("indexer process failed".to_string()),
+        Err("runtime changed".to_string()),
+    )
+    .unwrap_err();
+
+    assert_eq!(
+        error,
+        "indexer process failed; additionally, runtime changed"
+    );
 }
 
 #[test]

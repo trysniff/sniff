@@ -30,6 +30,8 @@ const MAX_PROCESS_OUTPUT: usize = 2 * 1024 * 1024;
 const INDEXER_MEMORY_LIMIT: u64 = 8 * 1024 * 1024 * 1024;
 const INDEXER_PROCESS_LIMIT: u32 = 512;
 const MAX_COMPACT_ERROR_OUTPUT: usize = 8 * 1024;
+const MAX_RUNTIME_IDENTITY_FILE_BYTES: u64 = 512 * 1024 * 1024;
+const MAX_RUNTIME_IDENTITY_TOTAL_BYTES: u64 = 1024 * 1024 * 1024;
 const INDEXER_CACHE_DIR: &str = ".sniff-indexer-cache";
 const INDEXER_TEMP_DIR: &str = ".sniff-indexer-tmp";
 const GRADLE_INDEXER_BASE_JVM_ARGS: &str = concat!(
@@ -54,6 +56,18 @@ struct TemporaryIndexerWorkspace {
     gradle_overlay_directory: Option<PathBuf>,
     gradle_main_class: &'static str,
     project_root: PathBuf,
+}
+
+struct PreparedIndexerCommand {
+    command: SandboxCommand,
+    runtime_files: Vec<PathBuf>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RuntimeFileIdentity {
+    path: PathBuf,
+    length: u64,
+    sha256: String,
 }
 
 struct TemporaryIndexerDirectory(PathBuf);
@@ -127,7 +141,14 @@ pub(crate) async fn run_required_indexers(
         if std::env::var_os("SNIFF_DEBUG_INDEXERS").is_some() {
             eprintln!("[sniff] semantic indexer start: {}", spec.display_name);
         }
-        if let Err(error) = run_one(spec, &root, &installed, files).await {
+        let run_result = run_one(spec, &root, &installed, files).await;
+        let installation_result = store.verify(spec).map(|_| ()).map_err(|error| {
+            format!(
+                "{} installation changed while it was running: {error}",
+                spec.display_name
+            )
+        });
+        if let Err(error) = combine_run_and_integrity(run_result, installation_result) {
             let _ = fs::remove_file(&index_path);
             return Err(error);
         }
@@ -265,7 +286,7 @@ async fn run_one(
             environment.to_string_lossy().to_string(),
         ]);
     }
-    let sandbox_command =
+    let prepared_command =
         build_indexer_sandbox_command(spec, root, installed, arguments, workspace.as_ref())?;
     if std::env::var_os("SNIFF_DEBUG_INDEXERS").is_some() {
         eprintln!(
@@ -288,7 +309,7 @@ async fn run_one(
             spec.display_name
         );
     }
-    let output = run_sandbox_command(sandbox_command, spec.display_name).await;
+    let output = run_with_runtime_identity(prepared_command, spec.display_name).await;
     if std::env::var_os("SNIFF_DEBUG_INDEXERS").is_some() {
         eprintln!(
             "[sniff] semantic indexer process returned: {}",
@@ -408,13 +429,177 @@ async fn run_sandbox_command(
     }
 }
 
+async fn run_with_runtime_identity(
+    prepared: PreparedIndexerCommand,
+    indexer_name: &str,
+) -> Result<crate::sandbox::SandboxOutput, String> {
+    let PreparedIndexerCommand {
+        command,
+        runtime_files,
+    } = prepared;
+    let before = runtime_file_identities(&runtime_files)?;
+    let run_result = run_sandbox_command(command, indexer_name).await;
+    let integrity_result = runtime_file_identities(&runtime_files)
+        .and_then(|after| verify_runtime_identities_unchanged(indexer_name, &before, &after));
+    combine_run_and_integrity(run_result, integrity_result)
+}
+
+fn combine_run_and_integrity<T>(
+    run_result: Result<T, String>,
+    integrity_result: Result<(), String>,
+) -> Result<T, String> {
+    match (run_result, integrity_result) {
+        (Ok(value), Ok(())) => Ok(value),
+        (Err(error), Ok(())) | (Ok(_), Err(error)) => Err(error),
+        (Err(run_error), Err(integrity_error)) => {
+            Err(format!("{run_error}; additionally, {integrity_error}"))
+        }
+    }
+}
+
+fn runtime_file_identities(paths: &[PathBuf]) -> Result<Vec<RuntimeFileIdentity>, String> {
+    let mut canonical_paths = paths
+        .iter()
+        .map(|path| {
+            fs::canonicalize(path).map_err(|error| {
+                format!(
+                    "failed to resolve executable runtime {} for identity verification: {error}",
+                    path.display()
+                )
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    canonical_paths.sort();
+    canonical_paths.dedup();
+
+    let mut total_bytes = 0u64;
+    let mut identities = Vec::with_capacity(canonical_paths.len());
+    for path in canonical_paths {
+        let mut file = fs::File::open(&path).map_err(|error| {
+            format!(
+                "failed to open executable runtime {} for identity verification: {error}",
+                path.display()
+            )
+        })?;
+        let metadata = file.metadata().map_err(|error| {
+            format!(
+                "failed to inspect executable runtime {} for identity verification: {error}",
+                path.display()
+            )
+        })?;
+        if !metadata.is_file() {
+            return Err(format!(
+                "executable runtime is not a regular file: {}",
+                path.display()
+            ));
+        }
+        let length = metadata.len();
+        if length > MAX_RUNTIME_IDENTITY_FILE_BYTES {
+            return Err(format!(
+                "executable runtime exceeds the {} byte identity limit: {}",
+                MAX_RUNTIME_IDENTITY_FILE_BYTES,
+                path.display()
+            ));
+        }
+        total_bytes = total_bytes
+            .checked_add(length)
+            .ok_or_else(|| "executable runtime identity byte count overflowed".to_string())?;
+        if total_bytes > MAX_RUNTIME_IDENTITY_TOTAL_BYTES {
+            return Err(format!(
+                "executable runtimes exceed the {} byte aggregate identity limit",
+                MAX_RUNTIME_IDENTITY_TOTAL_BYTES
+            ));
+        }
+
+        let mut digest = Sha256::new();
+        let mut bytes_read = 0u64;
+        let mut buffer = [0u8; 64 * 1024];
+        loop {
+            let count = file.read(&mut buffer).map_err(|error| {
+                format!(
+                    "failed to hash executable runtime {}: {error}",
+                    path.display()
+                )
+            })?;
+            if count == 0 {
+                break;
+            }
+            bytes_read = bytes_read
+                .checked_add(count as u64)
+                .ok_or_else(|| "executable runtime hash byte count overflowed".to_string())?;
+            digest.update(&buffer[..count]);
+        }
+        let length_after = file
+            .metadata()
+            .map_err(|error| {
+                format!(
+                    "failed to re-inspect executable runtime {} after hashing: {error}",
+                    path.display()
+                )
+            })?
+            .len();
+        if bytes_read != length || length_after != length {
+            return Err(format!(
+                "executable runtime changed while its identity was being verified: {}",
+                path.display()
+            ));
+        }
+        identities.push(RuntimeFileIdentity {
+            path,
+            length,
+            sha256: format!("{:x}", digest.finalize()),
+        });
+    }
+    Ok(identities)
+}
+
+fn verify_runtime_identities_unchanged(
+    indexer_name: &str,
+    before: &[RuntimeFileIdentity],
+    after: &[RuntimeFileIdentity],
+) -> Result<(), String> {
+    let before_by_path = before
+        .iter()
+        .map(|identity| (&identity.path, identity))
+        .collect::<BTreeMap<_, _>>();
+    let after_by_path = after
+        .iter()
+        .map(|identity| (&identity.path, identity))
+        .collect::<BTreeMap<_, _>>();
+
+    for (path, expected) in &before_by_path {
+        let Some(actual) = after_by_path.get(path) else {
+            return Err(format!(
+                "{indexer_name} executable runtime disappeared or resolved elsewhere while indexing: {}",
+                path.display()
+            ));
+        };
+        if expected.length != actual.length || expected.sha256 != actual.sha256 {
+            return Err(format!(
+                "{indexer_name} executable runtime changed while indexing: {}",
+                path.display()
+            ));
+        }
+    }
+    if let Some(path) = after_by_path
+        .keys()
+        .find(|path| !before_by_path.contains_key(*path))
+    {
+        return Err(format!(
+            "{indexer_name} executable runtime resolved to an unexpected file after indexing: {}",
+            path.display()
+        ));
+    }
+    Ok(())
+}
+
 fn build_indexer_sandbox_command(
     spec: PinnedIndexer,
     root: &Path,
     installed: &InstalledIndexer,
     arguments: Vec<String>,
     workspace: Option<&TemporaryIndexerWorkspace>,
-) -> Result<SandboxCommand, String> {
+) -> Result<PreparedIndexerCommand, String> {
     let installed_root = fs::canonicalize(&installed.root).map_err(|error| {
         format!(
             "failed to resolve {} installation root {}: {error}",
@@ -533,6 +718,7 @@ fn build_indexer_sandbox_command(
         push_external_read_only(root, &mut persistent_read_only_paths, dependency);
     }
     let mut path_prefixes = Vec::new();
+    let mut runtime_files = vec![runtime_path.clone()];
     let mut env = Vec::new();
     let sandbox_home = sandbox_repository_argument(root, &root.to_string_lossy());
     env.push(("HOME".to_string(), sandbox_home.clone()));
@@ -561,6 +747,7 @@ fn build_indexer_sandbox_command(
     }
     if spec.kind == SemanticIndexerKind::Go {
         let go = resolve_runtime("go")?;
+        runtime_files.push(go.clone());
         let go_root = runtime_mount_root(&go);
         push_external_read_only(root, &mut persistent_read_only_paths, go_root.clone());
         #[cfg(windows)]
@@ -572,6 +759,7 @@ fn build_indexer_sandbox_command(
                     )
                 })?;
             push_external_read_only(root, &mut executable_paths, sandbox_go.clone());
+            runtime_files.push(sandbox_go.clone());
             collect_windows_runtime_images(
                 root,
                 &mut executable_paths,
@@ -594,6 +782,7 @@ fn build_indexer_sandbox_command(
         #[cfg(not(windows))]
         let cargo = resolve_rust_compiler_runtime("cargo")?;
         let rustc = resolve_rust_compiler_runtime("rustc")?;
+        runtime_files.extend([cargo.clone(), rustc.clone()]);
         #[cfg(windows)]
         {
             let cargo_toolchain = runtime_mount_root(&cargo);
@@ -661,6 +850,7 @@ fn build_indexer_sandbox_command(
     }
     let gradle_jvm_args = if spec.kind == SemanticIndexerKind::Kotlin {
         let gradle = resolve_runtime("gradle")?;
+        runtime_files.push(gradle.clone());
         let gradle_jvm_args = gradle_indexer_jvm_args(&gradle)?;
         let gradle_root = runtime_mount_root(&gradle);
         push_external_read_only(root, &mut persistent_read_only_paths, gradle_root);
@@ -803,25 +993,30 @@ fn build_indexer_sandbox_command(
         ]);
     }
 
-    Ok(SandboxCommand {
-        root: root.to_path_buf(),
-        workdir: PathBuf::from("."),
-        program,
-        args,
-        read_only_paths,
-        writable_paths,
-        persistent_read_only_paths,
-        executable_paths,
-        #[cfg(windows)]
-        windows_virtualized_paths,
-        env,
-        allow_network: false,
-        #[cfg(target_os = "macos")]
-        allow_local_network: spec.kind == SemanticIndexerKind::Kotlin,
-        timeout: index_timeout(),
-        output_limit: MAX_PROCESS_OUTPUT,
-        memory_limit: INDEXER_MEMORY_LIMIT,
-        process_limit: INDEXER_PROCESS_LIMIT,
+    runtime_files.sort();
+    runtime_files.dedup();
+    Ok(PreparedIndexerCommand {
+        command: SandboxCommand {
+            root: root.to_path_buf(),
+            workdir: PathBuf::from("."),
+            program,
+            args,
+            read_only_paths,
+            writable_paths,
+            persistent_read_only_paths,
+            executable_paths,
+            #[cfg(windows)]
+            windows_virtualized_paths,
+            env,
+            allow_network: false,
+            #[cfg(target_os = "macos")]
+            allow_local_network: spec.kind == SemanticIndexerKind::Kotlin,
+            timeout: index_timeout(),
+            output_limit: MAX_PROCESS_OUTPUT,
+            memory_limit: INDEXER_MEMORY_LIMIT,
+            process_limit: INDEXER_PROCESS_LIMIT,
+        },
+        runtime_files,
     })
 }
 
@@ -978,8 +1173,9 @@ async fn prepare_kotlin_dependency_cache(
     );
     let output = match command {
         Ok(mut command) => {
-            command.allow_network = true;
+            command.command.allow_network = true;
             command
+                .command
                 .env
                 .retain(|(name, _)| name != "SNIFF_GRADLE_OFFLINE");
             if std::env::var_os("SNIFF_DEBUG_INDEXERS").is_some() {
@@ -988,7 +1184,7 @@ async fn prepare_kotlin_dependency_cache(
                     spec.display_name
                 );
             }
-            run_sandbox_command(command, spec.display_name).await
+            run_with_runtime_identity(command, spec.display_name).await
         }
         Err(error) => Err(error),
     };
