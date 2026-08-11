@@ -2,8 +2,9 @@ use super::{
     GRADLE_INDEXER_BASE_JVM_ARGS, WINDOWS_SCIP_NODE_BOOTSTRAP, WINDOWS_SCIP_PYTHON_BOOTSTRAP,
     compact_process_output, files_for_indexer, format_timeout, go_sandbox_environment,
     gradle_indexer_jvm_args, gradle_script_uses_android, indexer_arguments_with_project,
-    missing_position_encoding, project_name, reject_unsupported_android_gradle,
-    sandbox_repository_argument, source_integrity_digest, write_private_gradle_properties,
+    java_home_environment_value, missing_position_encoding, project_name,
+    reject_unsupported_android_gradle, sandbox_repository_argument, source_integrity_digest,
+    write_private_gradle_properties,
 };
 #[cfg(windows)]
 use super::{
@@ -52,6 +53,20 @@ fn windows_java_classpath_removes_verbatim_prefixes() {
         r"C:\indexers\scip-java-patch;C:\indexers\scip-java"
     );
     assert!(!classpath.contains(r"\\?\"));
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_java_home_environment_removes_verbatim_prefixes() {
+    let java_home = java_home_environment_value(Path::new(
+        r"\\?\C:\hostedtoolcache\windows\Java_Temurin-Hotspot_jdk\17\x64",
+    ));
+
+    assert_eq!(
+        java_home,
+        r"C:\hostedtoolcache\windows\Java_Temurin-Hotspot_jdk\17\x64"
+    );
+    assert!(!java_home.contains(r"\\?\"));
 }
 
 #[cfg(not(windows))]
