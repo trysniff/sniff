@@ -19,6 +19,7 @@ const INDEX_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 #[cfg(debug_assertions)]
 const INDEXER_TIMEOUT_ENV: &str = "SNIFF_INTERNAL_INDEXER_TIMEOUT_SECS";
 const MAX_PROCESS_OUTPUT: usize = 2 * 1024 * 1024;
+const INDEXER_PROCESS_LIMIT: u32 = 512;
 const MAX_COMPACT_ERROR_OUTPUT: usize = 8 * 1024;
 const INDEXER_CACHE_DIR: &str = ".sniff-indexer-cache";
 const INDEXER_TEMP_DIR: &str = ".sniff-indexer-tmp";
@@ -717,7 +718,7 @@ fn build_indexer_sandbox_command(
         timeout: index_timeout(),
         output_limit: MAX_PROCESS_OUTPUT,
         memory_limit: crate::sandbox::DEFAULT_MEMORY_LIMIT,
-        process_limit: crate::sandbox::DEFAULT_PROCESS_LIMIT,
+        process_limit: INDEXER_PROCESS_LIMIT,
     })
 }
 

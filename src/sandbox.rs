@@ -956,6 +956,8 @@ fn main() {
             allow_local_network: false,
             timeout: Duration::from_secs(2),
             output_limit: 1024,
+            memory_limit: DEFAULT_MEMORY_LIMIT,
+            process_limit: DEFAULT_PROCESS_LIMIT,
         };
 
         let result = super::run(&command).expect("Unix sandbox backend should be available");
@@ -995,6 +997,8 @@ fn main() {
             allow_local_network: false,
             timeout: Duration::from_millis(100),
             output_limit: 1024,
+            memory_limit: DEFAULT_MEMORY_LIMIT,
+            process_limit: DEFAULT_PROCESS_LIMIT,
         };
 
         let result = super::run(&command).expect("Unix sandbox backend should be available");
