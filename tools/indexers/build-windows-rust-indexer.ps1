@@ -44,7 +44,8 @@ function Checkout-ExactCommit {
         throw "Refusing to reuse source directory: $Directory"
     }
     Invoke-Checked -Executable "git" -ArgumentList @(
-        "clone", "--filter=blob:none", "--no-checkout", $Url, $Directory
+        "clone", "--config", "core.autocrlf=false", "--filter=blob:none", "--no-checkout",
+        $Url, $Directory
     )
     Invoke-Checked -Executable "git" -ArgumentList @(
         "-C", $Directory, "fetch", "--depth", "1", "origin", $Commit
