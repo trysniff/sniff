@@ -143,7 +143,8 @@ fn command(root: &Path, program: &Path, args: Vec<String>) -> SandboxCommand {
         writable_paths: Vec::new(),
         persistent_read_only_paths: Vec::new(),
         executable_paths: Vec::new(),
-        virtualize_windows_root: false,
+        #[cfg(windows)]
+        windows_virtualized_paths: Vec::new(),
         env: Vec::new(),
         allow_network: false,
         #[cfg(target_os = "macos")]
@@ -156,7 +157,7 @@ fn command(root: &Path, program: &Path, args: Vec<String>) -> SandboxCommand {
 }
 
 #[cfg(windows)]
-fn compile_java_real_path_probe(root: &Path) -> (PathBuf, PathBuf) {
+fn compile_java_real_path_probe(root: &Path, runtime_parent: &Path) -> (PathBuf, PathBuf) {
     let source = root.join("SniffRealPathProbe.java");
     std::fs::write(&source, JAVA_REAL_PATH_PROBE).expect("write Java path probe");
     let settings = Command::new("java")
@@ -180,7 +181,7 @@ fn compile_java_real_path_probe(root: &Path) -> (PathBuf, PathBuf) {
         "Java path probe failed to compile: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let runtime = root.join("java-runtime");
+    let runtime = runtime_parent.join("java-runtime");
     let output = Command::new(java_home.join("bin/jlink.exe"))
         .args([
             "--add-modules",
@@ -229,7 +230,8 @@ fn java_runtime_images(java_home: &Path) -> Vec<PathBuf> {
 #[test]
 fn windows_java_can_resolve_a_moved_sandbox_artifact() {
     let repository = tempfile::tempdir().expect("create Java path-probe repository");
-    let (java, java_runtime) = compile_java_real_path_probe(repository.path());
+    let toolchain = tempfile::tempdir().expect("create external Java path-probe toolchain");
+    let (java, java_runtime) = compile_java_real_path_probe(repository.path(), toolchain.path());
     let mut spec = command(
         repository.path(),
         &java,
@@ -240,8 +242,9 @@ fn windows_java_can_resolve_a_moved_sandbox_artifact() {
             repository.path().to_string_lossy().into_owned(),
         ],
     );
+    spec.persistent_read_only_paths.push(java_runtime.clone());
     spec.executable_paths = java_runtime_images(&java_runtime);
-    spec.virtualize_windows_root = true;
+    spec.windows_virtualized_paths = vec![repository.path().to_path_buf(), java_runtime];
 
     let output = run(&spec).expect("Java path probe sandbox should start");
 

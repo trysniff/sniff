@@ -154,24 +154,43 @@ pub(super) fn run(spec: &SandboxCommand) -> Result<SandboxOutput, SandboxError> 
         grant_acl(path, &app_container_sid_text, "RX")?;
     }
     trace_phase(started, "program execution granted");
-    let mut drive_mapping = effective_spec
-        .virtualize_windows_root
-        .then(|| SandboxDriveMapping::create(&effective_spec.root))
-        .transpose()?;
-    if drive_mapping.is_some() {
-        trace_phase(started, "private drive root mapped");
-    }
-    let process_spec = drive_mapping.as_ref().map_or_else(
-        || effective_spec.clone(),
-        |mapping| mapping.process_spec(&effective_spec),
+    let canonical_root = normalize_windows_path(
+        std::fs::canonicalize(&effective_spec.root).map_err(|error| {
+            SandboxError::Invalid(format!("resolve Windows sandbox root failed: {error}"))
+        })?,
     );
+    let mut process_spec = effective_spec.clone();
+    let mut drive_mappings = Vec::new();
+    for path in &effective_spec.windows_virtualized_paths {
+        let canonical_path =
+            normalize_windows_path(std::fs::canonicalize(path).map_err(|error| {
+                SandboxError::Invalid(format!(
+                    "resolve Windows virtualized path {} failed: {error}",
+                    path.display()
+                ))
+            })?);
+        let mapping = SandboxDriveMapping::create(&canonical_path)?;
+        mapping.rewrite_process_spec(&mut process_spec, path, canonical_path == canonical_root);
+        drive_mappings.push(mapping);
+    }
+    if !drive_mappings.is_empty() {
+        trace_phase(started, "private drive roots mapped");
+    }
     let result = run_process(&process_spec, profile_guard.sid, &mut capabilities);
     trace_phase(started, "sandbox process returned");
-    let mapping_cleanup = drive_mapping
-        .as_mut()
-        .map_or(Ok(()), SandboxDriveMapping::remove);
-    if drive_mapping.is_some() {
-        trace_phase(started, "private drive root unmapped");
+    let mut mapping_cleanup_failures = Vec::new();
+    for mapping in drive_mappings.iter_mut().rev() {
+        if let Err(error) = mapping.remove() {
+            mapping_cleanup_failures.push(error.to_string());
+        }
+    }
+    let mapping_cleanup = if mapping_cleanup_failures.is_empty() {
+        Ok(())
+    } else {
+        Err(SandboxError::Failed(mapping_cleanup_failures.join("; ")))
+    };
+    if !drive_mappings.is_empty() {
+        trace_phase(started, "private drive roots unmapped");
     }
     let result = match (result, mapping_cleanup) {
         (Ok(output), Ok(())) => Ok(output),

@@ -50,9 +50,10 @@ pub(crate) struct SandboxCommand {
     /// Trusted compiler/runtime images that the worker may execute. Windows
     /// grants these only to the unique per-run AppContainer identity.
     pub(crate) executable_paths: Vec<PathBuf>,
-    /// Present the repository as a temporary drive root on Windows. Java's
-    /// `Path::toRealPath` otherwise traverses inaccessible host ancestors.
-    pub(crate) virtualize_windows_root: bool,
+    /// Present explicitly trusted roots as temporary drives on Windows.
+    /// AppContainer children otherwise traverse inaccessible host ancestors.
+    #[cfg(windows)]
+    pub(crate) windows_virtualized_paths: Vec<PathBuf>,
     pub(crate) env: Vec<(String, String)>,
     pub(crate) allow_network: bool,
     #[cfg(target_os = "macos")]
@@ -323,6 +324,60 @@ fn validate_spec(spec: &SandboxCommand) -> Result<(), SandboxError> {
                 "persistent sandbox read-only paths must not overlap the repository root: {}",
                 path.display()
             )));
+        }
+    }
+    #[cfg(windows)]
+    {
+        let mut seen = Vec::new();
+        for path in &spec.windows_virtualized_paths {
+            let metadata = std::fs::symlink_metadata(path).map_err(|error| {
+                SandboxError::Invalid(format!(
+                    "Windows virtualized path must exist: {} ({error})",
+                    path.display()
+                ))
+            })?;
+            if !path.is_absolute() || !metadata.is_dir() || metadata.file_type().is_symlink() {
+                return Err(SandboxError::Invalid(format!(
+                    "Windows virtualized path must be an absolute non-symlink directory: {}",
+                    path.display()
+                )));
+            }
+            let canonical_path = std::fs::canonicalize(path).map_err(|error| {
+                SandboxError::Invalid(format!(
+                    "Windows virtualized path could not be canonicalized: {} ({error})",
+                    path.display()
+                ))
+            })?;
+            if seen.iter().any(|existing: &PathBuf| {
+                canonical_path.starts_with(existing) || existing.starts_with(&canonical_path)
+            }) {
+                return Err(SandboxError::Invalid(format!(
+                    "Windows virtualized paths must be unique and non-overlapping: {}",
+                    path.display()
+                )));
+            }
+            seen.push(canonical_path.clone());
+            if canonical_path == canonical_root {
+                continue;
+            }
+            if canonical_path.starts_with(&canonical_root)
+                || canonical_root.starts_with(&canonical_path)
+            {
+                return Err(SandboxError::Invalid(format!(
+                    "Windows virtualized external paths must not overlap the repository root: {}",
+                    path.display()
+                )));
+            }
+            let covered = spec.persistent_read_only_paths.iter().any(|allowed| {
+                std::fs::canonicalize(allowed)
+                    .is_ok_and(|allowed| canonical_path.starts_with(allowed))
+            });
+            if !covered {
+                return Err(SandboxError::Invalid(format!(
+                    "Windows virtualized external paths require a persistent read-only grant: {}",
+                    path.display()
+                )));
+            }
         }
     }
     for (key, value) in &spec.env {
@@ -989,7 +1044,8 @@ mod tests {
             writable_paths: Vec::new(),
             persistent_read_only_paths: Vec::new(),
             executable_paths: Vec::new(),
-            virtualize_windows_root: false,
+            #[cfg(windows)]
+            windows_virtualized_paths: Vec::new(),
             env: Vec::new(),
             allow_network: false,
             #[cfg(target_os = "macos")]
@@ -1080,6 +1136,21 @@ mod tests {
             matches!(error, SandboxError::Invalid(message) if message.contains("must not overlap"))
         );
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn rejects_ungranted_external_windows_drive_roots() {
+        let repository = tempfile::tempdir().unwrap();
+        let toolchain = tempfile::tempdir().unwrap();
+        let mut command = spec(repository.path().to_path_buf());
+        command.windows_virtualized_paths = vec![toolchain.path().to_path_buf()];
+
+        let error = validate_spec(&command).unwrap_err();
+
+        assert!(
+            matches!(error, SandboxError::Invalid(message) if message.contains("persistent read-only grant"))
+        );
     }
 
     #[test]
@@ -1182,7 +1253,8 @@ mod tests {
             writable_paths: Vec::new(),
             persistent_read_only_paths: Vec::new(),
             executable_paths: Vec::new(),
-            virtualize_windows_root: false,
+            #[cfg(windows)]
+            windows_virtualized_paths: Vec::new(),
             env: Vec::new(),
             allow_network: false,
             timeout: Duration::from_secs(2),
@@ -1248,7 +1320,8 @@ fn main() {
             writable_paths: Vec::new(),
             persistent_read_only_paths: Vec::new(),
             executable_paths: Vec::new(),
-            virtualize_windows_root: false,
+            #[cfg(windows)]
+            windows_virtualized_paths: Vec::new(),
             env: Vec::new(),
             allow_network: false,
             timeout: Duration::from_secs(5),
@@ -1409,7 +1482,8 @@ fn main() {
             writable_paths: Vec::new(),
             persistent_read_only_paths: Vec::new(),
             executable_paths: Vec::new(),
-            virtualize_windows_root: false,
+            #[cfg(windows)]
+            windows_virtualized_paths: Vec::new(),
             env: Vec::new(),
             allow_network: false,
             #[cfg(target_os = "macos")]
@@ -1452,7 +1526,8 @@ fn main() {
             writable_paths: Vec::new(),
             persistent_read_only_paths: Vec::new(),
             executable_paths: Vec::new(),
-            virtualize_windows_root: false,
+            #[cfg(windows)]
+            windows_virtualized_paths: Vec::new(),
             env: Vec::new(),
             allow_network: false,
             #[cfg(target_os = "macos")]

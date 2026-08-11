@@ -517,6 +517,8 @@ fn build_indexer_sandbox_command(
     let mut read_only_paths = Vec::new();
     let mut persistent_read_only_paths = Vec::new();
     let mut executable_paths = Vec::new();
+    #[cfg(windows)]
+    let mut windows_virtualized_paths = Vec::new();
     push_external_read_only(
         root,
         &mut persistent_read_only_paths,
@@ -583,6 +585,19 @@ fn build_indexer_sandbox_command(
     if spec.kind == SemanticIndexerKind::Rust {
         let cargo = resolve_rust_compiler_runtime("cargo")?;
         let rustc = resolve_rust_compiler_runtime("rustc")?;
+        #[cfg(windows)]
+        {
+            let cargo_toolchain = runtime_mount_root(&cargo);
+            let rustc_toolchain = runtime_mount_root(&rustc);
+            if cargo_toolchain != rustc_toolchain {
+                return Err(format!(
+                    "active Rust cargo and rustc resolve to different toolchains: {} and {}",
+                    cargo_toolchain.display(),
+                    rustc_toolchain.display()
+                ));
+            }
+            windows_virtualized_paths.push(cargo_toolchain);
+        }
         for (name, runtime) in [("cargo", &cargo), ("rustc", &rustc)] {
             let runtime_root = runtime_mount_root(runtime);
             push_external_read_only(root, &mut persistent_read_only_paths, runtime_root);
@@ -767,6 +782,18 @@ fn build_indexer_sandbox_command(
     persistent_read_only_paths.dedup();
     executable_paths.sort();
     executable_paths.dedup();
+    #[cfg(windows)]
+    if matches!(
+        spec.kind,
+        SemanticIndexerKind::Kotlin | SemanticIndexerKind::Rust
+    ) {
+        windows_virtualized_paths.push(root.to_path_buf());
+    }
+    #[cfg(windows)]
+    {
+        windows_virtualized_paths.sort();
+        windows_virtualized_paths.dedup();
+    }
     let mut writable_paths = vec![root.join(INDEXER_TEMP_DIR)];
     if spec.kind == SemanticIndexerKind::Kotlin {
         let cache = root.join(INDEXER_CACHE_DIR);
@@ -786,7 +813,8 @@ fn build_indexer_sandbox_command(
         writable_paths,
         persistent_read_only_paths,
         executable_paths,
-        virtualize_windows_root: spec.kind == SemanticIndexerKind::Kotlin,
+        #[cfg(windows)]
+        windows_virtualized_paths,
         env,
         allow_network: false,
         #[cfg(target_os = "macos")]

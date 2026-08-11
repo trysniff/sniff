@@ -53,10 +53,16 @@ impl SandboxDriveMapping {
         )))
     }
 
-    pub(super) fn process_spec(&self, spec: &SandboxCommand) -> SandboxCommand {
-        let mut process_spec = spec.clone();
-        let original_root = normalize_windows_path(spec.root.clone());
-        process_spec.root = PathBuf::from(format!(r"{}\", self.drive));
+    pub(super) fn rewrite_process_spec(
+        &self,
+        process_spec: &mut SandboxCommand,
+        original_root: &Path,
+        maps_process_root: bool,
+    ) {
+        let original_root = normalize_windows_path(original_root.to_path_buf());
+        if maps_process_root {
+            process_spec.root = PathBuf::from(format!(r"{}\", self.drive));
+        }
         process_spec.program = self.rewrite(&process_spec.program, &original_root);
         process_spec.args = process_spec
             .args
@@ -68,7 +74,6 @@ impl SandboxDriveMapping {
             .iter()
             .map(|(name, value)| (name.clone(), self.rewrite(value, &original_root)))
             .collect();
-        process_spec
     }
 
     fn rewrite(&self, value: &str, original_root: &Path) -> String {
