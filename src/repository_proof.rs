@@ -238,6 +238,8 @@ fn run_proof_command(root: &Path, command: &[String]) -> Result<sandbox::Sandbox
         allow_local_network: false,
         timeout: Duration::from_secs(300),
         output_limit: sandbox::DEFAULT_OUTPUT_LIMIT,
+        memory_limit: sandbox::DEFAULT_MEMORY_LIMIT,
+        process_limit: sandbox::DEFAULT_PROCESS_LIMIT,
     })
     .map_err(|error| format!("repository test proof unavailable: {error}"))?;
     if output.timed_out {

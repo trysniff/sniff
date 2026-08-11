@@ -1,5 +1,7 @@
 use std::ffi::OsString;
 use std::io::{Read, Result as IoResult};
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::path::Path;
 use std::path::PathBuf;
@@ -12,6 +14,18 @@ use std::time::{Duration, Instant};
 mod sandbox_windows;
 
 pub(crate) const DEFAULT_OUTPUT_LIMIT: usize = 256 * 1024;
+#[cfg(windows)]
+pub(crate) const DEFAULT_MEMORY_LIMIT: u64 = 1024 * 1024 * 1024;
+#[cfg(unix)]
+pub(crate) const DEFAULT_MEMORY_LIMIT: u64 = 4 * 1024 * 1024 * 1024;
+#[cfg(not(any(unix, windows)))]
+pub(crate) const DEFAULT_MEMORY_LIMIT: u64 = 1024 * 1024 * 1024;
+pub(crate) const DEFAULT_PROCESS_LIMIT: u32 = 128;
+
+#[cfg(all(target_os = "linux", not(target_env = "musl")))]
+type UnixResource = libc::__rlimit_resource_t;
+#[cfg(all(unix, any(not(target_os = "linux"), target_env = "musl")))]
+type UnixResource = libc::c_int;
 
 #[derive(Debug, Clone)]
 pub(crate) struct SandboxCommand {
@@ -32,6 +46,8 @@ pub(crate) struct SandboxCommand {
     pub(crate) allow_local_network: bool,
     pub(crate) timeout: Duration,
     pub(crate) output_limit: usize,
+    pub(crate) memory_limit: u64,
+    pub(crate) process_limit: u32,
 }
 
 impl SandboxCommand {
@@ -83,6 +99,8 @@ pub(crate) fn run(spec: &SandboxCommand) -> Result<SandboxOutput, SandboxError> 
 
 fn run_external(spec: &SandboxCommand) -> Result<SandboxOutput, SandboxError> {
     let mut command = build_command(spec)?;
+    #[cfg(unix)]
+    configure_unix_resource_limits(&mut command, spec)?;
     command
         .env_clear()
         .env("PATH", sandbox_path())
@@ -173,6 +191,11 @@ fn validate_spec(spec: &SandboxCommand) -> Result<(), SandboxError> {
             "sandbox worker timeout must be positive".to_string(),
         ));
     }
+    if spec.memory_limit == 0 || spec.process_limit == 0 {
+        return Err(SandboxError::Invalid(
+            "sandbox memory and process limits must be positive".to_string(),
+        ));
+    }
     for path in spec.all_read_only_paths() {
         let metadata = std::fs::symlink_metadata(path).map_err(|error| {
             SandboxError::Invalid(format!(
@@ -216,6 +239,39 @@ fn validate_spec(spec: &SandboxCommand) -> Result<(), SandboxError> {
     Ok(())
 }
 
+#[cfg(unix)]
+fn configure_unix_resource_limits(
+    command: &mut Command,
+    spec: &SandboxCommand,
+) -> Result<(), SandboxError> {
+    let memory_limit = libc::rlim_t::try_from(spec.memory_limit)
+        .map_err(|_| SandboxError::Invalid("sandbox memory limit exceeds rlim_t".to_string()))?;
+    let process_limit = libc::rlim_t::from(spec.process_limit);
+    // The limits are installed after fork and before exec, then inherited by
+    // the sandbox backend and every repository-controlled descendant.
+    unsafe {
+        command.pre_exec(move || {
+            set_unix_resource_limit(libc::RLIMIT_AS, memory_limit)?;
+            set_unix_resource_limit(libc::RLIMIT_NPROC, process_limit)?;
+            Ok(())
+        });
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn set_unix_resource_limit(resource: UnixResource, limit: libc::rlim_t) -> IoResult<()> {
+    let limits = libc::rlimit {
+        rlim_cur: limit,
+        rlim_max: limit,
+    };
+    if unsafe { libc::setrlimit(resource, &limits) } == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
 fn build_command(spec: &SandboxCommand) -> Result<Command, SandboxError> {
     if let Some(runner) = external_runner()? {
         let mut command = Command::new(runner);
@@ -226,6 +282,10 @@ fn build_command(spec: &SandboxCommand) -> Result<Command, SandboxError> {
             .arg(&spec.workdir)
             .arg("--timeout-ms")
             .arg(spec.timeout.as_millis().to_string())
+            .arg("--memory-limit-bytes")
+            .arg(spec.memory_limit.to_string())
+            .arg("--process-limit")
+            .arg(spec.process_limit.to_string())
             .args(spec.all_read_only_paths().flat_map(|path| {
                 [
                     OsString::from("--read-only-path"),
@@ -394,7 +454,7 @@ fn build_macos_sandbox_command(spec: &SandboxCommand) -> Result<Command, Sandbox
         "(deny network*)\n"
     };
     let profile_text = format!(
-        "(version 1)\n(deny default)\n(allow process-exec)\n(allow process-exec-interpreter)\n(allow process-fork)\n(allow signal (target same-sandbox))\n(allow ipc-posix-shm)\n(allow ipc-posix-sem)\n(allow sysctl-read)\n(allow mach-lookup (global-name \"com.apple.system.notification_center\") (global-name \"com.apple.system.opendirectoryd.libinfo\"))\n(allow file-read-metadata)\n(allow file-read-data (literal \"/\"))\n(allow file-read* (literal \"/dev/null\") (literal \"/dev/zero\") (literal \"/dev/random\") (literal \"/dev/urandom\") (literal \"/dev/dtracehelper\") (literal \"/dev/tty\"))\n(allow file-write* (literal \"/dev/null\") (literal \"/dev/zero\") (literal \"/dev/random\") (literal \"/dev/urandom\"))\n(allow file-ioctl (literal \"/dev/null\") (literal \"/dev/zero\") (literal \"/dev/random\") (literal \"/dev/urandom\") (literal \"/dev/dtracehelper\") (literal \"/dev/tty\"))\n(allow file-read* (subpath \"/usr\") (subpath \"/System\") (subpath \"/Library\") (subpath \"/bin\") (subpath \"/sbin\") (subpath \"/private\") (subpath \"{root}\"))\n{read_only_rules}(allow file-write* (subpath \"{root}\"))\n{network_rule}"
+        "(version 1)\n(deny default)\n(allow process-exec)\n(allow process-exec-interpreter)\n(allow process-fork)\n(allow signal (target same-sandbox))\n(allow ipc-posix-shm)\n(allow ipc-posix-sem)\n(allow sysctl-read)\n(allow mach-lookup (global-name \"com.apple.system.notification_center\") (global-name \"com.apple.system.opendirectoryd.libinfo\"))\n(allow file-read-metadata)\n(allow file-read-data (literal \"/\"))\n(allow file-read* (literal \"/dev/null\") (literal \"/dev/zero\") (literal \"/dev/random\") (literal \"/dev/urandom\") (literal \"/dev/dtracehelper\") (literal \"/dev/tty\"))\n(allow file-write* (literal \"/dev/null\") (literal \"/dev/zero\") (literal \"/dev/random\") (literal \"/dev/urandom\"))\n(allow file-ioctl (literal \"/dev/null\") (literal \"/dev/zero\") (literal \"/dev/random\") (literal \"/dev/urandom\") (literal \"/dev/dtracehelper\") (literal \"/dev/tty\"))\n(allow file-read* (subpath \"/usr\") (subpath \"/System\") (subpath \"/Library\") (subpath \"/bin\") (subpath \"/sbin\") (subpath \"/private/etc\") (subpath \"/private/var/db\") (subpath \"/private/var/select\") (subpath \"{root}\"))\n{read_only_rules}(allow file-write* (subpath \"{root}\"))\n{network_rule}"
     );
     std::fs::write(&profile, profile_text).map_err(|error| {
         SandboxError::Failed(format!("failed to write macOS sandbox profile: {error}"))
@@ -520,8 +580,8 @@ fn terminate(child: &mut Child) -> Result<(), SandboxError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        SandboxCommand, SandboxError, read_limited, read_limited_with_observer,
-        validate_external_runner, validate_spec,
+        DEFAULT_MEMORY_LIMIT, DEFAULT_PROCESS_LIMIT, SandboxCommand, SandboxError, read_limited,
+        read_limited_with_observer, validate_external_runner, validate_spec,
     };
     #[cfg(windows)]
     use std::path::Path;
@@ -543,6 +603,8 @@ mod tests {
             allow_local_network: false,
             timeout: Duration::from_secs(1),
             output_limit: 32,
+            memory_limit: DEFAULT_MEMORY_LIMIT,
+            process_limit: DEFAULT_PROCESS_LIMIT,
         }
     }
 
@@ -568,6 +630,20 @@ mod tests {
 
         let error = validate_spec(&command).unwrap_err();
         assert!(matches!(error, SandboxError::Invalid(message) if message.contains("positive")));
+    }
+
+    #[test]
+    fn rejects_zero_resource_limits() {
+        let mut command = spec(std::env::temp_dir());
+        command.memory_limit = 0;
+
+        let error = validate_spec(&command).unwrap_err();
+        assert!(matches!(error, SandboxError::Invalid(message) if message.contains("limits")));
+
+        command.memory_limit = DEFAULT_MEMORY_LIMIT;
+        command.process_limit = 0;
+        let error = validate_spec(&command).unwrap_err();
+        assert!(matches!(error, SandboxError::Invalid(message) if message.contains("limits")));
     }
 
     #[test]
@@ -684,6 +760,8 @@ mod tests {
             allow_network: false,
             timeout: Duration::from_secs(2),
             output_limit: 1024,
+            memory_limit: DEFAULT_MEMORY_LIMIT,
+            process_limit: DEFAULT_PROCESS_LIMIT,
         }
     }
 
@@ -718,6 +796,7 @@ fn main() {
         }
     }
 }
+
 "#,
         )
         .expect("write Windows child launcher source");
@@ -745,6 +824,8 @@ fn main() {
             allow_network: false,
             timeout: Duration::from_secs(5),
             output_limit: 64 * 1024,
+            memory_limit: DEFAULT_MEMORY_LIMIT,
+            process_limit: DEFAULT_PROCESS_LIMIT,
         }
     }
 
@@ -926,3 +1007,7 @@ fn main() {
         let _ = std::fs::remove_dir_all(root);
     }
 }
+
+#[cfg(test)]
+#[path = "tests/sandbox_security.rs"]
+mod security_tests;

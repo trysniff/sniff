@@ -48,8 +48,6 @@ const PERSISTENT_READ_CAPABILITY: &str = "trysniff.semantic-indexer-read.v1";
 const SE_GROUP_ENABLED: u32 = 0x00000004;
 const FILE_GENERIC_READ_ACCESS: u32 = 0x0012_0089;
 const PROCESS_CREATION_CHILD_PROCESS_OVERRIDE: u32 = 0x02;
-const MAX_PROCESS_MEMORY: usize = 1024 * 1024 * 1024;
-const MAX_ACTIVE_PROCESSES: u32 = 128;
 const ACL_COMMAND_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const ACL_COMMAND_OUTPUT_LIMIT: usize = 64 * 1024;
 const WINDOWS_SANDBOX_LOCK_NAME: &str = r"Local\SniffWindowsSandboxAclLock";
@@ -449,7 +447,7 @@ fn run_process(
         close_handles([stdout_read, stderr_read]);
         return Err(last_error("create Windows sandbox job"));
     }
-    if let Err(error) = configure_job(job) {
+    if let Err(error) = configure_job(job, spec.memory_limit, spec.process_limit) {
         terminate_process_and_close(process_info.hProcess);
         unsafe {
             CloseHandle(job);
@@ -538,13 +536,15 @@ fn terminate_process_and_close(process: HANDLE) {
     }
 }
 
-fn configure_job(job: HANDLE) -> Result<(), SandboxError> {
+fn configure_job(job: HANDLE, memory_limit: u64, process_limit: u32) -> Result<(), SandboxError> {
     let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
     limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
         | JOB_OBJECT_LIMIT_ACTIVE_PROCESS
         | JOB_OBJECT_LIMIT_PROCESS_MEMORY;
-    limits.BasicLimitInformation.ActiveProcessLimit = MAX_ACTIVE_PROCESSES;
-    limits.ProcessMemoryLimit = MAX_PROCESS_MEMORY;
+    limits.BasicLimitInformation.ActiveProcessLimit = process_limit;
+    limits.ProcessMemoryLimit = usize::try_from(memory_limit).map_err(|_| {
+        SandboxError::Invalid("Windows sandbox memory limit exceeds usize".to_string())
+    })?;
     if unsafe {
         SetInformationJobObject(
             job,

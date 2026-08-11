@@ -1855,6 +1855,7 @@ dependencies = [
  "flate2",
  "ignore",
  "indicatif",
+ "libc",
  "oxc_allocator",
  "oxc_ast",
  "oxc_parser",

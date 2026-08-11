@@ -716,6 +716,8 @@ fn build_indexer_sandbox_command(
         allow_local_network: spec.kind == SemanticIndexerKind::Kotlin,
         timeout: index_timeout(),
         output_limit: MAX_PROCESS_OUTPUT,
+        memory_limit: crate::sandbox::DEFAULT_MEMORY_LIMIT,
+        process_limit: crate::sandbox::DEFAULT_PROCESS_LIMIT,
     })
 }
 

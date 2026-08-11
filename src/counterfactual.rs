@@ -718,6 +718,8 @@ fn standalone_compiler_check(file_path: &str, source: &str) -> Result<bool, Stri
             allow_local_network: false,
             timeout: std::time::Duration::from_secs(30),
             output_limit: crate::sandbox::DEFAULT_OUTPUT_LIMIT,
+            memory_limit: crate::sandbox::DEFAULT_MEMORY_LIMIT,
+            process_limit: crate::sandbox::DEFAULT_PROCESS_LIMIT,
         });
         match output {
             Ok(output) => {
