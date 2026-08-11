@@ -1,5 +1,5 @@
 #[cfg(windows)]
-use super::replace_zip_entry_preserving_prefix;
+use super::install_rebuilt_zip_preserving_prefix;
 use super::{compact_output, parse_json_string};
 
 #[test]
@@ -22,15 +22,14 @@ fn command_output_is_bounded_and_compacted() {
 
 #[cfg(windows)]
 #[test]
-fn replacing_nested_runtime_preserves_launcher_prefix_and_other_entries() {
+fn rebuilt_launcher_preserves_executable_prefix_and_required_entries() {
     use std::io::{Read, Write};
     use zip::write::SimpleFileOptions;
 
     let temp = tempfile::tempdir().unwrap();
     let launcher = temp.path().join("launcher");
     let original_zip = temp.path().join("launcher.zip");
-    let replacement = temp.path().join("replacement.jar");
-    std::fs::write(&replacement, b"patched runtime").unwrap();
+    let rebuilt_zip = temp.path().join("rebuilt.zip");
 
     let file = std::fs::File::create(&original_zip).unwrap();
     let mut writer = zip::ZipWriter::new(file);
@@ -54,7 +53,19 @@ fn replacing_nested_runtime_preserves_launcher_prefix_and_other_entries() {
     .unwrap();
     drop(launcher_file);
 
-    replace_zip_entry_preserving_prefix(&launcher, "nested/runtime.jar", &replacement).unwrap();
+    let file = std::fs::File::create(&rebuilt_zip).unwrap();
+    let mut writer = zip::ZipWriter::new(file);
+    writer
+        .start_file("META-INF/MANIFEST.MF", SimpleFileOptions::default())
+        .unwrap();
+    writer.write_all(b"Main-Class: example.Main\n").unwrap();
+    writer
+        .start_file("nested/runtime.jar", SimpleFileOptions::default())
+        .unwrap();
+    writer.write_all(b"patched runtime").unwrap();
+    writer.finish().unwrap();
+
+    install_rebuilt_zip_preserving_prefix(&launcher, &rebuilt_zip, "nested/runtime.jar").unwrap();
 
     let bytes = std::fs::read(&launcher).unwrap();
     assert!(bytes.starts_with(b"#!/usr/bin/env sh\n"));
