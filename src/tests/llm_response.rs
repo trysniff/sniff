@@ -165,6 +165,7 @@ async fn request_times_out_when_the_server_never_answers() {
 
 #[tokio::test]
 async fn try_call_raw_accepts_json_with_plain_text_content_type() {
+    let _lock = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
     let (endpoint, hits) = spawn_text_json_server(
         r#"{"choices":[{"message":{"content":"{\"smelly\":false,\"tier\":\"clean\",\"evidence\":\"\",\"reason\":\"clean\"}"}}]}"#,
     );
@@ -215,6 +216,7 @@ async fn response_body_timeout_is_configurable() {
 
 #[tokio::test]
 async fn insufficient_balance_is_reported_explicitly() {
+    let _lock = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
     let (endpoint, _hits) = spawn_status_server(
         402,
         r#"{"error":{"message":"Insufficient Balance","type":"unknown_error","code":"invalid_request_error"}}"#,
