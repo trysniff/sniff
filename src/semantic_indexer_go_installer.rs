@@ -71,6 +71,9 @@ const GO_BUILD_ID_STDIN_BEFORE: &str = concat!(
 const GO_BUILD_ID_STDIN_AFTER: &str = concat!(
     "\t\tcmd := exec.Command(cmdline[0], cmdline[1:]...)\n",
     "\t\tcmd.Stdin = strings.NewReader(\"\")\n",
+    "\t\tif os.Getenv(\"SNIFF_DEBUG_INDEXERS\") != \"\" {\n",
+    "\t\t\tfmt.Fprintln(os.Stderr, \"[sniff] sandbox Go build-ID probe uses explicit stdin\")\n",
+    "\t\t}\n",
     "\t\tvar stdout, stderr strings.Builder\n"
 );
 #[cfg(windows)]
@@ -229,8 +232,10 @@ async fn build_windows_sandbox_go(root: &Path, build_root: &Path) -> Result<(), 
             goroot.display()
         ));
     }
-    let goroot = fs::canonicalize(&goroot)
-        .map_err(|error| format!("failed to resolve Go runtime root: {error}"))?;
+    let goroot = strip_windows_verbatim_prefix(
+        fs::canonicalize(&goroot)
+            .map_err(|error| format!("failed to resolve Go runtime root: {error}"))?,
+    );
 
     let overlay_root = build_root.join("go-overlay");
     fs::create_dir(&overlay_root).map_err(|error| {
@@ -330,6 +335,18 @@ fn replace_exact_once(
         ));
     }
     Ok(source.replacen(before, after, 1))
+}
+
+#[cfg(windows)]
+fn strip_windows_verbatim_prefix(path: PathBuf) -> PathBuf {
+    let text = path.to_string_lossy();
+    if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+        return PathBuf::from(format!(r"\\{}", rest));
+    }
+    if let Some(rest) = text.strip_prefix(r"\\?\") {
+        return PathBuf::from(rest);
+    }
+    path
 }
 
 #[cfg(windows)]
@@ -549,9 +566,9 @@ fn go_executable_name() -> OsString {
 
 #[cfg(test)]
 mod tests {
-    #[cfg(windows)]
-    use super::replace_exact_once;
     use super::{go_executable_name, parse_go_module_metadata};
+    #[cfg(windows)]
+    use super::{replace_exact_once, strip_windows_verbatim_prefix};
     use std::path::PathBuf;
 
     #[test]
@@ -606,6 +623,19 @@ mod tests {
             replace_exact_once("command command", "command", "patched", "test")
                 .unwrap_err()
                 .contains("2 compatible command sites")
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn go_overlay_paths_use_the_same_drive_form_as_the_go_tool() {
+        assert_eq!(
+            strip_windows_verbatim_prefix(PathBuf::from(r"\\?\C:\Go\src\cmd\go")),
+            PathBuf::from(r"C:\Go\src\cmd\go")
+        );
+        assert_eq!(
+            strip_windows_verbatim_prefix(PathBuf::from(r"\\?\UNC\server\share\Go")),
+            PathBuf::from(r"\\server\share\Go")
         );
     }
 }
