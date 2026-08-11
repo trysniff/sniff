@@ -218,6 +218,8 @@ fn windows_gradle_patch_uses_private_project_cache_and_explicit_offline_mode() {
     assert!(WINDOWS_SCIP_JAVA_PROCESS_RUNNER.contains("SNIFF_GRADLE_USER_HOME"));
     assert!(WINDOWS_SCIP_JAVA_PROCESS_RUNNER.contains("SNIFF_GRADLE_TEMP"));
     assert!(WINDOWS_SCIP_JAVA_PROCESS_RUNNER.contains("-Djava.io.tmpdir="));
+    assert!(WINDOWS_SCIP_JAVA_PROCESS_RUNNER.contains("-Dgradle.user.home="));
+    assert!(WINDOWS_SCIP_JAVA_PROCESS_RUNNER.contains("Files.createTempFile"));
     assert!(WINDOWS_SCIP_JAVA_PROCESS_RUNNER.contains("--gradle-user-home"));
     assert!(WINDOWS_SCIP_JAVA_PROCESS_RUNNER.contains("--project-cache-dir"));
     assert!(WINDOWS_SCIP_JAVA_PROCESS_RUNNER.contains("--no-watch-fs"));

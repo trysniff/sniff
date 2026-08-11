@@ -720,7 +720,12 @@ fn build_indexer_sandbox_command(
     executable_paths.dedup();
     let mut writable_paths = vec![root.join(INDEXER_TEMP_DIR)];
     if spec.kind == SemanticIndexerKind::Kotlin {
-        writable_paths.push(root.join(INDEXER_CACHE_DIR));
+        let cache = root.join(INDEXER_CACHE_DIR);
+        writable_paths.extend([
+            cache.clone(),
+            cache.join(".tmp"),
+            cache.join("project-cache"),
+        ]);
     }
 
     Ok(SandboxCommand {
@@ -882,6 +887,14 @@ fn format_timeout(duration: Duration) -> String {
 }
 
 fn write_private_gradle_properties(root: &Path, cache_root: &Path) -> Result<(), String> {
+    for directory in [cache_root.join(".tmp"), cache_root.join("project-cache")] {
+        fs::create_dir(&directory).map_err(|error| {
+            format!(
+                "failed to create private Gradle directory {}: {error}",
+                directory.display()
+            )
+        })?;
+    }
     let home = sandbox_repository_argument(root, &root.to_string_lossy()).replace('\\', "\\\\");
     let project_cache =
         sandbox_repository_argument(root, &cache_root.join("project-cache").to_string_lossy())

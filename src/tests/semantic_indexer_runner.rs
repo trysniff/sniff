@@ -189,6 +189,8 @@ fn private_gradle_properties_disable_daemons_without_host_home_access() {
 
     write_private_gradle_properties(&root, &cache).unwrap();
     let properties = std::fs::read_to_string(cache.join("gradle.properties")).unwrap();
+    assert!(cache.join(".tmp").is_dir());
+    assert!(cache.join("project-cache").is_dir());
     let expected_home =
         sandbox_repository_argument(&root, &root.to_string_lossy()).replace('\\', "\\\\");
     let expected_project_cache =

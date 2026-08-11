@@ -298,6 +298,8 @@ public final class ProcessRunner {
     String projectCache = requiredEnvironment("SNIFF_GRADLE_PROJECT_CACHE");
     String gradleUserHome = requiredEnvironment("SNIFF_GRADLE_USER_HOME");
     String temporaryDirectory = requiredEnvironment("SNIFF_GRADLE_TEMP");
+    verifyWritableDirectory(Path.of(gradleUserHome, ".tmp"), "Gradle user-home temp");
+    verifyWritableDirectory(Path.of(temporaryDirectory), "JVM temp");
     String javaOptions = requiredEnvironment("JAVA_OPTS");
     int agentSeparator = javaOptions.lastIndexOf(" -javaagent:");
     if (agentSeparator < 0 || !javaOptions.substring(0, agentSeparator).equals(BASE_JVM_OPTIONS)) {
@@ -311,6 +313,7 @@ public final class ProcessRunner {
     Collections.addAll(rewritten, BASE_JVM_OPTIONS.split(" "));
     rewritten.add("-javaagent:" + agent);
     rewritten.add("-Dorg.gradle.appname=gradle");
+    rewritten.add("-Dgradle.user.home=" + gradleUserHome);
     rewritten.add("-Djava.io.tmpdir=" + temporaryDirectory);
     rewritten.add("-classpath");
     rewritten.add(launcher);
@@ -329,6 +332,18 @@ public final class ProcessRunner {
     rewritten.addAll(command.subList(1, command.size()));
     trace("rewrote Gradle to one direct Java child");
     return rewritten;
+  }
+
+  private static void verifyWritableDirectory(Path directory, String label) {
+    try {
+      Files.createDirectories(directory);
+      Path probe = Files.createTempFile(directory, "sniff-gradle-probe-", ".tmp");
+      Files.delete(probe);
+      trace(label + " is writable: " + directory);
+    } catch (Exception error) {
+      trace(label + " is not writable: " + directory + ": " + error);
+      throw new IllegalStateException(label + " is not writable inside the Sniff sandbox: " + directory, error);
+    }
   }
 
   private static void normalizeInitScript(List<String> command) {
