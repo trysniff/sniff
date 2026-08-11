@@ -49,6 +49,7 @@ pub(super) fn stage_control_plane(repository: &Path, target: &Path) -> Result<()
 
     let mut budget = CopyBudget::default();
     let mut root_script_found = false;
+    let mut project_roots = BTreeSet::new();
     for result in builder.build() {
         let entry = result
             .map_err(|error| format!("failed to inventory the Gradle control plane: {error}"))?;
@@ -135,6 +136,14 @@ pub(super) fn stage_control_plane(repository: &Path, target: &Path) -> Result<()
         {
             root_script_found = true;
         }
+        if is_project_build_script(relative) {
+            project_roots.insert(
+                relative
+                    .parent()
+                    .filter(|parent| !parent.as_os_str().is_empty())
+                    .map_or_else(PathBuf::new, Path::to_path_buf),
+            );
+        }
     }
 
     if !root_script_found {
@@ -142,6 +151,51 @@ pub(super) fn stage_control_plane(repository: &Path, target: &Path) -> Result<()
             "Kotlin dependency preparation requires a repository-root settings.gradle(.kts) or build.gradle(.kts) file"
                 .to_string(),
         );
+    }
+    if project_roots.is_empty() {
+        return Err(
+            "Kotlin dependency preparation found no build.gradle(.kts) project to compile"
+                .to_string(),
+        );
+    }
+    write_compiler_probes(target, &project_roots)?;
+    Ok(())
+}
+
+fn write_compiler_probes(target: &Path, project_roots: &BTreeSet<PathBuf>) -> Result<(), String> {
+    for (ordinal, project_root) in project_roots.iter().enumerate() {
+        let java_directory = target.join(project_root).join("src/main/java");
+        let kotlin_directory = target.join(project_root).join("src/main/kotlin");
+        for directory in [&java_directory, &kotlin_directory] {
+            fs::create_dir_all(directory).map_err(|error| {
+                format!(
+                    "failed to create synthetic compiler-probe directory {}: {error}",
+                    directory.display()
+                )
+            })?;
+        }
+        let java_name = format!("SniffDependencyJavaProbe{ordinal}");
+        let kotlin_name = format!("SniffDependencyKotlinProbe{ordinal}");
+        fs::write(
+            java_directory.join(format!("{java_name}.java")),
+            format!("final class {java_name} {{}}\n"),
+        )
+        .map_err(|error| {
+            format!(
+                "failed to write synthetic Java compiler probe for {}: {error}",
+                target.join(project_root).display()
+            )
+        })?;
+        fs::write(
+            kotlin_directory.join(format!("{kotlin_name}.kt")),
+            format!("internal class {kotlin_name}\n"),
+        )
+        .map_err(|error| {
+            format!(
+                "failed to write synthetic Kotlin compiler probe for {}: {error}",
+                target.join(project_root).display()
+            )
+        })?;
     }
     Ok(())
 }
@@ -169,6 +223,10 @@ fn is_primary_gradle_script(path: &Path) -> bool {
         file_name(path),
         Some("settings.gradle" | "settings.gradle.kts" | "build.gradle" | "build.gradle.kts")
     )
+}
+
+fn is_project_build_script(path: &Path) -> bool {
+    matches!(file_name(path), Some("build.gradle" | "build.gradle.kts"))
 }
 
 fn has_control_extension(path: &Path) -> bool {

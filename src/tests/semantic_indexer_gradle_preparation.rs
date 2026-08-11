@@ -63,6 +63,16 @@ fn source_minimized_stage_keeps_build_logic_but_not_application_source_or_secret
     assert!(target.join("app/build.gradle.kts").is_file());
     assert!(
         target
+            .join("app/src/main/java/SniffDependencyJavaProbe1.java")
+            .is_file()
+    );
+    assert!(
+        target
+            .join("app/src/main/kotlin/SniffDependencyKotlinProbe1.kt")
+            .is_file()
+    );
+    assert!(
+        target
             .join("buildSrc/src/main/kotlin/RootPlugin.kt")
             .is_file()
     );
