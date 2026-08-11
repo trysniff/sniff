@@ -1,7 +1,7 @@
 #[cfg(windows)]
 use super::{
-    WINDOWS_SCIP_JAVA_PROCESS_RUNNER, install_rebuilt_zip_preserving_prefix,
-    patch_scip_java_windows,
+    WINDOWS_GRADLE_TEMP_FILES, WINDOWS_SCIP_JAVA_PROCESS_RUNNER,
+    install_rebuilt_zip_preserving_prefix, patch_scip_java_windows,
 };
 use super::{compact_output, parse_json_string};
 
@@ -220,6 +220,8 @@ fn windows_gradle_patch_uses_private_project_cache_and_explicit_offline_mode() {
     assert!(WINDOWS_SCIP_JAVA_PROCESS_RUNNER.contains("-Djava.io.tmpdir="));
     assert!(WINDOWS_SCIP_JAVA_PROCESS_RUNNER.contains("-Dgradle.user.home="));
     assert!(WINDOWS_SCIP_JAVA_PROCESS_RUNNER.contains("Files.createTempFile"));
+    assert!(WINDOWS_GRADLE_TEMP_FILES.contains("Files.createTempFile"));
+    assert!(!WINDOWS_GRADLE_TEMP_FILES.contains("File.createTempFile"));
     assert!(WINDOWS_SCIP_JAVA_PROCESS_RUNNER.contains("--gradle-user-home"));
     assert!(WINDOWS_SCIP_JAVA_PROCESS_RUNNER.contains("--project-cache-dir"));
     assert!(WINDOWS_SCIP_JAVA_PROCESS_RUNNER.contains("--no-watch-fs"));

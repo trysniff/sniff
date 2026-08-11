@@ -398,6 +398,27 @@ public final class ProcessRunner {
 "#;
 
 #[cfg(windows)]
+const WINDOWS_GRADLE_TEMP_FILES: &str = r#"package org.gradle.api.internal.file.temp;
+
+import java.io.File;
+import java.io.IOException;
+import java.nio.file.Files;
+
+public final class TempFiles {
+  private TempFiles() {}
+
+  static File createTempFile(String prefix, String suffix, File directory) throws IOException {
+    if (directory == null) {
+      throw new NullPointerException("The `directory` argument must not be null");
+    }
+    if (prefix == null) prefix = "gradle-";
+    if (prefix.length() <= 3) prefix = "tmp-" + prefix;
+    return Files.createTempFile(directory.toPath(), prefix, suffix).toFile();
+  }
+}
+"#;
+
+#[cfg(windows)]
 const WINDOWS_SCIP_JAVA_LAUNCHER_REPACKER: &str = r#"
 import java.io.InputStream;
 import java.nio.file.Files;
@@ -504,6 +525,10 @@ fn patch_scip_java_windows(root: &Path, spec: PinnedIndexer) -> Result<(), Strin
         fs::write(&runner_source, WINDOWS_SCIP_JAVA_PROCESS_RUNNER).map_err(|error| {
             format!("failed to write the Windows scip-java process patch source: {error}")
         })?;
+        let gradle_temp_source = patch_root.join("TempFiles.java");
+        fs::write(&gradle_temp_source, WINDOWS_GRADLE_TEMP_FILES).map_err(|error| {
+            format!("failed to write the Windows Gradle temp compatibility source: {error}")
+        })?;
         let repacker_source = patch_root.join("LauncherRepacker.java");
         fs::write(&repacker_source, WINDOWS_SCIP_JAVA_LAUNCHER_REPACKER).map_err(|error| {
             format!("failed to write the Windows scip-java launcher repacker source: {error}")
@@ -567,6 +592,7 @@ fn patch_scip_java_windows(root: &Path, spec: PinnedIndexer) -> Result<(), Strin
                 .arg(&classes)
                 .arg(&writer_source)
                 .arg(&runner_source)
+                .arg(&gradle_temp_source)
                 .arg(&repacker_source),
             "compile scip-java Windows compatibility patch",
         )?;
@@ -635,6 +661,7 @@ fn patch_scip_java_windows(root: &Path, spec: PinnedIndexer) -> Result<(), Strin
         )?;
         let patch_dir = root.join("bin/scip-java-v0.13.1-patch");
         let patch_package = patch_dir.join("org/scip_code/scip_java/aggregator");
+        let gradle_temp_package = patch_dir.join("org/gradle/api/internal/file/temp");
         let scip_package = patch_dir.join("org/scip_code/scip");
         let protobuf_package = patch_dir.join("com/google/protobuf");
         if patch_package.exists() {
@@ -645,6 +672,8 @@ fn patch_scip_java_windows(root: &Path, spec: PinnedIndexer) -> Result<(), Strin
         }
         fs::create_dir_all(&patch_package)
             .map_err(|error| format!("failed to create scip-java patch directory: {error}"))?;
+        fs::create_dir_all(&gradle_temp_package)
+            .map_err(|error| format!("failed to create Gradle temp patch directory: {error}"))?;
         fs::create_dir_all(&scip_package)
             .map_err(|error| format!("failed to create scip-java bindings directory: {error}"))?;
         for class_name in [
@@ -669,6 +698,18 @@ fn patch_scip_java_windows(root: &Path, spec: PinnedIndexer) -> Result<(), Strin
                 )
             })?;
         }
+        let gradle_temp_class = classes.join("org/gradle/api/internal/file/temp/TempFiles.class");
+        if !gradle_temp_class.is_file() {
+            return Err(format!(
+                "Gradle temp compatibility class is missing: {}",
+                gradle_temp_class.display()
+            ));
+        }
+        fs::copy(
+            &gradle_temp_class,
+            gradle_temp_package.join("TempFiles.class"),
+        )
+        .map_err(|error| format!("failed to install Gradle temp compatibility class: {error}"))?;
         copy_patch_tree(
             &classes.join("org/scip_code/scip"),
             &scip_package,
