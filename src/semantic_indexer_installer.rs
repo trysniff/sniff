@@ -370,83 +370,6 @@ public final class ProcessRunner {
 "#;
 
 #[cfg(windows)]
-const WINDOWS_SCIP_JAVA_LAUNCHER_REPACKER: &str = r#"
-import java.io.InputStream;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.util.Enumeration;
-import java.util.zip.CRC32;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipFile;
-import java.util.zip.ZipOutputStream;
-
-public final class LauncherRepacker {
-  private LauncherRepacker() {}
-
-  public static void main(String[] args) throws Exception {
-    if (args.length != 4) {
-      throw new IllegalArgumentException(
-          "expected launcher, replacement, output, and target entry arguments");
-    }
-    Path launcher = Path.of(args[0]);
-    Path replacement = Path.of(args[1]);
-    Path output = Path.of(args[2]);
-    String target = args[3];
-    byte[] replacementBytes = Files.readAllBytes(replacement);
-    CRC32 replacementCrc = new CRC32();
-    replacementCrc.update(replacementBytes);
-    int replacements = 0;
-    try (ZipFile input = new ZipFile(launcher.toFile());
-        ZipOutputStream rebuilt = new ZipOutputStream(Files.newOutputStream(output))) {
-      Enumeration<? extends ZipEntry> entries = input.entries();
-      while (entries.hasMoreElements()) {
-        ZipEntry source = entries.nextElement();
-        boolean replacing = source.getName().equals(target);
-        ZipEntry destination = replacing ? replacementEntry(source) : new ZipEntry(source);
-        if (replacing && source.getMethod() == ZipEntry.STORED) {
-          destination.setSize(replacementBytes.length);
-          destination.setCompressedSize(replacementBytes.length);
-          destination.setCrc(replacementCrc.getValue());
-        }
-        rebuilt.putNextEntry(destination);
-        if (replacing) {
-          rebuilt.write(replacementBytes);
-          replacements++;
-        } else if (!source.isDirectory()) {
-          try (InputStream contents = input.getInputStream(source)) {
-            contents.transferTo(rebuilt);
-          }
-        }
-        rebuilt.closeEntry();
-      }
-    }
-    if (replacements != 1) {
-      Files.deleteIfExists(output);
-      throw new IllegalStateException(
-          "expected exactly one " + target + " entry, found " + replacements);
-    }
-  }
-
-  private static ZipEntry replacementEntry(ZipEntry source) {
-    ZipEntry destination = new ZipEntry(source.getName());
-    destination.setMethod(source.getMethod());
-    if (source.getComment() != null) destination.setComment(source.getComment());
-    if (source.getExtra() != null) destination.setExtra(source.getExtra());
-    if (source.getLastModifiedTime() != null) {
-      destination.setLastModifiedTime(source.getLastModifiedTime());
-    }
-    if (source.getLastAccessTime() != null) {
-      destination.setLastAccessTime(source.getLastAccessTime());
-    }
-    if (source.getCreationTime() != null) {
-      destination.setCreationTime(source.getCreationTime());
-    }
-    return destination;
-  }
-}
-"#;
-
-#[cfg(windows)]
 fn patch_scip_java_windows(root: &Path, spec: PinnedIndexer) -> Result<(), String> {
     let entrypoint = root.join(spec.entrypoint_relative_path());
     let patch_root = std::env::temp_dir().join(format!(
@@ -476,11 +399,6 @@ fn patch_scip_java_windows(root: &Path, spec: PinnedIndexer) -> Result<(), Strin
         fs::write(&runner_source, WINDOWS_SCIP_JAVA_PROCESS_RUNNER).map_err(|error| {
             format!("failed to write the Windows scip-java process patch source: {error}")
         })?;
-        let repacker_source = patch_root.join("LauncherRepacker.java");
-        fs::write(&repacker_source, WINDOWS_SCIP_JAVA_LAUNCHER_REPACKER).map_err(|error| {
-            format!("failed to write the Windows scip-java launcher repacker source: {error}")
-        })?;
-
         run_patch_tool(
             std::process::Command::new("jar")
                 .current_dir(&launcher_root)
@@ -539,8 +457,7 @@ fn patch_scip_java_windows(root: &Path, spec: PinnedIndexer) -> Result<(), Strin
                 .arg("-d")
                 .arg(&classes)
                 .arg(&writer_source)
-                .arg(&runner_source)
-                .arg(&repacker_source),
+                .arg(&runner_source),
             "compile scip-java Windows compatibility patch",
         )?;
         run_patch_tool(
@@ -553,20 +470,11 @@ fn patch_scip_java_windows(root: &Path, spec: PinnedIndexer) -> Result<(), Strin
             "patch scip-java Windows process runner",
         )?;
         let rebuilt_launcher = patch_root.join("scip-java-rebuilt.jar");
-        run_patch_tool(
-            std::process::Command::new("java")
-                .arg("-cp")
-                .arg(&classes)
-                .arg("LauncherRepacker")
-                .arg(&entrypoint)
-                .arg(&scip_java)
-                .arg(&rebuilt_launcher)
-                .arg("coursier/bootstrap/launcher/jars/scip-java-0.13.1.jar"),
-            "stream-rebuild patched scip-java launcher",
-        )?;
-        install_rebuilt_zip_preserving_prefix(
+        rebuild_zip_entry_preserving_prefix(
             &entrypoint,
+            &scip_java,
             &rebuilt_launcher,
+            "coursier/bootstrap/launcher/jars/scip-java-0.13.1.jar",
             &[
                 "coursier/bootstrap/launcher/jars/scip-java-0.13.1.jar",
                 "coursier/bootstrap/launcher/ResourcesLauncher.class",
@@ -667,9 +575,11 @@ fn patch_scip_java_windows(root: &Path, spec: PinnedIndexer) -> Result<(), Strin
 }
 
 #[cfg(windows)]
-fn install_rebuilt_zip_preserving_prefix(
+fn rebuild_zip_entry_preserving_prefix(
     launcher_path: &Path,
-    rebuilt_zip_path: &Path,
+    replacement_path: &Path,
+    output_path: &Path,
+    target_entry: &str,
     required_entries: &[&str],
 ) -> Result<(), String> {
     const MAX_EXECUTABLE_PREFIX_BYTES: usize = 1024 * 1024;
@@ -704,41 +614,73 @@ fn install_rebuilt_zip_preserving_prefix(
             launcher_path.display()
         ));
     }
-    let rebuilt_zip = fs::read(rebuilt_zip_path).map_err(|error| {
+    let input = File::open(launcher_path).map_err(|error| {
         format!(
-            "failed to read rebuilt scip-java ZIP {}: {error}",
-            rebuilt_zip_path.display()
+            "failed to open scip-java launcher {} for rebuilding: {error}",
+            launcher_path.display()
         )
     })?;
-    if !rebuilt_zip.starts_with(LOCAL_ZIP_HEADER) {
-        return Err(format!(
-            "rebuilt scip-java launcher {} is not a plain ZIP archive",
-            rebuilt_zip_path.display()
-        ));
-    }
-    let output_path = launcher_path.with_extension("sniff-rebuilt");
-    if output_path.exists() {
-        fs::remove_file(&output_path).map_err(|error| {
-            format!(
-                "failed to clear stale scip-java rebuild output {}: {error}",
-                output_path.display()
-            )
-        })?;
-    }
-    let mut combined = File::create(&output_path).map_err(|error| {
+    let mut archive = ZipArchive::new(input)
+        .map_err(|error| format!("failed to parse scip-java launcher for rebuilding: {error}"))?;
+    let archive_comment = archive.comment().to_vec().into_boxed_slice();
+    let mut output = File::create(output_path).map_err(|error| {
         format!(
             "failed to create scip-java rebuild output {}: {error}",
             output_path.display()
         )
     })?;
-    combined
+    output
         .write_all(&launcher_bytes[..prefix_len])
-        .and_then(|()| combined.write_all(&rebuilt_zip))
-        .and_then(|()| combined.sync_all())
-        .map_err(|error| format!("failed to assemble rebuilt scip-java launcher: {error}"))?;
-    drop(combined);
+        .map_err(|error| format!("failed to preserve scip-java executable prefix: {error}"))?;
+    let mut rebuilt = zip::ZipWriter::new(output);
+    rebuilt.set_raw_comment(archive_comment);
+    let mut replacements = 0_usize;
+    for index in 0..archive.len() {
+        let entry = archive.by_index(index).map_err(|error| {
+            format!("failed to inspect scip-java launcher entry {index}: {error}")
+        })?;
+        if entry.name() == target_entry {
+            if entry.compression() != zip::CompressionMethod::Stored {
+                return Err(format!(
+                    "scip-java nested runtime {target_entry} must be stored without compression"
+                ));
+            }
+            let name = entry.name().to_string();
+            let options = entry.options();
+            drop(entry);
+            rebuilt.start_file(name, options).map_err(|error| {
+                format!("failed to start replacement scip-java runtime entry: {error}")
+            })?;
+            let mut replacement = File::open(replacement_path).map_err(|error| {
+                format!(
+                    "failed to open patched scip-java runtime {}: {error}",
+                    replacement_path.display()
+                )
+            })?;
+            std::io::copy(&mut replacement, &mut rebuilt).map_err(|error| {
+                format!("failed to write patched scip-java runtime entry: {error}")
+            })?;
+            replacements += 1;
+        } else {
+            rebuilt.raw_copy_file(entry).map_err(|error| {
+                format!("failed to preserve scip-java launcher entry {index}: {error}")
+            })?;
+        }
+    }
+    if replacements != 1 {
+        return Err(format!(
+            "expected exactly one {target_entry} entry, found {replacements}"
+        ));
+    }
+    let rebuilt_file = rebuilt
+        .finish()
+        .map_err(|error| format!("failed to finish rebuilt scip-java launcher: {error}"))?;
+    rebuilt_file
+        .sync_all()
+        .map_err(|error| format!("failed to sync rebuilt scip-java launcher: {error}"))?;
+    drop(archive);
 
-    let assembled = fs::read(&output_path)
+    let assembled = fs::read(output_path)
         .map_err(|error| format!("failed to validate rebuilt scip-java launcher: {error}"))?;
     if !assembled.starts_with(&launcher_bytes[..prefix_len])
         || assembled.get(prefix_len..prefix_len + LOCAL_ZIP_HEADER.len()) != Some(LOCAL_ZIP_HEADER)
@@ -747,7 +689,7 @@ fn install_rebuilt_zip_preserving_prefix(
             "patched scip-java launcher did not preserve its executable prefix".to_string(),
         );
     }
-    let mut validation = File::open(&output_path)
+    let mut validation = File::open(output_path)
         .map_err(|error| error.to_string())
         .and_then(|file| ZipArchive::new(file).map_err(|error| error.to_string()))?;
     for required_entry in required_entries {
@@ -767,13 +709,13 @@ fn install_rebuilt_zip_preserving_prefix(
         .by_name("META-INF/MANIFEST.MF")
         .map_err(|error| format!("rebuilt scip-java launcher is missing its manifest: {error}"))?;
     drop(validation);
-    fs::copy(&output_path, launcher_path).map_err(|error| {
+    fs::copy(output_path, launcher_path).map_err(|error| {
         format!(
             "failed to install patched scip-java launcher {}: {error}",
             launcher_path.display()
         )
     })?;
-    fs::remove_file(&output_path).map_err(|error| {
+    fs::remove_file(output_path).map_err(|error| {
         format!(
             "failed to remove scip-java repack output {}: {error}",
             output_path.display()
