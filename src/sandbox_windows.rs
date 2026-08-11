@@ -140,6 +140,7 @@ pub(super) fn run(spec: &SandboxCommand) -> Result<SandboxOutput, SandboxError> 
     let mut acl_guard = AclGuard::grant(
         &effective_spec.root,
         &effective_spec.read_only_paths,
+        &effective_spec.writable_paths,
         &app_container_sid_text,
     )?;
     trace_phase(started, "filesystem access granted");
@@ -986,15 +987,15 @@ impl AclGuard {
     fn grant(
         root: &Path,
         read_only_paths: &[std::path::PathBuf],
+        writable_paths: &[std::path::PathBuf],
         sid: &str,
     ) -> Result<Self, SandboxError> {
-        let paths = explicit_acl_paths(root, read_only_paths);
+        let paths = explicit_acl_paths(root, read_only_paths, writable_paths);
         let mut grants: Vec<AclGrant> = Vec::with_capacity(paths.len());
-        for path in paths {
+        for (path, permission) in paths {
             // Directory grants use inheritance rather than recursively
             // walking every dependency file. Cleanup removes the parent ACE;
             // inherited child access then disappears with it.
-            let permission = if path.as_path() == root { "M" } else { "R" };
             if let Err(error) = grant_acl(&path, sid, permission) {
                 for granted in grants.iter().rev() {
                     let _ = revoke_acl(&granted.path, sid);
@@ -1024,11 +1025,20 @@ impl AclGuard {
     }
 }
 
-fn explicit_acl_paths(root: &Path, read_only_paths: &[std::path::PathBuf]) -> Vec<PathBuf> {
-    let mut paths = Vec::with_capacity(read_only_paths.len() + 1);
-    for path in std::iter::once(root.to_path_buf()).chain(read_only_paths.iter().cloned()) {
-        if !paths.contains(&path) {
-            paths.push(path);
+fn explicit_acl_paths(
+    root: &Path,
+    read_only_paths: &[std::path::PathBuf],
+    writable_paths: &[std::path::PathBuf],
+) -> Vec<(PathBuf, &'static str)> {
+    let mut paths = vec![(root.to_path_buf(), "M")];
+    for path in writable_paths {
+        if !paths.iter().any(|(existing, _)| existing == path) {
+            paths.push((path.clone(), "M"));
+        }
+    }
+    for path in read_only_paths {
+        if !paths.iter().any(|(existing, _)| existing == path) {
+            paths.push((path.clone(), "R"));
         }
     }
     paths
@@ -1134,12 +1144,20 @@ mod tests {
     fn repository_acl_targets_never_include_ancestors() {
         let root = Path::new(r"C:\work\repository");
         let tool = PathBuf::from(r"C:\tools\node.exe");
+        let cache = PathBuf::from(r"C:\work\repository\.sniff-indexer-cache");
 
-        let paths = explicit_acl_paths(root, std::slice::from_ref(&tool));
+        let paths = explicit_acl_paths(
+            root,
+            std::slice::from_ref(&tool),
+            std::slice::from_ref(&cache),
+        );
 
-        assert_eq!(paths, [root.to_path_buf(), tool]);
-        assert!(!paths.contains(&PathBuf::from(r"C:\")));
-        assert!(!paths.contains(&PathBuf::from(r"C:\work")));
+        assert_eq!(
+            paths,
+            [(root.to_path_buf(), "M"), (cache, "M"), (tool, "R")]
+        );
+        assert!(!paths.iter().any(|(path, _)| path == Path::new(r"C:\")));
+        assert!(!paths.iter().any(|(path, _)| path == Path::new(r"C:\work")));
     }
 
     #[test]

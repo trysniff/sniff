@@ -718,6 +718,10 @@ fn build_indexer_sandbox_command(
     persistent_read_only_paths.dedup();
     executable_paths.sort();
     executable_paths.dedup();
+    let mut writable_paths = vec![root.join(INDEXER_TEMP_DIR)];
+    if spec.kind == SemanticIndexerKind::Kotlin {
+        writable_paths.push(root.join(INDEXER_CACHE_DIR));
+    }
 
     Ok(SandboxCommand {
         root: root.to_path_buf(),
@@ -725,6 +729,7 @@ fn build_indexer_sandbox_command(
         program,
         args,
         read_only_paths,
+        writable_paths,
         persistent_read_only_paths,
         executable_paths,
         env,

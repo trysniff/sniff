@@ -41,6 +41,9 @@ pub(crate) struct SandboxCommand {
     pub(crate) program: String,
     pub(crate) args: Vec<String>,
     pub(crate) read_only_paths: Vec<PathBuf>,
+    /// Existing paths inside `root` that need an explicit transient write
+    /// grant on backends whose root permission does not propagate retroactively.
+    pub(crate) writable_paths: Vec<PathBuf>,
     /// Host-controlled toolchains that may retain a read-only sandbox grant.
     /// Repository content must never be placed in this collection.
     pub(crate) persistent_read_only_paths: Vec<PathBuf>,
@@ -277,6 +280,32 @@ fn validate_spec(spec: &SandboxCommand) -> Result<(), SandboxError> {
     let canonical_root = std::fs::canonicalize(&spec.root).map_err(|error| {
         SandboxError::Invalid(format!("sandbox root could not be canonicalized: {error}"))
     })?;
+    for path in &spec.writable_paths {
+        let metadata = std::fs::symlink_metadata(path).map_err(|error| {
+            SandboxError::Invalid(format!(
+                "sandbox writable path must exist: {} ({error})",
+                path.display()
+            ))
+        })?;
+        if !path.is_absolute() || metadata.file_type().is_symlink() {
+            return Err(SandboxError::Invalid(format!(
+                "sandbox writable path must be an absolute non-symlink path: {}",
+                path.display()
+            )));
+        }
+        let canonical_path = std::fs::canonicalize(path).map_err(|error| {
+            SandboxError::Invalid(format!(
+                "sandbox writable path could not be canonicalized: {} ({error})",
+                path.display()
+            ))
+        })?;
+        if !canonical_path.starts_with(&canonical_root) {
+            return Err(SandboxError::Invalid(format!(
+                "sandbox writable path must remain inside the repository root: {}",
+                path.display()
+            )));
+        }
+    }
     for path in &spec.persistent_read_only_paths {
         let canonical_path = std::fs::canonicalize(path).map_err(|error| {
             SandboxError::Invalid(format!(
@@ -954,6 +983,7 @@ mod tests {
             program: "test".to_string(),
             args: Vec::new(),
             read_only_paths: Vec::new(),
+            writable_paths: Vec::new(),
             persistent_read_only_paths: Vec::new(),
             executable_paths: Vec::new(),
             env: Vec::new(),
@@ -1012,6 +1042,23 @@ mod tests {
 
         let error = validate_spec(&command).unwrap_err();
         assert!(matches!(error, SandboxError::Invalid(message) if message.contains("read-only")));
+    }
+
+    #[test]
+    fn rejects_writable_paths_outside_the_repository() {
+        let parent = tempfile::tempdir().unwrap();
+        let root = parent.path().join("repository");
+        let outside = parent.path().join("outside");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        let mut command = spec(root);
+        command.writable_paths = vec![outside];
+
+        let error = validate_spec(&command).unwrap_err();
+
+        assert!(
+            matches!(error, SandboxError::Invalid(message) if message.contains("inside the repository"))
+        );
     }
 
     #[test]
@@ -1128,6 +1175,7 @@ mod tests {
             program: program.to_string_lossy().into_owned(),
             args: vec!["/D".to_string(), "/S".to_string(), "/C".to_string(), script],
             read_only_paths: Vec::new(),
+            writable_paths: Vec::new(),
             persistent_read_only_paths: Vec::new(),
             executable_paths: Vec::new(),
             env: Vec::new(),
@@ -1192,6 +1240,7 @@ fn main() {
             program: program.to_string_lossy().into_owned(),
             args: vec![child.to_string_lossy().into_owned()],
             read_only_paths: Vec::new(),
+            writable_paths: Vec::new(),
             persistent_read_only_paths: Vec::new(),
             executable_paths: Vec::new(),
             env: Vec::new(),
@@ -1217,6 +1266,35 @@ fn main() {
         assert!(!outside.exists(), "sandbox wrote outside repository root");
         std::fs::remove_dir_all(root).unwrap();
         let _ = std::fs::remove_file(outside);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_backend_writes_to_an_explicit_preexisting_directory() {
+        let root = windows_test_root("explicit-write");
+        let cache = root.join(".sniff-indexer-cache");
+        let evidence = cache.join("probe.txt");
+        std::fs::create_dir(&cache).unwrap();
+        let mut command = windows_command(
+            root.clone(),
+            r"echo sandbox-write>.sniff-indexer-cache\probe.txt".to_string(),
+        );
+        command.writable_paths = vec![cache];
+
+        let output = super::run(&command).expect("Windows AppContainer should start");
+
+        assert_eq!(
+            output.status_code,
+            Some(0),
+            "stdout={:?} stderr={:?}",
+            output.stdout,
+            output.stderr
+        );
+        assert_eq!(
+            std::fs::read_to_string(evidence).unwrap().trim(),
+            "sandbox-write"
+        );
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[cfg(windows)]
@@ -1322,6 +1400,7 @@ fn main() {
             program: "/bin/sh".to_string(),
             args: vec!["-c".to_string(), format!("touch ../{outside_name}")],
             read_only_paths: Vec::new(),
+            writable_paths: Vec::new(),
             persistent_read_only_paths: Vec::new(),
             executable_paths: Vec::new(),
             env: Vec::new(),
@@ -1363,6 +1442,7 @@ fn main() {
             program: "/bin/sh".to_string(),
             args: vec!["-c".to_string(), "while :; do :; done".to_string()],
             read_only_paths: Vec::new(),
+            writable_paths: Vec::new(),
             persistent_read_only_paths: Vec::new(),
             executable_paths: Vec::new(),
             env: Vec::new(),

@@ -121,6 +121,7 @@ fn command(root: &Path, program: &Path, args: Vec<String>) -> SandboxCommand {
         program: program.to_string_lossy().into_owned(),
         args,
         read_only_paths: Vec::new(),
+        writable_paths: Vec::new(),
         persistent_read_only_paths: Vec::new(),
         executable_paths: Vec::new(),
         env: Vec::new(),
