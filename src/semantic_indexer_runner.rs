@@ -17,6 +17,8 @@ use std::time::Duration;
 #[cfg(windows)]
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[path = "semantic_indexer_gradle_preparation.rs"]
+mod gradle_preparation;
 #[cfg(windows)]
 #[path = "semantic_indexer_gradle_windows.rs"]
 mod gradle_windows;
@@ -222,6 +224,12 @@ async fn run_one(
         )
     })?;
     let _temporary_dir_cleanup = TemporaryIndexerDirectory(temporary_dir.clone());
+    let _cache_cleanup = cache_root
+        .as_ref()
+        .map(|path| TemporaryIndexerDirectory(path.clone()));
+    if spec.kind == SemanticIndexerKind::Kotlin {
+        prepare_kotlin_dependency_cache(spec, root, installed).await?;
+    }
     let workspace = prepare_indexer_workspace(spec, root)?;
     let temporary_project = if spec.kind == SemanticIndexerKind::TypeScriptJavaScript {
         prepare_mixed_typescript_javascript_project(spec, root, files)?
@@ -266,55 +274,21 @@ async fn run_one(
         );
     }
     if let Some(cache_root) = &cache_root {
-        fs::create_dir(cache_root).map_err(|error| {
-            format!(
-                "failed to create private semantic indexer cache {}: {error}",
+        if !cache_root.is_dir() {
+            return Err(format!(
+                "Kotlin dependency preparation did not produce the required offline cache {}",
                 cache_root.display()
-            )
-        })?;
+            ));
+        }
         write_private_gradle_properties(root, cache_root)?;
     }
-    let output = if spec.kind == SemanticIndexerKind::Kotlin {
-        let mut preparation = sandbox_command.clone();
-        preparation.allow_network = true;
-        preparation
-            .env
-            .retain(|(name, _)| name != "SNIFF_GRADLE_OFFLINE");
-        let preparation = run_sandbox_command(preparation, spec.display_name).await;
-        match preparation {
-            Ok(output) if output.status_code == Some(0) && !output.timed_out => {
-                let index_path = root.join("index.scip");
-                if let Err(error) = fs::remove_file(&index_path)
-                    && error.kind() != std::io::ErrorKind::NotFound
-                {
-                    Err(format!(
-                        "{} dependency preparation emitted an index that could not be cleared: {error}",
-                        spec.display_name
-                    ))
-                } else {
-                    run_sandbox_command(sandbox_command, spec.display_name).await
-                }
-            }
-            Ok(output) => Err(format!(
-                "{} dependency preparation failed with {}; output: {}; launcher trace: {}",
-                spec.display_name,
-                output
-                    .status_code
-                    .map_or_else(|| "signal".to_string(), |status| status.to_string()),
-                compact_process_output(output.stdout.as_bytes(), output.stderr.as_bytes()),
-                gradle_launcher_trace(root)
-            )),
-            Err(error) => Err(error),
-        }
-    } else {
-        if std::env::var_os("SNIFF_DEBUG_INDEXERS").is_some() {
-            eprintln!(
-                "[sniff] semantic indexer process start: {}",
-                spec.display_name
-            );
-        }
-        run_sandbox_command(sandbox_command, spec.display_name).await
-    };
+    if std::env::var_os("SNIFF_DEBUG_INDEXERS").is_some() {
+        eprintln!(
+            "[sniff] semantic indexer process start: {}",
+            spec.display_name
+        );
+    }
+    let output = run_sandbox_command(sandbox_command, spec.display_name).await;
     if std::env::var_os("SNIFF_DEBUG_INDEXERS").is_some() {
         eprintln!(
             "[sniff] semantic indexer process returned: {}",
@@ -613,9 +587,20 @@ fn build_indexer_sandbox_command(
             let runtime_root = runtime_mount_root(runtime);
             push_external_read_only(root, &mut persistent_read_only_paths, runtime_root);
             #[cfg(windows)]
-            push_external_read_only(root, &mut executable_paths, runtime.clone());
+            {
+                push_external_read_only(root, &mut executable_paths, runtime.clone());
+                push_external_read_only(
+                    root,
+                    &mut executable_paths,
+                    runtime
+                        .parent()
+                        .ok_or_else(|| format!("Rust {name} runtime has no parent directory"))?
+                        .to_path_buf(),
+                );
+            }
             path_prefixes.push(runtime_bin_directory(runtime, name)?);
         }
+        #[cfg(windows)]
         env.extend([
             ("CARGO".to_string(), external_runtime_path_value(&cargo)),
             ("RUSTC".to_string(), external_runtime_path_value(&rustc)),
@@ -919,6 +904,95 @@ fn collect_windows_runtime_images(
         }
     }
     Ok(())
+}
+
+async fn prepare_kotlin_dependency_cache(
+    spec: PinnedIndexer,
+    root: &Path,
+    installed: &InstalledIndexer,
+) -> Result<(), String> {
+    let preparation_root = root
+        .join(INDEXER_TEMP_DIR)
+        .join("kotlin-dependency-preparation");
+    gradle_preparation::stage_control_plane(root, &preparation_root)?;
+    let preparation_temp = preparation_root.join(INDEXER_TEMP_DIR);
+    fs::create_dir(&preparation_temp).map_err(|error| {
+        format!(
+            "failed to create source-minimized Kotlin preparation temp directory {}: {error}",
+            preparation_temp.display()
+        )
+    })?;
+    let preparation_cache = preparation_root.join(INDEXER_CACHE_DIR);
+    fs::create_dir(&preparation_cache).map_err(|error| {
+        format!(
+            "failed to create source-minimized Kotlin preparation cache {}: {error}",
+            preparation_cache.display()
+        )
+    })?;
+    write_private_gradle_properties(&preparation_root, &preparation_cache)?;
+
+    let workspace = prepare_indexer_workspace(spec, &preparation_root)?;
+    let arguments =
+        indexer_arguments_with_workspace(spec, &preparation_root, None, workspace.as_ref());
+    let command = build_indexer_sandbox_command(
+        spec,
+        &preparation_root,
+        installed,
+        arguments,
+        workspace.as_ref(),
+    );
+    let output = match command {
+        Ok(mut command) => {
+            command.allow_network = true;
+            command
+                .env
+                .retain(|(name, _)| name != "SNIFF_GRADLE_OFFLINE");
+            if std::env::var_os("SNIFF_DEBUG_INDEXERS").is_some() {
+                eprintln!(
+                    "[sniff] source-minimized dependency preparation start: {}",
+                    spec.display_name
+                );
+            }
+            run_sandbox_command(command, spec.display_name).await
+        }
+        Err(error) => Err(error),
+    };
+    let workspace_cleanup = workspace
+        .map(|workspace| workspace.cleanup(spec.display_name))
+        .transpose();
+    let output = match (output, workspace_cleanup) {
+        (Ok(output), Ok(_)) => output,
+        (Err(error), Ok(_)) | (Ok(_), Err(error)) => return Err(error),
+        (Err(error), Err(cleanup)) => {
+            return Err(format!("{error}; additionally, {cleanup}"));
+        }
+    };
+    if output.timed_out || output.status_code != Some(0) {
+        return Err(format!(
+            "{} source-minimized dependency preparation failed with {}; output: {}; launcher trace: {}",
+            spec.display_name,
+            if output.timed_out {
+                format!("a timeout after {}", format_timeout(index_timeout()))
+            } else {
+                output
+                    .status_code
+                    .map_or_else(|| "a signal".to_string(), |status| status.to_string())
+            },
+            compact_process_output(output.stdout.as_bytes(), output.stderr.as_bytes()),
+            gradle_launcher_trace(&preparation_root)
+        ));
+    }
+
+    let preparation_index = preparation_root.join("index.scip");
+    if let Err(error) = fs::remove_file(&preparation_index)
+        && error.kind() != std::io::ErrorKind::NotFound
+    {
+        return Err(format!(
+            "{} dependency preparation emitted an index that could not be cleared: {error}",
+            spec.display_name
+        ));
+    }
+    gradle_preparation::transfer_cache(&preparation_cache, &root.join(INDEXER_CACHE_DIR))
 }
 
 fn windows_node_entrypoint_argument(root: &Path, entrypoint: &Path) -> Result<String, String> {

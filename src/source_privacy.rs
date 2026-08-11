@@ -97,6 +97,13 @@ fn high_confidence_token_kind(line: &str) -> Option<&'static str> {
     None
 }
 
+pub(crate) fn first_likely_secret(source: &str) -> Option<(usize, &'static str)> {
+    source
+        .lines()
+        .enumerate()
+        .find_map(|(line, text)| high_confidence_token_kind(text).map(|kind| (line + 1, kind)))
+}
+
 pub(crate) fn reject_likely_secrets(files: &[FileRecord]) -> Result<(), String> {
     let findings = find_likely_secrets(files);
     if findings.is_empty() {
