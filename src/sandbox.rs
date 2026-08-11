@@ -138,7 +138,34 @@ fn run_external(spec: &SandboxCommand) -> Result<SandboxOutput, SandboxError> {
     let mut timed_out = false;
     #[cfg(target_os = "macos")]
     let mut memory_exceeded = false;
+    #[cfg(target_os = "macos")]
+    let mut process_limit_exceeded = false;
     let status = loop {
+        #[cfg(target_os = "macos")]
+        {
+            let usage = match macos_process_group_usage(child.id(), spec.process_limit) {
+                Ok(usage) => usage,
+                Err(error) => {
+                    let _ = terminate(&mut child);
+                    let _ = child.wait();
+                    return Err(error);
+                }
+            };
+            if usage.processes > spec.process_limit {
+                process_limit_exceeded = true;
+                terminate(&mut child)?;
+                break child.wait().map(Some).map_err(|error| {
+                    SandboxError::Failed(format!("sandbox worker wait failed: {error}"))
+                })?;
+            }
+            if usage.lifetime_peak_footprint > spec.memory_limit {
+                memory_exceeded = true;
+                terminate(&mut child)?;
+                break child.wait().map(Some).map_err(|error| {
+                    SandboxError::Failed(format!("sandbox worker wait failed: {error}"))
+                })?;
+            }
+        }
         match child.try_wait() {
             Ok(Some(status)) => {
                 #[cfg(target_os = "macos")]
@@ -154,17 +181,8 @@ fn run_external(spec: &SandboxCommand) -> Result<SandboxOutput, SandboxError> {
                     })?;
                 }
                 #[cfg(target_os = "macos")]
-                {
-                    let footprint =
-                        macos_process_group_physical_footprint(child.id(), spec.process_limit)?;
-                    if footprint > spec.memory_limit {
-                        memory_exceeded = true;
-                        terminate(&mut child)?;
-                        break child.wait().map(Some).map_err(|error| {
-                            SandboxError::Failed(format!("sandbox worker wait failed: {error}"))
-                        })?;
-                    }
-                }
+                thread::sleep(Duration::from_millis(1));
+                #[cfg(not(target_os = "macos"))]
                 thread::sleep(Duration::from_millis(25));
             }
             Err(error) => {
@@ -193,6 +211,13 @@ fn run_external(spec: &SandboxCommand) -> Result<SandboxOutput, SandboxError> {
         }
         stderr
             .push_str("Sniff terminated the sandbox after its physical memory limit was exceeded");
+    }
+    #[cfg(target_os = "macos")]
+    if process_limit_exceeded {
+        if !stderr.is_empty() && !stderr.ends_with('\n') {
+            stderr.push('\n');
+        }
+        stderr.push_str("Sniff terminated the sandbox after its process limit was exceeded");
     }
 
     Ok(SandboxOutput {
@@ -363,18 +388,17 @@ fn configure_macos_resource_limits(
 #[cfg(target_os = "macos")]
 #[repr(C)]
 #[derive(Default)]
-struct MacosResourceUsage {
+struct MacosResourceUsageV4 {
     uuid: [u8; 16],
-    user_time: u64,
-    system_time: u64,
-    package_idle_wakeups: u64,
-    interrupt_wakeups: u64,
-    pageins: u64,
-    wired_size: u64,
-    resident_size: u64,
-    physical_footprint: u64,
-    process_start_time: u64,
-    process_exit_time: u64,
+    fields_before_lifetime_peak: [u64; 28],
+    lifetime_peak_footprint: u64,
+    trailing_fields: [u64; 6],
+}
+
+#[cfg(target_os = "macos")]
+struct MacosProcessGroupUsage {
+    processes: u32,
+    lifetime_peak_footprint: u64,
 }
 
 #[cfg(target_os = "macos")]
@@ -385,11 +409,11 @@ unsafe extern "C" {
 }
 
 #[cfg(target_os = "macos")]
-fn macos_process_group_physical_footprint(
+fn macos_process_group_usage(
     process_group: u32,
     process_limit: u32,
-) -> Result<u64, SandboxError> {
-    const RUSAGE_INFO_V0: i32 = 0;
+) -> Result<MacosProcessGroupUsage, SandboxError> {
+    const RUSAGE_INFO_V4: i32 = 4;
     let observed =
         unsafe { proc_listpgrppids(process_group as libc::pid_t, std::ptr::null_mut(), 0) };
     if observed < 0 {
@@ -439,13 +463,17 @@ fn macos_process_group_physical_footprint(
         ));
     }
 
-    pids.into_iter()
+    let processes = u32::try_from(count)
+        .map_err(|_| SandboxError::Failed("sandbox process count overflowed".to_string()))?;
+
+    let lifetime_peak_footprint = pids
+        .into_iter()
         .take(count)
         .filter(|pid| *pid > 0)
         .try_fold(0_u64, |total, pid| {
-            let mut usage = MacosResourceUsage::default();
+            let mut usage = MacosResourceUsageV4::default();
             let usage_pointer = std::ptr::from_mut(&mut usage).cast::<c_void>();
-            if unsafe { proc_pid_rusage(pid, RUSAGE_INFO_V0, usage_pointer) } != 0 {
+            if unsafe { proc_pid_rusage(pid, RUSAGE_INFO_V4, usage_pointer) } != 0 {
                 let error = std::io::Error::last_os_error();
                 if error.raw_os_error() == Some(libc::ESRCH) {
                     return Ok(total);
@@ -454,10 +482,18 @@ fn macos_process_group_physical_footprint(
                     "failed to inspect sandbox process {pid} memory: {error}"
                 )));
             }
-            total.checked_add(usage.physical_footprint).ok_or_else(|| {
-                SandboxError::Failed("sandbox physical memory accounting overflowed".to_string())
-            })
-        })
+            total
+                .checked_add(usage.lifetime_peak_footprint)
+                .ok_or_else(|| {
+                    SandboxError::Failed(
+                        "sandbox physical memory accounting overflowed".to_string(),
+                    )
+                })
+        })?;
+    Ok(MacosProcessGroupUsage {
+        processes,
+        lifetime_peak_footprint,
+    })
 }
 
 #[cfg(target_os = "linux")]
