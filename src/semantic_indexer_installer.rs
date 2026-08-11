@@ -469,6 +469,7 @@ fn patch_scip_java_windows(root: &Path, spec: PinnedIndexer) -> Result<(), Strin
                     "coursier/bootstrap/launcher/jars/scip-java-0.13.1.jar",
                     "coursier/bootstrap/launcher/jars/scip-java-bindings-0.9.0.jar",
                     "coursier/bootstrap/launcher/jars/protobuf-java-4.34.2.jar",
+                    "coursier/bootstrap/launcher/jars/kotlin-stdlib-2.3.20.jar",
                 ]),
             "extract scip-java Windows compatibility patch dependencies",
         )?;
@@ -477,7 +478,14 @@ fn patch_scip_java_windows(root: &Path, spec: PinnedIndexer) -> Result<(), Strin
         let scip_java = jars.join("scip-java-0.13.1.jar");
         let bindings = jars.join("scip-java-bindings-0.9.0.jar");
         let protobuf = jars.join("protobuf-java-4.34.2.jar");
-        for path in [&aggregator, &scip_java, &bindings, &protobuf] {
+        let kotlin_stdlib = jars.join("kotlin-stdlib-2.3.20.jar");
+        for path in [
+            &aggregator,
+            &scip_java,
+            &bindings,
+            &protobuf,
+            &kotlin_stdlib,
+        ] {
             if !path.is_file() {
                 return Err(format!(
                     "scip-java runtime is missing patch dependency {}",
@@ -493,13 +501,14 @@ fn patch_scip_java_windows(root: &Path, spec: PinnedIndexer) -> Result<(), Strin
                 classes.display()
             )
         })?;
-        let classpath = format!(
-            "{};{};{};{}\\*",
-            aggregator.display(),
-            bindings.display(),
-            protobuf.display(),
-            jars.display()
-        );
+        let classpath = std::env::join_paths([
+            &aggregator,
+            &scip_java,
+            &bindings,
+            &protobuf,
+            &kotlin_stdlib,
+        ])
+        .map_err(|error| format!("failed to build scip-java patch classpath: {error}"))?;
         run_patch_tool(
             std::process::Command::new("javac")
                 .current_dir(&patch_root)
