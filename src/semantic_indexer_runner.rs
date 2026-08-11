@@ -14,6 +14,8 @@ use std::path::{Path, PathBuf};
 #[cfg(target_os = "macos")]
 use std::process::Command;
 use std::time::Duration;
+#[cfg(windows)]
+use std::time::{SystemTime, UNIX_EPOCH};
 
 const INDEX_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 #[cfg(debug_assertions)]
@@ -877,7 +879,7 @@ fn write_private_gradle_properties(root: &Path, cache_root: &Path) -> Result<(),
     fs::write(
         cache_root.join("gradle.properties"),
         format!(
-            "systemProp.user.home={home}\norg.gradle.daemon=false\norg.gradle.parallel=false\norg.gradle.workers.max=32\norg.gradle.projectcachedir={project_cache}\n"
+            "systemProp.user.home={home}\norg.gradle.daemon=false\norg.gradle.parallel=false\norg.gradle.vfs.watch=false\norg.gradle.workers.max=32\norg.gradle.projectcachedir={project_cache}\n"
         ),
     )
     .map_err(|error| {
@@ -1423,10 +1425,17 @@ fn system_gradle_launcher_jar(gradle: &Path) -> Result<PathBuf, String> {
 
 #[cfg(windows)]
 fn create_temporary_workspace(prefix: &str) -> Result<PathBuf, String> {
+    static NEXT_WORKSPACE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
     let base = std::env::temp_dir();
     let pid = std::process::id();
+    let started = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| format!("system clock is before the Unix epoch: {error}"))?
+        .as_nanos();
     for attempt in 0..1000u32 {
-        let directory = base.join(format!("{prefix}-{pid}-{attempt}"));
+        let sequence = NEXT_WORKSPACE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let directory = base.join(format!("{prefix}-{pid}-{started}-{sequence}-{attempt}"));
         match fs::create_dir(&directory) {
             Ok(()) => return Ok(directory),
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,

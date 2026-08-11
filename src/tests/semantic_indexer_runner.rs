@@ -199,6 +199,7 @@ fn private_gradle_properties_disable_daemons_without_host_home_access() {
     assert!(properties.contains("org.gradle.daemon=false"));
     assert!(!properties.contains("org.gradle.jvmargs"));
     assert!(properties.contains("org.gradle.parallel=false"));
+    assert!(properties.contains("org.gradle.vfs.watch=false"));
     assert!(properties.contains("org.gradle.workers.max=32"));
     assert!(properties.contains(&format!(
         "org.gradle.projectcachedir={expected_project_cache}"

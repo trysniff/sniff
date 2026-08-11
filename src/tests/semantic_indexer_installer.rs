@@ -216,6 +216,8 @@ fn rebuilt_launcher_accepts_the_verified_upstream_scip_java_polyglot() {
 fn windows_gradle_patch_uses_private_project_cache_and_explicit_offline_mode() {
     assert!(WINDOWS_SCIP_JAVA_PROCESS_RUNNER.contains("SNIFF_GRADLE_PROJECT_CACHE"));
     assert!(WINDOWS_SCIP_JAVA_PROCESS_RUNNER.contains("--project-cache-dir"));
+    assert!(WINDOWS_SCIP_JAVA_PROCESS_RUNNER.contains("--no-watch-fs"));
+    assert!(WINDOWS_SCIP_JAVA_PROCESS_RUNNER.contains("--stacktrace"));
     assert!(WINDOWS_SCIP_JAVA_PROCESS_RUNNER.contains("SNIFF_GRADLE_OFFLINE"));
     assert!(WINDOWS_SCIP_JAVA_PROCESS_RUNNER.contains("--offline"));
 }

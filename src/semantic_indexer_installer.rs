@@ -316,6 +316,8 @@ public final class ProcessRunner {
     rewritten.add(project);
     rewritten.add("--project-cache-dir");
     rewritten.add(projectCache);
+    rewritten.add("--no-watch-fs");
+    rewritten.add("--stacktrace");
     if ("1".equals(System.getenv("SNIFF_GRADLE_OFFLINE"))) {
       rewritten.add("--offline");
     }
