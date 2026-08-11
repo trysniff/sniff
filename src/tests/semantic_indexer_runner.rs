@@ -541,6 +541,7 @@ fn windows_system_gradle_requires_one_known_launcher_jar() {
 #[test]
 fn windows_project_wrapper_without_its_jar_fails_closed() {
     let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join(".sniff-indexer-tmp")).unwrap();
     std::fs::write(root.path().join("gradlew.bat"), "@echo off\r\n").unwrap();
 
     let spec = pinned_indexer(SemanticIndexerKind::Kotlin).unwrap();

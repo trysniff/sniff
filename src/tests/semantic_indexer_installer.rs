@@ -230,4 +230,9 @@ fn windows_gradle_patch_uses_private_project_cache_and_explicit_offline_mode() {
     assert!(WINDOWS_SCIP_JAVA_PROCESS_RUNNER.contains("--stacktrace"));
     assert!(WINDOWS_SCIP_JAVA_PROCESS_RUNNER.contains("SNIFF_GRADLE_OFFLINE"));
     assert!(WINDOWS_SCIP_JAVA_PROCESS_RUNNER.contains("--offline"));
+    assert!(
+        WINDOWS_SCIP_JAVA_PROCESS_RUNNER
+            .contains("-Pkotlin.compiler.execution.strategy=out-of-process")
+    );
+    assert!(WINDOWS_SCIP_JAVA_PROCESS_RUNNER.contains("replacements != 1"));
 }

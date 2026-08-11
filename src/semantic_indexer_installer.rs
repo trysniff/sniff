@@ -287,6 +287,7 @@ public final class ProcessRunner {
       return command;
     }
     normalizeInitScript(command);
+    isolateKotlinCompiler(command);
     String javaHome = requiredEnvironment("JAVA_HOME");
     String classpath = requiredEnvironment("SNIFF_GRADLE_CLASSPATH");
     String mainClass = requiredEnvironment("SNIFF_GRADLE_MAIN_CLASS");
@@ -362,6 +363,25 @@ public final class ProcessRunner {
       }
       return;
     }
+  }
+
+  private static void isolateKotlinCompiler(List<String> command) {
+    String current = "-Pkotlin.compiler.execution.strategy=in-process";
+    String isolated = "-Pkotlin.compiler.execution.strategy=out-of-process";
+    int replacements = 0;
+    for (int index = 0; index < command.size(); index++) {
+      if (!command.get(index).startsWith("-Pkotlin.compiler.execution.strategy=")) continue;
+      if (!command.get(index).equals(current)) {
+        throw new IllegalStateException("unexpected Kotlin compiler execution strategy");
+      }
+      command.set(index, isolated);
+      replacements++;
+    }
+    if (replacements != 1) {
+      throw new IllegalStateException(
+          "expected exactly one Kotlin compiler execution strategy, found " + replacements);
+    }
+    trace("isolated the Kotlin compiler in a bounded child process");
   }
 
   private static String requiredEnvironment(String name) {
