@@ -444,7 +444,8 @@ fn macos_process_group_physical_footprint(
         .filter(|pid| *pid > 0)
         .try_fold(0_u64, |total, pid| {
             let mut usage = MacosResourceUsage::default();
-            if unsafe { proc_pid_rusage(pid, RUSAGE_INFO_V0, (&mut usage as *mut _).cast()) } != 0 {
+            let usage_pointer = std::ptr::from_mut(&mut usage).cast::<c_void>();
+            if unsafe { proc_pid_rusage(pid, RUSAGE_INFO_V0, usage_pointer) } != 0 {
                 let error = std::io::Error::last_os_error();
                 if error.raw_os_error() == Some(libc::ESRCH) {
                     return Ok(total);
