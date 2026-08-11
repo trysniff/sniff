@@ -51,6 +51,16 @@ jobs:
             -Architecture "${{ matrix.architecture }}" `
             -OutputDirectory $output `
             -WorkDirectory $work
+      - name: Preserve the raw release archive
+        uses: actions/upload-artifact@v6
+        with:
+          name: raw-sniff-rust-indexer-${{ matrix.target }}
+          path: |
+            ${{ runner.temp }}/sniff-rust-indexer-output/*.zip
+            ${{ runner.temp }}/sniff-rust-indexer-output/*.sha256
+            ${{ runner.temp }}/sniff-rust-indexer-output/*.provenance.json
+          if-no-files-found: error
+          retention-days: 3
       - name: Generate SPDX SBOM
         uses: anchore/sbom-action@v0
         with:
