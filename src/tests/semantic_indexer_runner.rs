@@ -8,7 +8,7 @@ use super::{
 #[cfg(windows)]
 use super::{
     collect_windows_runtime_images, indexer_arguments_with_workspace, prepare_indexer_workspace,
-    push_external_read_only, system_gradle_launcher_jar,
+    push_external_read_only, system_gradle_launcher_jar, windows_java_classpath,
 };
 use crate::semantic_index::SemanticPositionEncoding;
 use crate::semantic_indexer_manifest::{SemanticIndexerKind, pinned_indexer};
@@ -37,6 +37,21 @@ fn python_file() -> FileRecord {
 #[cfg(windows)]
 fn synthetic_python_root() -> &'static Path {
     Path::new(r"C:\work\bumpkin")
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_java_classpath_removes_verbatim_prefixes() {
+    let classpath = windows_java_classpath(
+        Path::new(r"\\?\C:\indexers\scip-java-patch"),
+        Path::new(r"\\?\C:\indexers\scip-java"),
+    );
+
+    assert_eq!(
+        classpath,
+        r"C:\indexers\scip-java-patch;C:\indexers\scip-java"
+    );
+    assert!(!classpath.contains(r"\\?\"));
 }
 
 #[cfg(not(windows))]

@@ -468,7 +468,7 @@ fn build_indexer_sandbox_command(
                     .join("scip-java-v0.13.1-patch");
                 args.extend([
                     "-cp".to_string(),
-                    format!("{};{}", patch_dir.display(), entrypoint.display()),
+                    windows_java_classpath(&patch_dir, &entrypoint),
                     "coursier.bootstrap.launcher.ResourcesLauncher".to_string(),
                 ]);
             } else {
@@ -1552,6 +1552,13 @@ fn strip_windows_verbatim_prefix(path: PathBuf) -> PathBuf {
         return PathBuf::from(rest);
     }
     path
+}
+
+#[cfg(windows)]
+fn windows_java_classpath(patch_dir: &Path, launcher: &Path) -> String {
+    let patch_dir = strip_windows_verbatim_prefix(patch_dir.to_path_buf());
+    let launcher = strip_windows_verbatim_prefix(launcher.to_path_buf());
+    format!("{};{}", patch_dir.display(), launcher.display())
 }
 
 fn project_name(root: &Path) -> String {
