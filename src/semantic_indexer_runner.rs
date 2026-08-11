@@ -644,6 +644,18 @@ fn build_indexer_sandbox_command(
                 workspace.path_prefix.display()
             )
         })?);
+        #[cfg(windows)]
+        {
+            let gradle_launcher = fs::canonicalize(workspace.path_prefix.join("gradle.exe"))
+                .map_err(|error| {
+                    format!(
+                        "failed to resolve temporary Gradle launcher image {}: {error}",
+                        workspace.path_prefix.join("gradle.exe").display()
+                    )
+                })?;
+            push_external_read_only(root, &mut executable_paths, gradle_launcher);
+            push_external_read_only(root, &mut executable_paths, resolve_runtime("cmd")?);
+        }
         path_prefixes.push(workspace.path_prefix.clone());
         env.push((
             "SNIFF_INTERNAL_GRADLE_LAUNCHER".to_string(),
