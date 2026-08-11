@@ -27,6 +27,11 @@ type UnixResource = libc::__rlimit_resource_t;
 #[cfg(all(unix, any(not(target_os = "linux"), target_env = "musl")))]
 type UnixResource = libc::c_int;
 
+#[cfg(target_os = "linux")]
+const SANDBOX_PROCESS_OVERHEAD: u64 = 2;
+#[cfg(target_os = "macos")]
+const SANDBOX_PROCESS_OVERHEAD: u64 = 0;
+
 #[derive(Debug, Clone)]
 pub(crate) struct SandboxCommand {
     pub(crate) root: PathBuf,
@@ -246,12 +251,21 @@ fn configure_unix_resource_limits(
 ) -> Result<(), SandboxError> {
     let memory_limit = libc::rlim_t::try_from(spec.memory_limit)
         .map_err(|_| SandboxError::Invalid("sandbox memory limit exceeds rlim_t".to_string()))?;
-    let process_limit = libc::rlim_t::from(spec.process_limit);
+    let current_processes = current_user_process_count().map_err(|error| {
+        SandboxError::Failed(format!(
+            "failed to establish the sandbox process baseline: {error}"
+        ))
+    })?;
+    let process_limit = current_processes
+        .checked_add(u64::from(spec.process_limit))
+        .and_then(|limit| limit.checked_add(SANDBOX_PROCESS_OVERHEAD))
+        .and_then(|limit| libc::rlim_t::try_from(limit).ok())
+        .ok_or_else(|| SandboxError::Invalid("sandbox process limit exceeds rlim_t".to_string()))?;
     // The limits are installed after fork and before exec, then inherited by
     // the sandbox backend and every repository-controlled descendant.
     unsafe {
         command.pre_exec(move || {
-            set_unix_resource_limit(libc::RLIMIT_AS, memory_limit)?;
+            set_unix_memory_limit(memory_limit)?;
             set_unix_resource_limit(libc::RLIMIT_NPROC, process_limit)?;
             Ok(())
         });
@@ -261,6 +275,14 @@ fn configure_unix_resource_limits(
 
 #[cfg(unix)]
 fn set_unix_resource_limit(resource: UnixResource, limit: libc::rlim_t) -> IoResult<()> {
+    let mut current = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    if unsafe { libc::getrlimit(resource, &mut current) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let limit = limit.min(current.rlim_max);
     let limits = libc::rlimit {
         rlim_cur: limit,
         rlim_max: limit,
@@ -270,6 +292,94 @@ fn set_unix_resource_limit(resource: UnixResource, limit: libc::rlim_t) -> IoRes
     } else {
         Err(std::io::Error::last_os_error())
     }
+}
+
+#[cfg(target_os = "linux")]
+fn set_unix_memory_limit(limit: libc::rlim_t) -> IoResult<()> {
+    set_unix_resource_limit(libc::RLIMIT_AS, limit)
+}
+
+#[cfg(target_os = "macos")]
+fn set_unix_memory_limit(limit: libc::rlim_t) -> IoResult<()> {
+    set_unix_resource_limit(libc::RLIMIT_DATA, limit)
+}
+
+#[cfg(target_os = "linux")]
+fn current_user_process_count() -> IoResult<u64> {
+    let current_uid = unsafe { libc::geteuid() };
+    let mut total_threads = 0_u64;
+    for entry in std::fs::read_dir("/proc")? {
+        let entry = entry?;
+        if !entry
+            .file_name()
+            .to_string_lossy()
+            .bytes()
+            .all(|byte| byte.is_ascii_digit())
+        {
+            continue;
+        }
+        let Ok(status) = std::fs::read_to_string(entry.path().join("status")) else {
+            continue;
+        };
+        let uid = status.lines().find_map(|line| {
+            line.strip_prefix("Uid:")?
+                .split_ascii_whitespace()
+                .next()?
+                .parse::<libc::uid_t>()
+                .ok()
+        });
+        if uid != Some(current_uid) {
+            continue;
+        }
+        let threads = status
+            .lines()
+            .find_map(|line| line.strip_prefix("Threads:")?.trim().parse::<u64>().ok())
+            .unwrap_or(1);
+        total_threads = total_threads.saturating_add(threads);
+    }
+    Ok(total_threads.max(1))
+}
+
+#[cfg(target_os = "macos")]
+fn current_user_process_count() -> IoResult<u64> {
+    const PROC_UID_ONLY: u32 = 2;
+    unsafe extern "C" {
+        fn proc_listpids(
+            process_type: u32,
+            type_info: u32,
+            buffer: *mut libc::c_void,
+            buffer_size: libc::c_int,
+        ) -> libc::c_int;
+    }
+
+    let uid = unsafe { libc::geteuid() };
+    let required = unsafe { proc_listpids(PROC_UID_ONLY, uid, std::ptr::null_mut(), 0) };
+    if required <= 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let pid_size = std::mem::size_of::<libc::pid_t>();
+    let capacity = usize::try_from(required)
+        .ok()
+        .and_then(|bytes| bytes.checked_add(pid_size * 32))
+        .ok_or_else(|| std::io::Error::other("macOS process list is too large"))?;
+    let mut pids = vec![0 as libc::pid_t; capacity.div_ceil(pid_size)];
+    let bytes = unsafe {
+        proc_listpids(
+            PROC_UID_ONLY,
+            uid,
+            pids.as_mut_ptr().cast(),
+            libc::c_int::try_from(pids.len() * pid_size)
+                .map_err(|_| std::io::Error::other("macOS process list is too large"))?,
+        )
+    };
+    if bytes < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let count = usize::try_from(bytes)
+        .unwrap_or_default()
+        .div_ceil(pid_size)
+        .min(pids.len());
+    Ok(pids[..count].iter().filter(|pid| **pid > 0).count().max(1) as u64)
 }
 
 fn build_command(spec: &SandboxCommand) -> Result<Command, SandboxError> {

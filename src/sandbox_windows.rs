@@ -29,9 +29,9 @@ use windows_sys::Win32::Security::{
 };
 use windows_sys::Win32::System::JobObjects::{
     AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_ACTIVE_PROCESS,
-    JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOB_OBJECT_LIMIT_PROCESS_MEMORY,
-    JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
-    SetInformationJobObject, TerminateJobObject,
+    JOB_OBJECT_LIMIT_JOB_MEMORY, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    JOB_OBJECT_LIMIT_PROCESS_MEMORY, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+    JobObjectExtendedLimitInformation, SetInformationJobObject, TerminateJobObject,
 };
 use windows_sys::Win32::System::Pipes::CreatePipe;
 use windows_sys::Win32::System::Threading::{
@@ -540,11 +540,13 @@ fn configure_job(job: HANDLE, memory_limit: u64, process_limit: u32) -> Result<(
     let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
     limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
         | JOB_OBJECT_LIMIT_ACTIVE_PROCESS
-        | JOB_OBJECT_LIMIT_PROCESS_MEMORY;
+        | JOB_OBJECT_LIMIT_PROCESS_MEMORY
+        | JOB_OBJECT_LIMIT_JOB_MEMORY;
     limits.BasicLimitInformation.ActiveProcessLimit = process_limit;
     limits.ProcessMemoryLimit = usize::try_from(memory_limit).map_err(|_| {
         SandboxError::Invalid("Windows sandbox memory limit exceeds usize".to_string())
     })?;
+    limits.JobMemoryLimit = limits.ProcessMemoryLimit;
     if unsafe {
         SetInformationJobObject(
             job,
