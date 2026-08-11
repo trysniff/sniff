@@ -498,6 +498,10 @@ fn build_indexer_sandbox_command(
         &mut persistent_read_only_paths,
         installed_root.clone(),
     );
+    #[cfg(windows)]
+    if spec.runtime == IndexerRuntime::JavaJar {
+        collect_windows_runtime_images(root, &mut executable_paths, &runtime_root)?;
+    }
     push_external_read_only(root, &mut persistent_read_only_paths, runtime_root);
     for dependency in runtime_dependency_paths(&runtime_path)? {
         push_external_read_only(root, &mut persistent_read_only_paths, dependency);
@@ -542,7 +546,7 @@ fn build_indexer_sandbox_command(
                     )
                 })?;
             push_external_read_only(root, &mut executable_paths, sandbox_go.clone());
-            collect_windows_runtime_executables(
+            collect_windows_runtime_images(
                 root,
                 &mut executable_paths,
                 &go_root.join("pkg").join("tool"),
@@ -590,7 +594,7 @@ fn build_indexer_sandbox_command(
             if let Some(rustup_home) = rustup_home {
                 push_external_read_only(root, &mut persistent_read_only_paths, rustup_home.clone());
                 #[cfg(windows)]
-                collect_windows_runtime_executables(
+                collect_windows_runtime_images(
                     root,
                     &mut executable_paths,
                     &rustup_home.join("toolchains"),
@@ -747,7 +751,7 @@ fn push_external_read_only(root: &Path, paths: &mut Vec<PathBuf>, path: PathBuf)
 }
 
 #[cfg(windows)]
-fn collect_windows_runtime_executables(
+fn collect_windows_runtime_images(
     repository_root: &Path,
     executable_paths: &mut Vec<PathBuf>,
     runtime_root: &Path,
@@ -798,22 +802,22 @@ fn collect_windows_runtime_executables(
             if metadata.is_dir() {
                 pending.push(path);
             } else if metadata.is_file()
-                && path
-                    .extension()
-                    .is_some_and(|extension| extension.eq_ignore_ascii_case("exe"))
+                && path.extension().is_some_and(|extension| {
+                    extension.eq_ignore_ascii_case("exe") || extension.eq_ignore_ascii_case("dll")
+                })
             {
                 let mut header = [0u8; 2];
                 fs::File::open(&path)
                     .and_then(|mut file| file.read_exact(&mut header))
                     .map_err(|error| {
                         format!(
-                            "failed to verify Windows compiler executable {}: {error}",
+                            "failed to verify Windows runtime image {}: {error}",
                             path.display()
                         )
                     })?;
                 if header != *b"MZ" {
                     return Err(format!(
-                        "Windows compiler executable is not a PE image: {}",
+                        "Windows runtime executable or library is not a PE image: {}",
                         path.display()
                     ));
                 }

@@ -7,8 +7,8 @@ use super::{
 };
 #[cfg(windows)]
 use super::{
-    collect_windows_runtime_executables, indexer_arguments_with_workspace,
-    prepare_indexer_workspace, push_external_read_only, system_gradle_launcher_jar,
+    collect_windows_runtime_images, indexer_arguments_with_workspace, prepare_indexer_workspace,
+    push_external_read_only, system_gradle_launcher_jar,
 };
 use crate::semantic_index::SemanticPositionEncoding;
 use crate::semantic_indexer_manifest::{SemanticIndexerKind, pinned_indexer};
@@ -423,7 +423,7 @@ fn windows_project_wrapper_without_its_jar_fails_closed() {
 
 #[cfg(windows)]
 #[test]
-fn windows_runtime_execution_allowlist_contains_only_verified_pe_images() {
+fn windows_runtime_execution_allowlist_contains_verified_executables_and_libraries() {
     let temp = tempfile::tempdir().unwrap();
     let repository = temp.path().join("repository");
     let runtime = temp.path().join("runtime");
@@ -434,11 +434,15 @@ fn windows_runtime_execution_allowlist_contains_only_verified_pe_images() {
     let linker = nested.join("LINKER.EXE");
     std::fs::write(&compiler, b"MZcompiler").unwrap();
     std::fs::write(&linker, b"MZlinker").unwrap();
-    std::fs::write(runtime.join("runtime.dll"), b"MZlibrary").unwrap();
+    let library = runtime.join("runtime.dll");
+    std::fs::write(&library, b"MZlibrary").unwrap();
+    std::fs::write(runtime.join("notes.txt"), b"not executable").unwrap();
 
     let mut executable_paths = Vec::new();
-    collect_windows_runtime_executables(&repository, &mut executable_paths, &runtime).unwrap();
+    collect_windows_runtime_images(&repository, &mut executable_paths, &runtime).unwrap();
     executable_paths.sort();
 
-    assert_eq!(executable_paths, [compiler, linker]);
+    let mut expected = vec![compiler, linker, library];
+    expected.sort();
+    assert_eq!(executable_paths, expected);
 }
