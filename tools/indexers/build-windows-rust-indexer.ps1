@@ -97,6 +97,24 @@ function Write-DeterministicZip {
     }
 }
 
+function Assert-NoHostBuildPaths {
+    param(
+        [string[]]$BinaryPaths,
+        [string[]]$HostPaths
+    )
+    $encoding = [System.Text.Encoding]::GetEncoding(28591)
+    foreach ($binary in $BinaryPaths) {
+        $contents = $encoding.GetString([System.IO.File]::ReadAllBytes($binary))
+        foreach ($path in $HostPaths) {
+            foreach ($variant in @($path, $path.Replace("\", "/")) | Select-Object -Unique) {
+                if ($contents.IndexOf($variant, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
+                    throw "Built binary contains an unremapped host path ${variant}: $binary"
+                }
+            }
+        }
+    }
+}
+
 if (Test-Path -LiteralPath $WorkDirectory) {
     throw "Refusing to reuse work directory: $WorkDirectory"
 }
@@ -129,48 +147,115 @@ if ($LASTEXITCODE -ne 0) {
     throw "Failed to resolve the pinned Rust sysroot"
 }
 $RustSource = Join-Path $Sysroot "lib\rustlib\src\rust"
-Invoke-Checked -Executable "git" -ArgumentList @(
-    "-C", $RustSource, "apply", "--check", $RustStdPatch
+$CargoHome = if ($env:CARGO_HOME) {
+    (Resolve-Path -LiteralPath $env:CARGO_HOME).Path
+} else {
+    (Resolve-Path -LiteralPath (Join-Path $env:USERPROFILE ".cargo")).Path
+}
+$PathRemaps = @(
+    [ordered]@{ Source = $RepositoryRoot; Destination = "Z:\sniff-source" }
+    [ordered]@{ Source = $WorkDirectory; Destination = "Z:\sniff-build" }
+    [ordered]@{ Source = $CargoHome; Destination = "Z:\cargo-home" }
+    [ordered]@{ Source = $Sysroot; Destination = "Z:\rust-toolchain" }
 )
-$RustSourcePatched = $false
-try {
-    Invoke-Checked -Executable "git" -ArgumentList @(
-        "-C", $RustSource, "apply", $RustStdPatch
-    )
-    $RustSourcePatched = $true
-    $env:RUSTC_BOOTSTRAP = "1"
-
-    $env:CFG_RELEASE = "0.3.2997-standalone"
-    $env:CARGO_TARGET_DIR = Join-Path $WorkDirectory "rust-analyzer-target"
-    Push-Location $RustAnalyzerSource
-    try {
-        Invoke-Checked -Executable "cargo" -ArgumentList @(
-            "+$RustToolchain", "build", "-Z", "build-std=std,panic_abort", "--target", $Target,
-            "--release", "--locked", "-j", "2", "-p", "rust-analyzer"
-        )
-    } finally {
-        Pop-Location
+$EncodedRustFlags = [System.Collections.Generic.List[string]]::new()
+foreach ($remap in $PathRemaps) {
+    foreach ($variant in @(
+        [ordered]@{ Source = $remap.Source; Destination = $remap.Destination }
+        [ordered]@{
+            Source = $remap.Source.Replace("\", "/")
+            Destination = $remap.Destination.Replace("\", "/")
+        }
+    )) {
+        $EncodedRustFlags.Add("--remap-path-prefix")
+        $EncodedRustFlags.Add("$($variant.Source)=$($variant.Destination)")
     }
+}
 
-    $env:CFG_RELEASE = "1.96.0"
-    $env:CFG_RELEASE_CHANNEL = "stable"
-    $env:CARGO_COMMIT_HASH = $CargoCommit
-    $env:CARGO_COMMIT_SHORT_HASH = "30a34c682"
-    $env:CARGO_COMMIT_DATE = "2026-05-25"
-    $env:CARGO_TARGET_DIR = Join-Path $WorkDirectory "cargo-target"
-    Push-Location $CargoSource
+$BuildEnvironmentNames = @(
+    "CARGO_BUILD_RUSTFLAGS"
+    "CARGO_COMMIT_DATE"
+    "CARGO_COMMIT_HASH"
+    "CARGO_COMMIT_SHORT_HASH"
+    "CARGO_ENCODED_RUSTFLAGS"
+    "CARGO_INCREMENTAL"
+    "CARGO_TARGET_DIR"
+    "CFG_RELEASE"
+    "CFG_RELEASE_CHANNEL"
+    "RUSTC_BOOTSTRAP"
+    "RUSTC_WORKSPACE_WRAPPER"
+    "RUSTC_WRAPPER"
+    "RUSTFLAGS"
+    "SOURCE_DATE_EPOCH"
+)
+$OriginalBuildEnvironment = @{}
+foreach ($name in $BuildEnvironmentNames) {
+    $OriginalBuildEnvironment[$name] = [System.Environment]::GetEnvironmentVariable(
+        $name,
+        [System.EnvironmentVariableTarget]::Process
+    )
+    [System.Environment]::SetEnvironmentVariable(
+        $name,
+        $null,
+        [System.EnvironmentVariableTarget]::Process
+    )
+}
+
+try {
+    $env:CARGO_ENCODED_RUSTFLAGS = $EncodedRustFlags -join [char]0x1f
+    $env:CARGO_INCREMENTAL = "0"
+    $env:SOURCE_DATE_EPOCH = "1785628800"
+    Invoke-Checked -Executable "git" -ArgumentList @(
+        "-C", $RustSource, "apply", "--check", $RustStdPatch
+    )
+    $RustSourcePatched = $false
     try {
-        Invoke-Checked -Executable "cargo" -ArgumentList @(
-            "+$RustToolchain", "build", "-Z", "build-std=std,panic_abort", "--target", $Target,
-            "--release", "--locked", "-j", "2", "-p", "cargo"
+        Invoke-Checked -Executable "git" -ArgumentList @(
+            "-C", $RustSource, "apply", $RustStdPatch
         )
+        $RustSourcePatched = $true
+        $env:RUSTC_BOOTSTRAP = "1"
+
+        $env:CFG_RELEASE = "0.3.2997-standalone"
+        $env:CARGO_TARGET_DIR = Join-Path $WorkDirectory "rust-analyzer-target"
+        Push-Location $RustAnalyzerSource
+        try {
+            Invoke-Checked -Executable "cargo" -ArgumentList @(
+                "+$RustToolchain", "build", "-Z", "build-std=std,panic_abort", "--target", $Target,
+                "--release", "--locked", "-j", "2", "-p", "rust-analyzer"
+            )
+        } finally {
+            Pop-Location
+        }
+
+        $env:CFG_RELEASE = "1.96.0"
+        $env:CFG_RELEASE_CHANNEL = "stable"
+        $env:CARGO_COMMIT_HASH = $CargoCommit
+        $env:CARGO_COMMIT_SHORT_HASH = "30a34c682"
+        $env:CARGO_COMMIT_DATE = "2026-05-25"
+        $env:CARGO_TARGET_DIR = Join-Path $WorkDirectory "cargo-target"
+        Push-Location $CargoSource
+        try {
+            Invoke-Checked -Executable "cargo" -ArgumentList @(
+                "+$RustToolchain", "build", "-Z", "build-std=std,panic_abort", "--target", $Target,
+                "--release", "--locked", "-j", "2", "-p", "cargo"
+            )
+        } finally {
+            Pop-Location
+        }
     } finally {
-        Pop-Location
+        if ($RustSourcePatched) {
+            Invoke-Checked -Executable "git" -ArgumentList @(
+                "-C", $RustSource, "apply", "--reverse", $RustStdPatch
+            )
+        }
     }
 } finally {
-    if ($RustSourcePatched) {
-        Invoke-Checked -Executable "git" -ArgumentList @(
-            "-C", $RustSource, "apply", "--reverse", $RustStdPatch
+    foreach ($name in $BuildEnvironmentNames) {
+        [System.Environment]::SetEnvironmentVariable(
+            $name,
+            $OriginalBuildEnvironment[$name],
+            [System.EnvironmentVariableTarget]::Process
         )
     }
 }
@@ -182,6 +267,9 @@ $RustAnalyzer = Join-Path $WorkDirectory "rust-analyzer-target\$Target\release\r
 $Cargo = Join-Path $WorkDirectory "cargo-target\$Target\release\cargo.exe"
 Copy-Item -LiteralPath $RustAnalyzer -Destination (Join-Path $Bin "rust-analyzer.exe")
 Copy-Item -LiteralPath $Cargo -Destination (Join-Path $Bin "cargo.exe")
+Assert-NoHostBuildPaths `
+    -BinaryPaths @((Join-Path $Bin "rust-analyzer.exe"), (Join-Path $Bin "cargo.exe")) `
+    -HostPaths ($PathRemaps.Source)
 
 $RustAnalyzerVersion = (& (Join-Path $Bin "rust-analyzer.exe") --version).Trim()
 $CargoVersion = (& (Join-Path $Bin "cargo.exe") -Vv) -join "`n"
@@ -213,6 +301,8 @@ if ($LASTEXITCODE -ne 0 -or $SniffSourceCommit -notmatch "^[0-9a-f]{40}$") {
 
 $Provenance = [ordered]@{
     schema = "trysniff.windows-rust-indexer.v1"
+    reproducible_build_contract = "windows-rust-v1"
+    source_date_epoch = "1785628800"
     sniff_source_commit = $SniffSourceCommit
     build_script_sha256 = (Get-FileHash -Algorithm SHA256 $PSCommandPath).Hash.ToLowerInvariant()
     target = $Target

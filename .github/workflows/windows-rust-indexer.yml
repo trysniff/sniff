@@ -61,6 +61,23 @@ jobs:
             ${{ runner.temp }}/sniff-rust-indexer-output/*.provenance.json
           if-no-files-found: error
           retention-days: 3
+      - name: Rebuild and prove byte-for-byte reproducibility
+        if: github.event_name != 'pull_request'
+        shell: pwsh
+        run: |
+          $firstOutput = Join-Path $env:RUNNER_TEMP "sniff-rust-indexer-output"
+          $secondOutput = Join-Path $env:RUNNER_TEMP "sniff-rust-indexer-repro-output"
+          $secondWork = Join-Path $env:RUNNER_TEMP "sniff-rust-indexer-repro-work"
+          ./tools/indexers/build-windows-rust-indexer.ps1 `
+            -Architecture "${{ matrix.architecture }}" `
+            -OutputDirectory $secondOutput `
+            -WorkDirectory $secondWork
+          $asset = "sniff-rust-indexer-${{ matrix.target }}.zip"
+          $firstHash = (Get-FileHash -Algorithm SHA256 (Join-Path $firstOutput $asset)).Hash
+          $secondHash = (Get-FileHash -Algorithm SHA256 (Join-Path $secondOutput $asset)).Hash
+          if ($firstHash -ne $secondHash) {
+            throw "Clean rebuild was not reproducible: $firstHash != $secondHash"
+          }
       - name: Generate SPDX SBOM
         uses: anchore/sbom-action@v0
         with:
