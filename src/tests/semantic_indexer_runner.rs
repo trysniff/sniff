@@ -1,9 +1,9 @@
 use super::{
     GRADLE_INDEXER_BASE_JVM_ARGS, WINDOWS_SCIP_NODE_BOOTSTRAP, WINDOWS_SCIP_PYTHON_BOOTSTRAP,
-    compact_process_output, files_for_indexer, format_timeout, gradle_indexer_jvm_args,
-    gradle_script_uses_android, indexer_arguments_with_project, missing_position_encoding,
-    project_name, reject_unsupported_android_gradle, sandbox_repository_argument,
-    source_integrity_digest, write_private_gradle_properties,
+    compact_process_output, files_for_indexer, format_timeout, go_sandbox_environment,
+    gradle_indexer_jvm_args, gradle_script_uses_android, indexer_arguments_with_project,
+    missing_position_encoding, project_name, reject_unsupported_android_gradle,
+    sandbox_repository_argument, source_integrity_digest, write_private_gradle_properties,
 };
 #[cfg(windows)]
 use super::{
@@ -81,6 +81,45 @@ fn javascript_projects_without_tsconfig_use_inference() {
         ["index", "--infer-tsconfig"]
     );
     let _ = std::fs::remove_dir_all(temp);
+}
+
+#[test]
+fn go_indexing_uses_explicit_module_scope() {
+    let spec = pinned_indexer(SemanticIndexerKind::Go).unwrap();
+
+    assert_eq!(
+        indexer_arguments_with_project(spec, synthetic_python_root(), None),
+        ["--module-root", ".", "./..."]
+    );
+}
+
+#[test]
+fn go_indexing_keeps_mutable_state_inside_the_sandbox() {
+    let root = synthetic_python_root();
+    let environment = go_sandbox_environment(root)
+        .into_iter()
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let private_root = sandbox_repository_argument(
+        root,
+        &root.join(".sniff-indexer-tmp").join("go").to_string_lossy(),
+    );
+
+    assert_eq!(environment.get("GOENV").map(String::as_str), Some("off"));
+    assert_eq!(
+        environment.get("GOTOOLCHAIN").map(String::as_str),
+        Some("local")
+    );
+    assert_eq!(environment.get("GOPATH"), Some(&private_root));
+    assert!(
+        environment
+            .get("GOMODCACHE")
+            .is_some_and(|path| path.starts_with(&private_root) && path.ends_with("mod"))
+    );
+    assert!(
+        environment
+            .get("GOCACHE")
+            .is_some_and(|path| path.contains(".sniff-indexer-tmp"))
+    );
 }
 
 #[test]

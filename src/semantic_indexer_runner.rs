@@ -540,16 +540,7 @@ fn build_indexer_sandbox_command(
             )?;
         }
         path_prefixes.push(runtime_bin_directory(&go, "go")?);
-        env.push((
-            "GOCACHE".to_string(),
-            sandbox_repository_argument(
-                root,
-                &root
-                    .join(INDEXER_TEMP_DIR)
-                    .join("go-build")
-                    .to_string_lossy(),
-            ),
-        ));
+        env.extend(go_sandbox_environment(root));
     }
     if spec.kind == SemanticIndexerKind::Rust {
         let cargo = resolve_runtime("cargo")?;
@@ -1159,10 +1150,46 @@ fn indexer_arguments_with_project(
             "--project-version".to_string(),
             "_".to_string(),
         ],
-        SemanticIndexerKind::Go => Vec::new(),
+        // Avoid scip-go's git-dependent module-root inference inside the
+        // sandbox. The compiler still resolves the complete module graph.
+        SemanticIndexerKind::Go => vec![
+            "--module-root".to_string(),
+            ".".to_string(),
+            "./...".to_string(),
+        ],
         SemanticIndexerKind::Kotlin => vec!["index".to_string()],
         SemanticIndexerKind::Rust => vec!["scip".to_string(), ".".to_string()],
     }
+}
+
+fn go_sandbox_environment(root: &Path) -> Vec<(String, String)> {
+    let private_go_root = root.join(INDEXER_TEMP_DIR).join("go");
+    let private_go_root = sandbox_repository_argument(root, &private_go_root.to_string_lossy());
+    vec![
+        // The Windows Go tool otherwise reads GOENV and GOPATH from the host
+        // USERPROFILE, which is intentionally inaccessible to the AppContainer.
+        ("GOENV".to_string(), "off".to_string()),
+        ("GOTOOLCHAIN".to_string(), "local".to_string()),
+        ("GOPATH".to_string(), private_go_root.clone()),
+        (
+            "GOMODCACHE".to_string(),
+            format!(
+                "{private_go_root}{}pkg{}mod",
+                std::path::MAIN_SEPARATOR,
+                std::path::MAIN_SEPARATOR
+            ),
+        ),
+        (
+            "GOCACHE".to_string(),
+            sandbox_repository_argument(
+                root,
+                &root
+                    .join(INDEXER_TEMP_DIR)
+                    .join("go-build")
+                    .to_string_lossy(),
+            ),
+        ),
+    ]
 }
 
 fn indexer_arguments_with_workspace(

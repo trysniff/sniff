@@ -523,7 +523,9 @@ mod tests {
         SandboxCommand, SandboxError, read_limited, read_limited_with_observer,
         validate_external_runner, validate_spec,
     };
-    use std::path::{Path, PathBuf};
+    #[cfg(windows)]
+    use std::path::Path;
+    use std::path::PathBuf;
     use std::time::Duration;
 
     fn spec(root: PathBuf) -> SandboxCommand {
