@@ -111,6 +111,7 @@ fn is_execution_control_key(key: &str) -> bool {
             | "SNIFF_GRADLE_LAUNCHER_JAR"
             | "SNIFF_GRADLE_MAIN_CLASS"
             | "SNIFF_GRADLE_PROJECT"
+            | "SNIFF_GRADLE_TRACE"
             | "PATH"
             | "HOME"
             | "USERPROFILE"

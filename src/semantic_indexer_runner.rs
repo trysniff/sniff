@@ -262,12 +262,13 @@ async fn run_one(
                 }
             }
             Ok(output) => Err(format!(
-                "{} dependency preparation failed with {}; output: {}",
+                "{} dependency preparation failed with {}; output: {}; launcher trace: {}",
                 spec.display_name,
                 output
                     .status_code
                     .map_or_else(|| "signal".to_string(), |status| status.to_string()),
-                compact_process_output(output.stdout.as_bytes(), output.stderr.as_bytes())
+                compact_process_output(output.stdout.as_bytes(), output.stderr.as_bytes()),
+                gradle_launcher_trace(root)
             )),
             Err(error) => Err(error),
         }
@@ -673,6 +674,18 @@ fn build_indexer_sandbox_command(
             "SNIFF_GRADLE_PROJECT".to_string(),
             sandbox_repository_argument(root, &workspace.project_root.to_string_lossy()),
         ));
+        if std::env::var_os("SNIFF_DEBUG_INDEXERS").is_some() {
+            env.push((
+                "SNIFF_GRADLE_TRACE".to_string(),
+                sandbox_repository_argument(
+                    root,
+                    &root
+                        .join(INDEXER_TEMP_DIR)
+                        .join("gradle-launcher.log")
+                        .to_string_lossy(),
+                ),
+            ));
+        }
     }
     if spec.kind == SemanticIndexerKind::Kotlin {
         let cache_root = root.join(INDEXER_CACHE_DIR);
@@ -720,6 +733,29 @@ fn build_indexer_sandbox_command(
         timeout: index_timeout(),
         output_limit: MAX_PROCESS_OUTPUT,
     })
+}
+
+fn gradle_launcher_trace(root: &Path) -> String {
+    const LIMIT: u64 = 8 * 1024;
+    let path = root.join(INDEXER_TEMP_DIR).join("gradle-launcher.log");
+    let Ok(file) = fs::File::open(&path) else {
+        return "not emitted (the Gradle launcher process did not enter Sniff)".to_string();
+    };
+    let mut bytes = Vec::new();
+    if std::io::Read::take(file, LIMIT + 1)
+        .read_to_end(&mut bytes)
+        .is_err()
+    {
+        return format!("could not read {}", path.display());
+    }
+    if bytes.len() > LIMIT as usize {
+        bytes.truncate(LIMIT as usize);
+        bytes.extend_from_slice(b"\n[trace truncated]");
+    }
+    String::from_utf8_lossy(&bytes)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn push_external_read_only(root: &Path, paths: &mut Vec<PathBuf>, path: PathBuf) {

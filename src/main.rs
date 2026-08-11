@@ -92,6 +92,7 @@ fn run_internal_windows_gradle_launcher() -> Option<i32> {
         {
             return None;
         }
+        trace_internal_gradle_launcher("launcher entered");
         let launcher_jar = match std::env::var_os("SNIFF_GRADLE_LAUNCHER_JAR") {
             Some(launcher_jar) => launcher_jar,
             None => {
@@ -135,6 +136,11 @@ fn run_internal_windows_gradle_launcher() -> Option<i32> {
             }
         };
         let java = std::path::PathBuf::from(java_home).join("bin/java.exe");
+        trace_internal_gradle_launcher(&format!(
+            "launching Java runtime {} with {}",
+            java.display(),
+            main_class
+        ));
         let mut command = std::process::Command::new(java);
         let java_options = match std::env::var("JAVA_OPTS") {
             Ok(options) => options,
@@ -165,8 +171,12 @@ fn run_internal_windows_gradle_launcher() -> Option<i32> {
             .current_dir(project)
             .status();
         Some(match status {
-            Ok(status) => status.code().unwrap_or(1),
+            Ok(status) => {
+                trace_internal_gradle_launcher(&format!("Java exited with {status}"));
+                status.code().unwrap_or(1)
+            }
             Err(error) => {
+                trace_internal_gradle_launcher(&format!("Java launch failed: {error}"));
                 eprintln!("internal Gradle launcher failed: {error}");
                 2
             }
@@ -177,6 +187,23 @@ fn run_internal_windows_gradle_launcher() -> Option<i32> {
     {
         None
     }
+}
+
+#[cfg(windows)]
+fn trace_internal_gradle_launcher(message: &str) {
+    use std::io::Write;
+
+    let Some(path) = std::env::var_os("SNIFF_GRADLE_TRACE") else {
+        return;
+    };
+    let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    else {
+        return;
+    };
+    let _ = writeln!(file, "{message}");
 }
 
 #[cfg(windows)]
