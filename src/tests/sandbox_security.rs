@@ -230,6 +230,12 @@ fn malicious_worker_cannot_exceed_its_memory_limit() {
         output.stderr
     );
     assert!(!output.stdout.contains("memory-limit-bypassed"));
+    #[cfg(target_os = "macos")]
+    assert!(
+        output.stderr.contains("physical memory limit was exceeded"),
+        "macOS memory monitor did not report enforcement: {:?}",
+        output.stderr
+    );
 }
 
 #[test]

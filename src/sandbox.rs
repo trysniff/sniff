@@ -1,6 +1,8 @@
 use std::ffi::OsString;
+#[cfg(target_os = "macos")]
+use std::ffi::c_void;
 use std::io::{Read, Result as IoResult};
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::os::unix::process::CommandExt;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::path::Path;
@@ -24,7 +26,7 @@ pub(crate) const DEFAULT_PROCESS_LIMIT: u32 = 128;
 
 #[cfg(all(target_os = "linux", not(target_env = "musl")))]
 type UnixResource = libc::__rlimit_resource_t;
-#[cfg(all(target_os = "linux", target_env = "musl"))]
+#[cfg(any(all(target_os = "linux", target_env = "musl"), target_os = "macos"))]
 type UnixResource = libc::c_int;
 
 #[cfg(target_os = "linux")]
@@ -134,17 +136,37 @@ fn run_external(spec: &SandboxCommand) -> Result<SandboxOutput, SandboxError> {
 
     let started = Instant::now();
     let mut timed_out = false;
+    #[cfg(target_os = "macos")]
+    let mut memory_exceeded = false;
     let status = loop {
         match child.try_wait() {
-            Ok(Some(status)) => break Some(status),
-            Ok(None) if started.elapsed() >= spec.timeout => {
-                timed_out = true;
-                terminate(&mut child)?;
-                break child.wait().map(Some).map_err(|error| {
-                    SandboxError::Failed(format!("sandbox worker wait failed: {error}"))
-                })?;
+            Ok(Some(status)) => {
+                #[cfg(target_os = "macos")]
+                let _ = terminate_macos_process_group(child.id());
+                break Some(status);
             }
-            Ok(None) => thread::sleep(Duration::from_millis(25)),
+            Ok(None) => {
+                if started.elapsed() >= spec.timeout {
+                    timed_out = true;
+                    terminate(&mut child)?;
+                    break child.wait().map(Some).map_err(|error| {
+                        SandboxError::Failed(format!("sandbox worker wait failed: {error}"))
+                    })?;
+                }
+                #[cfg(target_os = "macos")]
+                {
+                    let footprint =
+                        macos_process_group_physical_footprint(child.id(), spec.process_limit)?;
+                    if footprint > spec.memory_limit {
+                        memory_exceeded = true;
+                        terminate(&mut child)?;
+                        break child.wait().map(Some).map_err(|error| {
+                            SandboxError::Failed(format!("sandbox worker wait failed: {error}"))
+                        })?;
+                    }
+                }
+                thread::sleep(Duration::from_millis(25));
+            }
             Err(error) => {
                 let _ = terminate(&mut child);
                 return Err(SandboxError::Failed(format!(
@@ -162,6 +184,16 @@ fn run_external(spec: &SandboxCommand) -> Result<SandboxOutput, SandboxError> {
         .join()
         .map_err(|_| SandboxError::Failed("sandbox stderr reader panicked".to_string()))?
         .map_err(|error| SandboxError::Failed(format!("sandbox stderr read failed: {error}")))?;
+    #[cfg(target_os = "macos")]
+    let mut stderr = stderr;
+    #[cfg(target_os = "macos")]
+    if memory_exceeded {
+        if !stderr.is_empty() && !stderr.ends_with('\n') {
+            stderr.push('\n');
+        }
+        stderr
+            .push_str("Sniff terminated the sandbox after its physical memory limit was exceeded");
+    }
 
     Ok(SandboxOutput {
         status_code: status.and_then(|status| status.code()),
@@ -275,7 +307,7 @@ fn configure_linux_resource_limits(
     Ok(())
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn set_unix_resource_limit(resource: UnixResource, limit: libc::rlim_t) -> IoResult<()> {
     let mut current = libc::rlimit {
         rlim_cur: 0,
@@ -315,23 +347,116 @@ fn configure_macos_resource_limits(
         .checked_add(u64::from(spec.process_limit))
         .and_then(|limit| limit.checked_add(SANDBOX_PROCESS_OVERHEAD))
         .ok_or_else(|| SandboxError::Invalid("sandbox process limit overflowed".to_string()))?;
-    let memory_kib = spec.memory_limit.div_ceil(1024);
-    let program = command.get_program().to_os_string();
-    let arguments = command
-        .get_args()
-        .map(std::ffi::OsStr::to_os_string)
-        .collect::<Vec<_>>();
-    let mut wrapper = Command::new("/bin/sh");
-    wrapper
-        .arg("-c")
-        .arg("ulimit -d \"$1\" || exit 125\nulimit -u \"$2\" || exit 125\nshift 2\nexec \"$@\"")
-        .arg("sniff-sandbox-limits")
-        .arg(memory_kib.to_string())
-        .arg(process_limit.to_string())
-        .arg(program)
-        .args(arguments);
-    *command = wrapper;
+    let process_limit = libc::rlim_t::try_from(process_limit)
+        .map_err(|_| SandboxError::Invalid("sandbox process limit is too large".to_string()))?;
+    unsafe {
+        command.pre_exec(move || {
+            if libc::setpgid(0, 0) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            set_unix_resource_limit(libc::RLIMIT_NPROC, process_limit)
+        });
+    }
     Ok(())
+}
+
+#[cfg(target_os = "macos")]
+#[repr(C)]
+#[derive(Default)]
+struct MacosResourceUsage {
+    uuid: [u8; 16],
+    user_time: u64,
+    system_time: u64,
+    package_idle_wakeups: u64,
+    interrupt_wakeups: u64,
+    pageins: u64,
+    wired_size: u64,
+    resident_size: u64,
+    physical_footprint: u64,
+    process_start_time: u64,
+    process_exit_time: u64,
+}
+
+#[cfg(target_os = "macos")]
+#[link(name = "proc")]
+unsafe extern "C" {
+    fn proc_listpgrppids(process_group: libc::pid_t, buffer: *mut c_void, size: i32) -> i32;
+    fn proc_pid_rusage(pid: libc::pid_t, flavor: i32, buffer: *mut c_void) -> i32;
+}
+
+#[cfg(target_os = "macos")]
+fn macos_process_group_physical_footprint(
+    process_group: u32,
+    process_limit: u32,
+) -> Result<u64, SandboxError> {
+    const RUSAGE_INFO_V0: i32 = 0;
+    let observed =
+        unsafe { proc_listpgrppids(process_group as libc::pid_t, std::ptr::null_mut(), 0) };
+    if observed < 0 {
+        return Err(SandboxError::Failed(format!(
+            "failed to size the sandbox process inventory: {}",
+            std::io::Error::last_os_error()
+        )));
+    }
+    let maximum = usize::try_from(process_limit)
+        .map_err(|_| SandboxError::Invalid("sandbox process limit is too large".to_string()))?
+        .checked_add(32)
+        .ok_or_else(|| SandboxError::Invalid("sandbox process limit overflowed".to_string()))?;
+    let capacity = usize::try_from(observed)
+        .map_err(|_| {
+            SandboxError::Failed("macOS returned an invalid sandbox process count".to_string())
+        })?
+        .checked_add(32)
+        .ok_or_else(|| SandboxError::Failed("sandbox process inventory overflowed".to_string()))?
+        .min(maximum);
+    let mut pids = vec![0 as libc::pid_t; capacity];
+    let byte_size = pids
+        .len()
+        .checked_mul(std::mem::size_of::<libc::pid_t>())
+        .and_then(|size| i32::try_from(size).ok())
+        .ok_or_else(|| {
+            SandboxError::Invalid("sandbox process inventory is too large".to_string())
+        })?;
+    let count = unsafe {
+        proc_listpgrppids(
+            process_group as libc::pid_t,
+            pids.as_mut_ptr().cast(),
+            byte_size,
+        )
+    };
+    if count < 0 {
+        return Err(SandboxError::Failed(format!(
+            "failed to inspect sandbox process group memory: {}",
+            std::io::Error::last_os_error()
+        )));
+    }
+    let count = usize::try_from(count).map_err(|_| {
+        SandboxError::Failed("macOS returned an invalid sandbox process count".to_string())
+    })?;
+    if count >= pids.len() {
+        return Err(SandboxError::Failed(
+            "sandbox process inventory exceeded its enforced process limit".to_string(),
+        ));
+    }
+
+    pids.into_iter()
+        .take(count)
+        .filter(|pid| *pid > 0)
+        .try_fold(0_u64, |total, pid| {
+            let mut usage = MacosResourceUsage::default();
+            if unsafe { proc_pid_rusage(pid, RUSAGE_INFO_V0, (&mut usage as *mut _).cast()) } != 0 {
+                let error = std::io::Error::last_os_error();
+                if error.raw_os_error() == Some(libc::ESRCH) {
+                    return Ok(total);
+                }
+                return Err(SandboxError::Failed(format!(
+                    "failed to inspect sandbox process {pid} memory: {error}"
+                )));
+            }
+            total.checked_add(usage.physical_footprint).ok_or_else(|| {
+                SandboxError::Failed("sandbox physical memory accounting overflowed".to_string())
+            })
+        })
 }
 
 #[cfg(target_os = "linux")]
@@ -733,9 +858,28 @@ where
 }
 
 fn terminate(child: &mut Child) -> Result<(), SandboxError> {
+    #[cfg(target_os = "macos")]
+    return terminate_macos_process_group(child.id());
+
+    #[cfg(not(target_os = "macos"))]
     child.kill().map_err(|error| {
         SandboxError::Failed(format!("failed to terminate sandbox worker: {error}"))
     })
+}
+
+#[cfg(target_os = "macos")]
+fn terminate_macos_process_group(process_group: u32) -> Result<(), SandboxError> {
+    if unsafe { libc::killpg(process_group as libc::pid_t, libc::SIGKILL) } == 0 {
+        return Ok(());
+    }
+    let error = std::io::Error::last_os_error();
+    if error.raw_os_error() == Some(libc::ESRCH) {
+        Ok(())
+    } else {
+        Err(SandboxError::Failed(format!(
+            "failed to terminate sandbox process group: {error}"
+        )))
+    }
 }
 
 #[cfg(test)]
@@ -753,7 +897,7 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     #[test]
-    fn macos_child_accepts_resource_limits_after_a_clean_exec() {
+    fn macos_child_accepts_process_group_and_process_limit_setup() {
         let mut command = std::process::Command::new("/usr/bin/true");
         let limits = spec(std::env::temp_dir());
         super::configure_macos_resource_limits(&mut command, &limits)
