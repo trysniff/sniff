@@ -96,7 +96,8 @@ fn go_indexing_uses_explicit_module_scope() {
 #[test]
 fn go_indexing_keeps_mutable_state_inside_the_sandbox() {
     let root = synthetic_python_root();
-    let environment = go_sandbox_environment(root)
+    let go_root = root.join("trusted-go-runtime");
+    let environment = go_sandbox_environment(root, &go_root)
         .into_iter()
         .collect::<std::collections::BTreeMap<_, _>>();
     let private_root = sandbox_repository_argument(
@@ -108,6 +109,10 @@ fn go_indexing_keeps_mutable_state_inside_the_sandbox() {
     assert_eq!(
         environment.get("GOTOOLCHAIN").map(String::as_str),
         Some("local")
+    );
+    assert_eq!(
+        environment.get("GOROOT"),
+        Some(&go_root.to_string_lossy().into_owned())
     );
     assert_eq!(environment.get("GOPATH"), Some(&private_root));
     assert!(

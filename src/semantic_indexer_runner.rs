@@ -550,7 +550,7 @@ fn build_indexer_sandbox_command(
             path_prefixes.push(runtime_bin_directory(&sandbox_go, "sandbox Go")?);
         }
         path_prefixes.push(runtime_bin_directory(&go, "go")?);
-        env.extend(go_sandbox_environment(root));
+        env.extend(go_sandbox_environment(root, &go_root));
     }
     if spec.kind == SemanticIndexerKind::Rust {
         let cargo = resolve_runtime("cargo")?;
@@ -1172,7 +1172,7 @@ fn indexer_arguments_with_project(
     }
 }
 
-fn go_sandbox_environment(root: &Path) -> Vec<(String, String)> {
+fn go_sandbox_environment(root: &Path, go_root: &Path) -> Vec<(String, String)> {
     let private_go_root = root.join(INDEXER_TEMP_DIR).join("go");
     let private_go_root = sandbox_repository_argument(root, &private_go_root.to_string_lossy());
     vec![
@@ -1180,6 +1180,7 @@ fn go_sandbox_environment(root: &Path) -> Vec<(String, String)> {
         // USERPROFILE, which is intentionally inaccessible to the AppContainer.
         ("GOENV".to_string(), "off".to_string()),
         ("GOTOOLCHAIN".to_string(), "local".to_string()),
+        ("GOROOT".to_string(), go_root.to_string_lossy().into_owned()),
         ("GOPATH".to_string(), private_go_root.clone()),
         (
             "GOMODCACHE".to_string(),
