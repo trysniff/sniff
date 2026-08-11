@@ -1,6 +1,10 @@
 use super::{run_command, run_json_command};
 use crate::semantic_indexer_manifest::PinnedIndexer;
+#[cfg(windows)]
+use serde::Serialize;
 use serde_json::{Deserializer, Value};
+#[cfg(windows)]
+use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::fs;
 #[cfg(windows)]
@@ -54,6 +58,39 @@ const SCIP_GO_TRACE_AFTER: &str = concat!(
     "\t}\n",
     "\treturn result\n"
 );
+#[cfg(windows)]
+const GO_BUILD_ID_SOURCE: &str = "src/cmd/go/internal/work/buildid.go";
+#[cfg(windows)]
+const GO_SHELL_SOURCE: &str = "src/cmd/go/internal/work/shell.go";
+#[cfg(windows)]
+const GO_BUILD_ID_STDIN_BEFORE: &str = concat!(
+    "\t\tcmd := exec.Command(cmdline[0], cmdline[1:]...)\n",
+    "\t\tvar stdout, stderr strings.Builder\n"
+);
+#[cfg(windows)]
+const GO_BUILD_ID_STDIN_AFTER: &str = concat!(
+    "\t\tcmd := exec.Command(cmdline[0], cmdline[1:]...)\n",
+    "\t\tcmd.Stdin = strings.NewReader(\"\")\n",
+    "\t\tvar stdout, stderr strings.Builder\n"
+);
+#[cfg(windows)]
+const GO_SHELL_STDIN_BEFORE: &str = concat!(
+    "\tcmd := exec.Command(path, cmdline[1:]...)\n",
+    "\tif cmd.Path != \"\" {\n"
+);
+#[cfg(windows)]
+const GO_SHELL_STDIN_AFTER: &str = concat!(
+    "\tcmd := exec.Command(path, cmdline[1:]...)\n",
+    "\tcmd.Stdin = bytes.NewReader(nil)\n",
+    "\tif cmd.Path != \"\" {\n"
+);
+
+#[cfg(windows)]
+#[derive(Serialize)]
+#[serde(rename_all = "PascalCase")]
+struct GoOverlay {
+    replace: BTreeMap<String, String>,
+}
 
 #[derive(Debug, PartialEq, Eq)]
 struct GoModuleMetadata {
@@ -174,9 +211,125 @@ async fn install_windows_inner(
         .args(["build", "-mod=vendor", "-trimpath", "-buildvcs=false", "-o"])
         .arg(&output)
         .arg(format!("./{relative_package}"));
-    run_command(&mut build_command, "scip-go Windows compatibility build")
+    run_command(&mut build_command, "scip-go Windows compatibility build").await?;
+    build_windows_sandbox_go(root, build_root).await
+}
+
+#[cfg(windows)]
+async fn build_windows_sandbox_go(root: &Path, build_root: &Path) -> Result<(), String> {
+    let mut goroot_command = Command::new(go_executable_name());
+    goroot_command.args(["env", "GOROOT"]);
+    let goroot_output = run_command(&mut goroot_command, "Go runtime root discovery").await?;
+    let goroot_text = String::from_utf8(goroot_output)
+        .map_err(|error| format!("Go runtime root is not UTF-8: {error}"))?;
+    let goroot = PathBuf::from(goroot_text.trim());
+    if !goroot.is_absolute() || !goroot.is_dir() {
+        return Err(format!(
+            "Go runtime returned an invalid GOROOT: {}",
+            goroot.display()
+        ));
+    }
+    let goroot = fs::canonicalize(&goroot)
+        .map_err(|error| format!("failed to resolve Go runtime root: {error}"))?;
+
+    let overlay_root = build_root.join("go-overlay");
+    fs::create_dir(&overlay_root).map_err(|error| {
+        format!(
+            "failed to create sandbox Go overlay directory {}: {error}",
+            overlay_root.display()
+        )
+    })?;
+    let build_id_overlay = patch_go_tool_source(
+        &goroot.join(GO_BUILD_ID_SOURCE),
+        &overlay_root.join("buildid.go"),
+        GO_BUILD_ID_STDIN_BEFORE,
+        GO_BUILD_ID_STDIN_AFTER,
+        "build-ID probe",
+    )?;
+    let shell_overlay = patch_go_tool_source(
+        &goroot.join(GO_SHELL_SOURCE),
+        &overlay_root.join("shell.go"),
+        GO_SHELL_STDIN_BEFORE,
+        GO_SHELL_STDIN_AFTER,
+        "compiler command runner",
+    )?;
+    let overlay = GoOverlay {
+        replace: BTreeMap::from([
+            (
+                goroot
+                    .join(GO_BUILD_ID_SOURCE)
+                    .to_string_lossy()
+                    .into_owned(),
+                build_id_overlay.to_string_lossy().into_owned(),
+            ),
+            (
+                goroot.join(GO_SHELL_SOURCE).to_string_lossy().into_owned(),
+                shell_overlay.to_string_lossy().into_owned(),
+            ),
+        ]),
+    };
+    let overlay_manifest = overlay_root.join("overlay.json");
+    let overlay_bytes = serde_json::to_vec(&overlay)
+        .map_err(|error| format!("failed to encode sandbox Go overlay: {error}"))?;
+    fs::write(&overlay_manifest, overlay_bytes).map_err(|error| {
+        format!(
+            "failed to write sandbox Go overlay {}: {error}",
+            overlay_manifest.display()
+        )
+    })?;
+
+    let output = root.join("bin").join("go.exe");
+    let mut command = Command::new(go_executable_name());
+    command
+        .args(["build", "-trimpath", "-buildvcs=false", "-overlay"])
+        .arg(&overlay_manifest)
+        .arg("-o")
+        .arg(&output)
+        .arg("cmd/go")
+        .env("GOTOOLCHAIN", "local");
+    run_command(&mut command, "sandbox-compatible Go command build")
         .await
         .map(|_| ())
+}
+
+#[cfg(windows)]
+fn patch_go_tool_source(
+    source_path: &Path,
+    target_path: &Path,
+    before: &str,
+    after: &str,
+    label: &str,
+) -> Result<PathBuf, String> {
+    let source = fs::read_to_string(source_path).map_err(|error| {
+        format!(
+            "failed to read Go {label} source {}: {error}",
+            source_path.display()
+        )
+    })?;
+    let patched = replace_exact_once(&source, before, after, label)?;
+    fs::write(target_path, patched).map_err(|error| {
+        format!(
+            "failed to write patched Go {label} source {}: {error}",
+            target_path.display()
+        )
+    })?;
+    Ok(target_path.to_path_buf())
+}
+
+#[cfg(windows)]
+fn replace_exact_once(
+    source: &str,
+    before: &str,
+    after: &str,
+    label: &str,
+) -> Result<String, String> {
+    let count = source.matches(before).count();
+    if count != 1 {
+        return Err(format!(
+            "Go {label} source has {count} compatible command sites; expected exactly one"
+        ));
+    }
+    Ok(source.replacen(before, after, 1))
 }
 
 #[cfg(windows)]
@@ -396,6 +549,8 @@ fn go_executable_name() -> OsString {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(windows)]
+    use super::replace_exact_once;
     use super::{go_executable_name, parse_go_module_metadata};
     use std::path::PathBuf;
 
@@ -432,6 +587,25 @@ mod tests {
             parse_go_module_metadata(no_directory, "github.com/scip-code/scip-go")
                 .unwrap_err()
                 .contains("omitted Dir")
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn go_runtime_adaptation_requires_one_exact_command_site() {
+        assert_eq!(
+            replace_exact_once("before command after", "command", "patched", "test").unwrap(),
+            "before patched after"
+        );
+        assert!(
+            replace_exact_once("no site", "command", "patched", "test")
+                .unwrap_err()
+                .contains("0 compatible command sites")
+        );
+        assert!(
+            replace_exact_once("command command", "command", "patched", "test")
+                .unwrap_err()
+                .contains("2 compatible command sites")
         );
     }
 }

@@ -535,12 +535,19 @@ fn build_indexer_sandbox_command(
         push_external_read_only(root, &mut persistent_read_only_paths, go_root.clone());
         #[cfg(windows)]
         {
-            push_external_read_only(root, &mut executable_paths, go.clone());
+            let sandbox_go = fs::canonicalize(installed_root.join("bin").join("go.exe"))
+                .map_err(|error| {
+                    format!(
+                        "sandbox-compatible Go command is missing from the sealed scip-go installation: {error}"
+                    )
+                })?;
+            push_external_read_only(root, &mut executable_paths, sandbox_go.clone());
             collect_windows_runtime_executables(
                 root,
                 &mut executable_paths,
                 &go_root.join("pkg").join("tool"),
             )?;
+            path_prefixes.push(runtime_bin_directory(&sandbox_go, "sandbox Go")?);
         }
         path_prefixes.push(runtime_bin_directory(&go, "go")?);
         env.extend(go_sandbox_environment(root));
