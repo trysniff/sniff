@@ -607,15 +607,19 @@ fn build_indexer_sandbox_command(
         env.extend(go_sandbox_environment(root, &go_root));
     }
     if spec.kind == SemanticIndexerKind::Rust {
-        let cargo = resolve_runtime("cargo")?;
-        for name in ["cargo", "rustc"] {
-            let runtime = resolve_runtime(name)?;
-            let runtime_root = runtime_mount_root(&runtime);
+        let cargo = resolve_rust_compiler_runtime("cargo")?;
+        let rustc = resolve_rust_compiler_runtime("rustc")?;
+        for (name, runtime) in [("cargo", &cargo), ("rustc", &rustc)] {
+            let runtime_root = runtime_mount_root(runtime);
             push_external_read_only(root, &mut persistent_read_only_paths, runtime_root);
             #[cfg(windows)]
             push_external_read_only(root, &mut executable_paths, runtime.clone());
-            path_prefixes.push(runtime_bin_directory(&runtime, name)?);
+            path_prefixes.push(runtime_bin_directory(runtime, name)?);
         }
+        env.extend([
+            ("CARGO".to_string(), external_runtime_path_value(&cargo)),
+            ("RUSTC".to_string(), external_runtime_path_value(&rustc)),
+        ]);
         let cargo_home = std::env::var_os("CARGO_HOME")
             .map(PathBuf::from)
             .filter(|path| path.is_dir())
@@ -1145,6 +1149,60 @@ fn resolve_runtime(name: &str) -> Result<PathBuf, String> {
         "{} runtime is required for semantic indexing",
         name
     ))
+}
+
+#[cfg(not(windows))]
+fn resolve_rust_compiler_runtime(name: &str) -> Result<PathBuf, String> {
+    resolve_runtime(name)
+}
+
+#[cfg(windows)]
+fn resolve_rust_compiler_runtime(name: &str) -> Result<PathBuf, String> {
+    let rustup = resolve_runtime("rustup")?;
+    let output = std::process::Command::new(&rustup)
+        .args(["which", name])
+        .output()
+        .map_err(|error| format!("failed to resolve active Rust {name} through rustup: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "rustup could not resolve the active Rust {name}: {}",
+            compact_process_output(&output.stdout, &output.stderr)
+        ));
+    }
+    if !output.stderr.is_empty() {
+        return Err(format!(
+            "rustup emitted unexpected stderr while resolving Rust {name}: {}",
+            compact_process_output(&[], &output.stderr)
+        ));
+    }
+    let stdout = String::from_utf8(output.stdout)
+        .map_err(|_| format!("rustup returned a non-UTF-8 path for Rust {name}"))?;
+    let mut lines = stdout
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty());
+    let path = lines
+        .next()
+        .ok_or_else(|| format!("rustup returned no path for Rust {name}"))?;
+    if lines.next().is_some() {
+        return Err(format!(
+            "rustup returned multiple paths for Rust {name}; refusing an ambiguous toolchain"
+        ));
+    }
+    let path = fs::canonicalize(path)
+        .map(strip_windows_verbatim_prefix)
+        .map_err(|error| format!("failed to resolve active Rust {name} at {path}: {error}"))?;
+    if path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .is_none_or(|value| !value.eq_ignore_ascii_case(&format!("{name}.exe")))
+    {
+        return Err(format!(
+            "rustup resolved Rust {name} to an unexpected executable: {}",
+            path.display()
+        ));
+    }
+    Ok(path)
 }
 
 fn runtime_mount_root(runtime: &Path) -> PathBuf {
