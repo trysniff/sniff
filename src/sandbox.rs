@@ -1,6 +1,6 @@
 use std::ffi::OsString;
 use std::io::{Read, Result as IoResult};
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 use std::os::unix::process::CommandExt;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::path::Path;
@@ -24,7 +24,7 @@ pub(crate) const DEFAULT_PROCESS_LIMIT: u32 = 128;
 
 #[cfg(all(target_os = "linux", not(target_env = "musl")))]
 type UnixResource = libc::__rlimit_resource_t;
-#[cfg(all(unix, any(not(target_os = "linux"), target_env = "musl")))]
+#[cfg(all(target_os = "linux", target_env = "musl"))]
 type UnixResource = libc::c_int;
 
 #[cfg(target_os = "linux")]
@@ -104,8 +104,10 @@ pub(crate) fn run(spec: &SandboxCommand) -> Result<SandboxOutput, SandboxError> 
 
 fn run_external(spec: &SandboxCommand) -> Result<SandboxOutput, SandboxError> {
     let mut command = build_command(spec)?;
-    #[cfg(unix)]
-    configure_unix_resource_limits(&mut command, spec)?;
+    #[cfg(target_os = "linux")]
+    configure_linux_resource_limits(&mut command, spec)?;
+    #[cfg(target_os = "macos")]
+    configure_macos_resource_limits(&mut command, spec)?;
     command
         .env_clear()
         .env("PATH", sandbox_path())
@@ -244,8 +246,8 @@ fn validate_spec(spec: &SandboxCommand) -> Result<(), SandboxError> {
     Ok(())
 }
 
-#[cfg(unix)]
-fn configure_unix_resource_limits(
+#[cfg(target_os = "linux")]
+fn configure_linux_resource_limits(
     command: &mut Command,
     spec: &SandboxCommand,
 ) -> Result<(), SandboxError> {
@@ -273,7 +275,7 @@ fn configure_unix_resource_limits(
     Ok(())
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 fn set_unix_resource_limit(resource: UnixResource, limit: libc::rlim_t) -> IoResult<()> {
     let mut current = libc::rlimit {
         rlim_cur: 0,
@@ -300,8 +302,36 @@ fn set_unix_memory_limit(limit: libc::rlim_t) -> IoResult<()> {
 }
 
 #[cfg(target_os = "macos")]
-fn set_unix_memory_limit(limit: libc::rlim_t) -> IoResult<()> {
-    set_unix_resource_limit(libc::RLIMIT_AS, limit)
+fn configure_macos_resource_limits(
+    command: &mut Command,
+    spec: &SandboxCommand,
+) -> Result<(), SandboxError> {
+    let current_processes = current_user_process_count().map_err(|error| {
+        SandboxError::Failed(format!(
+            "failed to establish the sandbox process baseline: {error}"
+        ))
+    })?;
+    let process_limit = current_processes
+        .checked_add(u64::from(spec.process_limit))
+        .and_then(|limit| limit.checked_add(SANDBOX_PROCESS_OVERHEAD))
+        .ok_or_else(|| SandboxError::Invalid("sandbox process limit overflowed".to_string()))?;
+    let memory_kib = spec.memory_limit.div_ceil(1024);
+    let program = command.get_program().to_os_string();
+    let arguments = command
+        .get_args()
+        .map(std::ffi::OsStr::to_os_string)
+        .collect::<Vec<_>>();
+    let mut wrapper = Command::new("/bin/sh");
+    wrapper
+        .arg("-c")
+        .arg("ulimit -d \"$1\" || exit 125\nulimit -u \"$2\" || exit 125\nshift 2\nexec \"$@\"")
+        .arg("sniff-sandbox-limits")
+        .arg(memory_kib.to_string())
+        .arg(process_limit.to_string())
+        .arg(program)
+        .args(arguments);
+    *command = wrapper;
+    Ok(())
 }
 
 #[cfg(target_os = "linux")]
@@ -722,39 +752,16 @@ mod tests {
     use std::time::Duration;
 
     #[cfg(target_os = "macos")]
-    fn spawn_with_resource_limit(
-        configure: impl FnOnce(&mut std::process::Command),
-    ) -> std::io::Result<std::process::ExitStatus> {
+    #[test]
+    fn macos_child_accepts_resource_limits_after_a_clean_exec() {
         let mut command = std::process::Command::new("/usr/bin/true");
-        configure(&mut command);
-        command.status()
-    }
+        let limits = spec(std::env::temp_dir());
+        super::configure_macos_resource_limits(&mut command, &limits)
+            .expect("prepare macOS resource wrapper");
 
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn macos_child_accepts_the_memory_resource_limit() {
-        use std::os::unix::process::CommandExt;
-
-        let status = spawn_with_resource_limit(|command| unsafe {
-            command.pre_exec(|| super::set_unix_memory_limit(DEFAULT_MEMORY_LIMIT));
-        })
-        .expect("macOS child should accept Sniff's memory resource limit");
-
-        assert!(status.success());
-    }
-
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn macos_child_accepts_the_process_resource_limit() {
-        use std::os::unix::process::CommandExt;
-
-        let baseline = super::current_user_process_count().expect("read macOS process baseline");
-        let limit = baseline + u64::from(DEFAULT_PROCESS_LIMIT) + super::SANDBOX_PROCESS_OVERHEAD;
-        let limit = libc::rlim_t::try_from(limit).expect("process limit should fit rlim_t");
-        let status = spawn_with_resource_limit(|command| unsafe {
-            command.pre_exec(move || super::set_unix_resource_limit(libc::RLIMIT_NPROC, limit));
-        })
-        .expect("macOS child should accept Sniff's process resource limit");
+        let status = command
+            .status()
+            .expect("macOS resource wrapper should start");
 
         assert!(status.success());
     }
