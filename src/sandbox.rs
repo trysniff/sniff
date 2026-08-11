@@ -23,6 +23,9 @@ pub(crate) struct SandboxCommand {
     /// Host-controlled toolchains that may retain a read-only sandbox grant.
     /// Repository content must never be placed in this collection.
     pub(crate) persistent_read_only_paths: Vec<PathBuf>,
+    /// Trusted compiler/runtime images that the worker may execute. Windows
+    /// grants these only to the unique per-run AppContainer identity.
+    pub(crate) executable_paths: Vec<PathBuf>,
     pub(crate) env: Vec<(String, String)>,
     pub(crate) allow_network: bool,
     #[cfg(target_os = "macos")]
@@ -36,6 +39,7 @@ impl SandboxCommand {
         self.read_only_paths
             .iter()
             .chain(self.persistent_read_only_paths.iter())
+            .chain(self.executable_paths.iter())
     }
 }
 
@@ -519,7 +523,7 @@ mod tests {
         SandboxCommand, SandboxError, read_limited, read_limited_with_observer,
         validate_external_runner, validate_spec,
     };
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::time::Duration;
 
     fn spec(root: PathBuf) -> SandboxCommand {
@@ -530,6 +534,7 @@ mod tests {
             args: Vec::new(),
             read_only_paths: Vec::new(),
             persistent_read_only_paths: Vec::new(),
+            executable_paths: Vec::new(),
             env: Vec::new(),
             allow_network: false,
             #[cfg(target_os = "macos")]
@@ -672,10 +677,72 @@ mod tests {
             args: vec!["/D".to_string(), "/S".to_string(), "/C".to_string(), script],
             read_only_paths: Vec::new(),
             persistent_read_only_paths: Vec::new(),
+            executable_paths: Vec::new(),
             env: Vec::new(),
             allow_network: false,
             timeout: Duration::from_secs(2),
             output_limit: 1024,
+        }
+    }
+
+    #[cfg(windows)]
+    fn windows_child_launcher(root: &Path, child: &Path) -> SandboxCommand {
+        let source = root.join("child-launcher.rs");
+        let program = root.join("child-launcher.exe");
+        std::fs::write(
+            &source,
+            r#"use std::process::{Command, Stdio, exit};
+
+fn main() {
+    let child = std::env::args_os().nth(1).expect("missing child path");
+    if child == "--child" {
+        println!("child-launched");
+        return;
+    }
+    match Command::new(child)
+        .arg("--child")
+        .stdin(Stdio::piped())
+        .output()
+    {
+        Ok(output) => {
+            print!("{}", String::from_utf8_lossy(&output.stdout));
+            eprint!("{}", String::from_utf8_lossy(&output.stderr));
+            eprintln!("child status: {:?}", output.status);
+            exit(output.status.code().unwrap_or(1));
+        }
+        Err(error) => {
+            eprintln!("spawn failed: {error}; raw={:?}", error.raw_os_error());
+            exit(111);
+        }
+    }
+}
+"#,
+        )
+        .expect("write Windows child launcher source");
+        let build = std::process::Command::new("rustc")
+            .arg("--edition=2024")
+            .arg(&source)
+            .arg("-o")
+            .arg(&program)
+            .output()
+            .expect("compile Windows child launcher");
+        assert!(
+            build.status.success(),
+            "child launcher failed to compile: {}",
+            String::from_utf8_lossy(&build.stderr)
+        );
+        SandboxCommand {
+            root: root.to_path_buf(),
+            workdir: PathBuf::from("."),
+            program: program.to_string_lossy().into_owned(),
+            args: vec![child.to_string_lossy().into_owned()],
+            read_only_paths: Vec::new(),
+            persistent_read_only_paths: Vec::new(),
+            executable_paths: Vec::new(),
+            env: Vec::new(),
+            allow_network: false,
+            timeout: Duration::from_secs(5),
+            output_limit: 64 * 1024,
         }
     }
 
@@ -719,6 +786,35 @@ mod tests {
             allowed_output.stderr
         );
         assert!(allowed_output.stdout.contains("trusted-toolchain-evidence"));
+
+        std::fs::remove_dir_all(root).unwrap();
+        std::fs::remove_dir_all(external).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_backend_executes_only_explicit_external_toolchains() {
+        let root = windows_test_root("persistent-execute");
+        let external = windows_test_root("external-executable");
+        let child = external.join("trusted-child.exe");
+        let denied = windows_child_launcher(&root, &child);
+        std::fs::copy(root.join("child-launcher.exe"), &child)
+            .expect("stage external child process");
+        let denied_output = super::run(&denied).expect("Windows AppContainer should start");
+        assert_ne!(denied_output.status_code, Some(0));
+
+        let mut allowed = denied;
+        allowed.executable_paths = vec![child];
+        let allowed_output =
+            super::run(&allowed).expect("transient toolchain execution grant should work");
+        assert_eq!(
+            allowed_output.status_code,
+            Some(0),
+            "stdout={:?} stderr={:?}",
+            allowed_output.stdout,
+            allowed_output.stderr
+        );
+        assert!(allowed_output.stdout.contains("child-launched"));
 
         std::fs::remove_dir_all(root).unwrap();
         std::fs::remove_dir_all(external).unwrap();
@@ -770,6 +866,7 @@ mod tests {
             args: vec!["-c".to_string(), format!("touch ../{outside_name}")],
             read_only_paths: Vec::new(),
             persistent_read_only_paths: Vec::new(),
+            executable_paths: Vec::new(),
             env: Vec::new(),
             allow_network: false,
             #[cfg(target_os = "macos")]
@@ -808,6 +905,7 @@ mod tests {
             args: vec!["-c".to_string(), "while :; do :; done".to_string()],
             read_only_paths: Vec::new(),
             persistent_read_only_paths: Vec::new(),
+            executable_paths: Vec::new(),
             env: Vec::new(),
             allow_network: false,
             #[cfg(target_os = "macos")]

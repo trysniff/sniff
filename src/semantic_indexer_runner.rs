@@ -8,6 +8,8 @@ use crate::types::FileRecord;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+#[cfg(windows)]
+use std::io::Read;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 #[cfg(target_os = "macos")]
@@ -490,6 +492,7 @@ fn build_indexer_sandbox_command(
     };
     let mut read_only_paths = Vec::new();
     let mut persistent_read_only_paths = Vec::new();
+    let mut executable_paths = Vec::new();
     push_external_read_only(
         root,
         &mut persistent_read_only_paths,
@@ -525,11 +528,17 @@ fn build_indexer_sandbox_command(
     }
     if spec.kind == SemanticIndexerKind::Go {
         let go = resolve_runtime("go")?;
-        push_external_read_only(
-            root,
-            &mut persistent_read_only_paths,
-            runtime_mount_root(&go),
-        );
+        let go_root = runtime_mount_root(&go);
+        push_external_read_only(root, &mut persistent_read_only_paths, go_root.clone());
+        #[cfg(windows)]
+        {
+            push_external_read_only(root, &mut executable_paths, go.clone());
+            collect_windows_runtime_executables(
+                root,
+                &mut executable_paths,
+                &go_root.join("pkg").join("tool"),
+            )?;
+        }
         path_prefixes.push(runtime_bin_directory(&go, "go")?);
         env.push((
             "GOCACHE".to_string(),
@@ -546,11 +555,10 @@ fn build_indexer_sandbox_command(
         let cargo = resolve_runtime("cargo")?;
         for name in ["cargo", "rustc"] {
             let runtime = resolve_runtime(name)?;
-            push_external_read_only(
-                root,
-                &mut persistent_read_only_paths,
-                runtime_mount_root(&runtime),
-            );
+            let runtime_root = runtime_mount_root(&runtime);
+            push_external_read_only(root, &mut persistent_read_only_paths, runtime_root);
+            #[cfg(windows)]
+            push_external_read_only(root, &mut executable_paths, runtime.clone());
             path_prefixes.push(runtime_bin_directory(&runtime, name)?);
         }
         let cargo_home = std::env::var_os("CARGO_HOME")
@@ -580,6 +588,12 @@ fn build_indexer_sandbox_command(
                 });
             if let Some(rustup_home) = rustup_home {
                 push_external_read_only(root, &mut persistent_read_only_paths, rustup_home.clone());
+                #[cfg(windows)]
+                collect_windows_runtime_executables(
+                    root,
+                    &mut executable_paths,
+                    &rustup_home.join("toolchains"),
+                )?;
                 env.push((
                     "RUSTUP_HOME".to_string(),
                     rustup_home.to_string_lossy().to_string(),
@@ -590,11 +604,10 @@ fn build_indexer_sandbox_command(
     let gradle_jvm_args = if spec.kind == SemanticIndexerKind::Kotlin {
         let gradle = resolve_runtime("gradle")?;
         let gradle_jvm_args = gradle_indexer_jvm_args(&gradle)?;
-        push_external_read_only(
-            root,
-            &mut persistent_read_only_paths,
-            runtime_mount_root(&gradle),
-        );
+        let gradle_root = runtime_mount_root(&gradle);
+        push_external_read_only(root, &mut persistent_read_only_paths, gradle_root);
+        #[cfg(windows)]
+        push_external_read_only(root, &mut executable_paths, gradle.clone());
         path_prefixes.push(runtime_bin_directory(&gradle, "gradle")?);
         Some(gradle_jvm_args)
     } else {
@@ -672,6 +685,8 @@ fn build_indexer_sandbox_command(
     read_only_paths.dedup();
     persistent_read_only_paths.sort();
     persistent_read_only_paths.dedup();
+    executable_paths.sort();
+    executable_paths.dedup();
 
     Ok(SandboxCommand {
         root: root.to_path_buf(),
@@ -680,6 +695,7 @@ fn build_indexer_sandbox_command(
         args,
         read_only_paths,
         persistent_read_only_paths,
+        executable_paths,
         env,
         allow_network: false,
         #[cfg(target_os = "macos")]
@@ -695,6 +711,84 @@ fn push_external_read_only(root: &Path, paths: &mut Vec<PathBuf>, path: PathBuf)
     if !path.starts_with(&root) {
         paths.push(path);
     }
+}
+
+#[cfg(windows)]
+fn collect_windows_runtime_executables(
+    repository_root: &Path,
+    executable_paths: &mut Vec<PathBuf>,
+    runtime_root: &Path,
+) -> Result<(), String> {
+    const MAX_RUNTIME_ENTRIES: usize = 20_000;
+
+    if !runtime_root.is_dir() {
+        return Err(format!(
+            "Windows compiler runtime directory is missing: {}",
+            runtime_root.display()
+        ));
+    }
+    let mut pending = vec![runtime_root.to_path_buf()];
+    let mut entries_seen = 0usize;
+    while let Some(directory) = pending.pop() {
+        for entry in fs::read_dir(&directory).map_err(|error| {
+            format!(
+                "failed to inspect Windows compiler runtime {}: {error}",
+                directory.display()
+            )
+        })? {
+            let entry = entry.map_err(|error| {
+                format!(
+                    "failed to enumerate Windows compiler runtime {}: {error}",
+                    directory.display()
+                )
+            })?;
+            entries_seen = entries_seen.saturating_add(1);
+            if entries_seen > MAX_RUNTIME_ENTRIES {
+                return Err(format!(
+                    "Windows compiler runtime exceeds {MAX_RUNTIME_ENTRIES} entries: {}",
+                    runtime_root.display()
+                ));
+            }
+            let path = entry.path();
+            let metadata = fs::symlink_metadata(&path).map_err(|error| {
+                format!(
+                    "failed to inspect Windows compiler runtime entry {}: {error}",
+                    path.display()
+                )
+            })?;
+            if metadata.file_type().is_symlink() {
+                return Err(format!(
+                    "Windows compiler runtime contains a symlink and cannot be trusted for execution: {}",
+                    path.display()
+                ));
+            }
+            if metadata.is_dir() {
+                pending.push(path);
+            } else if metadata.is_file()
+                && path
+                    .extension()
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("exe"))
+            {
+                let mut header = [0u8; 2];
+                fs::File::open(&path)
+                    .and_then(|mut file| file.read_exact(&mut header))
+                    .map_err(|error| {
+                        format!(
+                            "failed to verify Windows compiler executable {}: {error}",
+                            path.display()
+                        )
+                    })?;
+                if header != *b"MZ" {
+                    return Err(format!(
+                        "Windows compiler executable is not a PE image: {}",
+                        path.display()
+                    ));
+                }
+                push_external_read_only(repository_root, executable_paths, path);
+            }
+        }
+    }
+    Ok(())
 }
 
 fn windows_node_entrypoint_argument(root: &Path, entrypoint: &Path) -> Result<String, String> {

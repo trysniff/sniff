@@ -711,6 +711,7 @@ fn standalone_compiler_check(file_path: &str, source: &str) -> Result<bool, Stri
             args,
             read_only_paths: Vec::new(),
             persistent_read_only_paths: Vec::new(),
+            executable_paths: Vec::new(),
             env: Vec::new(),
             allow_network: false,
             #[cfg(target_os = "macos")]

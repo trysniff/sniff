@@ -6,7 +6,10 @@ use super::{
     source_integrity_digest, write_private_gradle_properties,
 };
 #[cfg(windows)]
-use super::{indexer_arguments_with_workspace, prepare_indexer_workspace, push_external_read_only};
+use super::{
+    collect_windows_runtime_executables, indexer_arguments_with_workspace,
+    prepare_indexer_workspace, push_external_read_only,
+};
 use crate::semantic_index::SemanticPositionEncoding;
 use crate::semantic_indexer_manifest::{SemanticIndexerKind, pinned_indexer};
 use crate::types::FileRecord;
@@ -318,4 +321,26 @@ fn windows_kotlin_workspace_uses_the_project_batch_wrapper() {
 
     workspace.cleanup(spec.display_name).unwrap();
     std::fs::remove_dir_all(root).unwrap();
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_runtime_execution_allowlist_contains_only_verified_pe_images() {
+    let temp = tempfile::tempdir().unwrap();
+    let repository = temp.path().join("repository");
+    let runtime = temp.path().join("runtime");
+    let nested = runtime.join("nested");
+    std::fs::create_dir_all(&repository).unwrap();
+    std::fs::create_dir_all(&nested).unwrap();
+    let compiler = runtime.join("compiler.exe");
+    let linker = nested.join("LINKER.EXE");
+    std::fs::write(&compiler, b"MZcompiler").unwrap();
+    std::fs::write(&linker, b"MZlinker").unwrap();
+    std::fs::write(runtime.join("runtime.dll"), b"MZlibrary").unwrap();
+
+    let mut executable_paths = Vec::new();
+    collect_windows_runtime_executables(&repository, &mut executable_paths, &runtime).unwrap();
+    executable_paths.sort();
+
+    assert_eq!(executable_paths, [compiler, linker]);
 }

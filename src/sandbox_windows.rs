@@ -37,16 +37,17 @@ use windows_sys::Win32::System::Pipes::CreatePipe;
 use windows_sys::Win32::System::Threading::{
     CREATE_NO_WINDOW, CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT, CreateMutexW, CreateProcessW,
     DeleteProcThreadAttributeList, EXTENDED_STARTUPINFO_PRESENT, GetExitCodeProcess,
-    InitializeProcThreadAttributeList, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
-    PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES, PROCESS_INFORMATION, ReleaseMutex, ResumeThread,
-    STARTF_USESTDHANDLES, STARTUPINFOEXW, TerminateProcess, UpdateProcThreadAttribute,
-    WaitForSingleObject,
+    InitializeProcThreadAttributeList, PROC_THREAD_ATTRIBUTE_CHILD_PROCESS_POLICY,
+    PROC_THREAD_ATTRIBUTE_HANDLE_LIST, PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES,
+    PROCESS_INFORMATION, ReleaseMutex, ResumeThread, STARTF_USESTDHANDLES, STARTUPINFOEXW,
+    TerminateProcess, UpdateProcThreadAttribute, WaitForSingleObject,
 };
 
 const INTERNET_CLIENT_SID: &str = "S-1-15-3-1";
 const PERSISTENT_READ_CAPABILITY: &str = "trysniff.semantic-indexer-read.v1";
 const SE_GROUP_ENABLED: u32 = 0x00000004;
 const FILE_GENERIC_READ_ACCESS: u32 = 0x0012_0089;
+const PROCESS_CREATION_CHILD_PROCESS_OVERRIDE: u32 = 0x02;
 const MAX_PROCESS_MEMORY: usize = 1024 * 1024 * 1024;
 const MAX_ACTIVE_PROCESSES: u32 = 128;
 const ACL_COMMAND_TIMEOUT: Duration = Duration::from_secs(5 * 60);
@@ -68,6 +69,9 @@ pub(super) fn run(spec: &SandboxCommand) -> Result<SandboxOutput, SandboxError> 
     let mut effective_spec = spec.clone();
     effective_spec.program = program.to_string_lossy().into_owned();
     effective_spec.read_only_paths.push(program.clone());
+    effective_spec
+        .read_only_paths
+        .extend(effective_spec.executable_paths.iter().cloned());
     let profile_name = unique_profile_name();
     let profile_name_w = wide_null(&profile_name);
     let display_name = wide_null("Sniff temporary sandbox");
@@ -143,6 +147,9 @@ pub(super) fn run(spec: &SandboxCommand) -> Result<SandboxOutput, SandboxError> 
     trace_phase(started, "filesystem access granted");
     // AppContainer file-read permission is not enough to launch an executable.
     grant_acl(&program, &app_container_sid_text, "RX")?;
+    for path in &effective_spec.executable_paths {
+        grant_acl(path, &app_container_sid_text, "RX")?;
+    }
     trace_phase(started, "program execution granted");
     let result = run_process(&effective_spec, profile_guard.sid, &mut capabilities);
     trace_phase(started, "sandbox process returned");
@@ -327,7 +334,7 @@ fn run_process(
     let (stderr_read, stderr_write) = create_pipe()?;
     let mut attributes_size = 0usize;
     unsafe {
-        InitializeProcThreadAttributeList(std::ptr::null_mut(), 2, 0, &mut attributes_size);
+        InitializeProcThreadAttributeList(std::ptr::null_mut(), 3, 0, &mut attributes_size);
     }
     if attributes_size == 0 {
         close_handles([stdout_read, stdout_write, stderr_read, stderr_write]);
@@ -336,7 +343,7 @@ fn run_process(
     let mut attributes_buffer = vec![0u8; attributes_size];
     let attributes = attributes_buffer.as_mut_ptr() as *mut c_void;
     if unsafe {
-        InitializeProcThreadAttributeList(attributes as _, 2, 0, &mut attributes_size) == 0
+        InitializeProcThreadAttributeList(attributes as _, 3, 0, &mut attributes_size) == 0
     } {
         close_handles([stdout_read, stdout_write, stderr_read, stderr_write]);
         return Err(last_error("initialize Windows process attribute list"));
@@ -366,6 +373,22 @@ fn run_process(
         unsafe { DeleteProcThreadAttributeList(attributes as _) };
         close_handles([stdout_read, stdout_write, stderr_read, stderr_write]);
         return Err(last_error("configure Windows AppContainer process"));
+    }
+    let mut child_process_policy = PROCESS_CREATION_CHILD_PROCESS_OVERRIDE;
+    if unsafe {
+        UpdateProcThreadAttribute(
+            attributes as _,
+            0,
+            PROC_THREAD_ATTRIBUTE_CHILD_PROCESS_POLICY as usize,
+            &mut child_process_policy as *mut _ as _,
+            std::mem::size_of::<u32>(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        ) == 0
+    } {
+        unsafe { DeleteProcThreadAttributeList(attributes as _) };
+        close_handles([stdout_read, stdout_write, stderr_read, stderr_write]);
+        return Err(last_error("allow Windows sandbox compiler child processes"));
     }
     let inherited_handles = [stdout_write, stderr_write];
     if unsafe {
