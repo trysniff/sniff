@@ -186,6 +186,45 @@ fn malicious_worker_cannot_reach_host_secrets_filesystem_or_network() {
 }
 
 #[test]
+fn network_enabled_preparation_still_cannot_reach_host_secrets_or_filesystem() {
+    let preparation = tempfile::tempdir().expect("create dependency-preparation root");
+    let host = tempfile::tempdir().expect("create host-only directory");
+    let secret_path = host.path().join("secret.txt");
+    let outside_path = host.path().join("escaped.txt");
+    std::fs::write(&secret_path, HOST_SECRET_VALUE).expect("write host-only secret");
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind local network target");
+    let worker = compile_worker(preparation.path());
+    let mut spec = command(
+        preparation.path(),
+        &worker,
+        vec![
+            "inspect".to_string(),
+            secret_path.to_string_lossy().into_owned(),
+            outside_path.to_string_lossy().into_owned(),
+            listener.local_addr().unwrap().to_string(),
+        ],
+    );
+    spec.allow_network = true;
+
+    unsafe { std::env::set_var(HOST_SECRET_ENV, HOST_SECRET_VALUE) };
+    let output = run(&spec).expect("network-enabled hardened sandbox should start");
+    unsafe { std::env::remove_var(HOST_SECRET_ENV) };
+
+    assert_eq!(
+        output.status_code,
+        Some(0),
+        "stdout={:?} stderr={:?}",
+        output.stdout,
+        output.stderr
+    );
+    assert!(output.stdout.contains("env=denied"));
+    assert!(output.stdout.contains("read=denied"));
+    assert!(output.stdout.contains("write=denied"));
+    assert!(!output.stdout.contains(HOST_SECRET_VALUE));
+    assert!(!outside_path.exists());
+}
+
+#[test]
 fn malicious_worker_output_is_bounded_on_both_streams() {
     let repository = tempfile::tempdir().expect("create malicious repository");
     let worker = compile_worker(repository.path());
