@@ -176,11 +176,18 @@ fn private_gradle_properties_disable_daemons_without_host_home_access() {
     let properties = std::fs::read_to_string(cache.join("gradle.properties")).unwrap();
     let expected_home =
         sandbox_repository_argument(&root, &root.to_string_lossy()).replace('\\', "\\\\");
+    let expected_project_cache =
+        sandbox_repository_argument(&root, &cache.join("project-cache").to_string_lossy())
+            .replace('\\', "\\\\");
 
     assert!(properties.contains(&format!("systemProp.user.home={expected_home}")));
     assert!(properties.contains("org.gradle.daemon=false"));
     assert!(!properties.contains("org.gradle.jvmargs"));
     assert!(properties.contains("org.gradle.parallel=false"));
+    assert!(properties.contains("org.gradle.workers.max=32"));
+    assert!(properties.contains(&format!(
+        "org.gradle.projectcachedir={expected_project_cache}"
+    )));
 
     std::fs::remove_dir_all(root).unwrap();
 }

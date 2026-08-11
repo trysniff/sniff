@@ -1,5 +1,8 @@
 #[cfg(windows)]
-use super::rebuild_zip_entry_preserving_prefix;
+use super::{
+    WINDOWS_SCIP_JAVA_PROCESS_RUNNER, install_rebuilt_zip_preserving_prefix,
+    patch_scip_java_windows,
+};
 use super::{compact_output, parse_json_string};
 
 #[test]
@@ -30,7 +33,6 @@ fn rebuilt_launcher_preserves_executable_prefix_and_required_entries() {
     let launcher = temp.path().join("launcher");
     let original_zip = temp.path().join("launcher.zip");
     let rebuilt_zip = temp.path().join("rebuilt.zip");
-    let replacement = temp.path().join("replacement.jar");
 
     let file = std::fs::File::create(&original_zip).unwrap();
     let mut writer = zip::ZipWriter::new(file);
@@ -65,12 +67,32 @@ fn rebuilt_launcher_preserves_executable_prefix_and_required_entries() {
     .unwrap();
     drop(launcher_file);
 
-    std::fs::write(&replacement, b"patched runtime").unwrap();
-    rebuild_zip_entry_preserving_prefix(
+    let file = std::fs::File::create(&rebuilt_zip).unwrap();
+    let mut writer = zip::ZipWriter::new(file);
+    writer
+        .start_file("META-INF/MANIFEST.MF", SimpleFileOptions::default())
+        .unwrap();
+    writer.write_all(b"Main-Class: example.Main\n").unwrap();
+    writer
+        .start_file(
+            "nested/runtime.jar",
+            SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored),
+        )
+        .unwrap();
+    writer.write_all(b"patched runtime").unwrap();
+    writer
+        .start_file("launcher/y.class", SimpleFileOptions::default())
+        .unwrap();
+    writer.write_all(b"lowercase class").unwrap();
+    writer
+        .start_file("launcher/Y.class", SimpleFileOptions::default())
+        .unwrap();
+    writer.write_all(b"uppercase class").unwrap();
+    writer.finish().unwrap();
+
+    install_rebuilt_zip_preserving_prefix(
         &launcher,
-        &replacement,
         &rebuilt_zip,
-        "nested/runtime.jar",
         &["nested/runtime.jar", "launcher/y.class", "launcher/Y.class"],
     )
     .unwrap();
@@ -124,4 +146,76 @@ fn rebuilt_launcher_preserves_executable_prefix_and_required_entries() {
     );
     assert!(java_listing.lines().any(|line| line == "launcher/y.class"));
     assert!(java_listing.lines().any(|line| line == "launcher/Y.class"));
+}
+
+#[cfg(windows)]
+#[test]
+#[ignore = "requires the 86 MB upstream scip-java v0.13.1 launcher"]
+fn rebuilt_launcher_accepts_the_verified_upstream_scip_java_polyglot() {
+    use crate::semantic_indexer_manifest::{SemanticIndexerKind, pinned_indexer};
+    use sha2::{Digest, Sha256};
+
+    const TARGET: &str = "coursier/bootstrap/launcher/jars/scip-java-0.13.1.jar";
+    const EXPECTED_SHA256: &str =
+        "a694cae143c32c5b6226362fb4bd268a8d13d3cd9b482819b3b0029a9a97b8fe";
+    let source = std::path::PathBuf::from(
+        std::env::var_os("SNIFF_TEST_SCIP_JAVA_LAUNCHER")
+            .expect("set SNIFF_TEST_SCIP_JAVA_LAUNCHER to the upstream launcher"),
+    );
+    let source_bytes = std::fs::read(&source).unwrap();
+    assert_eq!(
+        format!("{:x}", Sha256::digest(&source_bytes)),
+        EXPECTED_SHA256
+    );
+
+    let temp = tempfile::tempdir().unwrap();
+    let spec = pinned_indexer(SemanticIndexerKind::Kotlin).unwrap();
+    let launcher = temp.path().join(spec.entrypoint_relative_path());
+    std::fs::create_dir_all(launcher.parent().unwrap()).unwrap();
+    std::fs::write(&launcher, source_bytes).unwrap();
+    patch_scip_java_windows(temp.path(), spec).unwrap();
+
+    let version = std::process::Command::new("java")
+        .arg("-jar")
+        .arg(&launcher)
+        .arg("--version")
+        .output()
+        .unwrap();
+    assert!(
+        version.status.success(),
+        "patched launcher failed to execute: {}",
+        String::from_utf8_lossy(&version.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(version.stdout).unwrap().trim(),
+        "scip-java version 0.0.0-SNAPSHOT"
+    );
+
+    let listing = std::process::Command::new("jar")
+        .arg("tf")
+        .arg(&launcher)
+        .output()
+        .unwrap();
+    assert!(
+        listing.status.success(),
+        "JDK rejected rebuilt upstream launcher: {}",
+        String::from_utf8_lossy(&listing.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(listing.stdout)
+            .unwrap()
+            .lines()
+            .filter(|line| *line == TARGET)
+            .count(),
+        1
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_gradle_patch_uses_private_project_cache_and_explicit_offline_mode() {
+    assert!(WINDOWS_SCIP_JAVA_PROCESS_RUNNER.contains("SNIFF_GRADLE_PROJECT_CACHE"));
+    assert!(WINDOWS_SCIP_JAVA_PROCESS_RUNNER.contains("--project-cache-dir"));
+    assert!(WINDOWS_SCIP_JAVA_PROCESS_RUNNER.contains("SNIFF_GRADLE_OFFLINE"));
+    assert!(WINDOWS_SCIP_JAVA_PROCESS_RUNNER.contains("--offline"));
 }

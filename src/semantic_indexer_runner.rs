@@ -19,6 +19,7 @@ const INDEX_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 #[cfg(debug_assertions)]
 const INDEXER_TIMEOUT_ENV: &str = "SNIFF_INTERNAL_INDEXER_TIMEOUT_SECS";
 const MAX_PROCESS_OUTPUT: usize = 2 * 1024 * 1024;
+const INDEXER_MEMORY_LIMIT: u64 = 8 * 1024 * 1024 * 1024;
 const INDEXER_PROCESS_LIMIT: u32 = 512;
 const MAX_COMPACT_ERROR_OUTPUT: usize = 8 * 1024;
 const INDEXER_CACHE_DIR: &str = ".sniff-indexer-cache";
@@ -245,6 +246,9 @@ async fn run_one(
     let output = if spec.kind == SemanticIndexerKind::Kotlin {
         let mut preparation = sandbox_command.clone();
         preparation.allow_network = true;
+        preparation
+            .env
+            .retain(|(name, _)| name != "SNIFF_GRADLE_OFFLINE");
         let preparation = run_sandbox_command(preparation, spec.display_name).await;
         match preparation {
             Ok(output) if output.status_code == Some(0) && !output.timed_out => {
@@ -678,6 +682,11 @@ fn build_indexer_sandbox_command(
         env.push(("COURSIER_CACHE".to_string(), cache.clone()));
         env.push(("COURSIER_CACHE_DIR".to_string(), cache.clone()));
         env.push(("GRADLE_USER_HOME".to_string(), cache.clone()));
+        env.push((
+            "SNIFF_GRADLE_PROJECT_CACHE".to_string(),
+            sandbox_repository_argument(root, &cache_root.join("project-cache").to_string_lossy()),
+        ));
+        env.push(("SNIFF_GRADLE_OFFLINE".to_string(), "1".to_string()));
         // Match Gradle's client JVM to org.gradle.jvmargs so --no-daemon does
         // not fork a single-use daemon that needs a network listener.
         let gradle_jvm_args = gradle_jvm_args
@@ -717,7 +726,7 @@ fn build_indexer_sandbox_command(
         allow_local_network: spec.kind == SemanticIndexerKind::Kotlin,
         timeout: index_timeout(),
         output_limit: MAX_PROCESS_OUTPUT,
-        memory_limit: crate::sandbox::DEFAULT_MEMORY_LIMIT,
+        memory_limit: INDEXER_MEMORY_LIMIT,
         process_limit: INDEXER_PROCESS_LIMIT,
     })
 }
@@ -862,10 +871,13 @@ fn format_timeout(duration: Duration) -> String {
 
 fn write_private_gradle_properties(root: &Path, cache_root: &Path) -> Result<(), String> {
     let home = sandbox_repository_argument(root, &root.to_string_lossy()).replace('\\', "\\\\");
+    let project_cache =
+        sandbox_repository_argument(root, &cache_root.join("project-cache").to_string_lossy())
+            .replace('\\', "\\\\");
     fs::write(
         cache_root.join("gradle.properties"),
         format!(
-            "systemProp.user.home={home}\norg.gradle.daemon=false\norg.gradle.parallel=false\n"
+            "systemProp.user.home={home}\norg.gradle.daemon=false\norg.gradle.parallel=false\norg.gradle.workers.max=32\norg.gradle.projectcachedir={project_cache}\n"
         ),
     )
     .map_err(|error| {
