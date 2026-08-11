@@ -370,6 +370,61 @@ public final class ProcessRunner {
 "#;
 
 #[cfg(windows)]
+const WINDOWS_SCIP_JAVA_LAUNCHER_REPACKER: &str = r#"
+import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.Enumeration;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipFile;
+import java.util.zip.ZipOutputStream;
+
+public final class LauncherRepacker {
+  private LauncherRepacker() {}
+
+  public static void main(String[] args) throws Exception {
+    if (args.length != 4) {
+      throw new IllegalArgumentException(
+          "expected launcher, replacement, output, and target entry arguments");
+    }
+    Path launcher = Path.of(args[0]);
+    Path replacement = Path.of(args[1]);
+    Path output = Path.of(args[2]);
+    String target = args[3];
+    int replacements = 0;
+    try (ZipFile input = new ZipFile(launcher.toFile());
+        ZipOutputStream rebuilt = new ZipOutputStream(Files.newOutputStream(output))) {
+      Enumeration<? extends ZipEntry> entries = input.entries();
+      while (entries.hasMoreElements()) {
+        ZipEntry source = entries.nextElement();
+        ZipEntry destination = new ZipEntry(source.getName());
+        destination.setMethod(ZipEntry.DEFLATED);
+        if (source.getComment() != null) destination.setComment(source.getComment());
+        if (source.getLastModifiedTime() != null) {
+          destination.setLastModifiedTime(source.getLastModifiedTime());
+        }
+        rebuilt.putNextEntry(destination);
+        if (source.getName().equals(target)) {
+          Files.copy(replacement, rebuilt);
+          replacements++;
+        } else if (!source.isDirectory()) {
+          try (InputStream contents = input.getInputStream(source)) {
+            contents.transferTo(rebuilt);
+          }
+        }
+        rebuilt.closeEntry();
+      }
+    }
+    if (replacements != 1) {
+      Files.deleteIfExists(output);
+      throw new IllegalStateException(
+          "expected exactly one " + target + " entry, found " + replacements);
+    }
+  }
+}
+"#;
+
+#[cfg(windows)]
 fn patch_scip_java_windows(root: &Path, spec: PinnedIndexer) -> Result<(), String> {
     let entrypoint = root.join(spec.entrypoint_relative_path());
     let patch_root = std::env::temp_dir().join(format!(
@@ -399,12 +454,22 @@ fn patch_scip_java_windows(root: &Path, spec: PinnedIndexer) -> Result<(), Strin
         fs::write(&runner_source, WINDOWS_SCIP_JAVA_PROCESS_RUNNER).map_err(|error| {
             format!("failed to write the Windows scip-java process patch source: {error}")
         })?;
+        let repacker_source = patch_root.join("LauncherRepacker.java");
+        fs::write(&repacker_source, WINDOWS_SCIP_JAVA_LAUNCHER_REPACKER).map_err(|error| {
+            format!("failed to write the Windows scip-java launcher repacker source: {error}")
+        })?;
 
         run_patch_tool(
             std::process::Command::new("jar")
                 .current_dir(&launcher_root)
                 .arg("xf")
-                .arg(&entrypoint),
+                .arg(&entrypoint)
+                .args([
+                    "coursier/bootstrap/launcher/jars/scip-aggregator-0.13.1.jar",
+                    "coursier/bootstrap/launcher/jars/scip-java-0.13.1.jar",
+                    "coursier/bootstrap/launcher/jars/scip-java-bindings-0.9.0.jar",
+                    "coursier/bootstrap/launcher/jars/protobuf-java-4.34.2.jar",
+                ]),
             "extract scip-java Windows compatibility patch dependencies",
         )?;
         let jars = launcher_root.join("coursier/bootstrap/launcher/jars");
@@ -443,7 +508,8 @@ fn patch_scip_java_windows(root: &Path, spec: PinnedIndexer) -> Result<(), Strin
                 .arg("-d")
                 .arg(&classes)
                 .arg(&writer_source)
-                .arg(&runner_source),
+                .arg(&runner_source)
+                .arg(&repacker_source),
             "compile scip-java Windows compatibility patch",
         )?;
         run_patch_tool(
@@ -455,41 +521,27 @@ fn patch_scip_java_windows(root: &Path, spec: PinnedIndexer) -> Result<(), Strin
                 .arg("org/scip_code/scip_java/buildtools/ProcessRunner.class"),
             "patch scip-java Windows process runner",
         )?;
-        let manifest = launcher_root.join("META-INF/MANIFEST.MF");
-        if !manifest.is_file() {
-            return Err(format!(
-                "scip-java launcher manifest is missing after extraction: {}",
-                manifest.display()
-            ));
-        }
-        let saved_manifest = patch_root.join("launcher-manifest.mf");
-        fs::copy(&manifest, &saved_manifest).map_err(|error| {
-            format!(
-                "failed to preserve scip-java launcher manifest {}: {error}",
-                manifest.display()
-            )
-        })?;
-        fs::remove_file(&manifest).map_err(|error| {
-            format!(
-                "failed to remove extracted scip-java launcher manifest {}: {error}",
-                manifest.display()
-            )
-        })?;
         let rebuilt_launcher = patch_root.join("scip-java-rebuilt.jar");
         run_patch_tool(
-            std::process::Command::new("jar")
-                .arg("cfm")
+            std::process::Command::new("java")
+                .arg("-cp")
+                .arg(&classes)
+                .arg("LauncherRepacker")
+                .arg(&entrypoint)
+                .arg(&scip_java)
                 .arg(&rebuilt_launcher)
-                .arg(&saved_manifest)
-                .arg("-C")
-                .arg(&launcher_root)
-                .arg("."),
-            "rebuild patched scip-java launcher",
+                .arg("coursier/bootstrap/launcher/jars/scip-java-0.13.1.jar"),
+            "stream-rebuild patched scip-java launcher",
         )?;
         install_rebuilt_zip_preserving_prefix(
             &entrypoint,
             &rebuilt_launcher,
-            "coursier/bootstrap/launcher/jars/scip-java-0.13.1.jar",
+            &[
+                "coursier/bootstrap/launcher/jars/scip-java-0.13.1.jar",
+                "coursier/bootstrap/launcher/ResourcesLauncher.class",
+                "coursier/bootstrap/launcher/y.class",
+                "coursier/bootstrap/launcher/Y.class",
+            ],
         )?;
         run_patch_tool(
             std::process::Command::new("jar")
@@ -587,7 +639,7 @@ fn patch_scip_java_windows(root: &Path, spec: PinnedIndexer) -> Result<(), Strin
 fn install_rebuilt_zip_preserving_prefix(
     launcher_path: &Path,
     rebuilt_zip_path: &Path,
-    required_entry: &str,
+    required_entries: &[&str],
 ) -> Result<(), String> {
     const MAX_EXECUTABLE_PREFIX_BYTES: usize = 1024 * 1024;
     const LOCAL_ZIP_HEADER: &[u8; 4] = b"PK\x03\x04";
@@ -663,9 +715,13 @@ fn install_rebuilt_zip_preserving_prefix(
             "patched scip-java launcher did not preserve its executable prefix".to_string(),
         );
     }
-    validation.by_name(required_entry).map_err(|error| {
-        format!("rebuilt scip-java launcher is missing required entry {required_entry}: {error}")
-    })?;
+    for required_entry in required_entries {
+        validation.by_name(required_entry).map_err(|error| {
+            format!(
+                "rebuilt scip-java launcher is missing required entry {required_entry}: {error}"
+            )
+        })?;
+    }
     validation
         .by_name("META-INF/MANIFEST.MF")
         .map_err(|error| format!("rebuilt scip-java launcher is missing its manifest: {error}"))?;
