@@ -48,6 +48,8 @@ struct TemporaryIndexerWorkspace {
     directory: PathBuf,
     #[cfg(windows)]
     gradle_launcher_jar: PathBuf,
+    #[cfg(windows)]
+    gradle_overlay_directory: Option<PathBuf>,
     gradle_main_class: &'static str,
     project_root: PathBuf,
 }
@@ -70,19 +72,17 @@ impl TemporaryIndexerWorkspace {
             )
         });
         #[cfg(windows)]
-        let overlay_cleanup = {
-            let overlay = gradle_windows::overlay_directory(&self.directory);
-            if overlay.exists() {
-                fs::remove_dir_all(&overlay).map_err(|error| {
+        let overlay_cleanup = match &self.gradle_overlay_directory {
+            Some(overlay) if overlay.exists() => {
+                fs::remove_dir_all(overlay).map_err(|error| {
                     format!(
                         "{} indexing completed but Gradle runtime overlay cleanup failed for {}: {error}",
                         indexer_name,
                         overlay.display()
                     )
                 })
-            } else {
-                Ok(())
             }
+            _ => Ok(()),
         };
         #[cfg(not(windows))]
         let overlay_cleanup = Ok(());
@@ -461,7 +461,7 @@ fn build_indexer_sandbox_command(
             "Windows Kotlin indexing requires a prepared Gradle workspace".to_string()
         })?;
         Some(gradle_windows::prepare_child_classpath(
-            &workspace.directory,
+            workspace.gradle_overlay_directory.as_deref(),
             &workspace.gradle_launcher_jar,
             workspace.gradle_main_class,
             &entrypoint,
@@ -786,15 +786,6 @@ fn build_indexer_sandbox_command(
             cache.join(".tmp"),
             cache.join("project-cache"),
         ]);
-        #[cfg(windows)]
-        writable_paths.push(
-            workspace
-                .ok_or_else(|| {
-                    "Windows Kotlin indexing requires a prepared Gradle workspace".to_string()
-                })?
-                .directory
-                .clone(),
-        );
     }
 
     Ok(SandboxCommand {
@@ -1406,7 +1397,8 @@ fn prepare_windows_kotlin_workspace(
         ));
     }
 
-    let directory = create_temporary_workspace("sniff-kotlin-gradle")?;
+    let directory =
+        create_temporary_workspace_in(&root.join(INDEXER_TEMP_DIR), "sniff-kotlin-gradle")?;
     let result = (|| {
         fs::write(
             directory.join("build.gradle.kts"),
@@ -1424,25 +1416,28 @@ fn prepare_windows_kotlin_workspace(
                 directory.join("build").display()
             )
         })?;
-        let (gradle_launcher_jar, gradle_main_class) = if project_gradle_wrapper.is_file() {
-            let wrapper_jar = root.join("gradle/wrapper/gradle-wrapper.jar");
-            if !wrapper_jar.is_file() {
-                return Err(format!(
-                    "Gradle wrapper launcher is missing at {}; refusing to execute the batch wrapper through a shell",
-                    wrapper_jar.display()
-                ));
-            }
-            (wrapper_jar, "org.gradle.wrapper.GradleWrapperMain")
-        } else {
-            let system_gradle = find_system_gradle()?;
-            (
-                system_gradle_launcher_jar(&system_gradle)?,
-                "org.gradle.launcher.GradleMain",
-            )
-        };
+        let (gradle_launcher_jar, gradle_main_class, gradle_overlay_directory) =
+            if project_gradle_wrapper.is_file() {
+                let wrapper_jar = root.join("gradle/wrapper/gradle-wrapper.jar");
+                if !wrapper_jar.is_file() {
+                    return Err(format!(
+                        "Gradle wrapper launcher is missing at {}; refusing to execute the batch wrapper through a shell",
+                        wrapper_jar.display()
+                    ));
+                }
+                (wrapper_jar, "org.gradle.wrapper.GradleWrapperMain", None)
+            } else {
+                let system_gradle = find_system_gradle()?;
+                (
+                    system_gradle_launcher_jar(&system_gradle)?,
+                    "org.gradle.launcher.GradleMain",
+                    Some(create_temporary_workspace(gradle_windows::OVERLAY_DIR)?),
+                )
+            };
         Ok(TemporaryIndexerWorkspace {
             directory: directory.clone(),
             gradle_launcher_jar,
+            gradle_overlay_directory,
             gradle_main_class,
             project_root: root.to_path_buf(),
         })
@@ -1523,9 +1518,13 @@ fn system_gradle_launcher_jar(gradle: &Path) -> Result<PathBuf, String> {
 
 #[cfg(windows)]
 fn create_temporary_workspace(prefix: &str) -> Result<PathBuf, String> {
+    create_temporary_workspace_in(&std::env::temp_dir(), prefix)
+}
+
+#[cfg(windows)]
+fn create_temporary_workspace_in(base: &Path, prefix: &str) -> Result<PathBuf, String> {
     static NEXT_WORKSPACE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
-    let base = std::env::temp_dir();
     let pid = std::process::id();
     let started = SystemTime::now()
         .duration_since(UNIX_EPOCH)

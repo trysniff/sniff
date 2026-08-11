@@ -1,7 +1,7 @@
 #[cfg(windows)]
 use super::gradle_windows::{
-    OVERLAY_DIR as WINDOWS_GRADLE_OVERLAY_DIR, TEMP_CLASS as WINDOWS_GRADLE_TEMP_CLASS,
-    java_classpath as windows_java_classpath, prepare_system_overlay,
+    TEMP_CLASS as WINDOWS_GRADLE_TEMP_CLASS, java_classpath as windows_java_classpath,
+    prepare_system_overlay,
 };
 use super::{
     GRADLE_INDEXER_BASE_JVM_ARGS, WINDOWS_SCIP_NODE_BOOTSTRAP, WINDOWS_SCIP_PYTHON_BOOTSTRAP,
@@ -103,22 +103,21 @@ fn windows_gradle_overlay_replaces_only_the_legacy_temp_class() {
     std::fs::write(&replacement, b"nio-file-temp").unwrap();
     let workspace_root = temp.path().join("workspace");
     std::fs::create_dir(&workspace_root).unwrap();
+    let overlay_root = temp.path().join("overlay");
+    std::fs::create_dir(&overlay_root).unwrap();
     let workspace = TemporaryIndexerWorkspace {
         directory: workspace_root.clone(),
         gradle_launcher_jar: launcher,
+        gradle_overlay_directory: Some(overlay_root.clone()),
         gradle_main_class: "org.gradle.launcher.GradleMain",
         project_root: temp.path().join("project"),
     };
 
-    let prepared = prepare_system_overlay(
-        &workspace.directory,
-        &workspace.gradle_launcher_jar,
-        &patch_dir,
-    )
-    .unwrap();
+    let prepared =
+        prepare_system_overlay(&overlay_root, &workspace.gradle_launcher_jar, &patch_dir).unwrap();
     let classpath = &prepared.value;
 
-    assert!(classpath.contains(WINDOWS_GRADLE_OVERLAY_DIR));
+    assert!(classpath.contains(&overlay_root.to_string_lossy().to_string()));
     assert!(classpath.contains(r"lib\*"));
     assert!(classpath.contains(r"lib\plugins\*"));
     assert_eq!(std::fs::read(&beacon).unwrap(), b"beacon");
@@ -470,6 +469,7 @@ fn windows_kotlin_workspace_launches_the_project_wrapper_jar_directly() {
         std::process::id()
     ));
     std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir(root.join(".sniff-indexer-tmp")).unwrap();
     std::fs::write(root.join("gradlew"), "#!/usr/bin/env sh\n").unwrap();
     std::fs::write(root.join("gradlew.bat"), "@echo off\r\n").unwrap();
     std::fs::create_dir_all(root.join("gradle/wrapper")).unwrap();

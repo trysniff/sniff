@@ -12,7 +12,7 @@ pub(crate) struct PreparedClasspath {
 }
 
 pub(crate) fn prepare_child_classpath(
-    workspace_directory: &Path,
+    overlay_directory: Option<&Path>,
     launcher: &Path,
     main_class: &str,
     scip_java_entrypoint: &Path,
@@ -33,11 +33,14 @@ pub(crate) fn prepare_child_classpath(
         ));
     }
 
-    prepare_system_overlay(workspace_directory, launcher, &patch_dir)
+    let overlay_directory = overlay_directory.ok_or_else(|| {
+        "Windows system Gradle requires a private read-only runtime overlay".to_string()
+    })?;
+    prepare_system_overlay(overlay_directory, launcher, &patch_dir)
 }
 
 pub(crate) fn prepare_system_overlay(
-    workspace_directory: &Path,
+    overlay: &Path,
     launcher: &Path,
     patch_dir: &Path,
 ) -> Result<PreparedClasspath, String> {
@@ -97,10 +100,24 @@ pub(crate) fn prepare_system_overlay(
             replacement.display()
         ));
     }
-    let overlay = overlay_directory(workspace_directory);
-    if overlay.exists() {
+    if !overlay.is_dir() {
         return Err(format!(
-            "refusing to reuse an unexpected Windows Gradle runtime overlay {}",
+            "private Windows Gradle runtime overlay was not reserved: {}",
+            overlay.display()
+        ));
+    }
+    if fs::read_dir(overlay)
+        .map_err(|error| {
+            format!(
+                "failed to inspect private Windows Gradle runtime overlay {}: {error}",
+                overlay.display()
+            )
+        })?
+        .next()
+        .is_some()
+    {
+        return Err(format!(
+            "refusing to reuse a non-empty Windows Gradle runtime overlay {}",
             overlay.display()
         ));
     }
@@ -136,12 +153,8 @@ pub(crate) fn prepare_system_overlay(
     .map_err(|error| format!("failed to build private Windows Gradle classpath: {error}"))?;
     Ok(PreparedClasspath {
         value: classpath.to_string_lossy().into_owned(),
-        read_only_directory: Some(overlay),
+        read_only_directory: Some(overlay.to_path_buf()),
     })
-}
-
-pub(crate) fn overlay_directory(workspace_directory: &Path) -> PathBuf {
-    workspace_directory.with_extension(OVERLAY_DIR)
 }
 
 fn unique_distribution_jar(directory: &Path, prefix: &str) -> Result<PathBuf, String> {
