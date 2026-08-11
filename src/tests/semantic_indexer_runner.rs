@@ -110,19 +110,21 @@ fn windows_gradle_overlay_replaces_only_the_legacy_temp_class() {
         project_root: temp.path().join("project"),
     };
 
-    let classpath = prepare_system_overlay(
+    let prepared = prepare_system_overlay(
         &workspace.directory,
         &workspace.gradle_launcher_jar,
         &patch_dir,
     )
     .unwrap();
+    let classpath = &prepared.value;
 
     assert!(classpath.contains(WINDOWS_GRADLE_OVERLAY_DIR));
     assert!(classpath.contains(r"lib\*"));
     assert!(classpath.contains(r"lib\plugins\*"));
     assert_eq!(std::fs::read(&beacon).unwrap(), b"beacon");
-    let overlay_jar = workspace_root
-        .join(WINDOWS_GRADLE_OVERLAY_DIR)
+    let overlay_jar = prepared
+        .read_only_directory
+        .unwrap()
         .join("lib/gradle-file-temp-8.8.jar");
     let mut original = zip::ZipArchive::new(std::fs::File::open(&file_temp).unwrap()).unwrap();
     let mut original_temp = Vec::new();
@@ -481,6 +483,7 @@ fn windows_kotlin_workspace_launches_the_project_wrapper_jar_directly() {
     let workspace = prepare_indexer_workspace(spec, &root).unwrap().unwrap();
     assert_ne!(workspace.directory, root);
     assert!(workspace.directory.join("build.gradle.kts").is_file());
+    assert!(workspace.directory.join("build").is_dir());
     assert_eq!(
         workspace.gradle_launcher_jar,
         root.join("gradle/wrapper/gradle-wrapper.jar")

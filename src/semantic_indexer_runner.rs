@@ -62,13 +62,37 @@ impl Drop for TemporaryIndexerDirectory {
 
 impl TemporaryIndexerWorkspace {
     fn cleanup(self, indexer_name: &str) -> Result<(), String> {
-        fs::remove_dir_all(&self.directory).map_err(|error| {
+        let workspace_cleanup = fs::remove_dir_all(&self.directory).map_err(|error| {
             format!(
                 "{} indexing completed but temporary workspace cleanup failed for {}: {error}",
                 indexer_name,
                 self.directory.display()
             )
-        })
+        });
+        #[cfg(windows)]
+        let overlay_cleanup = {
+            let overlay = gradle_windows::overlay_directory(&self.directory);
+            if overlay.exists() {
+                fs::remove_dir_all(&overlay).map_err(|error| {
+                    format!(
+                        "{} indexing completed but Gradle runtime overlay cleanup failed for {}: {error}",
+                        indexer_name,
+                        overlay.display()
+                    )
+                })
+            } else {
+                Ok(())
+            }
+        };
+        #[cfg(not(windows))]
+        let overlay_cleanup = Ok(());
+        match (workspace_cleanup, overlay_cleanup) {
+            (Ok(()), Ok(())) => Ok(()),
+            (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
+            (Err(workspace_error), Err(overlay_error)) => {
+                Err(format!("{workspace_error}; additionally, {overlay_error}"))
+            }
+        }
     }
 }
 
@@ -432,7 +456,7 @@ fn build_indexer_sandbox_command(
         )
     })?;
     #[cfg(windows)]
-    let gradle_child_classpath = if spec.kind == SemanticIndexerKind::Kotlin {
+    let gradle_child = if spec.kind == SemanticIndexerKind::Kotlin {
         let workspace = workspace.ok_or_else(|| {
             "Windows Kotlin indexing requires a prepared Gradle workspace".to_string()
         })?;
@@ -668,6 +692,18 @@ fn build_indexer_sandbox_command(
                 workspace.directory.display()
             )
         })?);
+        #[cfg(windows)]
+        if let Some(overlay) = gradle_child
+            .as_ref()
+            .and_then(|prepared| prepared.read_only_directory.as_ref())
+        {
+            read_only_paths.push(fs::canonicalize(overlay).map_err(|error| {
+                format!(
+                    "failed to resolve private Gradle runtime overlay {}: {error}",
+                    overlay.display()
+                )
+            })?);
+        }
         env.push((
             "SNIFF_INTERNAL_GRADLE_LAUNCHER".to_string(),
             "1".to_string(),
@@ -675,9 +711,10 @@ fn build_indexer_sandbox_command(
         #[cfg(windows)]
         env.push((
             "SNIFF_GRADLE_CLASSPATH".to_string(),
-            gradle_child_classpath
+            gradle_child
                 .as_ref()
                 .ok_or_else(|| "Windows Gradle child classpath was not prepared".to_string())?
+                .value
                 .clone(),
         ));
         env.push((
@@ -749,6 +786,15 @@ fn build_indexer_sandbox_command(
             cache.join(".tmp"),
             cache.join("project-cache"),
         ]);
+        #[cfg(windows)]
+        writable_paths.push(
+            workspace
+                .ok_or_else(|| {
+                    "Windows Kotlin indexing requires a prepared Gradle workspace".to_string()
+                })?
+                .directory
+                .clone(),
+        );
     }
 
     Ok(SandboxCommand {
@@ -1370,6 +1416,12 @@ fn prepare_windows_kotlin_workspace(
             format!(
                 "failed to create temporary Kotlin Gradle project marker {}: {error}",
                 directory.join("build.gradle.kts").display()
+            )
+        })?;
+        fs::create_dir(directory.join("build")).map_err(|error| {
+            format!(
+                "failed to create temporary Kotlin Gradle output directory {}: {error}",
+                directory.join("build").display()
             )
         })?;
         let (gradle_launcher_jar, gradle_main_class) = if project_gradle_wrapper.is_file() {

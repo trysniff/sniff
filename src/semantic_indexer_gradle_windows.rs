@@ -6,18 +6,26 @@ use std::path::{Path, PathBuf};
 pub(crate) const OVERLAY_DIR: &str = "sniff-gradle-runtime-overlay";
 pub(crate) const TEMP_CLASS: &str = "org/gradle/api/internal/file/temp/TempFiles.class";
 
+pub(crate) struct PreparedClasspath {
+    pub(crate) value: String,
+    pub(crate) read_only_directory: Option<PathBuf>,
+}
+
 pub(crate) fn prepare_child_classpath(
     workspace_directory: &Path,
     launcher: &Path,
     main_class: &str,
     scip_java_entrypoint: &Path,
-) -> Result<String, String> {
+) -> Result<PreparedClasspath, String> {
     let patch_dir = scip_java_entrypoint
         .parent()
         .ok_or_else(|| "scip-java entrypoint has no parent directory".to_string())?
         .join("scip-java-v0.13.1-patch");
     if main_class == "org.gradle.wrapper.GradleWrapperMain" {
-        return Ok(java_classpath(&patch_dir, launcher));
+        return Ok(PreparedClasspath {
+            value: java_classpath(&patch_dir, launcher),
+            read_only_directory: None,
+        });
     }
     if main_class != "org.gradle.launcher.GradleMain" {
         return Err(format!(
@@ -32,7 +40,7 @@ pub(crate) fn prepare_system_overlay(
     workspace_directory: &Path,
     launcher: &Path,
     patch_dir: &Path,
-) -> Result<String, String> {
+) -> Result<PreparedClasspath, String> {
     let launcher = fs::canonicalize(launcher).map_err(|error| {
         format!(
             "failed to resolve the Windows Gradle launcher {}: {error}",
@@ -89,7 +97,7 @@ pub(crate) fn prepare_system_overlay(
             replacement.display()
         ));
     }
-    let overlay = workspace_directory.join(OVERLAY_DIR);
+    let overlay = overlay_directory(workspace_directory);
     if overlay.exists() {
         return Err(format!(
             "refusing to reuse an unexpected Windows Gradle runtime overlay {}",
@@ -126,7 +134,14 @@ pub(crate) fn prepare_system_overlay(
         strip_windows_verbatim_prefix(gradle_plugins.join("*")),
     ])
     .map_err(|error| format!("failed to build private Windows Gradle classpath: {error}"))?;
-    Ok(classpath.to_string_lossy().into_owned())
+    Ok(PreparedClasspath {
+        value: classpath.to_string_lossy().into_owned(),
+        read_only_directory: Some(overlay),
+    })
+}
+
+pub(crate) fn overlay_directory(workspace_directory: &Path) -> PathBuf {
+    workspace_directory.with_extension(OVERLAY_DIR)
 }
 
 fn unique_distribution_jar(directory: &Path, prefix: &str) -> Result<PathBuf, String> {
