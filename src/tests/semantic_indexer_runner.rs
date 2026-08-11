@@ -352,7 +352,6 @@ fn windows_kotlin_workspace_launches_the_project_wrapper_jar_directly() {
     let workspace = prepare_indexer_workspace(spec, &root).unwrap().unwrap();
     assert_ne!(workspace.directory, root);
     assert!(workspace.directory.join("build.gradle.kts").is_file());
-    assert!(workspace.path_prefix.join("gradle.exe").is_file());
     assert_eq!(
         workspace.gradle_launcher_jar,
         root.join("gradle/wrapper/gradle-wrapper.jar")

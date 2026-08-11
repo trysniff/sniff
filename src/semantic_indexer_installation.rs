@@ -244,7 +244,10 @@ fn source_identity(spec: PinnedIndexer) -> String {
     };
     #[cfg(windows)]
     if spec.kind == SemanticIndexerKind::Kotlin {
-        return format!("{source}:sniff-windows-patch-v6");
+        return format!(
+            "{source}:sniff-windows-patch-{}",
+            crate::semantic_indexer_manifest::WINDOWS_SCIP_JAVA_PATCH_ID
+        );
     }
     #[cfg(windows)]
     if spec.kind == SemanticIndexerKind::Go {

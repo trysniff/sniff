@@ -23,7 +23,7 @@ const MAX_PROCESS_OUTPUT: usize = 2 * 1024 * 1024;
 const MAX_COMPACT_ERROR_OUTPUT: usize = 8 * 1024;
 const INDEXER_CACHE_DIR: &str = ".sniff-indexer-cache";
 const INDEXER_TEMP_DIR: &str = ".sniff-indexer-tmp";
-pub(crate) const GRADLE_INDEXER_BASE_JVM_ARGS: &str = concat!(
+const GRADLE_INDEXER_BASE_JVM_ARGS: &str = concat!(
     "--add-opens=java.base/java.util=ALL-UNNAMED ",
     "--add-opens=java.base/java.lang=ALL-UNNAMED ",
     "--add-opens=java.base/java.lang.invoke=ALL-UNNAMED ",
@@ -39,7 +39,6 @@ const WINDOWS_SCIP_NODE_BOOTSTRAP: &str = "const indexer=require(process.argv[1]
 
 struct TemporaryIndexerWorkspace {
     directory: PathBuf,
-    path_prefix: PathBuf,
     gradle_launcher_jar: PathBuf,
     gradle_main_class: &'static str,
     project_root: PathBuf,
@@ -640,24 +639,6 @@ fn build_indexer_sandbox_command(
                 workspace.directory.display()
             )
         })?);
-        read_only_paths.push(fs::canonicalize(&workspace.path_prefix).map_err(|error| {
-            format!(
-                "failed to resolve temporary indexer launcher directory {}: {error}",
-                workspace.path_prefix.display()
-            )
-        })?);
-        #[cfg(windows)]
-        {
-            let gradle_launcher = fs::canonicalize(workspace.path_prefix.join("gradle.exe"))
-                .map_err(|error| {
-                    format!(
-                        "failed to resolve temporary Gradle launcher image {}: {error}",
-                        workspace.path_prefix.join("gradle.exe").display()
-                    )
-                })?;
-            push_external_read_only(root, &mut executable_paths, gradle_launcher);
-        }
-        path_prefixes.push(workspace.path_prefix.clone());
         env.push((
             "SNIFF_INTERNAL_GRADLE_LAUNCHER".to_string(),
             "1".to_string(),
@@ -1315,13 +1296,6 @@ fn prepare_windows_kotlin_workspace(
 
     let directory = create_temporary_workspace("sniff-kotlin-gradle")?;
     let result = (|| {
-        let path_prefix = directory.join("bin");
-        fs::create_dir(&path_prefix).map_err(|error| {
-            format!(
-                "failed to create temporary Kotlin Gradle launcher directory {}: {error}",
-                path_prefix.display()
-            )
-        })?;
         fs::write(
             directory.join("build.gradle.kts"),
             "// Sniff marker: the launcher delegates the build to the target project.\r\n",
@@ -1348,20 +1322,8 @@ fn prepare_windows_kotlin_workspace(
                 "org.gradle.launcher.GradleMain",
             )
         };
-        // Java ProcessBuilder cannot launch a Windows batch file by the bare
-        // `gradle` name, so reuse Sniff as a temporary launcher instead of
-        // shipping another executable.
-        fs::write(path_prefix.join("gradle.exe"), current_executable_bytes()?).map_err(
-            |error| {
-                format!(
-                    "failed to create temporary Windows Gradle launcher {}: {error}",
-                    path_prefix.join("gradle.exe").display()
-                )
-            },
-        )?;
         Ok(TemporaryIndexerWorkspace {
             directory: directory.clone(),
-            path_prefix,
             gradle_launcher_jar,
             gradle_main_class,
             project_root: root.to_path_buf(),
@@ -1439,19 +1401,6 @@ fn system_gradle_launcher_jar(gradle: &Path) -> Result<PathBuf, String> {
             lib.display()
         )),
     }
-}
-
-#[cfg(windows)]
-fn current_executable_bytes() -> Result<Vec<u8>, String> {
-    let executable = std::env::current_exe().map_err(|error| {
-        format!("failed to resolve Sniff executable for Gradle launcher: {error}")
-    })?;
-    fs::read(&executable).map_err(|error| {
-        format!(
-            "failed to read Sniff executable {} for Gradle launcher: {error}",
-            executable.display()
-        )
-    })
 }
 
 #[cfg(windows)]

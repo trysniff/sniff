@@ -8,6 +8,8 @@ use reqwest::Client;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::ffi::OsString;
+#[cfg(windows)]
+use std::fs::File;
 use std::fs::{self, OpenOptions};
 use std::io::{Cursor, Read, Write};
 use std::path::{Component, Path, PathBuf};
@@ -15,6 +17,8 @@ use std::time::Duration;
 use tokio::process::Command;
 use tokio::time::timeout;
 use zip::ZipArchive;
+#[cfg(windows)]
+use zip::ZipWriter;
 
 #[path = "semantic_indexer_go_installer.rs"]
 mod go_installer;
@@ -193,6 +197,181 @@ public class ScipWriter implements AutoCloseable {
 "#;
 
 #[cfg(windows)]
+const WINDOWS_SCIP_JAVA_PROCESS_RUNNER: &str = r#"package org.scip_code.scip_java.buildtools;
+
+import java.io.BufferedReader;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import kotlin.Unit;
+import kotlin.jvm.functions.Function1;
+
+public final class ProcessRunner {
+  public static final ProcessRunner INSTANCE = new ProcessRunner();
+  private static final String BASE_JVM_OPTIONS =
+      "--add-opens=java.base/java.util=ALL-UNNAMED "
+          + "--add-opens=java.base/java.lang=ALL-UNNAMED "
+          + "--add-opens=java.base/java.lang.invoke=ALL-UNNAMED "
+          + "--add-opens=java.prefs/java.util.prefs=ALL-UNNAMED "
+          + "--add-opens=java.base/java.nio.charset=ALL-UNNAMED "
+          + "--add-opens=java.base/java.net=ALL-UNNAMED "
+          + "--add-opens=java.base/java.util.concurrent.atomic=ALL-UNNAMED "
+          + "-Xmx512m -XX:MaxMetaspaceSize=384m -Dfile.encoding=US-ASCII "
+          + "-Duser.country=US -Duser.language=en -Duser.variant=";
+
+  private ProcessRunner() {}
+
+  public final ProcessResult run(
+      List<String> command,
+      Path cwd,
+      Map<String, String> env,
+      Function1<? super String, Unit> onStdout,
+      Function1<? super String, Unit> onStderr) {
+    List<String> effective = rewriteGradleCommand(command);
+    ProcessBuilder builder = new ProcessBuilder(effective).directory(cwd.toFile());
+    builder.environment().putAll(env);
+    try {
+      Process process = builder.start();
+      ExecutorService pool = Executors.newFixedThreadPool(2);
+      try {
+        Future<?> stdout = pool.submit(() -> drain(process.getInputStream(), onStdout));
+        Future<?> stderr = pool.submit(() -> drain(process.getErrorStream(), onStderr));
+        int exit = process.waitFor();
+        stdout.get(30, TimeUnit.SECONDS);
+        stderr.get(30, TimeUnit.SECONDS);
+        trace("direct Gradle Java exited with " + exit);
+        return new ProcessResult(exit);
+      } finally {
+        pool.shutdownNow();
+      }
+    } catch (InterruptedException error) {
+      Thread.currentThread().interrupt();
+      throw new RuntimeException("interrupted while running the sandboxed Gradle process", error);
+    } catch (Exception error) {
+      trace("direct Gradle Java launch failed: " + error);
+      throw new RuntimeException("failed to run the sandboxed Gradle process", error);
+    }
+  }
+
+  public static ProcessResult run$default(
+      ProcessRunner self,
+      List<String> command,
+      Path cwd,
+      Map<String, String> env,
+      Function1<? super String, Unit> onStdout,
+      Function1<? super String, Unit> onStderr,
+      int mask,
+      Object marker) {
+    if (marker != null) {
+      throw new UnsupportedOperationException("super calls with default arguments are unsupported");
+    }
+    if ((mask & 4) != 0) env = Collections.emptyMap();
+    if ((mask & 8) != 0) onStdout = value -> Unit.INSTANCE;
+    if ((mask & 16) != 0) onStderr = value -> Unit.INSTANCE;
+    return self.run(command, cwd, env, onStdout, onStderr);
+  }
+
+  private static List<String> rewriteGradleCommand(List<String> command) {
+    if (command.isEmpty()
+        || !"gradle".equals(command.get(0))
+        || !"1".equals(System.getenv("SNIFF_INTERNAL_GRADLE_LAUNCHER"))) {
+      return command;
+    }
+    normalizeInitScript(command);
+    String javaHome = requiredEnvironment("JAVA_HOME");
+    String launcher = requiredEnvironment("SNIFF_GRADLE_LAUNCHER_JAR");
+    String mainClass = requiredEnvironment("SNIFF_GRADLE_MAIN_CLASS");
+    if (!mainClass.equals("org.gradle.wrapper.GradleWrapperMain")
+        && !mainClass.equals("org.gradle.launcher.GradleMain")) {
+      throw new IllegalStateException("unsupported Gradle main class");
+    }
+    String project = requiredEnvironment("SNIFF_GRADLE_PROJECT");
+    String javaOptions = requiredEnvironment("JAVA_OPTS");
+    int agentSeparator = javaOptions.lastIndexOf(" -javaagent:");
+    if (agentSeparator < 0 || !javaOptions.substring(0, agentSeparator).equals(BASE_JVM_OPTIONS)) {
+      throw new IllegalStateException("unexpected Gradle JAVA_OPTS contract");
+    }
+    String agent = javaOptions.substring(agentSeparator + " -javaagent:".length());
+    if (agent.isEmpty()) throw new IllegalStateException("missing Gradle instrumentation agent");
+
+    List<String> rewritten = new ArrayList<>();
+    rewritten.add(Path.of(javaHome, "bin", "java.exe").toString());
+    Collections.addAll(rewritten, BASE_JVM_OPTIONS.split(" "));
+    rewritten.add("-javaagent:" + agent);
+    rewritten.add("-Dorg.gradle.appname=gradle");
+    rewritten.add("-classpath");
+    rewritten.add(launcher);
+    rewritten.add(mainClass);
+    rewritten.add("-p");
+    rewritten.add(project);
+    rewritten.addAll(command.subList(1, command.size()));
+    trace("rewrote Gradle to one direct Java child");
+    return rewritten;
+  }
+
+  private static void normalizeInitScript(List<String> command) {
+    for (int index = 0; index < command.size(); index++) {
+      String argument = command.get(index);
+      if (!argument.equals("--init-script") && !argument.equals("-I")) continue;
+      if (index + 1 >= command.size()) throw new IllegalStateException("missing Gradle init script");
+      Path script = Path.of(command.get(index + 1));
+      try {
+        Files.writeString(
+            script,
+            Files.readString(script, StandardCharsets.UTF_8).replace('\\', '/'),
+            StandardCharsets.UTF_8);
+      } catch (Exception error) {
+        throw new RuntimeException("failed to normalize the scip-java init script", error);
+      }
+      return;
+    }
+  }
+
+  private static String requiredEnvironment(String name) {
+    String value = System.getenv(name);
+    if (value == null || value.isEmpty()) throw new IllegalStateException("missing " + name);
+    return value;
+  }
+
+  private static void drain(InputStream input, Function1<? super String, Unit> sink) {
+    try (BufferedReader reader =
+        new BufferedReader(new InputStreamReader(input, StandardCharsets.UTF_8))) {
+      String line;
+      while ((line = reader.readLine()) != null) sink.invoke(line);
+    } catch (Exception error) {
+      throw new RuntimeException("failed to read sandboxed Gradle output", error);
+    }
+  }
+
+  private static void trace(String message) {
+    String destination = System.getenv("SNIFF_GRADLE_TRACE");
+    if (destination == null || destination.isEmpty()) return;
+    try {
+      Files.writeString(
+          Path.of(destination),
+          message + System.lineSeparator(),
+          StandardCharsets.UTF_8,
+          StandardOpenOption.CREATE,
+          StandardOpenOption.APPEND);
+    } catch (Exception ignored) {
+      // Debug tracing must not alter indexing behavior.
+    }
+  }
+}
+"#;
+
+#[cfg(windows)]
 fn patch_scip_java_windows(root: &Path, spec: PinnedIndexer) -> Result<(), String> {
     let entrypoint = root.join(spec.entrypoint_relative_path());
     let patch_root = std::env::temp_dir().join(format!(
@@ -207,9 +386,13 @@ fn patch_scip_java_windows(root: &Path, spec: PinnedIndexer) -> Result<(), Strin
         )
     })?;
     let result: Result<(), String> = (|| {
-        let source = patch_root.join("ScipWriter.java");
-        fs::write(&source, WINDOWS_SCIP_JAVA_WRITER).map_err(|error| {
+        let writer_source = patch_root.join("ScipWriter.java");
+        fs::write(&writer_source, WINDOWS_SCIP_JAVA_WRITER).map_err(|error| {
             format!("failed to write the Windows scip-java compatibility source: {error}")
+        })?;
+        let runner_source = patch_root.join("ProcessRunner.java");
+        fs::write(&runner_source, WINDOWS_SCIP_JAVA_PROCESS_RUNNER).map_err(|error| {
+            format!("failed to write the Windows scip-java process patch source: {error}")
         })?;
 
         run_patch_tool(
@@ -221,9 +404,10 @@ fn patch_scip_java_windows(root: &Path, spec: PinnedIndexer) -> Result<(), Strin
         )?;
         let jars = patch_root.join("coursier/bootstrap/launcher/jars");
         let aggregator = jars.join("scip-aggregator-0.13.1.jar");
+        let scip_java = jars.join("scip-java-0.13.1.jar");
         let bindings = jars.join("scip-java-bindings-0.9.0.jar");
         let protobuf = jars.join("protobuf-java-4.34.2.jar");
-        for path in [&aggregator, &bindings, &protobuf] {
+        for path in [&aggregator, &scip_java, &bindings, &protobuf] {
             if !path.is_file() {
                 return Err(format!(
                     "scip-java runtime is missing patch dependency {}",
@@ -240,10 +424,11 @@ fn patch_scip_java_windows(root: &Path, spec: PinnedIndexer) -> Result<(), Strin
             )
         })?;
         let classpath = format!(
-            "{};{};{}",
+            "{};{};{};{}\\*",
             aggregator.display(),
             bindings.display(),
-            protobuf.display()
+            protobuf.display(),
+            jars.display()
         );
         run_patch_tool(
             std::process::Command::new("javac")
@@ -252,8 +437,23 @@ fn patch_scip_java_windows(root: &Path, spec: PinnedIndexer) -> Result<(), Strin
                 .arg(&classpath)
                 .arg("-d")
                 .arg(&classes)
-                .arg(&source),
+                .arg(&writer_source)
+                .arg(&runner_source),
             "compile scip-java Windows compatibility patch",
+        )?;
+        run_patch_tool(
+            std::process::Command::new("jar")
+                .arg("uf")
+                .arg(&scip_java)
+                .arg("-C")
+                .arg(&classes)
+                .arg("org/scip_code/scip_java/buildtools/ProcessRunner.class"),
+            "patch scip-java Windows process runner",
+        )?;
+        replace_zip_entry_preserving_prefix(
+            &entrypoint,
+            "coursier/bootstrap/launcher/jars/scip-java-0.13.1.jar",
+            &scip_java,
         )?;
         run_patch_tool(
             std::process::Command::new("jar")
@@ -345,6 +545,139 @@ fn patch_scip_java_windows(root: &Path, spec: PinnedIndexer) -> Result<(), Strin
             patch_root.display()
         )),
     }
+}
+
+#[cfg(windows)]
+fn replace_zip_entry_preserving_prefix(
+    archive_path: &Path,
+    entry_name: &str,
+    replacement_path: &Path,
+) -> Result<(), String> {
+    let input = File::open(archive_path).map_err(|error| {
+        format!(
+            "failed to open scip-java launcher {} for patching: {error}",
+            archive_path.display()
+        )
+    })?;
+    let mut archive = ZipArchive::new(input).map_err(|error| {
+        format!(
+            "failed to read scip-java launcher archive {}: {error}",
+            archive_path.display()
+        )
+    })?;
+    let prefix_len = archive.offset();
+    let comment = archive.comment().to_vec().into_boxed_slice();
+    let zip_path = archive_path.with_extension("sniff-zip");
+    let output_path = archive_path.with_extension("sniff-repacked");
+    for path in [&zip_path, &output_path] {
+        if !path.exists() {
+            continue;
+        }
+        fs::remove_file(path).map_err(|error| {
+            format!(
+                "failed to clear stale scip-java repack output {}: {error}",
+                path.display()
+            )
+        })?;
+    }
+    let output = File::create(&zip_path).map_err(|error| {
+        format!(
+            "failed to create scip-java replacement ZIP {}: {error}",
+            zip_path.display()
+        )
+    })?;
+    let mut writer = ZipWriter::new(output);
+    writer.set_raw_comment(comment);
+    let mut replaced = false;
+    for index in 0..archive.len() {
+        let file = archive
+            .by_index(index)
+            .map_err(|error| format!("failed to read scip-java launcher entry {index}: {error}"))?;
+        if file.name() == entry_name {
+            let options = file.options();
+            drop(file);
+            writer
+                .start_file(entry_name, options)
+                .map_err(|error| format!("failed to start patched scip-java entry: {error}"))?;
+            let mut replacement = File::open(replacement_path).map_err(|error| {
+                format!(
+                    "failed to open patched scip-java runtime {}: {error}",
+                    replacement_path.display()
+                )
+            })?;
+            std::io::copy(&mut replacement, &mut writer)
+                .map_err(|error| format!("failed to embed patched scip-java runtime: {error}"))?;
+            replaced = true;
+        } else {
+            writer.raw_copy_file(file).map_err(|error| {
+                format!("failed to preserve scip-java launcher entry {index}: {error}")
+            })?;
+        }
+    }
+    if !replaced {
+        return Err(format!(
+            "scip-java launcher is missing required nested runtime {entry_name}"
+        ));
+    }
+    let output = writer
+        .finish()
+        .map_err(|error| format!("failed to finish patched scip-java launcher: {error}"))?;
+    output
+        .sync_all()
+        .map_err(|error| format!("failed to flush patched scip-java launcher: {error}"))?;
+    drop(output);
+
+    let mut combined = File::create(&output_path).map_err(|error| {
+        format!(
+            "failed to create scip-java repack output {}: {error}",
+            output_path.display()
+        )
+    })?;
+    let prefix = File::open(archive_path).map_err(|error| error.to_string())?;
+    let mut limited_prefix = std::io::Read::take(prefix, prefix_len);
+    std::io::copy(&mut limited_prefix, &mut combined).map_err(|error| {
+        format!(
+            "failed to preserve scip-java launcher prefix from {}: {error}",
+            archive_path.display()
+        )
+    })?;
+    let mut zip = File::open(&zip_path).map_err(|error| error.to_string())?;
+    std::io::copy(&mut zip, &mut combined)
+        .map_err(|error| format!("failed to append patched scip-java ZIP: {error}"))?;
+    combined
+        .sync_all()
+        .map_err(|error| format!("failed to flush repacked scip-java launcher: {error}"))?;
+    drop(combined);
+    fs::remove_file(&zip_path).map_err(|error| {
+        format!(
+            "failed to remove temporary scip-java ZIP {}: {error}",
+            zip_path.display()
+        )
+    })?;
+    drop(archive);
+
+    let validation = File::open(&output_path)
+        .map_err(|error| error.to_string())
+        .and_then(|file| ZipArchive::new(file).map_err(|error| error.to_string()))?;
+    if validation.offset() != prefix_len {
+        return Err(
+            "patched scip-java launcher did not preserve its executable prefix".to_string(),
+        );
+    }
+    drop(validation);
+    fs::copy(&output_path, archive_path).map_err(|error| {
+        format!(
+            "failed to install patched scip-java launcher {}: {error}",
+            archive_path.display()
+        )
+    })?;
+    fs::remove_file(&output_path).map_err(|error| {
+        format!(
+            "failed to remove scip-java repack output {}: {error}",
+            output_path.display()
+        )
+    })?;
+    Ok(())
 }
 
 #[cfg(windows)]
