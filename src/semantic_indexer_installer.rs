@@ -738,14 +738,18 @@ fn install_rebuilt_zip_preserving_prefix(
         .map_err(|error| format!("failed to assemble rebuilt scip-java launcher: {error}"))?;
     drop(combined);
 
-    let mut validation = File::open(&output_path)
-        .map_err(|error| error.to_string())
-        .and_then(|file| ZipArchive::new(file).map_err(|error| error.to_string()))?;
-    if validation.offset() != prefix_len as u64 {
+    let assembled = fs::read(&output_path)
+        .map_err(|error| format!("failed to validate rebuilt scip-java launcher: {error}"))?;
+    if !assembled.starts_with(&launcher_bytes[..prefix_len])
+        || assembled.get(prefix_len..prefix_len + LOCAL_ZIP_HEADER.len()) != Some(LOCAL_ZIP_HEADER)
+    {
         return Err(
             "patched scip-java launcher did not preserve its executable prefix".to_string(),
         );
     }
+    let mut validation = File::open(&output_path)
+        .map_err(|error| error.to_string())
+        .and_then(|file| ZipArchive::new(file).map_err(|error| error.to_string()))?;
     for required_entry in required_entries {
         let entry = validation.by_name(required_entry).map_err(|error| {
             format!(
