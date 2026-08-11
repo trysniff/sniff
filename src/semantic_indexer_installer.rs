@@ -296,6 +296,7 @@ public final class ProcessRunner {
     }
     String project = requiredEnvironment("SNIFF_GRADLE_PROJECT");
     String projectCache = requiredEnvironment("SNIFF_GRADLE_PROJECT_CACHE");
+    String gradleUserHome = requiredEnvironment("SNIFF_GRADLE_USER_HOME");
     String temporaryDirectory = requiredEnvironment("SNIFF_GRADLE_TEMP");
     String javaOptions = requiredEnvironment("JAVA_OPTS");
     int agentSeparator = javaOptions.lastIndexOf(" -javaagent:");
@@ -316,6 +317,8 @@ public final class ProcessRunner {
     rewritten.add(mainClass);
     rewritten.add("-p");
     rewritten.add(project);
+    rewritten.add("--gradle-user-home");
+    rewritten.add(gradleUserHome);
     rewritten.add("--project-cache-dir");
     rewritten.add(projectCache);
     rewritten.add("--no-watch-fs");

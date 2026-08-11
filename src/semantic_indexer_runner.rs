@@ -684,6 +684,7 @@ fn build_indexer_sandbox_command(
         env.push(("COURSIER_CACHE".to_string(), cache.clone()));
         env.push(("COURSIER_CACHE_DIR".to_string(), cache.clone()));
         env.push(("GRADLE_USER_HOME".to_string(), cache.clone()));
+        env.push(("SNIFF_GRADLE_USER_HOME".to_string(), cache.clone()));
         env.push((
             "SNIFF_GRADLE_TEMP".to_string(),
             sandbox_repository_argument(root, &root.join(INDEXER_TEMP_DIR).to_string_lossy()),
