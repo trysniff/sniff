@@ -215,7 +215,14 @@ fn validate_runtime_files(spec: PinnedIndexer, root: &Path) -> Result<(), String
                 path.display()
             )
         })?;
-        if !metadata.is_file() || metadata.file_type().is_symlink() {
+        if metadata.file_type().is_symlink() {
+            return Err(format!(
+                "{} runtime file must not be a symlink: {}",
+                spec.display_name,
+                path.display()
+            ));
+        }
+        if !metadata.is_file() {
             return Err(format!(
                 "{} runtime file is not a regular file: {}",
                 spec.display_name,

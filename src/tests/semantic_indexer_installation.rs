@@ -119,5 +119,5 @@ fn symlinked_entrypoint_is_rejected() {
     fs::write(&target, b"trusted test indexer").unwrap();
     symlink(target, entrypoint).unwrap();
     let error = store.seal(spec).unwrap_err();
-    assert!(error.contains("non-regular") || error.contains("symlink"));
+    assert!(error.contains("must not be a symlink"), "{error}");
 }

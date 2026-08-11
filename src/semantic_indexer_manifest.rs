@@ -219,7 +219,7 @@ fn rust_analyzer_download() -> Result<IndexerDownload, String> {
     let target = (std::env::consts::OS, std::env::consts::ARCH);
     let download = match target {
         ("windows", "x86_64") => IndexerDownload {
-            url: "https://github.com/trysniff/sniff/releases/download/semantic-indexers-v1/sniff-rust-indexer-x86_64-pc-windows-msvc.zip",
+            url: "https://github.com/trysniff/sniff/releases/download/semantic-indexers-v1.1/sniff-rust-indexer-x86_64-pc-windows-msvc.zip",
             sha256: "a0d49152280dba80ffb6adac59e5d93c231784b09301831e68c49aa78e8566bf",
             archive: DownloadArchive::Zip,
         },

@@ -25,13 +25,12 @@ $RustStdPatch = Join-Path $RepositoryRoot "tools\indexers\patches\rust-std-windo
 function Invoke-Checked {
     param(
         [Parameter(Mandatory = $true)]
-        [string]$Command,
-        [Parameter(ValueFromRemainingArguments = $true)]
-        [string[]]$Arguments
+        [string]$Executable,
+        [string[]]$ArgumentList = @()
     )
-    & $Command @Arguments
+    & $Executable @ArgumentList
     if ($LASTEXITCODE -ne 0) {
-        throw "$Command failed with exit code $LASTEXITCODE"
+        throw "$Executable failed with exit code $LASTEXITCODE"
     }
 }
 
@@ -44,9 +43,15 @@ function Checkout-ExactCommit {
     if (Test-Path -LiteralPath $Directory) {
         throw "Refusing to reuse source directory: $Directory"
     }
-    Invoke-Checked git clone --filter=blob:none --no-checkout $Url $Directory
-    Invoke-Checked git -C $Directory fetch --depth 1 origin $Commit
-    Invoke-Checked git -C $Directory checkout --detach FETCH_HEAD
+    Invoke-Checked -Executable "git" -ArgumentList @(
+        "clone", "--filter=blob:none", "--no-checkout", $Url, $Directory
+    )
+    Invoke-Checked -Executable "git" -ArgumentList @(
+        "-C", $Directory, "fetch", "--depth", "1", "origin", $Commit
+    )
+    Invoke-Checked -Executable "git" -ArgumentList @(
+        "-C", $Directory, "checkout", "--detach", "FETCH_HEAD"
+    )
     $actual = (& git -C $Directory rev-parse HEAD).Trim()
     if ($LASTEXITCODE -ne 0 -or $actual -ne $Commit) {
         throw "Source identity mismatch for ${Url}: expected $Commit, received $actual"
@@ -100,25 +105,37 @@ if (Test-Path -LiteralPath $OutputDirectory) {
 New-Item -ItemType Directory -Path $WorkDirectory | Out-Null
 New-Item -ItemType Directory -Path $OutputDirectory | Out-Null
 
-Invoke-Checked rustup toolchain install $RustToolchain --profile minimal --component rust-src
-Invoke-Checked rustup target add --toolchain $RustToolchain $Target
+Invoke-Checked -Executable "rustup" -ArgumentList @(
+    "toolchain", "install", $RustToolchain, "--profile", "minimal", "--component", "rust-src"
+)
+Invoke-Checked -Executable "rustup" -ArgumentList @(
+    "target", "add", "--toolchain", $RustToolchain, $Target
+)
 
 $RustAnalyzerSource = Join-Path $WorkDirectory "rust-analyzer"
 $CargoSource = Join-Path $WorkDirectory "cargo"
 Checkout-ExactCommit "https://github.com/rust-lang/rust-analyzer.git" $RustAnalyzerCommit $RustAnalyzerSource
 Checkout-ExactCommit "https://github.com/rust-lang/cargo.git" $CargoCommit $CargoSource
-Invoke-Checked git -C $RustAnalyzerSource apply --check $RustAnalyzerPatch
-Invoke-Checked git -C $RustAnalyzerSource apply $RustAnalyzerPatch
+Invoke-Checked -Executable "git" -ArgumentList @(
+    "-C", $RustAnalyzerSource, "apply", "--check", $RustAnalyzerPatch
+)
+Invoke-Checked -Executable "git" -ArgumentList @(
+    "-C", $RustAnalyzerSource, "apply", $RustAnalyzerPatch
+)
 
 $Sysroot = (& rustc "+$RustToolchain" --print sysroot).Trim()
 if ($LASTEXITCODE -ne 0) {
     throw "Failed to resolve the pinned Rust sysroot"
 }
 $RustSource = Join-Path $Sysroot "lib\rustlib\src\rust"
-Invoke-Checked git -C $RustSource apply --check $RustStdPatch
+Invoke-Checked -Executable "git" -ArgumentList @(
+    "-C", $RustSource, "apply", "--check", $RustStdPatch
+)
 $RustSourcePatched = $false
 try {
-    Invoke-Checked git -C $RustSource apply $RustStdPatch
+    Invoke-Checked -Executable "git" -ArgumentList @(
+        "-C", $RustSource, "apply", $RustStdPatch
+    )
     $RustSourcePatched = $true
     $env:RUSTC_BOOTSTRAP = "1"
 
@@ -126,7 +143,10 @@ try {
     $env:CARGO_TARGET_DIR = Join-Path $WorkDirectory "rust-analyzer-target"
     Push-Location $RustAnalyzerSource
     try {
-        Invoke-Checked cargo "+$RustToolchain" build -Z "build-std=std,panic_abort" --target $Target --release --locked -j 2 -p rust-analyzer
+        Invoke-Checked -Executable "cargo" -ArgumentList @(
+            "+$RustToolchain", "build", "-Z", "build-std=std,panic_abort", "--target", $Target,
+            "--release", "--locked", "-j", "2", "-p", "rust-analyzer"
+        )
     } finally {
         Pop-Location
     }
@@ -139,13 +159,18 @@ try {
     $env:CARGO_TARGET_DIR = Join-Path $WorkDirectory "cargo-target"
     Push-Location $CargoSource
     try {
-        Invoke-Checked cargo "+$RustToolchain" build -Z "build-std=std,panic_abort" --target $Target --release --locked -j 2 -p cargo
+        Invoke-Checked -Executable "cargo" -ArgumentList @(
+            "+$RustToolchain", "build", "-Z", "build-std=std,panic_abort", "--target", $Target,
+            "--release", "--locked", "-j", "2", "-p", "cargo"
+        )
     } finally {
         Pop-Location
     }
 } finally {
     if ($RustSourcePatched) {
-        Invoke-Checked git -C $RustSource apply --reverse $RustStdPatch
+        Invoke-Checked -Executable "git" -ArgumentList @(
+            "-C", $RustSource, "apply", "--reverse", $RustStdPatch
+        )
     }
 }
 
@@ -171,6 +196,10 @@ Write-DeterministicZip $Bundle $Archive
 $RustAnalyzerHash = (Get-FileHash -Algorithm SHA256 (Join-Path $Bin "rust-analyzer.exe")).Hash.ToLowerInvariant()
 $CargoHash = (Get-FileHash -Algorithm SHA256 (Join-Path $Bin "cargo.exe")).Hash.ToLowerInvariant()
 $ArchiveHash = (Get-FileHash -Algorithm SHA256 $Archive).Hash.ToLowerInvariant()
+$SniffSourceCommit = (& git -C $RepositoryRoot rev-parse HEAD).Trim()
+if ($LASTEXITCODE -ne 0 -or $SniffSourceCommit -notmatch "^[0-9a-f]{40}$") {
+    throw "Failed to resolve the Sniff source commit"
+}
 @(
     "$RustAnalyzerHash  bin/rust-analyzer.exe"
     "$CargoHash  bin/cargo.exe"
@@ -179,6 +208,8 @@ $ArchiveHash = (Get-FileHash -Algorithm SHA256 $Archive).Hash.ToLowerInvariant()
 
 $Provenance = [ordered]@{
     schema = "trysniff.windows-rust-indexer.v1"
+    sniff_source_commit = $SniffSourceCommit
+    build_script_sha256 = (Get-FileHash -Algorithm SHA256 $PSCommandPath).Hash.ToLowerInvariant()
     target = $Target
     rust_toolchain = $RustToolchain
     rust_analyzer_commit = $RustAnalyzerCommit
