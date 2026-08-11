@@ -46,6 +46,7 @@ const WINDOWS_SCIP_NODE_BOOTSTRAP: &str = "const indexer=require(process.argv[1]
 
 struct TemporaryIndexerWorkspace {
     directory: PathBuf,
+    #[cfg(windows)]
     gradle_launcher_jar: PathBuf,
     gradle_main_class: &'static str,
     project_root: PathBuf,
