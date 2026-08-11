@@ -288,7 +288,7 @@ public final class ProcessRunner {
     }
     normalizeInitScript(command);
     String javaHome = requiredEnvironment("JAVA_HOME");
-    String launcher = requiredEnvironment("SNIFF_GRADLE_LAUNCHER_JAR");
+    String classpath = requiredEnvironment("SNIFF_GRADLE_CLASSPATH");
     String mainClass = requiredEnvironment("SNIFF_GRADLE_MAIN_CLASS");
     if (!mainClass.equals("org.gradle.wrapper.GradleWrapperMain")
         && !mainClass.equals("org.gradle.launcher.GradleMain")) {
@@ -316,7 +316,7 @@ public final class ProcessRunner {
     rewritten.add("-Dgradle.user.home=" + gradleUserHome);
     rewritten.add("-Djava.io.tmpdir=" + temporaryDirectory);
     rewritten.add("-classpath");
-    rewritten.add(launcher);
+    rewritten.add(classpath);
     rewritten.add(mainClass);
     rewritten.add("-p");
     rewritten.add(project);
@@ -661,7 +661,7 @@ fn patch_scip_java_windows(root: &Path, spec: PinnedIndexer) -> Result<(), Strin
         )?;
         let patch_dir = root.join("bin/scip-java-v0.13.1-patch");
         let patch_package = patch_dir.join("org/scip_code/scip_java/aggregator");
-        let gradle_temp_package = patch_dir.join("org/gradle/api/internal/file/temp");
+        let gradle_patch_package = patch_dir.join("sniff-gradle-patch");
         let scip_package = patch_dir.join("org/scip_code/scip");
         let protobuf_package = patch_dir.join("com/google/protobuf");
         if patch_package.exists() {
@@ -672,7 +672,7 @@ fn patch_scip_java_windows(root: &Path, spec: PinnedIndexer) -> Result<(), Strin
         }
         fs::create_dir_all(&patch_package)
             .map_err(|error| format!("failed to create scip-java patch directory: {error}"))?;
-        fs::create_dir_all(&gradle_temp_package)
+        fs::create_dir_all(&gradle_patch_package)
             .map_err(|error| format!("failed to create Gradle temp patch directory: {error}"))?;
         fs::create_dir_all(&scip_package)
             .map_err(|error| format!("failed to create scip-java bindings directory: {error}"))?;
@@ -707,7 +707,7 @@ fn patch_scip_java_windows(root: &Path, spec: PinnedIndexer) -> Result<(), Strin
         }
         fs::copy(
             &gradle_temp_class,
-            gradle_temp_package.join("TempFiles.class"),
+            gradle_patch_package.join("TempFiles.class"),
         )
         .map_err(|error| format!("failed to install Gradle temp compatibility class: {error}"))?;
         copy_patch_tree(

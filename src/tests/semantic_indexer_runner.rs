@@ -1,3 +1,8 @@
+#[cfg(windows)]
+use super::gradle_windows::{
+    OVERLAY_DIR as WINDOWS_GRADLE_OVERLAY_DIR, TEMP_CLASS as WINDOWS_GRADLE_TEMP_CLASS,
+    java_classpath as windows_java_classpath, prepare_system_overlay,
+};
 use super::{
     GRADLE_INDEXER_BASE_JVM_ARGS, WINDOWS_SCIP_NODE_BOOTSTRAP, WINDOWS_SCIP_PYTHON_BOOTSTRAP,
     compact_process_output, files_for_indexer, format_timeout, go_sandbox_environment,
@@ -7,13 +12,15 @@ use super::{
 };
 #[cfg(windows)]
 use super::{
-    collect_windows_runtime_images, external_runtime_path_value, indexer_arguments_with_workspace,
-    prepare_indexer_workspace, push_external_read_only, system_gradle_launcher_jar,
-    windows_java_classpath,
+    TemporaryIndexerWorkspace, collect_windows_runtime_images, external_runtime_path_value,
+    indexer_arguments_with_workspace, prepare_indexer_workspace, push_external_read_only,
+    system_gradle_launcher_jar,
 };
 use crate::semantic_index::SemanticPositionEncoding;
 use crate::semantic_indexer_manifest::{SemanticIndexerKind, pinned_indexer};
 use crate::types::FileRecord;
+#[cfg(windows)]
+use std::io::{Read, Write};
 use std::path::Path;
 use std::time::Duration;
 
@@ -53,6 +60,86 @@ fn windows_java_classpath_removes_verbatim_prefixes() {
         r"C:\indexers\scip-java-patch;C:\indexers\scip-java"
     );
     assert!(!classpath.contains(r"\\?\"));
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_gradle_overlay_replaces_only_the_legacy_temp_class() {
+    use zip::write::SimpleFileOptions;
+
+    let temp = tempfile::tempdir().unwrap();
+    let gradle_root = temp.path().join("gradle-8.8");
+    let gradle_lib = gradle_root.join("lib");
+    std::fs::create_dir_all(gradle_lib.join("plugins")).unwrap();
+    let launcher = gradle_lib.join("gradle-launcher-8.8.jar");
+    std::fs::write(&launcher, b"launcher").unwrap();
+    let beacon = gradle_lib.join("gradle-installation-beacon-8.8.jar");
+    std::fs::write(&beacon, b"beacon").unwrap();
+    let file_temp = gradle_lib.join("gradle-file-temp-8.8.jar");
+    let mut writer = zip::ZipWriter::new(std::fs::File::create(&file_temp).unwrap());
+    writer
+        .start_file(
+            "gradle-file-temp-classpath.properties",
+            SimpleFileOptions::default(),
+        )
+        .unwrap();
+    writer.write_all(b"projects=gradle-files\n").unwrap();
+    writer
+        .start_file(
+            "org/gradle/api/internal/file/temp/DefaultTemporaryFileProvider.class",
+            SimpleFileOptions::default(),
+        )
+        .unwrap();
+    writer.write_all(b"provider").unwrap();
+    writer
+        .start_file(WINDOWS_GRADLE_TEMP_CLASS, SimpleFileOptions::default())
+        .unwrap();
+    writer.write_all(b"legacy-file-temp").unwrap();
+    writer.finish().unwrap();
+
+    let patch_dir = temp.path().join("scip-java-v0.13.1-patch");
+    let replacement = patch_dir.join("sniff-gradle-patch/TempFiles.class");
+    std::fs::create_dir_all(replacement.parent().unwrap()).unwrap();
+    std::fs::write(&replacement, b"nio-file-temp").unwrap();
+    let workspace_root = temp.path().join("workspace");
+    std::fs::create_dir(&workspace_root).unwrap();
+    let workspace = TemporaryIndexerWorkspace {
+        directory: workspace_root.clone(),
+        gradle_launcher_jar: launcher,
+        gradle_main_class: "org.gradle.launcher.GradleMain",
+        project_root: temp.path().join("project"),
+    };
+
+    let classpath = prepare_system_overlay(
+        &workspace.directory,
+        &workspace.gradle_launcher_jar,
+        &patch_dir,
+    )
+    .unwrap();
+
+    assert!(classpath.contains(WINDOWS_GRADLE_OVERLAY_DIR));
+    assert!(classpath.contains(r"lib\*"));
+    assert!(classpath.contains(r"lib\plugins\*"));
+    assert_eq!(std::fs::read(&beacon).unwrap(), b"beacon");
+    let overlay_jar = workspace_root
+        .join(WINDOWS_GRADLE_OVERLAY_DIR)
+        .join("lib/gradle-file-temp-8.8.jar");
+    let mut original = zip::ZipArchive::new(std::fs::File::open(&file_temp).unwrap()).unwrap();
+    let mut original_temp = Vec::new();
+    original
+        .by_name(WINDOWS_GRADLE_TEMP_CLASS)
+        .unwrap()
+        .read_to_end(&mut original_temp)
+        .unwrap();
+    assert_eq!(original_temp, b"legacy-file-temp");
+    let mut overlay = zip::ZipArchive::new(std::fs::File::open(overlay_jar).unwrap()).unwrap();
+    let mut patched_temp = Vec::new();
+    overlay
+        .by_name(WINDOWS_GRADLE_TEMP_CLASS)
+        .unwrap()
+        .read_to_end(&mut patched_temp)
+        .unwrap();
+    assert_eq!(patched_temp, b"nio-file-temp");
 }
 
 #[cfg(windows)]

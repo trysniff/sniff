@@ -17,6 +17,10 @@ use std::time::Duration;
 #[cfg(windows)]
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[cfg(windows)]
+#[path = "semantic_indexer_gradle_windows.rs"]
+mod gradle_windows;
+
 const INDEX_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 #[cfg(debug_assertions)]
 const INDEXER_TIMEOUT_ENV: &str = "SNIFF_INTERNAL_INDEXER_TIMEOUT_SECS";
@@ -426,6 +430,20 @@ fn build_indexer_sandbox_command(
             installed.entrypoint.display()
         )
     })?;
+    #[cfg(windows)]
+    let gradle_child_classpath = if spec.kind == SemanticIndexerKind::Kotlin {
+        let workspace = workspace.ok_or_else(|| {
+            "Windows Kotlin indexing requires a prepared Gradle workspace".to_string()
+        })?;
+        Some(gradle_windows::prepare_child_classpath(
+            &workspace.directory,
+            &workspace.gradle_launcher_jar,
+            workspace.gradle_main_class,
+            &entrypoint,
+        )?)
+    } else {
+        None
+    };
     let (program, mut args, runtime_path) = match spec.runtime {
         IndexerRuntime::NodeScript => {
             let node = stage_node_runtime(root, &resolve_runtime("node")?)?;
@@ -475,7 +493,7 @@ fn build_indexer_sandbox_command(
                     .join("scip-java-v0.13.1-patch");
                 args.extend([
                     "-cp".to_string(),
-                    windows_java_classpath(&patch_dir, &entrypoint),
+                    gradle_windows::java_classpath(&patch_dir, &entrypoint),
                     "coursier.bootstrap.launcher.ResourcesLauncher".to_string(),
                 ]);
             } else {
@@ -653,9 +671,13 @@ fn build_indexer_sandbox_command(
             "SNIFF_INTERNAL_GRADLE_LAUNCHER".to_string(),
             "1".to_string(),
         ));
+        #[cfg(windows)]
         env.push((
-            "SNIFF_GRADLE_LAUNCHER_JAR".to_string(),
-            sandbox_repository_argument(root, &workspace.gradle_launcher_jar.to_string_lossy()),
+            "SNIFF_GRADLE_CLASSPATH".to_string(),
+            gradle_child_classpath
+                .as_ref()
+                .ok_or_else(|| "Windows Gradle child classpath was not prepared".to_string())?
+                .clone(),
         ));
         env.push((
             "SNIFF_GRADLE_MAIN_CLASS".to_string(),
@@ -1605,13 +1627,6 @@ fn external_runtime_path_value(path: &Path) -> String {
     strip_windows_verbatim_prefix(path.to_path_buf())
         .to_string_lossy()
         .into_owned()
-}
-
-#[cfg(windows)]
-fn windows_java_classpath(patch_dir: &Path, launcher: &Path) -> String {
-    let patch_dir = strip_windows_verbatim_prefix(patch_dir.to_path_buf());
-    let launcher = strip_windows_verbatim_prefix(launcher.to_path_buf());
-    format!("{};{}", patch_dir.display(), launcher.display())
 }
 
 fn project_name(root: &Path) -> String {

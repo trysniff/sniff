@@ -7,7 +7,7 @@ pub(crate) const INDEXER_INSTALL_CONTRACT: &str = "semantic-indexers-v1";
 #[cfg(windows)]
 pub(crate) const WINDOWS_SCIP_GO_PATCH_ID: &str = "x-tools-v0.45.0-and-go-tool-explicit-stdin-v4";
 #[cfg(windows)]
-pub(crate) const WINDOWS_SCIP_JAVA_PATCH_ID: &str = "direct-gradle-java-launch-v17";
+pub(crate) const WINDOWS_SCIP_JAVA_PATCH_ID: &str = "isolated-gradle-file-temp-overlay-v18";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
