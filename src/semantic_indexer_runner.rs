@@ -507,6 +507,9 @@ fn build_indexer_sandbox_command(
     let sandbox_home = sandbox_repository_argument(root, &root.to_string_lossy());
     env.push(("HOME".to_string(), sandbox_home.clone()));
     env.push(("SNIFF_INTERNAL_INDEXER".to_string(), "1".to_string()));
+    if std::env::var_os("SNIFF_DEBUG_INDEXERS").is_some() {
+        env.push(("SNIFF_DEBUG_INDEXERS".to_string(), "1".to_string()));
+    }
     if cfg!(windows) && spec.runtime == IndexerRuntime::NodeScript {
         env.push((
             "NODE_PATH".to_string(),
