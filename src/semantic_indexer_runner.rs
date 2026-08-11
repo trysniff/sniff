@@ -8,7 +8,6 @@ use crate::types::FileRecord;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-#[cfg(windows)]
 use std::io::Read;
 use std::io::Write;
 use std::path::{Path, PathBuf};
