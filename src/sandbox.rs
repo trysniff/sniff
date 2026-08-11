@@ -50,6 +50,9 @@ pub(crate) struct SandboxCommand {
     /// Trusted compiler/runtime images that the worker may execute. Windows
     /// grants these only to the unique per-run AppContainer identity.
     pub(crate) executable_paths: Vec<PathBuf>,
+    /// Present the repository as a temporary drive root on Windows. Java's
+    /// `Path::toRealPath` otherwise traverses inaccessible host ancestors.
+    pub(crate) virtualize_windows_root: bool,
     pub(crate) env: Vec<(String, String)>,
     pub(crate) allow_network: bool,
     #[cfg(target_os = "macos")]
@@ -986,6 +989,7 @@ mod tests {
             writable_paths: Vec::new(),
             persistent_read_only_paths: Vec::new(),
             executable_paths: Vec::new(),
+            virtualize_windows_root: false,
             env: Vec::new(),
             allow_network: false,
             #[cfg(target_os = "macos")]
@@ -1178,6 +1182,7 @@ mod tests {
             writable_paths: Vec::new(),
             persistent_read_only_paths: Vec::new(),
             executable_paths: Vec::new(),
+            virtualize_windows_root: false,
             env: Vec::new(),
             allow_network: false,
             timeout: Duration::from_secs(2),
@@ -1243,6 +1248,7 @@ fn main() {
             writable_paths: Vec::new(),
             persistent_read_only_paths: Vec::new(),
             executable_paths: Vec::new(),
+            virtualize_windows_root: false,
             env: Vec::new(),
             allow_network: false,
             timeout: Duration::from_secs(5),
@@ -1403,6 +1409,7 @@ fn main() {
             writable_paths: Vec::new(),
             persistent_read_only_paths: Vec::new(),
             executable_paths: Vec::new(),
+            virtualize_windows_root: false,
             env: Vec::new(),
             allow_network: false,
             #[cfg(target_os = "macos")]
@@ -1445,6 +1452,7 @@ fn main() {
             writable_paths: Vec::new(),
             persistent_read_only_paths: Vec::new(),
             executable_paths: Vec::new(),
+            virtualize_windows_root: false,
             env: Vec::new(),
             allow_network: false,
             #[cfg(target_os = "macos")]

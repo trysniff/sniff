@@ -43,6 +43,10 @@ use windows_sys::Win32::System::Threading::{
     TerminateProcess, UpdateProcThreadAttribute, WaitForSingleObject,
 };
 
+#[path = "sandbox_windows_drive.rs"]
+mod drive;
+use drive::SandboxDriveMapping;
+
 const INTERNET_CLIENT_SID: &str = "S-1-15-3-1";
 const PERSISTENT_READ_CAPABILITY: &str = "trysniff.semantic-indexer-read.v1";
 const SE_GROUP_ENABLED: u32 = 0x00000004;
@@ -150,8 +154,33 @@ pub(super) fn run(spec: &SandboxCommand) -> Result<SandboxOutput, SandboxError> 
         grant_acl(path, &app_container_sid_text, "RX")?;
     }
     trace_phase(started, "program execution granted");
-    let result = run_process(&effective_spec, profile_guard.sid, &mut capabilities);
+    let mut drive_mapping = effective_spec
+        .virtualize_windows_root
+        .then(|| SandboxDriveMapping::create(&effective_spec.root))
+        .transpose()?;
+    if drive_mapping.is_some() {
+        trace_phase(started, "private drive root mapped");
+    }
+    let process_spec = drive_mapping.as_ref().map_or_else(
+        || effective_spec.clone(),
+        |mapping| mapping.process_spec(&effective_spec),
+    );
+    let result = run_process(&process_spec, profile_guard.sid, &mut capabilities);
     trace_phase(started, "sandbox process returned");
+    let mapping_cleanup = drive_mapping
+        .as_mut()
+        .map_or(Ok(()), SandboxDriveMapping::remove);
+    if drive_mapping.is_some() {
+        trace_phase(started, "private drive root unmapped");
+    }
+    let result = match (result, mapping_cleanup) {
+        (Ok(output), Ok(())) => Ok(output),
+        (Err(error), Ok(())) => Err(error),
+        (Ok(_), Err(error)) => Err(error),
+        (Err(error), Err(cleanup_error)) => Err(SandboxError::Failed(format!(
+            "{error}; additionally, Windows sandbox drive cleanup failed: {cleanup_error}"
+        ))),
+    };
     let revoke = acl_guard.revoke();
     trace_phase(started, "filesystem access revoked");
     match (result, revoke) {

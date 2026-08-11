@@ -7,6 +7,25 @@ use std::time::Duration;
 const HOST_SECRET_ENV: &str = "SNIFF_TEST_HOST_SECRET_DO_NOT_EXPOSE";
 const HOST_SECRET_VALUE: &str = "sniff-host-secret-evidence";
 
+#[cfg(windows)]
+const JAVA_REAL_PATH_PROBE: &str = r#"
+import java.nio.file.Files;
+import java.nio.file.Path;
+
+public final class SniffRealPathProbe {
+    public static void main(String[] args) throws Exception {
+        Path root = Path.of(args[0]);
+        Path temporary = root.resolve(".tmp/download.jar");
+        Path artifact = root.resolve("cache/group/artifact.jar");
+        Files.createDirectories(temporary.getParent());
+        Files.createDirectories(artifact.getParent());
+        Files.writeString(temporary, "sandbox path probe");
+        Files.move(temporary, artifact);
+        System.out.println(artifact.toRealPath());
+    }
+}
+"#;
+
 const MALICIOUS_WORKER: &str = r#"
 use std::io::{self, Write};
 use std::net::{SocketAddr, TcpStream};
@@ -124,6 +143,7 @@ fn command(root: &Path, program: &Path, args: Vec<String>) -> SandboxCommand {
         writable_paths: Vec::new(),
         persistent_read_only_paths: Vec::new(),
         executable_paths: Vec::new(),
+        virtualize_windows_root: false,
         env: Vec::new(),
         allow_network: false,
         #[cfg(target_os = "macos")]
@@ -133,6 +153,114 @@ fn command(root: &Path, program: &Path, args: Vec<String>) -> SandboxCommand {
         memory_limit: DEFAULT_MEMORY_LIMIT,
         process_limit: DEFAULT_PROCESS_LIMIT,
     }
+}
+
+#[cfg(windows)]
+fn compile_java_real_path_probe(root: &Path) -> (PathBuf, PathBuf) {
+    let source = root.join("SniffRealPathProbe.java");
+    std::fs::write(&source, JAVA_REAL_PATH_PROBE).expect("write Java path probe");
+    let settings = Command::new("java")
+        .args(["-XshowSettings:properties", "-version"])
+        .output()
+        .expect("inspect Java runtime");
+    assert!(settings.status.success(), "Java runtime inspection failed");
+    let diagnostics = String::from_utf8_lossy(&settings.stderr);
+    let java_home = diagnostics
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("java.home = "))
+        .map(PathBuf::from)
+        .expect("Java runtime did not report java.home");
+    let javac = java_home.join("bin/javac.exe");
+    let output = Command::new(&javac)
+        .args(["-d", root.to_str().unwrap(), source.to_str().unwrap()])
+        .output()
+        .expect("compile Java path probe");
+    assert!(
+        output.status.success(),
+        "Java path probe failed to compile: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let runtime = root.join("java-runtime");
+    let output = Command::new(java_home.join("bin/jlink.exe"))
+        .args([
+            "--add-modules",
+            "java.base",
+            "--output",
+            runtime.to_str().unwrap(),
+        ])
+        .output()
+        .expect("create minimal Java path-probe runtime");
+    assert!(
+        output.status.success(),
+        "minimal Java path-probe runtime failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    (runtime.join("bin/java.exe"), runtime)
+}
+
+#[cfg(windows)]
+fn java_runtime_images(java_home: &Path) -> Vec<PathBuf> {
+    let mut images = Vec::new();
+    let mut pending = vec![java_home.to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        for entry in std::fs::read_dir(&directory).expect("inspect Java runtime") {
+            let path = entry.expect("enumerate Java runtime").path();
+            let metadata = std::fs::symlink_metadata(&path).expect("inspect Java runtime entry");
+            assert!(
+                !metadata.file_type().is_symlink(),
+                "Java runtime must not contain symlinks: {}",
+                path.display()
+            );
+            if metadata.is_dir() {
+                pending.push(path);
+            } else if metadata.is_file()
+                && path.extension().is_some_and(|extension| {
+                    extension.eq_ignore_ascii_case("exe") || extension.eq_ignore_ascii_case("dll")
+                })
+            {
+                images.push(path);
+            }
+        }
+    }
+    images
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_java_can_resolve_a_moved_sandbox_artifact() {
+    let repository = tempfile::tempdir().expect("create Java path-probe repository");
+    let (java, java_runtime) = compile_java_real_path_probe(repository.path());
+    let mut spec = command(
+        repository.path(),
+        &java,
+        vec![
+            "-cp".to_string(),
+            repository.path().to_string_lossy().into_owned(),
+            "SniffRealPathProbe".to_string(),
+            repository.path().to_string_lossy().into_owned(),
+        ],
+    );
+    spec.executable_paths = java_runtime_images(&java_runtime);
+    spec.virtualize_windows_root = true;
+
+    let output = run(&spec).expect("Java path probe sandbox should start");
+
+    assert_eq!(
+        output.status_code,
+        Some(0),
+        "stdout={:?} stderr={:?}",
+        output.stdout,
+        output.stderr
+    );
+    let resolved = output.stdout.trim();
+    assert!(resolved.ends_with(r"cache\group\artifact.jar"));
+    let mapped_root = resolved
+        .get(..3)
+        .expect("mapped Java path has a drive root");
+    assert!(
+        !Path::new(mapped_root).exists(),
+        "sandbox drive mapping survived process completion: {mapped_root}"
+    );
 }
 
 #[test]

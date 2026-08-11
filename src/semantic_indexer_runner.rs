@@ -786,6 +786,7 @@ fn build_indexer_sandbox_command(
         writable_paths,
         persistent_read_only_paths,
         executable_paths,
+        virtualize_windows_root: spec.kind == SemanticIndexerKind::Kotlin,
         env,
         allow_network: false,
         #[cfg(target_os = "macos")]

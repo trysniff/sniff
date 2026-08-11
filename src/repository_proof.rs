@@ -233,6 +233,7 @@ fn run_proof_command(root: &Path, command: &[String]) -> Result<sandbox::Sandbox
         writable_paths: Vec::new(),
         persistent_read_only_paths: Vec::new(),
         executable_paths: Vec::new(),
+        virtualize_windows_root: false,
         env: Vec::new(),
         allow_network: false,
         #[cfg(target_os = "macos")]
