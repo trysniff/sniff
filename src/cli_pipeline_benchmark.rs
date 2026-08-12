@@ -1,6 +1,7 @@
-use crate::benchmark::{BenchmarkCase, BenchmarkPrediction, evaluate};
+use crate::benchmark::{BenchmarkCorpus, BenchmarkSubmission, evaluate_release};
 use std::fs;
 use std::io::{Error as IoError, ErrorKind};
+use std::path::Path;
 
 /// Evaluate a complete external benchmark ledger without loading configuration
 /// or contacting an LLM provider.
@@ -8,9 +9,12 @@ pub(crate) fn benchmark(
     cases_path: &str,
     predictions_path: &str,
 ) -> Result<i32, Box<dyn std::error::Error>> {
-    let cases = read_json::<Vec<BenchmarkCase>>(cases_path)?;
-    let predictions = read_json::<Vec<BenchmarkPrediction>>(predictions_path)?;
-    let metrics = evaluate(&cases, &predictions).map_err(|error| {
+    let corpus = read_json::<BenchmarkCorpus>(cases_path)?;
+    let submission = read_json::<BenchmarkSubmission>(predictions_path)?;
+    let corpus_root = Path::new(cases_path)
+        .parent()
+        .unwrap_or_else(|| Path::new("."));
+    let metrics = evaluate_release(&corpus, &submission, corpus_root).map_err(|error| {
         IoError::new(
             ErrorKind::InvalidData,
             format!("benchmark ledger is invalid: {error}"),
@@ -67,7 +71,7 @@ mod tests {
     }
 
     #[test]
-    fn complete_clean_ledger_passes_without_provider_configuration() {
+    fn legacy_arrays_are_rejected_as_release_proof() {
         let cases = temp_path("cases");
         let predictions = temp_path("predictions");
         fs::write(
@@ -81,16 +85,14 @@ mod tests {
         )
         .expect("write benchmark predictions");
 
-        assert_eq!(
-            benchmark(
-                cases.to_str().expect("cases path should be UTF-8"),
-                predictions
-                    .to_str()
-                    .expect("predictions path should be UTF-8")
-            )
-            .expect("complete clean benchmark should run"),
-            0
-        );
+        let error = benchmark(
+            cases.to_str().expect("cases path should be UTF-8"),
+            predictions
+                .to_str()
+                .expect("predictions path should be UTF-8"),
+        )
+        .expect_err("legacy arrays must not be accepted as release proof");
+        assert!(error.to_string().contains("failed to parse benchmark JSON"));
         let _ = fs::remove_file(cases);
         let _ = fs::remove_file(predictions);
     }

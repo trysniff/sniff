@@ -79,10 +79,10 @@ pub enum CliCommand {
     },
     /// Evaluate a complete held-out SniffBench prediction ledger without contacting a provider.
     Benchmark {
-        /// JSON array of labeled benchmark cases.
-        cases: String,
-        /// JSON array of predictions produced by a completed benchmark run.
-        predictions: String,
+        /// Frozen SniffBench v2 corpus manifest and source-snapshot directory.
+        corpus: String,
+        /// Complete SniffBench v2 runs, adjudications, usage, and baseline ledgers.
+        submission: String,
     },
 }
 
@@ -132,8 +132,8 @@ pub async fn run(args: CliArgs) -> Result<i32, Box<dyn std::error::Error>> {
         Some(CliCommand::Resume { path }) => {
             pipeline::resume(&path, args.skip_dotenv, args.yes, args.budget_usd).await
         }
-        Some(CliCommand::Benchmark { cases, predictions }) => {
-            pipeline::benchmark(&cases, &predictions)
+        Some(CliCommand::Benchmark { corpus, submission }) => {
+            pipeline::benchmark(&corpus, &submission)
         }
         None if args.estimate => pipeline::estimate(&args.path, args.skip_dotenv).await,
         None => pipeline::run(&args.path, args.skip_dotenv, args.yes, args.budget_usd).await,
@@ -207,8 +207,8 @@ mod tests {
 
         assert!(matches!(
             args.command,
-            Some(CliCommand::Benchmark { cases, predictions })
-                if cases == "cases.json" && predictions == "predictions.json"
+            Some(CliCommand::Benchmark { corpus, submission })
+                if corpus == "cases.json" && submission == "predictions.json"
         ));
     }
 

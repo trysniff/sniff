@@ -3,6 +3,16 @@ use crate::types::FindingTier;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
+#[path = "benchmark_release.rs"]
+mod release;
+
+pub use release::{
+    BenchmarkAdjudication, BenchmarkBaseline, BenchmarkBaselineFinding, BenchmarkCorpus,
+    BenchmarkEvidence, BenchmarkPartition, BenchmarkRun, BenchmarkRunPrediction,
+    BenchmarkSubmission, BenchmarkUsage, ReleaseBenchmarkCase, ReleaseBenchmarkMetrics,
+    ReviewerDisposition, SourceSnapshot, evaluate_release,
+};
+
 /// One labeled unit in a SniffBench corpus. The label is hidden from the
 /// analyzer during a run and is used only after predictions are collected.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -62,8 +62,8 @@ sniff resume
 # Optionally pause after about $0.50 of cumulative estimated scan spend.
 sniff --budget-usd 0.50
 
-# Evaluate a completed held-out benchmark ledger without contacting a provider.
-sniff benchmark cases.json predictions.json
+# Evaluate a completed frozen SniffBench v2 corpus without contacting a provider.
+sniff benchmark corpus.json submission.json
 ```
 
 Sniff writes `sniff-report.md` at the scanned repository root. A successful run
@@ -86,13 +86,16 @@ cap.
 
 ## SniffBench Evaluation
 
-`sniff benchmark CASES PREDICTIONS` evaluates two JSON arrays: labeled
-`BenchmarkCase` records and the complete `BenchmarkPrediction` ledger produced
-by a run. Labels are used only after predictions are collected. Missing,
-duplicate, invented, or incorrectly typed records fail closed. The command
-prints precision, recall, evidence validity, and per-language metrics, then
-returns a nonzero exit code when the release thresholds are not met. It never
-loads provider configuration or sends source code to an API.
+`sniff benchmark CORPUS SUBMISSION` evaluates a frozen SniffBench v2 corpus and
+three or more complete runs. The corpus binds labels and local before/after
+source snapshots by SHA-256. The submission binds provider/model identity,
+actual usage and cost, proof levels, exact evidence, blind reviewer outcomes,
+and complete competitor ledgers to that corpus. Missing or invented coverage,
+tampered snapshots or labels, invalid evidence, unstable verdicts, duplicate
+findings, weak real-world or blind-OSS metrics, and incomplete baseline results
+fail closed. Synthetic fixtures remain development signals and cannot carry the
+release gate. The command is fully offline: it never loads provider
+configuration or sends source code to an API.
 
 ## What A Finding Looks Like
 
