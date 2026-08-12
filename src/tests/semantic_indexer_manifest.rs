@@ -1,6 +1,6 @@
 use crate::semantic_indexer_manifest::{
     DownloadArchive, IndexerInstallSource, SemanticIndexerKind, VersionOutput, pinned_indexer,
-    required_indexers,
+    required_indexers, rust_analyzer_download_for,
 };
 use crate::types::FileRecord;
 
@@ -113,4 +113,29 @@ fn rust_pin_selects_a_platform_asset_or_reports_unsupported_platform() {
         },
         Err(error) => assert!(error.contains("has no pinned asset")),
     }
+}
+
+#[test]
+fn windows_rust_pins_use_the_reproducible_v1_2_compatibility_bundles() {
+    let x64 = rust_analyzer_download_for("windows", "x86_64", false).unwrap();
+    assert_eq!(
+        x64.url,
+        "https://github.com/trysniff/sniff/releases/download/semantic-indexers-v1.2/sniff-rust-indexer-x86_64-pc-windows-msvc.zip"
+    );
+    assert_eq!(
+        x64.sha256,
+        "4b57083b09b46634eabf24589f7059001de7f91f0007875ed6133c4a1727a6a5"
+    );
+    assert_eq!(x64.archive, DownloadArchive::Zip);
+
+    let arm64 = rust_analyzer_download_for("windows", "aarch64", false).unwrap();
+    assert_eq!(
+        arm64.url,
+        "https://github.com/trysniff/sniff/releases/download/semantic-indexers-v1.2/sniff-rust-indexer-aarch64-pc-windows-msvc.zip"
+    );
+    assert_eq!(
+        arm64.sha256,
+        "dc1d0bdf114919290635f4f2d95eb2c76a744ba406a1ebf62dd38d63069f8361"
+    );
+    assert_eq!(arm64.archive, DownloadArchive::Zip);
 }

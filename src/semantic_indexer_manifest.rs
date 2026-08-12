@@ -238,16 +238,28 @@ fn executable(name: &str) -> String {
 }
 
 fn rust_analyzer_download() -> Result<IndexerDownload, String> {
-    let target = (std::env::consts::OS, std::env::consts::ARCH);
+    rust_analyzer_download_for(
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+        cfg!(target_env = "musl"),
+    )
+}
+
+fn rust_analyzer_download_for(
+    os: &str,
+    architecture: &str,
+    is_musl: bool,
+) -> Result<IndexerDownload, String> {
+    let target = (os, architecture);
     let download = match target {
         ("windows", "x86_64") => IndexerDownload {
-            url: "https://github.com/trysniff/sniff/releases/download/semantic-indexers-v1.1/sniff-rust-indexer-x86_64-pc-windows-msvc.zip",
-            sha256: "a0d49152280dba80ffb6adac59e5d93c231784b09301831e68c49aa78e8566bf",
+            url: "https://github.com/trysniff/sniff/releases/download/semantic-indexers-v1.2/sniff-rust-indexer-x86_64-pc-windows-msvc.zip",
+            sha256: "4b57083b09b46634eabf24589f7059001de7f91f0007875ed6133c4a1727a6a5",
             archive: DownloadArchive::Zip,
         },
         ("windows", "aarch64") => IndexerDownload {
-            url: "https://github.com/rust-lang/rust-analyzer/releases/download/2026-08-03/rust-analyzer-aarch64-pc-windows-msvc.zip",
-            sha256: "c10cde297644fd79ef1c288d96059bb01e345970dd89ac9d673a4e58512330e9",
+            url: "https://github.com/trysniff/sniff/releases/download/semantic-indexers-v1.2/sniff-rust-indexer-aarch64-pc-windows-msvc.zip",
+            sha256: "dc1d0bdf114919290635f4f2d95eb2c76a744ba406a1ebf62dd38d63069f8361",
             archive: DownloadArchive::Zip,
         },
         ("macos", "x86_64") => IndexerDownload {
@@ -260,7 +272,7 @@ fn rust_analyzer_download() -> Result<IndexerDownload, String> {
             sha256: "bba6cd8209643cd781f3ee5474fa232d3ee1b77a57f2e77982806e3c80a65207",
             archive: DownloadArchive::Gzip,
         },
-        ("linux", "x86_64") if cfg!(target_env = "musl") => IndexerDownload {
+        ("linux", "x86_64") if is_musl => IndexerDownload {
             url: "https://github.com/rust-lang/rust-analyzer/releases/download/2026-08-03/rust-analyzer-x86_64-unknown-linux-musl.gz",
             sha256: "d63a986d83f1888079549d44d24af89c85ef88f42f520c9c00c01424125e885c",
             archive: DownloadArchive::Gzip,
@@ -270,7 +282,7 @@ fn rust_analyzer_download() -> Result<IndexerDownload, String> {
             sha256: "769670319df8571dac91b6eab6d3a65b18b69488a6900959f2fb6157181ace9d",
             archive: DownloadArchive::Gzip,
         },
-        ("linux", "aarch64") if !cfg!(target_env = "musl") => IndexerDownload {
+        ("linux", "aarch64") if !is_musl => IndexerDownload {
             url: "https://github.com/rust-lang/rust-analyzer/releases/download/2026-08-03/rust-analyzer-aarch64-unknown-linux-gnu.gz",
             sha256: "ea5cb460f1532bf3c6f399b079840e968e3c25857669cd65af36dd707ea097e8",
             archive: DownloadArchive::Gzip,
