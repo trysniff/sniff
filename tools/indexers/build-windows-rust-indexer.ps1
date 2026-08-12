@@ -131,6 +131,48 @@ function Assert-ReproduciblePeImage {
         if ($timestamp -eq $SourceDateEpoch) {
             throw "PE image uses the source epoch as a mutable timestamp instead of a /Brepro content hash: $binary"
         }
+
+        $optionalHeader = $peOffset + 24
+        $magic = [System.BitConverter]::ToUInt16($bytes, $optionalHeader)
+        $dataDirectory = switch ($magic) {
+            0x10b { $optionalHeader + 96 }
+            0x20b { $optionalHeader + 112 }
+            default { throw "Built binary has an unsupported PE optional header: $binary" }
+        }
+        $debugRva = [System.BitConverter]::ToUInt32($bytes, $dataDirectory + (6 * 8))
+        $debugSize = [System.BitConverter]::ToUInt32($bytes, $dataDirectory + (6 * 8) + 4)
+        if ($debugRva -eq 0 -or $debugSize -eq 0) {
+            continue
+        }
+        if ($debugSize % 28 -ne 0) {
+            throw "Built binary has a malformed PE debug directory: $binary"
+        }
+
+        $sectionCount = [System.BitConverter]::ToUInt16($bytes, $peOffset + 6)
+        $optionalHeaderSize = [System.BitConverter]::ToUInt16($bytes, $peOffset + 20)
+        $sectionTable = $optionalHeader + $optionalHeaderSize
+        $debugOffset = $null
+        for ($index = 0; $index -lt $sectionCount; $index++) {
+            $section = $sectionTable + ($index * 40)
+            $virtualSize = [System.BitConverter]::ToUInt32($bytes, $section + 8)
+            $virtualAddress = [System.BitConverter]::ToUInt32($bytes, $section + 12)
+            $rawSize = [System.BitConverter]::ToUInt32($bytes, $section + 16)
+            $rawOffset = [System.BitConverter]::ToUInt32($bytes, $section + 20)
+            $mappedSize = [Math]::Max($virtualSize, $rawSize)
+            if ($debugRva -ge $virtualAddress -and $debugRva -lt $virtualAddress + $mappedSize) {
+                $debugOffset = $rawOffset + ($debugRva - $virtualAddress)
+                break
+            }
+        }
+        if ($null -eq $debugOffset -or $debugOffset + $debugSize -gt $bytes.Length) {
+            throw "Built binary has an unmappable PE debug directory: $binary"
+        }
+        for ($offset = $debugOffset; $offset -lt $debugOffset + $debugSize; $offset += 28) {
+            $debugType = [System.BitConverter]::ToUInt32($bytes, $offset + 12)
+            if ($debugType -eq 2) {
+                throw "PE image contains a nondeterministic CodeView/PDB record: $binary"
+            }
+        }
     }
 }
 
@@ -216,6 +258,8 @@ foreach ($remap in $PathRemaps) {
 }
 $EncodedRustFlags.Add("-C")
 $EncodedRustFlags.Add("link-arg=/Brepro")
+$EncodedRustFlags.Add("-C")
+$EncodedRustFlags.Add("link-arg=/DEBUG:NONE")
 
 $BuildEnvironmentNames = @(
     "CARGO_BUILD_RUSTFLAGS"
@@ -348,8 +392,8 @@ if ($LASTEXITCODE -ne 0 -or $SniffSourceCommit -notmatch "^[0-9a-f]{40}$") {
 
 $Provenance = [ordered]@{
     schema = "trysniff.windows-rust-indexer.v1"
-    reproducible_build_contract = "windows-rust-v1"
-    linker_reproducibility = "msvc-/Brepro"
+    reproducible_build_contract = "windows-rust-v2"
+    linker_reproducibility = "msvc-/Brepro-/DEBUG:NONE"
     source_date_epoch = $SourceDateEpoch.ToString([System.Globalization.CultureInfo]::InvariantCulture)
     sniff_source_commit = $SniffSourceCommit
     build_script_sha256 = (Get-FileHash -Algorithm SHA256 $PSCommandPath).Hash.ToLowerInvariant()
