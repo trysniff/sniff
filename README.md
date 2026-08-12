@@ -64,6 +64,8 @@ sniff --budget-usd 0.50
 
 # Freeze a corpus, then evaluate completed runs without contacting a provider.
 sniff benchmark freeze draft.json corpus.json
+sniff benchmark prepare-run corpus.json review.json --artifact .sniff/runs/RUN.json
+sniff benchmark import-run corpus.json review.json run.json
 sniff benchmark evaluate corpus.json submission.json
 ```
 
@@ -71,12 +73,14 @@ Sniff writes `sniff-report.md` at the scanned repository root. A successful run
 reviews every eligible method; it never replaces failed AI reviews with a
 static-only report.
 
-Successful scans with eligible methods also write a versioned, hash-bound
-machine record under `.sniff/runs/`. It contains the complete method ledger, final cases, semantic
+Final scans with eligible methods and no retryable unresolved work also write a
+versioned, hash-bound machine record under `.sniff/runs/`. It contains the
+hashed scanned-source inventory, complete method ledger, final cases, semantic
 coverage, provider/model contract, token usage, and the pricing snapshots used
-for the displayed estimate. The directory is ignored by Git and is intended for
-offline audit and later SniffBench import. Its `estimated_cost_usd` is not an
-invoice: release benchmarking still requires separately verified actual cost.
+for the displayed estimate. The directory is ignored by Git and is intended
+for offline audit and later SniffBench import. Its `estimated_cost_usd` is not
+an invoice: release benchmarking still requires separately verified actual
+cost.
 
 Each completed method is appended to a durable journal. `sniff status [PATH]`
 reads that journal without loading provider configuration or scanning source
@@ -108,6 +112,22 @@ findings, weak real-world or blind-OSS metrics, and incomplete baseline results
 fail closed. Synthetic fixtures remain development signals and cannot carry the
 release gate. The command is fully offline: it never loads provider
 configuration or sends source code to an API.
+
+`sniff benchmark prepare-run` verifies one immutable completed-run artifact per
+frozen repository revision. Completed artifacts must be inside the benchmark
+bundle; the generated worksheet stores only portable relative paths. It exposes
+opaque case IDs, source snapshots, and Sniff's committed outcomes, never frozen
+labels or label-side case IDs.
+
+After an experienced independent reviewer records finding matches,
+dispositions, measured review time, identity, affiliation, and a label-blindness
+attestation, `sniff benchmark import-run` re-derives every protected field and
+emits one verified `BenchmarkRun`. The worksheet must also identify actual
+provider cost and wall-clock time. Cost evidence is a hash-verified JSON receipt
+inside the benchmark bundle; the receipt binds provider, model, USD amount,
+provenance, and the hash of the underlying invoice or usage export. Neither
+command contacts a provider, and neither accepts estimated cost as actual
+spend.
 
 ## What A Finding Looks Like
 

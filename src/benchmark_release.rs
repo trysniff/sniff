@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::path::{Component, Path};
 
-const RELEASE_SCHEMA_VERSION: u32 = 2;
+pub(crate) const RELEASE_SCHEMA_VERSION: u32 = 3;
 const REQUIRED_LANGUAGES: [&str; 6] =
     ["go", "javascript", "kotlin", "python", "rust", "typescript"];
 const REQUIRED_BASELINES: [&str; 7] = [
@@ -23,6 +23,11 @@ const REQUIRED_BASELINES: [&str; 7] = [
 mod schema;
 
 pub use schema::*;
+
+#[path = "benchmark_cost_receipt.rs"]
+mod cost_receipt;
+
+pub use cost_receipt::validate_actual_cost_receipt;
 
 impl BenchmarkPartition {
     fn all() -> [Self; 5] {
@@ -81,25 +86,25 @@ impl BenchmarkCorpus {
     }
 
     pub fn computed_source_commitment_sha256(&self) -> Result<String, String> {
-        #[derive(serde::Serialize)]
-        struct CommittedSource<'a> {
-            case_id: &'a str,
-            language: &'a str,
-            before: &'a [SourceSnapshot],
-        }
-
-        let mut sources = self
-            .cases
-            .iter()
-            .map(|case| CommittedSource {
-                case_id: &case.label.case_id,
-                language: &case.label.language,
-                before: &case.before,
-            })
-            .collect::<Vec<_>>();
-        sources.sort_by(|left, right| left.case_id.cmp(right.case_id));
+        let mut sources = self.analysis_sources.iter().collect::<Vec<_>>();
+        sources.sort_by(|left, right| {
+            (
+                &left.repository,
+                &left.revision,
+                &left.repository_path,
+                &left.artifact_path,
+                &left.sha256,
+            )
+                .cmp(&(
+                    &right.repository,
+                    &right.revision,
+                    &right.repository_path,
+                    &right.artifact_path,
+                    &right.sha256,
+                ))
+        });
         let bytes = serde_json::to_vec(&sources)
-            .map_err(|error| format!("failed to serialize benchmark source commitment: {error}"))?;
+            .map_err(|error| format!("failed to serialize benchmark source inventory: {error}"))?;
         Ok(format!("{:x}", Sha256::digest(bytes)))
     }
 }
@@ -182,11 +187,17 @@ pub fn evaluate_release(
             prediction.matched_case_id.is_none() && prediction.tier == FindingTier::Slop
         })
         .count();
-    let unresolved = normalized
+    let unresolved = all_predictions
         .iter()
-        .flatten()
         .filter(|prediction| prediction.tier == FindingTier::Unresolved)
         .count();
+    let unresolved_opportunities = corpus.cases.len() * submission.runs.len()
+        + all_predictions
+            .iter()
+            .filter(|prediction| {
+                prediction.matched_case_id.is_none() && prediction.tier == FindingTier::Unresolved
+            })
+            .count();
     let proof_opportunities = all_predictions
         .iter()
         .filter(|prediction| is_finding(prediction.tier))
@@ -263,10 +274,7 @@ pub fn evaluate_release(
         run_count: submission.runs.len(),
         verdict_repeatability,
         duplicate_case_rate: ratio(duplicate_count, all_predictions.len() as f64),
-        unresolved_rate: ratio(
-            unresolved,
-            (corpus.cases.len() * submission.runs.len()) as f64,
-        ),
+        unresolved_rate: ratio(unresolved, unresolved_opportunities as f64),
         proof_level_accuracy: ratio(proof_matches, proof_opportunities as f64),
         overall_evidence_validity: ratio(valid_evidence_findings, all_predicted_findings as f64),
         maintainer_acceptance: ratio(maintainer_accepted, maintainer_predictions.len() as f64),
@@ -319,6 +327,9 @@ fn validate_corpus(
     if corpus.cases.is_empty() {
         return Err("release benchmark corpus cannot be empty".to_string());
     }
+    if corpus.analysis_sources.is_empty() {
+        return Err("release benchmark analysis source inventory cannot be empty".to_string());
+    }
     let mut ids = HashSet::new();
     let mut languages = HashSet::new();
     let mut partitions = HashSet::new();
@@ -363,7 +374,28 @@ fn validate_corpus(
             "benchmark label commitment does not match the frozen labels; expected {computed}"
         ));
     }
-    validate_source_snapshots(corpus, corpus_root)
+    let source_texts = validate_source_snapshots(corpus, corpus_root)?;
+    validate_case_source_membership(corpus)?;
+    Ok(source_texts)
+}
+
+pub fn validate_frozen_corpus(corpus: &BenchmarkCorpus, corpus_root: &Path) -> Result<(), String> {
+    validate_corpus(corpus, corpus_root).map(|_| ())
+}
+
+fn validate_case_source_membership(corpus: &BenchmarkCorpus) -> Result<(), String> {
+    let analysis_sources = corpus.analysis_sources.iter().collect::<HashSet<_>>();
+    for case in &corpus.cases {
+        for snapshot in &case.before {
+            if !analysis_sources.contains(snapshot) {
+                return Err(format!(
+                    "benchmark case {} references before source {} that is absent from analysis_sources",
+                    case.label.case_id, snapshot.artifact_path
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn validate_case(case: &ReleaseBenchmarkCase) -> Result<(), String> {
@@ -534,6 +566,9 @@ fn validate_submission(
         .map(|case| case.label.case_id.as_str())
         .collect::<HashSet<_>>();
     let mut run_ids = HashSet::new();
+    let mut completed_artifact_ids = HashSet::new();
+    let mut execution_commitments = HashSet::new();
+    let mut cost_receipts = HashSet::new();
     let identity = submission.runs.first().map(run_identity);
     for run in &submission.runs {
         require_text("run_id", &run.run_id)?;
@@ -542,6 +577,29 @@ fn validate_submission(
         require_text("provider", &run.provider)?;
         require_text("model", &run.model)?;
         require_text("prompt_contract_version", &run.prompt_contract_version)?;
+        require_text("actual_cost_provenance", &run.actual_cost_provenance)?;
+        validate_blind_reviewer(&run.blind_reviewer)?;
+        validate_reviewer_separation(corpus, &run.blind_reviewer)?;
+        require_safe_artifact_path(&run.actual_cost_artifact_path)?;
+        require_sha256(
+            "actual_cost_artifact_sha256",
+            &run.actual_cost_artifact_sha256,
+        )?;
+        validate_actual_cost_receipt(
+            corpus_root,
+            &run.actual_cost_artifact_path,
+            &run.actual_cost_artifact_sha256,
+            &run.provider,
+            &run.model,
+            run.usage.actual_cost_microusd,
+            &run.actual_cost_provenance,
+        )?;
+        if !cost_receipts.insert(run.actual_cost_artifact_sha256.as_str()) {
+            return Err(format!(
+                "repeatability runs reuse actual cost receipt {}",
+                run.actual_cost_artifact_sha256
+            ));
+        }
         if !run_ids.insert(run.run_id.as_str()) {
             return Err(format!("benchmark submission repeats run {}", run.run_id));
         }
@@ -571,6 +629,36 @@ fn validate_submission(
                 "benchmark run {} has no measured provider token usage",
                 run.run_id
             ));
+        }
+        if run.completed_artifact_ids.is_empty()
+            || run.completed_artifact_ids.len() != run.execution_commitments_sha256.len()
+        {
+            return Err(format!(
+                "benchmark run {} has an incomplete completed-artifact ledger",
+                run.run_id
+            ));
+        }
+        if run.cross_scan_reused_units != 0 {
+            return Err(format!(
+                "benchmark run {} reused {} units from another scan and is not independent",
+                run.run_id, run.cross_scan_reused_units
+            ));
+        }
+        for artifact_id in &run.completed_artifact_ids {
+            require_sha256("completed_artifact_id", artifact_id)?;
+            if !completed_artifact_ids.insert(artifact_id.as_str()) {
+                return Err(format!(
+                    "repeatability runs reuse completed artifact {artifact_id}"
+                ));
+            }
+        }
+        for commitment in &run.execution_commitments_sha256 {
+            require_sha256("execution_commitment_sha256", commitment)?;
+            if !execution_commitments.insert(commitment.as_str()) {
+                return Err(format!(
+                    "repeatability runs reuse execution commitment {commitment}"
+                ));
+            }
         }
         if run.usage.cached_input_tokens > run.usage.input_tokens {
             return Err(format!(
@@ -654,9 +742,12 @@ fn validate_run_predictions(run: &BenchmarkRun, expected: &HashSet<&str>) -> Res
                 run.run_id
             ));
         }
-        if prediction.matched_case_id.is_none() && !is_finding(prediction.tier) {
+        if prediction.matched_case_id.is_none()
+            && !is_finding(prediction.tier)
+            && prediction.tier != FindingTier::Unresolved
+        {
             return Err(format!(
-                "unmatched prediction {} must be an emitted finding",
+                "unmatched prediction {} must be an emitted finding or unresolved coverage outcome",
                 prediction.prediction_id
             ));
         }
@@ -944,9 +1035,9 @@ fn validate_source_snapshots(
     })?;
     let mut expected_hashes = HashMap::<String, String>::new();
     for snapshot in corpus
-        .cases
+        .analysis_sources
         .iter()
-        .flat_map(|case| case.before.iter().chain(case.after.iter()))
+        .chain(corpus.cases.iter().flat_map(|case| case.after.iter()))
     {
         match expected_hashes.get(&snapshot.artifact_path) {
             Some(existing) if !existing.eq_ignore_ascii_case(&snapshot.sha256) => {
@@ -1010,6 +1101,42 @@ fn validate_artifact_hash(
     if !actual_hash.eq_ignore_ascii_case(expected_hash) {
         return Err(format!(
             "{label} {artifact_path} hash mismatch: expected {expected_hash}, got {actual_hash}"
+        ));
+    }
+    Ok(())
+}
+
+fn validate_blind_reviewer(reviewer: &BlindReviewer) -> Result<(), String> {
+    require_text("blind reviewer_id", &reviewer.reviewer_id)?;
+    require_text("blind reviewer affiliation", &reviewer.affiliation)?;
+    require_text("blind reviewer attestation", &reviewer.attestation)?;
+    if reviewer.years_experience < 3 || reviewer.attestation.trim().len() < 20 {
+        return Err(
+            "blind reviewer requires at least three years of experience and a substantive attestation"
+                .to_string(),
+        );
+    }
+    if !reviewer.independent_from_sniff || !reviewer.labels_hidden_during_review {
+        return Err(
+            "blind reviewer must attest independence from Sniff and no access to hidden labels"
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
+fn validate_reviewer_separation(
+    corpus: &BenchmarkCorpus,
+    reviewer: &BlindReviewer,
+) -> Result<(), String> {
+    let reviewer_id = reviewer.reviewer_id.trim();
+    if corpus.cases.iter().any(|case| {
+        case.adjudications
+            .iter()
+            .any(|adjudication| adjudication.reviewer_id.trim() == reviewer_id)
+    }) {
+        return Err(format!(
+            "blind reviewer {reviewer_id} also adjudicated a frozen corpus label"
         ));
     }
     Ok(())

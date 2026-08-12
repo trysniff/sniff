@@ -13,7 +13,7 @@ pub enum BenchmarkPartition {
     BlindOss,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct SourceSnapshot {
     pub repository: String,
     pub revision: String,
@@ -67,6 +67,7 @@ pub struct BenchmarkCorpus {
     pub frozen_at: String,
     pub source_commitment_sha256: String,
     pub label_commitment_sha256: String,
+    pub analysis_sources: Vec<SourceSnapshot>,
     pub cases: Vec<ReleaseBenchmarkCase>,
 }
 
@@ -102,6 +103,28 @@ pub struct BenchmarkUsage {
     pub actual_cost_microusd: u64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ActualCostReceipt {
+    pub schema_version: u32,
+    pub provider: String,
+    pub model: String,
+    pub currency: String,
+    pub actual_cost_microusd: u64,
+    pub provenance: String,
+    pub raw_evidence_artifact_path: String,
+    pub raw_evidence_sha256: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BlindReviewer {
+    pub reviewer_id: String,
+    pub years_experience: u16,
+    pub affiliation: String,
+    pub independent_from_sniff: bool,
+    pub labels_hidden_during_review: bool,
+    pub attestation: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BenchmarkRun {
     pub run_id: String,
@@ -112,10 +135,17 @@ pub struct BenchmarkRun {
     pub prompt_contract_version: String,
     pub source_commitment_sha256: String,
     pub label_commitment_sha256: String,
+    pub completed_artifact_ids: Vec<String>,
+    pub execution_commitments_sha256: Vec<String>,
+    pub cross_scan_reused_units: usize,
     pub analyzed_method_count: usize,
     pub covered_case_ids: Vec<String>,
     pub predictions: Vec<BenchmarkRunPrediction>,
     pub usage: BenchmarkUsage,
+    pub actual_cost_provenance: String,
+    pub actual_cost_artifact_path: String,
+    pub actual_cost_artifact_sha256: String,
+    pub blind_reviewer: BlindReviewer,
     pub wall_clock_seconds: f64,
 }
 

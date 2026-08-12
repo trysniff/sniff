@@ -1,5 +1,6 @@
 pub mod analyzer;
 pub mod benchmark;
+pub mod benchmark_import;
 pub mod callgraph;
 pub mod cli;
 pub mod completed_run;

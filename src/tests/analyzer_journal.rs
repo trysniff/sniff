@@ -22,6 +22,29 @@ fn temp_journal_path() -> std::path::PathBuf {
     ))
 }
 
+#[test]
+fn scan_identity_changes_when_only_repository_evidence_changes() {
+    let production = FileRecord {
+        file_path: "src/demo.py".to_string(),
+        source: "def demo():\n    return 1\n".to_string(),
+        language: "python".to_string(),
+        methods: Vec::new(),
+    };
+    let evidence_a = FileRecord {
+        file_path: "tests/test_demo.py".to_string(),
+        source: "def test_demo():\n    assert demo() == 1\n".to_string(),
+        language: "python".to_string(),
+        methods: Vec::new(),
+    };
+    let mut evidence_b = evidence_a.clone();
+    evidence_b.source = "def test_demo():\n    assert demo() == 2\n".to_string();
+
+    let first = scan_id(&[production.clone(), evidence_a], "review-contract");
+    let second = scan_id(&[production, evidence_b], "review-contract");
+
+    assert_ne!(first, second);
+}
+
 fn clean_completion() -> JournalCompletion {
     JournalCompletion {
         verdict: Some(LLMVerdict {

@@ -7,10 +7,11 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 mod release;
 
 pub use release::{
-    BenchmarkAdjudication, BenchmarkBaseline, BenchmarkBaselineFinding, BenchmarkCorpus,
-    BenchmarkEvidence, BenchmarkPartition, BenchmarkRun, BenchmarkRunPrediction,
-    BenchmarkSubmission, BenchmarkUsage, ReleaseBenchmarkCase, ReleaseBenchmarkMetrics,
-    ReviewerDisposition, SourceSnapshot, evaluate_release, freeze_corpus,
+    ActualCostReceipt, BenchmarkAdjudication, BenchmarkBaseline, BenchmarkBaselineFinding,
+    BenchmarkCorpus, BenchmarkEvidence, BenchmarkPartition, BenchmarkRun, BenchmarkRunPrediction,
+    BenchmarkSubmission, BenchmarkUsage, BlindReviewer, ReleaseBenchmarkCase,
+    ReleaseBenchmarkMetrics, ReviewerDisposition, SourceSnapshot, evaluate_release, freeze_corpus,
+    validate_actual_cost_receipt, validate_frozen_corpus,
 };
 
 /// One labeled unit in a SniffBench corpus. The label is hidden from the

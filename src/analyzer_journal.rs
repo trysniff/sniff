@@ -824,6 +824,7 @@ impl JournalStore {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct JournalSummary {
     pub scan_id: Option<String>,
+    pub execution_commitment_sha256: Option<String>,
     pub expected_units: usize,
     pub completed_units: usize,
     pub retryable_units: usize,
@@ -865,8 +866,12 @@ pub(super) fn summarize(path: &Path) -> Result<JournalSummary, String> {
         .into_iter()
         .filter(|entry| entry.scan_id == latest_scan_id)
         .collect::<Vec<_>>();
+    let execution_commitment_sha256 = serde_json::to_vec(&current_scan)
+        .map(|bytes| format!("{:x}", Sha256::digest(bytes)))
+        .map_err(|error| format!("failed to commit journal execution events: {error}"))?;
     let mut summary = JournalSummary {
         scan_id: Some(latest_scan_id),
+        execution_commitment_sha256: Some(execution_commitment_sha256),
         pricing_provenance_complete: true,
         ..JournalSummary::default()
     };

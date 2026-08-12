@@ -1,6 +1,7 @@
 use crate::pricing::PricingRates;
-use crate::report_types::{MethodReviewRecord, RunReport};
+use crate::report_types::RunReport;
 use crate::review_journal::JournalSummary;
+use crate::types::FileRecord;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
@@ -13,7 +14,15 @@ use std::time::{SystemTime, UNIX_EPOCH};
 #[cfg(unix)]
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
-pub const COMPLETED_RUN_SCHEMA_VERSION: u32 = 1;
+pub const COMPLETED_RUN_SCHEMA_VERSION: u32 = 2;
+
+type CompletedSourceInventory = (Vec<CompletedRunSourceFile>, Vec<(String, String)>);
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CompletedRunSourceFile {
+    pub repository_path: String,
+    pub sha256: String,
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CompletedRunUsage {
@@ -28,6 +37,7 @@ pub struct CompletedRunUsage {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CompletedRunCoverage {
     pub files_scanned: usize,
+    pub source_files_committed: usize,
     pub methods_expected: usize,
     pub methods_completed: usize,
     pub compiler_methods_expected: usize,
@@ -48,6 +58,7 @@ pub struct CompletedRunArtifact {
     pub schema_version: u32,
     pub run_id: String,
     pub scan_fingerprint: String,
+    pub execution_commitment_sha256: String,
     pub sniff_version: String,
     pub completed_unix_ms: u64,
     pub provider: String,
@@ -55,6 +66,7 @@ pub struct CompletedRunArtifact {
     pub endpoint: String,
     pub prompt_contract_version: String,
     pub semantic_index_hashes: Vec<String>,
+    pub source_files: Vec<CompletedRunSourceFile>,
     pub source_commitment_sha256: String,
     pub report_commitment_sha256: String,
     pub coverage: CompletedRunCoverage,
@@ -73,6 +85,10 @@ impl CompletedRunArtifact {
         for (name, value) in [
             ("run_id", self.run_id.as_str()),
             ("scan_fingerprint", self.scan_fingerprint.as_str()),
+            (
+                "execution_commitment_sha256",
+                self.execution_commitment_sha256.as_str(),
+            ),
             (
                 "source_commitment_sha256",
                 self.source_commitment_sha256.as_str(),
@@ -105,10 +121,18 @@ impl CompletedRunArtifact {
         if !self.usage.estimated_cost_usd.is_finite() || self.usage.estimated_cost_usd < 0.0 {
             return Err("completed-run estimated cost must be finite and non-negative".to_string());
         }
-        validate_report_coverage(&self.report, &self.coverage)?;
-        if source_commitment(&self.report.method_review_records)? != self.source_commitment_sha256 {
+        validate_source_inventory(&self.source_files)?;
+        if self.coverage.source_files_committed != self.source_files.len() {
             return Err(
-                "completed-run source commitment does not match its method census".to_string(),
+                "completed-run file coverage does not match its scanned source inventory"
+                    .to_string(),
+            );
+        }
+        validate_report_coverage(&self.report, &self.coverage)?;
+        if source_commitment(&self.source_files)? != self.source_commitment_sha256 {
+            return Err(
+                "completed-run source commitment does not match its scanned source inventory"
+                    .to_string(),
             );
         }
         if report_commitment(&self.report)? != self.report_commitment_sha256 {
@@ -117,6 +141,7 @@ impl CompletedRunArtifact {
         if self.run_id
             != completed_run_id(
                 &self.scan_fingerprint,
+                &self.execution_commitment_sha256,
                 &self.source_commitment_sha256,
                 &self.report_commitment_sha256,
                 &self.sniff_version,
@@ -142,11 +167,18 @@ impl CompletedRunArtifact {
 pub(crate) fn build_completed_run(
     report: &RunReport,
     journal: &JournalSummary,
+    files: &[FileRecord],
+    repository_root: &Path,
 ) -> Result<CompletedRunArtifact, String> {
     let scan_fingerprint = journal
         .scan_id
         .as_deref()
         .ok_or_else(|| "completed-run export requires a journal scan fingerprint".to_string())?;
+    let execution_commitment_sha256 = journal
+        .execution_commitment_sha256
+        .as_deref()
+        .ok_or_else(|| "completed-run export requires committed journal events".to_string())?;
+    require_sha256("execution_commitment_sha256", execution_commitment_sha256)?;
     let provider = required_journal_value("provider", journal.provider.as_deref())?;
     let model = required_journal_value("model", journal.model.as_deref())?;
     let endpoint = required_journal_value("endpoint", journal.endpoint.as_deref())?;
@@ -169,6 +201,7 @@ pub(crate) fn build_completed_run(
     }
     let coverage = CompletedRunCoverage {
         files_scanned: report.stats.files_scanned,
+        source_files_committed: files.len(),
         methods_expected: report.stats.method_reviews_expected,
         methods_completed: report.stats.method_reviews_completed,
         compiler_methods_expected: report.stats.compiler_methods_expected,
@@ -192,10 +225,13 @@ pub(crate) fn build_completed_run(
         pricing_provenance_complete: report.stats.pricing_provenance_complete,
     };
     let completed_unix_ms = now_unix_ms();
-    let source_commitment_sha256 = source_commitment(&report.method_review_records)?;
-    let report_commitment_sha256 = report_commitment(report)?;
+    let (source_files, source_paths) = source_inventory(files, repository_root)?;
+    let artifact_report = normalize_report_paths(report, &source_paths)?;
+    let source_commitment_sha256 = source_commitment(&source_files)?;
+    let report_commitment_sha256 = report_commitment(&artifact_report)?;
     let run_id = completed_run_id(
         scan_fingerprint,
+        execution_commitment_sha256,
         &source_commitment_sha256,
         &report_commitment_sha256,
         env!("CARGO_PKG_VERSION"),
@@ -204,6 +240,7 @@ pub(crate) fn build_completed_run(
         schema_version: COMPLETED_RUN_SCHEMA_VERSION,
         run_id,
         scan_fingerprint: scan_fingerprint.to_string(),
+        execution_commitment_sha256: execution_commitment_sha256.to_string(),
         sniff_version: env!("CARGO_PKG_VERSION").to_string(),
         completed_unix_ms,
         provider,
@@ -211,14 +248,35 @@ pub(crate) fn build_completed_run(
         endpoint,
         prompt_contract_version,
         semantic_index_hashes: journal.semantic_index_hashes.clone(),
+        source_files,
         source_commitment_sha256,
         report_commitment_sha256,
         coverage,
         usage,
-        report: report.clone(),
+        report: artifact_report,
     };
     artifact.verify()?;
     Ok(artifact)
+}
+
+pub(crate) fn build_final_completed_run(
+    report: &RunReport,
+    journal: &JournalSummary,
+    files: &[FileRecord],
+    repository_root: &Path,
+) -> Result<Option<CompletedRunArtifact>, String> {
+    if !journal_is_final(journal) {
+        return Ok(None);
+    }
+    build_completed_run(report, journal, files, repository_root).map(Some)
+}
+
+pub(crate) fn journal_is_final(journal: &JournalSummary) -> bool {
+    journal.retryable_units == 0
+        && journal.retryable_role_units == 0
+        && journal.retryable_synthesis_units == 0
+        && journal.retryable_adjudication_units == 0
+        && journal.retryable_proof_units == 0
 }
 
 pub(crate) fn write_completed_run(
@@ -403,23 +461,143 @@ fn validate_report_coverage(
     Ok(())
 }
 
-fn source_commitment(records: &[MethodReviewRecord]) -> Result<String, String> {
-    let mut census = records
+fn source_inventory(
+    files: &[FileRecord],
+    repository_root: &Path,
+) -> Result<CompletedSourceInventory, String> {
+    let root = std::fs::canonicalize(repository_root).map_err(|error| {
+        format!(
+            "failed to resolve completed-run repository root {}: {error}",
+            repository_root.display()
+        )
+    })?;
+    let mut source_paths = Vec::with_capacity(files.len());
+    let mut inventory = files
         .iter()
-        .map(|record| {
-            (
-                record.unit_id.as_str(),
-                record.source_hash.as_str(),
-                record.file_path.as_str(),
-                record.method_name.as_str(),
-                record.start_line,
-                record.end_line,
-            )
+        .map(|file| {
+            let path = std::fs::canonicalize(&file.file_path).map_err(|error| {
+                format!(
+                    "failed to resolve scanned source {}: {error}",
+                    file.file_path
+                )
+            })?;
+            let relative = path.strip_prefix(&root).map_err(|_| {
+                format!(
+                    "scanned source {} escapes repository root {}",
+                    path.display(),
+                    root.display()
+                )
+            })?;
+            let repository_path = relative.to_string_lossy().replace('\\', "/");
+            if repository_path.is_empty() {
+                return Err("scanned source path resolves to the repository root".to_string());
+            }
+            let original = file.file_path.replace('\\', "/");
+            let canonical = path.to_string_lossy().replace('\\', "/");
+            source_paths.push((original, repository_path.clone()));
+            if canonical != file.file_path.replace('\\', "/") {
+                source_paths.push((canonical, repository_path.clone()));
+            }
+            Ok(CompletedRunSourceFile {
+                repository_path,
+                sha256: sha256_text(&file.source),
+            })
         })
+        .collect::<Result<Vec<_>, String>>()?;
+    inventory.sort_by(|left, right| left.repository_path.cmp(&right.repository_path));
+    validate_source_inventory(&inventory)?;
+    source_paths.sort_by_key(|item| std::cmp::Reverse(item.0.len()));
+    source_paths.dedup();
+    Ok((inventory, source_paths))
+}
+
+fn normalize_report_paths(
+    report: &RunReport,
+    source_paths: &[(String, String)],
+) -> Result<RunReport, String> {
+    let normalize = |path: &str| normalize_source_path(path, source_paths);
+    let mut normalized = report.clone();
+    for verdict in &mut normalized.file_verdicts {
+        verdict.file_path = normalize(&verdict.file_path)?;
+    }
+    for flag in &mut normalized.static_flags {
+        flag.file_path = normalize(&flag.file_path)?;
+    }
+    for verdict in &mut normalized.llm_verdicts {
+        verdict.file_path = normalize(&verdict.file_path)?;
+    }
+    for record in &mut normalized.method_review_records {
+        record.file_path = normalize(&record.file_path)?;
+        record.verdict.file_path = normalize(&record.verdict.file_path)?;
+    }
+    for case in &mut normalized.slop_cases {
+        for evidence in &mut case.evidence {
+            evidence.file_path = normalize(&evidence.file_path)?;
+        }
+        for edit in &mut case.counterfactual_edits {
+            edit.file_path = normalize(&edit.file_path)?;
+        }
+        for provenance in &mut case.provenance {
+            for (absolute, relative) in source_paths {
+                *provenance = provenance
+                    .replace(absolute, relative)
+                    .replace(&absolute.replace('/', "\\"), relative);
+            }
+        }
+    }
+    Ok(normalized)
+}
+
+fn normalize_source_path(path: &str, source_paths: &[(String, String)]) -> Result<String, String> {
+    let normalized = path.replace('\\', "/");
+    source_paths
+        .iter()
+        .find(|(absolute, _)| absolute == &normalized)
+        .map(|(_, relative)| relative.clone())
+        .or_else(|| {
+            source_paths
+                .iter()
+                .find(|(_, relative)| relative == &normalized)
+                .map(|(_, relative)| relative.clone())
+        })
+        .ok_or_else(|| format!("completed-run report references unscanned source path {path}"))
+}
+
+fn validate_source_inventory(files: &[CompletedRunSourceFile]) -> Result<(), String> {
+    if files.is_empty() {
+        return Err("completed-run scanned source inventory is empty".to_string());
+    }
+    let mut paths = HashSet::with_capacity(files.len());
+    for file in files {
+        require_text("source repository_path", &file.repository_path)?;
+        if file.repository_path.contains('\\')
+            || file.repository_path.starts_with('/')
+            || file.repository_path.split('/').any(|part| part == "..")
+        {
+            return Err(format!(
+                "completed-run source path must be normalized and repository-relative: {}",
+                file.repository_path
+            ));
+        }
+        require_sha256("source file sha256", &file.sha256)?;
+        if !paths.insert(file.repository_path.as_str()) {
+            return Err(format!(
+                "completed-run scanned source inventory repeats {}",
+                file.repository_path
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn source_commitment(files: &[CompletedRunSourceFile]) -> Result<String, String> {
+    let mut inventory = files
+        .iter()
+        .map(|file| (file.repository_path.as_str(), file.sha256.as_str()))
         .collect::<Vec<_>>();
-    census.sort_unstable();
-    let bytes = serde_json::to_vec(&census)
-        .map_err(|error| format!("failed to serialize completed-run source census: {error}"))?;
+    inventory.sort_unstable();
+    let bytes = serde_json::to_vec(&inventory)
+        .map_err(|error| format!("failed to serialize completed-run source inventory: {error}"))?;
     Ok(sha256_bytes(&bytes))
 }
 
@@ -459,12 +637,13 @@ fn sha256_text(value: &str) -> String {
 
 fn completed_run_id(
     scan_fingerprint: &str,
+    execution_commitment_sha256: &str,
     source_commitment_sha256: &str,
     report_commitment_sha256: &str,
     sniff_version: &str,
 ) -> String {
     sha256_text(&format!(
-        "schema={COMPLETED_RUN_SCHEMA_VERSION}\nscan={scan_fingerprint}\nsource={source_commitment_sha256}\nreport={report_commitment_sha256}\nsniff={sniff_version}"
+        "schema={COMPLETED_RUN_SCHEMA_VERSION}\nscan={scan_fingerprint}\nexecution={execution_commitment_sha256}\nsource={source_commitment_sha256}\nreport={report_commitment_sha256}\nsniff={sniff_version}"
     ))
 }
 

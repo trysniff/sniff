@@ -86,18 +86,37 @@ pub enum CliCommand {
 
 #[derive(Subcommand, Debug)]
 pub enum BenchmarkCommand {
-    /// Verify snapshot hashes and create an immutable SniffBench v2 corpus manifest.
+    /// Verify snapshot hashes and create an immutable SniffBench v3 corpus manifest.
     Freeze {
         /// Draft corpus manifest; snapshot paths are relative to its directory.
         draft: String,
         /// New frozen manifest path; existing files are never overwritten.
         output: String,
     },
+    /// Create a label-blind review worksheet from immutable completed scans.
+    PrepareRun {
+        /// Frozen SniffBench corpus manifest.
+        corpus: String,
+        /// New review worksheet path; existing files are never overwritten.
+        output: String,
+        /// Completed `.sniff/runs/*.json` artifact; repeat once per repository revision.
+        #[arg(long = "artifact", required = true)]
+        artifacts: Vec<String>,
+    },
+    /// Verify a completed blind-review worksheet and emit one BenchmarkRun ledger.
+    ImportRun {
+        /// Frozen SniffBench corpus manifest.
+        corpus: String,
+        /// Independently completed review worksheet from `prepare-run`.
+        review: String,
+        /// New BenchmarkRun JSON path; existing files are never overwritten.
+        output: String,
+    },
     /// Evaluate complete runs and competitor ledgers against a frozen corpus.
     Evaluate {
-        /// Frozen SniffBench v2 corpus manifest and source-snapshot directory.
+        /// Frozen SniffBench v3 corpus manifest and source-snapshot directory.
         corpus: String,
-        /// Complete SniffBench v2 runs, adjudications, usage, and baseline ledgers.
+        /// Complete SniffBench v3 runs, adjudications, usage, and baseline ledgers.
         submission: String,
     },
 }
@@ -152,6 +171,16 @@ pub async fn run(args: CliArgs) -> Result<i32, Box<dyn std::error::Error>> {
             BenchmarkCommand::Freeze { draft, output } => {
                 pipeline::freeze_benchmark(&draft, &output)
             }
+            BenchmarkCommand::PrepareRun {
+                corpus,
+                output,
+                artifacts,
+            } => pipeline::prepare_benchmark_run(&corpus, &output, &artifacts),
+            BenchmarkCommand::ImportRun {
+                corpus,
+                review,
+                output,
+            } => pipeline::import_benchmark_run(&corpus, &review, &output),
             BenchmarkCommand::Evaluate { corpus, submission } => {
                 pipeline::benchmark(&corpus, &submission)
             }
@@ -251,6 +280,51 @@ mod tests {
             Some(CliCommand::Benchmark {
                 command: BenchmarkCommand::Freeze { draft, output }
             }) if draft == "draft.json" && output == "frozen.json"
+        ));
+    }
+
+    #[test]
+    fn parses_offline_benchmark_run_preparation() {
+        let args = CliArgs::try_parse_from([
+            "sniff",
+            "benchmark",
+            "prepare-run",
+            "corpus.json",
+            "review.json",
+            "--artifact",
+            "python.json",
+            "--artifact",
+            "typescript.json",
+        ])
+        .expect("benchmark prepare-run arguments");
+
+        assert!(matches!(
+            args.command,
+            Some(CliCommand::Benchmark {
+                command: BenchmarkCommand::PrepareRun { corpus, output, artifacts }
+            }) if corpus == "corpus.json"
+                && output == "review.json"
+                && artifacts == ["python.json", "typescript.json"]
+        ));
+    }
+
+    #[test]
+    fn parses_offline_benchmark_run_import() {
+        let args = CliArgs::try_parse_from([
+            "sniff",
+            "benchmark",
+            "import-run",
+            "corpus.json",
+            "review.json",
+            "run.json",
+        ])
+        .expect("benchmark import-run arguments");
+
+        assert!(matches!(
+            args.command,
+            Some(CliCommand::Benchmark {
+                command: BenchmarkCommand::ImportRun { corpus, review, output }
+            }) if corpus == "corpus.json" && review == "review.json" && output == "run.json"
         ));
     }
 

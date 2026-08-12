@@ -138,6 +138,7 @@ fn corpus() -> (TempDir, BenchmarkCorpus) {
         frozen_at: "2026-08-12T00:00:00Z".to_string(),
         source_commitment_sha256: "0".repeat(64),
         label_commitment_sha256: "0".repeat(64),
+        analysis_sources: cases.iter().flat_map(|case| case.before.clone()).collect(),
         cases,
     };
     corpus.source_commitment_sha256 = corpus
@@ -152,10 +153,31 @@ fn corpus() -> (TempDir, BenchmarkCorpus) {
         "raw baseline output\n",
     )
     .expect("write baseline output");
+    fs::create_dir_all(root.path().join("costs")).expect("create cost evidence dir");
+    for index in 1..=3 {
+        let raw_path = format!("costs/raw-{index}.json");
+        let raw = format!("{{\"run\":{index},\"cost_usd\":0.5}}\n");
+        fs::write(root.path().join(&raw_path), &raw).expect("write raw cost evidence");
+        let receipt = ActualCostReceipt {
+            schema_version: 1,
+            provider: "provider".to_string(),
+            model: "model".to_string(),
+            currency: "USD".to_string(),
+            actual_cost_microusd: 500_000,
+            provenance: format!("provider invoice run {index}"),
+            raw_evidence_artifact_path: raw_path,
+            raw_evidence_sha256: digest(&raw),
+        };
+        fs::write(
+            root.path().join(format!("costs/receipt-{index}.json")),
+            serde_json::to_vec_pretty(&receipt).expect("serialize cost receipt"),
+        )
+        .expect("write cost receipt");
+    }
     (root, corpus)
 }
 
-fn submission(corpus: &BenchmarkCorpus) -> BenchmarkSubmission {
+fn submission(corpus: &BenchmarkCorpus, root: &std::path::Path) -> BenchmarkSubmission {
     let predictions = corpus
         .cases
         .iter()
@@ -191,29 +213,50 @@ fn submission(corpus: &BenchmarkCorpus) -> BenchmarkSubmission {
         })
         .collect::<Vec<_>>();
     let runs = (1..=3)
-        .map(|index| BenchmarkRun {
-            run_id: format!("run-{index}"),
-            tool_version: "1.0.0".to_string(),
-            source_revision: "abcdef".to_string(),
-            provider: "provider".to_string(),
-            model: "model".to_string(),
-            prompt_contract_version: "v1".to_string(),
-            source_commitment_sha256: corpus.source_commitment_sha256.clone(),
-            label_commitment_sha256: corpus.label_commitment_sha256.clone(),
-            analyzed_method_count: 1000,
-            covered_case_ids: corpus
-                .cases
-                .iter()
-                .map(|case| case.label.case_id.clone())
-                .collect(),
-            predictions: predictions.clone(),
-            usage: BenchmarkUsage {
-                input_tokens: 100_000,
-                cached_input_tokens: 25_000,
-                output_tokens: 20_000,
-                actual_cost_microusd: 500_000,
-            },
-            wall_clock_seconds: 60.0,
+        .map(|index| {
+            let receipt_path = format!("costs/receipt-{index}.json");
+            let receipt_hash =
+                digest(&fs::read_to_string(root.join(&receipt_path)).expect("read cost receipt"));
+            BenchmarkRun {
+                run_id: format!("run-{index}"),
+                tool_version: "1.0.0".to_string(),
+                source_revision: "abcdef".to_string(),
+                provider: "provider".to_string(),
+                model: "model".to_string(),
+                prompt_contract_version: "v1".to_string(),
+                source_commitment_sha256: corpus.source_commitment_sha256.clone(),
+                label_commitment_sha256: corpus.label_commitment_sha256.clone(),
+                completed_artifact_ids: vec![digest(&format!("artifact-{index}"))],
+                execution_commitments_sha256: vec![digest(&format!("execution-{index}"))],
+                cross_scan_reused_units: 0,
+                analyzed_method_count: 1000,
+                covered_case_ids: corpus
+                    .cases
+                    .iter()
+                    .map(|case| case.label.case_id.clone())
+                    .collect(),
+                predictions: predictions.clone(),
+                usage: BenchmarkUsage {
+                    input_tokens: 100_000,
+                    cached_input_tokens: 25_000,
+                    output_tokens: 20_000,
+                    actual_cost_microusd: 500_000,
+                },
+                actual_cost_provenance: format!("provider invoice run {index}"),
+                actual_cost_artifact_path: receipt_path,
+                actual_cost_artifact_sha256: receipt_hash,
+                blind_reviewer: BlindReviewer {
+                    reviewer_id: format!("reviewer-{index}"),
+                    years_experience: 8,
+                    affiliation: "Independent evaluator".to_string(),
+                    independent_from_sniff: true,
+                    labels_hidden_during_review: true,
+                    attestation:
+                        "I reviewed these outcomes independently without access to hidden labels."
+                            .to_string(),
+                },
+                wall_clock_seconds: 60.0,
+            }
         })
         .collect();
     BenchmarkSubmission {
@@ -250,7 +293,7 @@ fn submission(corpus: &BenchmarkCorpus) -> BenchmarkSubmission {
 #[test]
 fn complete_release_submission_passes_every_offline_gate() {
     let (root, corpus) = corpus();
-    let submission = submission(&corpus);
+    let submission = submission(&corpus, root.path());
 
     let metrics = evaluate_release(&corpus, &submission, root.path()).expect("evaluate");
 
@@ -260,6 +303,18 @@ fn complete_release_submission_passes_every_offline_gate() {
     assert_eq!(metrics.overall_evidence_validity, 1.0);
     assert_eq!(metrics.cost_usd_per_1000_methods, 0.5);
     assert_eq!(metrics.by_partition.len(), 5);
+}
+
+#[test]
+fn release_submission_rejects_label_adjudicator_as_blind_reviewer() {
+    let (root, corpus) = corpus();
+    let mut submission = submission(&corpus, root.path());
+    submission.runs[0].blind_reviewer.reviewer_id =
+        corpus.cases[1].adjudications[0].reviewer_id.clone();
+
+    let error = evaluate_release(&corpus, &submission, root.path()).unwrap_err();
+
+    assert!(error.contains("also adjudicated a frozen corpus label"));
 }
 
 #[test]
@@ -281,13 +336,13 @@ fn freeze_computes_both_commitments_and_validates_snapshots() {
 #[test]
 fn release_corpus_rejects_tampered_labels_and_source_artifacts() {
     let (root, mut tampered_corpus) = corpus();
-    let valid_submission = submission(&tampered_corpus);
+    let valid_submission = submission(&tampered_corpus, root.path());
     tampered_corpus.cases[0].expected_proof_level = 2;
     let error = evaluate_release(&tampered_corpus, &valid_submission, root.path()).unwrap_err();
     assert!(error.contains("label commitment"));
 
     let (root, source_corpus) = corpus();
-    let valid_submission = submission(&source_corpus);
+    let valid_submission = submission(&source_corpus, root.path());
     fs::write(
         root.path()
             .join(&source_corpus.cases[0].before[0].artifact_path),
@@ -301,12 +356,12 @@ fn release_corpus_rejects_tampered_labels_and_source_artifacts() {
 #[test]
 fn release_submission_is_bound_to_sources_and_raw_baseline_outputs() {
     let (root, corpus) = corpus();
-    let mut source_mismatch = submission(&corpus);
+    let mut source_mismatch = submission(&corpus, root.path());
     source_mismatch.runs[0].source_commitment_sha256 = "b".repeat(64);
     let error = evaluate_release(&corpus, &source_mismatch, root.path()).unwrap_err();
     assert!(error.contains("frozen source corpus"));
 
-    let valid_submission = submission(&corpus);
+    let valid_submission = submission(&corpus, root.path());
     fs::write(
         root.path().join("baselines/raw.json"),
         "tampered baseline output\n",
@@ -319,7 +374,7 @@ fn release_submission_is_bound_to_sources_and_raw_baseline_outputs() {
 #[test]
 fn release_submission_rejects_incomplete_coverage() {
     let (root, corpus) = corpus();
-    let mut submission = submission(&corpus);
+    let mut submission = submission(&corpus, root.path());
     submission.runs[0].predictions.pop();
 
     let error = evaluate_release(&corpus, &submission, root.path()).unwrap_err();
@@ -330,7 +385,7 @@ fn release_submission_rejects_incomplete_coverage() {
 #[test]
 fn unmatched_and_invalid_evidence_findings_fail_the_release_gate() {
     let (root, corpus) = corpus();
-    let mut submission = submission(&corpus);
+    let mut submission = submission(&corpus, root.path());
     for run in &mut submission.runs {
         run.predictions.push(BenchmarkRunPrediction {
             prediction_id: format!("unmatched-{}", run.run_id),
@@ -363,7 +418,7 @@ fn unmatched_and_invalid_evidence_findings_fail_the_release_gate() {
 #[test]
 fn repeatability_includes_unmatched_findings() {
     let (root, corpus) = corpus();
-    let mut submission = submission(&corpus);
+    let mut submission = submission(&corpus, root.path());
     let snapshot = &corpus.cases[0].before[0];
     submission.runs[0].predictions.push(BenchmarkRunPrediction {
         prediction_id: "unstable-extra".to_string(),
@@ -392,4 +447,27 @@ fn repeatability_includes_unmatched_findings() {
             .iter()
             .any(|error| error.contains("repeatability"))
     );
+}
+
+#[test]
+fn unmatched_unresolved_outcomes_are_counted_not_erased() {
+    let (root, corpus) = corpus();
+    let mut submission = submission(&corpus, root.path());
+    for run in &mut submission.runs {
+        run.predictions.push(BenchmarkRunPrediction {
+            prediction_id: format!("unresolved-{}", run.run_id),
+            finding_fingerprint: None,
+            matched_case_id: None,
+            tier: FindingTier::Unresolved,
+            pattern: "none".to_string(),
+            evidence: Vec::new(),
+            proof_level: 0,
+            reviewer_disposition: ReviewerDisposition::Unreviewed,
+            reviewer_minutes: 0.0,
+        });
+    }
+
+    let metrics = evaluate_release(&corpus, &submission, root.path()).expect("evaluate");
+
+    assert!(metrics.unresolved_rate > 0.0);
 }

@@ -45,6 +45,7 @@ use clap::Parser;
 use std::thread;
 
 pub mod benchmark;
+pub mod benchmark_import;
 
 fn main() {
     let args = cli::CliArgs::parse();

@@ -264,6 +264,7 @@ pub(super) struct ReviewArtifacts {
     pub(super) estimated_cost_usd: f64,
     pub(super) pricing_snapshots: Vec<crate::pricing::PricingRates>,
     pub(super) pricing_provenance_complete: bool,
+    pub(super) context_file_records: Vec<FileRecord>,
 }
 
 fn ensure_ai_path(
@@ -368,9 +369,21 @@ pub(super) async fn prepare_review_artifacts(
         path,
         config,
     )?;
-    let scan_id = llm_client
-        .as_ref()
-        .map(|client| crate::review_journal::scan_id(file_records, &client.review_context_key()));
+    let production_paths = file_records
+        .iter()
+        .map(|file| file.file_path.clone())
+        .collect::<HashSet<_>>();
+    let (context_root, mut evidence_records) =
+        super::io::scan_context_files_with_cache(path, config, Some(execution.semantic_cache))
+            .await
+            .map_err(IoError::other)?;
+    evidence_records.retain(|file| !production_paths.contains(&file.file_path));
+    let mut context_file_records = file_records.to_vec();
+    context_file_records.extend(evidence_records.iter().cloned());
+    crate::source_privacy::reject_likely_secrets(&context_file_records).map_err(IoError::other)?;
+    let scan_id = llm_client.as_ref().map(|client| {
+        crate::review_journal::scan_id(&context_file_records, &client.review_context_key())
+    });
     if let (Some(journal_path), Some(scan_id), Some(client)) = (
         execution.journal_path,
         scan_id.as_deref(),
@@ -398,18 +411,6 @@ pub(super) async fn prepare_review_artifacts(
 
     let ai_expected_reviews = super::stats::expected_ai_reviews_after_role_resolution(file_records);
 
-    let production_paths = file_records
-        .iter()
-        .map(|file| file.file_path.clone())
-        .collect::<HashSet<_>>();
-    let (context_root, mut evidence_records) =
-        super::io::scan_context_files_with_cache(path, config, Some(execution.semantic_cache))
-            .await
-            .map_err(IoError::other)?;
-    evidence_records.retain(|file| !production_paths.contains(&file.file_path));
-    let mut remote_records = file_records.to_vec();
-    remote_records.extend(evidence_records.iter().cloned());
-    crate::source_privacy::reject_likely_secrets(&remote_records).map_err(IoError::other)?;
     let (static_flags, graph) = super::graph::build_static_flags(
         file_records,
         &evidence_records,
@@ -418,8 +419,6 @@ pub(super) async fn prepare_review_artifacts(
         Some(execution.semantic_cache),
     )
     .map_err(IoError::other)?;
-    let mut context_file_records = file_records.to_vec();
-    context_file_records.extend(evidence_records);
     let review_result = run_llm_checks(LlmCheckInput {
         file_records,
         context_file_records: &context_file_records,
@@ -500,6 +499,7 @@ pub(super) async fn prepare_review_artifacts(
         estimated_cost_usd,
         pricing_snapshots,
         pricing_provenance_complete,
+        context_file_records,
     })
 }
 

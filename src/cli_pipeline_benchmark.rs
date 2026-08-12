@@ -1,4 +1,5 @@
 use crate::benchmark::{BenchmarkCorpus, BenchmarkSubmission, evaluate_release, freeze_corpus};
+use crate::benchmark_import::{BenchmarkRunReview, import_reviewed_run, prepare_run_review};
 use std::fs;
 use std::io::{Error as IoError, ErrorKind, Write};
 use std::path::Path;
@@ -53,6 +54,53 @@ pub(crate) fn freeze_benchmark(
         "Frozen SniffBench corpus written to {output_path}\nSource commitment: {}\nLabel commitment: {}",
         frozen.source_commitment_sha256, frozen.label_commitment_sha256
     );
+    Ok(0)
+}
+
+pub(crate) fn prepare_benchmark_run(
+    corpus_path: &str,
+    output_path: &str,
+    artifact_paths: &[String],
+) -> Result<i32, Box<dyn std::error::Error>> {
+    let corpus = read_json::<BenchmarkCorpus>(corpus_path)?;
+    let corpus_root = Path::new(corpus_path)
+        .parent()
+        .unwrap_or_else(|| Path::new("."));
+    let artifacts = artifact_paths
+        .iter()
+        .map(std::path::PathBuf::from)
+        .collect::<Vec<_>>();
+    let review = prepare_run_review(&corpus, corpus_root, &artifacts).map_err(|error| {
+        IoError::new(
+            ErrorKind::InvalidData,
+            format!("benchmark run cannot be prepared: {error}"),
+        )
+    })?;
+    write_new_file(Path::new(output_path), &serde_json::to_vec_pretty(&review)?)?;
+    eprintln!(
+        "Label-blind SniffBench review worksheet written to {output_path}. Complete only reviews, actual cost provenance, and wall-clock time."
+    );
+    Ok(0)
+}
+
+pub(crate) fn import_benchmark_run(
+    corpus_path: &str,
+    review_path: &str,
+    output_path: &str,
+) -> Result<i32, Box<dyn std::error::Error>> {
+    let corpus = read_json::<BenchmarkCorpus>(corpus_path)?;
+    let review = read_json::<BenchmarkRunReview>(review_path)?;
+    let corpus_root = Path::new(corpus_path)
+        .parent()
+        .unwrap_or_else(|| Path::new("."));
+    let run = import_reviewed_run(&corpus, corpus_root, &review).map_err(|error| {
+        IoError::new(
+            ErrorKind::InvalidData,
+            format!("benchmark run cannot be imported: {error}"),
+        )
+    })?;
+    write_new_file(Path::new(output_path), &serde_json::to_vec_pretty(&run)?)?;
+    eprintln!("Verified SniffBench run written to {output_path}.");
     Ok(0)
 }
 

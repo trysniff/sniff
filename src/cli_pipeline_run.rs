@@ -213,7 +213,7 @@ async fn build_run_report(
     config: &crate::config::ResolvedConfig,
     file_records: &mut [crate::types::FileRecord],
     execution: llm::ReviewExecutionContext<'_>,
-) -> Result<(RunReport, bool), Box<dyn std::error::Error>> {
+) -> Result<(RunReport, bool, Vec<crate::types::FileRecord>), Box<dyn std::error::Error>> {
     let compiler_methods_expected = file_records.iter().map(|file| file.methods.len()).sum();
     let compiler_methods_covered = execution
         .compiler_method_contexts
@@ -244,7 +244,8 @@ async fn build_run_report(
         .into());
     }
 
-    Ok(stats::build_run_report_from_parts(
+    let context_file_records = review.context_file_records;
+    let (report, has_issues) = stats::build_run_report_from_parts(
         file_records,
         review.static_flags,
         review.verdicts,
@@ -252,7 +253,8 @@ async fn build_run_report(
         review.method_cases,
         review.synthesis_cases,
         stats,
-    ))
+    );
+    Ok((report, has_issues, context_file_records))
 }
 
 pub async fn run(
@@ -342,7 +344,7 @@ pub async fn run(
         },
     )
     .await;
-    let (run_report, has_issues) = match report_result {
+    let (run_report, has_issues, context_file_records) = match report_result {
         Ok(report) => report,
         Err(error) if crate::review_journal::is_budget_pause(&error.to_string()) => {
             eprintln!("{error}");
@@ -354,10 +356,13 @@ pub async fn run(
     let completed_run = if run_report.stats.method_reviews_expected > 0 {
         let journal_summary =
             crate::analyzer::summarize_journal(&journal_path).map_err(IoError::other)?;
-        Some(
-            crate::completed_run::build_completed_run(&run_report, &journal_summary)
-                .map_err(IoError::other)?,
+        crate::completed_run::build_final_completed_run(
+            &run_report,
+            &journal_summary,
+            &context_file_records,
+            &repository_root,
         )
+        .map_err(IoError::other)?
     } else {
         None
     };
@@ -472,6 +477,7 @@ mod tests {
     fn journal_status_is_compact_and_reports_remaining_work() {
         let summary = crate::analyzer::JournalSummary {
             scan_id: Some("scan".to_string()),
+            execution_commitment_sha256: Some("a".repeat(64)),
             expected_units: 10,
             completed_units: 4,
             retryable_units: 1,
