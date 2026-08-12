@@ -8,6 +8,7 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 static FIXTURE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+static PROCESS_TERMINATION_TEST_LOCK: Mutex<()> = Mutex::new(());
 
 enum ProviderAction {
     Json(String),
@@ -186,15 +187,15 @@ fn spawn_sniff(root: &Path, endpoint: &str, resume: bool) -> Child {
         .expect("sniff process should start")
 }
 
-fn wait_until(timeout: Duration, mut condition: impl FnMut() -> bool) {
+fn wait_until(timeout: Duration, mut condition: impl FnMut() -> bool) -> bool {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
         if condition() {
-            return;
+            return true;
         }
         thread::sleep(Duration::from_millis(25));
     }
-    panic!("condition was not met within {timeout:?}");
+    false
 }
 
 fn completed_method_units(journal: &Path) -> usize {
@@ -297,6 +298,9 @@ fn network_loss_resumes_without_repeating_completed_method() {
 
 #[test]
 fn forced_process_termination_resumes_without_repeating_completed_method() {
+    let _test_guard = PROCESS_TERMINATION_TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let root = method_fixture();
     let journal = root.join(".sniff-journal.jsonl");
     let (endpoint, hits, requests) = spawn_provider(vec![
@@ -309,9 +313,22 @@ fn forced_process_termination_resumes_without_repeating_completed_method() {
     ]);
 
     let mut interrupted = spawn_sniff(&root, &endpoint, false);
-    wait_until(Duration::from_secs(15), || {
+    let reached_checkpoint = wait_until(Duration::from_secs(30), || {
         completed_method_units(&journal) == 1 && hits.load(Ordering::SeqCst) >= 3
     });
+    if !reached_checkpoint {
+        let completed = completed_method_units(&journal);
+        let request_count = hits.load(Ordering::SeqCst);
+        let _ = interrupted.kill();
+        let output = interrupted
+            .wait_with_output()
+            .expect("reap timed-out sniff process");
+        panic!(
+            "interruption checkpoint was not reached: completed_methods={completed}, requests={request_count}, stdout={}, stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
     interrupted.kill().expect("force terminate sniff");
     interrupted.wait().expect("reap terminated sniff process");
 
@@ -339,6 +356,9 @@ fn forced_process_termination_resumes_without_repeating_completed_method() {
 
 #[test]
 fn forced_process_termination_during_synthesis_resumes_without_repeating_methods() {
+    let _test_guard = PROCESS_TERMINATION_TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let root = method_fixture();
     let journal = root.join(".sniff-journal.jsonl");
     let (endpoint, hits, requests) = spawn_provider(vec![
@@ -351,9 +371,22 @@ fn forced_process_termination_during_synthesis_resumes_without_repeating_methods
     ]);
 
     let mut interrupted = spawn_sniff(&root, &endpoint, false);
-    wait_until(Duration::from_secs(15), || {
+    let reached_checkpoint = wait_until(Duration::from_secs(30), || {
         completed_method_units(&journal) == 2 && hits.load(Ordering::SeqCst) >= 5
     });
+    if !reached_checkpoint {
+        let completed = completed_method_units(&journal);
+        let request_count = hits.load(Ordering::SeqCst);
+        let _ = interrupted.kill();
+        let output = interrupted
+            .wait_with_output()
+            .expect("reap timed-out sniff process");
+        panic!(
+            "synthesis interruption checkpoint was not reached: completed_methods={completed}, requests={request_count}, stdout={}, stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
     interrupted.kill().expect("force terminate sniff");
     interrupted.wait().expect("reap terminated sniff process");
 
