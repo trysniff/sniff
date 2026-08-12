@@ -131,8 +131,20 @@ if (Test-Path -LiteralPath $BuildDriveRoot) {
 }
 Invoke-Checked -Executable "subst.exe" -ArgumentList @($BuildDrive, $PhysicalWorkDirectory)
 $WorkDirectory = $BuildDriveRoot
-
+$DeterministicHomeNames = @("CARGO_HOME", "RUSTUP_HOME")
+$OriginalDeterministicHomes = @{}
+foreach ($name in $DeterministicHomeNames) {
+    $OriginalDeterministicHomes[$name] = [System.Environment]::GetEnvironmentVariable(
+        $name,
+        [System.EnvironmentVariableTarget]::Process
+    )
+}
 try {
+$env:CARGO_HOME = Join-Path $WorkDirectory "cargo-home"
+$env:RUSTUP_HOME = Join-Path $WorkDirectory "rustup-home"
+New-Item -ItemType Directory -Path $env:CARGO_HOME | Out-Null
+New-Item -ItemType Directory -Path $env:RUSTUP_HOME | Out-Null
+
 Invoke-Checked -Executable "rustup" -ArgumentList @(
     "toolchain", "install", $RustToolchain, "--profile", "minimal", "--component", "rust-src"
 )
@@ -156,8 +168,7 @@ if ($LASTEXITCODE -ne 0) {
     throw "Failed to resolve the pinned Rust sysroot"
 }
 $RustSource = Join-Path $Sysroot "lib\rustlib\src\rust"
-$CargoHome = Join-Path $WorkDirectory "cargo-home"
-New-Item -ItemType Directory -Path $CargoHome | Out-Null
+$CargoHome = (Resolve-Path -LiteralPath $env:CARGO_HOME).Path
 $PathRemaps = @(
     [ordered]@{ Source = $env:USERPROFILE; Destination = "Z:\host-home" }
     [ordered]@{ Source = $RepositoryRoot; Destination = "Z:\sniff-source" }
@@ -337,5 +348,12 @@ $ProvenancePath = Join-Path $OutputDirectory "$AssetName.provenance.json"
 Write-Output "ARCHIVE=$Archive"
 Write-Output "SHA256=$ArchiveHash"
 } finally {
+    foreach ($name in $DeterministicHomeNames) {
+        [System.Environment]::SetEnvironmentVariable(
+            $name,
+            $OriginalDeterministicHomes[$name],
+            [System.EnvironmentVariableTarget]::Process
+        )
+    }
     Invoke-Checked -Executable "subst.exe" -ArgumentList @($BuildDrive, "/D")
 }
