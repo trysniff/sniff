@@ -115,6 +115,25 @@ function Assert-NoHostBuildPaths {
     }
 }
 
+function Assert-ReproduciblePeImage {
+    param([string[]]$BinaryPaths)
+    foreach ($binary in $BinaryPaths) {
+        $bytes = [System.IO.File]::ReadAllBytes($binary)
+        if ($bytes.Length -lt 0x40 -or $bytes[0] -ne 0x4d -or $bytes[1] -ne 0x5a) {
+            throw "Built binary is not a PE image: $binary"
+        }
+        $peOffset = [System.BitConverter]::ToInt32($bytes, 0x3c)
+        if ($peOffset -lt 0 -or $peOffset + 12 -gt $bytes.Length) {
+            throw "Built binary has an invalid PE header offset: $binary"
+        }
+        $timestamp = [System.BitConverter]::ToUInt32($bytes, $peOffset + 8)
+        $sourceEpoch = [System.Convert]::ToUInt32($env:SOURCE_DATE_EPOCH)
+        if ($timestamp -eq $sourceEpoch) {
+            throw "PE image uses the source epoch as a mutable timestamp instead of a /Brepro content hash: $binary"
+        }
+    }
+}
+
 if (Test-Path -LiteralPath $WorkDirectory) {
     throw "Refusing to reuse work directory: $WorkDirectory"
 }
@@ -195,6 +214,8 @@ foreach ($remap in $PathRemaps) {
         $EncodedRustFlags.Add("$($variant.Source)=$($variant.Destination)")
     }
 }
+$EncodedRustFlags.Add("-C")
+$EncodedRustFlags.Add("link-arg=/Brepro")
 
 $BuildEnvironmentNames = @(
     "CARGO_BUILD_RUSTFLAGS"
@@ -294,6 +315,8 @@ Copy-Item -LiteralPath $Cargo -Destination (Join-Path $Bin "cargo.exe")
 Assert-NoHostBuildPaths `
     -BinaryPaths @((Join-Path $Bin "rust-analyzer.exe"), (Join-Path $Bin "cargo.exe")) `
     -HostPaths $RejectedHostPaths
+Assert-ReproduciblePeImage `
+    -BinaryPaths @((Join-Path $Bin "rust-analyzer.exe"), (Join-Path $Bin "cargo.exe"))
 
 $RustAnalyzerVersion = (& (Join-Path $Bin "rust-analyzer.exe") --version).Trim()
 $CargoVersion = (& (Join-Path $Bin "cargo.exe") -Vv) -join "`n"
@@ -326,6 +349,7 @@ if ($LASTEXITCODE -ne 0 -or $SniffSourceCommit -notmatch "^[0-9a-f]{40}$") {
 $Provenance = [ordered]@{
     schema = "trysniff.windows-rust-indexer.v1"
     reproducible_build_contract = "windows-rust-v1"
+    linker_reproducibility = "msvc-/Brepro"
     source_date_epoch = "1785628800"
     sniff_source_commit = $SniffSourceCommit
     build_script_sha256 = (Get-FileHash -Algorithm SHA256 $PSCommandPath).Hash.ToLowerInvariant()
