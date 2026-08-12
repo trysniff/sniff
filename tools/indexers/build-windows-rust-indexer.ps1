@@ -16,6 +16,7 @@ Set-StrictMode -Version Latest
 $RustToolchain = "1.96.0"
 $RustAnalyzerCommit = "b54a82b321c9617c5cf0b07ac0f12c08f7bc5902"
 $CargoCommit = "30a34c6821b57de0aaec83a901aca39f88f6778c"
+$SourceDateEpoch = 1785628800_u32
 $Target = "$Architecture-pc-windows-msvc"
 $AssetName = "sniff-rust-indexer-$Target"
 $RepositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
@@ -127,8 +128,7 @@ function Assert-ReproduciblePeImage {
             throw "Built binary has an invalid PE header offset: $binary"
         }
         $timestamp = [System.BitConverter]::ToUInt32($bytes, $peOffset + 8)
-        $sourceEpoch = [System.Convert]::ToUInt32($env:SOURCE_DATE_EPOCH)
-        if ($timestamp -eq $sourceEpoch) {
+        if ($timestamp -eq $SourceDateEpoch) {
             throw "PE image uses the source epoch as a mutable timestamp instead of a /Brepro content hash: $binary"
         }
     }
@@ -249,7 +249,7 @@ foreach ($name in $BuildEnvironmentNames) {
 try {
     $env:CARGO_ENCODED_RUSTFLAGS = $EncodedRustFlags -join [char]0x1f
     $env:CARGO_INCREMENTAL = "0"
-    $env:SOURCE_DATE_EPOCH = "1785628800"
+    $env:SOURCE_DATE_EPOCH = $SourceDateEpoch.ToString([System.Globalization.CultureInfo]::InvariantCulture)
     Invoke-Checked -Executable "git" -ArgumentList @(
         "-C", $RustSource, "apply", "--check", $RustStdPatch
     )
@@ -350,7 +350,7 @@ $Provenance = [ordered]@{
     schema = "trysniff.windows-rust-indexer.v1"
     reproducible_build_contract = "windows-rust-v1"
     linker_reproducibility = "msvc-/Brepro"
-    source_date_epoch = "1785628800"
+    source_date_epoch = $SourceDateEpoch.ToString([System.Globalization.CultureInfo]::InvariantCulture)
     sniff_source_commit = $SniffSourceCommit
     build_script_sha256 = (Get-FileHash -Algorithm SHA256 $PSCommandPath).Hash.ToLowerInvariant()
     target = $Target
