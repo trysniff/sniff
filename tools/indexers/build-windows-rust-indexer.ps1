@@ -16,7 +16,7 @@ Set-StrictMode -Version Latest
 $RustToolchain = "1.96.0"
 $RustAnalyzerCommit = "b54a82b321c9617c5cf0b07ac0f12c08f7bc5902"
 $CargoCommit = "30a34c6821b57de0aaec83a901aca39f88f6778c"
-$SourceDateEpoch = 1785628800_u32
+[UInt32]$SourceDateEpoch = 1785628800
 $Target = "$Architecture-pc-windows-msvc"
 $AssetName = "sniff-rust-indexer-$Target"
 $RepositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
