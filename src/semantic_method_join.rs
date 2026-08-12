@@ -7,7 +7,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
-use syn::spanned::Spanned;
+
+#[path = "semantic_method_join_rust_cfg.rs"]
+mod rust_cfg;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct SemanticMethodKey {
@@ -333,7 +335,7 @@ fn bind_method(
         );
     };
     let (definition_line, compiler_excluded) =
-        rust_method_info(file, method).unwrap_or((key.start_line.saturating_sub(1), false));
+        rust_cfg::method_info(file, method).unwrap_or((key.start_line.saturating_sub(1), None));
     let js_like = file.language.eq_ignore_ascii_case("javascript")
         || file.language.eq_ignore_ascii_case("typescript");
     let source_name_range = js_like.then(|| method_name_range(file, method));
@@ -386,22 +388,19 @@ fn bind_method(
                 coverage: SemanticMethodCoverage::CompilerExcluded { reason },
             };
         }
-        if compiler_excluded {
+        if let Some(reason) = compiler_excluded {
             return SemanticMethodBinding {
                 method: key.clone(),
                 symbol: SemanticResolution::Unresolved {
                     reason: SemanticUnresolvedReason::MissingIndexerFact,
                     raw_target: Some(method.name.clone()),
                     detail: format!(
-                        "{}::{} is excluded from the active Rust SCIP target by cfg(test)",
+                        "{}::{} is compiler-excluded: {reason}",
                         key.file.0, key.name
                     ),
                 },
                 definition: None,
-                coverage: SemanticMethodCoverage::CompilerExcluded {
-                    reason: "cfg(test) is not part of the active production SCIP target"
-                        .to_string(),
-                },
+                coverage: SemanticMethodCoverage::CompilerExcluded { reason },
             };
         }
         return unresolved(
@@ -507,116 +506,6 @@ fn method_name_range(file: &FileRecord, method: &MethodRecord) -> Option<(u32, u
     let start = line[..byte_start].encode_utf16().count() as u32;
     let width = method.name.encode_utf16().count() as u32;
     Some((line_number as u32, start, start + width))
-}
-
-fn rust_method_info(file: &FileRecord, method: &MethodRecord) -> Option<(u32, bool)> {
-    if !file.language.eq_ignore_ascii_case("rust") {
-        return None;
-    }
-    let Ok(ast) = syn::parse_file(&file.source) else {
-        return None;
-    };
-    let mut visitor = TestCfgVisitor {
-        target_line: method.start_line,
-        definition_line: None,
-        test_context: false,
-        matched: false,
-    };
-    syn::visit::Visit::visit_file(&mut visitor, &ast);
-    visitor
-        .definition_line
-        .and_then(|line| u32::try_from(line.saturating_sub(1)).ok())
-        .map(|line| (line, visitor.matched))
-}
-
-struct TestCfgVisitor {
-    target_line: usize,
-    definition_line: Option<usize>,
-    test_context: bool,
-    matched: bool,
-}
-
-impl TestCfgVisitor {
-    fn enter_attributes(&mut self, attrs: &[syn::Attribute]) -> bool {
-        let previous = self.test_context;
-        self.test_context |= attrs.iter().any(attribute_has_test_cfg);
-        previous
-    }
-
-    fn visit_callable(
-        &mut self,
-        node_start_line: usize,
-        identifier_line: usize,
-        attrs: &[syn::Attribute],
-    ) {
-        if node_start_line == self.target_line || identifier_line == self.target_line {
-            self.definition_line = Some(identifier_line);
-            if self.test_context || attrs.iter().any(attribute_has_test_cfg) {
-                self.matched = true;
-            }
-        }
-    }
-}
-
-fn attribute_has_test_cfg(attribute: &syn::Attribute) -> bool {
-    attribute.path().is_ident("cfg")
-        && attribute
-            .meta
-            .require_list()
-            .map(|list| {
-                list.tokens
-                    .to_string()
-                    .split(|character: char| !character.is_alphanumeric() && character != '_')
-                    .any(|part| part == "test")
-            })
-            .unwrap_or(false)
-}
-
-impl<'ast> syn::visit::Visit<'ast> for TestCfgVisitor {
-    fn visit_item_mod(&mut self, node: &'ast syn::ItemMod) {
-        let previous = self.enter_attributes(&node.attrs);
-        syn::visit::visit_item_mod(self, node);
-        self.test_context = previous;
-    }
-
-    fn visit_item_impl(&mut self, node: &'ast syn::ItemImpl) {
-        let previous = self.enter_attributes(&node.attrs);
-        syn::visit::visit_item_impl(self, node);
-        self.test_context = previous;
-    }
-
-    fn visit_item_trait(&mut self, node: &'ast syn::ItemTrait) {
-        let previous = self.enter_attributes(&node.attrs);
-        syn::visit::visit_item_trait(self, node);
-        self.test_context = previous;
-    }
-
-    fn visit_item_fn(&mut self, node: &'ast syn::ItemFn) {
-        self.visit_callable(
-            node.span().start().line,
-            node.sig.ident.span().start().line,
-            &node.attrs,
-        );
-        syn::visit::visit_item_fn(self, node);
-    }
-
-    fn visit_impl_item_fn(&mut self, node: &'ast syn::ImplItemFn) {
-        self.visit_callable(
-            node.span().start().line,
-            node.sig.ident.span().start().line,
-            &node.attrs,
-        );
-        syn::visit::visit_impl_item_fn(self, node);
-    }
-
-    fn visit_trait_item_fn(&mut self, node: &'ast syn::TraitItemFn) {
-        self.visit_callable(
-            node.span().start().line,
-            node.sig.ident.span().start().line,
-            &node.attrs,
-        );
-        syn::visit::visit_trait_item_fn(self, node);
-    }
 }
 
 fn repository_relative_path(root: &Path, file: &Path) -> Result<RepositoryPath, String> {
@@ -842,6 +731,133 @@ mod tests {
         assert_eq!(join.unresolved_count(), 0);
         join.require_complete().unwrap();
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn recognizes_inactive_builtin_target_cfg_as_compiler_excluded() {
+        let inactive_os = if cfg!(windows) { "linux" } else { "windows" };
+        let source = format!("#[cfg(target_os = \"{inactive_os}\")]\nfn process() {{}}\n");
+        let file = FileRecord {
+            file_path: "src/lib.rs".to_string(),
+            source: source.clone(),
+            language: "rust".to_string(),
+            methods: Vec::new(),
+        };
+        let method = MethodRecord {
+            name: "process".to_string(),
+            file_path: file.file_path.clone(),
+            source,
+            loc: 1,
+            param_count: 0,
+            start_line: 2,
+            end_line: 2,
+            is_exported: false,
+            language: "rust".to_string(),
+            nesting_depth: 0,
+            references: Vec::new(),
+            real_ref_count: 0,
+        };
+
+        let (_, exclusion) = rust_cfg::method_info(&file, &method).unwrap();
+
+        assert!(
+            exclusion
+                .as_deref()
+                .is_some_and(|reason| reason.contains("target_os"))
+        );
+    }
+
+    #[test]
+    fn unknown_feature_cfg_does_not_excuse_missing_compiler_facts() {
+        let source = "#[cfg(feature = \"optional-provider\")]\nfn process() {}\n";
+        let file = FileRecord {
+            file_path: "src/lib.rs".to_string(),
+            source: source.to_string(),
+            language: "rust".to_string(),
+            methods: Vec::new(),
+        };
+        let method = MethodRecord {
+            name: "process".to_string(),
+            file_path: file.file_path.clone(),
+            source: source.to_string(),
+            loc: 1,
+            param_count: 0,
+            start_line: 2,
+            end_line: 2,
+            is_exported: false,
+            language: "rust".to_string(),
+            nesting_depth: 0,
+            references: Vec::new(),
+            real_ref_count: 0,
+        };
+
+        let (_, exclusion) = rust_cfg::method_info(&file, &method).unwrap();
+
+        assert_eq!(exclusion, None);
+    }
+
+    #[test]
+    fn nested_foreign_declarations_inherit_inactive_target_cfg() {
+        let inactive_os = if cfg!(windows) { "macos" } else { "windows" };
+        let source = format!(
+            "#[cfg(target_os = \"{inactive_os}\")]\nfn inspect() {{\n    unsafe extern \"C\" {{\n        fn platform_call(value: i32) -> i32;\n    }}\n}}\n"
+        );
+        let file = FileRecord {
+            file_path: "src/lib.rs".to_string(),
+            source: source.clone(),
+            language: "rust".to_string(),
+            methods: Vec::new(),
+        };
+        let method = MethodRecord {
+            name: "platform_call".to_string(),
+            file_path: file.file_path.clone(),
+            source,
+            loc: 1,
+            param_count: 1,
+            start_line: 4,
+            end_line: 4,
+            is_exported: false,
+            language: "rust".to_string(),
+            nesting_depth: 0,
+            references: Vec::new(),
+            real_ref_count: 0,
+        };
+
+        let (_, exclusion) = rust_cfg::method_info(&file, &method).unwrap();
+
+        assert!(exclusion.is_some());
+    }
+
+    #[test]
+    fn foreign_module_declarations_inherit_inactive_target_cfg() {
+        let inactive_os = if cfg!(windows) { "macos" } else { "windows" };
+        let source = format!(
+            "#[cfg(target_os = \"{inactive_os}\")]\nunsafe extern \"C\" {{\n    fn platform_call(value: i32) -> i32;\n}}\n"
+        );
+        let file = FileRecord {
+            file_path: "src/lib.rs".to_string(),
+            source: source.clone(),
+            language: "rust".to_string(),
+            methods: Vec::new(),
+        };
+        let method = MethodRecord {
+            name: "platform_call".to_string(),
+            file_path: file.file_path.clone(),
+            source,
+            loc: 1,
+            param_count: 1,
+            start_line: 3,
+            end_line: 3,
+            is_exported: false,
+            language: "rust".to_string(),
+            nesting_depth: 0,
+            references: Vec::new(),
+            real_ref_count: 0,
+        };
+
+        let (_, exclusion) = rust_cfg::method_info(&file, &method).unwrap();
+
+        assert!(exclusion.is_some());
     }
 
     #[test]

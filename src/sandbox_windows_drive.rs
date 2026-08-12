@@ -10,7 +10,10 @@ pub(super) struct SandboxDriveMapping {
 }
 
 impl SandboxDriveMapping {
-    pub(super) fn create(root: &Path) -> Result<Self, SandboxError> {
+    pub(super) fn create(
+        root: &Path,
+        record: impl Fn(&str, &Path) -> Result<(), SandboxError>,
+    ) -> Result<Self, SandboxError> {
         let root = normalize_windows_path(std::fs::canonicalize(root).map_err(|error| {
             SandboxError::Failed(format!(
                 "resolve Windows sandbox root for private drive mapping failed: {error}"
@@ -22,6 +25,7 @@ impl SandboxDriveMapping {
             if Path::new(&format!(r"{drive}\")).exists() {
                 continue;
             }
+            record(&drive, &root)?;
             let output = Command::new("subst")
                 .arg(&drive)
                 .arg(&root)
@@ -110,6 +114,67 @@ impl SandboxDriveMapping {
     }
 }
 
+pub(super) fn recover_recorded_mapping(
+    drive: &str,
+    expected_root: &Path,
+) -> Result<(), SandboxError> {
+    let expected_root = normalize_windows_path(expected_root.to_path_buf());
+    let output = Command::new("subst").output().map_err(|error| {
+        SandboxError::Unavailable(format!(
+            "Windows private drive recovery requires subst.exe: {error}"
+        ))
+    })?;
+    if !output.status.success() {
+        return Err(SandboxError::Failed(format!(
+            "list Windows private drives failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    let mappings = String::from_utf8_lossy(&output.stdout);
+    let Some(actual_root) = recorded_mapping_root(&mappings, drive)? else {
+        return Ok(());
+    };
+    if actual_root != expected_root {
+        return Err(SandboxError::Failed(format!(
+            "refusing to remove Windows drive {drive}: expected {}, found {}",
+            expected_root.display(),
+            actual_root.display()
+        )));
+    }
+    let removed = Command::new("subst")
+        .args([drive, "/D"])
+        .output()
+        .map_err(|error| {
+            SandboxError::Failed(format!(
+                "recover Windows private drive {drive} failed: {error}"
+            ))
+        })?;
+    if removed.status.success() {
+        Ok(())
+    } else {
+        Err(SandboxError::Failed(format!(
+            "recover Windows private drive {drive} failed: {}",
+            String::from_utf8_lossy(&removed.stderr).trim()
+        )))
+    }
+}
+
+fn recorded_mapping_root(mappings: &str, drive: &str) -> Result<Option<PathBuf>, SandboxError> {
+    let expected_prefix = format!("{}\\:", drive.to_ascii_uppercase());
+    let Some(mapping) = mappings
+        .lines()
+        .find(|line| line.to_ascii_uppercase().starts_with(&expected_prefix))
+    else {
+        return Ok(None);
+    };
+    let (_, root) = mapping.split_once("=>").ok_or_else(|| {
+        SandboxError::Failed(format!(
+            "unrecognized subst mapping during recovery: {mapping}"
+        ))
+    })?;
+    Ok(Some(normalize_windows_path(PathBuf::from(root.trim()))))
+}
+
 impl Drop for SandboxDriveMapping {
     fn drop(&mut self) {
         let _ = self.remove();
@@ -148,7 +213,7 @@ fn rewrite_root_path(value: &str, root: &Path, drive: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::rewrite_root_path;
+    use super::{recorded_mapping_root, rewrite_root_path};
     use std::path::Path;
 
     #[test]
@@ -168,5 +233,16 @@ mod tests {
             rewrite_root_path(r"C:\work\repository-copy\file", root, "Z:"),
             r"C:\work\repository-copy\file"
         );
+    }
+
+    #[test]
+    fn recovery_reads_only_the_requested_drive_mapping() {
+        let mappings = "W:\\: => C:\\expected\r\nZ:\\: => C:\\other\r\n";
+
+        assert_eq!(
+            recorded_mapping_root(mappings, "W:").unwrap(),
+            Some(std::path::PathBuf::from(r"C:\expected"))
+        );
+        assert_eq!(recorded_mapping_root(mappings, "Y:").unwrap(), None);
     }
 }

@@ -10,6 +10,44 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 static FIXTURE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 static PROCESS_TERMINATION_TEST_LOCK: Mutex<()> = Mutex::new(());
 
+fn scan_deadline() -> Duration {
+    if cfg!(windows) {
+        // AppContainer setup and checksum verification can be slowed substantially
+        // by endpoint security even when the indexer itself is healthy.
+        Duration::from_secs(120)
+    } else {
+        Duration::from_secs(30)
+    }
+}
+
+#[cfg(windows)]
+fn assert_windows_sandbox_host_state_clean(root: &Path) {
+    let mappings = Command::new("subst").output().expect("list subst mappings");
+    assert!(mappings.status.success());
+    assert!(
+        !String::from_utf8_lossy(&mappings.stdout)
+            .to_ascii_lowercase()
+            .contains(&root.to_string_lossy().to_ascii_lowercase()),
+        "sandbox drive mapping survived process recovery"
+    );
+    let acl = Command::new("icacls")
+        .arg(root)
+        .output()
+        .expect("inspect fixture ACL");
+    assert!(acl.status.success());
+    assert!(
+        !String::from_utf8_lossy(&acl.stdout).contains("S-1-15-2-"),
+        "AppContainer ACL survived process recovery"
+    );
+    let ledger = PathBuf::from(std::env::var_os("LOCALAPPDATA").expect("LOCALAPPDATA"))
+        .join("Sniff")
+        .join("sandbox-recovery.jsonl");
+    assert!(!ledger.exists(), "sandbox recovery ledger was not cleared");
+}
+
+#[cfg(not(windows))]
+fn assert_windows_sandbox_host_state_clean(_root: &Path) {}
+
 enum ProviderAction {
     Json(String),
     Status(u16, String),
@@ -251,10 +289,7 @@ fn assert_method_transport_failure_resumes(failure: ProviderAction, expected_err
         ProviderAction::Json(synthesis_response()),
     ]);
 
-    let interrupted = wait_for_output(
-        spawn_sniff(&root, &endpoint, false),
-        Duration::from_secs(20),
-    );
+    let interrupted = wait_for_output(spawn_sniff(&root, &endpoint, false), scan_deadline());
     assert!(!interrupted.status.success(), "{interrupted:?}");
     assert!(
         String::from_utf8_lossy(&interrupted.stderr).contains(expected_error),
@@ -265,7 +300,7 @@ fn assert_method_transport_failure_resumes(failure: ProviderAction, expected_err
     assert_eq!(completed_method_units(&journal), 1);
     assert!(!root.join("sniff-report.md").exists());
 
-    let resumed = wait_for_output(spawn_sniff(&root, &endpoint, true), Duration::from_secs(20));
+    let resumed = wait_for_output(spawn_sniff(&root, &endpoint, true), scan_deadline());
     assert!(
         resumed.status.success(),
         "stdout={}\nstderr={}",
@@ -313,7 +348,7 @@ fn forced_process_termination_resumes_without_repeating_completed_method() {
     ]);
 
     let mut interrupted = spawn_sniff(&root, &endpoint, false);
-    let reached_checkpoint = wait_until(Duration::from_secs(30), || {
+    let reached_checkpoint = wait_until(scan_deadline(), || {
         completed_method_units(&journal) == 1 && hits.load(Ordering::SeqCst) >= 3
     });
     if !reached_checkpoint {
@@ -335,7 +370,7 @@ fn forced_process_termination_resumes_without_repeating_completed_method() {
     assert_eq!(completed_method_units(&journal), 1);
     assert!(!root.join("sniff-report.md").exists());
 
-    let resumed = wait_for_output(spawn_sniff(&root, &endpoint, true), Duration::from_secs(20));
+    let resumed = wait_for_output(spawn_sniff(&root, &endpoint, true), scan_deadline());
     assert!(
         resumed.status.success(),
         "stdout={}\nstderr={}",
@@ -350,6 +385,7 @@ fn forced_process_termination_resumes_without_repeating_completed_method() {
         requests.lock().expect("request log")
     );
     assert!(root.join("sniff-report.md").exists());
+    assert_windows_sandbox_host_state_clean(&root);
 
     std::fs::remove_dir_all(root).ok();
 }
@@ -371,7 +407,7 @@ fn forced_process_termination_during_synthesis_resumes_without_repeating_methods
     ]);
 
     let mut interrupted = spawn_sniff(&root, &endpoint, false);
-    let reached_checkpoint = wait_until(Duration::from_secs(30), || {
+    let reached_checkpoint = wait_until(scan_deadline(), || {
         completed_method_units(&journal) == 2 && hits.load(Ordering::SeqCst) >= 5
     });
     if !reached_checkpoint {
@@ -394,7 +430,7 @@ fn forced_process_termination_during_synthesis_resumes_without_repeating_methods
     assert_eq!(completed_synthesis_units(&journal), 0);
     assert!(!root.join("sniff-report.md").exists());
 
-    let resumed = wait_for_output(spawn_sniff(&root, &endpoint, true), Duration::from_secs(20));
+    let resumed = wait_for_output(spawn_sniff(&root, &endpoint, true), scan_deadline());
     assert!(
         resumed.status.success(),
         "stdout={}\nstderr={}",
@@ -410,6 +446,7 @@ fn forced_process_termination_during_synthesis_resumes_without_repeating_methods
         requests.lock().expect("request log")
     );
     assert!(root.join("sniff-report.md").exists());
+    assert_windows_sandbox_host_state_clean(&root);
 
     std::fs::remove_dir_all(root).ok();
 }

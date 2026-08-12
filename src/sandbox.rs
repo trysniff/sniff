@@ -1014,8 +1014,6 @@ mod tests {
         DEFAULT_MEMORY_LIMIT, DEFAULT_PROCESS_LIMIT, SandboxCommand, SandboxError, read_limited,
         read_limited_with_observer, validate_external_runner, validate_spec,
     };
-    #[cfg(windows)]
-    use std::path::Path;
     use std::path::PathBuf;
     use std::time::Duration;
 
@@ -1265,72 +1263,6 @@ mod tests {
     }
 
     #[cfg(windows)]
-    fn windows_child_launcher(root: &Path, child: &Path) -> SandboxCommand {
-        let source = root.join("child-launcher.rs");
-        let program = root.join("child-launcher.exe");
-        std::fs::write(
-            &source,
-            r#"use std::process::{Command, Stdio, exit};
-
-fn main() {
-    let child = std::env::args_os().nth(1).expect("missing child path");
-    if child == "--child" {
-        println!("child-launched");
-        return;
-    }
-    match Command::new(child)
-        .arg("--child")
-        .stdin(Stdio::piped())
-        .output()
-    {
-        Ok(output) => {
-            print!("{}", String::from_utf8_lossy(&output.stdout));
-            eprint!("{}", String::from_utf8_lossy(&output.stderr));
-            eprintln!("child status: {:?}", output.status);
-            exit(output.status.code().unwrap_or(1));
-        }
-        Err(error) => {
-            eprintln!("spawn failed: {error}; raw={:?}", error.raw_os_error());
-            exit(111);
-        }
-    }
-}
-
-"#,
-        )
-        .expect("write Windows child launcher source");
-        let build = std::process::Command::new("rustc")
-            .arg("--edition=2024")
-            .arg(&source)
-            .arg("-o")
-            .arg(&program)
-            .output()
-            .expect("compile Windows child launcher");
-        assert!(
-            build.status.success(),
-            "child launcher failed to compile: {}",
-            String::from_utf8_lossy(&build.stderr)
-        );
-        SandboxCommand {
-            root: root.to_path_buf(),
-            workdir: PathBuf::from("."),
-            program: program.to_string_lossy().into_owned(),
-            args: vec![child.to_string_lossy().into_owned()],
-            read_only_paths: Vec::new(),
-            writable_paths: Vec::new(),
-            persistent_read_only_paths: Vec::new(),
-            executable_paths: Vec::new(),
-            #[cfg(windows)]
-            windows_virtualized_paths: Vec::new(),
-            env: Vec::new(),
-            allow_network: false,
-            timeout: Duration::from_secs(5),
-            output_limit: 64 * 1024,
-            memory_limit: DEFAULT_MEMORY_LIMIT,
-            process_limit: DEFAULT_PROCESS_LIMIT,
-        }
-    }
-
     #[cfg(windows)]
     #[test]
     fn windows_backend_denies_writes_outside_repository_root() {
@@ -1411,14 +1343,23 @@ fn main() {
         let root = windows_test_root("persistent-execute");
         let external = windows_test_root("external-executable");
         let child = external.join("trusted-child.exe");
-        let denied = windows_child_launcher(&root, &child);
-        std::fs::copy(root.join("child-launcher.exe"), &child)
-            .expect("stage external child process");
+        let sibling = external.join("private-sibling.txt");
+        std::fs::write(&sibling, "must-not-leak").expect("stage private sibling");
+        let system_root = std::env::var_os("SystemRoot").expect("SystemRoot should be defined");
+        std::fs::copy(
+            PathBuf::from(system_root)
+                .join("System32")
+                .join("whoami.exe"),
+            &child,
+        )
+        .expect("stage signed external child process");
+        let script = child.display().to_string();
+        let denied = windows_command(root.clone(), script);
         let denied_output = super::run(&denied).expect("Windows AppContainer should start");
         assert_ne!(denied_output.status_code, Some(0));
 
         let mut allowed = denied;
-        allowed.executable_paths = vec![child];
+        allowed.executable_paths = vec![child.clone()];
         let allowed_output =
             super::run(&allowed).expect("transient toolchain execution grant should work");
         assert_eq!(
@@ -1428,7 +1369,13 @@ fn main() {
             allowed_output.stdout,
             allowed_output.stderr
         );
-        assert!(allowed_output.stdout.contains("child-launched"));
+        assert!(allowed_output.stdout.contains('\\'));
+
+        let mut sibling_read = windows_command(root.clone(), format!("type {}", sibling.display()));
+        sibling_read.executable_paths = vec![child];
+        let sibling_output = super::run(&sibling_read).expect("Windows AppContainer should start");
+        assert_ne!(sibling_output.status_code, Some(0));
+        assert!(!sibling_output.stdout.contains("must-not-leak"));
 
         std::fs::remove_dir_all(root).unwrap();
         std::fs::remove_dir_all(external).unwrap();

@@ -21,3 +21,7 @@ pub(crate) fn supporting_similarity_flags(file_records: &[FileRecord]) -> Vec<St
     flags.extend(similarity_test_coupling::test_coupling_flags(&prepared));
     flags
 }
+
+#[cfg(test)]
+#[path = "tests/signal_layers_similarity_flags.rs"]
+mod tests;

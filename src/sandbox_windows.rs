@@ -46,11 +46,15 @@ use windows_sys::Win32::System::Threading::{
 #[path = "sandbox_windows_drive.rs"]
 mod drive;
 use drive::SandboxDriveMapping;
+#[path = "sandbox_windows_recovery.rs"]
+mod recovery;
+use recovery::RecoveryLedger;
 
 const INTERNET_CLIENT_SID: &str = "S-1-15-3-1";
 const PERSISTENT_READ_CAPABILITY: &str = "trysniff.semantic-indexer-read.v1";
 const SE_GROUP_ENABLED: u32 = 0x00000004;
 const FILE_GENERIC_READ_ACCESS: u32 = 0x0012_0089;
+const DIRECTORY_TRAVERSE_ACCESS: u32 = 0x0012_00A0;
 const PROCESS_CREATION_CHILD_PROCESS_OVERRIDE: u32 = 0x02;
 const ACL_COMMAND_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const ACL_COMMAND_OUTPUT_LIMIT: usize = 64 * 1024;
@@ -74,7 +78,37 @@ pub(super) fn run(spec: &SandboxCommand) -> Result<SandboxOutput, SandboxError> 
     effective_spec
         .read_only_paths
         .extend(effective_spec.executable_paths.iter().cloned());
+    for path in &spec.executable_paths {
+        let canonical_path =
+            normalize_windows_path(std::fs::canonicalize(path).map_err(|error| {
+                SandboxError::Invalid(format!(
+                    "sandbox executable path could not be canonicalized: {} ({error})",
+                    path.display()
+                ))
+            })?);
+        let mapping_root = if canonical_path.is_dir() {
+            canonical_path
+        } else {
+            canonical_path
+                .parent()
+                .ok_or_else(|| {
+                    SandboxError::Invalid(format!(
+                        "sandbox executable path has no containing directory: {}",
+                        canonical_path.display()
+                    ))
+                })?
+                .to_path_buf()
+        };
+        if !effective_spec
+            .windows_virtualized_paths
+            .iter()
+            .any(|root| mapping_root.starts_with(root))
+        {
+            effective_spec.windows_virtualized_paths.push(mapping_root);
+        }
+    }
     let profile_name = unique_profile_name();
+    let recovery_ledger = RecoveryLedger::recover_and_begin(&profile_name)?;
     let profile_name_w = wide_null(&profile_name);
     let display_name = wide_null("Sniff temporary sandbox");
     let description = wide_null("Ephemeral Sniff repository worker");
@@ -126,14 +160,16 @@ pub(super) fn run(spec: &SandboxCommand) -> Result<SandboxOutput, SandboxError> 
             profile_result as u32
         )));
     }
-    let profile_guard = ProfileGuard {
+    let mut profile_guard = ProfileGuard {
         name: profile_name_w,
         sid: app_container_sid,
         network_sid,
+        active: true,
     };
     trace_phase(started, "AppContainer profile created");
 
     let app_container_sid_text = sid_string(profile_guard.sid)?;
+    recovery_ledger.record_sid(&app_container_sid_text)?;
     if let Some(capability) = &persistent_read_capability {
         let capability_sid = sid_string(capability.sid)?;
         for path in &effective_spec.persistent_read_only_paths {
@@ -146,12 +182,13 @@ pub(super) fn run(spec: &SandboxCommand) -> Result<SandboxOutput, SandboxError> 
         &effective_spec.read_only_paths,
         &effective_spec.writable_paths,
         &app_container_sid_text,
+        &recovery_ledger,
     )?;
     trace_phase(started, "filesystem access granted");
     // AppContainer file-read permission is not enough to launch an executable.
-    grant_acl(&program, &app_container_sid_text, "RX")?;
+    acl_guard.grant_once(&program, "RX", false, &recovery_ledger)?;
     for path in &effective_spec.executable_paths {
-        grant_acl(path, &app_container_sid_text, "RX")?;
+        acl_guard.grant_external_executable(path, &recovery_ledger)?;
     }
     trace_phase(started, "program execution granted");
     let canonical_root = normalize_windows_path(
@@ -169,7 +206,9 @@ pub(super) fn run(spec: &SandboxCommand) -> Result<SandboxOutput, SandboxError> 
                     path.display()
                 ))
             })?);
-        let mapping = SandboxDriveMapping::create(&canonical_path)?;
+        let mapping = SandboxDriveMapping::create(&canonical_path, |drive, root| {
+            recovery_ledger.record_mapping(drive, root)
+        })?;
         mapping.rewrite_process_spec(&mut process_spec, path, canonical_path == canonical_root);
         drive_mappings.push(mapping);
     }
@@ -192,6 +231,7 @@ pub(super) fn run(spec: &SandboxCommand) -> Result<SandboxOutput, SandboxError> 
     if !drive_mappings.is_empty() {
         trace_phase(started, "private drive roots unmapped");
     }
+    let mappings_clean = mapping_cleanup.is_ok();
     let result = match (result, mapping_cleanup) {
         (Ok(output), Ok(())) => Ok(output),
         (Err(error), Ok(())) => Err(error),
@@ -201,15 +241,30 @@ pub(super) fn run(spec: &SandboxCommand) -> Result<SandboxOutput, SandboxError> 
         ))),
     };
     let revoke = acl_guard.revoke();
+    let acls_clean = revoke.is_ok();
     trace_phase(started, "filesystem access revoked");
-    match (result, revoke) {
+    let result = match (result, revoke) {
         (Ok(output), Ok(())) => Ok(output),
         (Err(error), Ok(())) => Err(error),
         (Ok(_), Err(error)) => Err(error),
         (Err(error), Err(cleanup_error)) => Err(SandboxError::Failed(format!(
             "{error}; additionally, Windows sandbox ACL cleanup failed: {cleanup_error}"
         ))),
+    };
+    let profile_cleanup = profile_guard.remove();
+    let profile_clean = profile_cleanup.is_ok();
+    let result = match (result, profile_cleanup) {
+        (Ok(output), Ok(())) => Ok(output),
+        (Err(error), Ok(())) => Err(error),
+        (Ok(_), Err(error)) => Err(error),
+        (Err(error), Err(cleanup_error)) => Err(SandboxError::Failed(format!(
+            "{error}; additionally, Windows sandbox profile cleanup failed: {cleanup_error}"
+        ))),
+    };
+    if mappings_clean && acls_clean && profile_clean {
+        recovery_ledger.clear()?;
     }
+    result
 }
 
 struct CapabilitySid {
@@ -755,8 +810,17 @@ fn quote_arg(value: &str) -> String {
 }
 
 fn grant_acl(path: &Path, sid: &str, permission: &str) -> Result<(), SandboxError> {
+    grant_acl_with_inheritance(path, sid, permission, path.is_dir())
+}
+
+fn grant_acl_with_inheritance(
+    path: &Path,
+    sid: &str,
+    permission: &str,
+    inherit: bool,
+) -> Result<(), SandboxError> {
     let path = normalize_windows_path(path.to_path_buf());
-    let inheritance = if path.is_dir() { "(OI)(CI)" } else { "" };
+    let inheritance = if inherit { "(OI)(CI)" } else { "" };
     let rule = format!("*{sid}:{inheritance}{permission}");
     let mut command = Command::new("icacls");
     command.arg(&path).arg("/grant").arg(rule).arg("/C");
@@ -1037,6 +1101,7 @@ impl AclGuard {
         read_only_paths: &[std::path::PathBuf],
         writable_paths: &[std::path::PathBuf],
         sid: &str,
+        recovery: &RecoveryLedger,
     ) -> Result<Self, SandboxError> {
         let paths = explicit_acl_paths(root, read_only_paths, writable_paths);
         let mut grants: Vec<AclGrant> = Vec::with_capacity(paths.len());
@@ -1044,6 +1109,7 @@ impl AclGuard {
             // Directory grants use inheritance rather than recursively
             // walking every dependency file. Cleanup removes the parent ACE;
             // inherited child access then disappears with it.
+            recovery.record_acl(&path)?;
             if let Err(error) = grant_acl(&path, sid, permission) {
                 for granted in grants.iter().rev() {
                     let _ = revoke_acl(&granted.path, sid);
@@ -1056,6 +1122,74 @@ impl AclGuard {
             grants,
             sid: sid.to_string(),
         })
+    }
+
+    fn grant_external_executable(
+        &mut self,
+        path: &Path,
+        recovery: &RecoveryLedger,
+    ) -> Result<(), SandboxError> {
+        let path = normalize_windows_path(std::fs::canonicalize(path).map_err(|error| {
+            SandboxError::Invalid(format!(
+                "sandbox executable path could not be canonicalized: {} ({error})",
+                path.display()
+            ))
+        })?);
+        if path.is_dir() {
+            return self.grant_once(&path, "RX", true, recovery);
+        }
+        let parent = path.parent().ok_or_else(|| {
+            SandboxError::Invalid(format!(
+                "sandbox executable path has no containing directory: {}",
+                path.display()
+            ))
+        })?;
+
+        // The process uses a private drive rooted here, so no host ancestors
+        // need temporary ACEs. Generic execute on a directory includes
+        // traversal and attributes, but not listing or sibling-file reads.
+        self.grant_traverse_once(parent, recovery)?;
+        self.grant_once(&path, "RX", false, recovery)
+    }
+
+    fn grant_traverse_once(
+        &mut self,
+        path: &Path,
+        recovery: &RecoveryLedger,
+    ) -> Result<(), SandboxError> {
+        let path = normalize_windows_path(path.to_path_buf());
+        if self.grants.iter().any(|grant| grant.path == path) {
+            return Ok(());
+        }
+        recovery.record_acl(&path)?;
+        update_acl_entry(&path, &self.sid, DIRECTORY_TRAVERSE_ACCESS, GRANT_ACCESS).map_err(
+            |error| {
+                SandboxError::Failed(format!(
+                    "grant Windows AppContainer traversal to {} failed: {error}",
+                    path.display()
+                ))
+            },
+        )?;
+        self.grants.push(AclGrant { path });
+        Ok(())
+    }
+
+    fn grant_once(
+        &mut self,
+        path: &Path,
+        permission: &'static str,
+        inherit: bool,
+        recovery: &RecoveryLedger,
+    ) -> Result<(), SandboxError> {
+        let path = normalize_windows_path(path.to_path_buf());
+        if self.grants.iter().any(|grant| grant.path == path) {
+            grant_acl_with_inheritance(&path, &self.sid, permission, inherit)?;
+            return Ok(());
+        }
+        recovery.record_acl(&path)?;
+        grant_acl_with_inheritance(&path, &self.sid, permission, inherit)?;
+        self.grants.push(AclGrant { path });
+        Ok(())
     }
 
     fn revoke(&mut self) -> Result<(), SandboxError> {
@@ -1102,26 +1236,47 @@ struct ProfileGuard {
     name: Vec<u16>,
     sid: *mut c_void,
     network_sid: *mut c_void,
+    active: bool,
 }
 
-impl Drop for ProfileGuard {
-    fn drop(&mut self) {
+impl ProfileGuard {
+    fn remove(&mut self) -> Result<(), SandboxError> {
         let started = Instant::now();
+        let deleted = if self.active {
+            unsafe { DeleteAppContainerProfile(self.name.as_ptr()) }
+        } else {
+            0
+        };
         unsafe {
-            DeleteAppContainerProfile(self.name.as_ptr());
             if !self.sid.is_null() {
                 LocalFree(self.sid);
+                self.sid = std::ptr::null_mut();
             }
             if !self.network_sid.is_null() {
                 LocalFree(self.network_sid);
+                self.network_sid = std::ptr::null_mut();
             }
         }
+        if deleted < 0 {
+            return Err(SandboxError::Failed(format!(
+                "delete Windows AppContainer profile failed with HRESULT 0x{:08x}",
+                deleted as u32
+            )));
+        }
+        self.active = false;
         if std::env::var_os("SNIFF_DEBUG_INDEXERS").is_some() {
             eprintln!(
                 "[sniff] Windows sandbox AppContainer profile deleted: {:.3}s",
                 started.elapsed().as_secs_f64()
             );
         }
+        Ok(())
+    }
+}
+
+impl Drop for ProfileGuard {
+    fn drop(&mut self) {
+        let _ = self.remove();
     }
 }
 
