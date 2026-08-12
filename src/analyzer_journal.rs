@@ -66,6 +66,8 @@ pub(super) struct JournalEntry {
     #[serde(default)]
     pub(super) cached_in_tok: usize,
     pub(super) estimated_cost_usd: f64,
+    #[serde(default)]
+    pricing_rates: Option<PricingRates>,
     timestamp_unix_ms: u64,
     pub(super) proof_level: String,
     pub(super) retry_on_resume: bool,
@@ -301,7 +303,8 @@ impl JournalStore {
             })
             .unwrap_or("not_applicable")
             .to_string();
-        let estimated_cost_usd = PricingRates::from_env().cost(
+        let pricing_rates = PricingRates::from_env();
+        let estimated_cost_usd = pricing_rates.cost(
             completion.in_tok,
             completion.cached_in_tok,
             completion.out_tok,
@@ -331,6 +334,7 @@ impl JournalStore {
             out_tok: completion.out_tok,
             cached_in_tok: completion.cached_in_tok,
             estimated_cost_usd,
+            pricing_rates: Some(pricing_rates),
             timestamp_unix_ms: now_unix_ms(),
             proof_level,
             retry_on_resume: completion.retry_on_resume,
@@ -349,10 +353,10 @@ impl JournalStore {
         entry.scan_id == self.context.scan_id
     }
 
-    pub(crate) fn reusable_role(&self, unit_id: &str) -> Option<(String, bool)> {
+    pub(crate) fn reusable_role(&self, unit_id: &str, source_hash: &str) -> Option<(String, bool)> {
         self.completed
             .get(unit_id)
-            .filter(|entry| entry.is_reusable())
+            .filter(|entry| entry.is_reusable() && entry.source_hash == source_hash)
             .and_then(|entry| {
                 entry
                     .role
@@ -361,20 +365,33 @@ impl JournalStore {
             })
     }
 
-    pub(crate) fn reusable_synthesis(&self, unit_id: &str) -> Option<(Vec<SlopCase>, bool)> {
+    pub(crate) fn reusable_synthesis(
+        &self,
+        unit_id: &str,
+        source_hash: &str,
+    ) -> Option<(Vec<SlopCase>, bool)> {
         self.completed
             .get(unit_id)
-            .filter(|entry| entry.is_reusable() && entry.stage == JournalStage::Synthesis)
+            .filter(|entry| {
+                entry.is_reusable()
+                    && entry.stage == JournalStage::Synthesis
+                    && entry.source_hash == source_hash
+            })
             .map(|entry| (entry.slop_cases.clone(), self.is_current_scan(entry)))
     }
 
     pub(crate) fn reusable_adjudication(
         &self,
         unit_id: &str,
+        source_hash: &str,
     ) -> Option<(Vec<CaseAdjudication>, bool)> {
         self.completed
             .get(unit_id)
-            .filter(|entry| entry.is_reusable() && entry.stage == JournalStage::Adjudication)
+            .filter(|entry| {
+                entry.is_reusable()
+                    && entry.stage == JournalStage::Adjudication
+                    && entry.source_hash == source_hash
+            })
             .map(|entry| {
                 (
                     entry.case_adjudications.clone(),
@@ -383,10 +400,18 @@ impl JournalStore {
             })
     }
 
-    pub(crate) fn reusable_proof(&self, unit_id: &str) -> Option<(Vec<CaseProof>, bool)> {
+    pub(crate) fn reusable_proof(
+        &self,
+        unit_id: &str,
+        source_hash: &str,
+    ) -> Option<(Vec<CaseProof>, bool)> {
         self.completed
             .get(unit_id)
-            .filter(|entry| entry.is_reusable() && entry.stage == JournalStage::Proof)
+            .filter(|entry| {
+                entry.is_reusable()
+                    && entry.stage == JournalStage::Proof
+                    && entry.source_hash == source_hash
+            })
             .map(|entry| (entry.case_proofs.clone(), self.is_current_scan(entry)))
     }
 
@@ -399,6 +424,7 @@ impl JournalStore {
         if self.context.stage != JournalStage::Role {
             return Err("role result cannot be written to a non-role journal stage".to_string());
         }
+        let pricing_rates = PricingRates::from_env();
         let entry = JournalEntry {
             version: JOURNAL_VERSION,
             scan_id: self.context.scan_id.clone(),
@@ -427,11 +453,12 @@ impl JournalStore {
             in_tok: completion.in_tok,
             out_tok: completion.out_tok,
             cached_in_tok: completion.cached_in_tok,
-            estimated_cost_usd: PricingRates::from_env().cost(
+            estimated_cost_usd: pricing_rates.cost(
                 completion.in_tok,
                 completion.cached_in_tok,
                 completion.out_tok,
             ),
+            pricing_rates: Some(pricing_rates),
             timestamp_unix_ms: now_unix_ms(),
             proof_level: "not_applicable".to_string(),
             retry_on_resume: completion.retry_on_resume,
@@ -456,7 +483,8 @@ impl JournalStore {
             return Ok(());
         }
         static NEXT_USAGE_EVENT: AtomicU64 = AtomicU64::new(0);
-        let estimated_cost_usd = PricingRates::from_env().cost(in_tok, cached_in_tok, out_tok);
+        let pricing_rates = PricingRates::from_env();
+        let estimated_cost_usd = pricing_rates.cost(in_tok, cached_in_tok, out_tok);
         let entry = JournalEntry {
             version: JOURNAL_VERSION,
             scan_id: self.context.scan_id.clone(),
@@ -488,6 +516,7 @@ impl JournalStore {
             out_tok,
             cached_in_tok,
             estimated_cost_usd,
+            pricing_rates: Some(pricing_rates),
             timestamp_unix_ms: now_unix_ms(),
             proof_level: "not_applicable".to_string(),
             retry_on_resume: false,
@@ -498,6 +527,44 @@ impl JournalStore {
         self.stage_out_tok += out_tok;
         self.stage_cached_in_tok += cached_in_tok;
         Ok(())
+    }
+
+    pub(crate) fn record_cross_scan_reuse(
+        &mut self,
+        unit_id: &str,
+        source_hash: &str,
+    ) -> Result<(), String> {
+        let entry = JournalEntry {
+            version: JOURNAL_VERSION,
+            scan_id: self.context.scan_id.clone(),
+            stage: self.context.stage,
+            is_manifest: true,
+            unit_id: format!("__reuse__:{:?}:{unit_id}", self.context.stage).to_ascii_lowercase(),
+            expected_units: self.context.expected_units,
+            source_hash: source_hash.to_string(),
+            semantic_index_hash: self.context.semantic_index_hash.clone(),
+            prompt_contract_version: self.context.prompt_contract_version.clone(),
+            provider: self.context.provider.clone(),
+            model: self.context.model.clone(),
+            endpoint: self.context.endpoint.clone(),
+            review_context_hash: self.context.review_context_hash.clone(),
+            status: JournalStatus::Completed,
+            verdict: None,
+            method_record: None,
+            slop_cases: Vec::new(),
+            case_adjudications: Vec::new(),
+            case_proofs: Vec::new(),
+            role: None,
+            in_tok: 0,
+            out_tok: 0,
+            cached_in_tok: 0,
+            estimated_cost_usd: 0.0,
+            pricing_rates: Some(PricingRates::from_env()),
+            timestamp_unix_ms: now_unix_ms(),
+            proof_level: "not_applicable".to_string(),
+            retry_on_resume: false,
+        };
+        append_entry(&self.path, &entry)
     }
 
     pub(crate) fn record_synthesis(
@@ -516,7 +583,8 @@ impl JournalStore {
             .first()
             .map(|case| format!("{:?}", case.proof_level).to_ascii_lowercase())
             .unwrap_or_else(|| "not_applicable".to_string());
-        let estimated_cost_usd = PricingRates::from_env().cost(
+        let pricing_rates = PricingRates::from_env();
+        let estimated_cost_usd = pricing_rates.cost(
             completion.in_tok,
             completion.cached_in_tok,
             completion.out_tok,
@@ -550,6 +618,7 @@ impl JournalStore {
             out_tok: completion.out_tok,
             cached_in_tok: completion.cached_in_tok,
             estimated_cost_usd,
+            pricing_rates: Some(pricing_rates),
             timestamp_unix_ms: now_unix_ms(),
             proof_level,
             retry_on_resume: completion.retry_on_resume,
@@ -575,7 +644,8 @@ impl JournalStore {
                     .to_string(),
             );
         }
-        let estimated_cost_usd = PricingRates::from_env().cost(
+        let pricing_rates = PricingRates::from_env();
+        let estimated_cost_usd = pricing_rates.cost(
             completion.in_tok,
             completion.cached_in_tok,
             completion.out_tok,
@@ -609,6 +679,7 @@ impl JournalStore {
             out_tok: completion.out_tok,
             cached_in_tok: completion.cached_in_tok,
             estimated_cost_usd,
+            pricing_rates: Some(pricing_rates),
             timestamp_unix_ms: now_unix_ms(),
             proof_level: "not_applicable".to_string(),
             retry_on_resume: completion.retry_on_resume,
@@ -631,7 +702,8 @@ impl JournalStore {
         if self.context.stage != JournalStage::Proof {
             return Err("proof result cannot be written to a non-proof journal stage".to_string());
         }
-        let estimated_cost_usd = PricingRates::from_env().cost(
+        let pricing_rates = PricingRates::from_env();
+        let estimated_cost_usd = pricing_rates.cost(
             completion.in_tok,
             completion.cached_in_tok,
             completion.out_tok,
@@ -665,6 +737,7 @@ impl JournalStore {
             out_tok: completion.out_tok,
             cached_in_tok: completion.cached_in_tok,
             estimated_cost_usd,
+            pricing_rates: Some(pricing_rates),
             timestamp_unix_ms: now_unix_ms(),
             proof_level: "p0".to_string(),
             retry_on_resume: completion.retry_on_resume,
@@ -727,6 +800,7 @@ impl JournalStore {
             out_tok: 0,
             cached_in_tok: 0,
             estimated_cost_usd: 0.0,
+            pricing_rates: Some(PricingRates::from_env()),
             timestamp_unix_ms: now_unix_ms(),
             proof_level: "not_applicable".to_string(),
             retry_on_resume: false,
@@ -772,6 +846,12 @@ pub struct JournalSummary {
     pub cached_input_tokens: usize,
     pub output_tokens: usize,
     pub estimated_cost_usd: f64,
+    pub pricing_snapshots: Vec<PricingRates>,
+    pub pricing_provenance_complete: bool,
+    pub reused_units: usize,
+    pub prompt_contract_version: Option<String>,
+    pub endpoint: Option<String>,
+    pub semantic_index_hashes: Vec<String>,
     pub provider: Option<String>,
     pub model: Option<String>,
 }
@@ -787,6 +867,7 @@ pub(super) fn summarize(path: &Path) -> Result<JournalSummary, String> {
         .collect::<Vec<_>>();
     let mut summary = JournalSummary {
         scan_id: Some(latest_scan_id),
+        pricing_provenance_complete: true,
         ..JournalSummary::default()
     };
     for entry in &current_scan {
@@ -815,8 +896,35 @@ pub(super) fn summarize(path: &Path) -> Result<JournalSummary, String> {
         summary.cached_input_tokens += entry.cached_in_tok;
         summary.output_tokens += entry.out_tok;
         summary.estimated_cost_usd += entry.estimated_cost_usd;
+        if entry.in_tok > 0 || entry.out_tok > 0 || entry.cached_in_tok > 0 {
+            if let Some(rates) = entry.pricing_rates {
+                if !summary.pricing_snapshots.contains(&rates) {
+                    summary.pricing_snapshots.push(rates);
+                }
+            } else {
+                summary.pricing_provenance_complete = false;
+            }
+        }
         summary.provider = Some(entry.provider.clone());
         summary.model = Some(entry.model.clone());
+        summary.prompt_contract_version = Some(entry.prompt_contract_version.clone());
+        summary.endpoint = Some(entry.endpoint.clone());
+        if entry.semantic_index_hash.len() == 64
+            && entry
+                .semantic_index_hash
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit())
+            && !summary
+                .semantic_index_hashes
+                .contains(&entry.semantic_index_hash)
+        {
+            summary
+                .semantic_index_hashes
+                .push(entry.semantic_index_hash.clone());
+        }
+        if entry.is_manifest && entry.unit_id.starts_with("__reuse__:") {
+            summary.reused_units += 1;
+        }
     }
     let mut latest = HashMap::new();
     for entry in current_scan {

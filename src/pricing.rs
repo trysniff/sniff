@@ -1,10 +1,18 @@
 use std::env;
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct PricingRates {
     pub input_per_million: f64,
     pub cached_input_per_million: f64,
     pub output_per_million: f64,
+}
+
+impl Default for PricingRates {
+    fn default() -> Self {
+        Self::from_env()
+    }
 }
 
 impl PricingRates {

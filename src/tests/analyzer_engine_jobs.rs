@@ -72,9 +72,14 @@ fn record_outcome(
     key: String,
     outcome: &ReviewOutcome,
 ) -> Result<(), String> {
+    let source_hash = outcome
+        .method_record
+        .as_ref()
+        .map(|record| record.source_hash.clone())
+        .unwrap_or_else(|| sha256_text(&key));
     store.record(
         key.clone(),
-        sha256_text(&key),
+        source_hash,
         JournalCompletion {
             verdict: outcome.verdict.clone(),
             method_record: outcome.method_record.clone(),
@@ -248,6 +253,7 @@ async fn cross_scan_content_cache_records_zero_cost_coverage_without_an_api_call
     let summary = crate::review_journal::summarize(&path).unwrap();
     assert_eq!(summary.scan_id.as_deref(), Some("run-b"));
     assert_eq!(summary.completed_units, 1);
+    assert_eq!(summary.reused_units, 1);
     assert_eq!(summary.input_tokens, 0);
     assert_eq!(summary.output_tokens, 0);
     std::fs::remove_file(path).unwrap();

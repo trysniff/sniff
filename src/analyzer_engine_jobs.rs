@@ -1089,7 +1089,12 @@ pub(super) async fn run_review_jobs_with_records(
         if let Some(entry) = journal
             .as_ref()
             .and_then(|store| store.completed.get(&journal_unit_id))
-            .filter(|entry| journal_entry_is_reusable(entry))
+            .filter(|entry| {
+                journal_entry_is_reusable(entry)
+                    && source_hashes
+                        .get(&journal_unit_id)
+                        .is_some_and(|source_hash| entry.source_hash == *source_hash)
+            })
             .cloned()
         {
             let is_current_scan = journal
@@ -1099,6 +1104,10 @@ pub(super) async fn run_review_jobs_with_records(
                 let source_hash = source_hashes.get(&journal_unit_id).ok_or_else(|| {
                     format!("missing source hash for cached review {journal_unit_id}")
                 })?;
+                journal
+                    .as_mut()
+                    .expect("cached journal entry requires a store")
+                    .record_cross_scan_reuse(&journal_unit_id, source_hash)?;
                 journal
                     .as_mut()
                     .expect("cached journal entry requires a store")

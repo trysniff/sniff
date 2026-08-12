@@ -281,9 +281,11 @@ pub(crate) async fn run_synthesis(
                 .join("\n"),
         );
         if let Some(store) = journal.as_mut()
-            && let Some((cached_cases, is_current_scan)) = store.reusable_synthesis(&unit_id)
+            && let Some((cached_cases, is_current_scan)) =
+                store.reusable_synthesis(&unit_id, &source_hash)
         {
             if !is_current_scan {
+                store.record_cross_scan_reuse(&unit_id, &source_hash)?;
                 store.record_synthesis(
                     unit_id,
                     source_hash,
@@ -395,9 +397,11 @@ pub(crate) async fn run_case_adjudication(
                 .map_err(|err| format!("failed to hash adjudication unit: {err}"))?,
         );
         let decisions = if let Some(store) = journal.as_mut()
-            && let Some((cached, is_current_scan)) = store.reusable_adjudication(&unit_id)
+            && let Some((cached, is_current_scan)) =
+                store.reusable_adjudication(&unit_id, &source_hash)
         {
             if !is_current_scan {
+                store.record_cross_scan_reuse(&unit_id, &source_hash)?;
                 store.record_adjudication(
                     unit_id.clone(),
                     source_hash,

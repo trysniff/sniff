@@ -2,6 +2,7 @@ pub mod analyzer;
 pub mod benchmark;
 pub mod callgraph;
 pub mod cli;
+pub mod completed_run;
 pub mod config;
 pub mod config_loader;
 pub(crate) mod counterfactual;

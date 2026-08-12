@@ -261,6 +261,9 @@ pub(super) struct ReviewArtifacts {
     pub(super) cached_in_tok: usize,
     pub(super) ai_expected_reviews: usize,
     pub(super) method_reviews_expected: usize,
+    pub(super) estimated_cost_usd: f64,
+    pub(super) pricing_snapshots: Vec<crate::pricing::PricingRates>,
+    pub(super) pricing_provenance_complete: bool,
 }
 
 fn ensure_ai_path(
@@ -452,13 +455,33 @@ pub(super) async fn prepare_review_artifacts(
         .transpose()
         .map_err(IoError::other)?
         .filter(|summary| summary.scan_id.as_deref() == scan_id.as_deref());
-    let (in_tok, out_tok, cached_in_tok) = journal_usage.map_or(
-        (fallback_in_tok, fallback_out_tok, fallback_cached_in_tok),
+    let fallback_rates = crate::pricing::PricingRates::from_env();
+    let fallback_cost =
+        fallback_rates.cost(fallback_in_tok, fallback_cached_in_tok, fallback_out_tok);
+    let (
+        in_tok,
+        out_tok,
+        cached_in_tok,
+        estimated_cost_usd,
+        pricing_snapshots,
+        pricing_provenance_complete,
+    ) = journal_usage.map_or(
+        (
+            fallback_in_tok,
+            fallback_out_tok,
+            fallback_cached_in_tok,
+            fallback_cost,
+            vec![fallback_rates],
+            true,
+        ),
         |summary| {
             (
                 summary.input_tokens,
                 summary.output_tokens,
                 summary.cached_input_tokens,
+                summary.estimated_cost_usd,
+                summary.pricing_snapshots,
+                summary.pricing_provenance_complete,
             )
         },
     );
@@ -474,6 +497,9 @@ pub(super) async fn prepare_review_artifacts(
         cached_in_tok,
         ai_expected_reviews,
         method_reviews_expected: super::stats::expected_method_reviews(file_records),
+        estimated_cost_usd,
+        pricing_snapshots,
+        pricing_provenance_complete,
     })
 }
 

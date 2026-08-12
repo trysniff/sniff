@@ -1,6 +1,7 @@
 pub mod analyzer;
 pub mod callgraph;
 pub mod cli;
+pub mod completed_run;
 pub mod config;
 pub mod config_loader;
 pub mod env_value;

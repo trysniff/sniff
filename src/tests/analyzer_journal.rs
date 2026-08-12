@@ -323,9 +323,10 @@ fn synthesis_stage_persists_empty_case_results_for_resume() {
     )
     .unwrap();
     assert_eq!(
-        loaded.reusable_synthesis("synthesis-unit"),
+        loaded.reusable_synthesis("synthesis-unit", &sha256_text("methods")),
         Some((Vec::new(), true))
     );
+    assert_eq!(loaded.reusable_synthesis("synthesis-unit", "changed"), None);
     let summary = summarize(&path).unwrap();
     assert_eq!(summary.expected_synthesis_units, 1);
     assert_eq!(summary.completed_synthesis_units, 1);
@@ -379,8 +380,12 @@ fn adjudication_stage_persists_complete_decisions_for_resume() {
     )
     .unwrap();
     assert_eq!(
-        loaded.reusable_adjudication("adjudication-unit"),
+        loaded.reusable_adjudication("adjudication-unit", &sha256_text("case-a")),
         Some((vec![decision], true))
+    );
+    assert_eq!(
+        loaded.reusable_adjudication("adjudication-unit", "changed"),
+        None
     );
     let summary = summarize(&path).unwrap();
     assert_eq!(summary.expected_adjudication_units, 1);
@@ -433,9 +438,10 @@ fn proof_stage_persists_complete_counterfactuals_for_resume() {
     )
     .unwrap();
     assert_eq!(
-        loaded.reusable_proof("proof-unit"),
+        loaded.reusable_proof("proof-unit", &sha256_text("case-a")),
         Some((vec![proof], true))
     );
+    assert_eq!(loaded.reusable_proof("proof-unit", "changed"), None);
     let summary = summarize(&path).unwrap();
     assert_eq!(summary.expected_proof_units, 1);
     assert_eq!(summary.completed_proof_units, 1);

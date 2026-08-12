@@ -129,9 +129,10 @@ pub(crate) async fn run_counterfactual_proof_with_context(
                 .map_err(|err| format!("failed to hash counterfactual unit: {err}"))?,
         );
         let chunk_proofs = if let Some(store) = journal.as_mut()
-            && let Some((cached, is_current_scan)) = store.reusable_proof(&unit_id)
+            && let Some((cached, is_current_scan)) = store.reusable_proof(&unit_id, &source_hash)
         {
             if !is_current_scan {
+                store.record_cross_scan_reuse(&unit_id, &source_hash)?;
                 store.record_proof(
                     unit_id,
                     source_hash,

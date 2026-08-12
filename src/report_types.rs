@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 
+use crate::pricing::PricingRates;
 use crate::slop_cases::SlopCase;
 use crate::types::{FindingTier, MethodRecord};
 
@@ -191,6 +192,10 @@ pub struct RunStats {
     pub cached_input_tokens: usize,
     pub output_tokens: usize,
     pub estimated_cost_usd: f64,
+    #[serde(default)]
+    pub pricing_snapshots: Vec<PricingRates>,
+    #[serde(default)]
+    pub pricing_provenance_complete: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

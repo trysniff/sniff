@@ -229,6 +229,9 @@ async fn build_run_report(
         cached_in_tok: review.cached_in_tok,
         ai_expected_reviews: review.ai_expected_reviews,
         method_reviews_expected: review.method_reviews_expected,
+        estimated_cost_usd: review.estimated_cost_usd,
+        pricing_snapshots: review.pricing_snapshots,
+        pricing_provenance_complete: review.pricing_provenance_complete,
     });
     stats.compiler_methods_expected = compiler_methods_expected;
     stats.compiler_methods_covered = compiler_methods_covered;
@@ -348,9 +351,30 @@ pub async fn run(
         Err(error) => return Err(error),
     };
 
-    let report_path_text = report_path.to_string_lossy().to_string();
-    crate::reporter::render_report(&run_report, &config, Some(&report_path_text))
+    let completed_run = if run_report.stats.method_reviews_expected > 0 {
+        let journal_summary =
+            crate::analyzer::summarize_journal(&journal_path).map_err(IoError::other)?;
+        Some(
+            crate::completed_run::build_completed_run(&run_report, &journal_summary)
+                .map_err(IoError::other)?,
+        )
+    } else {
+        None
+    };
+    let completed_write = completed_run
+        .as_ref()
+        .map(|artifact| crate::completed_run::write_completed_run(artifact, &report_path))
+        .transpose()
         .map_err(IoError::other)?;
+    let report_path_text = report_path.to_string_lossy().to_string();
+    if let Err(error) =
+        crate::reporter::render_report(&run_report, &config, Some(&report_path_text))
+    {
+        if let Some((artifact_path, true)) = completed_write.as_ref() {
+            let _ = std::fs::remove_file(artifact_path);
+        }
+        return Err(IoError::other(error).into());
+    }
 
     Ok(exit_code_for_run(
         has_issues,
@@ -470,6 +494,12 @@ mod tests {
             cached_input_tokens: 60,
             output_tokens: 20,
             estimated_cost_usd: 0.0123,
+            pricing_snapshots: Vec::new(),
+            pricing_provenance_complete: false,
+            reused_units: 0,
+            prompt_contract_version: Some("test-contract".to_string()),
+            endpoint: Some("https://example.invalid/v1".to_string()),
+            semantic_index_hashes: Vec::new(),
             provider: Some("openai-compatible".to_string()),
             model: Some("test-model".to_string()),
         };

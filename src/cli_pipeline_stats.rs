@@ -1,3 +1,4 @@
+use crate::pricing::PricingRates;
 use crate::report_types::{LLMVerdict, MethodReviewRecord, RunReport, RunStats, StaticFlag};
 use crate::slop_cases::SlopCase;
 use crate::types::{FileRecord, FindingTier};
@@ -11,6 +12,9 @@ pub(super) struct StatsInput<'a> {
     pub cached_in_tok: usize,
     pub ai_expected_reviews: usize,
     pub method_reviews_expected: usize,
+    pub estimated_cost_usd: f64,
+    pub pricing_snapshots: Vec<PricingRates>,
+    pub pricing_provenance_complete: bool,
 }
 
 #[allow(clippy::field_reassign_with_default)]
@@ -122,6 +126,9 @@ pub(super) fn generate_stats(input: StatsInput<'_>) -> RunStats {
     stats.input_tokens = input.in_tok;
     stats.cached_input_tokens = input.cached_in_tok.min(input.in_tok);
     stats.output_tokens = input.out_tok;
+    stats.estimated_cost_usd = input.estimated_cost_usd;
+    stats.pricing_snapshots = input.pricing_snapshots;
+    stats.pricing_provenance_complete = input.pricing_provenance_complete;
     stats
 }
 

@@ -71,6 +71,13 @@ Sniff writes `sniff-report.md` at the scanned repository root. A successful run
 reviews every eligible method; it never replaces failed AI reviews with a
 static-only report.
 
+Successful scans with eligible methods also write a versioned, hash-bound
+machine record under `.sniff/runs/`. It contains the complete method ledger, final cases, semantic
+coverage, provider/model contract, token usage, and the pricing snapshots used
+for the displayed estimate. The directory is ignored by Git and is intended for
+offline audit and later SniffBench import. Its `estimated_cost_usd` is not an
+invoice: release benchmarking still requires separately verified actual cost.
+
 Each completed method is appended to a durable journal. `sniff status [PATH]`
 reads that journal without loading provider configuration or scanning source
 files. `sniff resume [PATH]` requires an existing journal and continues the
@@ -303,6 +310,11 @@ and report-writing failures are fatal. Sniff never emits a partial report as a
 successful result. Every completed review is durably appended to a local journal
 for safe resume; changed source, semantic context, or review contracts invalidate
 stale entries.
+
+A completed machine record is emitted only after exhaustive method and compiler
+coverage and all required synthesis, adjudication, and proof units finish. Cache
+reuse is recorded explicitly; reused scans are not independent SniffBench
+repeatability trials.
 
 Per-file semantic artifacts are cached separately under the operating system's
 user cache directory and reused only when their source hash, language, cache

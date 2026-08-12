@@ -1,6 +1,7 @@
 use crate::report_types::{LLMVerdict, RunReport};
 use crate::types::FindingTier;
 use std::io::Write;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::summary::append_footer;
 
@@ -52,11 +53,90 @@ pub(super) fn write_markdown_report(
         &run_report.llm_verdicts,
         cost_str,
     );
-    let mut f = std::fs::File::create(out_path)
-        .map_err(|err| format!("failed to create report file {out_path}: {}", err))?;
-    f.write_all(md_lines.join("\n").as_bytes())
-        .map_err(|err| format!("failed to write report file {out_path}: {}", err))?;
+    write_report_atomically(
+        std::path::Path::new(out_path),
+        md_lines.join("\n").as_bytes(),
+    )
+}
+
+fn write_report_atomically(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> {
+    static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
+    let parent = path.parent().unwrap_or_else(|| std::path::Path::new("."));
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("sniff-report.md");
+    let temp = parent.join(format!(
+        ".{name}.{}.{}.tmp",
+        std::process::id(),
+        NEXT_TEMP.fetch_add(1, Ordering::Relaxed)
+    ));
+    let result = (|| {
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp)
+            .map_err(|error| {
+                format!(
+                    "failed to create report temporary file {}: {error}",
+                    temp.display()
+                )
+            })?;
+        file.write_all(bytes)
+            .and_then(|_| file.sync_all())
+            .map_err(|error| {
+                format!(
+                    "failed to persist report temporary file {}: {error}",
+                    temp.display()
+                )
+            })?;
+        drop(file);
+        commit_report(&temp, path)
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temp);
+    }
+    result
+}
+
+#[cfg(windows)]
+fn commit_report(temp: &std::path::Path, path: &std::path::Path) -> Result<(), String> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
+    };
+
+    let source = temp
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let destination = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let result = unsafe {
+        MoveFileExW(
+            source.as_ptr(),
+            destination.as_ptr(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    };
+    if result == 0 {
+        return Err(format!(
+            "failed to commit report file {}: {}",
+            path.display(),
+            std::io::Error::last_os_error()
+        ));
+    }
     Ok(())
+}
+
+#[cfg(not(windows))]
+fn commit_report(temp: &std::path::Path, path: &std::path::Path) -> Result<(), String> {
+    std::fs::rename(temp, path)
+        .map_err(|error| format!("failed to commit report file {}: {error}", path.display()))
 }
 
 fn validate_case_report_contract(run_report: &RunReport) -> Result<(), String> {
@@ -492,6 +572,38 @@ mod tests {
         assert!(md.contains("borderline.rs"));
         assert!(md.contains("Kinda Slop Findings"));
         assert!(md.contains("proven unnecessary"));
+    }
+
+    #[test]
+    fn markdown_report_atomically_replaces_an_existing_report() {
+        let report = RunReport {
+            file_verdicts: vec![verdict("fresh.rs", FindingTier::Slop)],
+            static_flags: vec![],
+            llm_verdicts: vec![],
+            method_review_records: vec![],
+            slop_cases: vec![],
+            stats: RunStats::default(),
+        };
+        let out_path = temp_report_path();
+        fs::write(&out_path, "stale report").unwrap();
+
+        write_markdown_report(&report, &out_path, "$0.00").unwrap();
+
+        let path = std::path::Path::new(&out_path);
+        let md = fs::read_to_string(path).unwrap();
+        let parent = path.parent().unwrap();
+        let name = path.file_name().unwrap().to_string_lossy();
+        assert!(md.contains("fresh.rs"));
+        assert!(!md.contains("stale report"));
+        assert!(!fs::read_dir(parent).unwrap().any(|entry| {
+            entry.ok().is_some_and(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(&format!(".{name}."))
+            })
+        }));
+        fs::remove_file(path).unwrap();
     }
 
     #[test]
