@@ -17,6 +17,6 @@ mod run;
 #[path = "cli_pipeline_stats.rs"]
 mod stats;
 
-pub(crate) use benchmark_run::benchmark;
+pub(crate) use benchmark_run::{benchmark, freeze_benchmark};
 pub use preflight::{doctor, estimate, index_semantic_sources, install_indexers};
 pub use run::{resume, run, status};

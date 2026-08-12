@@ -283,6 +283,16 @@ pub fn evaluate_release(
     Ok(metrics)
 }
 
+pub fn freeze_corpus(
+    mut corpus: BenchmarkCorpus,
+    corpus_root: &Path,
+) -> Result<BenchmarkCorpus, String> {
+    corpus.source_commitment_sha256 = corpus.computed_source_commitment_sha256()?;
+    corpus.label_commitment_sha256 = corpus.computed_label_commitment_sha256()?;
+    validate_corpus(&corpus, corpus_root)?;
+    Ok(corpus)
+}
+
 impl ReleaseBenchmarkMetrics {
     pub fn assert_release_gate(&self) -> Result<(), String> {
         if self.release_gate_errors.is_empty() {

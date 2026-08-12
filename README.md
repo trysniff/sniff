@@ -62,8 +62,9 @@ sniff resume
 # Optionally pause after about $0.50 of cumulative estimated scan spend.
 sniff --budget-usd 0.50
 
-# Evaluate a completed frozen SniffBench v2 corpus without contacting a provider.
-sniff benchmark corpus.json submission.json
+# Freeze a corpus, then evaluate completed runs without contacting a provider.
+sniff benchmark freeze draft.json corpus.json
+sniff benchmark evaluate corpus.json submission.json
 ```
 
 Sniff writes `sniff-report.md` at the scanned repository root. A successful run
@@ -86,7 +87,11 @@ cap.
 
 ## SniffBench Evaluation
 
-`sniff benchmark CORPUS SUBMISSION` evaluates a frozen SniffBench v2 corpus and
+`sniff benchmark freeze DRAFT OUTPUT` verifies every declared local source
+snapshot, computes separate SHA-256 commitments for analyzed sources and hidden
+labels, and creates a new immutable corpus manifest without overwriting files.
+
+`sniff benchmark evaluate CORPUS SUBMISSION` evaluates that corpus and
 three or more complete runs. The corpus binds labels and local before/after
 source snapshots by SHA-256. The submission binds provider/model identity,
 actual usage and cost, proof levels, exact evidence, blind reviewer outcomes,

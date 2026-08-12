@@ -1,6 +1,6 @@
-use crate::benchmark::{BenchmarkCorpus, BenchmarkSubmission, evaluate_release};
+use crate::benchmark::{BenchmarkCorpus, BenchmarkSubmission, evaluate_release, freeze_corpus};
 use std::fs;
-use std::io::{Error as IoError, ErrorKind};
+use std::io::{Error as IoError, ErrorKind, Write};
 use std::path::Path;
 
 /// Evaluate a complete external benchmark ledger without loading configuration
@@ -33,6 +33,48 @@ pub(crate) fn benchmark(
     }
 }
 
+pub(crate) fn freeze_benchmark(
+    draft_path: &str,
+    output_path: &str,
+) -> Result<i32, Box<dyn std::error::Error>> {
+    let draft = read_json::<BenchmarkCorpus>(draft_path)?;
+    let corpus_root = Path::new(draft_path)
+        .parent()
+        .unwrap_or_else(|| Path::new("."));
+    let frozen = freeze_corpus(draft, corpus_root).map_err(|error| {
+        IoError::new(
+            ErrorKind::InvalidData,
+            format!("benchmark corpus cannot be frozen: {error}"),
+        )
+    })?;
+    let bytes = serde_json::to_vec_pretty(&frozen)?;
+    write_new_file(Path::new(output_path), &bytes)?;
+    eprintln!(
+        "Frozen SniffBench corpus written to {output_path}\nSource commitment: {}\nLabel commitment: {}",
+        frozen.source_commitment_sha256, frozen.label_commitment_sha256
+    );
+    Ok(0)
+}
+
+fn write_new_file(path: &Path, bytes: &[u8]) -> Result<(), IoError> {
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map_err(|error| {
+            IoError::new(
+                error.kind(),
+                format!(
+                    "failed to create frozen benchmark file {}: {error}",
+                    path.display()
+                ),
+            )
+        })?;
+    file.write_all(bytes)?;
+    file.write_all(b"\n")?;
+    file.sync_all()
+}
+
 fn read_json<T>(path: &str) -> Result<T, Box<dyn std::error::Error>>
 where
     T: serde::de::DeserializeOwned,
@@ -54,7 +96,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::benchmark;
+    use super::{benchmark, write_new_file};
     use std::fs;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -115,5 +157,17 @@ mod tests {
         );
         let _ = fs::remove_file(cases);
         let _ = fs::remove_file(predictions);
+    }
+
+    #[test]
+    fn frozen_manifest_writer_never_overwrites_an_existing_file() {
+        let output = temp_path("existing-frozen");
+        fs::write(&output, "existing").expect("write existing output");
+
+        let error = write_new_file(&output, b"replacement").unwrap_err();
+
+        assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(fs::read_to_string(&output).unwrap(), "existing");
+        let _ = fs::remove_file(output);
     }
 }

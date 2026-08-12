@@ -10,7 +10,7 @@ pub use release::{
     BenchmarkAdjudication, BenchmarkBaseline, BenchmarkBaselineFinding, BenchmarkCorpus,
     BenchmarkEvidence, BenchmarkPartition, BenchmarkRun, BenchmarkRunPrediction,
     BenchmarkSubmission, BenchmarkUsage, ReleaseBenchmarkCase, ReleaseBenchmarkMetrics,
-    ReviewerDisposition, SourceSnapshot, evaluate_release,
+    ReviewerDisposition, SourceSnapshot, evaluate_release, freeze_corpus,
 };
 
 /// One labeled unit in a SniffBench corpus. The label is hidden from the

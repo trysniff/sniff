@@ -263,6 +263,22 @@ fn complete_release_submission_passes_every_offline_gate() {
 }
 
 #[test]
+fn freeze_computes_both_commitments_and_validates_snapshots() {
+    let (root, mut draft) = corpus();
+    draft.source_commitment_sha256.clear();
+    draft.label_commitment_sha256.clear();
+
+    let frozen = freeze_corpus(draft, root.path()).expect("freeze corpus");
+
+    assert_eq!(frozen.source_commitment_sha256.len(), 64);
+    assert_eq!(frozen.label_commitment_sha256.len(), 64);
+    assert_ne!(
+        frozen.source_commitment_sha256,
+        frozen.label_commitment_sha256
+    );
+}
+
+#[test]
 fn release_corpus_rejects_tampered_labels_and_source_artifacts() {
     let (root, mut tampered_corpus) = corpus();
     let valid_submission = submission(&tampered_corpus);

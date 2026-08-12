@@ -79,6 +79,22 @@ pub enum CliCommand {
     },
     /// Evaluate a complete held-out SniffBench prediction ledger without contacting a provider.
     Benchmark {
+        #[command(subcommand)]
+        command: BenchmarkCommand,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum BenchmarkCommand {
+    /// Verify snapshot hashes and create an immutable SniffBench v2 corpus manifest.
+    Freeze {
+        /// Draft corpus manifest; snapshot paths are relative to its directory.
+        draft: String,
+        /// New frozen manifest path; existing files are never overwritten.
+        output: String,
+    },
+    /// Evaluate complete runs and competitor ledgers against a frozen corpus.
+    Evaluate {
         /// Frozen SniffBench v2 corpus manifest and source-snapshot directory.
         corpus: String,
         /// Complete SniffBench v2 runs, adjudications, usage, and baseline ledgers.
@@ -132,9 +148,14 @@ pub async fn run(args: CliArgs) -> Result<i32, Box<dyn std::error::Error>> {
         Some(CliCommand::Resume { path }) => {
             pipeline::resume(&path, args.skip_dotenv, args.yes, args.budget_usd).await
         }
-        Some(CliCommand::Benchmark { corpus, submission }) => {
-            pipeline::benchmark(&corpus, &submission)
-        }
+        Some(CliCommand::Benchmark { command }) => match command {
+            BenchmarkCommand::Freeze { draft, output } => {
+                pipeline::freeze_benchmark(&draft, &output)
+            }
+            BenchmarkCommand::Evaluate { corpus, submission } => {
+                pipeline::benchmark(&corpus, &submission)
+            }
+        },
         None if args.estimate => pipeline::estimate(&args.path, args.skip_dotenv).await,
         None => pipeline::run(&args.path, args.skip_dotenv, args.yes, args.budget_usd).await,
     }
@@ -142,7 +163,7 @@ pub async fn run(args: CliArgs) -> Result<i32, Box<dyn std::error::Error>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{CliArgs, CliCommand, IndexerCommand};
+    use super::{BenchmarkCommand, CliArgs, CliCommand, IndexerCommand};
     use clap::Parser;
 
     #[test]
@@ -201,14 +222,35 @@ mod tests {
 
     #[test]
     fn parses_offline_benchmark_ledgers() {
-        let args =
-            CliArgs::try_parse_from(["sniff", "benchmark", "cases.json", "predictions.json"])
-                .expect("benchmark arguments");
+        let args = CliArgs::try_parse_from([
+            "sniff",
+            "benchmark",
+            "evaluate",
+            "cases.json",
+            "predictions.json",
+        ])
+        .expect("benchmark arguments");
 
         assert!(matches!(
             args.command,
-            Some(CliCommand::Benchmark { corpus, submission })
+            Some(CliCommand::Benchmark {
+                command: BenchmarkCommand::Evaluate { corpus, submission }
+            })
                 if corpus == "cases.json" && submission == "predictions.json"
+        ));
+    }
+
+    #[test]
+    fn parses_offline_benchmark_freeze() {
+        let args =
+            CliArgs::try_parse_from(["sniff", "benchmark", "freeze", "draft.json", "frozen.json"])
+                .expect("benchmark freeze arguments");
+
+        assert!(matches!(
+            args.command,
+            Some(CliCommand::Benchmark {
+                command: BenchmarkCommand::Freeze { draft, output }
+            }) if draft == "draft.json" && output == "frozen.json"
         ));
     }
 
