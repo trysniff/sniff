@@ -218,3 +218,14 @@ worksheet. The worksheet contains no Sniff findings or hidden labels. At least
 two experienced reviewers must complete independent copies, and a separate
 resolver must adjudicate every disagreement before the blind corpus can be
 frozen.
+
+The prerelease also provides the deterministic blank worksheet as
+`independent-review-template.json`. Its SHA-256 is
+`5e241377c8ceadf143021f450155625c2b1df4ee928261d8e201bff11360458b`.
+Reviewers must follow [`LABELING.md`](LABELING.md) and validate their completed
+copy before submission:
+
+```console
+sniff benchmark validate-labels \
+  blind-source-seal.json completed-review.json
+```

@@ -8,7 +8,8 @@ use crate::benchmark::{
     combine_source_selections, create_composite_source_seal, create_source_seal,
     extend_source_selection, prepare_label_resolution, prepare_label_review,
     prepare_source_selection, prepare_source_selection_extension, source_selection_draft,
-    validate_label_review_audit, validate_source_frame_manifest, validate_source_seal,
+    validate_label_review, validate_label_review_audit, validate_source_frame_manifest,
+    validate_source_seal,
 };
 use crate::benchmark_import::{BenchmarkRunReview, import_reviewed_run, prepare_run_review};
 use std::fs;
@@ -399,6 +400,33 @@ pub(crate) fn prepare_benchmark_labels(
     eprintln!(
         "Source-only SniffBench label worksheet written to {output_path}. Methods: {}. Complete it independently without Sniff output.",
         worksheet.methods.len()
+    );
+    Ok(0)
+}
+
+pub(crate) fn validate_benchmark_labels(
+    seal_path: &str,
+    review_path: &str,
+) -> Result<i32, Box<dyn std::error::Error>> {
+    let (seal, seal_bytes) = read_source_seal(seal_path)?;
+    let seal_root = Path::new(seal_path)
+        .parent()
+        .unwrap_or_else(|| Path::new("."));
+    let review = read_json::<LabelReviewWorksheet>(review_path)?;
+    validate_label_review(&seal, seal_root, &sha256(&seal_bytes), &review).map_err(|error| {
+        IoError::new(
+            ErrorKind::InvalidData,
+            format!("benchmark label worksheet is invalid: {error}"),
+        )
+    })?;
+    let reviewer = review
+        .reviewer
+        .as_ref()
+        .expect("validated label worksheet has reviewer identity");
+    eprintln!(
+        "Verified complete source-only label worksheet {review_path}. Reviewer: {}. Methods: {}.",
+        reviewer.reviewer_id,
+        review.methods.len()
     );
     Ok(0)
 }

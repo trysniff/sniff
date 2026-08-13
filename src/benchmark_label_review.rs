@@ -256,6 +256,21 @@ pub fn audit_label_reviews(
     Ok(audit)
 }
 
+pub fn validate_label_review(
+    seal: &BenchmarkSourceSeal,
+    seal_root: &Path,
+    source_seal_artifact_sha256: &str,
+    worksheet: &LabelReviewWorksheet,
+) -> Result<(), String> {
+    let expected = prepare_label_review(seal, seal_root, source_seal_artifact_sha256)?;
+    let known_ids = seal
+        .methods
+        .iter()
+        .map(|method| method.method_id.as_str())
+        .collect::<HashSet<_>>();
+    validate_completed_worksheet(worksheet, &expected, &known_ids)
+}
+
 pub fn validate_label_review_audit(
     seal: &BenchmarkSourceSeal,
     source_seal_artifact_sha256: &str,

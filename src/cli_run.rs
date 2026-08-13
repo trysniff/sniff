@@ -214,6 +214,13 @@ pub enum BenchmarkCommand {
         /// New reviewer worksheet; existing files are never overwritten.
         output: String,
     },
+    /// Validate one completed source-only label worksheet before submission.
+    ValidateLabels {
+        /// Label-free source seal used to create the worksheet.
+        seal: String,
+        /// Independently completed reviewer worksheet.
+        review: String,
+    },
     /// Validate independent completed label worksheets and preserve every dispute.
     AuditLabels {
         /// Label-free source seal used to create every worksheet.
@@ -425,6 +432,9 @@ pub async fn run(args: CliArgs) -> Result<i32, Box<dyn std::error::Error>> {
             }
             BenchmarkCommand::PrepareLabels { seal, output } => {
                 pipeline::prepare_benchmark_labels(&seal, &output)
+            }
+            BenchmarkCommand::ValidateLabels { seal, review } => {
+                pipeline::validate_benchmark_labels(&seal, &review)
             }
             BenchmarkCommand::AuditLabels {
                 seal,
@@ -795,6 +805,21 @@ mod tests {
             Some(CliCommand::Benchmark {
                 command: BenchmarkCommand::PrepareLabels { seal, output }
             }) if seal == "blind-source-seal.json" && output == "review-a.json"
+        ));
+
+        let validate = CliArgs::try_parse_from([
+            "sniff",
+            "benchmark",
+            "validate-labels",
+            "blind-source-seal.json",
+            "review-a.json",
+        ])
+        .expect("validate label arguments");
+        assert!(matches!(
+            validate.command,
+            Some(CliCommand::Benchmark {
+                command: BenchmarkCommand::ValidateLabels { seal, review }
+            }) if seal == "blind-source-seal.json" && review == "review-a.json"
         ));
 
         let audit = CliArgs::try_parse_from([

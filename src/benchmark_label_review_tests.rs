@@ -1,6 +1,6 @@
 use super::{
     BenchmarkSourceSeal, LabelAgreementStatus, LabelReviewWorksheet, LabelReviewer,
-    audit_label_reviews, prepare_label_review, sha256,
+    audit_label_reviews, prepare_label_review, sha256, validate_label_review,
 };
 use crate::benchmark::{SourceSnapshot, write_test_source_seal};
 use crate::types::FindingTier;
@@ -58,6 +58,45 @@ fn prepared_label_review_contains_every_exact_sealed_method_without_labels() {
             && !method.source.is_empty()
             && sha256(method.source.as_bytes()) == method.source_sha256
     }));
+}
+
+#[test]
+fn one_completed_blind_worksheet_can_be_validated_before_audit() {
+    let (root, seal, seal_hash) = fixture();
+    let template = prepare_label_review(&seal, root.path(), &seal_hash).unwrap();
+    let review = completed(template, "reviewer-a");
+
+    validate_label_review(&seal, root.path(), &seal_hash, &review).unwrap();
+}
+
+#[test]
+fn single_worksheet_validation_rejects_incomplete_unblinded_and_tampered_work() {
+    let (root, seal, seal_hash) = fixture();
+    let template = prepare_label_review(&seal, root.path(), &seal_hash).unwrap();
+
+    let mut incomplete = completed(template.clone(), "reviewer-a");
+    incomplete.methods[0].decision.tier = None;
+    assert!(
+        validate_label_review(&seal, root.path(), &seal_hash, &incomplete)
+            .unwrap_err()
+            .contains("has not been labeled")
+    );
+
+    let mut unblinded = completed(template.clone(), "reviewer-a");
+    unblinded.reviewer.as_mut().unwrap().sniff_output_hidden = false;
+    assert!(
+        validate_label_review(&seal, root.path(), &seal_hash, &unblinded)
+            .unwrap_err()
+            .contains("blind to Sniff output")
+    );
+
+    let mut tampered = completed(template, "reviewer-a");
+    tampered.methods[0].source.push_str("// changed\n");
+    assert!(
+        validate_label_review(&seal, root.path(), &seal_hash, &tampered)
+            .unwrap_err()
+            .contains("changed immutable source facts")
+    );
 }
 
 #[test]
