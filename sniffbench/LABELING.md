@@ -100,7 +100,11 @@ sniff benchmark validate-labels \
   blind-source-seal.json completed-review.json
 ```
 
-6. Submit the exact validated JSON file and its SHA-256.
+6. Compute the SHA-256 of the exact validated JSON file.
+7. Post only the SHA-256 commitment and completion attestation. Do not reveal
+   the worksheet while another reviewer is still labeling.
+8. After at least two independent commitments are publicly recorded, reveal
+   the exact worksheet. Its SHA-256 must match the earlier commitment.
 
 Validation rechecks the complete source seal, immutable method census,
 worksheet identity, reviewer eligibility, every decision field, and all
@@ -109,3 +113,19 @@ cross-method relationships. It does not contact GitHub or a model provider.
 At least two distinct validated worksheets are required. Sniff preserves every
 disagreement in the label audit; a separate experienced resolver adjudicates
 disputes without changing either original worksheet.
+
+## Public commit-reveal
+
+The commitment phase prevents a later reviewer from seeing or copying an
+earlier review while still allowing the complete process to be public and
+auditable. A commitment comment must contain:
+
+- Reviewer ID matching the completed worksheet.
+- Worksheet SHA-256.
+- Attestation that all 1,607 methods were completed and `validate-labels`
+  passed before the commitment was posted.
+- Attestation that no Sniff output or other reviewer's labels were inspected.
+
+Do not include label counts, findings, rationales, excerpts, or the worksheet
+during the commitment phase. After two valid commitments exist, both reviewers
+may reveal their exact JSON files. A changed or non-matching reveal is rejected.
