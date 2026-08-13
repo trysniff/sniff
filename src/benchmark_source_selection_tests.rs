@@ -48,6 +48,9 @@ fn completed(frame: &[u8]) -> SourceSelectionWorksheet {
             repository: assessment.candidate.repository.clone(),
             selection_quota_language: language.clone(),
             observed_method_count: Some(100),
+            assessed_revision: Some("3".repeat(40)),
+            method_counts: BTreeMap::from([(language.clone(), 100)]),
+            method_census_contract: Some(SOURCE_ASSESSMENT_CENSUS_CONTRACT.to_string()),
             accessible: true,
             archived: Some(false),
             fork: Some(false),
@@ -60,7 +63,7 @@ fn completed(frame: &[u8]) -> SourceSelectionWorksheet {
         assessment.evidence = vec![
             SourceAssessmentEvidence {
                 kind: SourceAssessmentEvidenceKind::StructuredFacts,
-                source: "derived:source-assessment-facts-v1".to_string(),
+                source: "derived:source-assessment-facts-v2".to_string(),
                 observed_at: "2026-08-13T00:00:00Z".to_string(),
                 payload_sha256: sha256(payload.as_bytes()),
                 payload,
@@ -177,6 +180,34 @@ fn source_selection_rejects_tampered_frame_eligibility_census() {
     let error = audit_source_selection(policy(&frame), &frame, worksheet).unwrap_err();
 
     assert!(error.contains("changed its immutable task"));
+}
+
+#[test]
+fn source_selection_rejects_forged_revision_or_method_census() {
+    let frame = frame();
+    let mut revision_mismatch = completed(&frame);
+    let assessment = &mut revision_mismatch.candidates[0];
+    let mut facts = assessment.facts.clone().unwrap();
+    facts.assessed_revision = Some("4".repeat(40));
+    let payload = serde_json::to_string(&facts).unwrap();
+    assessment.facts = Some(facts);
+    assessment.evidence[0].payload_sha256 = sha256(payload.as_bytes());
+    assessment.evidence[0].payload = payload;
+
+    let error = audit_source_selection(policy(&frame), &frame, revision_mismatch).unwrap_err();
+    assert!(error.contains("does not match its assessed language or method count"));
+
+    let mut forged_count = completed(&frame);
+    let assessment = &mut forged_count.candidates[0];
+    let mut facts = assessment.facts.clone().unwrap();
+    facts.method_counts.insert("python".to_string(), 1);
+    let payload = serde_json::to_string(&facts).unwrap();
+    assessment.facts = Some(facts);
+    assessment.evidence[0].payload_sha256 = sha256(payload.as_bytes());
+    assessment.evidence[0].payload = payload;
+
+    let error = audit_source_selection(policy(&frame), &frame, forged_count).unwrap_err();
+    assert!(error.contains("does not sum"));
 }
 
 #[test]

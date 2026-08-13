@@ -4,7 +4,8 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashSet};
 
 pub const SOURCE_SAMPLING_POLICY_SCHEMA_VERSION: u32 = 1;
-pub const SOURCE_SELECTION_AUDIT_SCHEMA_VERSION: u32 = 2;
+pub const SOURCE_SELECTION_AUDIT_SCHEMA_VERSION: u32 = 3;
+pub const SOURCE_ASSESSMENT_CENSUS_CONTRACT: &str = "sniffbench-source-census-v1";
 const SOURCE_RANK_CONTRACT: &str = "sniffbench-source-rank-v1";
 const SUPPORTED_LANGUAGES: [&str; 6] =
     ["go", "javascript", "kotlin", "python", "rust", "typescript"];
@@ -83,6 +84,9 @@ pub struct SourceAssessmentFacts {
     pub repository: String,
     pub selection_quota_language: String,
     pub observed_method_count: Option<usize>,
+    pub assessed_revision: Option<String>,
+    pub method_counts: BTreeMap<String, usize>,
+    pub method_census_contract: Option<String>,
     pub accessible: bool,
     pub archived: Option<bool>,
     pub fork: Option<bool>,
@@ -438,6 +442,7 @@ fn validate_assessment(
             assessment.candidate.repository
         ));
     }
+    validate_assessment_census(facts)?;
     if let Some(license_path) = &facts.license_path {
         safe_relative(license_path)?;
     }
@@ -480,6 +485,7 @@ fn validate_assessment(
             }
             if !selected.selection_language.eq_ignore_ascii_case(&language)
                 || selected.observed_method_count != methods
+                || facts.assessed_revision.as_deref() != Some(selected.revision.as_str())
             {
                 return Err(format!(
                     "selected checkout {} does not match its assessed language or method count",
@@ -540,6 +546,84 @@ fn validate_assessment(
     Ok(())
 }
 
+fn validate_assessment_census(facts: &SourceAssessmentFacts) -> Result<(), String> {
+    if !facts.accessible {
+        if facts.assessed_revision.is_some()
+            || facts.observed_method_count.is_some()
+            || !facts.method_counts.is_empty()
+            || facts.method_census_contract.is_some()
+            || facts.selection_quota_language != "unavailable"
+        {
+            return Err(
+                "inaccessible source assessment cannot claim a repository census".to_string(),
+            );
+        }
+        return Ok(());
+    }
+
+    let revision = facts
+        .assessed_revision
+        .as_deref()
+        .ok_or_else(|| "accessible source assessment requires an immutable revision".to_string())?;
+    require_revision(revision)?;
+    if facts.method_census_contract.as_deref() != Some(SOURCE_ASSESSMENT_CENSUS_CONTRACT) {
+        return Err(
+            "accessible source assessment has an unknown method-census contract".to_string(),
+        );
+    }
+    if facts.supported_project_shape == Some(false) {
+        if facts.observed_method_count.is_some()
+            || !facts.method_counts.is_empty()
+            || facts.selection_quota_language != "unresolved"
+        {
+            return Err(
+                "unsupported project shape cannot claim a complete method census".to_string(),
+            );
+        }
+        return Ok(());
+    }
+
+    let observed = facts
+        .observed_method_count
+        .ok_or_else(|| "accessible source assessment requires a method count".to_string())?;
+    let mut total = 0_usize;
+    for (language, count) in &facts.method_counts {
+        if !SUPPORTED_LANGUAGES.contains(&language.as_str()) || *count == 0 {
+            return Err(
+                "source assessment method census contains an invalid language count".to_string(),
+            );
+        }
+        total = total
+            .checked_add(*count)
+            .ok_or_else(|| "source assessment method census overflowed".to_string())?;
+    }
+    if total != observed {
+        return Err(
+            "source assessment method census does not sum to its observed count".to_string(),
+        );
+    }
+    let expected_language = dominant_count_language(&facts.method_counts).unwrap_or("unsupported");
+    if facts.selection_quota_language != expected_language {
+        return Err(
+            "source assessment quota language is not its dominant method language".to_string(),
+        );
+    }
+    Ok(())
+}
+
+fn dominant_count_language(counts: &BTreeMap<String, usize>) -> Option<&str> {
+    counts
+        .iter()
+        .max_by(
+            |(left_language, left_count), (right_language, right_count)| {
+                left_count
+                    .cmp(right_count)
+                    .then_with(|| right_language.cmp(left_language))
+            },
+        )
+        .map(|(language, _)| language.as_str())
+}
+
 fn validate_exclusion(
     reason: SourceExclusionReason,
     supported: bool,
@@ -597,7 +681,7 @@ fn validate_assessment_evidence(assessment: &SourceCandidateAssessment) -> Resul
         require_text("source assessment evidence payload", &evidence.payload)?;
         match evidence.kind {
             SourceAssessmentEvidenceKind::StructuredFacts
-                if evidence.source != "derived:source-assessment-facts-v1" =>
+                if evidence.source != "derived:source-assessment-facts-v2" =>
             {
                 return Err("structured-fact evidence must use its canonical source ID".to_string());
             }
@@ -977,6 +1061,12 @@ pub(crate) fn test_selection_artifacts(
             repository: assessment.candidate.repository.clone(),
             selection_quota_language: repository.selection_language.clone(),
             observed_method_count: Some(repository.observed_method_count),
+            assessed_revision: Some(repository.revision.clone()),
+            method_counts: BTreeMap::from([(
+                repository.selection_language.clone(),
+                repository.observed_method_count,
+            )]),
+            method_census_contract: Some(SOURCE_ASSESSMENT_CENSUS_CONTRACT.to_string()),
             accessible: true,
             archived: Some(false),
             fork: Some(false),
@@ -992,7 +1082,7 @@ pub(crate) fn test_selection_artifacts(
         assessment.evidence = vec![
             SourceAssessmentEvidence {
                 kind: SourceAssessmentEvidenceKind::StructuredFacts,
-                source: "derived:source-assessment-facts-v1".to_string(),
+                source: "derived:source-assessment-facts-v2".to_string(),
                 observed_at: "2026-08-12T00:00:00Z".to_string(),
                 payload_sha256: sha256(payload.as_bytes()),
                 payload,

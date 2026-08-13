@@ -581,6 +581,11 @@ mod tests {
                 repository: candidate.candidate.repository.clone(),
                 selection_quota_language: language.to_string(),
                 observed_method_count: Some(1),
+                assessed_revision: Some(revision.clone()),
+                method_counts: BTreeMap::from([(language.to_string(), 1)]),
+                method_census_contract: Some(
+                    crate::benchmark::SOURCE_ASSESSMENT_CENSUS_CONTRACT.to_string(),
+                ),
                 accessible: true,
                 archived: Some(false),
                 fork: Some(false),
@@ -593,7 +598,7 @@ mod tests {
             candidate.evidence = vec![
                 SourceAssessmentEvidence {
                     kind: SourceAssessmentEvidenceKind::StructuredFacts,
-                    source: "derived:source-assessment-facts-v1".to_string(),
+                    source: "derived:source-assessment-facts-v2".to_string(),
                     observed_at: "2026-08-12T00:00:00Z".to_string(),
                     payload_sha256: format!("{:x}", Sha256::digest(payload.as_bytes())),
                     payload,

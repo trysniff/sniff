@@ -31,6 +31,13 @@ fact payload and at least one raw HTTPS source payload. Hashes prove exactly
 what was assessed; external facts remain independently reviewable claims rather
 than becoming true merely because they were hashed.
 
+Every accessible candidate is assessed at an immutable Git revision. Its
+structured facts contain the complete per-language eligible-method census under
+the published census contract, including candidates excluded for metadata,
+method bounds, or a filled quota. An inaccessible candidate cannot claim a
+revision or census, and an unsupported project shape remains explicitly
+unresolved rather than receiving a guessed count.
+
 The pinned frame is also audited before ranking. Empty rows are ignored;
 malformed rows, invalid GitHub identities, and repeated identities are excluded
 through a typed eligibility census. The worksheet commits each excluded row's
