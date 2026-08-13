@@ -102,3 +102,18 @@ Only after committing that final policy may the continuation worksheet be
 generated with `extend-selection`. Sniff rejects changed inherited assessments,
 criteria changes, skipped ranks, or use of a continuation policy through the
 fresh `prepare-selection` path.
+
+Extension 1 completed all 1,440 ranks. The exact assessment and independently
+derived outcome are published as
+[`blind-oss-v1-extension-1-assessment.json`](blind-oss-v1-extension-1-assessment.json)
+and
+[`blind-oss-v1-extension-1-result.json`](blind-oss-v1-extension-1-result.json).
+The continuation filled both Rust slots but still produced no qualifying Kotlin
+repository. Kotlin was detected in the frame, but the three Kotlin-dominant
+projects had 54 methods without a license, 2 methods, and 36 methods.
+
+This failed gate is retained rather than hidden or extended repeatedly. A future
+Kotlin completion round must use a separately pinned, language-stratified source
+frame whose construction and seed are committed before candidates are ranked.
+It must preserve the ten selected repositories and cannot alter the existing
+frame, method bounds, evidence, or exclusions.

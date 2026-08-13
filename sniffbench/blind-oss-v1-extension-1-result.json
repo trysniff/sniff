@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "selection_id": "sniffbench-blind-oss-v1-extension-1",
+  "assessment_prefix": 1440,
+  "assessment_artifact": "blind-oss-v1-extension-1-assessment.json",
+  "assessment_sha256": "0cdeaf0b20816588e315db128251e97e8476bf516937e38e68a541bc1ba43ac0",
+  "selected_counts": {
+    "go": 2,
+    "javascript": 2,
+    "kotlin": 0,
+    "python": 2,
+    "rust": 2,
+    "typescript": 2
+  },
+  "audit_outcome": "underfilled",
+  "audit_failure": "source selection filled 0 of 2 required kotlin repositories",
+  "kotlin_dominant_observations": [
+    {
+      "rank": 174,
+      "repository": "github.com/denisidoro/reseau",
+      "observed_method_count": 54,
+      "exclusion_reason": "missing_license"
+    },
+    {
+      "rank": 859,
+      "repository": "github.com/eaglesakura/lazysingleton",
+      "observed_method_count": 2,
+      "exclusion_reason": "below_method_floor"
+    },
+    {
+      "rank": 1131,
+      "repository": "github.com/husseinala/neon",
+      "observed_method_count": 36,
+      "exclusion_reason": "below_method_floor"
+    }
+  ],
+  "notes": "The exact frozen continuation completed all 1,440 ranks without model access. Ten repositories passed all requirements and every retained checkout was independently verified clean, nonpartial, and at its recorded revision. Kotlin was detected by the census, but the identity-only OpenSSF frame yielded no Kotlin-dominant repository satisfying the fixed size and license requirements. This result is retained as immutable evidence. Further extension of the same unstratified frame is rejected in favor of a separately precommitted Kotlin-stratified source frame."
+}
