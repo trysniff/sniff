@@ -78,35 +78,7 @@ pub(super) fn run(spec: &SandboxCommand) -> Result<SandboxOutput, SandboxError> 
     effective_spec
         .read_only_paths
         .extend(effective_spec.executable_paths.iter().cloned());
-    for path in &spec.executable_paths {
-        let canonical_path =
-            normalize_windows_path(std::fs::canonicalize(path).map_err(|error| {
-                SandboxError::Invalid(format!(
-                    "sandbox executable path could not be canonicalized: {} ({error})",
-                    path.display()
-                ))
-            })?);
-        let mapping_root = if canonical_path.is_dir() {
-            canonical_path
-        } else {
-            canonical_path
-                .parent()
-                .ok_or_else(|| {
-                    SandboxError::Invalid(format!(
-                        "sandbox executable path has no containing directory: {}",
-                        canonical_path.display()
-                    ))
-                })?
-                .to_path_buf()
-        };
-        if !effective_spec
-            .windows_virtualized_paths
-            .iter()
-            .any(|root| mapping_root.starts_with(root))
-        {
-            effective_spec.windows_virtualized_paths.push(mapping_root);
-        }
-    }
+    extend_executable_mapping_roots(&mut effective_spec)?;
     let profile_name = unique_profile_name();
     let recovery_ledger = RecoveryLedger::recover_and_begin(&profile_name)?;
     let profile_name_w = wide_null(&profile_name);
@@ -265,6 +237,50 @@ pub(super) fn run(spec: &SandboxCommand) -> Result<SandboxOutput, SandboxError> 
         recovery_ledger.clear()?;
     }
     result
+}
+
+fn extend_executable_mapping_roots(spec: &mut SandboxCommand) -> Result<(), SandboxError> {
+    let executable_paths = spec.executable_paths.clone();
+    let mut canonical_roots = spec
+        .windows_virtualized_paths
+        .iter()
+        .map(|root| std::fs::canonicalize(root).map(normalize_windows_path))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| {
+            SandboxError::Invalid(format!(
+                "Windows virtualized path could not be canonicalized: {error}"
+            ))
+        })?;
+    for path in executable_paths {
+        let canonical_path =
+            normalize_windows_path(std::fs::canonicalize(&path).map_err(|error| {
+                SandboxError::Invalid(format!(
+                    "sandbox executable path could not be canonicalized: {} ({error})",
+                    path.display()
+                ))
+            })?);
+        let mapping_root = if canonical_path.is_dir() {
+            canonical_path
+        } else {
+            canonical_path
+                .parent()
+                .ok_or_else(|| {
+                    SandboxError::Invalid(format!(
+                        "sandbox executable path has no containing directory: {}",
+                        canonical_path.display()
+                    ))
+                })?
+                .to_path_buf()
+        };
+        let covered = canonical_roots
+            .iter()
+            .any(|root| mapping_root.starts_with(root));
+        if !covered {
+            canonical_roots.push(mapping_root.clone());
+            spec.windows_virtualized_paths.push(mapping_root);
+        }
+    }
+    Ok(())
 }
 
 struct CapabilitySid {
@@ -1333,7 +1349,8 @@ fn last_error(action: &str) -> SandboxError {
 mod tests {
     use super::{
         CREATE_SUSPENDED, CapabilitySid, SANDBOX_PROCESS_CREATION_FLAGS,
-        ensure_persistent_read_acl, explicit_acl_paths, persistent_read_acl_exists, sid_string,
+        ensure_persistent_read_acl, explicit_acl_paths, extend_executable_mapping_roots,
+        persistent_read_acl_exists, sid_string,
     };
     use std::path::{Path, PathBuf};
     use windows_sys::Win32::Security::EqualSid;
@@ -1361,6 +1378,40 @@ mod tests {
         );
         assert!(!paths.iter().any(|(path, _)| path == Path::new(r"C:\")));
         assert!(!paths.iter().any(|(path, _)| path == Path::new(r"C:\work")));
+    }
+
+    #[test]
+    fn canonical_toolchain_root_prevents_a_narrower_executable_mapping() {
+        let directory = tempfile::tempdir().unwrap();
+        let real_root = directory.path().join("jdk-real");
+        let alias_root = directory.path().join("jdk-alias");
+        let bin = real_root.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::write(bin.join("java.exe"), b"fixture").unwrap();
+        std::os::windows::fs::symlink_dir(&real_root, &alias_root).unwrap();
+        let mut spec = crate::sandbox::SandboxCommand {
+            root: directory.path().to_path_buf(),
+            workdir: PathBuf::from("."),
+            program: "cmd.exe".to_string(),
+            args: Vec::new(),
+            read_only_paths: Vec::new(),
+            writable_paths: Vec::new(),
+            persistent_read_only_paths: Vec::new(),
+            executable_paths: Vec::new(),
+            windows_virtualized_paths: Vec::new(),
+            env: Vec::new(),
+            allow_network: false,
+            timeout: std::time::Duration::from_secs(1),
+            output_limit: 1024,
+            memory_limit: 1024,
+            process_limit: 1,
+        };
+        spec.executable_paths = vec![alias_root.join("bin").join("java.exe")];
+        spec.windows_virtualized_paths = vec![real_root.clone()];
+
+        extend_executable_mapping_roots(&mut spec).unwrap();
+
+        assert_eq!(spec.windows_virtualized_paths, vec![real_root]);
     }
 
     #[test]
