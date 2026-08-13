@@ -1,7 +1,8 @@
 use super::*;
 use crate::benchmark::{
     SOURCE_SAMPLING_POLICY_SCHEMA_VERSION, SourceAssessmentEvidenceKind,
-    SourceAssessmentSupportingEvidence, SourceSamplingPolicy, prepare_source_selection,
+    SourceAssessmentSupportingEvidence, SourceSamplingPolicy, SourceSelectionContinuation,
+    prepare_source_selection,
 };
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -69,6 +70,7 @@ fn policy(frame: &[u8]) -> SourceSamplingPolicy {
         maximum_methods: 10,
         language_quotas: BTreeMap::from([("python".to_string(), 1)]),
         attestation: "fixed before output".to_string(),
+        continuation: None,
     }
 }
 
@@ -152,6 +154,62 @@ fn checkpoints_resume_only_a_contiguous_prefix_with_its_selected_checkout() {
     let error =
         load_checkpoints(&worksheet, &checkpoint_root, &work_root, &checkout_root).unwrap_err();
     assert!(error.contains("contiguous ranked prefix"));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn continuation_reuses_inherited_assessment_without_duplicate_checkpoint() {
+    let frame = b"repo,metadata\ngithub.com/example/repository,fixture\n";
+    let mut worksheet = prepare_source_selection(policy(frame), frame).unwrap();
+    let root = temp_root("continuation-resume");
+    let checkpoint_root = root.join("checkpoints");
+    let work_root = root.join("work");
+    let checkout_root = root.join("checkouts");
+    let checkout = checkout_root.join("example").join("repository");
+    fs::create_dir_all(&checkpoint_root).unwrap();
+    fs::create_dir_all(&work_root).unwrap();
+    fs::create_dir_all(checkout.parent().unwrap()).unwrap();
+    fs::create_dir_all(&checkout).unwrap();
+    let revision = repository(&checkout);
+    let facts = SourceAssessmentFacts {
+        repository: "github.com/example/repository".to_string(),
+        selection_quota_language: "python".to_string(),
+        observed_method_count: Some(4),
+        assessed_revision: Some(revision.clone()),
+        method_counts: BTreeMap::from([("python".to_string(), 4)]),
+        method_census_contract: Some(SOURCE_ASSESSMENT_CENSUS_CONTRACT.to_string()),
+        repository_empty: false,
+        accessible: true,
+        archived: Some(false),
+        fork: Some(false),
+        license_path: Some("LICENSE".to_string()),
+        supported_project_shape: Some(true),
+    };
+    let mut selected_counts = BTreeMap::from([("python".to_string(), 0)]);
+    let assessment = complete_source_candidate_assessment(
+        worksheet.candidates[0].candidate.clone(),
+        facts,
+        "unix:1".to_string(),
+        supporting_evidence(&revision),
+        Vec::new(),
+        &worksheet.policy,
+        &mut selected_counts,
+    )
+    .unwrap();
+    worksheet.candidates[0] = assessment.clone();
+    worksheet.policy.continuation = Some(SourceSelectionContinuation {
+        prior_prefix: 1,
+        prior_policy_sha256: "1".repeat(64),
+        prior_task_sha256: "2".repeat(64),
+        prior_worksheet_sha256: "3".repeat(64),
+        prior_assessments_sha256: "4".repeat(64),
+    });
+
+    let resumed =
+        load_checkpoints(&worksheet, &checkpoint_root, &work_root, &checkout_root).unwrap();
+
+    assert_eq!(resumed, vec![assessment]);
+    assert_eq!(fs::read_dir(checkpoint_root).unwrap().count(), 0);
     fs::remove_dir_all(root).unwrap();
 }
 

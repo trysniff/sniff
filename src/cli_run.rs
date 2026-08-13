@@ -95,6 +95,28 @@ pub enum BenchmarkCommand {
         /// New label-free assessment worksheet; existing files are never overwritten.
         output: String,
     },
+    /// Bind a larger selection endpoint to a completed, underfilled prior round.
+    PrepareExtension {
+        /// Schema-v2 draft policy with the larger endpoint and no prefilled continuation hashes.
+        policy_draft: String,
+        /// Exact pinned sampling-frame CSV shared with the prior round.
+        frame: String,
+        /// Completed prior assessment worksheet to commit into the extension policy.
+        prior_worksheet: String,
+        /// New finalized extension policy; existing files are never overwritten.
+        output: String,
+    },
+    /// Extend a completed, underfilled frozen selection without changing prior ranks.
+    ExtendSelection {
+        /// Precommitted schema-v2 policy with the larger endpoint and prior commitments.
+        policy: String,
+        /// Exact pinned sampling-frame CSV shared with the prior round.
+        frame: String,
+        /// Completed prior assessment worksheet committed by the extension policy.
+        prior_worksheet: String,
+        /// New worksheet containing the immutable prior prefix and unassessed continuation.
+        output: String,
+    },
     /// Assess every ranked OSS candidate with GitHub metadata and an exact local method census.
     AssessSelection {
         /// Same precommitted policy used to prepare the worksheet.
@@ -256,6 +278,28 @@ pub async fn run(args: CliArgs) -> Result<i32, Box<dyn std::error::Error>> {
                 frame,
                 output,
             } => pipeline::prepare_benchmark_source_selection(&policy, &frame, &output),
+            BenchmarkCommand::PrepareExtension {
+                policy_draft,
+                frame,
+                prior_worksheet,
+                output,
+            } => pipeline::prepare_benchmark_source_selection_extension(
+                &policy_draft,
+                &frame,
+                &prior_worksheet,
+                &output,
+            ),
+            BenchmarkCommand::ExtendSelection {
+                policy,
+                frame,
+                prior_worksheet,
+                output,
+            } => pipeline::extend_benchmark_source_selection(
+                &policy,
+                &frame,
+                &prior_worksheet,
+                &output,
+            ),
             BenchmarkCommand::AssessSelection {
                 policy,
                 frame,

@@ -30,6 +30,7 @@ fn policy(frame: &[u8]) -> SourceSamplingPolicy {
             .collect(),
         attestation: "The frame, seed, quotas, and limits were fixed before tool output."
             .to_string(),
+        continuation: None,
     }
 }
 
@@ -103,6 +104,21 @@ fn completed(frame: &[u8]) -> SourceSelectionWorksheet {
     worksheet
 }
 
+fn continuation_policy(frame: &[u8], prior: &SourceSelectionWorksheet) -> SourceSamplingPolicy {
+    let mut extended = policy(frame);
+    extended.schema_version = SOURCE_SAMPLING_CONTINUATION_POLICY_SCHEMA_VERSION;
+    extended.selection_id = "blind-oss-v1-extension-1".to_string();
+    extended.assessment_prefix = prior.candidates.len() + 1;
+    extended.continuation = Some(SourceSelectionContinuation {
+        prior_prefix: prior.candidates.len(),
+        prior_policy_sha256: prior.policy_sha256.clone(),
+        prior_task_sha256: prior.task_sha256.clone(),
+        prior_worksheet_sha256: json_sha256(prior).unwrap(),
+        prior_assessments_sha256: json_sha256(&prior.candidates).unwrap(),
+    });
+    extended
+}
+
 #[test]
 fn source_selection_is_hash_ranked_and_fills_every_language_quota() {
     let frame = frame();
@@ -113,6 +129,72 @@ fn source_selection_is_hash_ranked_and_fills_every_language_quota() {
     assert_eq!(audit.selected_repositories.len(), 6);
     assert_eq!(audit.audit_sha256, audit.computed_audit_sha256().unwrap());
     validate_source_selection_audit(&audit).unwrap();
+}
+
+#[test]
+fn source_selection_extension_preserves_completed_prior_round_exactly() {
+    let mut frame = frame();
+    frame.extend_from_slice(b"github.com/example/go-extension,fixture\n");
+    let prior = completed(&frame);
+
+    let extended =
+        extend_source_selection(continuation_policy(&frame, &prior), &frame, prior.clone())
+            .unwrap();
+
+    assert_eq!(&extended.candidates[..12], prior.candidates.as_slice());
+    assert_eq!(extended.candidates.len(), 13);
+    assert!(extended.candidates[12].facts.is_none());
+    validate_source_selection_worksheet(&extended.policy, &frame, &extended).unwrap();
+}
+
+#[test]
+fn source_selection_extension_policy_is_derived_from_the_completed_prior_round() {
+    let mut frame = frame();
+    frame.extend_from_slice(b"github.com/example/go-extension,fixture\n");
+    let prior = completed(&frame);
+    let mut draft = continuation_policy(&frame, &prior);
+    draft.continuation = None;
+
+    let finalized = prepare_source_selection_extension(draft, &frame, &prior).unwrap();
+    let commitment = finalized.continuation.as_ref().unwrap();
+
+    assert_eq!(commitment.prior_prefix, 12);
+    assert_eq!(commitment.prior_policy_sha256, prior.policy_sha256);
+    assert_eq!(commitment.prior_task_sha256, prior.task_sha256);
+    assert_eq!(
+        commitment.prior_worksheet_sha256,
+        json_sha256(&prior).unwrap()
+    );
+    assert_eq!(
+        commitment.prior_assessments_sha256,
+        json_sha256(&prior.candidates).unwrap()
+    );
+    extend_source_selection(finalized, &frame, prior).unwrap();
+}
+
+#[test]
+fn source_selection_extension_rejects_retrofit_and_fresh_preparation() {
+    let mut frame = frame();
+    frame.extend_from_slice(b"github.com/example/go-extension,fixture\n");
+    let prior = completed(&frame);
+
+    let mut changed_contract = continuation_policy(&frame, &prior);
+    changed_contract.minimum_methods += 1;
+    let error = extend_source_selection(changed_contract, &frame, prior.clone()).unwrap_err();
+    assert!(error.contains("frame, seed, limits, or quotas"));
+
+    let continuation = continuation_policy(&frame, &prior);
+    let error = prepare_source_selection(continuation, &frame).unwrap_err();
+    assert!(error.contains("require extend-selection"));
+
+    let mut tampered_commitment = continuation_policy(&frame, &prior);
+    tampered_commitment
+        .continuation
+        .as_mut()
+        .unwrap()
+        .prior_assessments_sha256 = "0".repeat(64);
+    let error = extend_source_selection(tampered_commitment, &frame, prior).unwrap_err();
+    assert!(error.contains("completed prior round"));
 }
 
 #[test]

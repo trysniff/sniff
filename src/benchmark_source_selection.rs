@@ -4,6 +4,7 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashSet};
 
 pub const SOURCE_SAMPLING_POLICY_SCHEMA_VERSION: u32 = 1;
+pub const SOURCE_SAMPLING_CONTINUATION_POLICY_SCHEMA_VERSION: u32 = 2;
 pub const SOURCE_SELECTION_AUDIT_SCHEMA_VERSION: u32 = 4;
 pub const SOURCE_ASSESSMENT_CENSUS_CONTRACT: &str = "sniffbench-source-census-v1";
 const SOURCE_RANK_CONTRACT: &str = "sniffbench-source-rank-v1";
@@ -25,6 +26,17 @@ pub struct SourceSamplingPolicy {
     pub maximum_methods: usize,
     pub language_quotas: BTreeMap<String, usize>,
     pub attestation: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub continuation: Option<SourceSelectionContinuation>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SourceSelectionContinuation {
+    pub prior_prefix: usize,
+    pub prior_policy_sha256: String,
+    pub prior_task_sha256: String,
+    pub prior_worksheet_sha256: String,
+    pub prior_assessments_sha256: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -190,6 +202,87 @@ pub fn prepare_source_selection(
     policy: SourceSamplingPolicy,
     frame: &[u8],
 ) -> Result<SourceSelectionWorksheet, String> {
+    if policy.continuation.is_some() {
+        return Err(
+            "source sampling continuation policies require extend-selection and a completed prior worksheet"
+                .to_string(),
+        );
+    }
+    build_source_selection(policy, frame)
+}
+
+pub fn extend_source_selection(
+    policy: SourceSamplingPolicy,
+    frame: &[u8],
+    prior: SourceSelectionWorksheet,
+) -> Result<SourceSelectionWorksheet, String> {
+    let continuation = policy.continuation.clone().ok_or_else(|| {
+        "extended source selection requires a schema-v2 continuation commitment".to_string()
+    })?;
+    validate_source_selection_worksheet(&prior.policy, frame, &prior)?;
+    validate_completed_assessments(&prior)?;
+    if continuation.prior_prefix != prior.candidates.len()
+        || continuation.prior_prefix != prior.policy.assessment_prefix
+        || continuation.prior_policy_sha256 != prior.policy_sha256
+        || continuation.prior_task_sha256 != prior.task_sha256
+        || continuation.prior_worksheet_sha256 != json_sha256(&prior)?
+        || continuation.prior_assessments_sha256 != json_sha256(&prior.candidates)?
+    {
+        return Err(
+            "source sampling continuation does not match its completed prior round".to_string(),
+        );
+    }
+    require_unchanged_sampling_contract(&prior.policy, &policy)?;
+    let mut extended = build_source_selection(policy, frame)?;
+    for (target, completed) in extended
+        .candidates
+        .iter_mut()
+        .take(continuation.prior_prefix)
+        .zip(prior.candidates)
+    {
+        if target.candidate != completed.candidate {
+            return Err("source sampling continuation changed an inherited rank".to_string());
+        }
+        *target = completed;
+    }
+    validate_source_selection_worksheet(&extended.policy, frame, &extended)?;
+    Ok(extended)
+}
+
+pub fn prepare_source_selection_extension(
+    mut policy: SourceSamplingPolicy,
+    frame: &[u8],
+    prior: &SourceSelectionWorksheet,
+) -> Result<SourceSamplingPolicy, String> {
+    if policy.schema_version != SOURCE_SAMPLING_CONTINUATION_POLICY_SCHEMA_VERSION
+        || policy.continuation.is_some()
+    {
+        return Err(
+            "source sampling extension draft must use schema_version 2 without prefilled commitments"
+                .to_string(),
+        );
+    }
+    validate_source_selection_worksheet(&prior.policy, frame, prior)?;
+    validate_completed_assessments(prior)?;
+    require_unchanged_sampling_contract(&prior.policy, &policy)?;
+    if policy.assessment_prefix <= prior.candidates.len() {
+        return Err("source sampling extension endpoint must exceed the prior prefix".to_string());
+    }
+    policy.continuation = Some(SourceSelectionContinuation {
+        prior_prefix: prior.candidates.len(),
+        prior_policy_sha256: prior.policy_sha256.clone(),
+        prior_task_sha256: prior.task_sha256.clone(),
+        prior_worksheet_sha256: json_sha256(prior)?,
+        prior_assessments_sha256: json_sha256(&prior.candidates)?,
+    });
+    validate_policy(&policy)?;
+    Ok(policy)
+}
+
+fn build_source_selection(
+    policy: SourceSamplingPolicy,
+    frame: &[u8],
+) -> Result<SourceSelectionWorksheet, String> {
     validate_policy(&policy)?;
     let frame_sha256 = sha256(frame);
     if !frame_sha256.eq_ignore_ascii_case(&policy.frame_sha256) {
@@ -238,7 +331,7 @@ pub fn audit_source_selection(
     worksheet: SourceSelectionWorksheet,
 ) -> Result<SourceSelectionAudit, String> {
     validate_source_selection_worksheet(&policy, frame, &worksheet)?;
-    let expected = prepare_source_selection(policy, frame)?;
+    let expected = build_source_selection(policy, frame)?;
     validate_worksheet_header(&worksheet, &expected)?;
     if worksheet.candidates.len() != expected.candidates.len() {
         return Err("source selection worksheet changed the ranked candidate prefix".to_string());
@@ -297,7 +390,7 @@ pub fn validate_source_selection_worksheet(
     frame: &[u8],
     worksheet: &SourceSelectionWorksheet,
 ) -> Result<(), String> {
-    let expected = prepare_source_selection(policy.clone(), frame)?;
+    let expected = build_source_selection(policy.clone(), frame)?;
     validate_worksheet_header(worksheet, &expected)?;
     if worksheet.candidates.len() != expected.candidates.len() {
         return Err("source selection worksheet changed the ranked candidate prefix".to_string());
@@ -309,6 +402,38 @@ pub fn validate_source_selection_worksheet(
                 immutable.candidate.rank
             ));
         }
+    }
+    if let Some(continuation) = &policy.continuation {
+        let inherited = worksheet
+            .candidates
+            .get(..continuation.prior_prefix)
+            .ok_or_else(|| {
+                "source sampling continuation prefix exceeds its worksheet".to_string()
+            })?;
+        if json_sha256(&inherited)? != continuation.prior_assessments_sha256 {
+            return Err(
+                "source sampling continuation changed its inherited assessments".to_string(),
+            );
+        }
+    }
+    Ok(())
+}
+
+fn validate_completed_assessments(worksheet: &SourceSelectionWorksheet) -> Result<(), String> {
+    let mut selected_counts = worksheet
+        .policy
+        .language_quotas
+        .keys()
+        .map(|language| (language.clone(), 0_usize))
+        .collect::<BTreeMap<_, _>>();
+    let mut selected_repositories = Vec::new();
+    for assessment in &worksheet.candidates {
+        validate_assessment(
+            assessment,
+            &worksheet.policy,
+            &mut selected_counts,
+            &mut selected_repositories,
+        )?;
     }
     Ok(())
 }
@@ -954,10 +1079,43 @@ fn validate_selected_repository(repository: &SourceRepositoryDraft) -> Result<()
 }
 
 fn validate_policy(policy: &SourceSamplingPolicy) -> Result<(), String> {
-    if policy.schema_version != SOURCE_SAMPLING_POLICY_SCHEMA_VERSION {
+    if policy.schema_version != SOURCE_SAMPLING_POLICY_SCHEMA_VERSION
+        && policy.schema_version != SOURCE_SAMPLING_CONTINUATION_POLICY_SCHEMA_VERSION
+    {
         return Err(format!(
-            "source sampling policy schema_version must be {SOURCE_SAMPLING_POLICY_SCHEMA_VERSION}"
+            "source sampling policy schema_version must be {SOURCE_SAMPLING_POLICY_SCHEMA_VERSION} or {SOURCE_SAMPLING_CONTINUATION_POLICY_SCHEMA_VERSION}"
         ));
+    }
+    match (policy.schema_version, &policy.continuation) {
+        (SOURCE_SAMPLING_POLICY_SCHEMA_VERSION, None) => {}
+        (SOURCE_SAMPLING_CONTINUATION_POLICY_SCHEMA_VERSION, Some(continuation)) => {
+            if continuation.prior_prefix == 0
+                || continuation.prior_prefix >= policy.assessment_prefix
+            {
+                return Err(
+                    "source sampling continuation must extend a positive smaller prefix"
+                        .to_string(),
+                );
+            }
+            require_sha256(
+                "prior source policy SHA-256",
+                &continuation.prior_policy_sha256,
+            )?;
+            require_sha256("prior source task SHA-256", &continuation.prior_task_sha256)?;
+            require_sha256(
+                "prior source worksheet SHA-256",
+                &continuation.prior_worksheet_sha256,
+            )?;
+            require_sha256(
+                "prior source assessments SHA-256",
+                &continuation.prior_assessments_sha256,
+            )?;
+        }
+        _ => {
+            return Err(
+                "source sampling policy schema and continuation commitment disagree".to_string(),
+            );
+        }
     }
     require_text("selection_id", &policy.selection_id)?;
     require_text("selected_at", &policy.selected_at)?;
@@ -984,6 +1142,26 @@ fn validate_policy(policy: &SourceSamplingPolicy) -> Result<(), String> {
     }
     if policy.language_quotas.values().sum::<usize>() > policy.assessment_prefix {
         return Err("source sampling quotas exceed the assessment prefix".to_string());
+    }
+    Ok(())
+}
+
+fn require_unchanged_sampling_contract(
+    prior: &SourceSamplingPolicy,
+    extended: &SourceSamplingPolicy,
+) -> Result<(), String> {
+    if prior.frame_source != extended.frame_source
+        || prior.frame_revision != extended.frame_revision
+        || prior.frame_blob_sha != extended.frame_blob_sha
+        || prior.frame_sha256 != extended.frame_sha256
+        || prior.seed != extended.seed
+        || prior.minimum_methods != extended.minimum_methods
+        || prior.maximum_methods != extended.maximum_methods
+        || prior.language_quotas != extended.language_quotas
+    {
+        return Err(
+            "source sampling continuation changed the frame, seed, limits, or quotas".to_string(),
+        );
     }
     Ok(())
 }
@@ -1248,6 +1426,7 @@ pub(crate) fn test_selection_artifacts(
             .unwrap(),
         language_quotas,
         attestation: "Fixture sources were selected before fixture labels.".to_string(),
+        continuation: None,
     };
     let mut worksheet = prepare_source_selection(policy.clone(), &frame).unwrap();
     for assessment in &mut worksheet.candidates {

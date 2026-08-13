@@ -3,8 +3,9 @@ use crate::benchmark::{
     BenchmarkSourceSeal, LabelResolutionManifest, LabelReviewAudit, LabelReviewWorksheet,
     SourceSamplingPolicy, SourceSelectionAudit, SourceSelectionWorksheet, assess_source_selection,
     audit_label_reviews, audit_source_selection, build_blind_case_bundle, create_source_seal,
-    prepare_label_resolution, prepare_label_review, prepare_source_selection,
-    source_selection_draft, validate_label_review_audit, validate_source_seal,
+    extend_source_selection, prepare_label_resolution, prepare_label_review,
+    prepare_source_selection, prepare_source_selection_extension, source_selection_draft,
+    validate_label_review_audit, validate_source_seal,
 };
 use crate::benchmark_import::{BenchmarkRunReview, import_reviewed_run, prepare_run_review};
 use std::fs;
@@ -121,6 +122,57 @@ pub(crate) fn prepare_benchmark_source_selection(
     eprintln!(
         "SniffBench source-selection worksheet written to {output_path}. Ranked candidates: {}. No labels or Sniff output were used.",
         worksheet.candidates.len()
+    );
+    Ok(0)
+}
+
+pub(crate) fn extend_benchmark_source_selection(
+    policy_path: &str,
+    frame_path: &str,
+    prior_worksheet_path: &str,
+    output_path: &str,
+) -> Result<i32, Box<dyn std::error::Error>> {
+    let policy = read_json::<SourceSamplingPolicy>(policy_path)?;
+    let frame = fs::read(frame_path)?;
+    let prior = read_json::<SourceSelectionWorksheet>(prior_worksheet_path)?;
+    let inherited = prior.candidates.len();
+    let worksheet = extend_source_selection(policy, &frame, prior).map_err(|error| {
+        IoError::new(
+            ErrorKind::InvalidData,
+            format!("benchmark source selection cannot be extended: {error}"),
+        )
+    })?;
+    write_new_file(
+        Path::new(output_path),
+        &serde_json::to_vec_pretty(&worksheet)?,
+    )?;
+    eprintln!(
+        "Extended SniffBench source-selection worksheet written to {output_path}. Inherited candidates: {inherited}. New candidates: {}. No labels or Sniff output were used.",
+        worksheet.candidates.len() - inherited
+    );
+    Ok(0)
+}
+
+pub(crate) fn prepare_benchmark_source_selection_extension(
+    policy_draft_path: &str,
+    frame_path: &str,
+    prior_worksheet_path: &str,
+    output_path: &str,
+) -> Result<i32, Box<dyn std::error::Error>> {
+    let policy = read_json::<SourceSamplingPolicy>(policy_draft_path)?;
+    let frame = fs::read(frame_path)?;
+    let prior = read_json::<SourceSelectionWorksheet>(prior_worksheet_path)?;
+    let policy = prepare_source_selection_extension(policy, &frame, &prior).map_err(|error| {
+        IoError::new(
+            ErrorKind::InvalidData,
+            format!("benchmark source-selection extension cannot be prepared: {error}"),
+        )
+    })?;
+    write_new_file(Path::new(output_path), &serde_json::to_vec_pretty(&policy)?)?;
+    eprintln!(
+        "Finalized SniffBench source-selection extension policy written to {output_path}. Prior candidates: {}. Committed endpoint: {}. No new ranks were generated.",
+        prior.candidates.len(),
+        policy.assessment_prefix
     );
     Ok(0)
 }
@@ -593,6 +645,7 @@ mod tests {
                 .map(|(language, _, _)| (language.to_string(), 1))
                 .collect::<BTreeMap<_, _>>(),
             attestation: "Selected before labels and Sniff output.".to_string(),
+            continuation: None,
         };
         let policy_path = bundle.join("policy.json");
         let worksheet_path = bundle.join("selection-review.json");

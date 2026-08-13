@@ -126,11 +126,26 @@ pub(super) fn load_checkpoints(
 ) -> Result<Vec<SourceCandidateAssessment>, String> {
     remove_checkpoint_temps(checkpoint_root)?;
     let mut completed = Vec::new();
+    let inherited_prefix = worksheet
+        .policy
+        .continuation
+        .as_ref()
+        .map_or(0, |continuation| continuation.prior_prefix);
+    let mut physical_checkpoints = 0_usize;
     for candidate in &worksheet.candidates {
+        if candidate.candidate.rank <= inherited_prefix {
+            if let Some(selected) = &candidate.selected_repository {
+                let checkout = checkout_path(checkout_root, &candidate.candidate.repository)?;
+                verify_retained_checkout(&checkout, &selected.revision)?;
+            }
+            completed.push(candidate.clone());
+            continue;
+        }
         let path = checkpoint_path(checkpoint_root, candidate.candidate.rank);
         if !path.exists() {
             break;
         }
+        physical_checkpoints += 1;
         let checkpoint: SourceAssessmentCheckpoint = serde_json::from_slice(
             &fs::read(&path)
                 .map_err(|error| format!("failed to read source checkpoint: {error}"))?,
@@ -166,7 +181,7 @@ pub(super) fn load_checkpoints(
         .filter_map(Result::ok)
         .filter(|entry| entry.path().extension().and_then(|value| value.to_str()) == Some("json"))
         .count();
-    if unexpected != completed.len() {
+    if unexpected != physical_checkpoints {
         return Err(
             "source-assessment checkpoints are not one contiguous ranked prefix".to_string(),
         );
