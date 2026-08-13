@@ -29,6 +29,11 @@ mod non_blind_seal;
 
 pub use non_blind_seal::*;
 
+#[path = "benchmark_non_blind_history.rs"]
+mod non_blind_history;
+
+pub use non_blind_history::*;
+
 #[path = "benchmark_source_seal.rs"]
 mod source_seal;
 

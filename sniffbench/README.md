@@ -15,6 +15,27 @@ fixes the source populations, quotas, ranking contracts, eligibility rules,
 required research datasets, and no-fallback behavior before candidate
 collection. The final seal hashes this exact policy artifact.
 
+The historical-repository order is frozen separately in
+[`non-blind-v1-history-worksheet.json`](non-blind-v1-history-worksheet.json).
+It was generated before inspecting candidate histories and excludes every
+repository in the blind source seal before ranking. Reproduce it from the exact
+OpenSSF frame named by the policy without contacting an LLM provider:
+
+```console
+sniff benchmark prepare-non-blind-history \
+  sniffbench/non-blind-v1-selection-policy.json projects.csv \
+  sniffbench/blind-oss-v1-source-seal.json history-worksheet.json
+```
+
+The create-new output must contain 600 candidates, exclude 12 blind
+repositories, and reproduce these commitments:
+
+- Policy SHA-256: `43269a234b55ff406edf1893584418d0eefc3a79eada16764c2114fd7f88c44d`
+- Frame SHA-256: `55b1de849d6d401bd6529a2806d587b53170cfbe7cdbc2ac5799ab65bf42807a`
+- Blind source-seal SHA-256: `33bf6eaac53c3e58c6d4ff2f3ecf54321ef59b1c7f81a58f5e19790bb7b4f5a4`
+- Task SHA-256: `e78e4640072de84ff176538939cd9544cf6aa5027edd0c2941f12233123f8160`
+- Worksheet file SHA-256: `73fdbd7b9b49554a2dccb34fc1c19df0fcaa8f2b69e8b72be401cfc67f6dfe85`
+
 ```console
 sniff benchmark seal-non-blind-sources \
   non-blind-source-draft.json non-blind-source-seal.json

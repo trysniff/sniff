@@ -265,6 +265,17 @@ pub enum BenchmarkCommand {
         /// New immutable seal path; existing files are never overwritten.
         output: String,
     },
+    /// Rank the precommitted historical repository frame without inspecting commits.
+    PrepareNonBlindHistory {
+        /// Public non-blind selection policy committed before candidate inspection.
+        policy: String,
+        /// Exact pinned OpenSSF sampling-frame CSV.
+        frame: String,
+        /// Frozen blind source-seal manifest whose repositories must be excluded.
+        blind_seal: String,
+        /// New immutable history worksheet; existing files are never overwritten.
+        output: String,
+    },
     /// Verify all source seals and labels and create a SniffBench v6 corpus.
     Freeze {
         /// Draft corpus manifest; snapshot paths are relative to its directory.
@@ -472,6 +483,14 @@ pub async fn run(args: CliArgs) -> Result<i32, Box<dyn std::error::Error>> {
             BenchmarkCommand::SealNonBlindSources { draft, output } => {
                 pipeline::seal_non_blind_benchmark_sources(&draft, &output)
             }
+            BenchmarkCommand::PrepareNonBlindHistory {
+                policy,
+                frame,
+                blind_seal,
+                output,
+            } => {
+                pipeline::prepare_non_blind_benchmark_history(&policy, &frame, &blind_seal, &output)
+            }
             BenchmarkCommand::Freeze { draft, output } => {
                 pipeline::freeze_benchmark(&draft, &output)
             }
@@ -662,6 +681,35 @@ mod tests {
             Some(CliCommand::Benchmark {
                 command: BenchmarkCommand::SealNonBlindSources { draft, output }
             }) if draft == "draft.json" && output == "sealed.json"
+        ));
+    }
+
+    #[test]
+    fn parses_offline_non_blind_history_preparation() {
+        let args = CliArgs::try_parse_from([
+            "sniff",
+            "benchmark",
+            "prepare-non-blind-history",
+            "policy.json",
+            "projects.csv",
+            "blind-seal.json",
+            "history.json",
+        ])
+        .expect("non-blind history arguments");
+
+        assert!(matches!(
+            args.command,
+            Some(CliCommand::Benchmark {
+                command: BenchmarkCommand::PrepareNonBlindHistory {
+                    policy,
+                    frame,
+                    blind_seal,
+                    output
+                }
+            }) if policy == "policy.json"
+                && frame == "projects.csv"
+                && blind_seal == "blind-seal.json"
+                && output == "history.json"
         ));
     }
 

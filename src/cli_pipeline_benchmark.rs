@@ -1,6 +1,6 @@
 use crate::benchmark::{
     BenchmarkCorpus, BenchmarkSubmission, NonBlindSourceSeal, evaluate_release, freeze_corpus,
-    freeze_non_blind_source_seal,
+    freeze_non_blind_source_seal, prepare_non_blind_history,
 };
 use crate::benchmark::{
     BenchmarkSourceSeal, LabelResolutionManifest, LabelReviewAudit, LabelReviewWorksheet,
@@ -90,6 +90,34 @@ pub(crate) fn seal_non_blind_benchmark_sources(
     eprintln!(
         "Frozen non-blind SniffBench source seal written to {output_path}\nSeal commitment: {}",
         frozen.seal_sha256
+    );
+    Ok(0)
+}
+
+pub(crate) fn prepare_non_blind_benchmark_history(
+    policy_path: &str,
+    frame_path: &str,
+    blind_seal_path: &str,
+    output_path: &str,
+) -> Result<i32, Box<dyn std::error::Error>> {
+    let policy = fs::read(policy_path)?;
+    let frame = fs::read(frame_path)?;
+    let blind_seal = fs::read(blind_seal_path)?;
+    let worksheet = prepare_non_blind_history(&policy, &frame, &blind_seal).map_err(|error| {
+        IoError::new(
+            ErrorKind::InvalidData,
+            format!("non-blind history worksheet cannot be prepared: {error}"),
+        )
+    })?;
+    write_new_file(
+        Path::new(output_path),
+        &serde_json::to_vec_pretty(&worksheet)?,
+    )?;
+    eprintln!(
+        "Non-blind history worksheet written to {output_path}\nCandidates: {}\nExcluded blind repositories: {}\nTask commitment: {}",
+        worksheet.candidates.len(),
+        worksheet.excluded_blind_repositories.len(),
+        worksheet.task_sha256
     );
     Ok(0)
 }

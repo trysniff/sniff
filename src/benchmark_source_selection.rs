@@ -1147,6 +1147,37 @@ struct RankedFrame {
 }
 
 fn ranked_candidates(frame: &[u8], seed: &str, prefix: usize) -> Result<RankedFrame, String> {
+    let (repositories, eligibility) = eligible_source_frame(frame)?;
+    let mut ranked = repositories
+        .into_iter()
+        .map(|repository| RankedSourceCandidate {
+            rank: 0,
+            rank_sha256: sha256(format!("{SOURCE_RANK_CONTRACT}\n{seed}\n{repository}").as_bytes()),
+            repository,
+        })
+        .collect::<Vec<_>>();
+    if ranked.len() < prefix {
+        return Err(format!(
+            "source sampling frame has {} repositories but policy requires {prefix}",
+            ranked.len()
+        ));
+    }
+    ranked.sort_by(|left, right| {
+        (&left.rank_sha256, &left.repository).cmp(&(&right.rank_sha256, &right.repository))
+    });
+    ranked.truncate(prefix);
+    for (index, candidate) in ranked.iter_mut().enumerate() {
+        candidate.rank = index + 1;
+    }
+    Ok(RankedFrame {
+        candidates: ranked,
+        eligibility,
+    })
+}
+
+pub(super) fn eligible_source_frame(
+    frame: &[u8],
+) -> Result<(Vec<String>, FrameEligibilityAudit), String> {
     let text = std::str::from_utf8(frame)
         .map_err(|_| "source sampling frame must be UTF-8 CSV".to_string())?;
     let mut lines = text.lines();
@@ -1154,7 +1185,7 @@ fn ranked_candidates(frame: &[u8], seed: &str, prefix: usize) -> Result<RankedFr
         return Err("source sampling frame must use the OpenSSF repo,metadata header".to_string());
     }
     let mut seen = HashSet::new();
-    let mut ranked = Vec::new();
+    let mut repositories = Vec::new();
     let mut ineligible = Vec::new();
     let mut nonempty_records = 0_usize;
     for (index, line) in lines.enumerate() {
@@ -1187,24 +1218,7 @@ fn ranked_candidates(frame: &[u8], seed: &str, prefix: usize) -> Result<RankedFr
             });
             continue;
         }
-        ranked.push(RankedSourceCandidate {
-            rank: 0,
-            rank_sha256: sha256(format!("{SOURCE_RANK_CONTRACT}\n{seed}\n{repository}").as_bytes()),
-            repository,
-        });
-    }
-    if ranked.len() < prefix {
-        return Err(format!(
-            "source sampling frame has {} repositories but policy requires {prefix}",
-            ranked.len()
-        ));
-    }
-    ranked.sort_by(|left, right| {
-        (&left.rank_sha256, &left.repository).cmp(&(&right.rank_sha256, &right.repository))
-    });
-    ranked.truncate(prefix);
-    for (index, candidate) in ranked.iter_mut().enumerate() {
-        candidate.rank = index + 1;
+        repositories.push(repository);
     }
     let ineligible_records_sha256 = json_sha256(&ineligible)?;
     let eligibility = FrameEligibilityAudit {
@@ -1214,10 +1228,7 @@ fn ranked_candidates(frame: &[u8], seed: &str, prefix: usize) -> Result<RankedFr
         ineligible_records_sha256,
     };
     validate_frame_eligibility(&eligibility)?;
-    Ok(RankedFrame {
-        candidates: ranked,
-        eligibility,
-    })
+    Ok((repositories, eligibility))
 }
 
 fn validate_worksheet_header(
@@ -1282,7 +1293,7 @@ fn validate_frame_eligibility(audit: &FrameEligibilityAudit) -> Result<(), Strin
     Ok(())
 }
 
-fn normalize_repository(value: &str) -> Result<String, String> {
+pub(super) fn normalize_repository(value: &str) -> Result<String, String> {
     let normalized = value.trim();
     let normalized = normalized
         .strip_prefix("https://")
