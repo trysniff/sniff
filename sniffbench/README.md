@@ -168,7 +168,24 @@ sniff benchmark validate-frame \
   sniffbench/blind-oss-v1-kotlin-frame-1.csv
 ```
 
-The collected frame, manifest, and raw pages will be committed separately.
-Only after that immutable source commit will a Kotlin ranking seed and complete
-assessment prefix be precommitted. This prevents inspecting identities before
-choosing either the ranking or its endpoint.
+The collected frame, manifest, and raw pages were committed separately before
+the Kotlin ranking seed and complete assessment endpoint were precommitted.
+This prevents inspecting identities before choosing either the ranking or its
+endpoint.
+
+The frozen frame contains 1,291 repositories and replays to SHA-256
+`a293019c63666f7875e05d7637c02309a53971316aa5194d94430c1281d8a233`.
+Its immutable source is commit
+`cf6d6d02ab1a8efa6fc7855c69993581ca0e695a`, Git blob
+`6dda7c37a4ca4bbf32fd654bbfa0503a886c390c`.
+
+[`blind-oss-v1-kotlin-selection-1-policy.json`](blind-oss-v1-kotlin-selection-1-policy.json)
+precommits assessment of all 1,291 rows, not an operator-selected prefix. Its
+seed is derived from the frozen frame-manifest commitment and the already
+audited ten-repository base component. This guarantees that an unfilled Kotlin
+quota remains a public failure rather than triggering another endpoint choice.
+
+[`blind-oss-v1-composite-policy.json`](blind-oss-v1-composite-policy.json)
+precommits the ordered base and Kotlin components and exactly two repositories
+for each of the six supported languages. It is committed before Kotlin rank 1
+is generated or inspected.

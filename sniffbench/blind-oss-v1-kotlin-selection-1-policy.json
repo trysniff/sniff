@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "selection_id": "sniffbench-blind-oss-v1-kotlin-selection-1",
+  "selected_at": "2026-08-13T11:59:38Z",
+  "frame_source": "https://raw.githubusercontent.com/trysniff/sniff/cf6d6d02ab1a8efa6fc7855c69993581ca0e695a/sniffbench/blind-oss-v1-kotlin-frame-1.csv",
+  "frame_revision": "cf6d6d02ab1a8efa6fc7855c69993581ca0e695a",
+  "frame_blob_sha": "6dda7c37a4ca4bbf32fd654bbfa0503a886c390c",
+  "frame_sha256": "a293019c63666f7875e05d7637c02309a53971316aa5194d94430c1281d8a233",
+  "seed": "bb6ace36843924ff4786e2a08da93eaf3bacac8a9d70428eda28f02303fab35b",
+  "assessment_prefix": 1291,
+  "minimum_methods": 50,
+  "maximum_methods": 250,
+  "language_quotas": {
+    "kotlin": 2
+  },
+  "attestation": "The immutable frame commit, complete 1,291-row assessment endpoint, 50-250 production-method bounds, and two-repository Kotlin quota were committed before any candidate rank was generated or inspected. The ranking seed is SHA-256 of the exact UTF-8 string 'sniffbench-kotlin-selection-seed-v1\\n<source-frame-manifest-sha256>\\n<base-component-audit-sha256>\\n', using manifest 016b852f14c05c84505c5d640f8a71e28315e61823526995136953740b7e1c95 and base component 40b164db01f4ed80f4202048c80d63ac2158bc2b611509320ec14bc0a6a32caf. Every frame row is assessed so a failed Kotlin quota remains a published failure rather than triggering another endpoint choice. No Sniff finding, benchmark label, popularity signal, or model output participates in ranking or selection."
+}
