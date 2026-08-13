@@ -3,6 +3,8 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
+const MAX_CENSUS_SOURCE_BYTES: u64 = 1024 * 1024;
+
 pub(super) struct RepositoryCensus {
     pub(super) method_counts: BTreeMap<String, usize>,
     pub(super) observed_method_count: Option<usize>,
@@ -50,6 +52,21 @@ pub(super) fn census_repository(root: &Path) -> Result<RepositoryCensus, String>
             .map_err(|_| "source-assessment path escaped its checkout".to_string())?
             .to_string_lossy()
             .replace('\\', "/");
+        let source_bytes = fs::metadata(&canonical_path)
+            .map_err(|error| format!("failed to inspect assessed source {relative}: {error}"))?
+            .len();
+        if source_bytes > MAX_CENSUS_SOURCE_BYTES {
+            return Ok(RepositoryCensus {
+                method_counts: BTreeMap::new(),
+                observed_method_count: None,
+                dominant_language: None,
+                supported_project_shape: false,
+                source_inventory_sha256: sha256(&[]),
+                parse_failure: Some(format!(
+                    "{relative}: source is {source_bytes} bytes and exceeds the {MAX_CENSUS_SOURCE_BYTES}-byte deterministic parser limit"
+                )),
+            });
+        }
         let bytes = fs::read(&canonical_path)
             .map_err(|error| format!("failed to read assessed source {relative}: {error}"))?;
         let record = match crate::parser::parse_file_checked(&canonical_path.to_string_lossy()) {

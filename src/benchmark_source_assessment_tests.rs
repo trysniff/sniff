@@ -452,3 +452,21 @@ fn census_types_a_dirty_checkout_as_an_unsupported_project_shape() {
     );
     fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn census_rejects_an_oversized_source_before_parser_allocation() {
+    let root = temp_root("oversized-source");
+    let path = root.join("bundle.ts");
+    let file = fs::File::create(&path).unwrap();
+    file.set_len(1024 * 1024 + 1).unwrap();
+
+    let census = census_repository(&root).unwrap();
+
+    assert!(!census.supported_project_shape);
+    assert_eq!(census.observed_method_count, None);
+    assert!(census.method_counts.is_empty());
+    let failure = census.parse_failure.as_deref().unwrap();
+    assert!(failure.contains("bundle.ts"));
+    assert!(failure.contains("deterministic parser limit"));
+    fs::remove_dir_all(root).unwrap();
+}
