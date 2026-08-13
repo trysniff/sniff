@@ -1,0 +1,44 @@
+# SniffBench
+
+SniffBench is Sniff's reproducible evaluation protocol. Blind OSS source
+selection, source sealing, independent method labeling, run import, and final
+evaluation use create-new, hash-bound artifacts.
+
+## Blind OSS v1
+
+[`blind-oss-v1-policy.json`](blind-oss-v1-policy.json) was fixed before running
+the source-ranking command or inspecting ranked candidates. It pins:
+
+- The exact OpenSSF Scorecard project-list commit, Git blob, and SHA-256.
+- Commit `10afa5d22d090d7ac02e4621d89de24d0a8fd926` as the public ranking seed.
+  That commit implemented and published the selection contract before the
+  candidate list was generated, preventing seed rerolls after inspection.
+- Two repositories for each of Go, JavaScript, Kotlin, Python, Rust, and
+  TypeScript.
+- A complete 240-candidate assessment prefix.
+- A production-method range of 50 through 250 methods per selected repository.
+
+Two repositories per language prevent a language score from being determined by
+one project's conventions while keeping independent exhaustive human review
+feasible. The method range avoids both tiny examples and repositories too large
+for careful method-by-method adjudication. It targets roughly 1,200 to 2,000
+blind methods across 12 repositories.
+
+Each repository fills the quota for its dominant eligible-method language.
+Equal method counts use lexicographic language order as a deterministic
+tie-break. Every candidate in the prefix must retain one canonical structured
+fact payload and at least one raw HTTPS source payload. Hashes prove exactly
+what was assessed; external facts remain independently reviewable claims rather
+than becoming true merely because they were hashed.
+
+The 72.9 MB sampling frame is not committed to this repository. Download the
+immutable URL declared in the policy and verify its SHA-256 before preparing the
+selection worksheet:
+
+```console
+sniff benchmark prepare-selection \
+  sniffbench/blind-oss-v1-policy.json projects.csv selection-review.json
+```
+
+No Sniff finding, benchmark label, or provider/model output is used during
+source selection.

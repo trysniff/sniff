@@ -22,6 +22,7 @@ include = [
   "TRADEMARKS.md",
   "gold_fixtures/**",
   "scripts/**",
+  "sniffbench/**",
   "src/*.rs",
   "src/**/*.rs",
   "tests/**",
