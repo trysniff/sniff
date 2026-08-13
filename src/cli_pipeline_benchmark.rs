@@ -4,8 +4,8 @@ use crate::benchmark::{
     SourceSamplingPolicy, SourceSelectionAudit, SourceSelectionComponentAudit,
     SourceSelectionCompositePolicy, SourceSelectionWorksheet, assess_source_selection,
     audit_label_reviews, audit_source_selection, audit_source_selection_component,
-    build_blind_case_bundle, combine_source_selections, create_source_seal,
-    extend_source_selection, prepare_label_resolution, prepare_label_review,
+    build_blind_case_bundle, combine_source_selections, create_composite_source_seal,
+    create_source_seal, extend_source_selection, prepare_label_resolution, prepare_label_review,
     prepare_source_selection, prepare_source_selection_extension, source_selection_draft,
     validate_label_review_audit, validate_source_seal,
 };
@@ -97,6 +97,39 @@ pub(crate) fn seal_benchmark_sources(
     })?;
     eprintln!(
         "Label-free SniffBench source seal written to {output_path}\nSources: {}\nEligible methods: {}\nSeal commitment: {}",
+        seal.sources.len(),
+        seal.methods.len(),
+        seal.seal_sha256
+    );
+    Ok(0)
+}
+
+pub(crate) fn seal_composite_benchmark_sources(
+    audit_path: &str,
+    checkout_root: &str,
+    output_path: &str,
+    frame_paths: &[String],
+) -> Result<i32, Box<dyn std::error::Error>> {
+    let audit_bytes = fs::read(audit_path)?;
+    let frames = frame_paths
+        .iter()
+        .map(fs::read)
+        .collect::<Result<Vec<_>, _>>()?;
+    let seal = create_composite_source_seal(
+        &audit_bytes,
+        &frames,
+        Path::new(checkout_root),
+        Path::new(output_path),
+    )
+    .map_err(|error| {
+        IoError::new(
+            ErrorKind::InvalidData,
+            format!("composite benchmark sources cannot be sealed: {error}"),
+        )
+    })?;
+    eprintln!(
+        "Composite label-free SniffBench source seal written to {output_path}\nComponents: {}\nSources: {}\nEligible methods: {}\nSeal commitment: {}",
+        seal.selection_components.len(),
         seal.sources.len(),
         seal.methods.len(),
         seal.seal_sha256

@@ -175,6 +175,18 @@ pub enum BenchmarkCommand {
         /// New source-seal manifest; a create-new sibling source bundle is also written.
         output: String,
     },
+    /// Freeze a composite, label-free OSS source census from multiple committed frames.
+    SealCompositeSources {
+        /// Verified composite source-selection audit.
+        audit: String,
+        /// Root containing every selected checkout at OWNER/REPOSITORY.
+        checkout_root: String,
+        /// New source-seal manifest; a create-new sibling source bundle is also written.
+        output: String,
+        /// Exact pinned frame for one component; repeat in committed component order.
+        #[arg(long = "frame", required = true)]
+        frames: Vec<String>,
+    },
     /// Create a source-only worksheet for independent blind method labeling.
     PrepareLabels {
         /// Label-free source seal created before Sniff output or labels.
@@ -364,6 +376,14 @@ pub async fn run(args: CliArgs) -> Result<i32, Box<dyn std::error::Error>> {
                 checkout_root,
                 output,
             } => pipeline::seal_benchmark_sources(&audit, &frame, &checkout_root, &output),
+            BenchmarkCommand::SealCompositeSources {
+                audit,
+                checkout_root,
+                output,
+                frames,
+            } => {
+                pipeline::seal_composite_benchmark_sources(&audit, &checkout_root, &output, &frames)
+            }
             BenchmarkCommand::PrepareLabels { seal, output } => {
                 pipeline::prepare_benchmark_labels(&seal, &output)
             }
@@ -449,6 +469,34 @@ mod tests {
                 && state_directory == "selection-state"
                 && checkout_root == "checkouts"
                 && output == "selection-complete.json"
+        ));
+
+        let composite_seal = CliArgs::try_parse_from([
+            "sniff",
+            "benchmark",
+            "seal-composite-sources",
+            "selection-composite.json",
+            "checkouts",
+            "blind-source-seal.json",
+            "--frame",
+            "base.csv",
+            "--frame",
+            "kotlin.csv",
+        ])
+        .expect("benchmark composite source-seal arguments");
+        assert!(matches!(
+            composite_seal.command,
+            Some(CliCommand::Benchmark {
+                command: BenchmarkCommand::SealCompositeSources {
+                    audit,
+                    checkout_root,
+                    output,
+                    frames
+                }
+            }) if audit == "selection-composite.json"
+                && checkout_root == "checkouts"
+                && output == "blind-source-seal.json"
+                && frames == ["base.csv", "kotlin.csv"]
         ));
     }
 

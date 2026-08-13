@@ -1,4 +1,8 @@
-use super::{SourceSelectionAudit, SourceSnapshot, validate_source_selection_against_frame};
+use super::{
+    SourceSelectionAudit, SourceSelectionCompositeAudit, SourceSnapshot,
+    validate_source_selection_against_frame, validate_source_selection_component_against_frame,
+    validate_source_selection_composite_audit,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
@@ -61,6 +65,27 @@ pub struct SealedLicense {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SealedSourceSelectionComponent {
+    pub selection_id: String,
+    pub component_audit_sha256: String,
+    pub frame_artifact_path: String,
+    pub frame_sha256: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(super) struct CompositeSourceFrameManifest {
+    pub schema_version: u32,
+    pub components: Vec<CompositeSourceFrameCommitment>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(super) struct CompositeSourceFrameCommitment {
+    pub selection_id: String,
+    pub component_audit_sha256: String,
+    pub frame_sha256: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BenchmarkSourceSeal {
     pub schema_version: u32,
     pub census_contract_version: String,
@@ -73,6 +98,8 @@ pub struct BenchmarkSourceSeal {
     pub selection_audit_artifact_sha256: String,
     pub selection_frame_artifact_path: String,
     pub selection_frame_sha256: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub selection_components: Vec<SealedSourceSelectionComponent>,
     pub sources: Vec<SourceSnapshot>,
     pub context_sources: Vec<SourceSnapshot>,
     pub methods: Vec<SealedMethod>,
@@ -95,6 +122,8 @@ impl BenchmarkSourceSeal {
             selection_audit_artifact_sha256: &'a str,
             selection_frame_artifact_path: &'a str,
             selection_frame_sha256: &'a str,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            selection_components: Option<&'a [SealedSourceSelectionComponent]>,
             sources: &'a [SourceSnapshot],
             context_sources: &'a [SourceSnapshot],
             methods: &'a [SealedMethod],
@@ -112,6 +141,8 @@ impl BenchmarkSourceSeal {
             selection_audit_artifact_sha256: &self.selection_audit_artifact_sha256,
             selection_frame_artifact_path: &self.selection_frame_artifact_path,
             selection_frame_sha256: &self.selection_frame_sha256,
+            selection_components: (!self.selection_components.is_empty())
+                .then_some(self.selection_components.as_slice()),
             sources: &self.sources,
             context_sources: &self.context_sources,
             methods: &self.methods,
@@ -139,6 +170,103 @@ pub fn create_source_seal(
     {
         return Err("source-selection draft does not match its audited artifacts".to_string());
     }
+    create_prevalidated_source_seal(
+        draft,
+        PendingSelectionArtifacts {
+            audit_bytes: selection_audit_bytes,
+            frame_bytes: selection_frame_bytes,
+            frame_filename: "source-selection-frame.csv",
+            components: Vec::new(),
+        },
+        checkout_root,
+        output_path,
+    )
+}
+
+struct PendingSelectionComponent<'a> {
+    selection_id: String,
+    component_audit_sha256: String,
+    frame_sha256: String,
+    frame_bytes: &'a [u8],
+}
+
+struct PendingSelectionArtifacts<'a> {
+    audit_bytes: &'a [u8],
+    frame_bytes: &'a [u8],
+    frame_filename: &'a str,
+    components: Vec<PendingSelectionComponent<'a>>,
+}
+
+pub fn create_composite_source_seal(
+    selection_audit_bytes: &[u8],
+    selection_frames: &[Vec<u8>],
+    checkout_root: &Path,
+    output_path: &Path,
+) -> Result<BenchmarkSourceSeal, String> {
+    let audit: SourceSelectionCompositeAudit = serde_json::from_slice(selection_audit_bytes)
+        .map_err(|error| format!("failed to parse composite source-selection audit: {error}"))?;
+    validate_source_selection_composite_audit(&audit)?;
+    if selection_frames.len() != audit.components.len() {
+        return Err(
+            "composite source seal requires one ordered frame for every selection component"
+                .to_string(),
+        );
+    }
+    let mut pending = Vec::new();
+    let mut manifest = CompositeSourceFrameManifest {
+        schema_version: 1,
+        components: Vec::new(),
+    };
+    for (component, frame) in audit.components.iter().zip(selection_frames) {
+        validate_source_selection_component_against_frame(component, frame)?;
+        manifest.components.push(CompositeSourceFrameCommitment {
+            selection_id: component.policy.selection_id.clone(),
+            component_audit_sha256: component.component_audit_sha256.clone(),
+            frame_sha256: component.frame_sha256.clone(),
+        });
+        pending.push(PendingSelectionComponent {
+            selection_id: component.policy.selection_id.clone(),
+            component_audit_sha256: component.component_audit_sha256.clone(),
+            frame_sha256: component.frame_sha256.clone(),
+            frame_bytes: frame,
+        });
+    }
+    let mut frame_manifest_bytes = serde_json::to_vec_pretty(&manifest)
+        .map_err(|error| format!("failed to serialize composite frame manifest: {error}"))?;
+    frame_manifest_bytes.push(b'\n');
+    let draft = SourceSelectionDraft {
+        schema_version: SOURCE_SEAL_SCHEMA_VERSION,
+        selection_id: audit.policy.selection_id.clone(),
+        selected_at: audit.policy.selected_at.clone(),
+        selection_methodology: format!(
+            "Combined {} precommitted, independently ranked source-selection components.",
+            audit.components.len()
+        ),
+        selection_attestation: audit.policy.attestation.clone(),
+        selection_audit_sha256: audit.composite_audit_sha256.clone(),
+        selection_frame_sha256: sha256(&frame_manifest_bytes),
+        repositories: audit.selected_repositories.clone(),
+    };
+    create_prevalidated_source_seal(
+        draft,
+        PendingSelectionArtifacts {
+            audit_bytes: selection_audit_bytes,
+            frame_bytes: &frame_manifest_bytes,
+            frame_filename: "source-selection-frames.json",
+            components: pending,
+        },
+        checkout_root,
+        output_path,
+    )
+}
+
+fn create_prevalidated_source_seal(
+    draft: SourceSelectionDraft,
+    selection: PendingSelectionArtifacts<'_>,
+    checkout_root: &Path,
+    output_path: &Path,
+) -> Result<BenchmarkSourceSeal, String> {
+    validate_draft(&draft)?;
     if output_path.exists() {
         return Err(format!(
             "source-seal output already exists: {}",
@@ -167,8 +295,7 @@ pub fn create_source_seal(
     let mut manifest_created = false;
     let result = build_source_seal(
         draft,
-        selection_audit_bytes,
-        selection_frame_bytes,
+        &selection,
         checkout_root,
         output_parent,
         &artifact_directory,
@@ -205,23 +332,37 @@ pub fn create_source_seal(
 
 fn build_source_seal(
     draft: SourceSelectionDraft,
-    selection_audit_bytes: &[u8],
-    selection_frame_bytes: &[u8],
+    selection: &PendingSelectionArtifacts<'_>,
     checkout_root: &Path,
     output_parent: &Path,
     artifact_directory: &Path,
 ) -> Result<BenchmarkSourceSeal, String> {
     let selection_directory = artifact_directory.join("selection");
     let selection_audit_destination = selection_directory.join("source-selection-audit.json");
-    let selection_frame_destination = selection_directory.join("source-selection-frame.csv");
+    let selection_frame_destination = selection_directory.join(selection.frame_filename);
     write_new_artifact(
         &selection_audit_destination,
-        selection_audit_bytes,
+        selection.audit_bytes,
         "source-selection audit",
     )?;
+    let mut sealed_selection_components = Vec::new();
+    for (index, component) in selection.components.iter().enumerate() {
+        let destination = selection_directory.join(format!("component-{index}-frame.csv"));
+        write_new_artifact(
+            &destination,
+            component.frame_bytes,
+            "source-selection component frame",
+        )?;
+        sealed_selection_components.push(SealedSourceSelectionComponent {
+            selection_id: component.selection_id.clone(),
+            component_audit_sha256: component.component_audit_sha256.clone(),
+            frame_artifact_path: portable_relative(output_parent, &destination)?,
+            frame_sha256: component.frame_sha256.clone(),
+        });
+    }
     write_new_artifact(
         &selection_frame_destination,
-        selection_frame_bytes,
+        selection.frame_bytes,
         "source-selection frame",
     )?;
     let mut sources = Vec::new();
@@ -414,12 +555,13 @@ fn build_source_seal(
             output_parent,
             &selection_audit_destination,
         )?,
-        selection_audit_artifact_sha256: sha256(selection_audit_bytes),
+        selection_audit_artifact_sha256: sha256(selection.audit_bytes),
         selection_frame_artifact_path: portable_relative(
             output_parent,
             &selection_frame_destination,
         )?,
         selection_frame_sha256: draft.selection_frame_sha256,
+        selection_components: sealed_selection_components,
         sources,
         context_sources,
         methods,
@@ -996,6 +1138,7 @@ pub(crate) fn write_test_source_seal(
         selection_audit_artifact_sha256: sha256(&selection_audit_bytes),
         selection_frame_artifact_path,
         selection_frame_sha256: draft.selection_frame_sha256,
+        selection_components: Vec::new(),
         sources: sources.to_vec(),
         context_sources: Vec::new(),
         methods,

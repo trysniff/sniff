@@ -31,17 +31,22 @@ pub fn validate_source_seal(seal: &BenchmarkSourceSeal, seal_root: &Path) -> Res
     )?;
     let audit_bytes = read_artifact(seal_root, &seal.selection_audit_artifact_path)?;
     let frame_bytes = read_artifact(seal_root, &seal.selection_frame_artifact_path)?;
-    let audit: SourceSelectionAudit = serde_json::from_slice(&audit_bytes)
-        .map_err(|error| format!("failed to parse sealed source-selection audit: {error}"))?;
-    validate_source_selection_against_frame(&audit, &frame_bytes)?;
-    if audit.audit_sha256 != seal.selection_audit_sha256
-        || audit.frame_sha256 != seal.selection_frame_sha256
-        || audit.policy.selection_id != seal.selection_id
-        || audit.policy.selected_at != seal.selected_at
-        || audit.policy.attestation != seal.selection_attestation
-    {
-        return Err("source seal metadata does not match its selection audit".to_string());
-    }
+    let selected_repositories = if seal.selection_components.is_empty() {
+        let audit: SourceSelectionAudit = serde_json::from_slice(&audit_bytes)
+            .map_err(|error| format!("failed to parse sealed source-selection audit: {error}"))?;
+        validate_source_selection_against_frame(&audit, &frame_bytes)?;
+        if audit.audit_sha256 != seal.selection_audit_sha256
+            || audit.frame_sha256 != seal.selection_frame_sha256
+            || audit.policy.selection_id != seal.selection_id
+            || audit.policy.selected_at != seal.selected_at
+            || audit.policy.attestation != seal.selection_attestation
+        {
+            return Err("source seal metadata does not match its selection audit".to_string());
+        }
+        audit.selected_repositories
+    } else {
+        validate_composite_selection_artifacts(seal, seal_root, &audit_bytes, &frame_bytes)?
+    };
     if seal.schema_version != SOURCE_SEAL_SCHEMA_VERSION {
         return Err(format!(
             "source seal schema_version must be {SOURCE_SEAL_SCHEMA_VERSION}"
@@ -209,7 +214,7 @@ pub fn validate_source_seal(seal: &BenchmarkSourceSeal, seal_root: &Path) -> Res
     if repositories != license_repositories {
         return Err("source seal does not provide one license for every repository".to_string());
     }
-    validate_selection_census(&audit, seal)?;
+    validate_selection_census(&selected_repositories, seal)?;
     let expected = seal.computed_seal_sha256()?;
     if !seal.seal_sha256.eq_ignore_ascii_case(&expected) {
         return Err(format!(
@@ -217,6 +222,64 @@ pub fn validate_source_seal(seal: &BenchmarkSourceSeal, seal_root: &Path) -> Res
         ));
     }
     Ok(())
+}
+
+fn validate_composite_selection_artifacts(
+    seal: &BenchmarkSourceSeal,
+    seal_root: &Path,
+    audit_bytes: &[u8],
+    frame_manifest_bytes: &[u8],
+) -> Result<Vec<SourceRepositoryDraft>, String> {
+    let audit: SourceSelectionCompositeAudit = serde_json::from_slice(audit_bytes)
+        .map_err(|error| format!("failed to parse sealed composite selection audit: {error}"))?;
+    validate_source_selection_composite_audit(&audit)?;
+    let manifest: CompositeSourceFrameManifest = serde_json::from_slice(frame_manifest_bytes)
+        .map_err(|error| format!("failed to parse sealed composite frame manifest: {error}"))?;
+    if manifest.schema_version != 1
+        || manifest.components.len() != audit.components.len()
+        || seal.selection_components.len() != audit.components.len()
+    {
+        return Err(
+            "source seal composite frame manifest does not contain every component".to_string(),
+        );
+    }
+    for ((component, sealed), committed) in audit
+        .components
+        .iter()
+        .zip(&seal.selection_components)
+        .zip(&manifest.components)
+    {
+        if sealed.selection_id != component.policy.selection_id
+            || sealed.component_audit_sha256 != component.component_audit_sha256
+            || sealed.frame_sha256 != component.frame_sha256
+            || committed.selection_id != component.policy.selection_id
+            || committed.component_audit_sha256 != component.component_audit_sha256
+            || committed.frame_sha256 != component.frame_sha256
+        {
+            return Err(
+                "source seal composite component ledger does not match its audit".to_string(),
+            );
+        }
+        validate_artifact(
+            seal_root,
+            &sealed.frame_artifact_path,
+            &sealed.frame_sha256,
+            "source selection component frame",
+        )?;
+        let frame = read_artifact(seal_root, &sealed.frame_artifact_path)?;
+        validate_source_selection_component_against_frame(component, &frame)?;
+    }
+    if audit.composite_audit_sha256 != seal.selection_audit_sha256
+        || sha256(frame_manifest_bytes) != seal.selection_frame_sha256
+        || audit.policy.selection_id != seal.selection_id
+        || audit.policy.selected_at != seal.selected_at
+        || audit.policy.attestation != seal.selection_attestation
+    {
+        return Err(
+            "source seal metadata does not match its composite selection audit".to_string(),
+        );
+    }
+    Ok(audit.selected_repositories)
 }
 
 fn validate_source_identity(source: &SourceSnapshot, label: &str) -> Result<(), String> {
@@ -228,11 +291,10 @@ fn validate_source_identity(source: &SourceSnapshot, label: &str) -> Result<(), 
 }
 
 fn validate_selection_census(
-    audit: &SourceSelectionAudit,
+    selected_repositories: &[SourceRepositoryDraft],
     seal: &BenchmarkSourceSeal,
 ) -> Result<(), String> {
-    let selected = audit
-        .selected_repositories
+    let selected = selected_repositories
         .iter()
         .map(|repository| (repository.repository.as_str(), repository.revision.as_str()))
         .collect::<HashSet<_>>();
@@ -244,7 +306,7 @@ fn validate_selection_census(
     if selected != sealed {
         return Err("source seal repository census does not match its selection audit".to_string());
     }
-    for repository in &audit.selected_repositories {
+    for repository in selected_repositories {
         let methods = seal
             .methods
             .iter()

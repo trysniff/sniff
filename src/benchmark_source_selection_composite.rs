@@ -357,16 +357,13 @@ fn validate_composite_policy(policy: &SourceSelectionCompositePolicy) -> Result<
     require_text("composite selection_id", &policy.selection_id)?;
     require_text("composite selected_at", &policy.selected_at)?;
     require_text("composite selection attestation", &policy.attestation)?;
-    if policy.language_quotas.len() != SUPPORTED_LANGUAGES.len()
-        || SUPPORTED_LANGUAGES.iter().any(|language| {
-            policy
-                .language_quotas
-                .get(*language)
-                .is_none_or(|quota| *quota == 0)
+    if policy.language_quotas.is_empty()
+        || policy.language_quotas.iter().any(|(language, quota)| {
+            *quota == 0 || !SUPPORTED_LANGUAGES.contains(&language.as_str())
         })
     {
         return Err(
-            "composite source-selection policy requires positive quotas for all supported languages"
+            "composite source-selection policy requires positive supported-language quotas"
                 .to_string(),
         );
     }

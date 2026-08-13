@@ -2,8 +2,8 @@ use super::super::source_selection::test_selection_artifacts;
 #[cfg(unix)]
 use super::validate_artifact;
 use super::{
-    SourceRepositoryDraft, copy_committed_file, create_source_seal, dominant_method_language,
-    validate_source_seal,
+    SourceRepositoryDraft, copy_committed_file, create_composite_source_seal, create_source_seal,
+    dominant_method_language, validate_source_seal,
 };
 use std::fs;
 use std::process::Command;
@@ -56,6 +56,55 @@ fn selection(root: &std::path::Path) -> (super::SourceSelectionDraft, Vec<u8>, V
     }])
 }
 
+fn composite_selection(repositories: Vec<SourceRepositoryDraft>) -> (Vec<u8>, Vec<Vec<u8>>) {
+    let mut components = Vec::new();
+    let mut frames = Vec::new();
+    for repository in repositories {
+        let (_, audit, frame) =
+            super::super::source_selection::test_selection_artifacts(vec![repository]);
+        let strict: super::super::SourceSelectionAudit = serde_json::from_slice(&audit).unwrap();
+        let mut policy = strict.policy;
+        policy.selection_id = format!("test-component-{}", components.len() + 1);
+        let mut worksheet = super::super::prepare_source_selection(policy.clone(), &frame).unwrap();
+        worksheet.candidates = strict.assessments;
+        let component =
+            super::super::audit_source_selection_component(policy, &frame, worksheet).unwrap();
+        components.push(component);
+        frames.push(frame);
+    }
+    let language_quotas = components
+        .iter()
+        .flat_map(|component| component.selected_counts.iter())
+        .fold(
+            std::collections::BTreeMap::new(),
+            |mut counts, (language, count)| {
+                *counts.entry(language.clone()).or_insert(0) += count;
+                counts
+            },
+        );
+    let policy = super::super::SourceSelectionCompositePolicy {
+        schema_version: super::super::SOURCE_SELECTION_COMPOSITE_POLICY_SCHEMA_VERSION,
+        selection_id: "test-composite-selection".to_string(),
+        selected_at: "2026-08-14T00:00:00Z".to_string(),
+        language_quotas,
+        components: components
+            .iter()
+            .map(
+                |component| super::super::SourceSelectionComponentCommitment {
+                    selection_id: component.policy.selection_id.clone(),
+                    policy_sha256: component.policy_sha256.clone(),
+                    frame_sha256: component.frame_sha256.clone(),
+                },
+            )
+            .collect(),
+        attestation: "Fixture components were committed before sealing.".to_string(),
+    };
+    let audit = super::super::combine_source_selections(policy, components).unwrap();
+    let mut bytes = serde_json::to_vec_pretty(&audit).unwrap();
+    bytes.push(b'\n');
+    (bytes, frames)
+}
+
 #[test]
 fn source_seal_copies_a_clean_revision_and_derives_its_method_census() {
     let repository = repository();
@@ -71,6 +120,96 @@ fn source_seal_copies_a_clean_revision_and_derives_its_method_census() {
     assert_eq!(seal.methods[0].name, "selected");
     assert!(output.is_file());
     assert!(bundle.path().join("seal.sources").is_dir());
+}
+
+#[test]
+fn composite_source_seal_embeds_and_revalidates_every_component_frame() {
+    let repository = repository();
+    let repository_path = repository_path(&repository);
+    let revision = git(&repository_path, &["rev-parse", "HEAD"]);
+    let second_path = repository.path().join("example/second");
+    fs::create_dir_all(second_path.join("src")).unwrap();
+    fs::write(
+        second_path.join("src/lib.py"),
+        "def selected():\n    return 1\n",
+    )
+    .unwrap();
+    fs::write(second_path.join("LICENSE"), "test license\n").unwrap();
+    git(&second_path, &["init"]);
+    git(&second_path, &["config", "user.email", "seal@example.test"]);
+    git(&second_path, &["config", "user.name", "Seal Test"]);
+    git(&second_path, &["add", "."]);
+    git(&second_path, &["commit", "-m", "fixture"]);
+    let second_revision = git(&second_path, &["rev-parse", "HEAD"]);
+    let (audit, frames) = composite_selection(vec![
+        SourceRepositoryDraft {
+            repository: "https://github.com/example/selected".to_string(),
+            revision,
+            license_path: "LICENSE".to_string(),
+            selection_language: "rust".to_string(),
+            observed_method_count: 1,
+            context_paths: Vec::new(),
+        },
+        SourceRepositoryDraft {
+            repository: "https://github.com/example/second".to_string(),
+            revision: second_revision,
+            license_path: "LICENSE".to_string(),
+            selection_language: "python".to_string(),
+            observed_method_count: 1,
+            context_paths: Vec::new(),
+        },
+    ]);
+    let bundle = tempfile::tempdir().unwrap();
+    let output = bundle.path().join("seal.json");
+
+    let seal = create_composite_source_seal(&audit, &frames, repository.path(), &output).unwrap();
+
+    assert_eq!(seal.selection_components.len(), 2);
+    assert_eq!(seal.methods.len(), 2);
+    validate_source_seal(&seal, bundle.path()).unwrap();
+    let frame = bundle
+        .path()
+        .join(&seal.selection_components[1].frame_artifact_path);
+    fs::write(frame, b"tampered\n").unwrap();
+    let error = validate_source_seal(&seal, bundle.path()).unwrap_err();
+    assert!(error.contains("component frame hash mismatch"));
+}
+
+#[test]
+fn composite_source_seal_rejects_reordered_frames() {
+    let repository = repository();
+    let repository_path = repository_path(&repository);
+    let revision = git(&repository_path, &["rev-parse", "HEAD"]);
+    let (audit, mut frames) = composite_selection(vec![
+        SourceRepositoryDraft {
+            repository: "https://github.com/example/selected".to_string(),
+            revision: revision.clone(),
+            license_path: "LICENSE".to_string(),
+            selection_language: "rust".to_string(),
+            observed_method_count: 1,
+            context_paths: Vec::new(),
+        },
+        SourceRepositoryDraft {
+            repository: "https://github.com/example/selected-two".to_string(),
+            revision,
+            license_path: "LICENSE".to_string(),
+            selection_language: "python".to_string(),
+            observed_method_count: 1,
+            context_paths: Vec::new(),
+        },
+    ]);
+    frames.swap(0, 1);
+    let bundle = tempfile::tempdir().unwrap();
+
+    let error = create_composite_source_seal(
+        &audit,
+        &frames,
+        repository.path(),
+        &bundle.path().join("seal.json"),
+    )
+    .unwrap_err();
+
+    assert!(error.contains("component frame hash mismatch"));
 }
 
 #[test]
