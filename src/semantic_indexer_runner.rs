@@ -1149,7 +1149,19 @@ fn configure_windows_runtime_images(
     runtime_root: &Path,
 ) -> Result<(), String> {
     collect_windows_runtime_images(repository_root, executable_paths, runtime_root)?;
-    virtualized_paths.push(runtime_root.to_path_buf());
+    let virtualization_root = runtime_root.parent().ok_or_else(|| {
+        format!(
+            "Windows Java runtime root has no parent directory: {}",
+            runtime_root.display()
+        )
+    })?;
+    if runtime_root.file_name().is_none() {
+        return Err(format!(
+            "Windows Java runtime cannot be mounted at a drive root: {}",
+            runtime_root.display()
+        ));
+    }
+    virtualized_paths.push(virtualization_root.to_path_buf());
     Ok(())
 }
 

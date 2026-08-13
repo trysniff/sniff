@@ -369,8 +369,12 @@ fn validate_spec(spec: &SandboxCommand) -> Result<(), SandboxError> {
                 )));
             }
             let covered = spec.persistent_read_only_paths.iter().any(|allowed| {
-                std::fs::canonicalize(allowed)
-                    .is_ok_and(|allowed| canonical_path.starts_with(allowed))
+                std::fs::canonicalize(allowed).is_ok_and(|allowed| {
+                    canonical_path.starts_with(&allowed)
+                        || allowed
+                            .parent()
+                            .is_some_and(|parent| parent == canonical_path)
+                })
             });
             if !covered {
                 return Err(SandboxError::Invalid(format!(
@@ -1143,6 +1147,39 @@ mod tests {
         let toolchain = tempfile::tempdir().unwrap();
         let mut command = spec(repository.path().to_path_buf());
         command.windows_virtualized_paths = vec![toolchain.path().to_path_buf()];
+
+        let error = validate_spec(&command).unwrap_err();
+
+        assert!(
+            matches!(error, SandboxError::Invalid(message) if message.contains("persistent read-only grant"))
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn accepts_only_the_direct_namespace_parent_of_a_persistent_grant() {
+        let repository = tempfile::tempdir().unwrap();
+        let namespace = tempfile::tempdir().unwrap();
+        let runtime = namespace.path().join("jdk");
+        std::fs::create_dir(&runtime).unwrap();
+        let mut command = spec(repository.path().to_path_buf());
+        command.persistent_read_only_paths = vec![runtime];
+        command.windows_virtualized_paths = vec![namespace.path().to_path_buf()];
+
+        validate_spec(&command).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn rejects_a_broad_namespace_ancestor_of_a_persistent_grant() {
+        let repository = tempfile::tempdir().unwrap();
+        let namespace = tempfile::tempdir().unwrap();
+        let toolchain = namespace.path().join("toolchain");
+        let runtime = toolchain.join("jdk");
+        std::fs::create_dir_all(&runtime).unwrap();
+        let mut command = spec(repository.path().to_path_buf());
+        command.persistent_read_only_paths = vec![runtime];
+        command.windows_virtualized_paths = vec![namespace.path().to_path_buf()];
 
         let error = validate_spec(&command).unwrap_err();
 

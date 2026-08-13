@@ -11,9 +11,19 @@ const HOST_SECRET_VALUE: &str = "sniff-host-secret-evidence";
 const JAVA_REAL_PATH_PROBE: &str = r#"
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.AccessDeniedException;
 
 public final class SniffRealPathProbe {
     public static void main(String[] args) throws Exception {
+        System.out.println("java-home=" + System.getProperty("java.home"));
+        if (args.length > 1) {
+            try {
+                Files.readString(Path.of(args[1]));
+                throw new IllegalStateException("undeclared sibling was readable");
+            } catch (AccessDeniedException expected) {
+                System.out.println("sibling-denied");
+            }
+        }
         Path root = Path.of(args[0]);
         Path temporary = root.resolve(".tmp/download.jar");
         Path artifact = root.resolve("cache/group/artifact.jar");
@@ -243,6 +253,8 @@ fn windows_java_can_resolve_a_moved_sandbox_artifact() {
     let repository = tempfile::tempdir().expect("create Java path-probe repository");
     let toolchain = tempfile::tempdir().expect("create external Java path-probe toolchain");
     let (java, java_runtime) = compile_java_real_path_probe(repository.path(), toolchain.path());
+    let sibling_secret = toolchain.path().join("undeclared-secret.txt");
+    std::fs::write(&sibling_secret, "must remain private").unwrap();
     let mut spec = command(
         repository.path(),
         &java,
@@ -251,11 +263,15 @@ fn windows_java_can_resolve_a_moved_sandbox_artifact() {
             repository.path().to_string_lossy().into_owned(),
             "SniffRealPathProbe".to_string(),
             repository.path().to_string_lossy().into_owned(),
+            sibling_secret.to_string_lossy().into_owned(),
         ],
     );
     spec.persistent_read_only_paths.push(java_runtime.clone());
     spec.executable_paths = windows_runtime_images(&java_runtime);
-    spec.windows_virtualized_paths = vec![repository.path().to_path_buf(), java_runtime];
+    spec.windows_virtualized_paths = vec![
+        repository.path().to_path_buf(),
+        toolchain.path().to_path_buf(),
+    ];
 
     let output = run(&spec).expect("Java path probe sandbox should start");
 
@@ -266,7 +282,18 @@ fn windows_java_can_resolve_a_moved_sandbox_artifact() {
         output.stdout,
         output.stderr
     );
-    let resolved = output.stdout.trim();
+    assert!(output.stdout.contains("sibling-denied"));
+    let java_home = output
+        .stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("java-home="))
+        .expect("Java path probe should report java.home");
+    assert_eq!(
+        Path::new(java_home).file_name(),
+        Some(std::ffi::OsStr::new("java-runtime")),
+        "Java runtime must retain a named home below the mapped drive: {java_home}"
+    );
+    let resolved = output.stdout.lines().last().unwrap_or_default();
     assert!(resolved.ends_with(r"cache\group\artifact.jar"));
     let mapped_root = resolved
         .get(..3)
@@ -298,7 +325,10 @@ fn windows_mapped_external_child_can_start() {
     );
     spec.persistent_read_only_paths.push(java_runtime.clone());
     spec.executable_paths = windows_runtime_images(&java_runtime);
-    spec.windows_virtualized_paths = vec![repository.path().to_path_buf(), java_runtime];
+    spec.windows_virtualized_paths = vec![
+        repository.path().to_path_buf(),
+        toolchain.path().to_path_buf(),
+    ];
 
     let output = run(&spec).expect("nested Java path probe sandbox should start");
 
@@ -310,6 +340,8 @@ fn windows_mapped_external_child_can_start() {
         output.stderr
     );
     assert!(output.stdout.contains(r"cache\group\artifact.jar"));
+    assert!(output.stdout.contains(r"java-home="));
+    assert!(output.stdout.contains(r"\java-runtime"));
     assert!(output.stdout.contains("child-status=0"));
 }
 

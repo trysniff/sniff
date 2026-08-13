@@ -670,5 +670,5 @@ fn windows_runtime_execution_allowlist_contains_verified_executables_and_librari
     let mut expected = vec![compiler, linker, library];
     expected.sort();
     assert_eq!(executable_paths, expected);
-    assert_eq!(virtualized_paths, vec![runtime]);
+    assert_eq!(virtualized_paths, vec![temp.path().to_path_buf()]);
 }
