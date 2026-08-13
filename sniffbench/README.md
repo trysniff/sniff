@@ -36,6 +36,15 @@ repositories, and reproduce these commitments:
 - Task SHA-256: `e78e4640072de84ff176538939cd9544cf6aa5027edd0c2941f12233123f8160`
 - Worksheet file SHA-256: `73fdbd7b9b49554a2dccb34fc1c19df0fcaa8f2b69e8b72be401cfc67f6dfe85`
 
+[`non-blind-v1-history-assessment-protocol.json`](non-blind-v1-history-assessment-protocol.json)
+freezes how those 600 repositories are assessed before any candidate history
+is inspected. It fixes the default-branch snapshot, one-parent commit filter,
+commit ranking, single-attempt rule, method and language census, simplification
+floor, declared test-recipe order, sandbox execution, quota application, typed
+exclusions, checkpoint completeness, and label separation. A failed ranked
+commit closes its repository; it never causes SniffBench to choose a more
+convenient commit.
+
 ```console
 sniff benchmark seal-non-blind-sources \
   non-blind-source-draft.json non-blind-source-seal.json
