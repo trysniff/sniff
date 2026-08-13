@@ -174,6 +174,7 @@ pub struct HistoricalRepositoryFacts {
     pub quota_language: Option<String>,
     pub source_non_whitespace_lines_before: Option<usize>,
     pub source_non_whitespace_lines_after: Option<usize>,
+    pub production_paths: Vec<HistoricalProductionPathDelta>,
     pub license_path: Option<String>,
     pub test_recipe: Option<Vec<String>>,
     pub parent_test: Option<HistoricalTestResult>,
@@ -259,6 +260,7 @@ pub struct HistoricalSelectedProvenance {
     pub upstream_record_id: String,
     pub before: Vec<SourceSnapshot>,
     pub after: Vec<SourceSnapshot>,
+    pub removed_after_paths: Vec<String>,
     pub license: ProvenanceArtifact,
     pub behavioral_evidence: Vec<ProvenanceArtifact>,
 }

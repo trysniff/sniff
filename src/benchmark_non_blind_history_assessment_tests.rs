@@ -1,8 +1,8 @@
 use super::*;
 use crate::benchmark::{
     AffectedHistoricalMethod, HistoricalChangedPath, HistoricalEvidenceKind,
-    HistoricalRevisionSide, HistoricalTestOutcome, HistoricalTestResult, ProvenanceArtifact,
-    SourceSnapshot,
+    HistoricalProductionPathDelta, HistoricalRevisionSide, HistoricalTestOutcome,
+    HistoricalTestResult, ProvenanceArtifact, SourceSnapshot,
 };
 
 const POLICY: &[u8] = include_bytes!("../sniffbench/non-blind-v1-selection-policy.json");
@@ -154,6 +154,32 @@ fn quota_filled_is_derived_only_after_two_earlier_selections() {
     );
 }
 
+#[test]
+fn selected_provenance_can_prove_a_fully_deleted_production_file() {
+    let mut assessment = prepare_non_blind_history_assessment(POLICY, WORKSHEET, PROTOCOL).unwrap();
+    let mut entry = selected(assessment.assessments[0].clone());
+    let facts = entry.facts.as_mut().unwrap();
+    facts.source_non_whitespace_lines_after = Some(0);
+    facts.production_paths[0].commit_sha256 = None;
+    facts.production_paths[0].commit_non_whitespace_lines = 0;
+    let provenance = entry.selected_provenance.as_mut().unwrap();
+    provenance.after.clear();
+    provenance.removed_after_paths = vec!["src/main.rs".to_string()];
+    entry
+        .evidence
+        .retain(|evidence| evidence.kind != HistoricalEvidenceKind::CommitTest);
+    entry.evidence.push(HistoricalAssessmentEvidence {
+        kind: HistoricalEvidenceKind::CommitTest,
+        source: "fixture:commit-test".to_string(),
+        observed_at: "fixture".to_string(),
+        artifact_path: "evidence/deleted-commit-test.json".to_string(),
+        sha256: "f".repeat(64),
+    });
+    assessment.assessments[0] = entry;
+
+    validate_non_blind_history_assessment(POLICY, WORKSHEET, PROTOCOL, &assessment).unwrap();
+}
+
 fn commit(commit: &str, subject: &str, parents: &[&str]) -> HistoricalCommitMetadata {
     HistoricalCommitMetadata {
         commit_sha: commit.repeat(40),
@@ -185,6 +211,7 @@ fn excluded(mut assessment: HistoricalRepositoryAssessment) -> HistoricalReposit
         quota_language: None,
         source_non_whitespace_lines_before: None,
         source_non_whitespace_lines_after: None,
+        production_paths: Vec::new(),
         license_path: None,
         test_recipe: None,
         parent_test: None,
@@ -216,6 +243,8 @@ fn selected(mut assessment: HistoricalRepositoryAssessment) -> HistoricalReposit
     let command = vec!["cargo".to_string(), "test".to_string()];
     let parent_test = test_result(&ranked.parent_sha, &command);
     let commit_test = test_result(&ranked.commit_sha, &command);
+    let parent_test_sha256 = parent_test.raw_result_sha256.clone();
+    let commit_test_sha256 = commit_test.raw_result_sha256.clone();
     assessment.facts = Some(HistoricalRepositoryFacts {
         repository: repository.clone(),
         accessible: true,
@@ -241,6 +270,14 @@ fn selected(mut assessment: HistoricalRepositoryAssessment) -> HistoricalReposit
         quota_language: Some("rust".to_string()),
         source_non_whitespace_lines_before: Some(10),
         source_non_whitespace_lines_after: Some(9),
+        production_paths: vec![HistoricalProductionPathDelta {
+            previous_path: None,
+            path: "src/main.rs".to_string(),
+            parent_sha256: Some("4".repeat(64)),
+            commit_sha256: Some("5".repeat(64)),
+            parent_non_whitespace_lines: 10,
+            commit_non_whitespace_lines: 9,
+        }],
         license_path: Some("LICENSE".to_string()),
         test_recipe: Some(command.clone()),
         parent_test: Some(parent_test),
@@ -296,6 +333,7 @@ fn selected(mut assessment: HistoricalRepositoryAssessment) -> HistoricalReposit
             ),
             sha256: "5".repeat(64),
         }],
+        removed_after_paths: Vec::new(),
         license: ProvenanceArtifact {
             artifact_path: format!("sources/rank-{:04}/LICENSE", assessment.candidate.rank),
             sha256: "6".repeat(64),
@@ -304,12 +342,12 @@ fn selected(mut assessment: HistoricalRepositoryAssessment) -> HistoricalReposit
         behavioral_evidence: vec![
             ProvenanceArtifact {
                 artifact_path: format!("tests/rank-{:04}/parent.json", assessment.candidate.rank),
-                sha256: "7".repeat(64),
+                sha256: parent_test_sha256,
                 description: "Parent test result".to_string(),
             },
             ProvenanceArtifact {
                 artifact_path: format!("tests/rank-{:04}/commit.json", assessment.candidate.rank),
-                sha256: "8".repeat(64),
+                sha256: commit_test_sha256,
                 description: "Commit test result".to_string(),
             },
         ],

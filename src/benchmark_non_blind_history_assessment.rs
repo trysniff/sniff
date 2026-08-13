@@ -543,6 +543,7 @@ fn validate_facts(
     } else if !facts.parent_method_counts.is_empty() {
         return Err("historical assessment claimed language counts without a total".to_string());
     }
+    validate_production_paths(facts)?;
     if let Some(language) = &facts.quota_language
         && !policy.supported_languages.contains(language)
     {
@@ -817,7 +818,6 @@ fn validate_selected_provenance(
         || provenance.upstream_revision != commit.commit_sha
         || provenance.upstream_record_id != commit.commit_sha
         || provenance.before.is_empty()
-        || provenance.after.is_empty()
         || provenance.behavioral_evidence.len() < 2
     {
         return Err("selected historical provenance is incomplete or inconsistent".to_string());
@@ -830,9 +830,86 @@ fn validate_selected_provenance(
     for snapshot in &provenance.after {
         validate_provenance_snapshot(snapshot, &repository, &commit.commit_sha, &mut after_paths)?;
     }
+    let expected_before = facts
+        .production_paths
+        .iter()
+        .filter_map(|path| {
+            path.parent_sha256.as_ref().map(|sha256| {
+                (
+                    path.previous_path.as_deref().unwrap_or(&path.path),
+                    sha256.as_str(),
+                )
+            })
+        })
+        .collect::<BTreeMap<_, _>>();
+    let expected_after = facts
+        .production_paths
+        .iter()
+        .filter_map(|path| {
+            path.commit_sha256
+                .as_ref()
+                .map(|sha256| (path.path.as_str(), sha256.as_str()))
+        })
+        .collect::<BTreeMap<_, _>>();
+    let actual_before = provenance
+        .before
+        .iter()
+        .map(|snapshot| (snapshot.repository_path.as_str(), snapshot.sha256.as_str()))
+        .collect::<BTreeMap<_, _>>();
+    let actual_after = provenance
+        .after
+        .iter()
+        .map(|snapshot| (snapshot.repository_path.as_str(), snapshot.sha256.as_str()))
+        .collect::<BTreeMap<_, _>>();
+    let removed_after_paths = provenance
+        .removed_after_paths
+        .iter()
+        .map(String::as_str)
+        .collect::<HashSet<_>>();
+    let expected_removed = facts
+        .production_paths
+        .iter()
+        .filter(|path| path.commit_sha256.is_none())
+        .map(|path| path.path.as_str())
+        .collect::<HashSet<_>>();
+    if provenance
+        .removed_after_paths
+        .iter()
+        .any(|path| !safe_relative(path))
+        || removed_after_paths.len() != provenance.removed_after_paths.len()
+        || before_paths.len() != expected_before.len()
+        || after_paths.len() != expected_after.len()
+        || actual_before != expected_before
+        || actual_after != expected_after
+        || removed_after_paths != expected_removed
+    {
+        return Err(
+            "selected historical source snapshots do not match the production delta".to_string(),
+        );
+    }
     validate_provenance_artifact(&provenance.license)?;
     for artifact in &provenance.behavioral_evidence {
         validate_provenance_artifact(artifact)?;
+    }
+    let behavioral_hashes = provenance
+        .behavioral_evidence
+        .iter()
+        .map(|artifact| artifact.sha256.as_str())
+        .collect::<HashSet<_>>();
+    let parent_result = facts
+        .parent_test
+        .as_ref()
+        .ok_or_else(|| "selected historical provenance lacks parent test evidence".to_string())?;
+    let commit_result = facts
+        .commit_test
+        .as_ref()
+        .ok_or_else(|| "selected historical provenance lacks commit test evidence".to_string())?;
+    if !behavioral_hashes.contains(parent_result.raw_result_sha256.as_str())
+        || !behavioral_hashes.contains(commit_result.raw_result_sha256.as_str())
+    {
+        return Err(
+            "selected historical behavioral artifacts do not match test results".to_string(),
+        );
     }
     Ok(())
 }
@@ -917,6 +994,53 @@ fn validate_changed_paths(paths: &[super::HistoricalChangedPath]) -> Result<(), 
             return Err("historical commit changed paths must be unique and sorted".to_string());
         }
         previous = Some(current);
+    }
+    Ok(())
+}
+
+fn validate_production_paths(facts: &HistoricalRepositoryFacts) -> Result<(), String> {
+    let mut previous = None;
+    let mut before = 0_usize;
+    let mut after = 0_usize;
+    for path in &facts.production_paths {
+        let key = (path.previous_path.as_deref(), path.path.as_str());
+        if !safe_relative(&path.path)
+            || path
+                .previous_path
+                .as_deref()
+                .is_some_and(|value| !safe_relative(value))
+            || path
+                .parent_sha256
+                .as_deref()
+                .is_some_and(|value| !is_sha256(value))
+            || path
+                .commit_sha256
+                .as_deref()
+                .is_some_and(|value| !is_sha256(value))
+            || (path.parent_sha256.is_none() && path.commit_sha256.is_none())
+            || previous.is_some_and(|value| value >= key)
+        {
+            return Err("historical production-path delta is invalid".to_string());
+        }
+        before = before
+            .checked_add(path.parent_non_whitespace_lines)
+            .ok_or_else(|| "historical parent source-line census overflowed".to_string())?;
+        after = after
+            .checked_add(path.commit_non_whitespace_lines)
+            .ok_or_else(|| "historical commit source-line census overflowed".to_string())?;
+        previous = Some(key);
+    }
+    if facts.qualifying_production_change == Some(true) && facts.production_paths.is_empty() {
+        return Err("historical qualifying source change lacks production paths".to_string());
+    }
+    if facts
+        .source_non_whitespace_lines_before
+        .is_some_and(|value| value != before)
+        || facts
+            .source_non_whitespace_lines_after
+            .is_some_and(|value| value != after)
+    {
+        return Err("historical production-path lines do not match source totals".to_string());
     }
     Ok(())
 }

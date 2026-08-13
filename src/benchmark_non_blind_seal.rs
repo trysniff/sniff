@@ -36,6 +36,8 @@ pub struct NonBlindSourceEntry {
     pub selection_rationale: String,
     pub before: Vec<SourceSnapshot>,
     pub after: Vec<SourceSnapshot>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub removed_after_paths: Vec<String>,
     pub license: ProvenanceArtifact,
     pub behavioral_evidence: Vec<ProvenanceArtifact>,
 }
@@ -194,9 +196,42 @@ fn validate_entry(entry: &NonBlindSourceEntry, root: &Path) -> Result<(), String
             entry.provenance_id
         ));
     }
-    if entry.partition != BenchmarkPartition::IntentionalBoundary && entry.after.is_empty() {
+    if entry.partition != BenchmarkPartition::IntentionalBoundary
+        && entry.after.is_empty()
+        && entry.removed_after_paths.is_empty()
+    {
         return Err(format!(
-            "non-blind simplification entry {} requires after source",
+            "non-blind simplification entry {} requires after source or explicit removals",
+            entry.provenance_id
+        ));
+    }
+    if entry.partition == BenchmarkPartition::IntentionalBoundary
+        && !entry.removed_after_paths.is_empty()
+    {
+        return Err(format!(
+            "intentional-boundary entry {} cannot claim removed after paths",
+            entry.provenance_id
+        ));
+    }
+    let after_paths = entry
+        .after
+        .iter()
+        .map(|snapshot| snapshot.repository_path.as_str())
+        .collect::<HashSet<_>>();
+    let removed_paths = entry
+        .removed_after_paths
+        .iter()
+        .map(String::as_str)
+        .collect::<HashSet<_>>();
+    if removed_paths.len() != entry.removed_after_paths.len()
+        || entry
+            .removed_after_paths
+            .iter()
+            .any(|path| require_safe_path(path).is_err())
+        || !after_paths.is_disjoint(&removed_paths)
+    {
+        return Err(format!(
+            "non-blind entry {} has invalid removed after paths",
             entry.provenance_id
         ));
     }
@@ -376,6 +411,7 @@ pub(crate) fn write_test_non_blind_source_seal(
             selection_rationale: "Deterministic test fixture".to_string(),
             before: case.before.clone(),
             after,
+            removed_after_paths: Vec::new(),
             license: license.clone(),
             behavioral_evidence: vec![evidence.clone()],
         });
@@ -489,6 +525,7 @@ mod tests {
                             "fedcba9876543210fedcba9876543210fedcba98",
                         )]
                     },
+                    removed_after_paths: Vec::new(),
                     license: license.clone(),
                     behavioral_evidence: vec![evidence.clone()],
                 })
