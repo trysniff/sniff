@@ -17,11 +17,17 @@ struct SourceAssessmentCheckpoint {
     assessment: SourceCandidateAssessment,
 }
 
+pub(super) enum CloneOutcome {
+    CheckedOut { revision: String },
+    Empty,
+    UnsupportedCheckout { revision: String, reason: String },
+}
+
 pub(super) fn clone_repository(
     repository: &str,
     destination: &Path,
     work_root: &Path,
-) -> Result<(), String> {
+) -> Result<CloneOutcome, String> {
     clone_repository_url(
         &format!("https://{repository}.git"),
         repository,
@@ -35,7 +41,7 @@ fn clone_repository_url(
     repository: &str,
     destination: &Path,
     work_root: &Path,
-) -> Result<(), String> {
+) -> Result<CloneOutcome, String> {
     require_disk_headroom(work_root)?;
     let mut last_error = String::new();
     for attempt in 0..3_u32 {
@@ -45,6 +51,7 @@ fn clone_repository_url(
                 "-c",
                 "core.autocrlf=false",
                 "clone",
+                "--no-checkout",
                 "--depth",
                 "1",
                 "--no-tags",
@@ -55,7 +62,26 @@ fn clone_repository_url(
             .output()
             .map_err(|error| format!("source assessment requires git: {error}"))?;
         if output.status.success() {
-            return Ok(());
+            let Some(revision) = git_optional(destination, &["rev-parse", "--verify", "HEAD"])?
+            else {
+                return Ok(CloneOutcome::Empty);
+            };
+            let revision = revision.trim().to_ascii_lowercase();
+            let checkout = Command::new("git")
+                .arg("-c")
+                .arg("core.autocrlf=false")
+                .arg("-C")
+                .arg(destination)
+                .args(["checkout", "--force", "HEAD"])
+                .output()
+                .map_err(|error| format!("source assessment requires git: {error}"))?;
+            if checkout.status.success() {
+                return Ok(CloneOutcome::CheckedOut { revision });
+            }
+            return Ok(CloneOutcome::UnsupportedCheckout {
+                revision,
+                reason: bounded(&String::from_utf8_lossy(&checkout.stderr), 1024),
+            });
         }
         last_error = bounded(&String::from_utf8_lossy(&output.stderr), 1024);
         if attempt < 2 {
@@ -71,7 +97,7 @@ pub(super) fn clone_repository_fixture(
     source: &Path,
     destination: &Path,
     work_root: &Path,
-) -> Result<(), String> {
+) -> Result<CloneOutcome, String> {
     clone_repository_url(
         &source.to_string_lossy(),
         "fixture repository",

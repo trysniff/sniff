@@ -409,12 +409,17 @@ fn assessment_clone_preserves_committed_line_endings() {
     run_git(&origin, &["add", "."]);
     run_git(&origin, &["commit", "-m", "fixture"]);
 
-    assessment_state::clone_repository_fixture(
+    let outcome = assessment_state::clone_repository_fixture(
         &origin,
         &destination,
         destination.parent().unwrap(),
     )
     .unwrap();
+
+    let CloneOutcome::CheckedOut { revision } = outcome else {
+        panic!("fixture repository should check out cleanly");
+    };
+    assert_eq!(revision, run_git(&origin, &["rev-parse", "HEAD"]));
 
     assert_eq!(
         fs::read(destination.join("script.sh")).unwrap(),

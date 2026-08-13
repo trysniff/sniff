@@ -21,7 +21,7 @@ mod assessment_transport;
 
 use assessment_census::{census_repository, license_path};
 use assessment_state::{
-    checkout_path, clone_repository, git_optional, load_checkpoints, remove_generated_worktree,
+    CloneOutcome, checkout_path, clone_repository, load_checkpoints, remove_generated_worktree,
     write_checkpoint,
 };
 use assessment_transport::github_metadata;
@@ -171,11 +171,9 @@ async fn assess_candidate(
             selected_checkout.display()
         ));
     }
-    clone_repository(repository, &worktree, runtime.work_root)?;
+    let clone = clone_repository(repository, &worktree, runtime.work_root)?;
     let checkout = worktree.clone();
-    let revision = git_optional(&checkout, &["rev-parse", "--verify", "HEAD"])?
-        .map(|value| value.trim().to_ascii_lowercase());
-    if revision.is_none() {
+    if matches!(clone, CloneOutcome::Empty) {
         let facts = SourceAssessmentFacts {
             repository: repository.to_string(),
             selection_quota_language: "unsupported".to_string(),
@@ -225,7 +223,60 @@ async fn assess_candidate(
         write_checkpoint(runtime.checkpoint_root, runtime.task_sha256, &assessment)?;
         return Ok(assessment);
     }
-    let revision = revision.expect("empty repository returned above");
+    let revision = match clone {
+        CloneOutcome::CheckedOut { revision } => revision,
+        CloneOutcome::UnsupportedCheckout { revision, reason } => {
+            let facts = SourceAssessmentFacts {
+                repository: repository.to_string(),
+                selection_quota_language: "unresolved".to_string(),
+                observed_method_count: None,
+                assessed_revision: Some(revision.clone()),
+                method_counts: BTreeMap::new(),
+                method_census_contract: Some(SOURCE_ASSESSMENT_CENSUS_CONTRACT.to_string()),
+                repository_empty: false,
+                accessible: true,
+                archived: Some(metadata.archived),
+                fork: Some(metadata.fork),
+                license_path: None,
+                supported_project_shape: Some(false),
+            };
+            let census_payload = serde_json::to_string(&CensusEvidence {
+                census_contract: SOURCE_ASSESSMENT_CENSUS_CONTRACT,
+                revision: Some(revision),
+                method_counts: BTreeMap::new(),
+                observed_method_count: None,
+                supported_project_shape: false,
+                license_path: None,
+                source_inventory_sha256: sha256(&[]),
+                parse_failure: Some(format!("checkout cannot be materialized: {reason}")),
+            })
+            .map_err(|error| format!("failed to serialize checkout evidence: {error}"))?;
+            let assessment = complete_source_candidate_assessment(
+                candidate.candidate.clone(),
+                facts,
+                observed_at,
+                vec![
+                    SourceAssessmentSupportingEvidence {
+                        kind: SourceAssessmentEvidenceKind::RawSource,
+                        source: api_url,
+                        payload: metadata_payload,
+                    },
+                    SourceAssessmentSupportingEvidence {
+                        kind: SourceAssessmentEvidenceKind::DerivedCensus,
+                        source: SOURCE_ASSESSMENT_CENSUS_CONTRACT.to_string(),
+                        payload: census_payload,
+                    },
+                ],
+                Vec::new(),
+                runtime.policy,
+                selected_counts,
+            )?;
+            remove_generated_worktree(&worktree, runtime.work_root)?;
+            write_checkpoint(runtime.checkpoint_root, runtime.task_sha256, &assessment)?;
+            return Ok(assessment);
+        }
+        CloneOutcome::Empty => unreachable!("empty repository returned above"),
+    };
     let license_path = license_path(&checkout)?;
     let census = census_repository(&checkout)?;
     let facts = SourceAssessmentFacts {
