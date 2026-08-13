@@ -1929,6 +1929,7 @@ dependencies = [
  "oxc_syntax",
  "proc-macro2",
  "protobuf",
+ "regex",
  "reqwest",
  "rustpython-ast",
  "rustpython-parser",

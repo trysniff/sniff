@@ -1,6 +1,6 @@
 use crate::benchmark::{
     BenchmarkCorpus, BenchmarkSubmission, NonBlindSourceSeal, evaluate_release, freeze_corpus,
-    freeze_non_blind_source_seal, prepare_non_blind_history,
+    freeze_non_blind_source_seal, prepare_non_blind_history, prepare_non_blind_history_assessment,
 };
 use crate::benchmark::{
     BenchmarkSourceSeal, LabelResolutionManifest, LabelReviewAudit, LabelReviewWorksheet,
@@ -118,6 +118,35 @@ pub(crate) fn prepare_non_blind_benchmark_history(
         worksheet.candidates.len(),
         worksheet.excluded_blind_repositories.len(),
         worksheet.task_sha256
+    );
+    Ok(0)
+}
+
+pub(crate) fn prepare_non_blind_benchmark_history_assessment(
+    policy_path: &str,
+    worksheet_path: &str,
+    protocol_path: &str,
+    output_path: &str,
+) -> Result<i32, Box<dyn std::error::Error>> {
+    let policy = fs::read(policy_path)?;
+    let worksheet = fs::read(worksheet_path)?;
+    let protocol = fs::read(protocol_path)?;
+    let assessment =
+        prepare_non_blind_history_assessment(&policy, &worksheet, &protocol).map_err(|error| {
+            IoError::new(
+                ErrorKind::InvalidData,
+                format!("non-blind history assessment cannot be prepared: {error}"),
+            )
+        })?;
+    write_new_file(
+        Path::new(output_path),
+        &serde_json::to_vec_pretty(&assessment)?,
+    )?;
+    eprintln!(
+        "Non-blind history assessment written to {output_path}\nRepositories: {}\nLanguage quotas: {}\nTask commitment: {}",
+        assessment.assessments.len(),
+        assessment.quota_target.len(),
+        assessment.task_sha256
     );
     Ok(0)
 }

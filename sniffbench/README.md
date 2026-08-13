@@ -45,6 +45,24 @@ exclusions, checkpoint completeness, and label separation. A failed ranked
 commit closes its repository; it never causes SniffBench to choose a more
 convenient commit.
 
+Create the blank task-bound assessment ledger offline. This validates and hashes
+the policy, worksheet, and protocol; it does not contact GitHub or an LLM
+provider:
+
+```console
+sniff benchmark prepare-non-blind-history-assessment \
+  sniffbench/non-blind-v1-selection-policy.json \
+  sniffbench/non-blind-v1-history-worksheet.json \
+  sniffbench/non-blind-v1-history-assessment-protocol.json \
+  history-assessment.json
+```
+
+The blank ledger contains 600 repositories and six fixed language quotas. Its
+task commitment is
+`1b304d2a606498d9c2746d9622cf3b51568a9d825a63601c5bb78be11cfa4553`;
+the pretty-printed file SHA-256 is
+`fb5bc4f65f72cf4fb86fabde3520ea19427dfe7f8a7ddb1085fe00b83e48ec39`.
+
 ```console
 sniff benchmark seal-non-blind-sources \
   non-blind-source-draft.json non-blind-source-seal.json

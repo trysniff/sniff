@@ -6,8 +6,8 @@ use std::collections::{BTreeSet, HashSet};
 use std::path::{Component, Path};
 
 pub const NON_BLIND_HISTORY_WORKSHEET_SCHEMA_VERSION: u32 = 1;
-const HISTORY_RANK_CONTRACT: &str = "sniffbench-non-blind-history-v1";
-const COMMIT_RANK_CONTRACT: &str = "sniffbench-non-blind-commit-v1";
+pub(super) const HISTORY_RANK_CONTRACT: &str = "sniffbench-non-blind-history-v1";
+pub(super) const COMMIT_RANK_CONTRACT: &str = "sniffbench-non-blind-commit-v1";
 const EXPECTED_SUBJECT_REGEX: &str = "(?i)\\b(simplif(?:y|ied|ication)|cleanup|clean up|refactor|remove(?:d|s|ing)? (?:dead|duplicate|duplicated|redundant|unnecessary)|deduplicat(?:e|ed|ion))\\b";
 const REQUIRED_LANGUAGES: [&str; 6] =
     ["go", "javascript", "kotlin", "python", "rust", "typescript"];
@@ -198,7 +198,7 @@ pub fn validate_non_blind_history_worksheet(
     Ok(())
 }
 
-fn validate_policy(policy: &NonBlindSelectionPolicy) -> Result<(), String> {
+pub(super) fn validate_policy(policy: &NonBlindSelectionPolicy) -> Result<(), String> {
     if policy.schema_version != 1
         || policy.policy_id != "sniffbench-non-blind-v1"
         || !policy.no_fallbacks

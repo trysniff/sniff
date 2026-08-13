@@ -1,1 +1,2 @@
 *.patch text eol=lf
+sniffbench/*.json text eol=lf
