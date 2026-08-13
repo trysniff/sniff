@@ -4,7 +4,7 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashSet};
 
 pub const SOURCE_SAMPLING_POLICY_SCHEMA_VERSION: u32 = 1;
-pub const SOURCE_SELECTION_AUDIT_SCHEMA_VERSION: u32 = 3;
+pub const SOURCE_SELECTION_AUDIT_SCHEMA_VERSION: u32 = 4;
 pub const SOURCE_ASSESSMENT_CENSUS_CONTRACT: &str = "sniffbench-source-census-v1";
 const SOURCE_RANK_CONTRACT: &str = "sniffbench-source-rank-v1";
 const SUPPORTED_LANGUAGES: [&str; 6] =
@@ -87,6 +87,7 @@ pub struct SourceAssessmentFacts {
     pub assessed_revision: Option<String>,
     pub method_counts: BTreeMap<String, usize>,
     pub method_census_contract: Option<String>,
+    pub repository_empty: bool,
     pub accessible: bool,
     pub archived: Option<bool>,
     pub fork: Option<bool>,
@@ -99,6 +100,7 @@ pub struct SourceAssessmentFacts {
 pub enum SourceAssessmentEvidenceKind {
     StructuredFacts,
     RawSource,
+    DerivedCensus,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -108,6 +110,13 @@ pub struct SourceAssessmentEvidence {
     pub observed_at: String,
     pub payload: String,
     pub payload_sha256: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceAssessmentSupportingEvidence {
+    pub kind: SourceAssessmentEvidenceKind,
+    pub source: String,
+    pub payload: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -228,6 +237,7 @@ pub fn audit_source_selection(
     frame: &[u8],
     worksheet: SourceSelectionWorksheet,
 ) -> Result<SourceSelectionAudit, String> {
+    validate_source_selection_worksheet(&policy, frame, &worksheet)?;
     let expected = prepare_source_selection(policy, frame)?;
     validate_worksheet_header(&worksheet, &expected)?;
     if worksheet.candidates.len() != expected.candidates.len() {
@@ -280,6 +290,170 @@ pub fn audit_source_selection(
     };
     audit.audit_sha256 = audit.computed_audit_sha256()?;
     Ok(audit)
+}
+
+pub fn validate_source_selection_worksheet(
+    policy: &SourceSamplingPolicy,
+    frame: &[u8],
+    worksheet: &SourceSelectionWorksheet,
+) -> Result<(), String> {
+    let expected = prepare_source_selection(policy.clone(), frame)?;
+    validate_worksheet_header(worksheet, &expected)?;
+    if worksheet.candidates.len() != expected.candidates.len() {
+        return Err("source selection worksheet changed the ranked candidate prefix".to_string());
+    }
+    for (actual, immutable) in worksheet.candidates.iter().zip(&expected.candidates) {
+        if actual.candidate != immutable.candidate {
+            return Err(format!(
+                "source selection changed ranked candidate {}",
+                immutable.candidate.rank
+            ));
+        }
+    }
+    Ok(())
+}
+
+pub fn selected_counts_for_assessment_prefix(
+    policy: &SourceSamplingPolicy,
+    assessments: &[SourceCandidateAssessment],
+) -> Result<BTreeMap<String, usize>, String> {
+    validate_policy(policy)?;
+    let mut selected_counts = policy
+        .language_quotas
+        .keys()
+        .map(|language| (language.clone(), 0_usize))
+        .collect::<BTreeMap<_, _>>();
+    let mut selected_repositories = Vec::new();
+    for assessment in assessments {
+        validate_assessment(
+            assessment,
+            policy,
+            &mut selected_counts,
+            &mut selected_repositories,
+        )?;
+    }
+    Ok(selected_counts)
+}
+
+pub fn complete_source_candidate_assessment(
+    candidate: RankedSourceCandidate,
+    facts: SourceAssessmentFacts,
+    observed_at: String,
+    supporting_evidence: Vec<SourceAssessmentSupportingEvidence>,
+    context_paths: Vec<String>,
+    policy: &SourceSamplingPolicy,
+    selected_counts: &mut BTreeMap<String, usize>,
+) -> Result<SourceCandidateAssessment, String> {
+    if candidate.repository != facts.repository {
+        return Err("source assessment facts do not match their ranked candidate".to_string());
+    }
+    let language = facts.selection_quota_language.clone();
+    let method_count = facts.observed_method_count;
+    let exclusion_reason = deterministic_exclusion(&facts, policy, selected_counts)?;
+    let selected_repository = if exclusion_reason.is_none() {
+        Some(SourceRepositoryDraft {
+            repository: format!("https://{}", candidate.repository),
+            revision: facts
+                .assessed_revision
+                .clone()
+                .ok_or_else(|| "selected source requires an assessed revision".to_string())?,
+            license_path: facts
+                .license_path
+                .clone()
+                .ok_or_else(|| "selected source requires a license path".to_string())?,
+            selection_language: language.clone(),
+            observed_method_count: method_count
+                .ok_or_else(|| "selected source requires a method count".to_string())?,
+            context_paths,
+        })
+    } else {
+        None
+    };
+    let facts_payload = serde_json::to_string(&facts)
+        .map_err(|error| format!("failed to serialize source assessment facts: {error}"))?;
+    let mut evidence = vec![SourceAssessmentEvidence {
+        kind: SourceAssessmentEvidenceKind::StructuredFacts,
+        source: "derived:source-assessment-facts-v2".to_string(),
+        observed_at: observed_at.clone(),
+        payload_sha256: sha256(facts_payload.as_bytes()),
+        payload: facts_payload,
+    }];
+    evidence.extend(
+        supporting_evidence
+            .into_iter()
+            .map(|supporting| SourceAssessmentEvidence {
+                kind: supporting.kind,
+                source: supporting.source,
+                observed_at: observed_at.clone(),
+                payload_sha256: sha256(supporting.payload.as_bytes()),
+                payload: supporting.payload,
+            }),
+    );
+    let mut assessment = SourceCandidateAssessment {
+        candidate,
+        selection_quota_language: language,
+        observed_method_count: method_count,
+        facts: Some(facts),
+        evidence,
+        disposition: Some(if exclusion_reason.is_some() {
+            SourceSelectionDisposition::Excluded
+        } else {
+            SourceSelectionDisposition::Selected
+        }),
+        exclusion_reason,
+        selected_repository,
+    };
+    let mut selected_repositories = Vec::new();
+    validate_assessment(
+        &assessment,
+        policy,
+        selected_counts,
+        &mut selected_repositories,
+    )?;
+    assessment.selection_quota_language = assessment
+        .selection_quota_language
+        .trim()
+        .to_ascii_lowercase();
+    Ok(assessment)
+}
+
+fn deterministic_exclusion(
+    facts: &SourceAssessmentFacts,
+    policy: &SourceSamplingPolicy,
+    selected_counts: &BTreeMap<String, usize>,
+) -> Result<Option<SourceExclusionReason>, String> {
+    validate_assessment_census(facts)?;
+    let language = facts.selection_quota_language.as_str();
+    let reason = if !facts.accessible {
+        Some(SourceExclusionReason::Inaccessible)
+    } else if facts.supported_project_shape == Some(false) {
+        Some(SourceExclusionReason::UnsupportedProjectShape)
+    } else if facts.archived == Some(true) {
+        Some(SourceExclusionReason::Archived)
+    } else if facts.fork == Some(true) {
+        Some(SourceExclusionReason::Fork)
+    } else if facts.observed_method_count == Some(0) {
+        Some(SourceExclusionReason::NoSupportedMethods)
+    } else if facts.license_path.is_none() {
+        Some(SourceExclusionReason::MissingLicense)
+    } else if !selected_counts.contains_key(language) {
+        Some(SourceExclusionReason::UnsupportedLanguage)
+    } else if facts
+        .observed_method_count
+        .is_some_and(|count| count < policy.minimum_methods)
+    {
+        Some(SourceExclusionReason::BelowMethodFloor)
+    } else if facts
+        .observed_method_count
+        .is_some_and(|count| count > policy.maximum_methods)
+    {
+        Some(SourceExclusionReason::AboveMethodCeiling)
+    } else if selected_counts[language] >= policy.language_quotas[language] {
+        Some(SourceExclusionReason::QuotaFilled)
+    } else {
+        None
+    };
+    Ok(reason)
 }
 
 pub fn validate_source_selection_audit(audit: &SourceSelectionAudit) -> Result<(), String> {
@@ -552,11 +726,25 @@ fn validate_assessment_census(facts: &SourceAssessmentFacts) -> Result<(), Strin
             || facts.observed_method_count.is_some()
             || !facts.method_counts.is_empty()
             || facts.method_census_contract.is_some()
+            || facts.repository_empty
             || facts.selection_quota_language != "unavailable"
         {
             return Err(
                 "inaccessible source assessment cannot claim a repository census".to_string(),
             );
+        }
+        return Ok(());
+    }
+
+    if facts.repository_empty {
+        if facts.assessed_revision.is_some()
+            || facts.observed_method_count != Some(0)
+            || !facts.method_counts.is_empty()
+            || facts.method_census_contract.as_deref() != Some(SOURCE_ASSESSMENT_CENSUS_CONTRACT)
+            || facts.selection_quota_language != "unsupported"
+            || facts.supported_project_shape != Some(true)
+        {
+            return Err("empty source repository has contradictory census facts".to_string());
         }
         return Ok(());
     }
@@ -672,6 +860,7 @@ fn validate_assessment_evidence(assessment: &SourceCandidateAssessment) -> Resul
     let mut identities = HashSet::new();
     let mut structured_facts = 0_usize;
     let mut raw_sources = 0_usize;
+    let mut derived_census = 0_usize;
     for evidence in &assessment.evidence {
         require_text("source assessment evidence source", &evidence.source)?;
         require_text(
@@ -687,6 +876,13 @@ fn validate_assessment_evidence(assessment: &SourceCandidateAssessment) -> Resul
             }
             SourceAssessmentEvidenceKind::RawSource if !evidence.source.starts_with("https://") => {
                 return Err("raw-source evidence must identify an HTTPS source".to_string());
+            }
+            SourceAssessmentEvidenceKind::DerivedCensus
+                if evidence.source != SOURCE_ASSESSMENT_CENSUS_CONTRACT =>
+            {
+                return Err(
+                    "derived census evidence must use its canonical contract ID".to_string()
+                );
             }
             _ => {}
         }
@@ -723,11 +919,18 @@ fn validate_assessment_evidence(assessment: &SourceCandidateAssessment) -> Resul
                 }
             }
             SourceAssessmentEvidenceKind::RawSource => raw_sources += 1,
+            SourceAssessmentEvidenceKind::DerivedCensus => derived_census += 1,
         }
     }
-    if structured_facts != 1 || raw_sources == 0 {
+    let required_census = usize::from(
+        assessment
+            .facts
+            .as_ref()
+            .is_some_and(|facts| facts.accessible),
+    );
+    if structured_facts != 1 || raw_sources == 0 || derived_census != required_census {
         return Err(format!(
-            "ranked candidate {} requires exactly one structured-fact payload and at least one raw-source payload",
+            "ranked candidate {} requires exactly one structured-fact payload, at least one raw-source payload, and an exact accessible-source census",
             assessment.candidate.repository
         ));
     }
@@ -1067,6 +1270,7 @@ pub(crate) fn test_selection_artifacts(
                 repository.observed_method_count,
             )]),
             method_census_contract: Some(SOURCE_ASSESSMENT_CENSUS_CONTRACT.to_string()),
+            repository_empty: false,
             accessible: true,
             archived: Some(false),
             fork: Some(false),
@@ -1077,6 +1281,10 @@ pub(crate) fn test_selection_artifacts(
         assessment.facts = Some(facts);
         let raw_payload = format!(
             "synthetic metadata for {} at {}",
+            repository.repository, repository.revision
+        );
+        let census_payload = format!(
+            "synthetic census for {} at {}",
             repository.repository, repository.revision
         );
         assessment.evidence = vec![
@@ -1093,6 +1301,13 @@ pub(crate) fn test_selection_artifacts(
                 observed_at: "2026-08-12T00:00:00Z".to_string(),
                 payload_sha256: sha256(raw_payload.as_bytes()),
                 payload: raw_payload,
+            },
+            SourceAssessmentEvidence {
+                kind: SourceAssessmentEvidenceKind::DerivedCensus,
+                source: SOURCE_ASSESSMENT_CENSUS_CONTRACT.to_string(),
+                observed_at: "2026-08-12T00:00:00Z".to_string(),
+                payload_sha256: sha256(census_payload.as_bytes()),
+                payload: census_payload,
             },
         ];
         assessment.disposition = Some(SourceSelectionDisposition::Selected);

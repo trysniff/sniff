@@ -1,10 +1,10 @@
 use crate::benchmark::{BenchmarkCorpus, BenchmarkSubmission, evaluate_release, freeze_corpus};
 use crate::benchmark::{
     BenchmarkSourceSeal, LabelResolutionManifest, LabelReviewAudit, LabelReviewWorksheet,
-    SourceSamplingPolicy, SourceSelectionAudit, SourceSelectionWorksheet, audit_label_reviews,
-    audit_source_selection, build_blind_case_bundle, create_source_seal, prepare_label_resolution,
-    prepare_label_review, prepare_source_selection, source_selection_draft,
-    validate_label_review_audit, validate_source_seal,
+    SourceSamplingPolicy, SourceSelectionAudit, SourceSelectionWorksheet, assess_source_selection,
+    audit_label_reviews, audit_source_selection, build_blind_case_bundle, create_source_seal,
+    prepare_label_resolution, prepare_label_review, prepare_source_selection,
+    source_selection_draft, validate_label_review_audit, validate_source_seal,
 };
 use crate::benchmark_import::{BenchmarkRunReview, import_reviewed_run, prepare_run_review};
 use std::fs;
@@ -121,6 +121,46 @@ pub(crate) fn prepare_benchmark_source_selection(
     eprintln!(
         "SniffBench source-selection worksheet written to {output_path}. Ranked candidates: {}. No labels or Sniff output were used.",
         worksheet.candidates.len()
+    );
+    Ok(0)
+}
+
+pub(crate) async fn assess_benchmark_source_selection(
+    policy_path: &str,
+    frame_path: &str,
+    worksheet_path: &str,
+    state_directory: &str,
+    checkout_root: &str,
+    output_path: &str,
+) -> Result<i32, Box<dyn std::error::Error>> {
+    let policy = read_json::<SourceSamplingPolicy>(policy_path)?;
+    let frame = fs::read(frame_path)?;
+    let worksheet = read_json::<SourceSelectionWorksheet>(worksheet_path)?;
+    let token = std::env::var("GH_TOKEN")
+        .ok()
+        .or_else(|| std::env::var("GITHUB_TOKEN").ok());
+    let completed = assess_source_selection(
+        policy,
+        &frame,
+        worksheet,
+        Path::new(state_directory),
+        Path::new(checkout_root),
+        token.as_deref(),
+    )
+    .await
+    .map_err(|error| {
+        IoError::new(
+            ErrorKind::InvalidData,
+            format!("benchmark source selection cannot be assessed: {error}"),
+        )
+    })?;
+    write_new_file(
+        Path::new(output_path),
+        &serde_json::to_vec_pretty(&completed)?,
+    )?;
+    eprintln!(
+        "Completed SniffBench source assessment written to {output_path}. Assessed candidates: {}.",
+        completed.candidates.len()
     );
     Ok(0)
 }
@@ -586,6 +626,7 @@ mod tests {
                 method_census_contract: Some(
                     crate::benchmark::SOURCE_ASSESSMENT_CENSUS_CONTRACT.to_string(),
                 ),
+                repository_empty: false,
                 accessible: true,
                 archived: Some(false),
                 fork: Some(false),
@@ -595,6 +636,7 @@ mod tests {
             let payload = serde_json::to_string(&facts).unwrap();
             candidate.facts = Some(facts);
             let raw_payload = format!("raw metadata for {}", candidate.candidate.repository);
+            let census_payload = format!("census for {}", candidate.candidate.repository);
             candidate.evidence = vec![
                 SourceAssessmentEvidence {
                     kind: SourceAssessmentEvidenceKind::StructuredFacts,
@@ -609,6 +651,13 @@ mod tests {
                     observed_at: "2026-08-12T00:00:00Z".to_string(),
                     payload_sha256: format!("{:x}", Sha256::digest(raw_payload.as_bytes())),
                     payload: raw_payload,
+                },
+                SourceAssessmentEvidence {
+                    kind: SourceAssessmentEvidenceKind::DerivedCensus,
+                    source: crate::benchmark::SOURCE_ASSESSMENT_CENSUS_CONTRACT.to_string(),
+                    observed_at: "2026-08-12T00:00:00Z".to_string(),
+                    payload_sha256: format!("{:x}", Sha256::digest(census_payload.as_bytes())),
+                    payload: census_payload,
                 },
             ];
             candidate.disposition = Some(SourceSelectionDisposition::Selected);

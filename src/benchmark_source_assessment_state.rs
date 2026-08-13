@@ -1,0 +1,269 @@
+use super::{SourceCandidateAssessment, SourceSelectionWorksheet};
+use serde::{Deserialize, Serialize};
+use std::fs;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::time::Duration;
+
+const SOURCE_ASSESSMENT_STATE_SCHEMA_VERSION: u32 = 1;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SourceAssessmentCheckpoint {
+    schema_version: u32,
+    task_sha256: String,
+    assessment: SourceCandidateAssessment,
+}
+
+pub(super) fn clone_repository(
+    repository: &str,
+    destination: &Path,
+    work_root: &Path,
+) -> Result<(), String> {
+    let mut last_error = String::new();
+    for attempt in 0..3_u32 {
+        remove_generated_worktree(destination, work_root)?;
+        let output = Command::new("git")
+            .args([
+                "clone",
+                "--depth",
+                "1",
+                "--no-tags",
+                "--single-branch",
+                &format!("https://{repository}.git"),
+            ])
+            .arg(destination)
+            .output()
+            .map_err(|error| format!("source assessment requires git: {error}"))?;
+        if output.status.success() {
+            return Ok(());
+        }
+        last_error = bounded(&String::from_utf8_lossy(&output.stderr), 1024);
+        if attempt < 2 {
+            std::thread::sleep(Duration::from_secs(1_u64 << attempt));
+        }
+    }
+    remove_generated_worktree(destination, work_root)?;
+    Err(format!("git clone failed for {repository}: {last_error}"))
+}
+
+pub(super) fn checkout_path(root: &Path, repository: &str) -> Result<PathBuf, String> {
+    let slug = repository
+        .strip_prefix("github.com/")
+        .ok_or_else(|| "source-assessment repository is not canonical".to_string())?;
+    let mut parts = slug.split('/');
+    let owner = parts
+        .next()
+        .ok_or_else(|| "repository owner is missing".to_string())?;
+    let name = parts
+        .next()
+        .ok_or_else(|| "repository name is missing".to_string())?;
+    if parts.next().is_some() {
+        return Err("source-assessment repository has an invalid path".to_string());
+    }
+    Ok(root.join(owner).join(name))
+}
+
+pub(super) fn load_checkpoints(
+    worksheet: &SourceSelectionWorksheet,
+    checkpoint_root: &Path,
+    work_root: &Path,
+    checkout_root: &Path,
+) -> Result<Vec<SourceCandidateAssessment>, String> {
+    remove_checkpoint_temps(checkpoint_root)?;
+    let mut completed = Vec::new();
+    for candidate in &worksheet.candidates {
+        let path = checkpoint_path(checkpoint_root, candidate.candidate.rank);
+        if !path.exists() {
+            break;
+        }
+        let checkpoint: SourceAssessmentCheckpoint = serde_json::from_slice(
+            &fs::read(&path)
+                .map_err(|error| format!("failed to read source checkpoint: {error}"))?,
+        )
+        .map_err(|error| format!("invalid source checkpoint {}: {error}", path.display()))?;
+        if checkpoint.schema_version != SOURCE_ASSESSMENT_STATE_SCHEMA_VERSION
+            || checkpoint.task_sha256 != worksheet.task_sha256
+            || checkpoint.assessment.candidate != candidate.candidate
+        {
+            return Err(format!(
+                "source checkpoint changed immutable rank {}",
+                candidate.candidate.rank
+            ));
+        }
+        if let Some(selected) = &checkpoint.assessment.selected_repository {
+            let checkout = checkout_path(checkout_root, &candidate.candidate.repository)?;
+            let worktree = work_root.join(format!("rank-{:04}", candidate.candidate.rank));
+            if !checkout.exists() && worktree.is_dir() {
+                verify_retained_checkout(&worktree, &selected.revision)?;
+                if let Some(parent) = checkout.parent() {
+                    fs::create_dir_all(parent)
+                        .map_err(|error| format!("failed to recover checkout parent: {error}"))?;
+                }
+                fs::rename(&worktree, &checkout)
+                    .map_err(|error| format!("failed to recover selected checkout: {error}"))?;
+            }
+            verify_retained_checkout(&checkout, &selected.revision)?;
+        }
+        completed.push(checkpoint.assessment);
+    }
+    let unexpected = fs::read_dir(checkpoint_root)
+        .map_err(|error| format!("failed to inspect source checkpoints: {error}"))?
+        .filter_map(Result::ok)
+        .filter(|entry| entry.path().extension().and_then(|value| value.to_str()) == Some("json"))
+        .count();
+    if unexpected != completed.len() {
+        return Err(
+            "source-assessment checkpoints are not one contiguous ranked prefix".to_string(),
+        );
+    }
+    Ok(completed)
+}
+
+pub(super) fn write_checkpoint(
+    root: &Path,
+    task_sha256: &str,
+    assessment: &SourceCandidateAssessment,
+) -> Result<(), String> {
+    let checkpoint = SourceAssessmentCheckpoint {
+        schema_version: SOURCE_ASSESSMENT_STATE_SCHEMA_VERSION,
+        task_sha256: task_sha256.to_string(),
+        assessment: assessment.clone(),
+    };
+    let bytes = serde_json::to_vec_pretty(&checkpoint)
+        .map_err(|error| format!("failed to serialize source checkpoint: {error}"))?;
+    let path = checkpoint_path(root, assessment.candidate.rank);
+    if path.exists() {
+        return Err(format!(
+            "source checkpoint already exists: {}",
+            path.display()
+        ));
+    }
+    let temporary = root.join(format!(
+        "rank-{:04}.json.tmp-{}",
+        assessment.candidate.rank,
+        std::process::id()
+    ));
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temporary)
+        .map_err(|error| {
+            format!(
+                "failed to create temporary source checkpoint {}: {error}",
+                temporary.display()
+            )
+        })?;
+    file.write_all(&bytes)
+        .and_then(|_| file.write_all(b"\n"))
+        .and_then(|_| file.sync_all())
+        .map_err(|error| format!("failed to persist source checkpoint: {error}"))?;
+    drop(file);
+    fs::rename(&temporary, &path)
+        .map_err(|error| format!("failed to publish source checkpoint: {error}"))
+}
+
+pub(super) fn remove_generated_worktree(path: &Path, root: &Path) -> Result<(), String> {
+    if !path.exists() {
+        return Ok(());
+    }
+    let parent = path
+        .parent()
+        .ok_or_else(|| "source-assessment worktree has no parent".to_string())?;
+    if parent != root
+        || !path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with("rank-"))
+    {
+        return Err(format!(
+            "refusing to remove unexpected source-assessment path: {}",
+            path.display()
+        ));
+    }
+    fs::remove_dir_all(path)
+        .map_err(|error| format!("failed to remove generated source worktree: {error}"))
+}
+
+pub(super) fn git(root: &Path, args: &[&str]) -> Result<String, String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(args)
+        .output()
+        .map_err(|error| format!("source assessment requires git: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "git {} failed for {}: {}",
+            args.join(" "),
+            root.display(),
+            bounded(&String::from_utf8_lossy(&output.stderr), 1024)
+        ));
+    }
+    String::from_utf8(output.stdout).map_err(|_| "git output is not UTF-8".to_string())
+}
+
+pub(super) fn git_optional(root: &Path, args: &[&str]) -> Result<Option<String>, String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(args)
+        .output()
+        .map_err(|error| format!("source assessment requires git: {error}"))?;
+    if output.status.success() {
+        String::from_utf8(output.stdout)
+            .map(Some)
+            .map_err(|_| "git output is not UTF-8".to_string())
+    } else {
+        Ok(None)
+    }
+}
+
+fn verify_retained_checkout(root: &Path, revision: &str) -> Result<(), String> {
+    let promisor = git_optional(
+        root,
+        &["config", "--get-regexp", "^remote\\..*\\.promisor$"],
+    )?
+    .unwrap_or_default();
+    if !root.is_dir()
+        || !git(root, &["rev-parse", "HEAD"])?
+            .trim()
+            .eq_ignore_ascii_case(revision)
+        || !git(root, &["status", "--porcelain=v1", "--untracked-files=all"])?
+            .trim()
+            .is_empty()
+        || !promisor.trim().is_empty()
+    {
+        return Err(format!(
+            "selected checkout is missing, partial, dirty, or changed: {}",
+            root.display()
+        ));
+    }
+    Ok(())
+}
+
+fn remove_checkpoint_temps(root: &Path) -> Result<(), String> {
+    for entry in fs::read_dir(root)
+        .map_err(|error| format!("failed to inspect source checkpoints: {error}"))?
+    {
+        let path = entry
+            .map_err(|error| format!("failed to inspect source checkpoint entry: {error}"))?
+            .path();
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if name.starts_with("rank-") && name.contains(".json.tmp-") && path.is_file() {
+            fs::remove_file(&path)
+                .map_err(|error| format!("failed to remove stale checkpoint temp: {error}"))?;
+        }
+    }
+    Ok(())
+}
+
+fn checkpoint_path(root: &Path, rank: usize) -> PathBuf {
+    root.join(format!("rank-{rank:04}.json"))
+}
+
+fn bounded(value: &str, limit: usize) -> String {
+    value.chars().take(limit).collect()
+}

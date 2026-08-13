@@ -34,6 +34,11 @@ mod source_selection;
 
 pub use source_selection::*;
 
+#[path = "benchmark_source_assessment.rs"]
+mod source_assessment;
+
+pub use source_assessment::assess_source_selection;
+
 #[path = "benchmark_label_review.rs"]
 mod label_review;
 

@@ -54,5 +54,19 @@ sniff benchmark prepare-selection \
   sniffbench/blind-oss-v1-policy.json projects.csv selection-review.json
 ```
 
+Assess the complete fixed prefix with resumable per-rank checkpoints. This uses
+GitHub metadata and Git source only; it does not contact an LLM provider:
+
+```console
+sniff benchmark assess-selection \
+  sniffbench/blind-oss-v1-policy.json projects.csv selection-review.json \
+  selection-state checkouts selection-complete.json
+```
+
+Each completed rank is atomically persisted. Interrupted API requests and Git
+clones use bounded retries, while rerunning the command resumes at the first
+uncommitted rank. Only selected repositories are retained, as clean
+self-contained checkouts at the assessed commit; excluded worktrees are removed.
+
 No Sniff finding, benchmark label, or provider/model output is used during
 source selection.

@@ -51,6 +51,7 @@ fn completed(frame: &[u8]) -> SourceSelectionWorksheet {
             assessed_revision: Some("3".repeat(40)),
             method_counts: BTreeMap::from([(language.clone(), 100)]),
             method_census_contract: Some(SOURCE_ASSESSMENT_CENSUS_CONTRACT.to_string()),
+            repository_empty: false,
             accessible: true,
             archived: Some(false),
             fork: Some(false),
@@ -60,6 +61,7 @@ fn completed(frame: &[u8]) -> SourceSelectionWorksheet {
         let payload = serde_json::to_string(&facts).unwrap();
         assessment.facts = Some(facts);
         let raw_payload = format!("raw metadata for {}", assessment.candidate.repository);
+        let census_payload = format!("census for {}", assessment.candidate.repository);
         assessment.evidence = vec![
             SourceAssessmentEvidence {
                 kind: SourceAssessmentEvidenceKind::StructuredFacts,
@@ -74,6 +76,13 @@ fn completed(frame: &[u8]) -> SourceSelectionWorksheet {
                 observed_at: "2026-08-13T00:00:00Z".to_string(),
                 payload_sha256: sha256(raw_payload.as_bytes()),
                 payload: raw_payload,
+            },
+            SourceAssessmentEvidence {
+                kind: SourceAssessmentEvidenceKind::DerivedCensus,
+                source: SOURCE_ASSESSMENT_CENSUS_CONTRACT.to_string(),
+                observed_at: "2026-08-13T00:00:00Z".to_string(),
+                payload_sha256: sha256(census_payload.as_bytes()),
+                payload: census_payload,
             },
         ];
         if selected.insert(language) {

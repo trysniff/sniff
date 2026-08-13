@@ -95,6 +95,21 @@ pub enum BenchmarkCommand {
         /// New label-free assessment worksheet; existing files are never overwritten.
         output: String,
     },
+    /// Assess every ranked OSS candidate with GitHub metadata and an exact local method census.
+    AssessSelection {
+        /// Same precommitted policy used to prepare the worksheet.
+        policy: String,
+        /// Exact pinned sampling-frame CSV declared by the policy.
+        frame: String,
+        /// Immutable ranked worksheet created by `prepare-selection`.
+        worksheet: String,
+        /// Durable per-rank checkpoints and temporary source worktrees.
+        state_directory: String,
+        /// Selected clean checkouts retained at OWNER/REPOSITORY for source sealing.
+        checkout_root: String,
+        /// New completed assessment worksheet; existing files are never overwritten.
+        output: String,
+    },
     /// Validate every ranked assessment and emit a committed source-selection audit.
     AuditSelection {
         /// Same precommitted policy used to prepare the worksheet.
@@ -241,6 +256,24 @@ pub async fn run(args: CliArgs) -> Result<i32, Box<dyn std::error::Error>> {
                 frame,
                 output,
             } => pipeline::prepare_benchmark_source_selection(&policy, &frame, &output),
+            BenchmarkCommand::AssessSelection {
+                policy,
+                frame,
+                worksheet,
+                state_directory,
+                checkout_root,
+                output,
+            } => {
+                pipeline::assess_benchmark_source_selection(
+                    &policy,
+                    &frame,
+                    &worksheet,
+                    &state_directory,
+                    &checkout_root,
+                    &output,
+                )
+                .await
+            }
             BenchmarkCommand::AuditSelection {
                 policy,
                 frame,
@@ -307,6 +340,37 @@ mod tests {
         assert!(matches!(
             args.command,
             Some(CliCommand::Doctor { path, probe }) if path == "repo" && probe
+        ));
+
+        let assess = CliArgs::try_parse_from([
+            "sniff",
+            "benchmark",
+            "assess-selection",
+            "policy.json",
+            "projects.csv",
+            "selection-review.json",
+            "selection-state",
+            "checkouts",
+            "selection-complete.json",
+        ])
+        .expect("benchmark source-selection assessment arguments");
+        assert!(matches!(
+            assess.command,
+            Some(CliCommand::Benchmark {
+                command: BenchmarkCommand::AssessSelection {
+                    policy,
+                    frame,
+                    worksheet,
+                    state_directory,
+                    checkout_root,
+                    output
+                }
+            }) if policy == "policy.json"
+                && frame == "projects.csv"
+                && worksheet == "selection-review.json"
+                && state_directory == "selection-state"
+                && checkout_root == "checkouts"
+                && output == "selection-complete.json"
         ));
     }
 
