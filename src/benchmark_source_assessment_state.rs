@@ -7,6 +7,8 @@ use std::process::Command;
 use std::time::Duration;
 
 const MINIMUM_FREE_BYTES: u64 = 1_073_741_824;
+const GIT_CLONE_TIMEOUT: Duration = Duration::from_secs(300);
+const GIT_COMMAND_TIMEOUT: Duration = Duration::from_secs(120);
 
 const SOURCE_ASSESSMENT_STATE_SCHEMA_VERSION: u32 = 1;
 
@@ -46,7 +48,8 @@ fn clone_repository_url(
     let mut last_error = String::new();
     for attempt in 0..3_u32 {
         remove_generated_worktree(destination, work_root)?;
-        let output = Command::new("git")
+        let mut command = Command::new("git");
+        command
             .args([
                 "-c",
                 "core.autocrlf=false",
@@ -58,23 +61,44 @@ fn clone_repository_url(
                 "--single-branch",
                 url,
             ])
-            .arg(destination)
-            .output()
+            .arg(destination);
+        let output = crate::bounded_process::run(&mut command, GIT_CLONE_TIMEOUT)
             .map_err(|error| format!("source assessment requires git: {error}"))?;
+        if output.timed_out {
+            last_error = format!(
+                "git clone exceeded its {}-second deadline",
+                GIT_CLONE_TIMEOUT.as_secs()
+            );
+            if attempt < 2 {
+                std::thread::sleep(Duration::from_secs(1_u64 << attempt));
+                continue;
+            }
+            break;
+        }
         if output.status.success() {
             let Some(revision) = git_optional(destination, &["rev-parse", "--verify", "HEAD"])?
             else {
                 return Ok(CloneOutcome::Empty);
             };
             let revision = revision.trim().to_ascii_lowercase();
-            let checkout = Command::new("git")
+            let mut checkout_command = Command::new("git");
+            checkout_command
                 .arg("-c")
                 .arg("core.autocrlf=false")
                 .arg("-C")
                 .arg(destination)
-                .args(["checkout", "--force", "HEAD"])
-                .output()
+                .args(["checkout", "--force", "HEAD"]);
+            let checkout = crate::bounded_process::run(&mut checkout_command, GIT_COMMAND_TIMEOUT)
                 .map_err(|error| format!("source assessment requires git: {error}"))?;
+            if checkout.timed_out {
+                return Ok(CloneOutcome::UnsupportedCheckout {
+                    revision,
+                    reason: format!(
+                        "git checkout exceeded its {}-second deadline",
+                        GIT_COMMAND_TIMEOUT.as_secs()
+                    ),
+                });
+            }
             if checkout.status.success() {
                 return Ok(CloneOutcome::CheckedOut { revision });
             }
@@ -312,12 +336,18 @@ pub(super) fn remove_generated_worktree(path: &Path, root: &Path) -> Result<(), 
 }
 
 pub(super) fn git(root: &Path, args: &[&str]) -> Result<String, String> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(root)
-        .args(args)
-        .output()
+    let mut command = Command::new("git");
+    command.arg("-C").arg(root).args(args);
+    let output = crate::bounded_process::run(&mut command, GIT_COMMAND_TIMEOUT)
         .map_err(|error| format!("source assessment requires git: {error}"))?;
+    if output.timed_out {
+        return Err(format!(
+            "git {} exceeded its {}-second deadline for {}",
+            args.join(" "),
+            GIT_COMMAND_TIMEOUT.as_secs(),
+            root.display()
+        ));
+    }
     if !output.status.success() {
         return Err(format!(
             "git {} failed for {}: {}",
@@ -330,12 +360,18 @@ pub(super) fn git(root: &Path, args: &[&str]) -> Result<String, String> {
 }
 
 pub(super) fn git_optional(root: &Path, args: &[&str]) -> Result<Option<String>, String> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(root)
-        .args(args)
-        .output()
+    let mut command = Command::new("git");
+    command.arg("-C").arg(root).args(args);
+    let output = crate::bounded_process::run(&mut command, GIT_COMMAND_TIMEOUT)
         .map_err(|error| format!("source assessment requires git: {error}"))?;
+    if output.timed_out {
+        return Err(format!(
+            "git {} exceeded its {}-second deadline for {}",
+            args.join(" "),
+            GIT_COMMAND_TIMEOUT.as_secs(),
+            root.display()
+        ));
+    }
     if output.status.success() {
         String::from_utf8(output.stdout)
             .map(Some)

@@ -1,6 +1,7 @@
 pub mod analyzer;
 pub mod benchmark;
 pub mod benchmark_import;
+pub(crate) mod bounded_process;
 pub mod callgraph;
 pub mod cli;
 pub mod completed_run;

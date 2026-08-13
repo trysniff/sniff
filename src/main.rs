@@ -36,6 +36,7 @@ pub mod synthesis;
 pub mod types;
 pub mod walker;
 
+mod bounded_process;
 mod cli_banner;
 mod counterfactual;
 mod sandbox;
