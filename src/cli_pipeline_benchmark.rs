@@ -380,7 +380,7 @@ mod tests {
         seal_benchmark_sources, write_new_file,
     };
     use crate::benchmark::{
-        SOURCE_SELECTION_AUDIT_SCHEMA_VERSION, SourceAssessmentEvidence,
+        SOURCE_SAMPLING_POLICY_SCHEMA_VERSION, SourceAssessmentEvidence,
         SourceAssessmentEvidenceKind, SourceAssessmentFacts, SourceSamplingPolicy,
         SourceSelectionDisposition, SourceSelectionWorksheet,
     };
@@ -537,7 +537,7 @@ mod tests {
         let frame_path = bundle.join("projects.csv");
         fs::write(&frame_path, &frame).unwrap();
         let policy = SourceSamplingPolicy {
-            schema_version: SOURCE_SELECTION_AUDIT_SCHEMA_VERSION,
+            schema_version: SOURCE_SAMPLING_POLICY_SCHEMA_VERSION,
             selection_id: "offline-seal".to_string(),
             selected_at: "2026-08-12T00:00:00Z".to_string(),
             frame_source: "https://github.com/ossf/scorecard/projects.csv".to_string(),

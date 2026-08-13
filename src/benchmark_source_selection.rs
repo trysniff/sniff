@@ -3,7 +3,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashSet};
 
-pub const SOURCE_SELECTION_AUDIT_SCHEMA_VERSION: u32 = 1;
+pub const SOURCE_SAMPLING_POLICY_SCHEMA_VERSION: u32 = 1;
+pub const SOURCE_SELECTION_AUDIT_SCHEMA_VERSION: u32 = 2;
 const SOURCE_RANK_CONTRACT: &str = "sniffbench-source-rank-v1";
 const SUPPORTED_LANGUAGES: [&str; 6] =
     ["go", "javascript", "kotlin", "python", "rust", "typescript"];
@@ -30,6 +31,29 @@ pub struct RankedSourceCandidate {
     pub rank: usize,
     pub repository: String,
     pub rank_sha256: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FrameIneligibilityReason {
+    MalformedRecord,
+    InvalidRepositoryIdentity,
+    DuplicateRepositoryIdentity,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FrameIneligibleRecord {
+    pub line_number: usize,
+    pub row_sha256: String,
+    pub reason: FrameIneligibilityReason,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FrameEligibilityAudit {
+    pub nonempty_records: usize,
+    pub eligible_records: usize,
+    pub ineligible_records: Vec<FrameIneligibleRecord>,
+    pub ineligible_records_sha256: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -102,6 +126,7 @@ pub struct SourceSelectionWorksheet {
     pub policy: SourceSamplingPolicy,
     pub policy_sha256: String,
     pub frame_sha256: String,
+    pub frame_eligibility: FrameEligibilityAudit,
     pub task_sha256: String,
     pub candidates: Vec<SourceCandidateAssessment>,
 }
@@ -113,6 +138,7 @@ pub struct SourceSelectionAudit {
     pub policy: SourceSamplingPolicy,
     pub policy_sha256: String,
     pub frame_sha256: String,
+    pub frame_eligibility: FrameEligibilityAudit,
     pub task_sha256: String,
     pub assessments: Vec<SourceCandidateAssessment>,
     pub selected_repositories: Vec<SourceRepositoryDraft>,
@@ -128,6 +154,7 @@ impl SourceSelectionAudit {
             policy: &'a SourceSamplingPolicy,
             policy_sha256: &'a str,
             frame_sha256: &'a str,
+            frame_eligibility: &'a FrameEligibilityAudit,
             task_sha256: &'a str,
             assessments: &'a [SourceCandidateAssessment],
             selected_repositories: &'a [SourceRepositoryDraft],
@@ -138,6 +165,7 @@ impl SourceSelectionAudit {
             policy: &self.policy,
             policy_sha256: &self.policy_sha256,
             frame_sha256: &self.frame_sha256,
+            frame_eligibility: &self.frame_eligibility,
             task_sha256: &self.task_sha256,
             assessments: &self.assessments,
             selected_repositories: &self.selected_repositories,
@@ -158,7 +186,9 @@ pub fn prepare_source_selection(
         ));
     }
     let policy_sha256 = json_sha256(&policy)?;
-    let candidates = ranked_candidates(frame, &policy.seed, policy.assessment_prefix)?
+    let ranked_frame = ranked_candidates(frame, &policy.seed, policy.assessment_prefix)?;
+    let candidates = ranked_frame
+        .candidates
         .into_iter()
         .map(|candidate| SourceCandidateAssessment {
             candidate,
@@ -171,13 +201,19 @@ pub fn prepare_source_selection(
             selected_repository: None,
         })
         .collect::<Vec<_>>();
-    let task_sha256 = selection_task_sha256(&policy_sha256, &frame_sha256, &candidates)?;
+    let task_sha256 = selection_task_sha256(
+        &policy_sha256,
+        &frame_sha256,
+        &ranked_frame.eligibility,
+        &candidates,
+    )?;
     Ok(SourceSelectionWorksheet {
         schema_version: SOURCE_SELECTION_AUDIT_SCHEMA_VERSION,
         rank_contract: SOURCE_RANK_CONTRACT.to_string(),
         policy,
         policy_sha256,
         frame_sha256,
+        frame_eligibility: ranked_frame.eligibility,
         task_sha256,
         candidates,
     })
@@ -232,6 +268,7 @@ pub fn audit_source_selection(
         policy: worksheet.policy,
         policy_sha256: worksheet.policy_sha256,
         frame_sha256: worksheet.frame_sha256,
+        frame_eligibility: worksheet.frame_eligibility,
         task_sha256: worksheet.task_sha256,
         assessments: worksheet.candidates,
         selected_repositories,
@@ -253,6 +290,7 @@ pub fn validate_source_selection_audit(audit: &SourceSelectionAudit) -> Result<(
         return Err("source selection audit policy or frame commitment changed".to_string());
     }
     require_sha256("source selection task SHA-256", &audit.task_sha256)?;
+    validate_frame_eligibility(&audit.frame_eligibility)?;
     if audit.assessments.len() != audit.policy.assessment_prefix {
         return Err("source selection audit does not contain the precommitted prefix".to_string());
     }
@@ -275,6 +313,7 @@ pub fn validate_source_selection_audit(audit: &SourceSelectionAudit) -> Result<(
     let task_sha256 = selection_task_sha256(
         &audit.policy_sha256,
         &audit.frame_sha256,
+        &audit.frame_eligibility,
         &audit.assessments,
     )?;
     if audit.task_sha256 != task_sha256 {
@@ -352,11 +391,16 @@ pub(crate) fn validate_source_selection_against_frame(
         ));
     }
     let expected = ranked_candidates(frame, &audit.policy.seed, audit.policy.assessment_prefix)?;
+    if audit.frame_eligibility != expected.eligibility {
+        return Err(
+            "source selection audit does not match the pinned frame eligibility census".to_string(),
+        );
+    }
     if !audit
         .assessments
         .iter()
         .map(|assessment| &assessment.candidate)
-        .eq(expected.iter())
+        .eq(expected.candidates.iter())
     {
         return Err("source selection audit does not match the pinned frame ranking".to_string());
     }
@@ -623,9 +667,9 @@ fn validate_selected_repository(repository: &SourceRepositoryDraft) -> Result<()
 }
 
 fn validate_policy(policy: &SourceSamplingPolicy) -> Result<(), String> {
-    if policy.schema_version != SOURCE_SELECTION_AUDIT_SCHEMA_VERSION {
+    if policy.schema_version != SOURCE_SAMPLING_POLICY_SCHEMA_VERSION {
         return Err(format!(
-            "source sampling policy schema_version must be {SOURCE_SELECTION_AUDIT_SCHEMA_VERSION}"
+            "source sampling policy schema_version must be {SOURCE_SAMPLING_POLICY_SCHEMA_VERSION}"
         ));
     }
     require_text("selection_id", &policy.selection_id)?;
@@ -657,11 +701,12 @@ fn validate_policy(policy: &SourceSamplingPolicy) -> Result<(), String> {
     Ok(())
 }
 
-fn ranked_candidates(
-    frame: &[u8],
-    seed: &str,
-    prefix: usize,
-) -> Result<Vec<RankedSourceCandidate>, String> {
+struct RankedFrame {
+    candidates: Vec<RankedSourceCandidate>,
+    eligibility: FrameEligibilityAudit,
+}
+
+fn ranked_candidates(frame: &[u8], seed: &str, prefix: usize) -> Result<RankedFrame, String> {
     let text = std::str::from_utf8(frame)
         .map_err(|_| "source sampling frame must be UTF-8 CSV".to_string())?;
     let mut lines = text.lines();
@@ -670,19 +715,37 @@ fn ranked_candidates(
     }
     let mut seen = HashSet::new();
     let mut ranked = Vec::new();
+    let mut ineligible = Vec::new();
+    let mut nonempty_records = 0_usize;
     for (index, line) in lines.enumerate() {
         if line.trim().is_empty() {
             continue;
         }
-        let repository = line
-            .split_once(',')
-            .map(|(repository, _)| repository)
-            .ok_or_else(|| format!("source sampling frame line {} is malformed", index + 2))?;
-        let repository = normalize_repository(repository)?;
+        nonempty_records += 1;
+        let line_number = index + 2;
+        let Some(repository) = line.split_once(',').map(|(repository, _)| repository) else {
+            ineligible.push(FrameIneligibleRecord {
+                line_number,
+                row_sha256: sha256(line.as_bytes()),
+                reason: FrameIneligibilityReason::MalformedRecord,
+            });
+            continue;
+        };
+        let Ok(repository) = normalize_repository(repository) else {
+            ineligible.push(FrameIneligibleRecord {
+                line_number,
+                row_sha256: sha256(line.as_bytes()),
+                reason: FrameIneligibilityReason::InvalidRepositoryIdentity,
+            });
+            continue;
+        };
         if !seen.insert(repository.clone()) {
-            return Err(format!(
-                "source sampling frame repeats repository {repository}"
-            ));
+            ineligible.push(FrameIneligibleRecord {
+                line_number,
+                row_sha256: sha256(line.as_bytes()),
+                reason: FrameIneligibilityReason::DuplicateRepositoryIdentity,
+            });
+            continue;
         }
         ranked.push(RankedSourceCandidate {
             rank: 0,
@@ -703,7 +766,18 @@ fn ranked_candidates(
     for (index, candidate) in ranked.iter_mut().enumerate() {
         candidate.rank = index + 1;
     }
-    Ok(ranked)
+    let ineligible_records_sha256 = json_sha256(&ineligible)?;
+    let eligibility = FrameEligibilityAudit {
+        nonempty_records,
+        eligible_records: seen.len(),
+        ineligible_records: ineligible,
+        ineligible_records_sha256,
+    };
+    validate_frame_eligibility(&eligibility)?;
+    Ok(RankedFrame {
+        candidates: ranked,
+        eligibility,
+    })
 }
 
 fn validate_worksheet_header(
@@ -715,6 +789,7 @@ fn validate_worksheet_header(
         || worksheet.policy != expected.policy
         || worksheet.policy_sha256 != expected.policy_sha256
         || worksheet.frame_sha256 != expected.frame_sha256
+        || worksheet.frame_eligibility != expected.frame_eligibility
         || worksheet.task_sha256 != expected.task_sha256
     {
         return Err("source selection worksheet changed its immutable task".to_string());
@@ -725,13 +800,46 @@ fn validate_worksheet_header(
 fn selection_task_sha256(
     policy_sha256: &str,
     frame_sha256: &str,
+    frame_eligibility: &FrameEligibilityAudit,
     candidates: &[SourceCandidateAssessment],
 ) -> Result<String, String> {
     let immutable = candidates
         .iter()
         .map(|assessment| &assessment.candidate)
         .collect::<Vec<_>>();
-    json_sha256(&(SOURCE_RANK_CONTRACT, policy_sha256, frame_sha256, immutable))
+    json_sha256(&(
+        SOURCE_RANK_CONTRACT,
+        policy_sha256,
+        frame_sha256,
+        frame_eligibility,
+        immutable,
+    ))
+}
+
+fn validate_frame_eligibility(audit: &FrameEligibilityAudit) -> Result<(), String> {
+    if audit.nonempty_records == 0
+        || audit.eligible_records == 0
+        || audit.eligible_records + audit.ineligible_records.len() != audit.nonempty_records
+    {
+        return Err("source frame eligibility census has invalid record counts".to_string());
+    }
+    let mut previous_line = 1_usize;
+    for record in &audit.ineligible_records {
+        if record.line_number <= previous_line {
+            return Err("source frame ineligible records are not strictly ordered".to_string());
+        }
+        require_sha256("source frame ineligible row SHA-256", &record.row_sha256)?;
+        previous_line = record.line_number;
+    }
+    require_sha256(
+        "source frame ineligible-record commitment",
+        &audit.ineligible_records_sha256,
+    )?;
+    let expected = json_sha256(&audit.ineligible_records)?;
+    if audit.ineligible_records_sha256 != expected {
+        return Err("source frame ineligible-record commitment changed".to_string());
+    }
+    Ok(())
 }
 
 fn normalize_repository(value: &str) -> Result<String, String> {
@@ -836,7 +944,7 @@ pub(crate) fn test_selection_artifacts(
             .or_insert(0) += 1;
     }
     let policy = SourceSamplingPolicy {
-        schema_version: SOURCE_SELECTION_AUDIT_SCHEMA_VERSION,
+        schema_version: SOURCE_SAMPLING_POLICY_SCHEMA_VERSION,
         selection_id: "test-selection".to_string(),
         selected_at: "2026-08-12T00:00:00Z".to_string(),
         frame_source: "https://github.com/ossf/scorecard/test-frame.csv".to_string(),

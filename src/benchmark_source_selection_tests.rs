@@ -12,7 +12,7 @@ fn frame() -> Vec<u8> {
 
 fn policy(frame: &[u8]) -> SourceSamplingPolicy {
     SourceSamplingPolicy {
-        schema_version: SOURCE_SELECTION_AUDIT_SCHEMA_VERSION,
+        schema_version: SOURCE_SAMPLING_POLICY_SCHEMA_VERSION,
         selection_id: "blind-oss-v1".to_string(),
         selected_at: "2026-08-13T00:00:00Z".to_string(),
         frame_source: "https://github.com/ossf/scorecard/cron/internal/data/projects.csv"
@@ -138,6 +138,45 @@ fn source_selection_rejects_frame_or_task_tampering() {
     let error = audit_source_selection(policy(&frame), &changed_frame, worksheet).unwrap_err();
 
     assert!(error.contains("frame hash mismatch"));
+}
+
+#[test]
+fn source_selection_commits_malformed_invalid_and_duplicate_frame_rows() {
+    let mut frame = frame();
+    frame.extend_from_slice(b"not-a-csv-row\n");
+    frame.extend_from_slice(b"github.com/invalid+owner/repository,fixture\n");
+    frame.extend_from_slice(b"github.com/example/rust-0,duplicate\n");
+    let mut policy = policy(&frame);
+    policy.assessment_prefix = 12;
+
+    let worksheet = prepare_source_selection(policy, &frame).unwrap();
+
+    assert_eq!(worksheet.frame_eligibility.ineligible_records.len(), 3);
+    assert_eq!(
+        worksheet.frame_eligibility.ineligible_records[0].reason,
+        FrameIneligibilityReason::MalformedRecord
+    );
+    assert_eq!(
+        worksheet.frame_eligibility.ineligible_records[1].reason,
+        FrameIneligibilityReason::InvalidRepositoryIdentity
+    );
+    assert_eq!(
+        worksheet.frame_eligibility.ineligible_records[2].reason,
+        FrameIneligibilityReason::DuplicateRepositoryIdentity
+    );
+    let serialized = serde_json::to_string(&worksheet.frame_eligibility).unwrap();
+    assert!(!serialized.contains("invalid+owner"));
+}
+
+#[test]
+fn source_selection_rejects_tampered_frame_eligibility_census() {
+    let frame = frame();
+    let mut worksheet = completed(&frame);
+    worksheet.frame_eligibility.nonempty_records += 1;
+
+    let error = audit_source_selection(policy(&frame), &frame, worksheet).unwrap_err();
+
+    assert!(error.contains("changed its immutable task"));
 }
 
 #[test]

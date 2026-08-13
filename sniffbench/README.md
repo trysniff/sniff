@@ -31,6 +31,13 @@ fact payload and at least one raw HTTPS source payload. Hashes prove exactly
 what was assessed; external facts remain independently reviewable claims rather
 than becoming true merely because they were hashed.
 
+The pinned frame is also audited before ranking. Empty rows are ignored;
+malformed rows, invalid GitHub identities, and repeated identities are excluded
+through a typed eligibility census. The worksheet commits each excluded row's
+CSV line number and SHA-256, plus an aggregate SHA-256 over the ordered ledger.
+This keeps stale frame records reproducible without publishing their raw values
+or silently changing the sampling population.
+
 The 72.9 MB sampling frame is not committed to this repository. Download the
 immutable URL declared in the policy and verify its SHA-256 before preparing the
 selection worksheet:
