@@ -71,6 +71,8 @@ pub struct BenchmarkCorpus {
     pub label_commitment_sha256: String,
     pub source_seal_artifact_path: String,
     pub source_seal_sha256: String,
+    pub blind_case_bundle_artifact_path: String,
+    pub blind_case_bundle_sha256: String,
     pub analysis_sources: Vec<SourceSnapshot>,
     pub cases: Vec<ReleaseBenchmarkCase>,
 }

@@ -3,6 +3,7 @@ use super::{
 };
 use crate::benchmark::{
     ActualCostReceipt, BenchmarkAdjudication, BenchmarkCase, BenchmarkCorpus, BenchmarkPartition,
+    BenchmarkSourceSeal, BlindCaseBundle, LABEL_RESOLUTION_SCHEMA_VERSION, LabelResolver,
     ReleaseBenchmarkCase, ReviewerDisposition, SourceSnapshot, freeze_corpus,
 };
 use crate::completed_run::{
@@ -46,6 +47,42 @@ fn snapshot(
         artifact_path,
         sha256: digest(text),
     }
+}
+
+fn write_blind_case_bundle(
+    root: &std::path::Path,
+    source_seal_artifact_path: &str,
+    source_seal_sha256: &str,
+    cases: &[ReleaseBenchmarkCase],
+) -> (String, String) {
+    let seal: BenchmarkSourceSeal = serde_json::from_slice(
+        &fs::read(root.join(source_seal_artifact_path)).expect("read source seal"),
+    )
+    .expect("parse source seal");
+    let mut bundle = BlindCaseBundle {
+        schema_version: LABEL_RESOLUTION_SCHEMA_VERSION,
+        source_seal_artifact_sha256: source_seal_sha256.to_string(),
+        source_seal_commitment_sha256: seal.seal_sha256,
+        label_audit_sha256: "a".repeat(64),
+        resolver: LabelResolver {
+            resolver_id: "resolver-fixture".to_string(),
+            years_experience: 8,
+            affiliation: "Independent fixture reviewer".to_string(),
+            maintainer: false,
+            attestation: "Fixture labels were independently resolved.".to_string(),
+        },
+        cases: cases
+            .iter()
+            .filter(|case| case.partition == BenchmarkPartition::BlindOss)
+            .cloned()
+            .collect(),
+        bundle_sha256: String::new(),
+    };
+    bundle.bundle_sha256 = bundle.computed_bundle_sha256().unwrap();
+    let artifact_path = "blind-case-bundle.json".to_string();
+    let bytes = serde_json::to_vec_pretty(&bundle).unwrap();
+    fs::write(root.join(&artifact_path), &bytes).unwrap();
+    (artifact_path, digest(&bytes))
 }
 
 fn frozen_corpus(root: &std::path::Path) -> BenchmarkCorpus {
@@ -177,15 +214,23 @@ fn frozen_corpus(root: &std::path::Path) -> BenchmarkCorpus {
             case.covered_method_ids = methods_by_artifact[&case.before[0].artifact_path].clone();
         }
     }
+    let (blind_case_bundle_artifact_path, blind_case_bundle_sha256) = write_blind_case_bundle(
+        root,
+        &source_seal_artifact_path,
+        &source_seal_sha256,
+        &cases,
+    );
     freeze_corpus(
         BenchmarkCorpus {
-            schema_version: 4,
+            schema_version: 5,
             corpus_id: "import-corpus".to_string(),
             frozen_at: "2026-08-12T00:00:00Z".to_string(),
             source_commitment_sha256: String::new(),
             label_commitment_sha256: String::new(),
             source_seal_artifact_path,
             source_seal_sha256,
+            blind_case_bundle_artifact_path,
+            blind_case_bundle_sha256,
             analysis_sources: sources,
             cases,
         },

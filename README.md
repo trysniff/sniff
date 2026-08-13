@@ -142,7 +142,8 @@ itself. Both commands are offline.
 `sniff benchmark freeze DRAFT OUTPUT` verifies every declared local source
 snapshot, computes separate SHA-256 commitments for analyzed sources and hidden
 labels, verifies the referenced source seal and exhaustive blind-method
-coverage, and creates a new immutable SniffBench v4 corpus manifest without
+coverage, verifies that every BlindOss label exactly matches the committed
+independent-resolution bundle, and creates a new immutable SniffBench v5 corpus manifest without
 overwriting files.
 
 `sniff benchmark evaluate CORPUS SUBMISSION` evaluates that corpus and

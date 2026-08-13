@@ -79,6 +79,54 @@ impl BlindCaseBundle {
             cases: &self.cases,
         })
     }
+
+    pub fn validate_commitment(&self) -> Result<(), String> {
+        if self.schema_version != LABEL_RESOLUTION_SCHEMA_VERSION {
+            return Err(format!(
+                "blind-case bundle schema_version must be {LABEL_RESOLUTION_SCHEMA_VERSION}"
+            ));
+        }
+        require_sha256(
+            "blind-case source-seal artifact SHA-256",
+            &self.source_seal_artifact_sha256,
+        )?;
+        require_sha256(
+            "blind-case source-seal commitment SHA-256",
+            &self.source_seal_commitment_sha256,
+        )?;
+        require_sha256("blind-case label-audit SHA-256", &self.label_audit_sha256)?;
+        require_text("blind-case resolver_id", &self.resolver.resolver_id)?;
+        require_text(
+            "blind-case resolver affiliation",
+            &self.resolver.affiliation,
+        )?;
+        require_text(
+            "blind-case resolver attestation",
+            &self.resolver.attestation,
+        )?;
+        if self.resolver.years_experience == 0 || self.cases.is_empty() {
+            return Err(
+                "blind-case bundle requires an experienced resolver and non-empty cases"
+                    .to_string(),
+            );
+        }
+        let expected = self.computed_bundle_sha256()?;
+        if !self.bundle_sha256.eq_ignore_ascii_case(&expected) {
+            return Err(format!(
+                "blind-case bundle commitment mismatch; expected {expected}"
+            ));
+        }
+        let mut ids = HashSet::new();
+        if self.cases.iter().any(|case| {
+            case.partition != BenchmarkPartition::BlindOss
+                || !ids.insert(case.label.case_id.as_str())
+        }) {
+            return Err(
+                "blind-case bundle requires unique cases in the BlindOss partition".to_string(),
+            );
+        }
+        Ok(())
+    }
 }
 
 pub fn build_blind_case_bundle(

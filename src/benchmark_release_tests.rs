@@ -19,6 +19,42 @@ fn snapshot(root: &Path, artifact_path: &str, repository_path: &str, text: &str)
     }
 }
 
+fn write_blind_case_bundle(
+    root: &Path,
+    source_seal_artifact_path: &str,
+    source_seal_sha256: &str,
+    cases: &[ReleaseBenchmarkCase],
+) -> (String, String) {
+    let seal: BenchmarkSourceSeal = serde_json::from_slice(
+        &fs::read(root.join(source_seal_artifact_path)).expect("read source seal"),
+    )
+    .expect("parse source seal");
+    let mut bundle = BlindCaseBundle {
+        schema_version: LABEL_RESOLUTION_SCHEMA_VERSION,
+        source_seal_artifact_sha256: source_seal_sha256.to_string(),
+        source_seal_commitment_sha256: seal.seal_sha256,
+        label_audit_sha256: "a".repeat(64),
+        resolver: LabelResolver {
+            resolver_id: "resolver-fixture".to_string(),
+            years_experience: 8,
+            affiliation: "Independent fixture reviewer".to_string(),
+            maintainer: false,
+            attestation: "Fixture labels were independently resolved.".to_string(),
+        },
+        cases: cases
+            .iter()
+            .filter(|case| case.partition == BenchmarkPartition::BlindOss)
+            .cloned()
+            .collect(),
+        bundle_sha256: String::new(),
+    };
+    bundle.bundle_sha256 = bundle.computed_bundle_sha256().unwrap();
+    let artifact_path = "blind-case-bundle.json".to_string();
+    let bytes = serde_json::to_vec_pretty(&bundle).unwrap();
+    fs::write(root.join(&artifact_path), &bytes).unwrap();
+    (artifact_path, format!("{:x}", Sha256::digest(&bytes)))
+}
+
 fn corpus() -> (TempDir, BenchmarkCorpus) {
     let root = TempDir::new().expect("temp corpus");
     let definitions = [
@@ -189,6 +225,12 @@ fn corpus() -> (TempDir, BenchmarkCorpus) {
             case.covered_method_ids = methods_by_artifact[&case.before[0].artifact_path].clone();
         }
     }
+    let (blind_case_bundle_artifact_path, blind_case_bundle_sha256) = write_blind_case_bundle(
+        root.path(),
+        &source_seal_artifact_path,
+        &source_seal_sha256,
+        &cases,
+    );
     let mut corpus = BenchmarkCorpus {
         schema_version: RELEASE_SCHEMA_VERSION,
         corpus_id: "frozen-corpus-v1".to_string(),
@@ -197,6 +239,8 @@ fn corpus() -> (TempDir, BenchmarkCorpus) {
         label_commitment_sha256: "0".repeat(64),
         source_seal_artifact_path,
         source_seal_sha256,
+        blind_case_bundle_artifact_path,
+        blind_case_bundle_sha256,
         analysis_sources: cases.iter().flat_map(|case| case.before.clone()).collect(),
         cases,
     };
@@ -371,6 +415,33 @@ fn complete_release_submission_passes_every_offline_gate() {
 }
 
 #[test]
+fn blind_corpus_rejects_tampered_or_retrofitted_case_bundles() {
+    let (root, corpus) = corpus();
+    let bundle_path = root.path().join(&corpus.blind_case_bundle_artifact_path);
+    let original = fs::read(&bundle_path).unwrap();
+    fs::write(&bundle_path, b"tampered bundle\n").unwrap();
+
+    let error = validate_frozen_corpus(&corpus, root.path()).unwrap_err();
+
+    assert!(error.contains("blind-case bundle artifact hash mismatch"));
+    fs::write(&bundle_path, original).unwrap();
+
+    let mut retrofitted = corpus.clone();
+    let case = retrofitted
+        .cases
+        .iter_mut()
+        .find(|case| case.partition == BenchmarkPartition::BlindOss)
+        .unwrap();
+    case.human_explanation
+        .push_str(" Retrofitted after review.");
+    retrofitted.label_commitment_sha256 = retrofitted.computed_label_commitment_sha256().unwrap();
+
+    let error = validate_frozen_corpus(&retrofitted, root.path()).unwrap_err();
+
+    assert!(error.contains("differ from the independently resolved blind-case bundle"));
+}
+
+#[test]
 fn blind_corpus_rejects_tampered_or_incomplete_source_seals() {
     let (root, corpus) = corpus();
     let seal_path = root.path().join(&corpus.source_seal_artifact_path);
@@ -409,6 +480,14 @@ fn blind_corpus_requires_every_sealed_method_exactly_once() {
     let method_id = corpus.cases[blind_index].covered_method_ids[0].clone();
     let mut omitted = corpus.clone();
     omitted.cases[blind_index].covered_method_ids.clear();
+    let (path, hash) = write_blind_case_bundle(
+        root.path(),
+        &omitted.source_seal_artifact_path,
+        &omitted.source_seal_sha256,
+        &omitted.cases,
+    );
+    omitted.blind_case_bundle_artifact_path = path;
+    omitted.blind_case_bundle_sha256 = hash;
     omitted.label_commitment_sha256 = omitted.computed_label_commitment_sha256().unwrap();
 
     let error = validate_frozen_corpus(&omitted, root.path()).unwrap_err();
@@ -419,6 +498,14 @@ fn blind_corpus_requires_every_sealed_method_exactly_once() {
     duplicated.cases[blind_index]
         .covered_method_ids
         .push(method_id);
+    let (path, hash) = write_blind_case_bundle(
+        root.path(),
+        &duplicated.source_seal_artifact_path,
+        &duplicated.source_seal_sha256,
+        &duplicated.cases,
+    );
+    duplicated.blind_case_bundle_artifact_path = path;
+    duplicated.blind_case_bundle_sha256 = hash;
     duplicated.label_commitment_sha256 = duplicated.computed_label_commitment_sha256().unwrap();
 
     let error = validate_frozen_corpus(&duplicated, root.path()).unwrap_err();

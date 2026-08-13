@@ -130,7 +130,7 @@ pub enum BenchmarkCommand {
         /// New immutable blind-case bundle; existing files are never overwritten.
         output: String,
     },
-    /// Verify snapshot hashes and create an immutable SniffBench v4 corpus manifest.
+    /// Verify snapshot and blind-label bundle hashes and create a SniffBench v5 corpus.
     Freeze {
         /// Draft corpus manifest; snapshot paths are relative to its directory.
         draft: String,
@@ -158,9 +158,9 @@ pub enum BenchmarkCommand {
     },
     /// Evaluate complete runs and competitor ledgers against a frozen corpus.
     Evaluate {
-        /// Frozen SniffBench v4 corpus manifest and source-snapshot directory.
+        /// Frozen SniffBench v5 corpus manifest and source-snapshot directory.
         corpus: String,
-        /// Complete SniffBench v4 runs, adjudications, usage, and baseline ledgers.
+        /// Complete SniffBench v5 runs, adjudications, usage, and baseline ledgers.
         submission: String,
     },
 }

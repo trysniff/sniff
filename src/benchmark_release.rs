@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::path::{Component, Path};
 
-pub(crate) const RELEASE_SCHEMA_VERSION: u32 = 4;
+pub(crate) const RELEASE_SCHEMA_VERSION: u32 = 5;
 const REQUIRED_LANGUAGES: [&str; 6] =
     ["go", "javascript", "kotlin", "python", "rust", "typescript"];
 const REQUIRED_BASELINES: [&str; 7] = [
@@ -76,6 +76,13 @@ impl BenchmarkCorpus {
             dispute_resolution: Option<&'a str>,
         }
 
+        #[derive(serde::Serialize)]
+        struct CommittedLabels<'a> {
+            blind_case_bundle_artifact_path: &'a str,
+            blind_case_bundle_sha256: &'a str,
+            labels: Vec<CommittedLabel<'a>>,
+        }
+
         let mut labels = self
             .cases
             .iter()
@@ -97,8 +104,12 @@ impl BenchmarkCorpus {
             })
             .collect::<Vec<_>>();
         labels.sort_by(|left, right| left.case_id.cmp(right.case_id));
-        let bytes = serde_json::to_vec(&labels)
-            .map_err(|error| format!("failed to serialize benchmark label commitment: {error}"))?;
+        let bytes = serde_json::to_vec(&CommittedLabels {
+            blind_case_bundle_artifact_path: &self.blind_case_bundle_artifact_path,
+            blind_case_bundle_sha256: &self.blind_case_bundle_sha256,
+            labels,
+        })
+        .map_err(|error| format!("failed to serialize benchmark label commitment: {error}"))?;
         Ok(format!("{:x}", Sha256::digest(bytes)))
     }
 
@@ -353,6 +364,8 @@ fn validate_corpus(
     require_sha256("label_commitment_sha256", &corpus.label_commitment_sha256)?;
     require_safe_artifact_path(&corpus.source_seal_artifact_path)?;
     require_sha256("source_seal_sha256", &corpus.source_seal_sha256)?;
+    require_safe_artifact_path(&corpus.blind_case_bundle_artifact_path)?;
+    require_sha256("blind_case_bundle_sha256", &corpus.blind_case_bundle_sha256)?;
     if corpus.cases.is_empty() {
         return Err("release benchmark corpus cannot be empty".to_string());
     }
@@ -426,6 +439,7 @@ fn validate_blind_source_seal(corpus: &BenchmarkCorpus, corpus_root: &Path) -> R
     let seal: BenchmarkSourceSeal = serde_json::from_slice(&bytes)
         .map_err(|error| format!("failed to parse benchmark source seal: {error}"))?;
     validate_source_seal(&seal, corpus_root)?;
+    validate_corpus_blind_case_bundle(corpus, corpus_root, &seal)?;
 
     let analysis_sources = corpus.analysis_sources.iter().collect::<HashSet<_>>();
     let sealed_sources = seal.sources.iter().collect::<HashSet<_>>();
@@ -530,6 +544,50 @@ fn validate_blind_source_seal(corpus: &BenchmarkCorpus, corpus_root: &Path) -> R
             "blind OSS adjudication omitted sealed methods: {}",
             missing.join(", ")
         ));
+    }
+    Ok(())
+}
+
+fn validate_corpus_blind_case_bundle(
+    corpus: &BenchmarkCorpus,
+    corpus_root: &Path,
+    seal: &BenchmarkSourceSeal,
+) -> Result<(), String> {
+    let path = corpus_root.join(&corpus.blind_case_bundle_artifact_path);
+    let bytes = fs::read(&path).map_err(|error| {
+        format!(
+            "failed to read benchmark blind-case bundle {}: {error}",
+            path.display()
+        )
+    })?;
+    let actual_hash = format!("{:x}", Sha256::digest(&bytes));
+    if !actual_hash.eq_ignore_ascii_case(&corpus.blind_case_bundle_sha256) {
+        return Err(format!(
+            "benchmark blind-case bundle artifact hash mismatch; expected {actual_hash}"
+        ));
+    }
+    let bundle: BlindCaseBundle = serde_json::from_slice(&bytes)
+        .map_err(|error| format!("failed to parse benchmark blind-case bundle: {error}"))?;
+    bundle.validate_commitment()?;
+    if bundle.source_seal_artifact_sha256 != corpus.source_seal_sha256
+        || bundle.source_seal_commitment_sha256 != seal.seal_sha256
+    {
+        return Err("benchmark blind-case bundle does not match the source seal".to_string());
+    }
+    let mut expected = bundle.cases;
+    expected.sort_by(|left, right| left.label.case_id.cmp(&right.label.case_id));
+    let mut actual = corpus
+        .cases
+        .iter()
+        .filter(|case| case.partition == BenchmarkPartition::BlindOss)
+        .cloned()
+        .collect::<Vec<_>>();
+    actual.sort_by(|left, right| left.label.case_id.cmp(&right.label.case_id));
+    if actual != expected {
+        return Err(
+            "benchmark BlindOss cases differ from the independently resolved blind-case bundle"
+                .to_string(),
+        );
     }
     Ok(())
 }
