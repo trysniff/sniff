@@ -147,7 +147,8 @@ pub(super) fn require_disk_headroom(path: &Path) -> Result<(), String> {
         }
         // Successful `statvfs` initializes the complete output structure.
         let stats = unsafe { stats.assume_init() };
-        let available = u64::from(stats.f_bavail).saturating_mul(u64::from(stats.f_frsize));
+        #[allow(clippy::unnecessary_cast)]
+        let available = (stats.f_bavail as u64).saturating_mul(stats.f_frsize as u64);
         if available < MINIMUM_FREE_BYTES {
             return Err(format!(
                 "source assessment paused before cloning because only {available} bytes are free; at least {MINIMUM_FREE_BYTES} are required"
