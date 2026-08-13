@@ -86,6 +86,26 @@ pub enum CliCommand {
 
 #[derive(Subcommand, Debug)]
 pub enum BenchmarkCommand {
+    /// Collect a complete, resumable, raw-response-backed GitHub source frame.
+    CollectFrame {
+        /// Precommitted frame query and deterministic ordering contract.
+        policy: String,
+        /// Durable create-new raw-page checkpoints.
+        state_directory: String,
+        /// New OpenSSF-compatible repository frame CSV.
+        frame_output: String,
+        /// New hash-bound collection manifest.
+        manifest_output: String,
+    },
+    /// Replay a frozen source frame from its hash-bound raw GitHub responses.
+    ValidateFrame {
+        /// Hash-bound source-frame manifest.
+        manifest: String,
+        /// Root directory containing every manifest page artifact.
+        artifact_root: String,
+        /// Frozen repository frame CSV to reproduce.
+        frame: String,
+    },
     /// Create a deterministic ranked worksheet from a pinned OSS sampling frame.
     PrepareSelection {
         /// Precommitted frame identity, seed, quotas, prefix, and size limits.
@@ -306,6 +326,25 @@ pub async fn run(args: CliArgs) -> Result<i32, Box<dyn std::error::Error>> {
             pipeline::resume(&path, args.skip_dotenv, args.yes, args.budget_usd).await
         }
         Some(CliCommand::Benchmark { command }) => match command {
+            BenchmarkCommand::CollectFrame {
+                policy,
+                state_directory,
+                frame_output,
+                manifest_output,
+            } => {
+                pipeline::collect_benchmark_source_frame(
+                    &policy,
+                    &state_directory,
+                    &frame_output,
+                    &manifest_output,
+                )
+                .await
+            }
+            BenchmarkCommand::ValidateFrame {
+                manifest,
+                artifact_root,
+                frame,
+            } => pipeline::validate_benchmark_source_frame(&manifest, &artifact_root, &frame),
             BenchmarkCommand::PrepareSelection {
                 policy,
                 frame,
@@ -579,6 +618,53 @@ mod tests {
 
     #[test]
     fn parses_offline_benchmark_source_seal() {
+        let collect = CliArgs::try_parse_from([
+            "sniff",
+            "benchmark",
+            "collect-frame",
+            "frame-policy.json",
+            "frame-state",
+            "frame.csv",
+            "frame-manifest.json",
+        ])
+        .expect("benchmark source-frame collection arguments");
+        assert!(matches!(
+            collect.command,
+            Some(CliCommand::Benchmark {
+                command: BenchmarkCommand::CollectFrame {
+                    policy,
+                    state_directory,
+                    frame_output,
+                    manifest_output
+                }
+            }) if policy == "frame-policy.json"
+                && state_directory == "frame-state"
+                && frame_output == "frame.csv"
+                && manifest_output == "frame-manifest.json"
+        ));
+
+        let validate = CliArgs::try_parse_from([
+            "sniff",
+            "benchmark",
+            "validate-frame",
+            "frame-manifest.json",
+            "frame-artifacts",
+            "frame.csv",
+        ])
+        .expect("benchmark source-frame validation arguments");
+        assert!(matches!(
+            validate.command,
+            Some(CliCommand::Benchmark {
+                command: BenchmarkCommand::ValidateFrame {
+                    manifest,
+                    artifact_root,
+                    frame
+                }
+            }) if manifest == "frame-manifest.json"
+                && artifact_root == "frame-artifacts"
+                && frame == "frame.csv"
+        ));
+
         let prepare = CliArgs::try_parse_from([
             "sniff",
             "benchmark",

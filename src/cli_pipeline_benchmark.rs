@@ -1,13 +1,14 @@
 use crate::benchmark::{BenchmarkCorpus, BenchmarkSubmission, evaluate_release, freeze_corpus};
 use crate::benchmark::{
     BenchmarkSourceSeal, LabelResolutionManifest, LabelReviewAudit, LabelReviewWorksheet,
-    SourceSamplingPolicy, SourceSelectionAudit, SourceSelectionComponentAudit,
-    SourceSelectionCompositePolicy, SourceSelectionWorksheet, assess_source_selection,
-    audit_label_reviews, audit_source_selection, audit_source_selection_component,
-    build_blind_case_bundle, combine_source_selections, create_composite_source_seal,
-    create_source_seal, extend_source_selection, prepare_label_resolution, prepare_label_review,
+    SourceFrameCollectionPolicy, SourceSamplingPolicy, SourceSelectionAudit,
+    SourceSelectionComponentAudit, SourceSelectionCompositePolicy, SourceSelectionWorksheet,
+    assess_source_selection, audit_label_reviews, audit_source_selection,
+    audit_source_selection_component, build_blind_case_bundle, collect_source_frame,
+    combine_source_selections, create_composite_source_seal, create_source_seal,
+    extend_source_selection, prepare_label_resolution, prepare_label_review,
     prepare_source_selection, prepare_source_selection_extension, source_selection_draft,
-    validate_label_review_audit, validate_source_seal,
+    validate_label_review_audit, validate_source_frame_manifest, validate_source_seal,
 };
 use crate::benchmark_import::{BenchmarkRunReview, import_reviewed_run, prepare_run_review};
 use std::fs;
@@ -64,6 +65,56 @@ pub(crate) fn freeze_benchmark(
         "Frozen SniffBench corpus written to {output_path}\nSource commitment: {}\nLabel commitment: {}",
         frozen.source_commitment_sha256, frozen.label_commitment_sha256
     );
+    Ok(0)
+}
+
+pub(crate) async fn collect_benchmark_source_frame(
+    policy_path: &str,
+    state_directory: &str,
+    frame_output: &str,
+    manifest_output: &str,
+) -> Result<i32, Box<dyn std::error::Error>> {
+    let policy = read_json::<SourceFrameCollectionPolicy>(policy_path)?;
+    let token = std::env::var("GH_TOKEN")
+        .ok()
+        .or_else(|| std::env::var("GITHUB_TOKEN").ok());
+    let manifest = collect_source_frame(
+        policy,
+        Path::new(state_directory),
+        Path::new(frame_output),
+        Path::new(manifest_output),
+        token.as_deref(),
+    )
+    .await
+    .map_err(|error| {
+        IoError::new(
+            ErrorKind::InvalidData,
+            format!("benchmark source frame cannot be collected: {error}"),
+        )
+    })?;
+    eprintln!(
+        "Frozen SniffBench source frame written to {frame_output}\nRepositories: {}\nFrame commitment: {}\nManifest commitment: {}",
+        manifest.repository_count, manifest.frame_sha256, manifest.manifest_sha256
+    );
+    Ok(0)
+}
+
+pub(crate) fn validate_benchmark_source_frame(
+    manifest_path: &str,
+    artifact_root: &str,
+    frame_path: &str,
+) -> Result<i32, Box<dyn std::error::Error>> {
+    let manifest = read_json(manifest_path)?;
+    let frame = fs::read(frame_path)?;
+    validate_source_frame_manifest(&manifest, Path::new(artifact_root), &frame).map_err(
+        |error| {
+            IoError::new(
+                ErrorKind::InvalidData,
+                format!("benchmark source frame is invalid: {error}"),
+            )
+        },
+    )?;
+    eprintln!("Source frame manifest and raw-page replay are valid.");
     Ok(0)
 }
 

@@ -34,6 +34,11 @@ mod source_selection;
 
 pub use source_selection::*;
 
+#[path = "benchmark_source_frame.rs"]
+mod source_frame;
+
+pub use source_frame::*;
+
 #[path = "benchmark_source_assessment.rs"]
 mod source_assessment;
 

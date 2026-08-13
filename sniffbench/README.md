@@ -117,3 +117,50 @@ Kotlin completion round must use a separately pinned, language-stratified source
 frame whose construction and seed are committed before candidates are ranked.
 It must preserve the ten selected repositories and cannot alter the existing
 frame, method bounds, evidence, or exclusions.
+
+### Precommitted Kotlin source frame
+
+[`blind-oss-v1-kotlin-frame-1-policy.json`](blind-oss-v1-kotlin-frame-1-policy.json)
+fixes the missing Kotlin population before any candidate repository identity is
+collected or ranked. It queries public GitHub repositories whose Linguist
+primary language is Kotlin and whose immutable creation timestamp falls on one
+deterministically selected day in the latest completed calendar quarter.
+
+The date is not operator-picked. The first eight hexadecimal digits of the
+already-published blind-oss-v1 ranking seed are interpreted as an unsigned
+integer. Modulo the 91 days of 2026 Q2 produces offset 39 from 2026-04-01, so
+the frozen day is 2026-05-10 UTC.
+
+The collector searches each UTC hour independently with forks, archived
+repositories, mirrors, and templates excluded. It retains every raw GitHub
+response, rejects incomplete responses or any partition above GitHub Search's
+1,000-result completeness limit, checks returned repository facts against the
+query, and orders the final frame by immutable numeric GitHub repository ID.
+There is no star, popularity, or model-derived filter.
+
+Collection is resumable through atomically published raw-page checkpoints. The
+state directory must remain inside the manifest artifact root so every evidence
+path is portable:
+
+```console
+sniff benchmark collect-frame \
+  sniffbench/blind-oss-v1-kotlin-frame-1-policy.json \
+  sniffbench/blind-oss-v1-kotlin-frame-1-raw \
+  sniffbench/blind-oss-v1-kotlin-frame-1.csv \
+  sniffbench/blind-oss-v1-kotlin-frame-1-manifest.json
+```
+
+An independent offline replay must reproduce the exact CSV from all committed
+raw pages:
+
+```console
+sniff benchmark validate-frame \
+  sniffbench/blind-oss-v1-kotlin-frame-1-manifest.json \
+  sniffbench \
+  sniffbench/blind-oss-v1-kotlin-frame-1.csv
+```
+
+The collected frame, manifest, and raw pages will be committed separately.
+Only after that immutable source commit will a Kotlin ranking seed and complete
+assessment prefix be precommitted. This prevents inspecting identities before
+choosing either the ranking or its endpoint.

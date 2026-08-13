@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "frame_id": "sniffbench-blind-oss-v1-kotlin-frame-1",
+  "source": "https://api.github.com/search/repositories",
+  "api_version": "2022-11-28",
+  "language": "Kotlin",
+  "created_day_utc": "2026-05-10",
+  "derivation_seed": "10afa5d22d090d7ac02e4621d89de24d0a8fd926",
+  "derivation_period_start_utc": "2026-04-01",
+  "derivation_period_days": 91,
+  "derivation_rule": "first_8_hex_u32_mod_period_days",
+  "partition": "utc_hour",
+  "include_forks": false,
+  "include_archived": false,
+  "include_mirrors": false,
+  "include_templates": false,
+  "ordering": "github_repository_id_ascending",
+  "attestation": "This Kotlin source-frame population and its date derivation were committed before GitHub repository identities were collected or ranked. The first eight hexadecimal digits of the existing public blind-oss-v1 ranking seed are interpreted as an unsigned integer; modulo the 91 days of 2026 Q2 yields offset 39 from 2026-04-01, selecting 2026-05-10. Every UTC hour is a separate GitHub Search partition, every raw response is retained and hash-bound, partitions over GitHub's 1,000-result completeness limit fail closed, and final ordering uses immutable numeric GitHub repository IDs rather than search relevance. No popularity threshold or model output participates in construction."
+}
