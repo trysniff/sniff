@@ -52,7 +52,11 @@ pub(crate) fn run(command: &mut Command, timeout: Duration) -> io::Result<Bounde
     #[cfg(windows)]
     drop(job);
     #[cfg(unix)]
-    terminate_process_group(child.id())?;
+    if !timed_out {
+        // A normally exiting parent can leave helpers behind. The timeout path
+        // already killed the process group before waiting for the parent.
+        terminate_process_group(child.id())?;
+    }
     let stdout = join_reader(stdout_reader, "stdout")?;
     let stderr = join_reader(stderr_reader, "stderr")?;
     Ok(BoundedOutput {
@@ -212,10 +216,16 @@ mod tests {
             command
         };
         #[cfg(unix)]
-        let mut command = {
+        let (mut command, survivor_marker) = {
+            let directory = tempfile::tempdir().unwrap();
+            let marker = directory.path().join("descendant-survived");
             let mut command = Command::new("sh");
-            command.args(["-c", "sleep 30 & echo $!; wait"]);
             command
+                .arg("-c")
+                .arg("(sleep 3; printf survived > \"$1\") & echo $!; wait")
+                .arg("bounded-process-test")
+                .arg(&marker);
+            (command, (directory, marker))
         };
 
         let output = run(&mut command, Duration::from_secs(2)).unwrap();
@@ -240,6 +250,10 @@ mod tests {
             assert!(status.success());
         }
         #[cfg(unix)]
-        assert_ne!(unsafe { libc::kill(descendant as libc::pid_t, 0) }, 0);
+        {
+            let _ = descendant;
+            thread::sleep(Duration::from_millis(1_200));
+            assert!(!survivor_marker.1.exists());
+        }
     }
 }
