@@ -6,6 +6,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
+const MINIMUM_FREE_BYTES: u64 = 1_073_741_824;
+
 const SOURCE_ASSESSMENT_STATE_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -20,6 +22,7 @@ pub(super) fn clone_repository(
     destination: &Path,
     work_root: &Path,
 ) -> Result<(), String> {
+    require_disk_headroom(work_root)?;
     let mut last_error = String::new();
     for attempt in 0..3_u32 {
         remove_generated_worktree(destination, work_root)?;
@@ -45,6 +48,57 @@ pub(super) fn clone_repository(
     }
     remove_generated_worktree(destination, work_root)?;
     Err(format!("git clone failed for {repository}: {last_error}"))
+}
+
+pub(super) fn require_disk_headroom(path: &Path) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
+
+        let mut wide = path.as_os_str().encode_wide().collect::<Vec<_>>();
+        wide.push(0);
+        let mut available = 0_u64;
+        let ok = unsafe {
+            GetDiskFreeSpaceExW(
+                wide.as_ptr(),
+                &mut available,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        };
+        if ok == 0 {
+            return Err("failed to determine source-assessment free disk space".to_string());
+        }
+        if available < MINIMUM_FREE_BYTES {
+            return Err(format!(
+                "source assessment paused before cloning because only {available} bytes are free; at least {MINIMUM_FREE_BYTES} are required"
+            ));
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        use std::ffi::CString;
+        use std::os::unix::ffi::OsStrExt;
+
+        let path = CString::new(path.as_os_str().as_bytes())
+            .map_err(|_| "source-assessment path contains a NUL byte".to_string())?;
+        let mut stats = std::mem::MaybeUninit::<libc::statvfs>::uninit();
+        // `path` is NUL-terminated and `stats` points to writable storage for libc.
+        let status = unsafe { libc::statvfs(path.as_ptr(), stats.as_mut_ptr()) };
+        if status != 0 {
+            return Err("failed to determine source-assessment free disk space".to_string());
+        }
+        // Successful `statvfs` initializes the complete output structure.
+        let stats = unsafe { stats.assume_init() };
+        let available = u64::from(stats.f_bavail).saturating_mul(u64::from(stats.f_frsize));
+        if available < MINIMUM_FREE_BYTES {
+            return Err(format!(
+                "source assessment paused before cloning because only {available} bytes are free; at least {MINIMUM_FREE_BYTES} are required"
+            ));
+        }
+    }
+    Ok(())
 }
 
 pub(super) fn checkout_path(root: &Path, repository: &str) -> Result<PathBuf, String> {

@@ -314,3 +314,12 @@ fn accessible_assessment_without_derived_census_is_rejected() {
 
     assert!(error.contains("accessible-source census"));
 }
+
+#[test]
+fn assessment_requires_safe_disk_headroom_before_clone() {
+    let root = temp_root("disk-headroom");
+
+    assessment_state::require_disk_headroom(&root).unwrap();
+
+    fs::remove_dir_all(root).unwrap();
+}
