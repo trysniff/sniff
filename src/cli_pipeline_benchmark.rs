@@ -1,9 +1,10 @@
 use crate::benchmark::{BenchmarkCorpus, BenchmarkSubmission, evaluate_release, freeze_corpus};
 use crate::benchmark::{
     BenchmarkSourceSeal, LabelResolutionManifest, LabelReviewAudit, LabelReviewWorksheet,
-    SourceSelectionDraft, audit_label_reviews, build_blind_case_bundle, create_source_seal,
-    prepare_label_resolution, prepare_label_review, validate_label_review_audit,
-    validate_source_seal,
+    SourceSamplingPolicy, SourceSelectionAudit, SourceSelectionWorksheet, audit_label_reviews,
+    audit_source_selection, build_blind_case_bundle, create_source_seal, prepare_label_resolution,
+    prepare_label_review, prepare_source_selection, source_selection_draft,
+    validate_label_review_audit, validate_source_seal,
 };
 use crate::benchmark_import::{BenchmarkRunReview, import_reviewed_run, prepare_run_review};
 use std::fs;
@@ -64,14 +65,28 @@ pub(crate) fn freeze_benchmark(
 }
 
 pub(crate) fn seal_benchmark_sources(
-    draft_path: &str,
+    audit_path: &str,
+    frame_path: &str,
+    checkout_root: &str,
     output_path: &str,
 ) -> Result<i32, Box<dyn std::error::Error>> {
-    let draft = read_json::<SourceSelectionDraft>(draft_path)?;
-    let draft_root = Path::new(draft_path)
-        .parent()
-        .unwrap_or_else(|| Path::new("."));
-    let seal = create_source_seal(draft, draft_root, Path::new(output_path)).map_err(|error| {
+    let audit_bytes = fs::read(audit_path)?;
+    let audit: SourceSelectionAudit = serde_json::from_slice(&audit_bytes)?;
+    let frame = fs::read(frame_path)?;
+    let draft = source_selection_draft(&audit, &frame).map_err(|error| {
+        IoError::new(
+            ErrorKind::InvalidData,
+            format!("benchmark source selection audit is invalid: {error}"),
+        )
+    })?;
+    let seal = create_source_seal(
+        draft,
+        &audit_bytes,
+        &frame,
+        Path::new(checkout_root),
+        Path::new(output_path),
+    )
+    .map_err(|error| {
         IoError::new(
             ErrorKind::InvalidData,
             format!("benchmark sources cannot be sealed: {error}"),
@@ -82,6 +97,54 @@ pub(crate) fn seal_benchmark_sources(
         seal.sources.len(),
         seal.methods.len(),
         seal.seal_sha256
+    );
+    Ok(0)
+}
+
+pub(crate) fn prepare_benchmark_source_selection(
+    policy_path: &str,
+    frame_path: &str,
+    output_path: &str,
+) -> Result<i32, Box<dyn std::error::Error>> {
+    let policy = read_json::<SourceSamplingPolicy>(policy_path)?;
+    let frame = fs::read(frame_path)?;
+    let worksheet = prepare_source_selection(policy, &frame).map_err(|error| {
+        IoError::new(
+            ErrorKind::InvalidData,
+            format!("benchmark source selection cannot be prepared: {error}"),
+        )
+    })?;
+    write_new_file(
+        Path::new(output_path),
+        &serde_json::to_vec_pretty(&worksheet)?,
+    )?;
+    eprintln!(
+        "SniffBench source-selection worksheet written to {output_path}. Ranked candidates: {}. No labels or Sniff output were used.",
+        worksheet.candidates.len()
+    );
+    Ok(0)
+}
+
+pub(crate) fn audit_benchmark_source_selection(
+    policy_path: &str,
+    frame_path: &str,
+    worksheet_path: &str,
+    output_path: &str,
+) -> Result<i32, Box<dyn std::error::Error>> {
+    let policy = read_json::<SourceSamplingPolicy>(policy_path)?;
+    let frame = fs::read(frame_path)?;
+    let worksheet = read_json::<SourceSelectionWorksheet>(worksheet_path)?;
+    let audit = audit_source_selection(policy, &frame, worksheet).map_err(|error| {
+        IoError::new(
+            ErrorKind::InvalidData,
+            format!("benchmark source selection is invalid: {error}"),
+        )
+    })?;
+    write_new_file(Path::new(output_path), &serde_json::to_vec_pretty(&audit)?)?;
+    eprintln!(
+        "Verified SniffBench source-selection audit written to {output_path}. Selected repositories: {}. Audit commitment: {}",
+        audit.selected_repositories.len(),
+        audit.audit_sha256
     );
     Ok(0)
 }
@@ -312,10 +375,17 @@ fn sha256(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{benchmark, seal_benchmark_sources, write_new_file};
-    use crate::benchmark::{
-        SOURCE_SEAL_SCHEMA_VERSION, SourceRepositoryDraft, SourceSelectionDraft,
+    use super::{
+        audit_benchmark_source_selection, benchmark, prepare_benchmark_source_selection,
+        seal_benchmark_sources, write_new_file,
     };
+    use crate::benchmark::{
+        SOURCE_SELECTION_AUDIT_SCHEMA_VERSION, SourceAssessmentEvidence,
+        SourceAssessmentEvidenceKind, SourceAssessmentFacts, SourceSamplingPolicy,
+        SourceSelectionDisposition, SourceSelectionWorksheet,
+    };
+    use sha2::{Digest, Sha256};
+    use std::collections::{BTreeMap, HashMap};
     use std::fs;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -393,66 +463,190 @@ mod tests {
     #[test]
     fn source_sealing_is_an_offline_create_new_workflow() {
         let bundle = temp_path("source-seal-bundle");
-        let repository = bundle.join("repository");
-        fs::create_dir_all(repository.join("src")).unwrap();
-        fs::write(
-            repository.join("src/lib.rs"),
-            "pub fn sealed() -> i32 { 1 }\n",
-        )
-        .unwrap();
-        fs::write(repository.join("LICENSE"), "test license\n").unwrap();
-        let git = |args: &[&str]| {
+        fs::create_dir_all(&bundle).unwrap();
+        let definitions = [
+            (
+                "go",
+                "main.go",
+                "package fixture\nfunc Sealed() int { return 1 }\n",
+            ),
+            ("javascript", "main.js", "function sealed() { return 1; }\n"),
+            ("kotlin", "Main.kt", "fun sealed(): Int = 1\n"),
+            ("python", "main.py", "def sealed():\n    return 1\n"),
+            ("rust", "main.rs", "pub fn sealed() -> i32 { 1 }\n"),
+            (
+                "typescript",
+                "main.ts",
+                "function sealed(): number { return 1; }\n",
+            ),
+        ];
+        let checkout_root = bundle.join("checkouts");
+        let mut checkouts = HashMap::new();
+        for (language, path, source) in definitions {
+            let repository = checkout_root
+                .join("example")
+                .join(format!("{language}-fixture"));
+            fs::create_dir_all(&repository).unwrap();
+            fs::write(repository.join(path), source).unwrap();
+            fs::write(repository.join("LICENSE"), "test license\n").unwrap();
             let output = std::process::Command::new("git")
                 .arg("-C")
                 .arg(&repository)
-                .args(args)
+                .args(["init"])
                 .output()
                 .unwrap();
-            assert!(
-                output.status.success(),
-                "{}",
-                String::from_utf8_lossy(&output.stderr)
+            assert!(output.status.success());
+            for args in [
+                ["config", "user.email", "seal@example.test"].as_slice(),
+                ["config", "user.name", "Seal Test"].as_slice(),
+                ["add", "."].as_slice(),
+                ["commit", "-m", "fixture"].as_slice(),
+            ] {
+                assert!(
+                    std::process::Command::new("git")
+                        .arg("-C")
+                        .arg(&repository)
+                        .args(args)
+                        .output()
+                        .unwrap()
+                        .status
+                        .success()
+                );
+            }
+            let revision = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&repository)
+                .args(["rev-parse", "HEAD"])
+                .output()
+                .unwrap();
+            checkouts.insert(
+                language.to_string(),
+                String::from_utf8(revision.stdout)
+                    .unwrap()
+                    .trim()
+                    .to_string(),
             );
-            String::from_utf8(output.stdout).unwrap().trim().to_string()
-        };
-        git(&["init"]);
-        git(&["config", "user.email", "seal@example.test"]);
-        git(&["config", "user.name", "Seal Test"]);
-        git(&["add", "."]);
-        git(&["commit", "-m", "fixture"]);
-        let revision = git(&["rev-parse", "HEAD"]);
-        let draft = SourceSelectionDraft {
-            schema_version: SOURCE_SEAL_SCHEMA_VERSION,
+        }
+        let frame = definitions.iter().fold(
+            String::from("repo,metadata\n"),
+            |mut frame, (language, _, _)| {
+                frame.push_str(&format!("github.com/example/{language}-fixture,test\n"));
+                frame
+            },
+        );
+        let frame_path = bundle.join("projects.csv");
+        fs::write(&frame_path, &frame).unwrap();
+        let policy = SourceSamplingPolicy {
+            schema_version: SOURCE_SELECTION_AUDIT_SCHEMA_VERSION,
             selection_id: "offline-seal".to_string(),
             selected_at: "2026-08-12T00:00:00Z".to_string(),
-            selection_methodology: "Selected before labels and tool output.".to_string(),
-            selection_attestation: "No provider was used during source selection.".to_string(),
-            repositories: vec![SourceRepositoryDraft {
-                repository: "https://example.test/offline".to_string(),
-                revision,
-                local_path: repository.to_string_lossy().into_owned(),
-                license_path: "LICENSE".to_string(),
-                context_paths: Vec::new(),
-            }],
+            frame_source: "https://github.com/ossf/scorecard/projects.csv".to_string(),
+            frame_revision: "1".repeat(40),
+            frame_blob_sha: "2".repeat(40),
+            frame_sha256: format!("{:x}", Sha256::digest(frame.as_bytes())),
+            seed: "offline-seal-seed".to_string(),
+            assessment_prefix: 6,
+            minimum_methods: 1,
+            maximum_methods: 10,
+            language_quotas: definitions
+                .iter()
+                .map(|(language, _, _)| (language.to_string(), 1))
+                .collect::<BTreeMap<_, _>>(),
+            attestation: "Selected before labels and Sniff output.".to_string(),
         };
-        let draft_path = bundle.join("selection.json");
+        let policy_path = bundle.join("policy.json");
+        let worksheet_path = bundle.join("selection-review.json");
+        let audit_path = bundle.join("selection-audit.json");
         let output_path = bundle.join("seal.json");
-        fs::write(&draft_path, serde_json::to_vec_pretty(&draft).unwrap()).unwrap();
+        fs::write(&policy_path, serde_json::to_vec_pretty(&policy).unwrap()).unwrap();
 
-        let code =
-            seal_benchmark_sources(draft_path.to_str().unwrap(), output_path.to_str().unwrap())
+        prepare_benchmark_source_selection(
+            policy_path.to_str().unwrap(),
+            frame_path.to_str().unwrap(),
+            worksheet_path.to_str().unwrap(),
+        )
+        .unwrap();
+        let mut worksheet: SourceSelectionWorksheet =
+            serde_json::from_slice(&fs::read(&worksheet_path).unwrap()).unwrap();
+        for candidate in &mut worksheet.candidates {
+            let language = definitions
+                .iter()
+                .find(|(language, _, _)| candidate.candidate.repository.contains(*language))
+                .map(|(language, _, _)| *language)
                 .unwrap();
+            let revision = &checkouts[language];
+            candidate.selection_quota_language = language.to_string();
+            candidate.observed_method_count = Some(1);
+            let facts = SourceAssessmentFacts {
+                repository: candidate.candidate.repository.clone(),
+                selection_quota_language: language.to_string(),
+                observed_method_count: Some(1),
+                accessible: true,
+                archived: Some(false),
+                fork: Some(false),
+                license_path: Some("LICENSE".to_string()),
+                supported_project_shape: Some(true),
+            };
+            let payload = serde_json::to_string(&facts).unwrap();
+            candidate.facts = Some(facts);
+            let raw_payload = format!("raw metadata for {}", candidate.candidate.repository);
+            candidate.evidence = vec![
+                SourceAssessmentEvidence {
+                    kind: SourceAssessmentEvidenceKind::StructuredFacts,
+                    source: "derived:source-assessment-facts-v1".to_string(),
+                    observed_at: "2026-08-12T00:00:00Z".to_string(),
+                    payload_sha256: format!("{:x}", Sha256::digest(payload.as_bytes())),
+                    payload,
+                },
+                SourceAssessmentEvidence {
+                    kind: SourceAssessmentEvidenceKind::RawSource,
+                    source: "https://example.test/source-selection-metadata".to_string(),
+                    observed_at: "2026-08-12T00:00:00Z".to_string(),
+                    payload_sha256: format!("{:x}", Sha256::digest(raw_payload.as_bytes())),
+                    payload: raw_payload,
+                },
+            ];
+            candidate.disposition = Some(SourceSelectionDisposition::Selected);
+            candidate.selected_repository = Some(crate::benchmark::SourceRepositoryDraft {
+                repository: format!("https://{}", candidate.candidate.repository),
+                revision: revision.clone(),
+                license_path: "LICENSE".to_string(),
+                selection_language: language.to_string(),
+                observed_method_count: 1,
+                context_paths: Vec::new(),
+            });
+        }
+        fs::write(
+            &worksheet_path,
+            serde_json::to_vec_pretty(&worksheet).unwrap(),
+        )
+        .unwrap();
+        audit_benchmark_source_selection(
+            policy_path.to_str().unwrap(),
+            frame_path.to_str().unwrap(),
+            worksheet_path.to_str().unwrap(),
+            audit_path.to_str().unwrap(),
+        )
+        .unwrap();
+
+        let code = seal_benchmark_sources(
+            audit_path.to_str().unwrap(),
+            frame_path.to_str().unwrap(),
+            checkout_root.to_str().unwrap(),
+            output_path.to_str().unwrap(),
+        )
+        .unwrap();
 
         assert_eq!(code, 0);
         assert!(output_path.is_file());
-        assert!(
-            bundle
-                .join("seal.sources/repository-0/source/src/lib.rs")
-                .is_file()
-        );
-        let error =
-            seal_benchmark_sources(draft_path.to_str().unwrap(), output_path.to_str().unwrap())
-                .unwrap_err();
+        assert!(bundle.join("seal.sources").read_dir().unwrap().count() >= 6);
+        let error = seal_benchmark_sources(
+            audit_path.to_str().unwrap(),
+            frame_path.to_str().unwrap(),
+            checkout_root.to_str().unwrap(),
+            output_path.to_str().unwrap(),
+        )
+        .unwrap_err();
         assert!(error.to_string().contains("already exists"));
         let _ = fs::remove_dir_all(bundle);
     }

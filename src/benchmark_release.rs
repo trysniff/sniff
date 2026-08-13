@@ -29,6 +29,11 @@ mod source_seal;
 
 pub use source_seal::*;
 
+#[path = "benchmark_source_selection.rs"]
+mod source_selection;
+
+pub use source_selection::*;
+
 #[path = "benchmark_label_review.rs"]
 mod label_review;
 

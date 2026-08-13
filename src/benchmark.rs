@@ -16,11 +16,16 @@ pub use release::{
     LabelResolutionManifest, LabelResolver, LabelReviewAudit, LabelReviewWorksheet, LabelReviewer,
     MethodLabelAudit, MethodLabelDecision, MethodLabelReview, ReleaseBenchmarkCase,
     ReleaseBenchmarkMetrics, ResolvedLabelCase, ReviewerDisposition, ReviewerLabel,
-    SOURCE_CENSUS_CONTRACT_VERSION, SOURCE_SEAL_SCHEMA_VERSION, SealedLicense, SealedMethod,
-    SourceRepositoryDraft, SourceSelectionDraft, SourceSnapshot, audit_label_reviews,
-    build_blind_case_bundle, create_source_seal, evaluate_release, freeze_corpus,
-    prepare_label_resolution, prepare_label_review, validate_actual_cost_receipt,
+    SOURCE_CENSUS_CONTRACT_VERSION, SOURCE_SEAL_SCHEMA_VERSION,
+    SOURCE_SELECTION_AUDIT_SCHEMA_VERSION, SealedLicense, SealedMethod, SourceAssessmentEvidence,
+    SourceAssessmentEvidenceKind, SourceAssessmentFacts, SourceCandidateAssessment,
+    SourceExclusionReason, SourceRepositoryDraft, SourceSamplingPolicy, SourceSelectionAudit,
+    SourceSelectionDisposition, SourceSelectionDraft, SourceSelectionWorksheet, SourceSnapshot,
+    audit_label_reviews, audit_source_selection, build_blind_case_bundle, create_source_seal,
+    evaluate_release, freeze_corpus, prepare_label_resolution, prepare_label_review,
+    prepare_source_selection, source_selection_draft, validate_actual_cost_receipt,
     validate_frozen_corpus, validate_label_review_audit, validate_source_seal,
+    validate_source_selection_audit,
 };
 
 /// One labeled unit in a SniffBench corpus. The label is hidden from the

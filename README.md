@@ -62,8 +62,12 @@ sniff resume
 # Optionally pause after about $0.50 of cumulative estimated scan spend.
 sniff --budget-usd 0.50
 
-# Seal blind sources before labels/runs, then freeze and evaluate offline.
-sniff benchmark seal-sources selection.json blind-source-seal.json
+# Rank and audit a precommitted blind OSS selection before labels or Sniff runs.
+sniff benchmark prepare-selection selection-policy.json projects.csv selection-review.json
+sniff benchmark audit-selection selection-policy.json projects.csv \
+  selection-review.json selection-audit.json
+sniff benchmark seal-sources selection-audit.json projects.csv \
+  checkouts blind-source-seal.json
 sniff benchmark prepare-labels blind-source-seal.json reviewer-a.json
 sniff benchmark prepare-labels blind-source-seal.json reviewer-b.json
 sniff benchmark audit-labels blind-source-seal.json label-audit.json \
@@ -106,15 +110,39 @@ cap.
 
 ## SniffBench Evaluation
 
-`sniff benchmark seal-sources SELECTION OUTPUT` operates entirely offline. It
-requires clean local Git checkouts at complete immutable commit IDs, copies only
-Sniff-supported primary source files, tests, common package/build/API contracts,
-explicitly declared context files, and license evidence into a create-new bundle.
-Only primary production methods enter the eligible census; context remains
-separately hash-bound for human review. The command writes a label-free source
-seal. Commit or attest that seal before creating labels or running Sniff;
-the later corpus must hash-bind it and assign every sealed blind method to
-exactly one adjudicated case.
+The blind OSS workflow operates entirely offline after its sampling-frame file
+has been obtained. `prepare-selection POLICY FRAME OUTPUT` verifies the exact
+frame SHA-256, deterministically hash-ranks its repositories from a precommitted
+seed, and emits the complete ranked assessment prefix without consulting labels
+or Sniff output. Complete every candidate with a quota language, method census,
+typed repository facts, exactly one canonical fact payload, at least one retained
+raw-source payload, and either a selected
+immutable revision or a typed exclusion. `audit-selection POLICY FRAME WORKSHEET
+OUTPUT` rejects skipped/reordered candidates, contradictory evidence, premature
+quota claims, and incomplete quotas, then writes an immutable selection audit.
+Each selected repository fills the quota for its dominant eligible-method
+language; equal method counts use lexicographic language order as the fixed
+tie-break, and source sealing rederives that assignment from committed source.
+The audit commitment proves exactly what was assessed and preserves the raw
+payloads for independent review; it does not make an unverifiable external
+claim true. Selected repository identity, revision, license path, method count,
+quota language, and declared context are independently rederived from the local
+checkouts during source sealing. External exclusion facts such as inaccessible,
+archived, or fork status remain reviewable attestations unless their retained
+source payload can be independently reproduced.
+
+`sniff benchmark seal-sources AUDIT FRAME CHECKOUT_ROOT OUTPUT` revalidates the
+audit against the exact frame and requires each selected GitHub repository at
+`CHECKOUT_ROOT/OWNER/REPOSITORY`. Checkouts must be clean, non-sparse Git roots at
+their audited complete commit IDs. The command copies Sniff-supported production
+sources, tests, common package/build/API contracts, explicitly declared context,
+and license evidence into a create-new bundle. It embeds the exact selection
+audit and frame, reproduces every audited method count and quota language, and
+stores no operator filesystem paths. Only production methods enter the eligible
+census; context remains separately hash-bound for human review. Commit or attest
+this label-free source seal before creating labels or running Sniff. The later
+corpus must hash-bind it and assign every sealed blind method to exactly one
+adjudicated case.
 
 `sniff benchmark prepare-labels SEAL OUTPUT` creates a source-only worksheet for
 one independent reviewer. It contains every sealed method and exact source, but

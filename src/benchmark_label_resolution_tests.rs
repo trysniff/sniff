@@ -19,7 +19,7 @@ fn fixture() -> (
     let source = "pub fn first() -> i32 { 1 }\npub fn second() -> i32 { 2 }\n";
     fs::write(root.path().join("blind.rs"), source).unwrap();
     let snapshots = vec![SourceSnapshot {
-        repository: "https://example.test/blind".to_string(),
+        repository: "https://github.com/example/blind".to_string(),
         revision: "1".repeat(40),
         repository_path: "src/blind.rs".to_string(),
         artifact_path: "blind.rs".to_string(),
@@ -88,7 +88,7 @@ fn after(root: &std::path::Path) -> SourceSnapshot {
     fs::create_dir_all(root.join("after")).unwrap();
     fs::write(root.join("after/blind.rs"), text).unwrap();
     SourceSnapshot {
-        repository: "https://example.test/blind".to_string(),
+        repository: "https://github.com/example/blind".to_string(),
         revision: "2".repeat(40),
         repository_path: "src/blind.rs".to_string(),
         artifact_path: "after/blind.rs".to_string(),

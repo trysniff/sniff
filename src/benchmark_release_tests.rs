@@ -11,7 +11,7 @@ fn snapshot(root: &Path, artifact_path: &str, repository_path: &str, text: &str)
     fs::create_dir_all(path.parent().expect("artifact parent")).expect("create artifact dir");
     fs::write(&path, text).expect("write benchmark artifact");
     SourceSnapshot {
-        repository: "https://example.test/repo".to_string(),
+        repository: "https://github.com/example/repo".to_string(),
         revision: "0123456789abcdef0123456789abcdef01234567".to_string(),
         repository_path: repository_path.to_string(),
         artifact_path: artifact_path.to_string(),

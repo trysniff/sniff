@@ -1,8 +1,9 @@
+use super::super::source_selection::test_selection_artifacts;
 #[cfg(unix)]
 use super::validate_artifact;
 use super::{
-    SOURCE_SEAL_SCHEMA_VERSION, SourceRepositoryDraft, SourceSelectionDraft, copy_committed_file,
-    create_source_seal,
+    SourceRepositoryDraft, copy_committed_file, create_source_seal, dominant_method_language,
+    validate_source_seal,
 };
 use std::fs;
 use std::process::Command;
@@ -24,45 +25,46 @@ fn git(root: &std::path::Path, args: &[&str]) -> String {
 
 fn repository() -> tempfile::TempDir {
     let root = tempfile::tempdir().unwrap();
-    fs::create_dir(root.path().join("src")).unwrap();
+    let repository = repository_path(&root);
+    fs::create_dir_all(repository.join("src")).unwrap();
     fs::write(
-        root.path().join("src/lib.rs"),
+        repository.join("src/lib.rs"),
         "pub fn selected() -> i32 { 1 }\n",
     )
     .unwrap();
-    fs::write(root.path().join("LICENSE"), "test license\n").unwrap();
-    git(root.path(), &["init"]);
-    git(root.path(), &["config", "user.email", "seal@example.test"]);
-    git(root.path(), &["config", "user.name", "Seal Test"]);
-    git(root.path(), &["add", "."]);
-    git(root.path(), &["commit", "-m", "fixture"]);
+    fs::write(repository.join("LICENSE"), "test license\n").unwrap();
+    git(&repository, &["init"]);
+    git(&repository, &["config", "user.email", "seal@example.test"]);
+    git(&repository, &["config", "user.name", "Seal Test"]);
+    git(&repository, &["add", "."]);
+    git(&repository, &["commit", "-m", "fixture"]);
     root
 }
 
-fn draft(root: &std::path::Path) -> SourceSelectionDraft {
-    SourceSelectionDraft {
-        schema_version: SOURCE_SEAL_SCHEMA_VERSION,
-        selection_id: "blind-fixture".to_string(),
-        selected_at: "2026-08-12T00:00:00Z".to_string(),
-        selection_methodology: "Selected without inspecting Sniff output.".to_string(),
-        selection_attestation: "No labels or Sniff findings existed at selection time.".to_string(),
-        repositories: vec![SourceRepositoryDraft {
-            repository: "https://example.test/selected".to_string(),
-            revision: git(root, &["rev-parse", "HEAD"]),
-            local_path: root.to_string_lossy().into_owned(),
-            license_path: "LICENSE".to_string(),
-            context_paths: Vec::new(),
-        }],
-    }
+fn repository_path(root: &tempfile::TempDir) -> std::path::PathBuf {
+    root.path().join("example/selected")
+}
+
+fn selection(root: &std::path::Path) -> (super::SourceSelectionDraft, Vec<u8>, Vec<u8>) {
+    test_selection_artifacts(vec![SourceRepositoryDraft {
+        repository: "https://github.com/example/selected".to_string(),
+        revision: git(root, &["rev-parse", "HEAD"]),
+        license_path: "LICENSE".to_string(),
+        selection_language: "rust".to_string(),
+        observed_method_count: 1,
+        context_paths: Vec::new(),
+    }])
 }
 
 #[test]
 fn source_seal_copies_a_clean_revision_and_derives_its_method_census() {
     let repository = repository();
+    let repository_path = repository_path(&repository);
     let bundle = tempfile::tempdir().unwrap();
     let output = bundle.path().join("seal.json");
+    let (draft, audit, frame) = selection(&repository_path);
 
-    let seal = create_source_seal(draft(repository.path()), bundle.path(), &output).unwrap();
+    let seal = create_source_seal(draft, &audit, &frame, repository.path(), &output).unwrap();
 
     assert_eq!(seal.sources.len(), 1);
     assert_eq!(seal.methods.len(), 1);
@@ -74,19 +76,23 @@ fn source_seal_copies_a_clean_revision_and_derives_its_method_census() {
 #[test]
 fn source_seal_keeps_tests_as_context_without_inflating_the_method_census() {
     let repository = repository();
-    fs::create_dir(repository.path().join("tests")).unwrap();
+    let repository_path = repository_path(&repository);
+    fs::create_dir(repository_path.join("tests")).unwrap();
     fs::write(
-        repository.path().join("tests/selected.rs"),
+        repository_path.join("tests/selected.rs"),
         "#[test]\nfn selected_works() { assert_eq!(1, 1); }\n",
     )
     .unwrap();
-    git(repository.path(), &["add", "."]);
-    git(repository.path(), &["commit", "-m", "add test context"]);
+    git(&repository_path, &["add", "."]);
+    git(&repository_path, &["commit", "-m", "add test context"]);
     let bundle = tempfile::tempdir().unwrap();
+    let (draft, audit, frame) = selection(&repository_path);
 
     let seal = create_source_seal(
-        draft(repository.path()),
-        bundle.path(),
+        draft,
+        &audit,
+        &frame,
+        repository.path(),
         &bundle.path().join("seal.json"),
     )
     .unwrap();
@@ -97,41 +103,67 @@ fn source_seal_keeps_tests_as_context_without_inflating_the_method_census() {
 }
 
 #[test]
+fn source_seal_rejects_tampered_selection_artifacts() {
+    let repository = repository();
+    let repository_path = repository_path(&repository);
+    let bundle = tempfile::tempdir().unwrap();
+    let (draft, audit, frame) = selection(&repository_path);
+    let output = bundle.path().join("seal.json");
+    let seal = create_source_seal(draft, &audit, &frame, repository.path(), &output).unwrap();
+    let audit_path = bundle.path().join(&seal.selection_audit_artifact_path);
+    fs::write(audit_path, b"{}\n").unwrap();
+
+    let error = validate_source_seal(&seal, bundle.path()).unwrap_err();
+
+    assert!(error.contains("source selection audit hash mismatch"));
+}
+
+#[test]
 fn source_seal_rejects_dirty_or_revision_mismatched_checkouts() {
     let repository = repository();
+    let repository_path = repository_path(&repository);
     let bundle = tempfile::tempdir().unwrap();
-    let mut dirty = draft(repository.path());
-    fs::write(repository.path().join("untracked.txt"), "dirty\n").unwrap();
+    let (mut dirty, audit, frame) = selection(&repository_path);
+    fs::write(repository_path.join("untracked.txt"), "dirty\n").unwrap();
 
     let error = create_source_seal(
         dirty.clone(),
-        bundle.path(),
+        &audit,
+        &frame,
+        repository.path(),
         &bundle.path().join("dirty.json"),
     )
     .unwrap_err();
 
     assert!(error.contains("must be clean"));
-    fs::remove_file(repository.path().join("untracked.txt")).unwrap();
+    fs::remove_file(repository_path.join("untracked.txt")).unwrap();
     dirty.repositories[0].revision = "0".repeat(40);
 
-    let error =
-        create_source_seal(dirty, bundle.path(), &bundle.path().join("wrong.json")).unwrap_err();
+    let error = create_source_seal(
+        dirty,
+        &audit,
+        &frame,
+        repository.path(),
+        &bundle.path().join("wrong.json"),
+    )
+    .unwrap_err();
 
-    assert!(error.contains("revision mismatch"));
+    assert!(error.contains("does not match its audited artifacts"));
 }
 
 #[test]
 fn source_seal_rejects_sparse_checkouts() {
     let repository = repository();
+    let repository_path = repository_path(&repository);
     let bundle = tempfile::tempdir().unwrap();
-    git(
-        repository.path(),
-        &["config", "core.sparseCheckout", "true"],
-    );
+    git(&repository_path, &["config", "core.sparseCheckout", "true"]);
+    let (draft, audit, frame) = selection(&repository_path);
 
     let error = create_source_seal(
-        draft(repository.path()),
-        bundle.path(),
+        draft,
+        &audit,
+        &frame,
+        repository.path(),
         &bundle.path().join("sparse.json"),
     )
     .unwrap_err();
@@ -142,16 +174,17 @@ fn source_seal_rejects_sparse_checkouts() {
 #[test]
 fn committed_copy_uses_the_declared_revision_instead_of_worktree_bytes() {
     let repository = repository();
-    let revision = git(repository.path(), &["rev-parse", "HEAD"]);
-    let copied = repository.path().join("copied.rs");
+    let repository_path = repository_path(&repository);
+    let revision = git(&repository_path, &["rev-parse", "HEAD"]);
+    let copied = repository_path.join("copied.rs");
     fs::write(
-        repository.path().join("src/lib.rs"),
+        repository_path.join("src/lib.rs"),
         "pub fn selected() -> i32 { 2 }\n",
     )
     .unwrap();
 
     copy_committed_file(
-        repository.path(),
+        &repository_path,
         &revision,
         std::path::Path::new("src/lib.rs"),
         &copied,
@@ -162,6 +195,18 @@ fn committed_copy_uses_the_declared_revision_instead_of_worktree_bytes() {
     assert_eq!(
         fs::read_to_string(copied).unwrap(),
         "pub fn selected() -> i32 { 1 }\n"
+    );
+}
+
+#[test]
+fn dominant_method_language_is_counted_with_a_deterministic_tie_break() {
+    assert_eq!(
+        dominant_method_language(["rust", "python", "rust"].into_iter()),
+        Some("rust".to_string())
+    );
+    assert_eq!(
+        dominant_method_language(["typescript", "javascript"].into_iter()),
+        Some("javascript".to_string())
     );
 }
 

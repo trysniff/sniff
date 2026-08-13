@@ -1,4 +1,4 @@
-use super::SourceSnapshot;
+use super::{SourceSelectionAudit, SourceSnapshot, validate_source_selection_against_frame};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
@@ -6,7 +6,12 @@ use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 
-pub const SOURCE_SEAL_SCHEMA_VERSION: u32 = 2;
+#[path = "benchmark_source_seal_validation.rs"]
+mod validation;
+
+pub use validation::validate_source_seal;
+
+pub const SOURCE_SEAL_SCHEMA_VERSION: u32 = 3;
 pub const SOURCE_CENSUS_CONTRACT_VERSION: &str = "sniff-source-census-v1";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -16,6 +21,8 @@ pub struct SourceSelectionDraft {
     pub selected_at: String,
     pub selection_methodology: String,
     pub selection_attestation: String,
+    pub selection_audit_sha256: String,
+    pub selection_frame_sha256: String,
     pub repositories: Vec<SourceRepositoryDraft>,
 }
 
@@ -23,8 +30,9 @@ pub struct SourceSelectionDraft {
 pub struct SourceRepositoryDraft {
     pub repository: String,
     pub revision: String,
-    pub local_path: String,
     pub license_path: String,
+    pub selection_language: String,
+    pub observed_method_count: usize,
     #[serde(default)]
     pub context_paths: Vec<String>,
 }
@@ -60,6 +68,11 @@ pub struct BenchmarkSourceSeal {
     pub selected_at: String,
     pub selection_methodology: String,
     pub selection_attestation: String,
+    pub selection_audit_sha256: String,
+    pub selection_audit_artifact_path: String,
+    pub selection_audit_artifact_sha256: String,
+    pub selection_frame_artifact_path: String,
+    pub selection_frame_sha256: String,
     pub sources: Vec<SourceSnapshot>,
     pub context_sources: Vec<SourceSnapshot>,
     pub methods: Vec<SealedMethod>,
@@ -77,6 +90,11 @@ impl BenchmarkSourceSeal {
             selected_at: &'a str,
             selection_methodology: &'a str,
             selection_attestation: &'a str,
+            selection_audit_sha256: &'a str,
+            selection_audit_artifact_path: &'a str,
+            selection_audit_artifact_sha256: &'a str,
+            selection_frame_artifact_path: &'a str,
+            selection_frame_sha256: &'a str,
             sources: &'a [SourceSnapshot],
             context_sources: &'a [SourceSnapshot],
             methods: &'a [SealedMethod],
@@ -89,6 +107,11 @@ impl BenchmarkSourceSeal {
             selected_at: &self.selected_at,
             selection_methodology: &self.selection_methodology,
             selection_attestation: &self.selection_attestation,
+            selection_audit_sha256: &self.selection_audit_sha256,
+            selection_audit_artifact_path: &self.selection_audit_artifact_path,
+            selection_audit_artifact_sha256: &self.selection_audit_artifact_sha256,
+            selection_frame_artifact_path: &self.selection_frame_artifact_path,
+            selection_frame_sha256: &self.selection_frame_sha256,
             sources: &self.sources,
             context_sources: &self.context_sources,
             methods: &self.methods,
@@ -101,10 +124,21 @@ impl BenchmarkSourceSeal {
 
 pub fn create_source_seal(
     draft: SourceSelectionDraft,
-    draft_root: &Path,
+    selection_audit_bytes: &[u8],
+    selection_frame_bytes: &[u8],
+    checkout_root: &Path,
     output_path: &Path,
 ) -> Result<BenchmarkSourceSeal, String> {
     validate_draft(&draft)?;
+    let audit: SourceSelectionAudit = serde_json::from_slice(selection_audit_bytes)
+        .map_err(|error| format!("failed to parse source-selection audit: {error}"))?;
+    validate_source_selection_against_frame(&audit, selection_frame_bytes)?;
+    if audit.audit_sha256 != draft.selection_audit_sha256
+        || audit.frame_sha256 != draft.selection_frame_sha256
+        || audit.selected_repositories != draft.repositories
+    {
+        return Err("source-selection draft does not match its audited artifacts".to_string());
+    }
     if output_path.exists() {
         return Err(format!(
             "source-seal output already exists: {}",
@@ -131,28 +165,35 @@ pub fn create_source_seal(
         )
     })?;
     let mut manifest_created = false;
-    let result =
-        build_source_seal(draft, draft_root, output_parent, &artifact_directory).and_then(|seal| {
-            let mut bytes = serde_json::to_vec_pretty(&seal)
-                .map_err(|error| format!("failed to serialize source seal: {error}"))?;
-            bytes.push(b'\n');
-            let mut file = fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(output_path)
-                .map_err(|error| {
-                    format!(
-                        "failed to create source-seal manifest {}: {error}",
-                        output_path.display()
-                    )
-                })?;
-            manifest_created = true;
-            use std::io::Write;
-            file.write_all(&bytes)
-                .and_then(|_| file.sync_all())
-                .map_err(|error| format!("failed to persist source seal: {error}"))?;
-            Ok(seal)
-        });
+    let result = build_source_seal(
+        draft,
+        selection_audit_bytes,
+        selection_frame_bytes,
+        checkout_root,
+        output_parent,
+        &artifact_directory,
+    )
+    .and_then(|seal| {
+        let mut bytes = serde_json::to_vec_pretty(&seal)
+            .map_err(|error| format!("failed to serialize source seal: {error}"))?;
+        bytes.push(b'\n');
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(output_path)
+            .map_err(|error| {
+                format!(
+                    "failed to create source-seal manifest {}: {error}",
+                    output_path.display()
+                )
+            })?;
+        manifest_created = true;
+        use std::io::Write;
+        file.write_all(&bytes)
+            .and_then(|_| file.sync_all())
+            .map_err(|error| format!("failed to persist source seal: {error}"))?;
+        Ok(seal)
+    });
     if result.is_err() {
         let _ = fs::remove_dir_all(&artifact_directory);
         if manifest_created {
@@ -162,213 +203,33 @@ pub fn create_source_seal(
     result
 }
 
-pub fn validate_source_seal(seal: &BenchmarkSourceSeal, seal_root: &Path) -> Result<(), String> {
-    require_text("source seal selection_id", &seal.selection_id)?;
-    require_text("source seal selected_at", &seal.selected_at)?;
-    require_text(
-        "source seal selection_methodology",
-        &seal.selection_methodology,
-    )?;
-    require_text(
-        "source seal selection_attestation",
-        &seal.selection_attestation,
-    )?;
-    if seal.schema_version != SOURCE_SEAL_SCHEMA_VERSION {
-        return Err(format!(
-            "source seal schema_version must be {SOURCE_SEAL_SCHEMA_VERSION}"
-        ));
-    }
-    if seal.census_contract_version != SOURCE_CENSUS_CONTRACT_VERSION {
-        return Err(format!(
-            "source seal census_contract_version must be {SOURCE_CENSUS_CONTRACT_VERSION}"
-        ));
-    }
-    if seal.sources.is_empty() || seal.methods.is_empty() || seal.licenses.is_empty() {
-        return Err("source seal requires sources, eligible methods, and licenses".to_string());
-    }
-    let mut source_keys = HashSet::new();
-    let mut source_identities = HashSet::new();
-    for source in &seal.sources {
-        validate_source_identity(source, "source seal source")?;
-        validate_artifact(
-            seal_root,
-            &source.artifact_path,
-            &source.sha256,
-            "source seal source",
-        )?;
-        if !source_keys.insert((
-            source.repository.as_str(),
-            source.revision.as_str(),
-            source.repository_path.as_str(),
-            source.artifact_path.as_str(),
-        )) {
-            return Err(format!(
-                "source seal repeats source {} at {}",
-                source.repository, source.repository_path
-            ));
-        }
-        source_identities.insert((
-            source.repository.as_str(),
-            source.revision.as_str(),
-            source.repository_path.as_str(),
-        ));
-    }
-    let mut context_keys = HashSet::new();
-    for source in &seal.context_sources {
-        validate_source_identity(source, "source seal review context")?;
-        validate_artifact(
-            seal_root,
-            &source.artifact_path,
-            &source.sha256,
-            "source seal review context",
-        )?;
-        let key = (
-            source.repository.as_str(),
-            source.revision.as_str(),
-            source.repository_path.as_str(),
-        );
-        if source_identities.contains(&key) || !context_keys.insert(key) {
-            return Err(format!(
-                "source seal repeats review context {} at {}",
-                source.repository, source.repository_path
-            ));
-        }
-    }
-    let source_artifacts = seal
-        .sources
-        .iter()
-        .map(|source| (source.artifact_path.as_str(), source))
-        .collect::<std::collections::HashMap<_, _>>();
-    let mut method_ids = HashSet::new();
-    for method in &seal.methods {
-        require_text("sealed method repository", &method.repository)?;
-        require_revision(&method.revision)?;
-        safe_relative_path(&method.repository_path)?;
-        safe_relative_path(&method.artifact_path)?;
-        require_sha256("sealed method_id", &method.method_id)?;
-        require_sha256("sealed method source_sha256", &method.source_sha256)?;
-        require_text("sealed method language", &method.language)?;
-        require_text("sealed method name", &method.name)?;
-        if method.start_line == 0 || method.end_line < method.start_line {
-            return Err(format!(
-                "sealed method {} has an invalid range",
-                method.method_id
-            ));
-        }
-        let Some(source) = source_artifacts.get(method.artifact_path.as_str()) else {
-            return Err(format!(
-                "sealed method {} references an unknown source artifact",
-                method.method_id
-            ));
-        };
-        if method.repository != source.repository
-            || method.revision != source.revision
-            || method.repository_path != source.repository_path
-        {
-            return Err(format!(
-                "sealed method {} does not match its source identity",
-                method.method_id
-            ));
-        }
-        if !method_ids.insert(method.method_id.as_str()) {
-            return Err(format!("source seal repeats method {}", method.method_id));
-        }
-    }
-    let mut parsed_methods = Vec::new();
-    for source in &seal.sources {
-        let artifact = seal_root.join(safe_relative_path(&source.artifact_path)?);
-        let record = crate::parser::parse_file_checked(&artifact.to_string_lossy())?;
-        if record.language.is_empty() {
-            return Err(format!(
-                "sealed source is no longer supported by the census contract: {}",
-                source.artifact_path
-            ));
-        }
-        for method in record.methods {
-            let method_source_hash = sha256(method.source.as_bytes());
-            parsed_methods.push(SealedMethod {
-                method_id: sealed_method_identity(
-                    &source.repository,
-                    &source.revision,
-                    &source.repository_path,
-                    &method.name,
-                    method.start_line,
-                    method.end_line,
-                    &method_source_hash,
-                )?,
-                repository: source.repository.clone(),
-                revision: source.revision.clone(),
-                repository_path: source.repository_path.clone(),
-                artifact_path: source.artifact_path.clone(),
-                language: method.language,
-                name: method.name,
-                start_line: method.start_line,
-                end_line: method.end_line,
-                source_sha256: method_source_hash,
-            });
-        }
-    }
-    parsed_methods.sort_by(|left, right| left.method_id.cmp(&right.method_id));
-    if parsed_methods != seal.methods {
-        return Err(
-            "source seal eligible-method census does not match its sealed sources".to_string(),
-        );
-    }
-    let mut license_repositories = HashSet::new();
-    for license in &seal.licenses {
-        require_text("sealed license repository", &license.repository)?;
-        require_revision(&license.revision)?;
-        safe_relative_path(&license.repository_path)?;
-        validate_artifact(
-            seal_root,
-            &license.artifact_path,
-            &license.sha256,
-            "source seal license",
-        )?;
-        if !license_repositories.insert((license.repository.as_str(), license.revision.as_str())) {
-            return Err(format!(
-                "source seal repeats license evidence for {} at {}",
-                license.repository, license.revision
-            ));
-        }
-    }
-    let repositories = seal
-        .sources
-        .iter()
-        .map(|source| (source.repository.as_str(), source.revision.as_str()))
-        .collect::<HashSet<_>>();
-    if repositories != license_repositories {
-        return Err("source seal does not provide one license for every repository".to_string());
-    }
-    let expected = seal.computed_seal_sha256()?;
-    if !seal.seal_sha256.eq_ignore_ascii_case(&expected) {
-        return Err(format!(
-            "source seal commitment does not match its contents; expected {expected}"
-        ));
-    }
-    Ok(())
-}
-
-fn validate_source_identity(source: &SourceSnapshot, label: &str) -> Result<(), String> {
-    require_text(&format!("{label} repository"), &source.repository)?;
-    require_revision(&source.revision)?;
-    safe_relative_path(&source.repository_path)?;
-    safe_relative_path(&source.artifact_path)?;
-    Ok(())
-}
-
 fn build_source_seal(
     draft: SourceSelectionDraft,
-    draft_root: &Path,
+    selection_audit_bytes: &[u8],
+    selection_frame_bytes: &[u8],
+    checkout_root: &Path,
     output_parent: &Path,
     artifact_directory: &Path,
 ) -> Result<BenchmarkSourceSeal, String> {
+    let selection_directory = artifact_directory.join("selection");
+    let selection_audit_destination = selection_directory.join("source-selection-audit.json");
+    let selection_frame_destination = selection_directory.join("source-selection-frame.csv");
+    write_new_artifact(
+        &selection_audit_destination,
+        selection_audit_bytes,
+        "source-selection audit",
+    )?;
+    write_new_artifact(
+        &selection_frame_destination,
+        selection_frame_bytes,
+        "source-selection frame",
+    )?;
     let mut sources = Vec::new();
     let mut context_sources = Vec::new();
     let mut methods = Vec::new();
     let mut licenses = Vec::new();
     for (index, repository) in draft.repositories.iter().enumerate() {
-        let local_root = resolve_local_root(draft_root, &repository.local_path)?;
+        let local_root = resolve_checkout_root(checkout_root, &repository.repository)?;
         verify_git_revision(&local_root, &repository.revision)?;
         let destination_root = artifact_directory.join(format!("repository-{index}"));
         let source_destination = destination_root.join("source");
@@ -384,6 +245,7 @@ fn build_source_seal(
                 repository.repository
             ));
         }
+        let method_start = methods.len();
         for path in paths {
             let path = PathBuf::from(path);
             reject_symlink(&path, "source file")?;
@@ -437,6 +299,27 @@ fn build_source_seal(
                     source_sha256: method_source_hash,
                 });
             }
+        }
+        let repository_methods = &methods[method_start..];
+        if repository_methods.len() != repository.observed_method_count {
+            return Err(format!(
+                "source repository {} declared {} methods but the committed census found {}",
+                repository.repository,
+                repository.observed_method_count,
+                repository_methods.len()
+            ));
+        }
+        let dominant_language = dominant_method_language(
+            repository_methods
+                .iter()
+                .map(|method| method.language.as_str()),
+        )
+        .expect("a positive repository method census has a dominant language");
+        if dominant_language != repository.selection_language.to_ascii_lowercase() {
+            return Err(format!(
+                "source repository {} was assigned to {} but its dominant eligible-method language is {dominant_language}",
+                repository.repository, repository.selection_language,
+            ));
         }
         let context_paths = selected_context_paths(&local_root, &repository.context_paths)?;
         let context_destination = destination_root.join("context");
@@ -526,6 +409,17 @@ fn build_source_seal(
         selected_at: draft.selected_at,
         selection_methodology: draft.selection_methodology,
         selection_attestation: draft.selection_attestation,
+        selection_audit_sha256: draft.selection_audit_sha256,
+        selection_audit_artifact_path: portable_relative(
+            output_parent,
+            &selection_audit_destination,
+        )?,
+        selection_audit_artifact_sha256: sha256(selection_audit_bytes),
+        selection_frame_artifact_path: portable_relative(
+            output_parent,
+            &selection_frame_destination,
+        )?,
+        selection_frame_sha256: draft.selection_frame_sha256,
         sources,
         context_sources,
         methods,
@@ -547,6 +441,8 @@ fn validate_draft(draft: &SourceSelectionDraft) -> Result<(), String> {
     require_text("selected_at", &draft.selected_at)?;
     require_text("selection_methodology", &draft.selection_methodology)?;
     require_text("selection_attestation", &draft.selection_attestation)?;
+    require_sha256("selection audit SHA-256", &draft.selection_audit_sha256)?;
+    require_sha256("selection frame SHA-256", &draft.selection_frame_sha256)?;
     if draft.repositories.is_empty() {
         return Err("source selection requires at least one repository".to_string());
     }
@@ -554,8 +450,11 @@ fn validate_draft(draft: &SourceSelectionDraft) -> Result<(), String> {
     for repository in &draft.repositories {
         require_text("repository", &repository.repository)?;
         require_revision(&repository.revision)?;
-        require_text("local_path", &repository.local_path)?;
         safe_relative_path(&repository.license_path)?;
+        require_supported_language(&repository.selection_language)?;
+        if repository.observed_method_count == 0 {
+            return Err("selected repository method count must be positive".to_string());
+        }
         let mut context_paths = HashSet::new();
         for path in &repository.context_paths {
             let path = safe_relative_path(path)?;
@@ -574,6 +473,16 @@ fn validate_draft(draft: &SourceSelectionDraft) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+fn require_supported_language(value: &str) -> Result<(), String> {
+    if ["go", "javascript", "kotlin", "python", "rust", "typescript"]
+        .contains(&value.trim().to_ascii_lowercase().as_str())
+    {
+        Ok(())
+    } else {
+        Err(format!("unsupported selected repository language: {value}"))
+    }
 }
 
 fn selected_context_paths(root: &Path, declared: &[String]) -> Result<Vec<PathBuf>, String> {
@@ -628,7 +537,7 @@ fn verify_git_revision(root: &Path, expected_revision: &str) -> Result<(), Strin
         .map_err(|error| format!("failed to resolve Git repository root: {error}"))?;
     if canonical_top != root {
         return Err(format!(
-            "source selection local_path must be the Git repository root: {}",
+            "selected checkout must be the Git repository root: {}",
             root.display()
         ));
     }
@@ -750,19 +659,64 @@ pub(crate) fn sealed_method_identity(
     Ok(sha256(&bytes))
 }
 
-fn resolve_local_root(draft_root: &Path, value: &str) -> Result<PathBuf, String> {
-    let path = Path::new(value);
-    let joined = if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        draft_root.join(path)
-    };
-    fs::canonicalize(&joined).map_err(|error| {
+pub(crate) fn dominant_method_language<'a>(
+    languages: impl Iterator<Item = &'a str>,
+) -> Option<String> {
+    let mut counts = std::collections::BTreeMap::<String, usize>::new();
+    for language in languages {
+        *counts.entry(language.to_ascii_lowercase()).or_default() += 1;
+    }
+    counts
+        .into_iter()
+        .max_by(
+            |(left_language, left_count), (right_language, right_count)| {
+                left_count
+                    .cmp(right_count)
+                    .then_with(|| right_language.cmp(left_language))
+            },
+        )
+        .map(|(language, _)| language)
+}
+
+fn resolve_checkout_root(checkout_root: &Path, repository: &str) -> Result<PathBuf, String> {
+    let identity = repository
+        .strip_prefix("https://github.com/")
+        .ok_or_else(|| {
+            format!("selected repository is not a canonical GitHub URL: {repository}")
+        })?;
+    let parts = identity.split('/').collect::<Vec<_>>();
+    if parts.len() != 2
+        || parts.iter().any(|part| {
+            part.is_empty()
+                || !part
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+        })
+    {
+        return Err(format!(
+            "selected repository has an invalid GitHub identity: {repository}"
+        ));
+    }
+    let canonical_checkout_root = fs::canonicalize(checkout_root).map_err(|error| {
+        format!(
+            "failed to resolve checkout root {}: {error}",
+            checkout_root.display()
+        )
+    })?;
+    let joined = canonical_checkout_root.join(parts[0]).join(parts[1]);
+    let resolved = fs::canonicalize(&joined).map_err(|error| {
         format!(
             "failed to resolve selected repository {}: {error}",
             joined.display()
         )
-    })
+    })?;
+    if !resolved.starts_with(&canonical_checkout_root) {
+        return Err(format!(
+            "selected repository checkout escapes the checkout root: {}",
+            resolved.display()
+        ));
+    }
+    Ok(resolved)
 }
 
 fn repository_relative(root: &Path, path: &Path) -> Result<PathBuf, String> {
@@ -819,6 +773,48 @@ fn validate_artifact(root: &Path, path: &str, expected: &str, label: &str) -> Re
         ));
     }
     Ok(())
+}
+
+fn read_artifact(root: &Path, path: &str) -> Result<Vec<u8>, String> {
+    let relative = safe_relative_path(path)?;
+    let canonical_root = fs::canonicalize(root).map_err(|error| {
+        format!(
+            "failed to resolve source-seal root {}: {error}",
+            root.display()
+        )
+    })?;
+    let artifact = fs::canonicalize(root.join(relative))
+        .map_err(|error| format!("failed to resolve source-seal artifact {path}: {error}"))?;
+    if !artifact.starts_with(&canonical_root) {
+        return Err(format!("source-seal artifact escapes its bundle: {path}"));
+    }
+    reject_symlink(&artifact, "source-seal artifact")?;
+    fs::read(&artifact).map_err(|error| format!("failed to read {path}: {error}"))
+}
+
+fn write_new_artifact(destination: &Path, bytes: &[u8], label: &str) -> Result<(), String> {
+    if let Some(parent) = destination.parent() {
+        fs::create_dir_all(parent).map_err(|error| {
+            format!(
+                "failed to create sealed {label} directory {}: {error}",
+                parent.display()
+            )
+        })?;
+    }
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(destination)
+        .map_err(|error| {
+            format!(
+                "failed to create sealed {label} {}: {error}",
+                destination.display()
+            )
+        })?;
+    use std::io::Write;
+    file.write_all(bytes)
+        .and_then(|_| file.sync_all())
+        .map_err(|error| format!("failed to persist sealed {label}: {error}"))
 }
 
 fn portable_relative(root: &Path, path: &Path) -> Result<String, String> {
@@ -936,7 +932,8 @@ pub(crate) fn write_test_source_seal(
     repositories.sort();
     repositories.dedup();
     let licenses = repositories
-        .into_iter()
+        .iter()
+        .cloned()
         .enumerate()
         .map(|(index, (repository, revision))| {
             let artifact_path = format!("seal-license-{index}.txt");
@@ -951,13 +948,54 @@ pub(crate) fn write_test_source_seal(
             }
         })
         .collect::<Vec<_>>();
+    let selected_repositories = repositories
+        .into_iter()
+        .map(|(repository, revision)| {
+            let repository_methods = methods
+                .iter()
+                .filter(|method| method.repository == repository && method.revision == revision)
+                .collect::<Vec<_>>();
+            SourceRepositoryDraft {
+                repository,
+                revision,
+                license_path: "LICENSE".to_string(),
+                selection_language: dominant_method_language(
+                    repository_methods
+                        .iter()
+                        .map(|method| method.language.as_str()),
+                )
+                .unwrap(),
+                observed_method_count: repository_methods.len(),
+                context_paths: Vec::new(),
+            }
+        })
+        .collect::<Vec<_>>();
+    let (draft, selection_audit_bytes, selection_frame_bytes) =
+        super::source_selection::test_selection_artifacts(selected_repositories);
+    let selection_audit_artifact_path = "source-selection-audit.json".to_string();
+    let selection_frame_artifact_path = "source-selection-frame.csv".to_string();
+    fs::write(
+        root.join(&selection_audit_artifact_path),
+        &selection_audit_bytes,
+    )
+    .unwrap();
+    fs::write(
+        root.join(&selection_frame_artifact_path),
+        &selection_frame_bytes,
+    )
+    .unwrap();
     let mut seal = BenchmarkSourceSeal {
         schema_version: SOURCE_SEAL_SCHEMA_VERSION,
         census_contract_version: SOURCE_CENSUS_CONTRACT_VERSION.to_string(),
-        selection_id: "test-selection".to_string(),
-        selected_at: "2026-08-12T00:00:00Z".to_string(),
-        selection_methodology: "Fixture sources selected before fixture labels.".to_string(),
-        selection_attestation: "No fixture output was inspected before selection.".to_string(),
+        selection_id: draft.selection_id,
+        selected_at: draft.selected_at,
+        selection_methodology: draft.selection_methodology,
+        selection_attestation: draft.selection_attestation,
+        selection_audit_sha256: draft.selection_audit_sha256,
+        selection_audit_artifact_path,
+        selection_audit_artifact_sha256: sha256(&selection_audit_bytes),
+        selection_frame_artifact_path,
+        selection_frame_sha256: draft.selection_frame_sha256,
         sources: sources.to_vec(),
         context_sources: Vec::new(),
         methods,

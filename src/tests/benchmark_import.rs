@@ -41,7 +41,7 @@ fn snapshot(
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     fs::write(path, text).unwrap();
     SourceSnapshot {
-        repository: "https://example.test/polyglot".to_string(),
+        repository: "https://github.com/example/polyglot".to_string(),
         revision: "0123456789abcdef0123456789abcdef01234567".to_string(),
         repository_path: repository_path.to_string(),
         artifact_path,

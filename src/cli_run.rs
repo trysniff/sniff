@@ -86,10 +86,34 @@ pub enum CliCommand {
 
 #[derive(Subcommand, Debug)]
 pub enum BenchmarkCommand {
+    /// Create a deterministic ranked worksheet from a pinned OSS sampling frame.
+    PrepareSelection {
+        /// Precommitted frame identity, seed, quotas, prefix, and size limits.
+        policy: String,
+        /// Exact pinned OpenSSF project-list CSV declared by the policy.
+        frame: String,
+        /// New label-free assessment worksheet; existing files are never overwritten.
+        output: String,
+    },
+    /// Validate every ranked assessment and emit a committed source-selection audit.
+    AuditSelection {
+        /// Same precommitted policy used to prepare the worksheet.
+        policy: String,
+        /// Exact pinned sampling-frame CSV declared by the policy.
+        frame: String,
+        /// Completed ranked-prefix assessment worksheet.
+        worksheet: String,
+        /// New immutable selection audit; existing files are never overwritten.
+        output: String,
+    },
     /// Freeze a label-free OSS source and eligible-method census before any Sniff run.
     SealSources {
-        /// Source-selection draft with immutable revisions and local clean checkouts.
-        draft: String,
+        /// Verified source-selection audit with immutable local checkout identities.
+        audit: String,
+        /// Exact pinned sampling-frame CSV used by the selection audit.
+        frame: String,
+        /// Root containing every selected checkout at OWNER/REPOSITORY.
+        checkout_root: String,
         /// New source-seal manifest; a create-new sibling source bundle is also written.
         output: String,
     },
@@ -212,9 +236,23 @@ pub async fn run(args: CliArgs) -> Result<i32, Box<dyn std::error::Error>> {
             pipeline::resume(&path, args.skip_dotenv, args.yes, args.budget_usd).await
         }
         Some(CliCommand::Benchmark { command }) => match command {
-            BenchmarkCommand::SealSources { draft, output } => {
-                pipeline::seal_benchmark_sources(&draft, &output)
-            }
+            BenchmarkCommand::PrepareSelection {
+                policy,
+                frame,
+                output,
+            } => pipeline::prepare_benchmark_source_selection(&policy, &frame, &output),
+            BenchmarkCommand::AuditSelection {
+                policy,
+                frame,
+                worksheet,
+                output,
+            } => pipeline::audit_benchmark_source_selection(&policy, &frame, &worksheet, &output),
+            BenchmarkCommand::SealSources {
+                audit,
+                frame,
+                checkout_root,
+                output,
+            } => pipeline::seal_benchmark_sources(&audit, &frame, &checkout_root, &output),
             BenchmarkCommand::PrepareLabels { seal, output } => {
                 pipeline::prepare_benchmark_labels(&seal, &output)
             }
@@ -351,11 +389,56 @@ mod tests {
 
     #[test]
     fn parses_offline_benchmark_source_seal() {
+        let prepare = CliArgs::try_parse_from([
+            "sniff",
+            "benchmark",
+            "prepare-selection",
+            "policy.json",
+            "projects.csv",
+            "selection-review.json",
+        ])
+        .expect("benchmark source-selection preparation arguments");
+        assert!(matches!(
+            prepare.command,
+            Some(CliCommand::Benchmark {
+                command: BenchmarkCommand::PrepareSelection { policy, frame, output }
+            }) if policy == "policy.json"
+                && frame == "projects.csv"
+                && output == "selection-review.json"
+        ));
+
+        let audit = CliArgs::try_parse_from([
+            "sniff",
+            "benchmark",
+            "audit-selection",
+            "policy.json",
+            "projects.csv",
+            "selection-review.json",
+            "selection-audit.json",
+        ])
+        .expect("benchmark source-selection audit arguments");
+        assert!(matches!(
+            audit.command,
+            Some(CliCommand::Benchmark {
+                command: BenchmarkCommand::AuditSelection {
+                    policy,
+                    frame,
+                    worksheet,
+                    output
+                }
+            }) if policy == "policy.json"
+                && frame == "projects.csv"
+                && worksheet == "selection-review.json"
+                && output == "selection-audit.json"
+        ));
+
         let args = CliArgs::try_parse_from([
             "sniff",
             "benchmark",
             "seal-sources",
-            "selection.json",
+            "selection-audit.json",
+            "projects.csv",
+            "checkouts",
             "blind-source-seal.json",
         ])
         .expect("benchmark source-seal arguments");
@@ -363,8 +446,11 @@ mod tests {
         assert!(matches!(
             args.command,
             Some(CliCommand::Benchmark {
-                command: BenchmarkCommand::SealSources { draft, output }
-            }) if draft == "selection.json" && output == "blind-source-seal.json"
+                command: BenchmarkCommand::SealSources { audit, frame, checkout_root, output }
+            }) if audit == "selection-audit.json"
+                && frame == "projects.csv"
+                && checkout_root == "checkouts"
+                && output == "blind-source-seal.json"
         ));
     }
 
