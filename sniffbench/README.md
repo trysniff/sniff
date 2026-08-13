@@ -122,9 +122,9 @@ frame, method bounds, evidence, or exclusions.
 
 [`blind-oss-v1-kotlin-frame-1-policy.json`](blind-oss-v1-kotlin-frame-1-policy.json)
 fixes the missing Kotlin population before any candidate repository identity is
-collected or ranked. It queries public GitHub repositories whose Linguist
-primary language is Kotlin and whose immutable creation timestamp falls on one
-deterministically selected day in the latest completed calendar quarter.
+collected or ranked. It queries public repositories that GitHub Search indexes
+for Kotlin and whose immutable creation timestamp falls on one deterministically
+selected day in the latest completed calendar quarter.
 
 The date is not operator-picked. The first eight hexadecimal digits of the
 already-published blind-oss-v1 ranking seed are interpreted as an unsigned
@@ -137,6 +137,14 @@ response, rejects incomplete responses or any partition above GitHub Search's
 1,000-result completeness limit, checks returned repository facts against the
 query, and orders the final frame by immutable numeric GitHub repository ID.
 There is no star, popularity, or model-derived filter.
+
+GitHub's repository Search response also carries a nullable `language` summary
+field. The first frozen collection proved that this field can be `null` even
+when the same repository is returned for the precommitted `language:Kotlin`
+query. Sniff therefore preserves that raw discrepancy but does not silently add
+the mutable summary field as a post-collection filter. Kotlin dominance is
+measured later from the immutable checked-out source by the existing complete
+eligible-method census.
 
 Collection is resumable through atomically published raw-page checkpoints. The
 state directory must remain inside the manifest artifact root so every evidence

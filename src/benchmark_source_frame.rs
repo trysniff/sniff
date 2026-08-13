@@ -30,7 +30,6 @@ struct GithubSearchRepository {
     id: u64,
     full_name: String,
     created_at: String,
-    language: Option<String>,
     fork: bool,
     archived: bool,
     mirror_url: Option<String>,
@@ -429,7 +428,6 @@ fn validate_repository(
     let expected_prefix = format!("{}T{expected_hour:02}:", policy.created_day_utc);
     if repository.id == 0
         || !repository.created_at.starts_with(&expected_prefix)
-        || repository.language.as_deref() != Some(policy.language.as_str())
         || repository.fork != policy.include_forks
         || repository.archived != policy.include_archived
         || repository.mirror_url.is_some() != policy.include_mirrors

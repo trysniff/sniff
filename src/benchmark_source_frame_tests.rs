@@ -59,7 +59,7 @@ fn source_frame_is_ordered_by_repository_id_and_commits_raw_pages() {
     let output = tempfile::tempdir().unwrap();
     let state = output.path().join("raw");
     let query = hourly_query(&policy(), 0);
-    let response = r#"{"total_count":2,"incomplete_results":false,"items":[{"id":9,"full_name":"Example/Nine","created_at":"2026-05-10T00:01:00Z","language":"Kotlin","fork":false,"archived":false,"mirror_url":null,"is_template":false},{"id":2,"full_name":"Example/Two","created_at":"2026-05-10T00:02:00Z","language":"Kotlin","fork":false,"archived":false,"mirror_url":null,"is_template":false}]}"#;
+    let response = r#"{"total_count":2,"incomplete_results":false,"items":[{"id":9,"full_name":"Example/Nine","created_at":"2026-05-10T00:01:00Z","language":null,"fork":false,"archived":false,"mirror_url":null,"is_template":false},{"id":2,"full_name":"Example/Two","created_at":"2026-05-10T00:02:00Z","language":"Kotlin","fork":false,"archived":false,"mirror_url":null,"is_template":false}]}"#;
     assert_eq!(query, hourly_query(&policy(), 0));
     let pages = frozen_day(&state, &policy(), response);
 
