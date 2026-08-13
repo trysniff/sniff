@@ -19,7 +19,8 @@ mod stats;
 
 pub(crate) use benchmark_run::{
     audit_benchmark_labels, benchmark, freeze_benchmark, import_benchmark_run,
-    prepare_benchmark_labels, prepare_benchmark_run, seal_benchmark_sources,
+    prepare_benchmark_label_resolution, prepare_benchmark_labels, prepare_benchmark_run,
+    resolve_benchmark_labels, seal_benchmark_sources,
 };
 pub use preflight::{doctor, estimate, index_semantic_sources, install_indexers};
 pub use run::{resume, run, status};

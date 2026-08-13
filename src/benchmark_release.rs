@@ -34,6 +34,11 @@ mod label_review;
 
 pub use label_review::*;
 
+#[path = "benchmark_label_resolution.rs"]
+mod label_resolution;
+
+pub use label_resolution::*;
+
 #[path = "benchmark_cost_receipt.rs"]
 mod cost_receipt;
 

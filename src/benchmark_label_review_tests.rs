@@ -30,11 +30,13 @@ fn completed(mut worksheet: LabelReviewWorksheet, reviewer_id: &str) -> LabelRev
         independent_from_sniff: true,
         sniff_output_hidden: true,
         repository_context_inspected: true,
+        maintainer: false,
         attestation: "I reviewed only the sealed source worksheet.".to_string(),
     });
     for method in &mut worksheet.methods {
         method.decision.tier = Some(FindingTier::Clean);
         method.decision.pattern = "none".to_string();
+        method.decision.intentional_boundary = Some(false);
         method.decision.rationale =
             "The method directly implements its stated operation.".to_string();
     }
@@ -78,6 +80,26 @@ fn label_audit_requires_complete_independent_reviews_and_preserves_disputes() {
     assert_eq!(audit.methods[0].status, LabelAgreementStatus::Disputed);
     assert_eq!(audit.methods[0].labels.len(), 2);
     assert_eq!(audit.audit_sha256, audit.computed_audit_sha256().unwrap());
+}
+
+#[test]
+fn intentional_boundary_disagreement_remains_an_explicit_dispute() {
+    let (root, seal, seal_hash) = fixture();
+    let template = prepare_label_review(&seal, root.path(), &seal_hash).unwrap();
+    let first = completed(template.clone(), "reviewer-a");
+    let mut second = completed(template, "reviewer-b");
+    second.methods[0].decision.intentional_boundary = Some(true);
+    second.methods[0].decision.rationale =
+        "The clean method is an intentional public boundary.".to_string();
+
+    let audit = audit_label_reviews(&seal, root.path(), &seal_hash, &[first, second]).unwrap();
+
+    let disputed = audit
+        .methods
+        .iter()
+        .find(|method| method.method_id == seal.methods[0].method_id)
+        .unwrap();
+    assert_eq!(disputed.status, LabelAgreementStatus::Disputed);
 }
 
 #[test]

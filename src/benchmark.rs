@@ -11,14 +11,16 @@ pub(crate) use release::write_test_source_seal;
 pub use release::{
     ActualCostReceipt, BenchmarkAdjudication, BenchmarkBaseline, BenchmarkBaselineFinding,
     BenchmarkCorpus, BenchmarkEvidence, BenchmarkPartition, BenchmarkRun, BenchmarkRunPrediction,
-    BenchmarkSourceSeal, BenchmarkSubmission, BenchmarkUsage, BlindReviewer,
-    LABEL_REVIEW_SCHEMA_VERSION, LabelAgreementStatus, LabelReviewAudit, LabelReviewWorksheet,
-    LabelReviewer, MethodLabelAudit, MethodLabelDecision, MethodLabelReview, ReleaseBenchmarkCase,
-    ReleaseBenchmarkMetrics, ReviewerDisposition, ReviewerLabel, SOURCE_CENSUS_CONTRACT_VERSION,
-    SOURCE_SEAL_SCHEMA_VERSION, SealedLicense, SealedMethod, SourceRepositoryDraft,
-    SourceSelectionDraft, SourceSnapshot, audit_label_reviews, create_source_seal,
-    evaluate_release, freeze_corpus, prepare_label_review, validate_actual_cost_receipt,
-    validate_frozen_corpus, validate_source_seal,
+    BenchmarkSourceSeal, BenchmarkSubmission, BenchmarkUsage, BlindCaseBundle, BlindReviewer,
+    LABEL_RESOLUTION_SCHEMA_VERSION, LABEL_REVIEW_SCHEMA_VERSION, LabelAgreementStatus,
+    LabelResolutionManifest, LabelResolver, LabelReviewAudit, LabelReviewWorksheet, LabelReviewer,
+    MethodLabelAudit, MethodLabelDecision, MethodLabelReview, ReleaseBenchmarkCase,
+    ReleaseBenchmarkMetrics, ResolvedLabelCase, ReviewerDisposition, ReviewerLabel,
+    SOURCE_CENSUS_CONTRACT_VERSION, SOURCE_SEAL_SCHEMA_VERSION, SealedLicense, SealedMethod,
+    SourceRepositoryDraft, SourceSelectionDraft, SourceSnapshot, audit_label_reviews,
+    build_blind_case_bundle, create_source_seal, evaluate_release, freeze_corpus,
+    prepare_label_resolution, prepare_label_review, validate_actual_cost_receipt,
+    validate_frozen_corpus, validate_label_review_audit, validate_source_seal,
 };
 
 /// One labeled unit in a SniffBench corpus. The label is hidden from the

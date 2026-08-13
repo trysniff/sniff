@@ -68,6 +68,9 @@ sniff benchmark prepare-labels blind-source-seal.json reviewer-a.json
 sniff benchmark prepare-labels blind-source-seal.json reviewer-b.json
 sniff benchmark audit-labels blind-source-seal.json label-audit.json \
   --review reviewer-a.json --review reviewer-b.json
+sniff benchmark prepare-resolution blind-source-seal.json label-audit.json resolution.json
+sniff benchmark resolve-labels blind-source-seal.json label-audit.json \
+  resolution.json blind-cases.json
 sniff benchmark freeze draft.json corpus.json
 sniff benchmark prepare-run corpus.json review.json --artifact .sniff/runs/RUN.json
 sniff benchmark import-run corpus.json review.json run.json
@@ -122,7 +125,19 @@ without sharing answers. `sniff benchmark audit-labels SEAL OUTPUT --review A --
 requires at least two distinct experienced reviewers, verifies the complete
 method census and immutable source facts, rejects unblinded or incomplete
 worksheets, and preserves every tier, mechanism, or related-method disagreement
-as an explicit dispute. Both commands are offline.
+as an explicit dispute. Reviewers must explicitly classify Clean intentional
+boundaries; Sniff never infers that benchmark label from paths or names. Both
+commands are offline.
+
+`sniff benchmark prepare-resolution SEAL AUDIT OUTPUT` creates a human-resolution
+draft. Undisputed tiers, mechanisms, and cross-method components are immutable
+and prefilled; disputed labels remain blank. Complete resolver identity, every
+dispute rationale, and hash-bound after/proof artifacts for findings.
+`sniff benchmark resolve-labels SEAL AUDIT RESOLUTION OUTPUT` requires a distinct
+resolver for disputes, refuses omitted or multiply assigned methods, verifies
+after artifacts relative to the resolution manifest, and emits a committed
+corpus-ready blind-case bundle. It never generates a label or counterfactual
+itself. Both commands are offline.
 
 `sniff benchmark freeze DRAFT OUTPUT` verifies every declared local source
 snapshot, computes separate SHA-256 commitments for analyzed sources and hidden

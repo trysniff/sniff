@@ -1,7 +1,9 @@
 use crate::benchmark::{BenchmarkCorpus, BenchmarkSubmission, evaluate_release, freeze_corpus};
 use crate::benchmark::{
-    BenchmarkSourceSeal, LabelReviewWorksheet, SourceSelectionDraft, audit_label_reviews,
-    create_source_seal, prepare_label_review, validate_source_seal,
+    BenchmarkSourceSeal, LabelResolutionManifest, LabelReviewAudit, LabelReviewWorksheet,
+    SourceSelectionDraft, audit_label_reviews, build_blind_case_bundle, create_source_seal,
+    prepare_label_resolution, prepare_label_review, validate_label_review_audit,
+    validate_source_seal,
 };
 use crate::benchmark_import::{BenchmarkRunReview, import_reviewed_run, prepare_run_review};
 use std::fs;
@@ -134,6 +136,61 @@ pub(crate) fn audit_benchmark_labels(
     eprintln!(
         "Verified SniffBench label audit written to {output_path}. Agreements: {}. Disputes requiring resolution: {}.",
         audit.agreement_count, audit.disputed_count
+    );
+    Ok(0)
+}
+
+pub(crate) fn prepare_benchmark_label_resolution(
+    seal_path: &str,
+    audit_path: &str,
+    output_path: &str,
+) -> Result<i32, Box<dyn std::error::Error>> {
+    let (seal, seal_bytes) = read_source_seal(seal_path)?;
+    let audit = read_json::<LabelReviewAudit>(audit_path)?;
+    let draft = prepare_label_resolution(&seal, &sha256(&seal_bytes), &audit).map_err(|error| {
+        IoError::new(
+            ErrorKind::InvalidData,
+            format!("benchmark label resolution cannot be prepared: {error}"),
+        )
+    })?;
+    write_new_file(Path::new(output_path), &serde_json::to_vec_pretty(&draft)?)?;
+    eprintln!(
+        "SniffBench label-resolution draft written to {output_path}. Cases: {}. Complete resolver identity, disputes, and finding proof artifacts.",
+        draft.cases.len()
+    );
+    Ok(0)
+}
+
+pub(crate) fn resolve_benchmark_labels(
+    seal_path: &str,
+    audit_path: &str,
+    resolution_path: &str,
+    output_path: &str,
+) -> Result<i32, Box<dyn std::error::Error>> {
+    let (seal, seal_bytes) = read_source_seal(seal_path)?;
+    let audit = read_json::<LabelReviewAudit>(audit_path)?;
+    validate_label_review_audit(&seal, &sha256(&seal_bytes), &audit).map_err(|error| {
+        IoError::new(
+            ErrorKind::InvalidData,
+            format!("benchmark label audit is invalid: {error}"),
+        )
+    })?;
+    let resolution = read_json::<LabelResolutionManifest>(resolution_path)?;
+    let root = Path::new(resolution_path)
+        .parent()
+        .unwrap_or_else(|| Path::new("."));
+    let bundle = build_blind_case_bundle(&seal, &sha256(&seal_bytes), &audit, &resolution, root)
+        .map_err(|error| {
+            IoError::new(
+                ErrorKind::InvalidData,
+                format!("benchmark labels cannot be resolved: {error}"),
+            )
+        })?;
+    write_new_file(Path::new(output_path), &serde_json::to_vec_pretty(&bundle)?)?;
+    eprintln!(
+        "Verified SniffBench blind-case bundle written to {output_path}. Cases: {}. Bundle commitment: {}",
+        bundle.cases.len(),
+        bundle.bundle_sha256
     );
     Ok(0)
 }

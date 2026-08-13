@@ -110,6 +110,26 @@ pub enum BenchmarkCommand {
         #[arg(long = "review", required = true)]
         reviews: Vec<String>,
     },
+    /// Create a human-resolution draft from a verified independent label audit.
+    PrepareResolution {
+        /// Label-free source seal used for the independent reviews.
+        seal: String,
+        /// Verified output from `audit-labels`.
+        audit: String,
+        /// New resolution draft; existing files are never overwritten.
+        output: String,
+    },
+    /// Validate completed human resolutions and emit corpus-ready blind cases.
+    ResolveLabels {
+        /// Label-free source seal used for the independent reviews.
+        seal: String,
+        /// Verified output from `audit-labels`.
+        audit: String,
+        /// Completed draft from `prepare-resolution`.
+        resolution: String,
+        /// New immutable blind-case bundle; existing files are never overwritten.
+        output: String,
+    },
     /// Verify snapshot hashes and create an immutable SniffBench v4 corpus manifest.
     Freeze {
         /// Draft corpus manifest; snapshot paths are relative to its directory.
@@ -203,6 +223,17 @@ pub async fn run(args: CliArgs) -> Result<i32, Box<dyn std::error::Error>> {
                 output,
                 reviews,
             } => pipeline::audit_benchmark_labels(&seal, &output, &reviews),
+            BenchmarkCommand::PrepareResolution {
+                seal,
+                audit,
+                output,
+            } => pipeline::prepare_benchmark_label_resolution(&seal, &audit, &output),
+            BenchmarkCommand::ResolveLabels {
+                seal,
+                audit,
+                resolution,
+                output,
+            } => pipeline::resolve_benchmark_labels(&seal, &audit, &resolution, &output),
             BenchmarkCommand::Freeze { draft, output } => {
                 pipeline::freeze_benchmark(&draft, &output)
             }
@@ -373,6 +404,49 @@ mod tests {
             }) if seal == "blind-source-seal.json"
                 && output == "label-audit.json"
                 && reviews == ["review-a.json", "review-b.json"]
+        ));
+
+        let prepare_resolution = CliArgs::try_parse_from([
+            "sniff",
+            "benchmark",
+            "prepare-resolution",
+            "blind-source-seal.json",
+            "label-audit.json",
+            "resolution.json",
+        ])
+        .expect("prepare resolution arguments");
+        assert!(matches!(
+            prepare_resolution.command,
+            Some(CliCommand::Benchmark {
+                command: BenchmarkCommand::PrepareResolution { seal, audit, output }
+            }) if seal == "blind-source-seal.json"
+                && audit == "label-audit.json"
+                && output == "resolution.json"
+        ));
+
+        let resolve = CliArgs::try_parse_from([
+            "sniff",
+            "benchmark",
+            "resolve-labels",
+            "blind-source-seal.json",
+            "label-audit.json",
+            "resolution.json",
+            "blind-cases.json",
+        ])
+        .expect("resolve label arguments");
+        assert!(matches!(
+            resolve.command,
+            Some(CliCommand::Benchmark {
+                command: BenchmarkCommand::ResolveLabels {
+                    seal,
+                    audit,
+                    resolution,
+                    output
+                }
+            }) if seal == "blind-source-seal.json"
+                && audit == "label-audit.json"
+                && resolution == "resolution.json"
+                && output == "blind-cases.json"
         ));
     }
 
