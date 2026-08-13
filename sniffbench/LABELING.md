@@ -86,14 +86,21 @@ revision, and language and share the same tier, pattern, and boundary status.
    `sniffbench-blind-oss-v1-source-seal` GitHub prerelease.
 2. Work from a fresh copy of `independent-review-template.json`.
 3. Complete the reviewer object and every method decision independently.
-4. Validate the completed worksheet offline:
+4. Save at any time and validate completed decisions plus remaining counts:
+
+```console
+sniff benchmark label-status \
+  blind-source-seal.json in-progress-review.json
+```
+
+5. Validate the completed worksheet offline:
 
 ```console
 sniff benchmark validate-labels \
   blind-source-seal.json completed-review.json
 ```
 
-5. Submit the exact validated JSON file and its SHA-256.
+6. Submit the exact validated JSON file and its SHA-256.
 
 Validation rechecks the complete source seal, immutable method census,
 worksheet identity, reviewer eligibility, every decision field, and all

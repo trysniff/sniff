@@ -221,6 +221,13 @@ pub enum BenchmarkCommand {
         /// Independently completed reviewer worksheet.
         review: String,
     },
+    /// Verify an in-progress label worksheet and report completed and pending work.
+    LabelStatus {
+        /// Label-free source seal used to create the worksheet.
+        seal: String,
+        /// In-progress or completed reviewer worksheet.
+        review: String,
+    },
     /// Validate independent completed label worksheets and preserve every dispute.
     AuditLabels {
         /// Label-free source seal used to create every worksheet.
@@ -435,6 +442,9 @@ pub async fn run(args: CliArgs) -> Result<i32, Box<dyn std::error::Error>> {
             }
             BenchmarkCommand::ValidateLabels { seal, review } => {
                 pipeline::validate_benchmark_labels(&seal, &review)
+            }
+            BenchmarkCommand::LabelStatus { seal, review } => {
+                pipeline::benchmark_label_status(&seal, &review)
             }
             BenchmarkCommand::AuditLabels {
                 seal,
@@ -673,6 +683,21 @@ mod tests {
             }) if manifest == "frame-manifest.json"
                 && artifact_root == "frame-artifacts"
                 && frame == "frame.csv"
+        ));
+
+        let status = CliArgs::try_parse_from([
+            "sniff",
+            "benchmark",
+            "label-status",
+            "blind-source-seal.json",
+            "review-a.json",
+        ])
+        .expect("label status arguments");
+        assert!(matches!(
+            status.command,
+            Some(CliCommand::Benchmark {
+                command: BenchmarkCommand::LabelStatus { seal, review }
+            }) if seal == "blind-source-seal.json" && review == "review-a.json"
         ));
 
         let prepare = CliArgs::try_parse_from([

@@ -6,10 +6,10 @@ use crate::benchmark::{
     assess_source_selection, audit_label_reviews, audit_source_selection,
     audit_source_selection_component, build_blind_case_bundle, collect_source_frame,
     combine_source_selections, create_composite_source_seal, create_source_seal,
-    extend_source_selection, prepare_label_resolution, prepare_label_review,
-    prepare_source_selection, prepare_source_selection_extension, source_selection_draft,
-    validate_label_review, validate_label_review_audit, validate_source_frame_manifest,
-    validate_source_seal,
+    extend_source_selection, inspect_label_review_progress, prepare_label_resolution,
+    prepare_label_review, prepare_source_selection, prepare_source_selection_extension,
+    source_selection_draft, validate_label_review, validate_label_review_audit,
+    validate_source_frame_manifest, validate_source_seal,
 };
 use crate::benchmark_import::{BenchmarkRunReview, import_reviewed_run, prepare_run_review};
 use std::fs;
@@ -431,6 +431,23 @@ pub(crate) fn validate_benchmark_labels(
     Ok(0)
 }
 
+pub(crate) fn benchmark_label_status(
+    seal_path: &str,
+    review_path: &str,
+) -> Result<i32, Box<dyn std::error::Error>> {
+    let (seal, seal_bytes) = read_source_seal_manifest(seal_path)?;
+    let review = read_json::<LabelReviewWorksheet>(review_path)?;
+    let progress =
+        inspect_label_review_progress(&seal, &sha256(&seal_bytes), &review).map_err(|error| {
+            IoError::new(
+                ErrorKind::InvalidData,
+                format!("benchmark label worksheet is invalid: {error}"),
+            )
+        })?;
+    println!("{}", serde_json::to_string_pretty(&progress)?);
+    Ok(0)
+}
+
 pub(crate) fn audit_benchmark_labels(
     seal_path: &str,
     output_path: &str,
@@ -602,6 +619,20 @@ where
 fn read_source_seal(
     path: &str,
 ) -> Result<(BenchmarkSourceSeal, Vec<u8>), Box<dyn std::error::Error>> {
+    let (seal, bytes) = read_source_seal_manifest(path)?;
+    let root = Path::new(path).parent().unwrap_or_else(|| Path::new("."));
+    validate_source_seal(&seal, root).map_err(|error| {
+        IoError::new(
+            ErrorKind::InvalidData,
+            format!("benchmark source seal is invalid: {error}"),
+        )
+    })?;
+    Ok((seal, bytes))
+}
+
+fn read_source_seal_manifest(
+    path: &str,
+) -> Result<(BenchmarkSourceSeal, Vec<u8>), Box<dyn std::error::Error>> {
     let bytes = fs::read(path).map_err(|error| {
         IoError::new(
             error.kind(),
@@ -612,13 +643,6 @@ fn read_source_seal(
         IoError::new(
             ErrorKind::InvalidData,
             format!("failed to parse benchmark source seal {path}: {error}"),
-        )
-    })?;
-    let root = Path::new(path).parent().unwrap_or_else(|| Path::new("."));
-    validate_source_seal(&seal, root).map_err(|error| {
-        IoError::new(
-            ErrorKind::InvalidData,
-            format!("benchmark source seal is invalid: {error}"),
         )
     })?;
     Ok((seal, bytes))

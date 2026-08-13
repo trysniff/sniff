@@ -1,6 +1,7 @@
 use super::{
     BenchmarkSourceSeal, LabelAgreementStatus, LabelReviewWorksheet, LabelReviewer,
-    audit_label_reviews, prepare_label_review, sha256, validate_label_review,
+    audit_label_reviews, inspect_label_review_progress, prepare_label_review, sha256,
+    validate_label_review,
 };
 use crate::benchmark::{SourceSnapshot, write_test_source_seal};
 use crate::types::FindingTier;
@@ -96,6 +97,76 @@ fn single_worksheet_validation_rejects_incomplete_unblinded_and_tampered_work() 
         validate_label_review(&seal, root.path(), &seal_hash, &tampered)
             .unwrap_err()
             .contains("changed immutable source facts")
+    );
+}
+
+#[test]
+fn progress_accepts_blank_work_and_counts_completed_decisions() {
+    let (root, seal, seal_hash) = fixture();
+    let mut worksheet = prepare_label_review(&seal, root.path(), &seal_hash).unwrap();
+
+    let blank = inspect_label_review_progress(&seal, &seal_hash, &worksheet).unwrap();
+    assert_eq!(blank.completed_count, 0);
+    assert_eq!(blank.pending_count, 2);
+    assert_eq!(blank.pending_by_language["rust"], 2);
+
+    worksheet = completed(worksheet, "reviewer-a");
+    worksheet.methods[1].decision = super::MethodLabelDecision {
+        tier: None,
+        pattern: String::new(),
+        intentional_boundary: None,
+        rationale: String::new(),
+        simplification: String::new(),
+        behavioral_evidence: Vec::new(),
+        missing_evidence: Vec::new(),
+        related_method_ids: Vec::new(),
+    };
+    let partial = inspect_label_review_progress(&seal, &seal_hash, &worksheet).unwrap();
+    assert_eq!(partial.reviewer_id.as_deref(), Some("reviewer-a"));
+    assert_eq!(partial.completed_count, 1);
+    assert_eq!(partial.pending_count, 1);
+    assert_eq!(partial.completed_by_tier["clean"], 1);
+}
+
+#[test]
+fn progress_rejects_half_filled_decisions() {
+    let (root, seal, seal_hash) = fixture();
+    let mut worksheet = prepare_label_review(&seal, root.path(), &seal_hash).unwrap();
+    worksheet.methods[0].decision.rationale = "Started but not classified.".to_string();
+
+    let error = inspect_label_review_progress(&seal, &seal_hash, &worksheet).unwrap_err();
+    assert!(error.contains("has not been labeled"));
+}
+
+#[test]
+fn progress_rejects_tampered_embedded_source_and_seal_commitment() {
+    let (root, seal, seal_hash) = fixture();
+    let template = prepare_label_review(&seal, root.path(), &seal_hash).unwrap();
+
+    let mut changed_source = template.clone();
+    changed_source.methods[0].source.push_str("// changed\n");
+    assert!(
+        inspect_label_review_progress(&seal, &seal_hash, &changed_source)
+            .unwrap_err()
+            .contains("task commitment mismatch")
+    );
+
+    let mut changed_context = template.clone();
+    changed_context.context_sources[0]
+        .source
+        .push_str("// changed\n");
+    assert!(
+        inspect_label_review_progress(&seal, &seal_hash, &changed_context)
+            .unwrap_err()
+            .contains("changed immutable review context")
+    );
+
+    let mut changed_seal = seal;
+    changed_seal.selection_attestation.push_str(" changed");
+    assert!(
+        inspect_label_review_progress(&changed_seal, &seal_hash, &template)
+            .unwrap_err()
+            .contains("source seal commitment mismatch")
     );
 }
 

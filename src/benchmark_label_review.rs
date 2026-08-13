@@ -3,7 +3,7 @@ use crate::product_contract::SlopPattern;
 use crate::types::FindingTier;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 
 pub const LABEL_REVIEW_SCHEMA_VERSION: u32 = 2;
@@ -69,6 +69,17 @@ pub struct LabelReviewWorksheet {
     pub reviewer: Option<LabelReviewer>,
     pub context_sources: Vec<LabelContextSource>,
     pub methods: Vec<MethodLabelReview>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LabelReviewProgress {
+    pub reviewer_id: Option<String>,
+    pub method_count: usize,
+    pub completed_count: usize,
+    pub pending_count: usize,
+    pub completed_by_language: BTreeMap<String, usize>,
+    pub pending_by_language: BTreeMap<String, usize>,
+    pub completed_by_tier: BTreeMap<String, usize>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -271,6 +282,164 @@ pub fn validate_label_review(
     validate_completed_worksheet(worksheet, &expected, &known_ids)
 }
 
+pub fn inspect_label_review_progress(
+    seal: &BenchmarkSourceSeal,
+    source_seal_artifact_sha256: &str,
+    worksheet: &LabelReviewWorksheet,
+) -> Result<LabelReviewProgress, String> {
+    validate_progress_identity(seal, source_seal_artifact_sha256, worksheet)?;
+    if let Some(reviewer) = &worksheet.reviewer {
+        validate_reviewer(reviewer)?;
+    }
+    let known_ids = seal
+        .methods
+        .iter()
+        .map(|method| method.method_id.as_str())
+        .collect::<HashSet<_>>();
+    let expected_by_id = seal
+        .methods
+        .iter()
+        .map(|method| (method.method_id.as_str(), method))
+        .collect::<HashMap<_, _>>();
+    let methods_by_id = worksheet
+        .methods
+        .iter()
+        .map(|method| (method.method_id.as_str(), method))
+        .collect::<HashMap<_, _>>();
+    let mut seen = HashSet::new();
+    let mut completed_by_language = BTreeMap::new();
+    let mut pending_by_language = BTreeMap::new();
+    let mut completed_by_tier = BTreeMap::new();
+    for method in &worksheet.methods {
+        let Some(expected_method) = expected_by_id.get(method.method_id.as_str()) else {
+            return Err(format!(
+                "label worksheet invents method {}",
+                method.method_id
+            ));
+        };
+        if !seen.insert(method.method_id.as_str()) {
+            return Err(format!(
+                "label worksheet repeats method {}",
+                method.method_id
+            ));
+        }
+        if !method_matches_seal(method, expected_method)
+            || sha256(method.source.as_bytes()) != expected_method.source_sha256
+        {
+            return Err(format!(
+                "label worksheet changed immutable source facts for method {}",
+                method.method_id
+            ));
+        }
+        if decision_is_blank(&method.decision) {
+            *pending_by_language
+                .entry(method.language.clone())
+                .or_insert(0) += 1;
+        } else {
+            validate_decision(&method.method_id, &method.decision, &known_ids)?;
+            *completed_by_language
+                .entry(method.language.clone())
+                .or_insert(0) += 1;
+            let tier = method.decision.tier.expect("validated decision has tier");
+            *completed_by_tier
+                .entry(tier.label().to_ascii_lowercase().replace(' ', "_"))
+                .or_insert(0) += 1;
+        }
+    }
+    validate_relationships(&methods_by_id)?;
+    let completed_count = completed_by_language.values().sum();
+    Ok(LabelReviewProgress {
+        reviewer_id: worksheet
+            .reviewer
+            .as_ref()
+            .map(|reviewer| reviewer.reviewer_id.clone()),
+        method_count: worksheet.methods.len(),
+        completed_count,
+        pending_count: worksheet.methods.len() - completed_count,
+        completed_by_language,
+        pending_by_language,
+        completed_by_tier,
+    })
+}
+
+fn validate_progress_identity(
+    seal: &BenchmarkSourceSeal,
+    source_seal_artifact_sha256: &str,
+    worksheet: &LabelReviewWorksheet,
+) -> Result<(), String> {
+    require_sha256("source seal artifact SHA-256", source_seal_artifact_sha256)?;
+    let computed_seal = seal.computed_seal_sha256()?;
+    if seal.seal_sha256 != computed_seal {
+        return Err(format!(
+            "source seal commitment mismatch; expected {computed_seal}"
+        ));
+    }
+    if worksheet.schema_version != LABEL_REVIEW_SCHEMA_VERSION
+        || worksheet.source_seal_artifact_sha256 != source_seal_artifact_sha256
+        || worksheet.source_seal_commitment_sha256 != seal.seal_sha256
+        || worksheet.selection_id != seal.selection_id
+        || worksheet.methods.len() != seal.methods.len()
+    {
+        return Err("label worksheet does not match the immutable source-seal task".to_string());
+    }
+    let snapshots = seal
+        .sources
+        .iter()
+        .chain(&seal.context_sources)
+        .map(|source| (source.artifact_path.as_str(), source))
+        .collect::<HashMap<_, _>>();
+    if worksheet.context_sources.len() != snapshots.len() {
+        return Err("label worksheet changed immutable review context".to_string());
+    }
+    let mut seen_context = HashSet::new();
+    for context in &worksheet.context_sources {
+        let Some(snapshot) = snapshots.get(context.artifact_path.as_str()) else {
+            return Err(format!(
+                "label worksheet invents review context {}",
+                context.artifact_path
+            ));
+        };
+        if !seen_context.insert(context.artifact_path.as_str())
+            || context.repository != snapshot.repository
+            || context.revision != snapshot.revision
+            || context.repository_path != snapshot.repository_path
+            || context.sha256 != snapshot.sha256
+            || sha256(context.source.as_bytes()) != snapshot.sha256
+        {
+            return Err(format!(
+                "label worksheet changed immutable review context {}",
+                context.artifact_path
+            ));
+        }
+    }
+    let expected_task = task_commitment(
+        source_seal_artifact_sha256,
+        &seal.seal_sha256,
+        &seal.selection_id,
+        &worksheet.context_sources,
+        &worksheet.methods,
+    )?;
+    if worksheet.task_commitment_sha256 != expected_task {
+        return Err(format!(
+            "label worksheet task commitment mismatch; expected {expected_task}"
+        ));
+    }
+    Ok(())
+}
+
+fn method_matches_seal(method: &MethodLabelReview, sealed: &SealedMethod) -> bool {
+    method.method_id == sealed.method_id
+        && method.repository == sealed.repository
+        && method.revision == sealed.revision
+        && method.repository_path == sealed.repository_path
+        && method.artifact_path == sealed.artifact_path
+        && method.language == sealed.language
+        && method.name == sealed.name
+        && method.start_line == sealed.start_line
+        && method.end_line == sealed.end_line
+        && method.source_sha256 == sealed.source_sha256
+}
+
 pub fn validate_label_review_audit(
     seal: &BenchmarkSourceSeal,
     source_seal_artifact_sha256: &str,
@@ -451,41 +620,12 @@ fn validate_completed_worksheet(
     expected: &LabelReviewWorksheet,
     known_ids: &HashSet<&str>,
 ) -> Result<(), String> {
-    if worksheet.schema_version != LABEL_REVIEW_SCHEMA_VERSION
-        || worksheet.source_seal_artifact_sha256 != expected.source_seal_artifact_sha256
-        || worksheet.source_seal_commitment_sha256 != expected.source_seal_commitment_sha256
-        || worksheet.selection_id != expected.selection_id
-        || worksheet.task_commitment_sha256 != expected.task_commitment_sha256
-    {
-        return Err("label worksheet does not match the immutable source-seal task".to_string());
-    }
-    if worksheet.context_sources != expected.context_sources {
-        return Err("label worksheet changed immutable review context".to_string());
-    }
-    if worksheet.methods.len() != expected.methods.len() {
-        return Err(
-            "label worksheet does not contain the complete sealed method census".to_string(),
-        );
-    }
+    validate_worksheet_identity(worksheet, expected)?;
     let reviewer = worksheet
         .reviewer
         .as_ref()
         .ok_or_else(|| "label worksheet is missing reviewer identity".to_string())?;
-    require_text("reviewer_id", &reviewer.reviewer_id)?;
-    require_text("reviewer affiliation", &reviewer.affiliation)?;
-    require_text("reviewer attestation", &reviewer.attestation)?;
-    if reviewer.years_experience == 0 {
-        return Err("label reviewer must record non-zero experience".to_string());
-    }
-    if !reviewer.independent_from_sniff
-        || !reviewer.sniff_output_hidden
-        || !reviewer.repository_context_inspected
-    {
-        return Err(
-            "label reviewer must be independent, blind to Sniff output, and attest repository-context inspection"
-                .to_string(),
-        );
-    }
+    validate_reviewer(reviewer)?;
     let expected_by_id = expected
         .methods
         .iter()
@@ -519,6 +659,48 @@ fn validate_completed_worksheet(
         validate_decision(&method.method_id, &method.decision, known_ids)?;
     }
     validate_relationships(&methods_by_id)?;
+    Ok(())
+}
+
+fn validate_worksheet_identity(
+    worksheet: &LabelReviewWorksheet,
+    expected: &LabelReviewWorksheet,
+) -> Result<(), String> {
+    if worksheet.schema_version != LABEL_REVIEW_SCHEMA_VERSION
+        || worksheet.source_seal_artifact_sha256 != expected.source_seal_artifact_sha256
+        || worksheet.source_seal_commitment_sha256 != expected.source_seal_commitment_sha256
+        || worksheet.selection_id != expected.selection_id
+        || worksheet.task_commitment_sha256 != expected.task_commitment_sha256
+    {
+        return Err("label worksheet does not match the immutable source-seal task".to_string());
+    }
+    if worksheet.context_sources != expected.context_sources {
+        return Err("label worksheet changed immutable review context".to_string());
+    }
+    if worksheet.methods.len() != expected.methods.len() {
+        return Err(
+            "label worksheet does not contain the complete sealed method census".to_string(),
+        );
+    }
+    Ok(())
+}
+
+fn validate_reviewer(reviewer: &LabelReviewer) -> Result<(), String> {
+    require_text("reviewer_id", &reviewer.reviewer_id)?;
+    require_text("reviewer affiliation", &reviewer.affiliation)?;
+    require_text("reviewer attestation", &reviewer.attestation)?;
+    if reviewer.years_experience == 0 {
+        return Err("label reviewer must record non-zero experience".to_string());
+    }
+    if !reviewer.independent_from_sniff
+        || !reviewer.sniff_output_hidden
+        || !reviewer.repository_context_inspected
+    {
+        return Err(
+            "label reviewer must be independent, blind to Sniff output, and attest repository-context inspection"
+                .to_string(),
+        );
+    }
     Ok(())
 }
 
@@ -646,6 +828,17 @@ fn validate_decision(
         }
     }
     Ok(())
+}
+
+fn decision_is_blank(decision: &MethodLabelDecision) -> bool {
+    decision.tier.is_none()
+        && decision.pattern.is_empty()
+        && decision.intentional_boundary.is_none()
+        && decision.rationale.is_empty()
+        && decision.simplification.is_empty()
+        && decision.behavioral_evidence.is_empty()
+        && decision.missing_evidence.is_empty()
+        && decision.related_method_ids.is_empty()
 }
 
 fn label_task(
