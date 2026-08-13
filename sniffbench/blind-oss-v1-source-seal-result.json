@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "selection_id": "sniffbench-blind-oss-v1-composite",
+  "source_seal_schema_version": 3,
+  "source_seal_sha256": "45fbabccc0ec2541e5033f2bfd3c85c0fb06c3235d0c077c40109d3e2484298e",
+  "source_seal_manifest_sha256": "33bf6eaac53c3e58c6d4ff2f3ecf54321ef59b1c7f81a58f5e19790bb7b4f5a4",
+  "source_seal_archive": "sniffbench-blind-oss-v1-source-seal.zip",
+  "source_seal_archive_sha256": "9cfca885c88ce7f8d2c7cc01114b6bc129acd5e2dfa432ef3b255858a51b65a9",
+  "source_seal_archive_bytes": 16998391,
+  "expanded_artifact_files": 355,
+  "expanded_artifact_bytes": 99227846,
+  "repository_count": 12,
+  "production_source_count": 278,
+  "review_context_count": 61,
+  "eligible_method_count": 1607,
+  "license_count": 12,
+  "methods_by_language": {
+    "go": 246,
+    "javascript": 153,
+    "kotlin": 361,
+    "python": 253,
+    "rust": 287,
+    "typescript": 307
+  },
+  "release_tag": "sniffbench-blind-oss-v1-source-seal"
+}

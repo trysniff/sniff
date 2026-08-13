@@ -189,3 +189,32 @@ quota remains a public failure rather than triggering another endpoint choice.
 precommits the ordered base and Kotlin components and exactly two repositories
 for each of the six supported languages. It is committed before Kotlin rank 1
 is generated or inspected.
+
+### Frozen six-language source seal
+
+The completed Kotlin assessment filled the two missing Kotlin slots without
+changing the ten repositories selected by the base component. The composite
+source seal contains exactly two repositories for each supported language and
+an exhaustive census of 1,607 eligible production methods.
+
+[`blind-oss-v1-source-seal.json`](blind-oss-v1-source-seal.json) is the public
+manifest. The exact source, review context, licenses, selection ledgers, and
+sampling frames are distributed as the
+[`sniffbench-blind-oss-v1-source-seal.zip`](https://github.com/trysniff/sniff/releases/download/sniffbench-blind-oss-v1-source-seal/sniffbench-blind-oss-v1-source-seal.zip)
+release asset rather than inside the installable Cargo crate. Its immutable
+sizes, counts, and SHA-256 commitments are recorded in
+[`blind-oss-v1-source-seal-result.json`](blind-oss-v1-source-seal-result.json).
+
+After extracting the archive, verify the manifest and every referenced byte
+without contacting GitHub or a model provider:
+
+```console
+sniff benchmark prepare-labels \
+  blind-source-seal.json independent-review.json
+```
+
+This command validates the complete source seal before creating a source-only
+worksheet. The worksheet contains no Sniff findings or hidden labels. At least
+two experienced reviewers must complete independent copies, and a separate
+resolver must adjudicate every disagreement before the blind corpus can be
+frozen.
