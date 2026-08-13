@@ -1,3 +1,4 @@
+use sha2::{Digest, Sha256};
 use std::ffi::OsString;
 #[cfg(target_os = "macos")]
 use std::ffi::c_void;
@@ -78,7 +79,15 @@ pub(crate) struct SandboxOutput {
     pub(crate) status_code: Option<i32>,
     pub(crate) stdout: String,
     pub(crate) stderr: String,
+    pub(crate) stdout_sha256: String,
+    pub(crate) stderr_sha256: String,
     pub(crate) timed_out: bool,
+}
+
+#[derive(Debug)]
+struct CapturedOutput {
+    text: String,
+    sha256: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -138,8 +147,8 @@ fn run_external(spec: &SandboxCommand) -> Result<SandboxOutput, SandboxError> {
         SandboxError::Failed("sandbox worker stderr was not captured".to_string())
     })?;
     let limit = spec.output_limit.max(1);
-    let stdout_reader = thread::spawn(move || read_limited(stdout, limit));
-    let stderr_reader = thread::spawn(move || read_limited(stderr, limit));
+    let stdout_reader = thread::spawn(move || read_limited_hashed(stdout, limit));
+    let stderr_reader = thread::spawn(move || read_limited_hashed(stderr, limit));
 
     let started = Instant::now();
     let mut timed_out = false;
@@ -228,28 +237,31 @@ fn run_external(spec: &SandboxCommand) -> Result<SandboxOutput, SandboxError> {
         .join()
         .map_err(|_| SandboxError::Failed("sandbox stderr reader panicked".to_string()))?
         .map_err(|error| SandboxError::Failed(format!("sandbox stderr read failed: {error}")))?;
+    let stderr_text = stderr.text;
     #[cfg(any(target_os = "linux", target_os = "macos"))]
-    let mut stderr = stderr;
+    let mut stderr_text = stderr_text;
     #[cfg(target_os = "macos")]
     if memory_exceeded {
-        if !stderr.is_empty() && !stderr.ends_with('\n') {
-            stderr.push('\n');
+        if !stderr_text.is_empty() && !stderr_text.ends_with('\n') {
+            stderr_text.push('\n');
         }
-        stderr
+        stderr_text
             .push_str("Sniff terminated the sandbox after its physical memory limit was exceeded");
     }
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     if process_limit_exceeded {
-        if !stderr.is_empty() && !stderr.ends_with('\n') {
-            stderr.push('\n');
+        if !stderr_text.is_empty() && !stderr_text.ends_with('\n') {
+            stderr_text.push('\n');
         }
-        stderr.push_str("Sniff terminated the sandbox after its process limit was exceeded");
+        stderr_text.push_str("Sniff terminated the sandbox after its process limit was exceeded");
     }
 
     Ok(SandboxOutput {
         status_code: status.and_then(|status| status.code()),
-        stdout,
-        stderr,
+        stdout: stdout.text,
+        stderr: stderr_text,
+        stdout_sha256: stdout.sha256,
+        stderr_sha256: stderr.sha256,
         timed_out,
     })
 }
@@ -1025,19 +1037,33 @@ fn profile_path(path: &Path) -> Result<String, SandboxError> {
 }
 
 fn read_limited<R: Read>(reader: R, limit: usize) -> IoResult<String> {
-    read_limited_with_observer(reader, limit, |_| {})
+    read_limited_hashed(reader, limit).map(|output| output.text)
 }
 
-fn read_limited_with_observer<R, F>(
+#[cfg(test)]
+fn read_limited_with_observer<R, F>(reader: R, limit: usize, observer: F) -> IoResult<String>
+where
+    R: Read,
+    F: FnMut(&[u8]),
+{
+    read_limited_hashed_with_observer(reader, limit, observer).map(|output| output.text)
+}
+
+fn read_limited_hashed<R: Read>(reader: R, limit: usize) -> IoResult<CapturedOutput> {
+    read_limited_hashed_with_observer(reader, limit, |_| {})
+}
+
+fn read_limited_hashed_with_observer<R, F>(
     mut reader: R,
     limit: usize,
     mut observer: F,
-) -> IoResult<String>
+) -> IoResult<CapturedOutput>
 where
     R: Read,
     F: FnMut(&[u8]),
 {
     let mut bytes = Vec::new();
+    let mut digest = Sha256::new();
     let mut buffer = [0u8; 8192];
     let mut truncated = false;
     loop {
@@ -1046,6 +1072,7 @@ where
             break;
         }
         observer(&buffer[..count]);
+        digest.update(&buffer[..count]);
         if bytes.len() < limit {
             let retained = count.min(limit - bytes.len());
             bytes.extend_from_slice(&buffer[..retained]);
@@ -1060,7 +1087,10 @@ where
     if truncated {
         text.push_str("\n[output truncated by Sniff]");
     }
-    Ok(text)
+    Ok(CapturedOutput {
+        text,
+        sha256: format!("{:x}", digest.finalize()),
+    })
 }
 
 fn terminate(child: &mut Child) -> Result<(), SandboxError> {
@@ -1092,7 +1122,7 @@ fn terminate_macos_process_group(process_group: u32) -> Result<(), SandboxError>
 mod tests {
     use super::{
         DEFAULT_MEMORY_LIMIT, DEFAULT_PROCESS_LIMIT, SandboxCommand, SandboxError, read_limited,
-        read_limited_with_observer, validate_external_runner, validate_spec,
+        read_limited_hashed, read_limited_with_observer, validate_external_runner, validate_spec,
     };
     #[cfg(target_os = "linux")]
     use super::{linux_proc_stat_parent, linux_sandbox_program};
@@ -1335,6 +1365,17 @@ mod tests {
 
         assert_eq!(observed, b"0123456789");
         assert_eq!(output, "0123\n[output truncated by Sniff]");
+    }
+
+    #[test]
+    fn hashes_complete_worker_output_beyond_the_retained_limit() {
+        let output = read_limited_hashed("0123456789".as_bytes(), 4).unwrap();
+
+        assert_eq!(output.text, "0123\n[output truncated by Sniff]");
+        assert_eq!(
+            output.sha256,
+            "84d89877f0d4041efb6bf91a16f0248f2fd573e6af05d4fa02513f8fbb7d7a7e"
+        );
     }
 
     #[test]

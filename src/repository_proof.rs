@@ -520,6 +520,8 @@ mod tests {
             status_code: Some(0),
             stdout: stdout.to_string(),
             stderr: String::new(),
+            stdout_sha256: "0".repeat(64),
+            stderr_sha256: "0".repeat(64),
             timed_out: false,
         }
     }
@@ -679,6 +681,8 @@ mod tests {
                     status_code: Some(1),
                     stdout: "same failure\n".to_string(),
                     stderr: String::new(),
+                    stdout_sha256: "0".repeat(64),
+                    stderr_sha256: "0".repeat(64),
                     timed_out: false,
                 })
             });

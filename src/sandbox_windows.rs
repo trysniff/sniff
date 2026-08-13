@@ -1,5 +1,6 @@
 use super::{
-    SandboxCommand, SandboxError, SandboxOutput, read_limited, read_limited_with_observer,
+    CapturedOutput, SandboxCommand, SandboxError, SandboxOutput, read_limited, read_limited_hashed,
+    read_limited_hashed_with_observer,
 };
 use std::collections::BTreeMap;
 use std::ffi::c_void;
@@ -643,8 +644,10 @@ fn run_process(
         .map_err(|error| SandboxError::Failed(format!("Windows stderr read failed: {error}")))?;
     Ok(SandboxOutput {
         status_code: Some(exit_code as i32),
-        stdout,
-        stderr,
+        stdout: stdout.text,
+        stderr: stderr.text,
+        stdout_sha256: stdout.sha256,
+        stderr_sha256: stderr.sha256,
         timed_out,
     })
 }
@@ -703,14 +706,14 @@ fn read_thread(
     handle: HANDLE,
     limit: usize,
     stream_name: &'static str,
-) -> thread::JoinHandle<std::io::Result<String>> {
+) -> thread::JoinHandle<std::io::Result<CapturedOutput>> {
     let handle_value = handle as isize;
     let debug = std::env::var_os("SNIFF_DEBUG_INDEXERS").is_some();
     thread::spawn(move || unsafe {
         let file = std::fs::File::from_raw_handle(handle_value as _);
         if debug {
             let mut traced = 0usize;
-            read_limited_with_observer(file, limit, |chunk| {
+            read_limited_hashed_with_observer(file, limit, |chunk| {
                 if traced >= limit {
                     return;
                 }
@@ -722,7 +725,7 @@ fn read_thread(
                 traced += count;
             })
         } else {
-            read_limited(file, limit)
+            read_limited_hashed(file, limit)
         }
     })
 }
