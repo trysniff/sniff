@@ -426,3 +426,24 @@ fn assessment_clone_preserves_committed_line_endings() {
     );
     fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn census_types_a_dirty_checkout_as_an_unsupported_project_shape() {
+    let root = temp_root("dirty-checkout");
+    repository(&root);
+    fs::write(root.join("main.py"), "def changed():\n    return 3\n").unwrap();
+
+    let census = census_repository(&root).unwrap();
+
+    assert!(!census.supported_project_shape);
+    assert_eq!(census.observed_method_count, None);
+    assert!(census.method_counts.is_empty());
+    assert!(
+        census
+            .parse_failure
+            .as_deref()
+            .unwrap()
+            .contains("not reproducibly clean")
+    );
+    fs::remove_dir_all(root).unwrap();
+}

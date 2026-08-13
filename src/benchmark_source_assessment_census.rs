@@ -13,6 +13,25 @@ pub(super) struct RepositoryCensus {
 }
 
 pub(super) fn census_repository(root: &Path) -> Result<RepositoryCensus, String> {
+    if root.join(".git").exists() {
+        let status = super::assessment_state::git(
+            root,
+            &["status", "--porcelain=v1", "--untracked-files=all"],
+        )?;
+        if !status.trim().is_empty() {
+            return Ok(RepositoryCensus {
+                method_counts: BTreeMap::new(),
+                observed_method_count: None,
+                dominant_language: None,
+                supported_project_shape: false,
+                source_inventory_sha256: sha256(&[]),
+                parse_failure: Some(format!(
+                    "checkout is not reproducibly clean under its Git attributes: {}",
+                    status.lines().take(8).collect::<Vec<_>>().join("; ")
+                )),
+            });
+        }
+    }
     let canonical_root = fs::canonicalize(root)
         .map_err(|error| format!("failed to resolve source-assessment checkout: {error}"))?;
     let paths = crate::walker::walk(

@@ -55,7 +55,6 @@ fn clone_repository_url(
             .output()
             .map_err(|error| format!("source assessment requires git: {error}"))?;
         if output.status.success() {
-            normalize_tracked_checkout_bytes(destination)?;
             return Ok(());
         }
         last_error = bounded(&String::from_utf8_lossy(&output.stderr), 1024);
@@ -65,72 +64,6 @@ fn clone_repository_url(
     }
     remove_generated_worktree(destination, work_root)?;
     Err(format!("git clone failed for {repository}: {last_error}"))
-}
-
-fn normalize_tracked_checkout_bytes(root: &Path) -> Result<(), String> {
-    let changed = git_bytes(root, &["diff", "--name-only", "-z", "--"])?;
-    for encoded in changed
-        .split(|byte| *byte == 0)
-        .filter(|path| !path.is_empty())
-    {
-        let relative = std::str::from_utf8(encoded)
-            .map_err(|_| "source-assessment tracked path is not UTF-8".to_string())?;
-        let path = Path::new(relative);
-        if path.is_absolute()
-            || path.components().any(|component| {
-                matches!(
-                    component,
-                    std::path::Component::ParentDir
-                        | std::path::Component::RootDir
-                        | std::path::Component::Prefix(_)
-                )
-            })
-        {
-            return Err(format!(
-                "source-assessment tracked path escaped its checkout: {relative}"
-            ));
-        }
-        let mode = git(root, &["ls-files", "-s", "--", relative])?;
-        let Some((mode, _)) = mode.split_once(' ') else {
-            return Err(format!(
-                "source-assessment changed path is not in the Git index: {relative}"
-            ));
-        };
-        if !matches!(mode, "100644" | "100755") {
-            return Err(format!(
-                "source-assessment cannot normalize changed Git mode {mode}: {relative}"
-            ));
-        }
-        let bytes = git_bytes(root, &["cat-file", "blob", &format!(":{relative}")])?;
-        fs::write(root.join(path), bytes).map_err(|error| {
-            format!("failed to restore committed source bytes for {relative}: {error}")
-        })?;
-    }
-    if !git(root, &["status", "--porcelain=v1", "--untracked-files=all"])?
-        .trim()
-        .is_empty()
-    {
-        return Err("source-assessment clone is not clean after byte normalization".to_string());
-    }
-    Ok(())
-}
-
-fn git_bytes(root: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(root)
-        .args(args)
-        .output()
-        .map_err(|error| format!("source assessment requires git: {error}"))?;
-    if !output.status.success() {
-        return Err(format!(
-            "git {} failed for {}: {}",
-            args.join(" "),
-            root.display(),
-            bounded(&String::from_utf8_lossy(&output.stderr), 1024)
-        ));
-    }
-    Ok(output.stdout)
 }
 
 #[cfg(test)]
