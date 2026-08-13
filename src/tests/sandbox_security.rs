@@ -1,11 +1,14 @@
 use super::{DEFAULT_MEMORY_LIMIT, DEFAULT_PROCESS_LIMIT, SandboxCommand, run};
+use crate::repository_proof::run_proof_command;
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Mutex;
 use std::time::Duration;
 
 const HOST_SECRET_ENV: &str = "SNIFF_TEST_HOST_SECRET_DO_NOT_EXPOSE";
 const HOST_SECRET_VALUE: &str = "sniff-host-secret-evidence";
+static HOST_SECRET_ENV_LOCK: Mutex<()> = Mutex::new(());
 
 #[cfg(windows)]
 const JAVA_REAL_PATH_PROBE: &str = r#"
@@ -392,6 +395,7 @@ fn windows_mapped_rust_toolchain_child_can_start() {
 
 #[test]
 fn malicious_worker_cannot_reach_host_secrets_filesystem_or_network() {
+    let _environment_guard = HOST_SECRET_ENV_LOCK.lock().unwrap();
     let repository = tempfile::tempdir().expect("create malicious repository");
     let host = tempfile::tempdir().expect("create host-only directory");
     let secret_path = host.path().join("secret.txt");
@@ -437,6 +441,54 @@ fn malicious_worker_cannot_reach_host_secrets_filesystem_or_network() {
     assert!(
         listener.accept().is_err(),
         "worker reached a host-local network listener"
+    );
+}
+
+#[test]
+fn repository_proof_command_cannot_reach_host_secrets_filesystem_or_network() {
+    let _environment_guard = HOST_SECRET_ENV_LOCK.lock().unwrap();
+    let repository = tempfile::tempdir().expect("create malicious proof repository");
+    let host = tempfile::tempdir().expect("create proof host-only directory");
+    let secret_path = host.path().join("secret.txt");
+    let outside_path = host.path().join("escaped.txt");
+    std::fs::write(&secret_path, HOST_SECRET_VALUE).expect("write proof host-only secret");
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind proof network target");
+    listener
+        .set_nonblocking(true)
+        .expect("make proof target nonblocking");
+    let worker = compile_worker(repository.path());
+    let command = vec![
+        worker.to_string_lossy().into_owned(),
+        "inspect".to_string(),
+        secret_path.to_string_lossy().into_owned(),
+        outside_path.to_string_lossy().into_owned(),
+        listener.local_addr().unwrap().to_string(),
+    ];
+
+    unsafe { std::env::set_var(HOST_SECRET_ENV, HOST_SECRET_VALUE) };
+    let output = run_proof_command(repository.path(), &command)
+        .expect("repository proof sandbox should start");
+    unsafe { std::env::remove_var(HOST_SECRET_ENV) };
+
+    assert_eq!(
+        output.status_code,
+        Some(0),
+        "stdout={:?} stderr={:?}",
+        output.stdout,
+        output.stderr
+    );
+    assert!(output.stdout.contains("env=denied"));
+    assert!(output.stdout.contains("read=denied"));
+    assert!(output.stdout.contains("write=denied"));
+    assert!(output.stdout.contains("network=denied"));
+    assert!(!output.stdout.contains(HOST_SECRET_VALUE));
+    assert!(
+        !outside_path.exists(),
+        "proof command wrote outside its snapshot"
+    );
+    assert!(
+        listener.accept().is_err(),
+        "proof command reached a host-local network listener"
     );
 }
 

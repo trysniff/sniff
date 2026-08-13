@@ -217,7 +217,10 @@ fn run_case_tests_with_executor(
     }
 }
 
-fn run_proof_command(root: &Path, command: &[String]) -> Result<sandbox::SandboxOutput, String> {
+pub(crate) fn run_proof_command(
+    root: &Path,
+    command: &[String],
+) -> Result<sandbox::SandboxOutput, String> {
     let program = command
         .first()
         .ok_or_else(|| "repository test command is empty".to_string())?;
