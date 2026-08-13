@@ -47,6 +47,53 @@ pub struct HistoricalGitDiscovery {
     pub selected_commit: Option<RankedHistoricalCommit>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HistoricalDiffHunk {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_path: Option<String>,
+    pub path: String,
+    pub parent_start: usize,
+    pub parent_count: usize,
+    pub commit_start: usize,
+    pub commit_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HistoricalProductionPathDelta {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_path: Option<String>,
+    pub path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub commit_sha256: Option<String>,
+    pub parent_non_whitespace_lines: usize,
+    pub commit_non_whitespace_lines: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HistoricalSourceDeltaCensus {
+    pub parent_revision: String,
+    pub commit_revision: String,
+    pub supported_project_shape: bool,
+    pub parent_method_counts: BTreeMap<String, usize>,
+    pub parent_method_count: Option<usize>,
+    pub affected_methods: Vec<AffectedHistoricalMethod>,
+    pub quota_language: Option<String>,
+    pub qualifying_production_change: Option<bool>,
+    pub production_paths: Vec<HistoricalProductionPathDelta>,
+    pub source_non_whitespace_lines_before: Option<usize>,
+    pub source_non_whitespace_lines_after: Option<usize>,
+    pub license_path: Option<String>,
+    pub parent_source_inventory_sha256: String,
+    pub commit_source_inventory_sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parse_failure: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HistoricalRevisionSide {

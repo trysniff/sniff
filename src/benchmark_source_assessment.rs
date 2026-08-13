@@ -26,6 +26,10 @@ use assessment_state::{
 };
 use assessment_transport::github_metadata;
 
+pub(super) fn deterministic_license_path(root: &Path) -> Result<Option<String>, String> {
+    license_path(root)
+}
+
 #[derive(Debug, Clone, Serialize)]
 struct CensusEvidence {
     census_contract: &'static str,
