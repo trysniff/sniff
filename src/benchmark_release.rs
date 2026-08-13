@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::path::{Component, Path};
 
-pub(crate) const RELEASE_SCHEMA_VERSION: u32 = 5;
+pub(crate) const RELEASE_SCHEMA_VERSION: u32 = 6;
 const REQUIRED_LANGUAGES: [&str; 6] =
     ["go", "javascript", "kotlin", "python", "rust", "typescript"];
 const REQUIRED_BASELINES: [&str; 7] = [
@@ -23,6 +23,11 @@ const REQUIRED_BASELINES: [&str; 7] = [
 mod schema;
 
 pub use schema::*;
+
+#[path = "benchmark_non_blind_seal.rs"]
+mod non_blind_seal;
+
+pub use non_blind_seal::*;
 
 #[path = "benchmark_source_seal.rs"]
 mod source_seal;
@@ -81,6 +86,7 @@ impl BenchmarkCorpus {
             expected_pattern: &'a str,
             intentional_boundary: bool,
             partition: BenchmarkPartition,
+            scope: BenchmarkScope,
             expected_proof_level: u8,
             covered_method_ids: &'a [String],
             after: &'a [SourceSnapshot],
@@ -108,6 +114,7 @@ impl BenchmarkCorpus {
                 expected_pattern: &case.label.expected_pattern,
                 intentional_boundary: case.label.intentional_boundary,
                 partition: case.partition,
+                scope: case.scope,
                 expected_proof_level: case.expected_proof_level,
                 covered_method_ids: &case.covered_method_ids,
                 after: &case.after,
@@ -130,10 +137,22 @@ impl BenchmarkCorpus {
 
     pub fn computed_source_commitment_sha256(&self) -> Result<String, String> {
         #[derive(serde::Serialize)]
+        struct CommittedCaseSource<'a> {
+            case_id: &'a str,
+            partition: BenchmarkPartition,
+            provenance_id: Option<&'a str>,
+            before: &'a [SourceSnapshot],
+            after: &'a [SourceSnapshot],
+        }
+
+        #[derive(serde::Serialize)]
         struct CommittedSources<'a> {
             source_seal_artifact_path: &'a str,
             source_seal_sha256: &'a str,
+            non_blind_source_seal_artifact_path: &'a str,
+            non_blind_source_seal_sha256: &'a str,
             sources: Vec<&'a SourceSnapshot>,
+            case_sources: Vec<CommittedCaseSource<'a>>,
         }
         let mut sources = self.analysis_sources.iter().collect::<Vec<_>>();
         sources.sort_by(|left, right| {
@@ -155,7 +174,24 @@ impl BenchmarkCorpus {
         let bytes = serde_json::to_vec(&CommittedSources {
             source_seal_artifact_path: &self.source_seal_artifact_path,
             source_seal_sha256: &self.source_seal_sha256,
+            non_blind_source_seal_artifact_path: &self.non_blind_source_seal_artifact_path,
+            non_blind_source_seal_sha256: &self.non_blind_source_seal_sha256,
             sources,
+            case_sources: {
+                let mut cases = self
+                    .cases
+                    .iter()
+                    .map(|case| CommittedCaseSource {
+                        case_id: &case.label.case_id,
+                        partition: case.partition,
+                        provenance_id: case.provenance_id.as_deref(),
+                        before: &case.before,
+                        after: &case.after,
+                    })
+                    .collect::<Vec<_>>();
+                cases.sort_by(|left, right| left.case_id.cmp(right.case_id));
+                cases
+            },
         })
         .map_err(|error| format!("failed to serialize benchmark source inventory: {error}"))?;
         Ok(format!("{:x}", Sha256::digest(bytes)))
@@ -381,6 +417,11 @@ fn validate_corpus(
     require_sha256("source_seal_sha256", &corpus.source_seal_sha256)?;
     require_safe_artifact_path(&corpus.blind_case_bundle_artifact_path)?;
     require_sha256("blind_case_bundle_sha256", &corpus.blind_case_bundle_sha256)?;
+    require_safe_artifact_path(&corpus.non_blind_source_seal_artifact_path)?;
+    require_sha256(
+        "non_blind_source_seal_sha256",
+        &corpus.non_blind_source_seal_sha256,
+    )?;
     if corpus.cases.is_empty() {
         return Err("release benchmark corpus cannot be empty".to_string());
     }
@@ -433,8 +474,91 @@ fn validate_corpus(
     }
     let source_texts = validate_source_snapshots(corpus, corpus_root)?;
     validate_case_source_membership(corpus)?;
+    validate_corpus_non_blind_source_seal(corpus, corpus_root)?;
     validate_blind_source_seal(corpus, corpus_root)?;
     Ok(source_texts)
+}
+
+fn validate_corpus_non_blind_source_seal(
+    corpus: &BenchmarkCorpus,
+    corpus_root: &Path,
+) -> Result<(), String> {
+    let path = corpus_root.join(&corpus.non_blind_source_seal_artifact_path);
+    let bytes = fs::read(&path).map_err(|error| {
+        format!(
+            "failed to read benchmark non-blind source seal {}: {error}",
+            path.display()
+        )
+    })?;
+    let actual_hash = format!("{:x}", Sha256::digest(&bytes));
+    if !actual_hash.eq_ignore_ascii_case(&corpus.non_blind_source_seal_sha256) {
+        return Err(format!(
+            "benchmark non-blind source-seal artifact hash mismatch: expected {actual_hash}"
+        ));
+    }
+    let seal: NonBlindSourceSeal = serde_json::from_slice(&bytes)
+        .map_err(|error| format!("failed to parse non-blind source seal: {error}"))?;
+    validate_non_blind_source_seal(&seal, corpus_root)?;
+    let entries = seal
+        .entries
+        .iter()
+        .map(|entry| (entry.provenance_id.as_str(), entry))
+        .collect::<HashMap<_, _>>();
+    let mut used = HashSet::new();
+    for case in &corpus.cases {
+        match case.partition {
+            BenchmarkPartition::HistoricalSimplification
+            | BenchmarkPartition::ResearchTrajectory
+            | BenchmarkPartition::IntentionalBoundary => {
+                let provenance_id = case.provenance_id.as_deref().ok_or_else(|| {
+                    format!(
+                        "non-blind real case {} requires a sealed provenance_id",
+                        case.label.case_id
+                    )
+                })?;
+                let entry = entries.get(provenance_id).ok_or_else(|| {
+                    format!(
+                        "benchmark case {} references unknown non-blind provenance_id {provenance_id}",
+                        case.label.case_id
+                    )
+                })?;
+                if entry.partition != case.partition
+                    || !case
+                        .before
+                        .iter()
+                        .all(|source| entry.before.contains(source))
+                    || !case.after.iter().all(|source| entry.after.contains(source))
+                {
+                    return Err(format!(
+                        "benchmark case {} differs from sealed non-blind provenance {provenance_id}",
+                        case.label.case_id
+                    ));
+                }
+                used.insert(provenance_id);
+            }
+            BenchmarkPartition::SyntheticGold | BenchmarkPartition::BlindOss => {
+                if case.provenance_id.is_some() {
+                    return Err(format!(
+                        "benchmark case {} cannot claim non-blind provenance",
+                        case.label.case_id
+                    ));
+                }
+            }
+        }
+    }
+    if used.len() != entries.len() {
+        let mut unused = entries
+            .keys()
+            .filter(|id| !used.contains(**id))
+            .copied()
+            .collect::<Vec<_>>();
+        unused.sort_unstable();
+        return Err(format!(
+            "non-blind source seal contains unassigned provenance entries: {}",
+            unused.join(", ")
+        ));
+    }
+    Ok(())
 }
 
 fn validate_blind_source_seal(corpus: &BenchmarkCorpus, corpus_root: &Path) -> Result<(), String> {
@@ -642,6 +766,19 @@ fn validate_case(case: &ReleaseBenchmarkCase) -> Result<(), String> {
     }
     validate_snapshots(id, "before", &case.before)?;
     require_text("human_explanation", &case.human_explanation)?;
+    if case.scope == BenchmarkScope::Method && case.before.len() != 1 {
+        return Err(format!(
+            "method-scoped benchmark case {id} must identify exactly one before source"
+        ));
+    }
+    if case.scope == BenchmarkScope::MultiMethod
+        && case.partition == BenchmarkPartition::BlindOss
+        && case.covered_method_ids.len() < 2
+    {
+        return Err(format!(
+            "multi-method benchmark case {id} must identify at least two covered methods"
+        ));
+    }
     if case.expected_proof_level > 5 {
         return Err(format!("benchmark case {id} has proof level above P5"));
     }

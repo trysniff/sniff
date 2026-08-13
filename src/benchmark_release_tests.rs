@@ -80,6 +80,13 @@ fn corpus() -> (TempDir, BenchmarkCorpus) {
             false,
         ),
         (
+            "python",
+            BenchmarkPartition::ResearchTrajectory,
+            FindingTier::Slop,
+            "residual_machinery",
+            false,
+        ),
+        (
             "kotlin",
             BenchmarkPartition::IntentionalBoundary,
             FindingTier::Clean,
@@ -206,7 +213,9 @@ fn corpus() -> (TempDir, BenchmarkCorpus) {
             } else {
                 Vec::new()
             },
+            scope: BenchmarkScope::Method,
             expected_proof_level: if is_finding(tier) { 1 } else { 0 },
+            provenance_id: None,
             covered_method_ids: Vec::new(),
             adjudications,
             disputed: false,
@@ -231,6 +240,8 @@ fn corpus() -> (TempDir, BenchmarkCorpus) {
         &source_seal_sha256,
         &cases,
     );
+    let (non_blind_source_seal_artifact_path, non_blind_source_seal_sha256) =
+        super::write_test_non_blind_source_seal(root.path(), &mut cases);
     let mut corpus = BenchmarkCorpus {
         schema_version: RELEASE_SCHEMA_VERSION,
         corpus_id: "frozen-corpus-v1".to_string(),
@@ -241,6 +252,8 @@ fn corpus() -> (TempDir, BenchmarkCorpus) {
         source_seal_sha256,
         blind_case_bundle_artifact_path,
         blind_case_bundle_sha256,
+        non_blind_source_seal_artifact_path,
+        non_blind_source_seal_sha256,
         analysis_sources: cases.iter().flat_map(|case| case.before.clone()).collect(),
         cases,
     };
@@ -467,6 +480,56 @@ fn blind_corpus_rejects_tampered_or_incomplete_source_seals() {
     let error = validate_frozen_corpus(&incomplete, root.path()).unwrap_err();
 
     assert!(error.contains("eligible-method census does not match"));
+}
+
+#[test]
+fn non_blind_corpus_rejects_tampered_or_retrofitted_provenance() {
+    let (root, corpus) = corpus();
+    let seal_path = root
+        .path()
+        .join(&corpus.non_blind_source_seal_artifact_path);
+    let original = fs::read(&seal_path).unwrap();
+    fs::write(&seal_path, b"tampered non-blind seal\n").unwrap();
+
+    let error = validate_frozen_corpus(&corpus, root.path()).unwrap_err();
+
+    assert!(error.contains("non-blind source-seal artifact hash mismatch"));
+    fs::write(&seal_path, &original).unwrap();
+
+    let mut seal: NonBlindSourceSeal = serde_json::from_slice(&original).unwrap();
+    seal.entries[0]
+        .selection_rationale
+        .push_str(" Retrofitted after analysis.");
+    let bytes = serde_json::to_vec_pretty(&seal).unwrap();
+    fs::write(&seal_path, &bytes).unwrap();
+    let mut retrofitted = corpus.clone();
+    retrofitted.non_blind_source_seal_sha256 = format!("{:x}", Sha256::digest(&bytes));
+    retrofitted.source_commitment_sha256 = retrofitted.computed_source_commitment_sha256().unwrap();
+
+    let error = validate_frozen_corpus(&retrofitted, root.path()).unwrap_err();
+
+    assert!(error.contains("non-blind source seal commitment mismatch"));
+}
+
+#[test]
+fn non_blind_cases_must_match_precommitted_sources() {
+    let (root, mut corpus) = corpus();
+    let research_provenance = corpus
+        .cases
+        .iter()
+        .find(|case| case.partition == BenchmarkPartition::ResearchTrajectory)
+        .and_then(|case| case.provenance_id.clone());
+    let case = corpus
+        .cases
+        .iter_mut()
+        .find(|case| case.partition == BenchmarkPartition::HistoricalSimplification)
+        .unwrap();
+    case.provenance_id = research_provenance;
+    corpus.source_commitment_sha256 = corpus.computed_source_commitment_sha256().unwrap();
+
+    let error = validate_frozen_corpus(&corpus, root.path()).unwrap_err();
+
+    assert!(error.contains("differs from sealed non-blind provenance"));
 }
 
 #[test]

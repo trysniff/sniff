@@ -1,4 +1,7 @@
-use crate::benchmark::{BenchmarkCorpus, BenchmarkSubmission, evaluate_release, freeze_corpus};
+use crate::benchmark::{
+    BenchmarkCorpus, BenchmarkSubmission, NonBlindSourceSeal, evaluate_release, freeze_corpus,
+    freeze_non_blind_source_seal,
+};
 use crate::benchmark::{
     BenchmarkSourceSeal, LabelResolutionManifest, LabelReviewAudit, LabelReviewWorksheet,
     SourceFrameCollectionPolicy, SourceSamplingPolicy, SourceSelectionAudit,
@@ -65,6 +68,28 @@ pub(crate) fn freeze_benchmark(
     eprintln!(
         "Frozen SniffBench corpus written to {output_path}\nSource commitment: {}\nLabel commitment: {}",
         frozen.source_commitment_sha256, frozen.label_commitment_sha256
+    );
+    Ok(0)
+}
+
+pub(crate) fn seal_non_blind_benchmark_sources(
+    draft_path: &str,
+    output_path: &str,
+) -> Result<i32, Box<dyn std::error::Error>> {
+    let draft = read_json::<NonBlindSourceSeal>(draft_path)?;
+    let artifact_root = Path::new(draft_path)
+        .parent()
+        .unwrap_or_else(|| Path::new("."));
+    let frozen = freeze_non_blind_source_seal(draft, artifact_root).map_err(|error| {
+        IoError::new(
+            ErrorKind::InvalidData,
+            format!("non-blind benchmark sources cannot be sealed: {error}"),
+        )
+    })?;
+    write_new_file(Path::new(output_path), &serde_json::to_vec_pretty(&frozen)?)?;
+    eprintln!(
+        "Frozen non-blind SniffBench source seal written to {output_path}\nSeal commitment: {}",
+        frozen.seal_sha256
     );
     Ok(0)
 }

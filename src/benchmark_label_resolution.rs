@@ -1,5 +1,5 @@
 use super::{
-    BenchmarkAdjudication, BenchmarkCase, BenchmarkPartition, BenchmarkSourceSeal,
+    BenchmarkAdjudication, BenchmarkCase, BenchmarkPartition, BenchmarkScope, BenchmarkSourceSeal,
     LabelAgreementStatus, LabelReviewAudit, ReleaseBenchmarkCase, SourceSnapshot,
     validate_label_review_audit,
 };
@@ -531,7 +531,13 @@ fn to_release_case(
         after: resolved.after.clone(),
         human_explanation: resolved.human_explanation.clone(),
         behavioral_evidence: resolved.behavioral_evidence.clone(),
+        scope: if method_ids.len() > 1 {
+            BenchmarkScope::MultiMethod
+        } else {
+            BenchmarkScope::Method
+        },
         expected_proof_level: resolved.expected_proof_level,
+        provenance_id: None,
         covered_method_ids: method_ids.to_vec(),
         adjudications,
         disputed: audited

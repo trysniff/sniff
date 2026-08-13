@@ -4,6 +4,38 @@ SniffBench is Sniff's reproducible evaluation protocol. Blind OSS source
 selection, source sealing, independent method labeling, run import, and final
 evaluation use create-new, hash-bound artifacts.
 
+## Non-blind real evidence
+
+Historical simplifications, research trajectories, and intentional clean
+boundaries use a separate label-free provenance seal. Freeze this seal before
+running Sniff or assigning labels:
+
+[`non-blind-v1-selection-policy.json`](non-blind-v1-selection-policy.json)
+fixes the source populations, quotas, ranking contracts, eligibility rules,
+required research datasets, and no-fallback behavior before candidate
+collection. The final seal hashes this exact policy artifact.
+
+```console
+sniff benchmark seal-non-blind-sources \
+  non-blind-source-draft.json non-blind-source-seal.json
+```
+
+The seal also hashes a separately published selection-policy artifact, which
+must exist before candidate source inspection. Every entry pins an HTTPS
+upstream, an immutable 40- or 64-character revision,
+the exact before/after source bytes, its license, and behavioral evidence such
+as tests or build results. The command verifies every artifact and writes a
+commitment-bound create-new seal. A final SniffBench v6 corpus must assign every
+historical, research, and intentional-boundary case to one of these presealed
+entries; synthetic and blind-OSS cases cannot claim that provenance.
+
+Research provenance is not a label. SlopCodeBench trajectories and TRIM
+original/minimized patches still require independent Sniff-ontology review.
+Reference solutions, paper figures, aggregate metrics, and authored examples
+must not be relabeled as observed agent slop. If exact trajectory artifacts are
+not publicly available, that source is recorded as unavailable rather than
+reconstructed or approximated.
+
 ## Blind OSS v1
 
 [`blind-oss-v1-policy.json`](blind-oss-v1-policy.json) was fixed before running

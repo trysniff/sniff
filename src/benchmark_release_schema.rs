@@ -13,6 +13,15 @@ pub enum BenchmarkPartition {
     BlindOss,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BenchmarkScope {
+    Method,
+    MultiMethod,
+    File,
+    Repository,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct SourceSnapshot {
     pub repository: String,
@@ -52,7 +61,10 @@ pub struct ReleaseBenchmarkCase {
     pub after: Vec<SourceSnapshot>,
     pub human_explanation: String,
     pub behavioral_evidence: Vec<String>,
+    pub scope: BenchmarkScope,
     pub expected_proof_level: u8,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provenance_id: Option<String>,
     #[serde(default)]
     pub covered_method_ids: Vec<String>,
     pub adjudications: Vec<BenchmarkAdjudication>,
@@ -73,6 +85,8 @@ pub struct BenchmarkCorpus {
     pub source_seal_sha256: String,
     pub blind_case_bundle_artifact_path: String,
     pub blind_case_bundle_sha256: String,
+    pub non_blind_source_seal_artifact_path: String,
+    pub non_blind_source_seal_sha256: String,
     pub analysis_sources: Vec<SourceSnapshot>,
     pub cases: Vec<ReleaseBenchmarkCase>,
 }

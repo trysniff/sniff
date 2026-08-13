@@ -7,18 +7,22 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 mod release;
 
 #[cfg(test)]
+pub(crate) use release::write_test_non_blind_source_seal;
+#[cfg(test)]
 pub(crate) use release::write_test_source_seal;
 pub use release::{
     ActualCostReceipt, BenchmarkAdjudication, BenchmarkBaseline, BenchmarkBaselineFinding,
     BenchmarkCorpus, BenchmarkEvidence, BenchmarkPartition, BenchmarkRun, BenchmarkRunPrediction,
-    BenchmarkSourceSeal, BenchmarkSubmission, BenchmarkUsage, BlindCaseBundle, BlindReviewer,
-    FrameEligibilityAudit, FrameIneligibilityReason, FrameIneligibleRecord,
+    BenchmarkScope, BenchmarkSourceSeal, BenchmarkSubmission, BenchmarkUsage, BlindCaseBundle,
+    BlindReviewer, FrameEligibilityAudit, FrameIneligibilityReason, FrameIneligibleRecord,
     LABEL_RESOLUTION_SCHEMA_VERSION, LABEL_REVIEW_SCHEMA_VERSION, LabelAgreementStatus,
     LabelResolutionManifest, LabelResolver, LabelReviewAudit, LabelReviewProgress,
     LabelReviewWorksheet, LabelReviewer, MethodLabelAudit, MethodLabelDecision, MethodLabelReview,
-    ReleaseBenchmarkCase, ReleaseBenchmarkMetrics, ResolvedLabelCase, ReviewerDisposition,
-    ReviewerLabel, SOURCE_ASSESSMENT_CENSUS_CONTRACT, SOURCE_CENSUS_CONTRACT_VERSION,
-    SOURCE_FRAME_COLLECTION_MANIFEST_SCHEMA_VERSION, SOURCE_FRAME_COLLECTION_POLICY_SCHEMA_VERSION,
+    NON_BLIND_SOURCE_SEAL_SCHEMA_VERSION, NonBlindSourceEntry, NonBlindSourceKind,
+    NonBlindSourceSeal, ProvenanceArtifact, ReleaseBenchmarkCase, ReleaseBenchmarkMetrics,
+    ResolvedLabelCase, ReviewerDisposition, ReviewerLabel, SOURCE_ASSESSMENT_CENSUS_CONTRACT,
+    SOURCE_CENSUS_CONTRACT_VERSION, SOURCE_FRAME_COLLECTION_MANIFEST_SCHEMA_VERSION,
+    SOURCE_FRAME_COLLECTION_POLICY_SCHEMA_VERSION,
     SOURCE_SAMPLING_CONTINUATION_POLICY_SCHEMA_VERSION, SOURCE_SAMPLING_POLICY_SCHEMA_VERSION,
     SOURCE_SEAL_SCHEMA_VERSION, SOURCE_SELECTION_AUDIT_SCHEMA_VERSION,
     SOURCE_SELECTION_COMPONENT_AUDIT_SCHEMA_VERSION,
@@ -34,11 +38,12 @@ pub use release::{
     assess_source_selection, audit_label_reviews, audit_source_selection,
     audit_source_selection_component, build_blind_case_bundle, collect_source_frame,
     combine_source_selections, create_composite_source_seal, create_source_seal, evaluate_release,
-    extend_source_selection, freeze_corpus, inspect_label_review_progress,
-    prepare_label_resolution, prepare_label_review, prepare_source_selection,
-    prepare_source_selection_extension, source_selection_draft, validate_actual_cost_receipt,
-    validate_frozen_corpus, validate_label_review, validate_label_review_audit,
-    validate_source_frame_manifest, validate_source_seal, validate_source_selection_audit,
+    extend_source_selection, freeze_corpus, freeze_non_blind_source_seal,
+    inspect_label_review_progress, prepare_label_resolution, prepare_label_review,
+    prepare_source_selection, prepare_source_selection_extension, source_selection_draft,
+    validate_actual_cost_receipt, validate_frozen_corpus, validate_label_review,
+    validate_label_review_audit, validate_non_blind_source_seal, validate_source_frame_manifest,
+    validate_source_seal, validate_source_selection_audit,
     validate_source_selection_component_against_frame, validate_source_selection_component_audit,
     validate_source_selection_composite_audit, validate_source_selection_worksheet,
 };

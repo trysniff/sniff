@@ -3,8 +3,8 @@ use super::{
 };
 use crate::benchmark::{
     ActualCostReceipt, BenchmarkAdjudication, BenchmarkCase, BenchmarkCorpus, BenchmarkPartition,
-    BenchmarkSourceSeal, BlindCaseBundle, LABEL_RESOLUTION_SCHEMA_VERSION, LabelResolver,
-    ReleaseBenchmarkCase, ReviewerDisposition, SourceSnapshot, freeze_corpus,
+    BenchmarkScope, BenchmarkSourceSeal, BlindCaseBundle, LABEL_RESOLUTION_SCHEMA_VERSION,
+    LabelResolver, ReleaseBenchmarkCase, ReviewerDisposition, SourceSnapshot, freeze_corpus,
 };
 use crate::completed_run::{
     COMPLETED_RUN_SCHEMA_VERSION, CompletedRunArtifact, CompletedRunCoverage,
@@ -98,6 +98,11 @@ fn frozen_corpus(root: &std::path::Path) -> BenchmarkCorpus {
             "src/demo.ts",
             "function demo(): number { return 1; }\n",
         ),
+        (
+            "python",
+            "src/research.py",
+            "def research_demo():\n    return 1\n",
+        ),
         ("kotlin", "src/Demo.kt", "fun demo(): Int = 1\n"),
         ("rust", "src/demo.rs", "fn demo() -> i32 { 1 }\n"),
         (
@@ -129,6 +134,7 @@ fn frozen_corpus(root: &std::path::Path) -> BenchmarkCorpus {
     let partitions = [
         BenchmarkPartition::SyntheticGold,
         BenchmarkPartition::HistoricalSimplification,
+        BenchmarkPartition::ResearchTrajectory,
         BenchmarkPartition::ResearchTrajectory,
         BenchmarkPartition::IntentionalBoundary,
         BenchmarkPartition::BlindOss,
@@ -183,7 +189,9 @@ fn frozen_corpus(root: &std::path::Path) -> BenchmarkCorpus {
                 } else {
                     Vec::new()
                 },
+                scope: BenchmarkScope::Method,
                 expected_proof_level: if finding { 1 } else { 0 },
+                provenance_id: None,
                 covered_method_ids: Vec::new(),
                 adjudications: if partition == BenchmarkPartition::SyntheticGold {
                     Vec::new()
@@ -220,9 +228,11 @@ fn frozen_corpus(root: &std::path::Path) -> BenchmarkCorpus {
         &source_seal_sha256,
         &cases,
     );
+    let (non_blind_source_seal_artifact_path, non_blind_source_seal_sha256) =
+        crate::benchmark::write_test_non_blind_source_seal(root, &mut cases);
     freeze_corpus(
         BenchmarkCorpus {
-            schema_version: 5,
+            schema_version: 6,
             corpus_id: "import-corpus".to_string(),
             frozen_at: "2026-08-12T00:00:00Z".to_string(),
             source_commitment_sha256: String::new(),
@@ -231,6 +241,8 @@ fn frozen_corpus(root: &std::path::Path) -> BenchmarkCorpus {
             source_seal_sha256,
             blind_case_bundle_artifact_path,
             blind_case_bundle_sha256,
+            non_blind_source_seal_artifact_path,
+            non_blind_source_seal_sha256,
             analysis_sources: sources,
             cases,
         },

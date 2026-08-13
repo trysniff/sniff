@@ -1,0 +1,96 @@
+{
+  "schema_version": 1,
+  "policy_id": "sniffbench-non-blind-v1",
+  "prepared_at": "2026-08-13T00:00:00Z",
+  "precommit_parent_revision": "754939a8f956227c15b7552b90c0d42783b8aa5a",
+  "ranking_seed": "754939a8f956227c15b7552b90c0d42783b8aa5a",
+  "no_fallbacks": true,
+  "supported_languages": [
+    "go",
+    "javascript",
+    "kotlin",
+    "python",
+    "rust",
+    "typescript"
+  ],
+  "historical_simplification": {
+    "sampling_frame_url": "https://raw.githubusercontent.com/ossf/scorecard/40c1e35996730d4fdcbdb2e6a23917a2467e29b7/cron/internal/data/projects.csv",
+    "sampling_frame_commit": "40c1e35996730d4fdcbdb2e6a23917a2467e29b7",
+    "sampling_frame_blob": "01e0927123bd7e8ffcf2ec313ccf1404fe4c5229",
+    "sampling_frame_sha256": "55b1de849d6d401bd6529a2806d587b53170cfbe7cdbc2ac5799ab65bf42807a",
+    "repository_ranking_contract": "sha256(sniffbench-non-blind-history-v1\\0 || ranking_seed || \\0 || canonical_repository_identity), ascending digest then identity",
+    "assessed_repository_prefix": 600,
+    "repositories_per_language": 2,
+    "commits_per_repository": 1,
+    "excluded_repository_source": "sniffbench/blind-oss-v1-source-seal.json",
+    "commit_ranking_contract": "sha256(sniffbench-non-blind-commit-v1\\0 || ranking_seed || \\0 || canonical_repository_identity || \\0 || full_commit_sha), ascending digest then commit SHA",
+    "commit_subject_regex": "(?i)\\b(simplif(?:y|ied|ication)|cleanup|clean up|refactor|remove(?:d|s|ing)? (?:dead|duplicate|duplicated|redundant|unnecessary)|deduplicat(?:e|ed|ion))\\b",
+    "commit_requirements": [
+      "exactly one parent and not a merge",
+      "both parent and commit are immutable full Git revisions",
+      "changes at least one supported production source file",
+      "does not consist only of generated, vendored, test, fixture, example, documentation, lock, or formatting changes",
+      "before and after revisions both pass the same default CI test command declared by the repository at the candidate commit; inability to reproduce that command is a typed exclusion, never permission to choose a smaller test subset",
+      "the selected source delta removes or consolidates behavior while preserving the tested public contract",
+      "selection uses only commit metadata and deterministic source/test facts, never Sniff output or a slop label"
+    ],
+    "source_method_bounds": {
+      "minimum": 20,
+      "maximum": 500
+    }
+  },
+  "research_trajectories": {
+    "required_sources": [
+      {
+        "source_id": "slopcodebench",
+        "paper": "https://arxiv.org/abs/2603.24755v2",
+        "harness_repository": "https://github.com/SprocketLab/slop-code-bench",
+        "harness_revision": "25bd2b9a216df93e85bb46f741c0e2d1f422b111",
+        "problem_repository": "https://github.com/gabeorlanski/scb-problems",
+        "problem_revision": "ef6a9dd13911566b6b01075ca121758c9f7b5c5f",
+        "required_artifacts": [
+          "complete checkpoint-by-checkpoint agent source trajectory",
+          "exact prompts and agent/model identity",
+          "checkpoint tests and raw pass/fail results",
+          "license permitting redistribution"
+        ],
+        "availability_as_of_policy": "harness and problems available; official v0.3 release has no run assets; linked Zenodo records 18405900 and 19257129 contain PDFs only"
+      },
+      {
+        "source_id": "trim",
+        "paper": "https://arxiv.org/abs/2607.18161v1",
+        "required_artifacts": [
+          "original passing agent patch",
+          "TRIM-minimized passing patch",
+          "exact base repository and revision",
+          "raw validation results",
+          "license permitting redistribution"
+        ],
+        "availability_as_of_policy": "no official artifact repository or downloadable trajectory dataset was located"
+      }
+    ],
+    "selection_rule": "Use every licensed exact trajectory pair supplied by the required sources up to 20 pairs per source, ranked by sha256(source_id || NUL || upstream_record_id). Do not substitute reference solutions, paper excerpts, aggregate metrics, third-party recreations, or newly generated Sniff output.",
+    "failure_rule": "The ResearchTrajectory partition remains incomplete until at least one exact qualifying pair from each required source is sealed. Missing artifacts are a failed prerequisite, not permission to invent or approximate data."
+  },
+  "intentional_boundaries": {
+    "categories": [
+      "adapter",
+      "retry_boundary",
+      "public_wrapper",
+      "compatibility_api",
+      "generated_surface",
+      "test_seam",
+      "entrypoint",
+      "framework_callback"
+    ],
+    "cases_per_category": 2,
+    "candidate_ranking_contract": "sha256(sniffbench-intentional-boundary-v1\\0 || ranking_seed || \\0 || immutable_repository_revision || \\0 || repository_path || \\0 || exact_symbol_identity), ascending digest then identity",
+    "requirements": [
+      "candidate source is outside the blind OSS seal",
+      "the exact public/framework/test contract is captured as a hash-bound behavioral artifact before labeling",
+      "selection is based on observable role and contract evidence, not path/name alone and never Sniff output",
+      "independent adjudication must confirm Clean and intentional_boundary before the case can satisfy this partition",
+      "a failed candidate closes its precommitted slot rather than allowing a hand-picked replacement"
+    ]
+  }
+}
