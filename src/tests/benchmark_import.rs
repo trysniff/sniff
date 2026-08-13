@@ -27,7 +27,15 @@ fn snapshot(
     repository_path: &str,
     text: &str,
 ) -> SourceSnapshot {
-    let artifact_path = format!("before/{language}.txt");
+    let extension = std::path::Path::new(repository_path)
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap();
+    let source_name = repository_path
+        .replace(['/', '\\'], "-")
+        .trim_end_matches(&format!(".{extension}"))
+        .to_string();
+    let artifact_path = format!("before/{language}-{source_name}.{extension}");
     let path = root.join(&artifact_path);
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     fs::write(path, text).unwrap();
@@ -60,6 +68,22 @@ fn frozen_corpus(root: &std::path::Path) -> BenchmarkCorpus {
             "src/demo.go",
             "package demo\nfunc Demo() int { return 1 }\n",
         ),
+        (
+            "python",
+            "blind/demo.py",
+            "def blind_demo():\n    return 1\n",
+        ),
+        (
+            "javascript",
+            "blind/demo.js",
+            "function blindDemo() { return 1; }\n",
+        ),
+        (
+            "typescript",
+            "blind/demo.ts",
+            "function blindDemo(): number { return 1; }\n",
+        ),
+        ("kotlin", "blind/Demo.kt", "fun blindDemo(): Int = 1\n"),
     ];
     let sources = definitions
         .iter()
@@ -72,8 +96,12 @@ fn frozen_corpus(root: &std::path::Path) -> BenchmarkCorpus {
         BenchmarkPartition::IntentionalBoundary,
         BenchmarkPartition::BlindOss,
         BenchmarkPartition::BlindOss,
+        BenchmarkPartition::BlindOss,
+        BenchmarkPartition::BlindOss,
+        BenchmarkPartition::BlindOss,
+        BenchmarkPartition::BlindOss,
     ];
-    let cases = definitions
+    let mut cases = definitions
         .iter()
         .zip(&sources)
         .zip(partitions)
@@ -82,7 +110,7 @@ fn frozen_corpus(root: &std::path::Path) -> BenchmarkCorpus {
             let finding = index == 0;
             ReleaseBenchmarkCase {
                 label: BenchmarkCase {
-                    case_id: format!("case-{language}"),
+                    case_id: format!("case-{index}-{language}"),
                     language: (*language).to_string(),
                     expected_tier: if finding {
                         FindingTier::Slop
@@ -119,6 +147,7 @@ fn frozen_corpus(root: &std::path::Path) -> BenchmarkCorpus {
                     Vec::new()
                 },
                 expected_proof_level: if finding { 1 } else { 0 },
+                covered_method_ids: Vec::new(),
                 adjudications: if partition == BenchmarkPartition::SyntheticGold {
                     Vec::new()
                 } else {
@@ -136,13 +165,27 @@ fn frozen_corpus(root: &std::path::Path) -> BenchmarkCorpus {
             }
         })
         .collect::<Vec<_>>();
+    let blind_sources = cases
+        .iter()
+        .filter(|case| case.partition == BenchmarkPartition::BlindOss)
+        .flat_map(|case| case.before.clone())
+        .collect::<Vec<_>>();
+    let (source_seal_artifact_path, source_seal_sha256, methods_by_artifact) =
+        crate::benchmark::write_test_source_seal(root, &blind_sources);
+    for case in &mut cases {
+        if case.partition == BenchmarkPartition::BlindOss {
+            case.covered_method_ids = methods_by_artifact[&case.before[0].artifact_path].clone();
+        }
+    }
     freeze_corpus(
         BenchmarkCorpus {
-            schema_version: 3,
+            schema_version: 4,
             corpus_id: "import-corpus".to_string(),
             frozen_at: "2026-08-12T00:00:00Z".to_string(),
             source_commitment_sha256: String::new(),
             label_commitment_sha256: String::new(),
+            source_seal_artifact_path,
+            source_seal_sha256,
             analysis_sources: sources,
             cases,
         },
@@ -160,6 +203,7 @@ fn completed_artifact(corpus: &BenchmarkCorpus) -> CompletedRunArtifact {
             sha256: source.sha256.clone(),
         })
         .collect::<Vec<_>>();
+    let file_count = source_files.len();
     let verdict = LLMVerdict {
         verdict_type: "method".to_string(),
         file_path: "src/demo.py".to_string(),
@@ -229,7 +273,7 @@ fn completed_artifact(corpus: &BenchmarkCorpus) -> CompletedRunArtifact {
         output_per_million: 0.28,
     };
     let stats = RunStats {
-        files_scanned: 6,
+        files_scanned: file_count,
         methods_analyzed: 1,
         ai_reviews: 1,
         ai_expected_reviews: 1,
@@ -284,8 +328,8 @@ fn completed_artifact(corpus: &BenchmarkCorpus) -> CompletedRunArtifact {
         source_commitment_sha256: source_commitment,
         report_commitment_sha256: report_commitment,
         coverage: CompletedRunCoverage {
-            files_scanned: 6,
-            source_files_committed: 6,
+            files_scanned: file_count,
+            source_files_committed: file_count,
             methods_expected: 1,
             methods_completed: 1,
             compiler_methods_expected: 1,
@@ -371,7 +415,7 @@ fn completed_artifacts_prepare_and_import_without_exposing_labels() {
     assert_eq!(run.predictions.len(), corpus.cases.len());
     assert_eq!(
         run.predictions[0].matched_case_id.as_deref(),
-        Some("case-python")
+        Some("case-0-python")
     );
     assert_eq!(run.usage.actual_cost_microusd, 50_000);
     assert_eq!(run.cross_scan_reused_units, 0);

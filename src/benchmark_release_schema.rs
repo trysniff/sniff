@@ -53,6 +53,8 @@ pub struct ReleaseBenchmarkCase {
     pub human_explanation: String,
     pub behavioral_evidence: Vec<String>,
     pub expected_proof_level: u8,
+    #[serde(default)]
+    pub covered_method_ids: Vec<String>,
     pub adjudications: Vec<BenchmarkAdjudication>,
     #[serde(default)]
     pub disputed: bool,
@@ -67,6 +69,8 @@ pub struct BenchmarkCorpus {
     pub frozen_at: String,
     pub source_commitment_sha256: String,
     pub label_commitment_sha256: String,
+    pub source_seal_artifact_path: String,
+    pub source_seal_sha256: String,
     pub analysis_sources: Vec<SourceSnapshot>,
     pub cases: Vec<ReleaseBenchmarkCase>,
 }

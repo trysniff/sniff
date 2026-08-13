@@ -86,7 +86,14 @@ pub enum CliCommand {
 
 #[derive(Subcommand, Debug)]
 pub enum BenchmarkCommand {
-    /// Verify snapshot hashes and create an immutable SniffBench v3 corpus manifest.
+    /// Freeze a label-free OSS source and eligible-method census before any Sniff run.
+    SealSources {
+        /// Source-selection draft with immutable revisions and local clean checkouts.
+        draft: String,
+        /// New source-seal manifest; a create-new sibling source bundle is also written.
+        output: String,
+    },
+    /// Verify snapshot hashes and create an immutable SniffBench v4 corpus manifest.
     Freeze {
         /// Draft corpus manifest; snapshot paths are relative to its directory.
         draft: String,
@@ -114,9 +121,9 @@ pub enum BenchmarkCommand {
     },
     /// Evaluate complete runs and competitor ledgers against a frozen corpus.
     Evaluate {
-        /// Frozen SniffBench v3 corpus manifest and source-snapshot directory.
+        /// Frozen SniffBench v4 corpus manifest and source-snapshot directory.
         corpus: String,
-        /// Complete SniffBench v3 runs, adjudications, usage, and baseline ledgers.
+        /// Complete SniffBench v4 runs, adjudications, usage, and baseline ledgers.
         submission: String,
     },
 }
@@ -168,6 +175,9 @@ pub async fn run(args: CliArgs) -> Result<i32, Box<dyn std::error::Error>> {
             pipeline::resume(&path, args.skip_dotenv, args.yes, args.budget_usd).await
         }
         Some(CliCommand::Benchmark { command }) => match command {
+            BenchmarkCommand::SealSources { draft, output } => {
+                pipeline::seal_benchmark_sources(&draft, &output)
+            }
             BenchmarkCommand::Freeze { draft, output } => {
                 pipeline::freeze_benchmark(&draft, &output)
             }
@@ -280,6 +290,25 @@ mod tests {
             Some(CliCommand::Benchmark {
                 command: BenchmarkCommand::Freeze { draft, output }
             }) if draft == "draft.json" && output == "frozen.json"
+        ));
+    }
+
+    #[test]
+    fn parses_offline_benchmark_source_seal() {
+        let args = CliArgs::try_parse_from([
+            "sniff",
+            "benchmark",
+            "seal-sources",
+            "selection.json",
+            "blind-source-seal.json",
+        ])
+        .expect("benchmark source-seal arguments");
+
+        assert!(matches!(
+            args.command,
+            Some(CliCommand::Benchmark {
+                command: BenchmarkCommand::SealSources { draft, output }
+            }) if draft == "selection.json" && output == "blind-source-seal.json"
         ));
     }
 

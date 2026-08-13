@@ -71,18 +71,62 @@ fn corpus() -> (TempDir, BenchmarkCorpus) {
             "none",
             false,
         ),
+        (
+            "javascript",
+            BenchmarkPartition::BlindOss,
+            FindingTier::Clean,
+            "none",
+            false,
+        ),
+        (
+            "typescript",
+            BenchmarkPartition::BlindOss,
+            FindingTier::Clean,
+            "none",
+            false,
+        ),
+        (
+            "kotlin",
+            BenchmarkPartition::BlindOss,
+            FindingTier::Clean,
+            "none",
+            false,
+        ),
     ];
     let mut cases = Vec::new();
     for (index, (language, partition, tier, pattern, intentional_boundary)) in
         definitions.into_iter().enumerate()
     {
         let case_id = format!("case-{index}-{language}");
-        let before_text = format!("line one\nunnecessary_{index}\nline three\n");
+        let (extension, before_text) = match language {
+            "rust" => ("rs", format!("fn blind_{index}() -> i32 {{ 1 }}\n")),
+            "go" => (
+                "go",
+                format!("package demo\nfunc Blind{index}() int {{ return 1 }}\n"),
+            ),
+            "python" if partition == BenchmarkPartition::BlindOss => {
+                ("py", format!("def blind_{index}():\n    return 1\n"))
+            }
+            "javascript" if partition == BenchmarkPartition::BlindOss => {
+                ("js", format!("function blind{index}() {{ return 1; }}\n"))
+            }
+            "typescript" if partition == BenchmarkPartition::BlindOss => (
+                "ts",
+                format!("function blind{index}(): number {{ return 1; }}\n"),
+            ),
+            "kotlin" if partition == BenchmarkPartition::BlindOss => {
+                ("kt", format!("fun blind{index}(): Int = 1\n"))
+            }
+            _ => (
+                "txt",
+                format!("line one\nunnecessary_{index}\nline three\n"),
+            ),
+        };
         let after_text = "line one\nline three\n";
         let before = snapshot(
             root.path(),
-            &format!("before/{index}-{language}.txt"),
-            &format!("src/{language}.txt"),
+            &format!("before/{index}-{language}.{extension}"),
+            &format!("src/{language}.{extension}"),
             &before_text,
         );
         let after = if is_finding(tier) {
@@ -127,10 +171,23 @@ fn corpus() -> (TempDir, BenchmarkCorpus) {
                 Vec::new()
             },
             expected_proof_level: if is_finding(tier) { 1 } else { 0 },
+            covered_method_ids: Vec::new(),
             adjudications,
             disputed: false,
             dispute_resolution: None,
         });
+    }
+    let blind_sources = cases
+        .iter()
+        .filter(|case| case.partition == BenchmarkPartition::BlindOss)
+        .flat_map(|case| case.before.clone())
+        .collect::<Vec<_>>();
+    let (source_seal_artifact_path, source_seal_sha256, methods_by_artifact) =
+        source_seal::write_test_source_seal(root.path(), &blind_sources);
+    for case in &mut cases {
+        if case.partition == BenchmarkPartition::BlindOss {
+            case.covered_method_ids = methods_by_artifact[&case.before[0].artifact_path].clone();
+        }
     }
     let mut corpus = BenchmarkCorpus {
         schema_version: RELEASE_SCHEMA_VERSION,
@@ -138,6 +195,8 @@ fn corpus() -> (TempDir, BenchmarkCorpus) {
         frozen_at: "2026-08-12T00:00:00Z".to_string(),
         source_commitment_sha256: "0".repeat(64),
         label_commitment_sha256: "0".repeat(64),
+        source_seal_artifact_path,
+        source_seal_sha256,
         analysis_sources: cases.iter().flat_map(|case| case.before.clone()).collect(),
         cases,
     };
@@ -181,8 +240,7 @@ fn submission(corpus: &BenchmarkCorpus, root: &std::path::Path) -> BenchmarkSubm
     let predictions = corpus
         .cases
         .iter()
-        .enumerate()
-        .map(|(index, case)| {
+        .map(|case| {
             let finding = is_finding(case.label.expected_tier);
             BenchmarkRunPrediction {
                 prediction_id: format!("prediction-{}", case.label.case_id),
@@ -192,12 +250,19 @@ fn submission(corpus: &BenchmarkCorpus, root: &std::path::Path) -> BenchmarkSubm
                 pattern: case.label.expected_pattern.clone(),
                 evidence: if finding {
                     let snapshot = &case.before[0];
+                    let source = fs::read_to_string(root.join(&snapshot.artifact_path)).unwrap();
+                    let (line_index, quote) = source
+                        .lines()
+                        .enumerate()
+                        .find(|(_, line)| !line.trim().is_empty())
+                        .map(|(index, line)| (index + 1, line.trim().to_string()))
+                        .unwrap();
                     vec![BenchmarkEvidence {
                         artifact_path: snapshot.artifact_path.clone(),
                         source_sha256: snapshot.sha256.clone(),
-                        start_line: 2,
-                        end_line: 2,
-                        quote: format!("unnecessary_{index}"),
+                        start_line: line_index,
+                        end_line: line_index,
+                        quote,
                     }]
                 } else {
                     Vec::new()
@@ -303,6 +368,62 @@ fn complete_release_submission_passes_every_offline_gate() {
     assert_eq!(metrics.overall_evidence_validity, 1.0);
     assert_eq!(metrics.cost_usd_per_1000_methods, 0.5);
     assert_eq!(metrics.by_partition.len(), 5);
+}
+
+#[test]
+fn blind_corpus_rejects_tampered_or_incomplete_source_seals() {
+    let (root, corpus) = corpus();
+    let seal_path = root.path().join(&corpus.source_seal_artifact_path);
+    let original = fs::read(&seal_path).unwrap();
+    fs::write(&seal_path, b"tampered seal\n").unwrap();
+
+    let error = validate_frozen_corpus(&corpus, root.path()).unwrap_err();
+
+    assert!(error.contains("source-seal artifact hash mismatch"));
+    fs::write(&seal_path, original).unwrap();
+
+    let mut seal: BenchmarkSourceSeal =
+        serde_json::from_slice(&fs::read(&seal_path).unwrap()).unwrap();
+    seal.methods.pop();
+    seal.seal_sha256 = seal.computed_seal_sha256().unwrap();
+    let mut bytes = serde_json::to_vec_pretty(&seal).unwrap();
+    bytes.push(b'\n');
+    fs::write(&seal_path, &bytes).unwrap();
+    let mut incomplete = corpus.clone();
+    incomplete.source_seal_sha256 = digest(&String::from_utf8(bytes).unwrap());
+    incomplete.source_commitment_sha256 = incomplete.computed_source_commitment_sha256().unwrap();
+
+    let error = validate_frozen_corpus(&incomplete, root.path()).unwrap_err();
+
+    assert!(error.contains("eligible-method census does not match"));
+}
+
+#[test]
+fn blind_corpus_requires_every_sealed_method_exactly_once() {
+    let (root, corpus) = corpus();
+    let blind_index = corpus
+        .cases
+        .iter()
+        .position(|case| case.partition == BenchmarkPartition::BlindOss)
+        .unwrap();
+    let method_id = corpus.cases[blind_index].covered_method_ids[0].clone();
+    let mut omitted = corpus.clone();
+    omitted.cases[blind_index].covered_method_ids.clear();
+    omitted.label_commitment_sha256 = omitted.computed_label_commitment_sha256().unwrap();
+
+    let error = validate_frozen_corpus(&omitted, root.path()).unwrap_err();
+
+    assert!(error.contains("does not identify any sealed method"));
+
+    let mut duplicated = corpus.clone();
+    duplicated.cases[blind_index]
+        .covered_method_ids
+        .push(method_id);
+    duplicated.label_commitment_sha256 = duplicated.computed_label_commitment_sha256().unwrap();
+
+    let error = validate_frozen_corpus(&duplicated, root.path()).unwrap_err();
+
+    assert!(error.contains("assigned to more than one case"));
 }
 
 #[test]
@@ -420,23 +541,25 @@ fn repeatability_includes_unmatched_findings() {
     let (root, corpus) = corpus();
     let mut submission = submission(&corpus, root.path());
     let snapshot = &corpus.cases[0].before[0];
-    submission.runs[0].predictions.push(BenchmarkRunPrediction {
-        prediction_id: "unstable-extra".to_string(),
-        finding_fingerprint: Some("unstable-fingerprint".to_string()),
-        matched_case_id: None,
-        tier: FindingTier::KindaSlop,
-        pattern: "ceremonial_logic".to_string(),
-        evidence: vec![BenchmarkEvidence {
-            artifact_path: snapshot.artifact_path.clone(),
-            source_sha256: snapshot.sha256.clone(),
-            start_line: 2,
-            end_line: 2,
-            quote: "unnecessary_0".to_string(),
-        }],
-        proof_level: 1,
-        reviewer_disposition: ReviewerDisposition::Rejected,
-        reviewer_minutes: 1.0,
-    });
+    for index in 0..2 {
+        submission.runs[0].predictions.push(BenchmarkRunPrediction {
+            prediction_id: format!("unstable-extra-{index}"),
+            finding_fingerprint: Some(format!("unstable-fingerprint-{index}")),
+            matched_case_id: None,
+            tier: FindingTier::KindaSlop,
+            pattern: "ceremonial_logic".to_string(),
+            evidence: vec![BenchmarkEvidence {
+                artifact_path: snapshot.artifact_path.clone(),
+                source_sha256: snapshot.sha256.clone(),
+                start_line: 2,
+                end_line: 2,
+                quote: "unnecessary_0".to_string(),
+            }],
+            proof_level: 1,
+            reviewer_disposition: ReviewerDisposition::Rejected,
+            reviewer_minutes: 1.0,
+        });
+    }
 
     let metrics = evaluate_release(&corpus, &submission, root.path()).expect("evaluate");
 

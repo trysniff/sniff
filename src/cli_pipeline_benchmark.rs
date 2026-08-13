@@ -1,4 +1,5 @@
 use crate::benchmark::{BenchmarkCorpus, BenchmarkSubmission, evaluate_release, freeze_corpus};
+use crate::benchmark::{SourceSelectionDraft, create_source_seal};
 use crate::benchmark_import::{BenchmarkRunReview, import_reviewed_run, prepare_run_review};
 use std::fs;
 use std::io::{Error as IoError, ErrorKind, Write};
@@ -53,6 +54,29 @@ pub(crate) fn freeze_benchmark(
     eprintln!(
         "Frozen SniffBench corpus written to {output_path}\nSource commitment: {}\nLabel commitment: {}",
         frozen.source_commitment_sha256, frozen.label_commitment_sha256
+    );
+    Ok(0)
+}
+
+pub(crate) fn seal_benchmark_sources(
+    draft_path: &str,
+    output_path: &str,
+) -> Result<i32, Box<dyn std::error::Error>> {
+    let draft = read_json::<SourceSelectionDraft>(draft_path)?;
+    let draft_root = Path::new(draft_path)
+        .parent()
+        .unwrap_or_else(|| Path::new("."));
+    let seal = create_source_seal(draft, draft_root, Path::new(output_path)).map_err(|error| {
+        IoError::new(
+            ErrorKind::InvalidData,
+            format!("benchmark sources cannot be sealed: {error}"),
+        )
+    })?;
+    eprintln!(
+        "Label-free SniffBench source seal written to {output_path}\nSources: {}\nEligible methods: {}\nSeal commitment: {}",
+        seal.sources.len(),
+        seal.methods.len(),
+        seal.seal_sha256
     );
     Ok(0)
 }
@@ -144,7 +168,10 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{benchmark, write_new_file};
+    use super::{benchmark, seal_benchmark_sources, write_new_file};
+    use crate::benchmark::{
+        SOURCE_SEAL_SCHEMA_VERSION, SourceRepositoryDraft, SourceSelectionDraft,
+    };
     use std::fs;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -217,5 +244,71 @@ mod tests {
         assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
         assert_eq!(fs::read_to_string(&output).unwrap(), "existing");
         let _ = fs::remove_file(output);
+    }
+
+    #[test]
+    fn source_sealing_is_an_offline_create_new_workflow() {
+        let bundle = temp_path("source-seal-bundle");
+        let repository = bundle.join("repository");
+        fs::create_dir_all(repository.join("src")).unwrap();
+        fs::write(
+            repository.join("src/lib.rs"),
+            "pub fn sealed() -> i32 { 1 }\n",
+        )
+        .unwrap();
+        fs::write(repository.join("LICENSE"), "test license\n").unwrap();
+        let git = |args: &[&str]| {
+            let output = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&repository)
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            String::from_utf8(output.stdout).unwrap().trim().to_string()
+        };
+        git(&["init"]);
+        git(&["config", "user.email", "seal@example.test"]);
+        git(&["config", "user.name", "Seal Test"]);
+        git(&["add", "."]);
+        git(&["commit", "-m", "fixture"]);
+        let revision = git(&["rev-parse", "HEAD"]);
+        let draft = SourceSelectionDraft {
+            schema_version: SOURCE_SEAL_SCHEMA_VERSION,
+            selection_id: "offline-seal".to_string(),
+            selected_at: "2026-08-12T00:00:00Z".to_string(),
+            selection_methodology: "Selected before labels and tool output.".to_string(),
+            selection_attestation: "No provider was used during source selection.".to_string(),
+            repositories: vec![SourceRepositoryDraft {
+                repository: "https://example.test/offline".to_string(),
+                revision,
+                local_path: repository.to_string_lossy().into_owned(),
+                license_path: "LICENSE".to_string(),
+            }],
+        };
+        let draft_path = bundle.join("selection.json");
+        let output_path = bundle.join("seal.json");
+        fs::write(&draft_path, serde_json::to_vec_pretty(&draft).unwrap()).unwrap();
+
+        let code =
+            seal_benchmark_sources(draft_path.to_str().unwrap(), output_path.to_str().unwrap())
+                .unwrap();
+
+        assert_eq!(code, 0);
+        assert!(output_path.is_file());
+        assert!(
+            bundle
+                .join("seal.sources/repository-0/source/src/lib.rs")
+                .is_file()
+        );
+        let error =
+            seal_benchmark_sources(draft_path.to_str().unwrap(), output_path.to_str().unwrap())
+                .unwrap_err();
+        assert!(error.to_string().contains("already exists"));
+        let _ = fs::remove_dir_all(bundle);
     }
 }

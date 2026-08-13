@@ -62,7 +62,8 @@ sniff resume
 # Optionally pause after about $0.50 of cumulative estimated scan spend.
 sniff --budget-usd 0.50
 
-# Freeze a corpus, then evaluate completed runs without contacting a provider.
+# Seal blind sources before labels/runs, then freeze and evaluate offline.
+sniff benchmark seal-sources selection.json blind-source-seal.json
 sniff benchmark freeze draft.json corpus.json
 sniff benchmark prepare-run corpus.json review.json --artifact .sniff/runs/RUN.json
 sniff benchmark import-run corpus.json review.json run.json
@@ -98,9 +99,19 @@ cap.
 
 ## SniffBench Evaluation
 
+`sniff benchmark seal-sources SELECTION OUTPUT` operates entirely offline. It
+requires clean local Git checkouts at complete immutable commit IDs, copies only
+Sniff-supported source files plus declared license evidence into a create-new
+bundle, derives the complete eligible-method census, and writes a label-free
+source seal. Commit or attest that seal before creating labels or running Sniff;
+the later corpus must hash-bind it and assign every sealed blind method to
+exactly one adjudicated case.
+
 `sniff benchmark freeze DRAFT OUTPUT` verifies every declared local source
 snapshot, computes separate SHA-256 commitments for analyzed sources and hidden
-labels, and creates a new immutable corpus manifest without overwriting files.
+labels, verifies the referenced source seal and exhaustive blind-method
+coverage, and creates a new immutable SniffBench v4 corpus manifest without
+overwriting files.
 
 `sniff benchmark evaluate CORPUS SUBMISSION` evaluates that corpus and
 three or more complete runs. The corpus binds labels and local before/after

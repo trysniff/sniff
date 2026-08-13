@@ -6,12 +6,16 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 #[path = "benchmark_release.rs"]
 mod release;
 
+#[cfg(test)]
+pub(crate) use release::write_test_source_seal;
 pub use release::{
     ActualCostReceipt, BenchmarkAdjudication, BenchmarkBaseline, BenchmarkBaselineFinding,
     BenchmarkCorpus, BenchmarkEvidence, BenchmarkPartition, BenchmarkRun, BenchmarkRunPrediction,
-    BenchmarkSubmission, BenchmarkUsage, BlindReviewer, ReleaseBenchmarkCase,
-    ReleaseBenchmarkMetrics, ReviewerDisposition, SourceSnapshot, evaluate_release, freeze_corpus,
-    validate_actual_cost_receipt, validate_frozen_corpus,
+    BenchmarkSourceSeal, BenchmarkSubmission, BenchmarkUsage, BlindReviewer, ReleaseBenchmarkCase,
+    ReleaseBenchmarkMetrics, ReviewerDisposition, SOURCE_CENSUS_CONTRACT_VERSION,
+    SOURCE_SEAL_SCHEMA_VERSION, SealedLicense, SealedMethod, SourceRepositoryDraft,
+    SourceSelectionDraft, SourceSnapshot, create_source_seal, evaluate_release, freeze_corpus,
+    validate_actual_cost_receipt, validate_frozen_corpus, validate_source_seal,
 };
 
 /// One labeled unit in a SniffBench corpus. The label is hidden from the

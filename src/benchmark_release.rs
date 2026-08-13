@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::path::{Component, Path};
 
-pub(crate) const RELEASE_SCHEMA_VERSION: u32 = 3;
+pub(crate) const RELEASE_SCHEMA_VERSION: u32 = 4;
 const REQUIRED_LANGUAGES: [&str; 6] =
     ["go", "javascript", "kotlin", "python", "rust", "typescript"];
 const REQUIRED_BASELINES: [&str; 7] = [
@@ -23,6 +23,11 @@ const REQUIRED_BASELINES: [&str; 7] = [
 mod schema;
 
 pub use schema::*;
+
+#[path = "benchmark_source_seal.rs"]
+mod source_seal;
+
+pub use source_seal::*;
 
 #[path = "benchmark_cost_receipt.rs"]
 mod cost_receipt;
@@ -52,6 +57,7 @@ impl BenchmarkCorpus {
             intentional_boundary: bool,
             partition: BenchmarkPartition,
             expected_proof_level: u8,
+            covered_method_ids: &'a [String],
             after: &'a [SourceSnapshot],
             human_explanation: &'a str,
             behavioral_evidence: &'a [String],
@@ -71,6 +77,7 @@ impl BenchmarkCorpus {
                 intentional_boundary: case.label.intentional_boundary,
                 partition: case.partition,
                 expected_proof_level: case.expected_proof_level,
+                covered_method_ids: &case.covered_method_ids,
                 after: &case.after,
                 human_explanation: &case.human_explanation,
                 behavioral_evidence: &case.behavioral_evidence,
@@ -86,6 +93,12 @@ impl BenchmarkCorpus {
     }
 
     pub fn computed_source_commitment_sha256(&self) -> Result<String, String> {
+        #[derive(serde::Serialize)]
+        struct CommittedSources<'a> {
+            source_seal_artifact_path: &'a str,
+            source_seal_sha256: &'a str,
+            sources: Vec<&'a SourceSnapshot>,
+        }
         let mut sources = self.analysis_sources.iter().collect::<Vec<_>>();
         sources.sort_by(|left, right| {
             (
@@ -103,8 +116,12 @@ impl BenchmarkCorpus {
                     &right.sha256,
                 ))
         });
-        let bytes = serde_json::to_vec(&sources)
-            .map_err(|error| format!("failed to serialize benchmark source inventory: {error}"))?;
+        let bytes = serde_json::to_vec(&CommittedSources {
+            source_seal_artifact_path: &self.source_seal_artifact_path,
+            source_seal_sha256: &self.source_seal_sha256,
+            sources,
+        })
+        .map_err(|error| format!("failed to serialize benchmark source inventory: {error}"))?;
         Ok(format!("{:x}", Sha256::digest(bytes)))
     }
 }
@@ -324,6 +341,8 @@ fn validate_corpus(
     require_text("frozen_at", &corpus.frozen_at)?;
     require_sha256("source_commitment_sha256", &corpus.source_commitment_sha256)?;
     require_sha256("label_commitment_sha256", &corpus.label_commitment_sha256)?;
+    require_safe_artifact_path(&corpus.source_seal_artifact_path)?;
+    require_sha256("source_seal_sha256", &corpus.source_seal_sha256)?;
     if corpus.cases.is_empty() {
         return Err("release benchmark corpus cannot be empty".to_string());
     }
@@ -376,7 +395,133 @@ fn validate_corpus(
     }
     let source_texts = validate_source_snapshots(corpus, corpus_root)?;
     validate_case_source_membership(corpus)?;
+    validate_blind_source_seal(corpus, corpus_root)?;
     Ok(source_texts)
+}
+
+fn validate_blind_source_seal(corpus: &BenchmarkCorpus, corpus_root: &Path) -> Result<(), String> {
+    let seal_path = corpus_root.join(&corpus.source_seal_artifact_path);
+    let bytes = fs::read(&seal_path).map_err(|error| {
+        format!(
+            "failed to read benchmark source seal {}: {error}",
+            seal_path.display()
+        )
+    })?;
+    let actual_hash = format!("{:x}", Sha256::digest(&bytes));
+    if !actual_hash.eq_ignore_ascii_case(&corpus.source_seal_sha256) {
+        return Err(format!(
+            "benchmark source-seal artifact hash mismatch; expected {actual_hash}"
+        ));
+    }
+    let seal: BenchmarkSourceSeal = serde_json::from_slice(&bytes)
+        .map_err(|error| format!("failed to parse benchmark source seal: {error}"))?;
+    validate_source_seal(&seal, corpus_root)?;
+
+    let analysis_sources = corpus.analysis_sources.iter().collect::<HashSet<_>>();
+    let sealed_sources = seal.sources.iter().collect::<HashSet<_>>();
+    for source in &seal.sources {
+        if !analysis_sources.contains(source) {
+            return Err(format!(
+                "blind source seal includes {} at {} but analysis_sources does not",
+                source.repository, source.repository_path
+            ));
+        }
+    }
+    let sealed_methods = seal
+        .methods
+        .iter()
+        .map(|method| (method.method_id.as_str(), method))
+        .collect::<HashMap<_, _>>();
+    let sealed_languages = seal
+        .methods
+        .iter()
+        .map(|method| method.language.to_ascii_lowercase())
+        .collect::<HashSet<_>>();
+    for language in REQUIRED_LANGUAGES {
+        if !sealed_languages.contains(language) {
+            return Err(format!(
+                "blind source seal is missing required language {language}"
+            ));
+        }
+    }
+    let mut covered_methods = HashSet::new();
+    for case in &corpus.cases {
+        if case.partition == BenchmarkPartition::BlindOss {
+            if case.covered_method_ids.is_empty() {
+                return Err(format!(
+                    "blind OSS case {} does not identify any sealed method",
+                    case.label.case_id
+                ));
+            }
+            for method_id in &case.covered_method_ids {
+                require_sha256("blind covered_method_id", method_id)?;
+                let Some(method) = sealed_methods.get(method_id.as_str()) else {
+                    return Err(format!(
+                        "blind OSS case {} references method outside the source seal: {method_id}",
+                        case.label.case_id
+                    ));
+                };
+                if !method.language.eq_ignore_ascii_case(&case.label.language) {
+                    return Err(format!(
+                        "blind OSS case {} labels {} as {}",
+                        case.label.case_id, method.language, case.label.language
+                    ));
+                }
+                if !case.before.iter().any(|source| {
+                    source.repository == method.repository
+                        && source.revision == method.revision
+                        && source.repository_path == method.repository_path
+                        && source.artifact_path == method.artifact_path
+                }) {
+                    return Err(format!(
+                        "blind OSS case {} does not include the sealed source for method {method_id}",
+                        case.label.case_id
+                    ));
+                }
+                if !covered_methods.insert(method_id.as_str()) {
+                    return Err(format!(
+                        "blind OSS method {method_id} is assigned to more than one case"
+                    ));
+                }
+            }
+            if !is_finding(case.label.expected_tier) && case.covered_method_ids.len() != 1 {
+                return Err(format!(
+                    "blind non-finding case {} must represent exactly one sealed method",
+                    case.label.case_id
+                ));
+            }
+        } else if !case.covered_method_ids.is_empty() {
+            return Err(format!(
+                "non-blind case {} must not claim source-seal methods",
+                case.label.case_id
+            ));
+        } else if case
+            .before
+            .iter()
+            .any(|source| sealed_sources.contains(source))
+        {
+            return Err(format!(
+                "non-blind case {} reuses a source from the blind source seal",
+                case.label.case_id
+            ));
+        }
+    }
+    let sealed_method_ids = sealed_methods.keys().copied().collect::<HashSet<_>>();
+    if covered_methods != sealed_method_ids {
+        let mut missing = sealed_methods
+            .keys()
+            .copied()
+            .collect::<HashSet<_>>()
+            .difference(&covered_methods)
+            .copied()
+            .collect::<Vec<_>>();
+        missing.sort_unstable();
+        return Err(format!(
+            "blind OSS adjudication omitted sealed methods: {}",
+            missing.join(", ")
+        ));
+    }
+    Ok(())
 }
 
 pub fn validate_frozen_corpus(corpus: &BenchmarkCorpus, corpus_root: &Path) -> Result<(), String> {
