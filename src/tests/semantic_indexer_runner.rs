@@ -16,7 +16,7 @@ use super::{
 };
 #[cfg(windows)]
 use super::{
-    TemporaryIndexerWorkspace, collect_windows_runtime_images, external_runtime_path_value,
+    TemporaryIndexerWorkspace, configure_windows_runtime_images, external_runtime_path_value,
     indexer_arguments_with_workspace, prepare_indexer_workspace, push_external_read_only,
     system_gradle_launcher_jar,
 };
@@ -657,10 +657,18 @@ fn windows_runtime_execution_allowlist_contains_verified_executables_and_librari
     std::fs::write(runtime.join("notes.txt"), b"not executable").unwrap();
 
     let mut executable_paths = Vec::new();
-    collect_windows_runtime_images(&repository, &mut executable_paths, &runtime).unwrap();
+    let mut virtualized_paths = Vec::new();
+    configure_windows_runtime_images(
+        &repository,
+        &mut executable_paths,
+        &mut virtualized_paths,
+        &runtime,
+    )
+    .unwrap();
     executable_paths.sort();
 
     let mut expected = vec![compiler, linker, library];
     expected.sort();
     assert_eq!(executable_paths, expected);
+    assert_eq!(virtualized_paths, vec![runtime]);
 }

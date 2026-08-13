@@ -711,7 +711,12 @@ fn build_indexer_sandbox_command(
     );
     #[cfg(windows)]
     if spec.runtime == IndexerRuntime::JavaJar {
-        collect_windows_runtime_images(root, &mut executable_paths, &runtime_root)?;
+        configure_windows_runtime_images(
+            root,
+            &mut executable_paths,
+            &mut windows_virtualized_paths,
+            &runtime_root,
+        )?;
     }
     push_external_read_only(root, &mut persistent_read_only_paths, runtime_root);
     for dependency in runtime_dependency_paths(&runtime_path)? {
@@ -1133,6 +1138,18 @@ fn collect_windows_runtime_images(
             }
         }
     }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn configure_windows_runtime_images(
+    repository_root: &Path,
+    executable_paths: &mut Vec<PathBuf>,
+    virtualized_paths: &mut Vec<PathBuf>,
+    runtime_root: &Path,
+) -> Result<(), String> {
+    collect_windows_runtime_images(repository_root, executable_paths, runtime_root)?;
+    virtualized_paths.push(runtime_root.to_path_buf());
     Ok(())
 }
 
