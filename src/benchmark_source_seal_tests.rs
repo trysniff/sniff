@@ -54,7 +54,12 @@ fn review_context_deduplicates_discovery_paths_by_repository_identity() {
     )
     .unwrap();
 
-    let paths = selected_context_paths(root.path(), &["setup.py".to_string()]).unwrap();
+    let paths = selected_context_paths(
+        root.path(),
+        &["setup.py".to_string()],
+        &std::collections::HashSet::new(),
+    )
+    .unwrap();
 
     assert_eq!(
         paths
@@ -63,6 +68,10 @@ fn review_context_deduplicates_discovery_paths_by_repository_identity() {
             .count(),
         1
     );
+
+    let primary = std::collections::HashSet::from(["setup.py"]);
+    let paths = selected_context_paths(root.path(), &["setup.py".to_string()], &primary).unwrap();
+    assert!(paths.is_empty());
 }
 
 fn selection(root: &std::path::Path) -> (super::SourceSelectionDraft, Vec<u8>, Vec<u8>) {

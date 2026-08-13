@@ -462,7 +462,15 @@ fn build_source_seal(
                 repository.repository, repository.selection_language,
             ));
         }
-        let context_paths = selected_context_paths(&local_root, &repository.context_paths)?;
+        let source_paths = sources
+            .iter()
+            .filter(|source| {
+                source.repository == repository.repository && source.revision == repository.revision
+            })
+            .map(|source| source.repository_path.as_str())
+            .collect::<HashSet<_>>();
+        let context_paths =
+            selected_context_paths(&local_root, &repository.context_paths, &source_paths)?;
         let context_destination = destination_root.join("context");
         for path in context_paths {
             reject_symlink(&path, "context file")?;
@@ -627,7 +635,11 @@ fn require_supported_language(value: &str) -> Result<(), String> {
     }
 }
 
-fn selected_context_paths(root: &Path, declared: &[String]) -> Result<Vec<PathBuf>, String> {
+fn selected_context_paths(
+    root: &Path,
+    declared: &[String],
+    source_paths: &HashSet<&str>,
+) -> Result<Vec<PathBuf>, String> {
     let canonical_root = fs::canonicalize(root).map_err(|error| {
         format!(
             "failed to resolve review-context repository root {}: {error}",
@@ -684,7 +696,9 @@ fn selected_context_paths(root: &Path, declared: &[String]) -> Result<Vec<PathBu
         })?;
         let relative = repository_relative(&canonical_root, &canonical)?;
         let identity = portable_path(&relative)?;
-        unique.entry(identity).or_insert(canonical);
+        if !source_paths.contains(identity.as_str()) {
+            unique.entry(identity).or_insert(canonical);
+        }
     }
     Ok(unique.into_values().collect())
 }
