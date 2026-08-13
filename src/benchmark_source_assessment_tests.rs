@@ -89,6 +89,19 @@ fn census_records_every_language_and_uses_lexicographic_tie_break() {
 }
 
 #[test]
+fn census_accepts_a_noncanonical_checkout_path_without_weakening_containment() {
+    let root = temp_root("relative-census");
+    repository(&root);
+
+    let census = census_repository(&root.join(".")).unwrap();
+
+    assert_eq!(census.observed_method_count, Some(4));
+    assert_eq!(census.method_counts.get("python"), Some(&2));
+    assert_eq!(census.method_counts.get("typescript"), Some(&2));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn checkpoints_resume_only_a_contiguous_prefix_with_its_selected_checkout() {
     let frame = b"repo,metadata\ngithub.com/example/repository,fixture\n";
     let worksheet = prepare_source_selection(policy(frame), frame).unwrap();

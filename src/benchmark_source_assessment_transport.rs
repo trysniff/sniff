@@ -1,5 +1,17 @@
 use reqwest::{Client, StatusCode};
+use std::error::Error;
 use tokio::time::{Duration, sleep};
+
+fn request_error_chain(error: &reqwest::Error) -> String {
+    let mut rendered = error.to_string();
+    let mut source = error.source();
+    while let Some(cause) = source {
+        rendered.push_str(": ");
+        rendered.push_str(&cause.to_string());
+        source = cause.source();
+    }
+    rendered
+}
 
 pub(super) async fn github_metadata(
     client: &Client,
@@ -31,10 +43,10 @@ pub(super) async fn github_metadata(
                 return Ok((status, payload));
             }
             Err(error) if attempt < 3 => {
-                last_error = error.to_string();
+                last_error = request_error_chain(&error);
                 sleep(Duration::from_secs(1_u64 << attempt)).await;
             }
-            Err(error) => last_error = error.to_string(),
+            Err(error) => last_error = request_error_chain(&error),
         }
     }
     Err(format!(

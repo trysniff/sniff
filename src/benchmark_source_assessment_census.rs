@@ -13,22 +13,27 @@ pub(super) struct RepositoryCensus {
 }
 
 pub(super) fn census_repository(root: &Path) -> Result<RepositoryCensus, String> {
+    let canonical_root = fs::canonicalize(root)
+        .map_err(|error| format!("failed to resolve source-assessment checkout: {error}"))?;
     let paths = crate::walker::walk(
-        root.to_str()
+        canonical_root
+            .to_str()
             .ok_or_else(|| "source-assessment checkout path is not UTF-8".to_string())?,
         &crate::config::ResolvedConfig::default(),
     )?;
     let mut counts = BTreeMap::new();
     let mut inventory = Vec::new();
     for path in paths {
-        let relative = Path::new(&path)
-            .strip_prefix(root)
+        let canonical_path = fs::canonicalize(&path)
+            .map_err(|error| format!("failed to resolve assessed source {path}: {error}"))?;
+        let relative = canonical_path
+            .strip_prefix(&canonical_root)
             .map_err(|_| "source-assessment path escaped its checkout".to_string())?
             .to_string_lossy()
             .replace('\\', "/");
-        let bytes = fs::read(&path)
+        let bytes = fs::read(&canonical_path)
             .map_err(|error| format!("failed to read assessed source {relative}: {error}"))?;
-        let record = match crate::parser::parse_file_checked(&path) {
+        let record = match crate::parser::parse_file_checked(&canonical_path.to_string_lossy()) {
             Ok(record) => record,
             Err(error) => {
                 return Ok(RepositoryCensus {
