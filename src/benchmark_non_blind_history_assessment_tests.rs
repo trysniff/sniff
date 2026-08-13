@@ -161,6 +161,7 @@ fn commit(commit: &str, subject: &str, parents: &[&str]) -> HistoricalCommitMeta
         subject: subject.to_string(),
         changed_paths: vec![HistoricalChangedPath {
             status: "M".to_string(),
+            previous_path: None,
             path: "src/main.rs".to_string(),
         }],
     }

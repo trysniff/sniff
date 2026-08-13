@@ -18,6 +18,8 @@ pub struct HistoricalCommitMetadata {
 #[serde(deny_unknown_fields)]
 pub struct HistoricalChangedPath {
     pub status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_path: Option<String>,
     pub path: String,
 }
 
@@ -31,6 +33,18 @@ pub struct RankedHistoricalCommit {
     pub changed_paths: Vec<HistoricalChangedPath>,
     pub metadata_sha256: String,
     pub rank_sha256: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HistoricalGitDiscovery {
+    pub repository: String,
+    pub default_branch: String,
+    pub default_branch_head: String,
+    pub reachable_commit_count: usize,
+    pub matching_commit_count: usize,
+    pub matching_commits_sha256: String,
+    pub selected_commit: Option<RankedHistoricalCommit>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]

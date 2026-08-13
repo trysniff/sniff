@@ -14,9 +14,19 @@ pub(crate) struct BoundedOutput {
     pub(crate) stdout: Vec<u8>,
     pub(crate) stderr: Vec<u8>,
     pub(crate) timed_out: bool,
+    pub(crate) stdout_truncated: bool,
+    pub(crate) stderr_truncated: bool,
 }
 
 pub(crate) fn run(command: &mut Command, timeout: Duration) -> io::Result<BoundedOutput> {
+    run_with_output_limit(command, timeout, OUTPUT_LIMIT)
+}
+
+pub(crate) fn run_with_output_limit(
+    command: &mut Command,
+    timeout: Duration,
+    output_limit: usize,
+) -> io::Result<BoundedOutput> {
     configure_process_group(command);
     command
         .stdin(Stdio::null())
@@ -33,8 +43,8 @@ pub(crate) fn run(command: &mut Command, timeout: Duration) -> io::Result<Bounde
         .stderr
         .take()
         .ok_or_else(|| io::Error::other("bounded child stderr was not captured"))?;
-    let stdout_reader = thread::spawn(move || read_limited(stdout));
-    let stderr_reader = thread::spawn(move || read_limited(stderr));
+    let stdout_reader = thread::spawn(move || read_limited(stdout, output_limit));
+    let stderr_reader = thread::spawn(move || read_limited(stderr, output_limit));
     let started = Instant::now();
     let (status, timed_out) = loop {
         match child.try_wait()? {
@@ -57,35 +67,41 @@ pub(crate) fn run(command: &mut Command, timeout: Duration) -> io::Result<Bounde
         // already killed the process group before waiting for the parent.
         terminate_process_group(child.id())?;
     }
-    let stdout = join_reader(stdout_reader, "stdout")?;
-    let stderr = join_reader(stderr_reader, "stderr")?;
+    let (stdout, stdout_truncated) = join_reader(stdout_reader, "stdout")?;
+    let (stderr, stderr_truncated) = join_reader(stderr_reader, "stderr")?;
     Ok(BoundedOutput {
         status,
         stdout,
         stderr,
         timed_out,
+        stdout_truncated,
+        stderr_truncated,
     })
 }
 
-fn read_limited(mut reader: impl Read) -> io::Result<Vec<u8>> {
+fn read_limited(mut reader: impl Read, limit: usize) -> io::Result<(Vec<u8>, bool)> {
     let mut retained = Vec::new();
+    let mut truncated = false;
     let mut buffer = [0_u8; 8192];
     loop {
         let count = reader.read(&mut buffer)?;
         if count == 0 {
-            return Ok(retained);
+            return Ok((retained, truncated));
         }
-        if retained.len() < OUTPUT_LIMIT {
-            let keep = count.min(OUTPUT_LIMIT - retained.len());
+        if retained.len() < limit {
+            let keep = count.min(limit - retained.len());
             retained.extend_from_slice(&buffer[..keep]);
+            truncated |= keep < count;
+        } else {
+            truncated = true;
         }
     }
 }
 
 fn join_reader(
-    reader: thread::JoinHandle<io::Result<Vec<u8>>>,
+    reader: thread::JoinHandle<io::Result<(Vec<u8>, bool)>>,
     label: &str,
-) -> io::Result<Vec<u8>> {
+) -> io::Result<(Vec<u8>, bool)> {
     reader
         .join()
         .map_err(|_| io::Error::other(format!("bounded child {label} reader panicked")))?
@@ -202,6 +218,32 @@ fn terminate_tree(child: &mut Child) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn explicit_output_limit_reports_truncation() {
+        #[cfg(windows)]
+        let mut command = {
+            let mut command = Command::new("powershell.exe");
+            command.args([
+                "-NoProfile",
+                "-Command",
+                "[Console]::Out.Write('0123456789')",
+            ]);
+            command
+        };
+        #[cfg(not(windows))]
+        let mut command = {
+            let mut command = Command::new("sh");
+            command.args(["-c", "printf 0123456789"]);
+            command
+        };
+
+        let output = run_with_output_limit(&mut command, Duration::from_secs(5), 4).unwrap();
+
+        assert_eq!(output.stdout, b"0123");
+        assert!(output.stdout_truncated);
+        assert!(!output.stderr_truncated);
+    }
 
     #[test]
     fn deadline_terminates_the_complete_child_tree() {

@@ -44,6 +44,11 @@ mod non_blind_history_assessment;
 
 pub use non_blind_history_assessment::*;
 
+#[path = "benchmark_non_blind_history_git.rs"]
+mod non_blind_history_git;
+
+pub use non_blind_history_git::*;
+
 #[path = "benchmark_source_seal.rs"]
 mod source_seal;
 

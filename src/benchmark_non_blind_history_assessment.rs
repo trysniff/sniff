@@ -888,14 +888,31 @@ fn blank_assessment(candidate: HistoricalRepositoryCandidate) -> HistoricalRepos
 }
 
 fn validate_changed_paths(paths: &[super::HistoricalChangedPath]) -> Result<(), String> {
-    let mut previous: Option<(&str, &str)> = None;
+    let mut previous: Option<(&str, Option<&str>, &str)> = None;
     for path in paths {
-        if !matches!(path.status.as_str(), "A" | "C" | "D" | "M" | "R" | "T")
+        let rename_or_copy = path.status.starts_with('R') || path.status.starts_with('C');
+        let valid_status = matches!(
+            path.status.as_str(),
+            "A" | "D" | "M" | "T" | "U" | "X" | "B"
+        ) || ((path.status.starts_with('R') || path.status.starts_with('C'))
+            && path.status[1..]
+                .parse::<u8>()
+                .is_ok_and(|score| score <= 100));
+        if !valid_status
             || !safe_relative(&path.path)
+            || rename_or_copy != path.previous_path.is_some()
+            || path
+                .previous_path
+                .as_deref()
+                .is_some_and(|value| !safe_relative(value))
         {
             return Err("historical commit changed-path ledger is invalid".to_string());
         }
-        let current = (path.path.as_str(), path.status.as_str());
+        let current = (
+            path.path.as_str(),
+            path.previous_path.as_deref(),
+            path.status.as_str(),
+        );
         if previous.is_some_and(|value| value >= current) {
             return Err("historical commit changed paths must be unique and sorted".to_string());
         }
