@@ -394,3 +394,35 @@ fn assessment_requires_safe_disk_headroom_before_clone() {
 
     fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn assessment_clone_preserves_committed_line_endings() {
+    let root = temp_root("clone-line-endings");
+    let origin = root.join("origin");
+    let destination = root.join("work").join("rank-0001");
+    fs::create_dir_all(&origin).unwrap();
+    fs::create_dir_all(destination.parent().unwrap()).unwrap();
+    run_git(&origin, &["init"]);
+    run_git(&origin, &["config", "user.email", "sniff@example.test"]);
+    run_git(&origin, &["config", "user.name", "Sniff Fixture"]);
+    fs::write(origin.join("script.sh"), b"#!/bin/sh\necho fixture\n").unwrap();
+    run_git(&origin, &["add", "."]);
+    run_git(&origin, &["commit", "-m", "fixture"]);
+
+    assessment_state::clone_repository_fixture(
+        &origin,
+        &destination,
+        destination.parent().unwrap(),
+    )
+    .unwrap();
+
+    assert_eq!(
+        fs::read(destination.join("script.sh")).unwrap(),
+        b"#!/bin/sh\necho fixture\n"
+    );
+    assert!(
+        run_git(&destination, &["status", "--porcelain=v1"]).is_empty(),
+        "assessment clone must remain byte-clean"
+    );
+    fs::remove_dir_all(root).unwrap();
+}

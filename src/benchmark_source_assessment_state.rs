@@ -22,18 +22,34 @@ pub(super) fn clone_repository(
     destination: &Path,
     work_root: &Path,
 ) -> Result<(), String> {
+    clone_repository_url(
+        &format!("https://{repository}.git"),
+        repository,
+        destination,
+        work_root,
+    )
+}
+
+fn clone_repository_url(
+    url: &str,
+    repository: &str,
+    destination: &Path,
+    work_root: &Path,
+) -> Result<(), String> {
     require_disk_headroom(work_root)?;
     let mut last_error = String::new();
     for attempt in 0..3_u32 {
         remove_generated_worktree(destination, work_root)?;
         let output = Command::new("git")
             .args([
+                "-c",
+                "core.autocrlf=false",
                 "clone",
                 "--depth",
                 "1",
                 "--no-tags",
                 "--single-branch",
-                &format!("https://{repository}.git"),
+                url,
             ])
             .arg(destination)
             .output()
@@ -48,6 +64,20 @@ pub(super) fn clone_repository(
     }
     remove_generated_worktree(destination, work_root)?;
     Err(format!("git clone failed for {repository}: {last_error}"))
+}
+
+#[cfg(test)]
+pub(super) fn clone_repository_fixture(
+    source: &Path,
+    destination: &Path,
+    work_root: &Path,
+) -> Result<(), String> {
+    clone_repository_url(
+        &source.to_string_lossy(),
+        "fixture repository",
+        destination,
+        work_root,
+    )
 }
 
 pub(super) fn require_disk_headroom(path: &Path) -> Result<(), String> {
