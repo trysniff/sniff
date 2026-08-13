@@ -3,7 +3,7 @@ use super::super::source_selection::test_selection_artifacts;
 use super::validate_artifact;
 use super::{
     SourceRepositoryDraft, copy_committed_file, create_composite_source_seal, create_source_seal,
-    dominant_method_language, validate_source_seal,
+    dominant_method_language, selected_context_paths, validate_source_seal,
 };
 use std::fs;
 use std::process::Command;
@@ -43,6 +43,26 @@ fn repository() -> tempfile::TempDir {
 
 fn repository_path(root: &tempfile::TempDir) -> std::path::PathBuf {
     root.path().join("example/selected")
+}
+
+#[test]
+fn review_context_deduplicates_discovery_paths_by_repository_identity() {
+    let root = tempfile::tempdir().unwrap();
+    fs::write(
+        root.path().join("setup.py"),
+        "from setuptools import setup\n",
+    )
+    .unwrap();
+
+    let paths = selected_context_paths(root.path(), &["setup.py".to_string()]).unwrap();
+
+    assert_eq!(
+        paths
+            .iter()
+            .filter(|path| path.file_name().is_some_and(|name| name == "setup.py"))
+            .count(),
+        1
+    );
 }
 
 fn selection(root: &std::path::Path) -> (super::SourceSelectionDraft, Vec<u8>, Vec<u8>) {

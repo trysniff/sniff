@@ -5,7 +5,7 @@ use super::{
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
@@ -628,6 +628,12 @@ fn require_supported_language(value: &str) -> Result<(), String> {
 }
 
 fn selected_context_paths(root: &Path, declared: &[String]) -> Result<Vec<PathBuf>, String> {
+    let canonical_root = fs::canonicalize(root).map_err(|error| {
+        format!(
+            "failed to resolve review-context repository root {}: {error}",
+            root.display()
+        )
+    })?;
     let mut paths = crate::walker::walk_evidence(
         root.to_str()
             .ok_or_else(|| "source repository path is not UTF-8".to_string())?,
@@ -668,9 +674,19 @@ fn selected_context_paths(root: &Path, declared: &[String]) -> Result<Vec<PathBu
         }
         paths.push(path);
     }
-    paths.sort();
-    paths.dedup();
-    Ok(paths)
+    let mut unique = BTreeMap::new();
+    for path in paths {
+        let canonical = fs::canonicalize(&path).map_err(|error| {
+            format!(
+                "failed to resolve review context {}: {error}",
+                path.display()
+            )
+        })?;
+        let relative = repository_relative(&canonical_root, &canonical)?;
+        let identity = portable_path(&relative)?;
+        unique.entry(identity).or_insert(canonical);
+    }
+    Ok(unique.into_values().collect())
 }
 
 fn verify_git_revision(root: &Path, expected_revision: &str) -> Result<(), String> {
