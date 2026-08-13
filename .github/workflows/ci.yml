@@ -115,6 +115,12 @@ jobs:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo package --locked --target-dir target/package-check
+      - name: Keep benchmark evidence out of the installable crate
+        run: |
+          if cargo package --locked --list | grep -q '^sniffbench/'; then
+            echo 'sniffbench evidence must remain a repository or release artifact' >&2
+            exit 1
+          fi
 
   semantic-indexers:
     name: semantic-indexers
