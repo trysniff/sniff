@@ -126,6 +126,35 @@ pub struct HistoricalTestResult {
     pub raw_result_sha256: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HistoricalTestRecipeStatus {
+    Selected,
+    Unavailable,
+    Ambiguous,
+    Changed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HistoricalTestRecipeInput {
+    pub path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub commit_sha256: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HistoricalTestRecipeDiscovery {
+    pub status: HistoricalTestRecipeStatus,
+    pub command: Option<Vec<String>>,
+    pub runtime_program: Option<String>,
+    pub inputs: Vec<HistoricalTestRecipeInput>,
+    pub reason: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HistoricalRepositoryFacts {
