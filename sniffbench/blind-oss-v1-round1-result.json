@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "selection_id": "sniffbench-blind-oss-v1",
+  "assessment_prefix": 240,
+  "assessment_artifact": "blind-oss-v1-round1-assessment.json",
+  "assessment_sha256": "cbdaf5bf262943e17065bd435fdf8c1286cec0543519261246b93a144bb78228",
+  "selected_counts": {
+    "go": 2,
+    "javascript": 2,
+    "kotlin": 0,
+    "python": 2,
+    "rust": 0,
+    "typescript": 2
+  },
+  "audit_outcome": "underfilled",
+  "audit_failure": "source selection filled 0 of 2 required kotlin repositories",
+  "notes": "The exact frozen round completed all 240 ranks without model access. Eight repositories passed the method, language, license, archive, fork, parse-shape, and reproducibly-clean-checkout requirements. The result is retained as immutable evidence and extended rather than replaced."
+}

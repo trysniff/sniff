@@ -70,3 +70,35 @@ self-contained checkouts at the assessed commit; excluded worktrees are removed.
 
 No Sniff finding, benchmark label, or provider/model output is used during
 source selection.
+
+### Precommitted continuation
+
+The complete first round is published as
+[`blind-oss-v1-round1-assessment.json`](blind-oss-v1-round1-assessment.json),
+with its independently derived outcome in
+[`blind-oss-v1-round1-result.json`](blind-oss-v1-round1-result.json). The fixed
+240-rank prefix filled both Go, JavaScript, Python, and TypeScript slots but no
+Kotlin or Rust slots under the seal-compatible clean-checkout requirement.
+
+Rather than replace the failed sample or hand-pick repositories, extension 1
+keeps every round-one assessment byte-for-byte and continues the same ranking
+through a single conservative endpoint of rank 1,440. The endpoint and the
+hashes of the complete prior round were committed before rank 241 was generated
+or inspected. The frame, seed, method bounds, language quotas, and ranking
+contract are unchanged.
+
+[`blind-oss-v1-extension-1-policy.json`](blind-oss-v1-extension-1-policy.json)
+is the final hash-bound policy. Its companion draft demonstrates which values
+were operator-chosen; `prepare-extension` derived the prior-round commitments:
+
+```console
+sniff benchmark prepare-extension \
+  sniffbench/blind-oss-v1-extension-1-draft.json projects.csv \
+  sniffbench/blind-oss-v1-round1-assessment.json \
+  sniffbench/blind-oss-v1-extension-1-policy.json
+```
+
+Only after committing that final policy may the continuation worksheet be
+generated with `extend-selection`. Sniff rejects changed inherited assessments,
+criteria changes, skipped ranks, or use of a continuation policy through the
+fresh `prepare-selection` path.
