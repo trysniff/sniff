@@ -29,6 +29,11 @@ mod source_seal;
 
 pub use source_seal::*;
 
+#[path = "benchmark_label_review.rs"]
+mod label_review;
+
+pub use label_review::*;
+
 #[path = "benchmark_cost_receipt.rs"]
 mod cost_receipt;
 

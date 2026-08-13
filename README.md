@@ -64,6 +64,10 @@ sniff --budget-usd 0.50
 
 # Seal blind sources before labels/runs, then freeze and evaluate offline.
 sniff benchmark seal-sources selection.json blind-source-seal.json
+sniff benchmark prepare-labels blind-source-seal.json reviewer-a.json
+sniff benchmark prepare-labels blind-source-seal.json reviewer-b.json
+sniff benchmark audit-labels blind-source-seal.json label-audit.json \
+  --review reviewer-a.json --review reviewer-b.json
 sniff benchmark freeze draft.json corpus.json
 sniff benchmark prepare-run corpus.json review.json --artifact .sniff/runs/RUN.json
 sniff benchmark import-run corpus.json review.json run.json
@@ -101,11 +105,24 @@ cap.
 
 `sniff benchmark seal-sources SELECTION OUTPUT` operates entirely offline. It
 requires clean local Git checkouts at complete immutable commit IDs, copies only
-Sniff-supported source files plus declared license evidence into a create-new
-bundle, derives the complete eligible-method census, and writes a label-free
-source seal. Commit or attest that seal before creating labels or running Sniff;
+Sniff-supported primary source files, tests, common package/build/API contracts,
+explicitly declared context files, and license evidence into a create-new bundle.
+Only primary production methods enter the eligible census; context remains
+separately hash-bound for human review. The command writes a label-free source
+seal. Commit or attest that seal before creating labels or running Sniff;
 the later corpus must hash-bind it and assign every sealed blind method to
 exactly one adjudicated case.
+
+`sniff benchmark prepare-labels SEAL OUTPUT` creates a source-only worksheet for
+one independent reviewer. It contains every sealed method and exact source, but
+no Sniff output or prefilled label, plus the sealed repository source, tests, and
+declared contract context needed to inspect callers and intent. Reviewers must
+attest that they inspected the repository context. Complete separate worksheets
+without sharing answers. `sniff benchmark audit-labels SEAL OUTPUT --review A --review B`
+requires at least two distinct experienced reviewers, verifies the complete
+method census and immutable source facts, rejects unblinded or incomplete
+worksheets, and preserves every tier, mechanism, or related-method disagreement
+as an explicit dispute. Both commands are offline.
 
 `sniff benchmark freeze DRAFT OUTPUT` verifies every declared local source
 snapshot, computes separate SHA-256 commitments for analyzed sources and hidden

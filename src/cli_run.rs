@@ -93,6 +93,23 @@ pub enum BenchmarkCommand {
         /// New source-seal manifest; a create-new sibling source bundle is also written.
         output: String,
     },
+    /// Create a source-only worksheet for independent blind method labeling.
+    PrepareLabels {
+        /// Label-free source seal created before Sniff output or labels.
+        seal: String,
+        /// New reviewer worksheet; existing files are never overwritten.
+        output: String,
+    },
+    /// Validate independent completed label worksheets and preserve every dispute.
+    AuditLabels {
+        /// Label-free source seal used to create every worksheet.
+        seal: String,
+        /// New label-audit ledger; existing files are never overwritten.
+        output: String,
+        /// Independently completed worksheet; repeat for every reviewer.
+        #[arg(long = "review", required = true)]
+        reviews: Vec<String>,
+    },
     /// Verify snapshot hashes and create an immutable SniffBench v4 corpus manifest.
     Freeze {
         /// Draft corpus manifest; snapshot paths are relative to its directory.
@@ -178,6 +195,14 @@ pub async fn run(args: CliArgs) -> Result<i32, Box<dyn std::error::Error>> {
             BenchmarkCommand::SealSources { draft, output } => {
                 pipeline::seal_benchmark_sources(&draft, &output)
             }
+            BenchmarkCommand::PrepareLabels { seal, output } => {
+                pipeline::prepare_benchmark_labels(&seal, &output)
+            }
+            BenchmarkCommand::AuditLabels {
+                seal,
+                output,
+                reviews,
+            } => pipeline::audit_benchmark_labels(&seal, &output, &reviews),
             BenchmarkCommand::Freeze { draft, output } => {
                 pipeline::freeze_benchmark(&draft, &output)
             }
@@ -309,6 +334,45 @@ mod tests {
             Some(CliCommand::Benchmark {
                 command: BenchmarkCommand::SealSources { draft, output }
             }) if draft == "selection.json" && output == "blind-source-seal.json"
+        ));
+    }
+
+    #[test]
+    fn parses_offline_benchmark_label_workflow() {
+        let prepare = CliArgs::try_parse_from([
+            "sniff",
+            "benchmark",
+            "prepare-labels",
+            "blind-source-seal.json",
+            "review-a.json",
+        ])
+        .expect("prepare label arguments");
+        assert!(matches!(
+            prepare.command,
+            Some(CliCommand::Benchmark {
+                command: BenchmarkCommand::PrepareLabels { seal, output }
+            }) if seal == "blind-source-seal.json" && output == "review-a.json"
+        ));
+
+        let audit = CliArgs::try_parse_from([
+            "sniff",
+            "benchmark",
+            "audit-labels",
+            "blind-source-seal.json",
+            "label-audit.json",
+            "--review",
+            "review-a.json",
+            "--review",
+            "review-b.json",
+        ])
+        .expect("audit label arguments");
+        assert!(matches!(
+            audit.command,
+            Some(CliCommand::Benchmark {
+                command: BenchmarkCommand::AuditLabels { seal, output, reviews }
+            }) if seal == "blind-source-seal.json"
+                && output == "label-audit.json"
+                && reviews == ["review-a.json", "review-b.json"]
         ));
     }
 

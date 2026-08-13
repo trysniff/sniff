@@ -41,7 +41,7 @@ fn snapshot(
     fs::write(path, text).unwrap();
     SourceSnapshot {
         repository: "https://example.test/polyglot".to_string(),
-        revision: "0123456789abcdef".to_string(),
+        revision: "0123456789abcdef0123456789abcdef01234567".to_string(),
         repository_path: repository_path.to_string(),
         artifact_path,
         sha256: digest(text),
@@ -132,7 +132,7 @@ fn frozen_corpus(root: &std::path::Path) -> BenchmarkCorpus {
                     fs::write(&path, "def demo():\n    return 1\n").unwrap();
                     vec![SourceSnapshot {
                         repository: source.repository.clone(),
-                        revision: "fedcba9876543210".to_string(),
+                        revision: "fedcba9876543210fedcba9876543210fedcba98".to_string(),
                         repository_path: source.repository_path.clone(),
                         artifact_path: "after/python.txt".to_string(),
                         sha256: digest("def demo():\n    return 1\n"),

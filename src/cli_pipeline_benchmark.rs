@@ -1,5 +1,8 @@
 use crate::benchmark::{BenchmarkCorpus, BenchmarkSubmission, evaluate_release, freeze_corpus};
-use crate::benchmark::{SourceSelectionDraft, create_source_seal};
+use crate::benchmark::{
+    BenchmarkSourceSeal, LabelReviewWorksheet, SourceSelectionDraft, audit_label_reviews,
+    create_source_seal, prepare_label_review, validate_source_seal,
+};
 use crate::benchmark_import::{BenchmarkRunReview, import_reviewed_run, prepare_run_review};
 use std::fs;
 use std::io::{Error as IoError, ErrorKind, Write};
@@ -77,6 +80,60 @@ pub(crate) fn seal_benchmark_sources(
         seal.sources.len(),
         seal.methods.len(),
         seal.seal_sha256
+    );
+    Ok(0)
+}
+
+pub(crate) fn prepare_benchmark_labels(
+    seal_path: &str,
+    output_path: &str,
+) -> Result<i32, Box<dyn std::error::Error>> {
+    let (seal, seal_bytes) = read_source_seal(seal_path)?;
+    let seal_root = Path::new(seal_path)
+        .parent()
+        .unwrap_or_else(|| Path::new("."));
+    let worksheet =
+        prepare_label_review(&seal, seal_root, &sha256(&seal_bytes)).map_err(|error| {
+            IoError::new(
+                ErrorKind::InvalidData,
+                format!("benchmark labels cannot be prepared: {error}"),
+            )
+        })?;
+    write_new_file(
+        Path::new(output_path),
+        &serde_json::to_vec_pretty(&worksheet)?,
+    )?;
+    eprintln!(
+        "Source-only SniffBench label worksheet written to {output_path}. Methods: {}. Complete it independently without Sniff output.",
+        worksheet.methods.len()
+    );
+    Ok(0)
+}
+
+pub(crate) fn audit_benchmark_labels(
+    seal_path: &str,
+    output_path: &str,
+    review_paths: &[String],
+) -> Result<i32, Box<dyn std::error::Error>> {
+    let (seal, seal_bytes) = read_source_seal(seal_path)?;
+    let seal_root = Path::new(seal_path)
+        .parent()
+        .unwrap_or_else(|| Path::new("."));
+    let reviews = review_paths
+        .iter()
+        .map(|path| read_json::<LabelReviewWorksheet>(path))
+        .collect::<Result<Vec<_>, _>>()?;
+    let audit =
+        audit_label_reviews(&seal, seal_root, &sha256(&seal_bytes), &reviews).map_err(|error| {
+            IoError::new(
+                ErrorKind::InvalidData,
+                format!("benchmark label worksheets cannot be audited: {error}"),
+            )
+        })?;
+    write_new_file(Path::new(output_path), &serde_json::to_vec_pretty(&audit)?)?;
+    eprintln!(
+        "Verified SniffBench label audit written to {output_path}. Agreements: {}. Disputes requiring resolution: {}.",
+        audit.agreement_count, audit.disputed_count
     );
     Ok(0)
 }
@@ -164,6 +221,36 @@ where
         )
         .into()
     })
+}
+
+fn read_source_seal(
+    path: &str,
+) -> Result<(BenchmarkSourceSeal, Vec<u8>), Box<dyn std::error::Error>> {
+    let bytes = fs::read(path).map_err(|error| {
+        IoError::new(
+            error.kind(),
+            format!("failed to read benchmark source seal {path}: {error}"),
+        )
+    })?;
+    let seal = serde_json::from_slice::<BenchmarkSourceSeal>(&bytes).map_err(|error| {
+        IoError::new(
+            ErrorKind::InvalidData,
+            format!("failed to parse benchmark source seal {path}: {error}"),
+        )
+    })?;
+    let root = Path::new(path).parent().unwrap_or_else(|| Path::new("."));
+    validate_source_seal(&seal, root).map_err(|error| {
+        IoError::new(
+            ErrorKind::InvalidData,
+            format!("benchmark source seal is invalid: {error}"),
+        )
+    })?;
+    Ok((seal, bytes))
+}
+
+fn sha256(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    format!("{:x}", Sha256::digest(bytes))
 }
 
 #[cfg(test)]
@@ -288,6 +375,7 @@ mod tests {
                 revision,
                 local_path: repository.to_string_lossy().into_owned(),
                 license_path: "LICENSE".to_string(),
+                context_paths: Vec::new(),
             }],
         };
         let draft_path = bundle.join("selection.json");

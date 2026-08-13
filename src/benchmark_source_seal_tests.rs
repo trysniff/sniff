@@ -51,6 +51,7 @@ fn draft(root: &std::path::Path) -> SourceSelectionDraft {
             revision: git(root, &["rev-parse", "HEAD"]),
             local_path: root.to_string_lossy().into_owned(),
             license_path: "LICENSE".to_string(),
+            context_paths: Vec::new(),
         }],
     }
 }
@@ -68,6 +69,31 @@ fn source_seal_copies_a_clean_revision_and_derives_its_method_census() {
     assert_eq!(seal.methods[0].name, "selected");
     assert!(output.is_file());
     assert!(bundle.path().join("seal.sources").is_dir());
+}
+
+#[test]
+fn source_seal_keeps_tests_as_context_without_inflating_the_method_census() {
+    let repository = repository();
+    fs::create_dir(repository.path().join("tests")).unwrap();
+    fs::write(
+        repository.path().join("tests/selected.rs"),
+        "#[test]\nfn selected_works() { assert_eq!(1, 1); }\n",
+    )
+    .unwrap();
+    git(repository.path(), &["add", "."]);
+    git(repository.path(), &["commit", "-m", "add test context"]);
+    let bundle = tempfile::tempdir().unwrap();
+
+    let seal = create_source_seal(
+        draft(repository.path()),
+        bundle.path(),
+        &bundle.path().join("seal.json"),
+    )
+    .unwrap();
+
+    assert_eq!(seal.methods.len(), 1);
+    assert_eq!(seal.context_sources.len(), 1);
+    assert_eq!(seal.context_sources[0].repository_path, "tests/selected.rs");
 }
 
 #[test]
