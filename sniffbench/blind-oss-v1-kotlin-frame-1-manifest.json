@@ -1,0 +1,196 @@
+{
+  "schema_version": 1,
+  "policy": {
+    "schema_version": 1,
+    "frame_id": "sniffbench-blind-oss-v1-kotlin-frame-1",
+    "source": "https://api.github.com/search/repositories",
+    "api_version": "2022-11-28",
+    "language": "Kotlin",
+    "created_day_utc": "2026-05-10",
+    "derivation_seed": "10afa5d22d090d7ac02e4621d89de24d0a8fd926",
+    "derivation_period_start_utc": "2026-04-01",
+    "derivation_period_days": 91,
+    "derivation_rule": "first_8_hex_u32_mod_period_days",
+    "partition": "utc_hour",
+    "include_forks": false,
+    "include_archived": false,
+    "include_mirrors": false,
+    "include_templates": false,
+    "ordering": "github_repository_id_ascending",
+    "attestation": "This Kotlin source-frame population and its date derivation were committed before GitHub repository identities were collected or ranked. The first eight hexadecimal digits of the existing public blind-oss-v1 ranking seed are interpreted as an unsigned integer; modulo the 91 days of 2026 Q2 yields offset 39 from 2026-04-01, selecting 2026-05-10. Every UTC hour is a separate GitHub Search partition, every raw response is retained and hash-bound, partitions over GitHub's 1,000-result completeness limit fail closed, and final ordering uses immutable numeric GitHub repository IDs rather than search relevance. No popularity threshold or model output participates in construction."
+  },
+  "policy_sha256": "9e582446d7252a6d6b32fe94e2724451a04649e3313f19acd8aa64a0c0014a42",
+  "frame_sha256": "a293019c63666f7875e05d7637c02309a53971316aa5194d94430c1281d8a233",
+  "repository_count": 1291,
+  "pages": [
+    {
+      "query": "language:Kotlin created:2026-05-10T00:00:00Z..2026-05-10T00:59:59Z fork:false archived:false mirror:false template:false",
+      "page": 1,
+      "artifact_path": "blind-oss-v1-kotlin-frame-1-raw/hour-00-page-001.json",
+      "artifact_sha256": "ba62ac375e285622d67c52fe1e3fc16b12255283cabb3ec007a730d603b90188",
+      "response_sha256": "ec4c0b8ce52e04aac3bbb4021ed7a5d701685f5148c2b322b21cd0f27f5befff"
+    },
+    {
+      "query": "language:Kotlin created:2026-05-10T01:00:00Z..2026-05-10T01:59:59Z fork:false archived:false mirror:false template:false",
+      "page": 1,
+      "artifact_path": "blind-oss-v1-kotlin-frame-1-raw/hour-01-page-001.json",
+      "artifact_sha256": "039f2e64f7b5068cfdf91a0ed2fc4ad38403aa72e993e07adf4ace3f991e4977",
+      "response_sha256": "dd8efe737cf61b0f8c66ded213d49278c04af5594e52de80a17e790afe5d7a48"
+    },
+    {
+      "query": "language:Kotlin created:2026-05-10T02:00:00Z..2026-05-10T02:59:59Z fork:false archived:false mirror:false template:false",
+      "page": 1,
+      "artifact_path": "blind-oss-v1-kotlin-frame-1-raw/hour-02-page-001.json",
+      "artifact_sha256": "ddfdafa6847eda27a44ca78d6e39368fe500c100ae4e5358f3cfefb210b5d174",
+      "response_sha256": "923bf5dc6bb52fe2686f6a54d97451c795f6dfd764dcb0a0820f110a731f3734"
+    },
+    {
+      "query": "language:Kotlin created:2026-05-10T03:00:00Z..2026-05-10T03:59:59Z fork:false archived:false mirror:false template:false",
+      "page": 1,
+      "artifact_path": "blind-oss-v1-kotlin-frame-1-raw/hour-03-page-001.json",
+      "artifact_sha256": "f0f2eaf711c0217d621998ba96d76c38f9fa98936105ea8a9221d9da1e181121",
+      "response_sha256": "5c9c6e230110fcb3c67fbcd7b258995248b2bc5c29b60ce0ca5bc506f7842c2b"
+    },
+    {
+      "query": "language:Kotlin created:2026-05-10T04:00:00Z..2026-05-10T04:59:59Z fork:false archived:false mirror:false template:false",
+      "page": 1,
+      "artifact_path": "blind-oss-v1-kotlin-frame-1-raw/hour-04-page-001.json",
+      "artifact_sha256": "1e61e76f09544a644e73e753a53d7c1eaeb750795434c60829b5051bf98ccf88",
+      "response_sha256": "b070d918ce0518594e93b156011bb1163bc693bc74ced6eb2423d72c24df39ee"
+    },
+    {
+      "query": "language:Kotlin created:2026-05-10T05:00:00Z..2026-05-10T05:59:59Z fork:false archived:false mirror:false template:false",
+      "page": 1,
+      "artifact_path": "blind-oss-v1-kotlin-frame-1-raw/hour-05-page-001.json",
+      "artifact_sha256": "94ace7b99442fc6ca287f9dfbde83b23bd567b6104a823bcbbed25aa55bdb0a0",
+      "response_sha256": "1f5d2aa5cc93a4f8a2fb0764d6160938f8435f3e221f2e220a40492fd2ffb252"
+    },
+    {
+      "query": "language:Kotlin created:2026-05-10T06:00:00Z..2026-05-10T06:59:59Z fork:false archived:false mirror:false template:false",
+      "page": 1,
+      "artifact_path": "blind-oss-v1-kotlin-frame-1-raw/hour-06-page-001.json",
+      "artifact_sha256": "11bf85eb817daeb6cb8962877875d6cac4487c05bada2baa2b3f70badaf51cfa",
+      "response_sha256": "b7dceb178ce18c58528df5ffea1a5f26d7c7481a4001e23d688c01aa7ca28f86"
+    },
+    {
+      "query": "language:Kotlin created:2026-05-10T07:00:00Z..2026-05-10T07:59:59Z fork:false archived:false mirror:false template:false",
+      "page": 1,
+      "artifact_path": "blind-oss-v1-kotlin-frame-1-raw/hour-07-page-001.json",
+      "artifact_sha256": "376a3d95103d2ef64f7da586fb45a0c249850fd8d3299fae7487f718e1b293f9",
+      "response_sha256": "f9d236d46a9ade6b1c4434382562cfb9886fb24fa87a13bb8efb48194f162c77"
+    },
+    {
+      "query": "language:Kotlin created:2026-05-10T08:00:00Z..2026-05-10T08:59:59Z fork:false archived:false mirror:false template:false",
+      "page": 1,
+      "artifact_path": "blind-oss-v1-kotlin-frame-1-raw/hour-08-page-001.json",
+      "artifact_sha256": "ed428489a78899b68634d92c40a5454d2c60921ea2e1d410f1f91fd0614ca6c5",
+      "response_sha256": "87761e56203cc76b0429b087b45d633dd4b0d94d3603824b299182347324e61b"
+    },
+    {
+      "query": "language:Kotlin created:2026-05-10T09:00:00Z..2026-05-10T09:59:59Z fork:false archived:false mirror:false template:false",
+      "page": 1,
+      "artifact_path": "blind-oss-v1-kotlin-frame-1-raw/hour-09-page-001.json",
+      "artifact_sha256": "edd6e7c9d44245d9375e351f234aa8aa35470278b5de2be43c17ca953751481a",
+      "response_sha256": "4a2c968a0528b2087b65bbba2f68f8aa493118d655f065c9d96a1c1baaf27fa0"
+    },
+    {
+      "query": "language:Kotlin created:2026-05-10T10:00:00Z..2026-05-10T10:59:59Z fork:false archived:false mirror:false template:false",
+      "page": 1,
+      "artifact_path": "blind-oss-v1-kotlin-frame-1-raw/hour-10-page-001.json",
+      "artifact_sha256": "c35b3c7906d7e33b017c4aa70add227a5c7826a99dd669724678d92c1359dd06",
+      "response_sha256": "baf7233e489fe69e15e9d7e3defafeea2e3acea0433a7e5b613cd27a3e249b2e"
+    },
+    {
+      "query": "language:Kotlin created:2026-05-10T11:00:00Z..2026-05-10T11:59:59Z fork:false archived:false mirror:false template:false",
+      "page": 1,
+      "artifact_path": "blind-oss-v1-kotlin-frame-1-raw/hour-11-page-001.json",
+      "artifact_sha256": "9878651fcae7fbcfd4b99216b83ca27e6473c9545cb4547c99089134218de92f",
+      "response_sha256": "e4cf2900032a88ec3151031031eaa68db9e81714b16b4fba1aa2d0c6395ca79c"
+    },
+    {
+      "query": "language:Kotlin created:2026-05-10T12:00:00Z..2026-05-10T12:59:59Z fork:false archived:false mirror:false template:false",
+      "page": 1,
+      "artifact_path": "blind-oss-v1-kotlin-frame-1-raw/hour-12-page-001.json",
+      "artifact_sha256": "453c69bff6a0015e497375ea0cfa7e88041d7e13d36191a9944b2891436497ba",
+      "response_sha256": "26c47a6c8b6798daccbd763266a851d981ccca0a8a146dd342d75dede1a3bff7"
+    },
+    {
+      "query": "language:Kotlin created:2026-05-10T13:00:00Z..2026-05-10T13:59:59Z fork:false archived:false mirror:false template:false",
+      "page": 1,
+      "artifact_path": "blind-oss-v1-kotlin-frame-1-raw/hour-13-page-001.json",
+      "artifact_sha256": "ae7cfec7e9076df7caaf5f112d2af1314f9ead39d8b5ae26f190b1a11e060afb",
+      "response_sha256": "95b601f37b0130b1eec113f4e2f30c21cba3a2757d097f230aeb3c5b47e78a38"
+    },
+    {
+      "query": "language:Kotlin created:2026-05-10T14:00:00Z..2026-05-10T14:59:59Z fork:false archived:false mirror:false template:false",
+      "page": 1,
+      "artifact_path": "blind-oss-v1-kotlin-frame-1-raw/hour-14-page-001.json",
+      "artifact_sha256": "571b9bacb5d8bb039e0b6d7ebd0c1ea5f1fd83ca94615c180e183f33fa7692b6",
+      "response_sha256": "9e54a38f3e94498e06e529c0a810c7be13bcee29efee417efe71aff2b073f3a7"
+    },
+    {
+      "query": "language:Kotlin created:2026-05-10T15:00:00Z..2026-05-10T15:59:59Z fork:false archived:false mirror:false template:false",
+      "page": 1,
+      "artifact_path": "blind-oss-v1-kotlin-frame-1-raw/hour-15-page-001.json",
+      "artifact_sha256": "78881273ff78dd6b42dba7f708bf89ecaa4fdc270660b8fef43b51f1a6cfbc46",
+      "response_sha256": "eeb99e11a532ba6c1ea2f5931cfc3e9fe73f2f52897f6c3808fb874f0f1a554f"
+    },
+    {
+      "query": "language:Kotlin created:2026-05-10T16:00:00Z..2026-05-10T16:59:59Z fork:false archived:false mirror:false template:false",
+      "page": 1,
+      "artifact_path": "blind-oss-v1-kotlin-frame-1-raw/hour-16-page-001.json",
+      "artifact_sha256": "154d2f95a14cda6d16b5bbe545a77b178b6509dfaf895209c6680022c84a77f8",
+      "response_sha256": "f32d4e1e514b724b692d9285708efeaf4ea37290c16127fe021253a74a1366f4"
+    },
+    {
+      "query": "language:Kotlin created:2026-05-10T17:00:00Z..2026-05-10T17:59:59Z fork:false archived:false mirror:false template:false",
+      "page": 1,
+      "artifact_path": "blind-oss-v1-kotlin-frame-1-raw/hour-17-page-001.json",
+      "artifact_sha256": "52afafbd420ea39374573f87aebece1dc9cf163404df47d91e501b58715849e8",
+      "response_sha256": "a1ca6945770fe4fd0b42e6e0efbb50df698de9c0c6e85bfc441896aed39d01bc"
+    },
+    {
+      "query": "language:Kotlin created:2026-05-10T18:00:00Z..2026-05-10T18:59:59Z fork:false archived:false mirror:false template:false",
+      "page": 1,
+      "artifact_path": "blind-oss-v1-kotlin-frame-1-raw/hour-18-page-001.json",
+      "artifact_sha256": "130d1a8b21e828add7303b73a033d635389841b36f64476b827996d203b3be27",
+      "response_sha256": "a7d93b239af03d2b3d22e7c5d3126ea536af542b08f4d895222083b864befb94"
+    },
+    {
+      "query": "language:Kotlin created:2026-05-10T19:00:00Z..2026-05-10T19:59:59Z fork:false archived:false mirror:false template:false",
+      "page": 1,
+      "artifact_path": "blind-oss-v1-kotlin-frame-1-raw/hour-19-page-001.json",
+      "artifact_sha256": "961ec8833cb5b92df393b6b358bf22f5236fc421ff3d6f3e33d67e6317519da5",
+      "response_sha256": "316fd3a6cf2c0aeb57c200e47448960e26506dc97c10db6c68357151a1671261"
+    },
+    {
+      "query": "language:Kotlin created:2026-05-10T20:00:00Z..2026-05-10T20:59:59Z fork:false archived:false mirror:false template:false",
+      "page": 1,
+      "artifact_path": "blind-oss-v1-kotlin-frame-1-raw/hour-20-page-001.json",
+      "artifact_sha256": "151cd35fa1cdb089a14c6c054b395c51d7d3dd5706eba6b36b820fa3d7894d06",
+      "response_sha256": "388fa313b90dc8abd82d21d65baa45f0d917d5f5af0fbf86791c8cff87b8bf6d"
+    },
+    {
+      "query": "language:Kotlin created:2026-05-10T21:00:00Z..2026-05-10T21:59:59Z fork:false archived:false mirror:false template:false",
+      "page": 1,
+      "artifact_path": "blind-oss-v1-kotlin-frame-1-raw/hour-21-page-001.json",
+      "artifact_sha256": "b2e702c779fabe54fc132b135e234244174065a81b41359d53f47d4f22734e7e",
+      "response_sha256": "28b729f2e5368be3a9646745b5867753d11adde423681678897593351af306ee"
+    },
+    {
+      "query": "language:Kotlin created:2026-05-10T22:00:00Z..2026-05-10T22:59:59Z fork:false archived:false mirror:false template:false",
+      "page": 1,
+      "artifact_path": "blind-oss-v1-kotlin-frame-1-raw/hour-22-page-001.json",
+      "artifact_sha256": "78c74edaade5118a1b74563e62f15ddc6f8ccb280f797078561ab004c0c90103",
+      "response_sha256": "3e4005e3800eaf63a791f15998aee049af1ea7b930dd1cbedf1fc291020e0663"
+    },
+    {
+      "query": "language:Kotlin created:2026-05-10T23:00:00Z..2026-05-10T23:59:59Z fork:false archived:false mirror:false template:false",
+      "page": 1,
+      "artifact_path": "blind-oss-v1-kotlin-frame-1-raw/hour-23-page-001.json",
+      "artifact_sha256": "541b5451217b5d4335943da52966f7c99a54a90443f51d16b3eed7d77570e67b",
+      "response_sha256": "6a6ae11405b707788b2bcd914e555634fadf66c05a46dfb133d96b9b301e2a48"
+    }
+  ],
+  "manifest_sha256": "016b852f14c05c84505c5d640f8a71e28315e61823526995136953740b7e1c95"
+}
