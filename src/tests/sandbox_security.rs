@@ -594,7 +594,7 @@ fn malicious_worker_child_fanout_is_bounded() {
 
     let output = run(&spec).expect("hardened sandbox should start");
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     assert_eq!(
         output.status_code,
         Some(0),
@@ -602,11 +602,11 @@ fn malicious_worker_child_fanout_is_bounded() {
         output.stdout,
         output.stderr
     );
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     if output.status_code != Some(0) {
         assert!(
             output.stderr.contains("process limit was exceeded"),
-            "macOS process monitor did not report enforcement: {:?}",
+            "process monitor did not report enforcement: {:?}",
             output.stderr
         );
         return;

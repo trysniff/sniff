@@ -145,9 +145,26 @@ fn run_external(spec: &SandboxCommand) -> Result<SandboxOutput, SandboxError> {
     let mut timed_out = false;
     #[cfg(target_os = "macos")]
     let mut memory_exceeded = false;
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     let mut process_limit_exceeded = false;
     let status = loop {
+        #[cfg(target_os = "linux")]
+        {
+            let process_limit = spec
+                .process_limit
+                .checked_add(SANDBOX_PROCESS_OVERHEAD as u32)
+                .ok_or_else(|| {
+                    SandboxError::Invalid("sandbox process limit overflowed".to_string())
+                })?;
+            let processes = linux_process_tree_count(child.id())?;
+            if processes > process_limit {
+                process_limit_exceeded = true;
+                terminate(&mut child)?;
+                break child.wait().map(Some).map_err(|error| {
+                    SandboxError::Failed(format!("sandbox worker wait failed: {error}"))
+                })?;
+            }
+        }
         #[cfg(target_os = "macos")]
         {
             let usage = match macos_process_group_usage(child.id(), spec.process_limit) {
@@ -187,9 +204,11 @@ fn run_external(spec: &SandboxCommand) -> Result<SandboxOutput, SandboxError> {
                         SandboxError::Failed(format!("sandbox worker wait failed: {error}"))
                     })?;
                 }
+                #[cfg(target_os = "linux")]
+                thread::sleep(Duration::from_millis(10));
                 #[cfg(target_os = "macos")]
                 thread::sleep(Duration::from_millis(1));
-                #[cfg(not(target_os = "macos"))]
+                #[cfg(not(any(target_os = "linux", target_os = "macos")))]
                 thread::sleep(Duration::from_millis(25));
             }
             Err(error) => {
@@ -209,7 +228,7 @@ fn run_external(spec: &SandboxCommand) -> Result<SandboxOutput, SandboxError> {
         .join()
         .map_err(|_| SandboxError::Failed("sandbox stderr reader panicked".to_string()))?
         .map_err(|error| SandboxError::Failed(format!("sandbox stderr read failed: {error}")))?;
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     let mut stderr = stderr;
     #[cfg(target_os = "macos")]
     if memory_exceeded {
@@ -219,7 +238,7 @@ fn run_external(spec: &SandboxCommand) -> Result<SandboxOutput, SandboxError> {
         stderr
             .push_str("Sniff terminated the sandbox after its physical memory limit was exceeded");
     }
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     if process_limit_exceeded {
         if !stderr.is_empty() && !stderr.ends_with('\n') {
             stderr.push('\n');
@@ -233,6 +252,65 @@ fn run_external(spec: &SandboxCommand) -> Result<SandboxOutput, SandboxError> {
         stderr,
         timed_out,
     })
+}
+
+#[cfg(target_os = "linux")]
+fn linux_process_tree_count(root: u32) -> Result<u32, SandboxError> {
+    let root = libc::pid_t::try_from(root)
+        .map_err(|_| SandboxError::Failed("sandbox process id overflowed".to_string()))?;
+    let mut relationships = Vec::new();
+    for entry in std::fs::read_dir("/proc").map_err(|error| {
+        SandboxError::Failed(format!(
+            "failed to inspect the sandbox process tree: {error}"
+        ))
+    })? {
+        let entry = entry.map_err(|error| {
+            SandboxError::Failed(format!(
+                "failed to inspect the sandbox process tree: {error}"
+            ))
+        })?;
+        let Some(pid) = entry
+            .file_name()
+            .to_str()
+            .and_then(|name| name.parse::<libc::pid_t>().ok())
+        else {
+            continue;
+        };
+        let Ok(stat) = std::fs::read_to_string(entry.path().join("stat")) else {
+            // Processes may disappear between listing /proc and reading stat.
+            continue;
+        };
+        if let Some(parent) = linux_proc_stat_parent(&stat) {
+            relationships.push((pid, parent));
+        }
+    }
+
+    let mut descendants = std::collections::HashSet::from([root]);
+    loop {
+        let previous = descendants.len();
+        for (pid, parent) in &relationships {
+            if descendants.contains(parent) {
+                descendants.insert(*pid);
+            }
+        }
+        if descendants.len() == previous {
+            break;
+        }
+    }
+    u32::try_from(descendants.len())
+        .map_err(|_| SandboxError::Failed("sandbox process count overflowed".to_string()))
+}
+
+#[cfg(target_os = "linux")]
+fn linux_proc_stat_parent(stat: &str) -> Option<libc::pid_t> {
+    // comm may contain spaces and parentheses, so fields after it must be
+    // located from the final closing parenthesis rather than split wholesale.
+    stat.rsplit_once(") ")?
+        .1
+        .split_ascii_whitespace()
+        .nth(1)?
+        .parse()
+        .ok()
 }
 
 fn validate_spec(spec: &SandboxCommand) -> Result<(), SandboxError> {
@@ -1012,12 +1090,12 @@ fn terminate_macos_process_group(process_group: u32) -> Result<(), SandboxError>
 
 #[cfg(test)]
 mod tests {
-    #[cfg(target_os = "linux")]
-    use super::linux_sandbox_program;
     use super::{
         DEFAULT_MEMORY_LIMIT, DEFAULT_PROCESS_LIMIT, SandboxCommand, SandboxError, read_limited,
         read_limited_with_observer, validate_external_runner, validate_spec,
     };
+    #[cfg(target_os = "linux")]
+    use super::{linux_proc_stat_parent, linux_sandbox_program};
     use std::path::PathBuf;
     use std::time::Duration;
 
@@ -1057,6 +1135,15 @@ mod tests {
             memory_limit: DEFAULT_MEMORY_LIMIT,
             process_limit: DEFAULT_PROCESS_LIMIT,
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_proc_stat_parent_handles_spaces_and_parentheses_in_process_names() {
+        let stat = "42 (hostile worker) name) S 17 42 42 0 -1 4194304";
+
+        assert_eq!(linux_proc_stat_parent(stat), Some(17));
+        assert_eq!(linux_proc_stat_parent("malformed"), None);
     }
 
     #[test]
