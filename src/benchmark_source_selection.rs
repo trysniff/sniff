@@ -11,6 +11,11 @@ const SOURCE_RANK_CONTRACT: &str = "sniffbench-source-rank-v1";
 const SUPPORTED_LANGUAGES: [&str; 6] =
     ["go", "javascript", "kotlin", "python", "rust", "typescript"];
 
+#[path = "benchmark_source_selection_composite.rs"]
+mod composite;
+
+pub use composite::*;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SourceSamplingPolicy {
     pub schema_version: u32,
@@ -330,55 +335,25 @@ pub fn audit_source_selection(
     frame: &[u8],
     worksheet: SourceSelectionWorksheet,
 ) -> Result<SourceSelectionAudit, String> {
-    validate_source_selection_worksheet(&policy, frame, &worksheet)?;
-    let expected = build_source_selection(policy, frame)?;
-    validate_worksheet_header(&worksheet, &expected)?;
-    if worksheet.candidates.len() != expected.candidates.len() {
-        return Err("source selection worksheet changed the ranked candidate prefix".to_string());
-    }
-    for (completed, immutable) in worksheet.candidates.iter().zip(&expected.candidates) {
-        if completed.candidate != immutable.candidate {
-            return Err(format!(
-                "source selection changed ranked candidate {}",
-                immutable.candidate.rank
-            ));
-        }
-    }
-
-    let mut selected_counts = worksheet
-        .policy
-        .language_quotas
-        .keys()
-        .map(|language| (language.clone(), 0_usize))
-        .collect::<BTreeMap<_, _>>();
-    let mut selected_repositories = Vec::new();
-    for assessment in &worksheet.candidates {
-        validate_assessment(
-            assessment,
-            &worksheet.policy,
-            &mut selected_counts,
-            &mut selected_repositories,
-        )?;
-    }
-    for (language, expected) in &worksheet.policy.language_quotas {
-        let actual = selected_counts[language];
+    let component = audit_source_selection_component(policy, frame, worksheet)?;
+    for (language, expected) in &component.policy.language_quotas {
+        let actual = component.selected_counts[language];
         if actual != *expected {
             return Err(format!(
                 "source selection filled {actual} of {expected} required {language} repositories"
             ));
         }
     }
-    selected_repositories.sort_by(|left, right| left.repository.cmp(&right.repository));
     let mut audit = SourceSelectionAudit {
         schema_version: SOURCE_SELECTION_AUDIT_SCHEMA_VERSION,
-        rank_contract: SOURCE_RANK_CONTRACT.to_string(),
-        policy: worksheet.policy,
-        policy_sha256: worksheet.policy_sha256,
-        frame_sha256: worksheet.frame_sha256,
-        frame_eligibility: worksheet.frame_eligibility,
-        task_sha256: worksheet.task_sha256,
-        assessments: worksheet.candidates,
-        selected_repositories,
+        rank_contract: component.rank_contract,
+        policy: component.policy,
+        policy_sha256: component.policy_sha256,
+        frame_sha256: component.frame_sha256,
+        frame_eligibility: component.frame_eligibility,
+        task_sha256: component.task_sha256,
+        assessments: component.assessments,
+        selected_repositories: component.selected_repositories,
         audit_sha256: String::new(),
     };
     audit.audit_sha256 = audit.computed_audit_sha256()?;

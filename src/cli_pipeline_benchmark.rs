@@ -1,8 +1,10 @@
 use crate::benchmark::{BenchmarkCorpus, BenchmarkSubmission, evaluate_release, freeze_corpus};
 use crate::benchmark::{
     BenchmarkSourceSeal, LabelResolutionManifest, LabelReviewAudit, LabelReviewWorksheet,
-    SourceSamplingPolicy, SourceSelectionAudit, SourceSelectionWorksheet, assess_source_selection,
-    audit_label_reviews, audit_source_selection, build_blind_case_bundle, create_source_seal,
+    SourceSamplingPolicy, SourceSelectionAudit, SourceSelectionComponentAudit,
+    SourceSelectionCompositePolicy, SourceSelectionWorksheet, assess_source_selection,
+    audit_label_reviews, audit_source_selection, audit_source_selection_component,
+    build_blind_case_bundle, combine_source_selections, create_source_seal,
     extend_source_selection, prepare_label_resolution, prepare_label_review,
     prepare_source_selection, prepare_source_selection_extension, source_selection_draft,
     validate_label_review_audit, validate_source_seal,
@@ -237,6 +239,56 @@ pub(crate) fn audit_benchmark_source_selection(
         "Verified SniffBench source-selection audit written to {output_path}. Selected repositories: {}. Audit commitment: {}",
         audit.selected_repositories.len(),
         audit.audit_sha256
+    );
+    Ok(0)
+}
+
+pub(crate) fn audit_benchmark_source_selection_component(
+    policy_path: &str,
+    frame_path: &str,
+    worksheet_path: &str,
+    output_path: &str,
+) -> Result<i32, Box<dyn std::error::Error>> {
+    let policy = read_json::<SourceSamplingPolicy>(policy_path)?;
+    let frame = fs::read(frame_path)?;
+    let worksheet = read_json::<SourceSelectionWorksheet>(worksheet_path)?;
+    let audit = audit_source_selection_component(policy, &frame, worksheet).map_err(|error| {
+        IoError::new(
+            ErrorKind::InvalidData,
+            format!("benchmark source-selection component is invalid: {error}"),
+        )
+    })?;
+    write_new_file(Path::new(output_path), &serde_json::to_vec_pretty(&audit)?)?;
+    eprintln!(
+        "Verified SniffBench source-selection component written to {output_path}. Selected repositories: {}. Component commitment: {}",
+        audit.selected_repositories.len(),
+        audit.component_audit_sha256
+    );
+    Ok(0)
+}
+
+pub(crate) fn combine_benchmark_source_selections(
+    policy_path: &str,
+    output_path: &str,
+    component_paths: &[String],
+) -> Result<i32, Box<dyn std::error::Error>> {
+    let policy = read_json::<SourceSelectionCompositePolicy>(policy_path)?;
+    let components = component_paths
+        .iter()
+        .map(|path| read_json::<SourceSelectionComponentAudit>(path))
+        .collect::<Result<Vec<_>, _>>()?;
+    let audit = combine_source_selections(policy, components).map_err(|error| {
+        IoError::new(
+            ErrorKind::InvalidData,
+            format!("benchmark composite source selection is invalid: {error}"),
+        )
+    })?;
+    write_new_file(Path::new(output_path), &serde_json::to_vec_pretty(&audit)?)?;
+    eprintln!(
+        "Verified SniffBench composite source selection written to {output_path}. Components: {}. Selected repositories: {}. Composite commitment: {}",
+        audit.components.len(),
+        audit.selected_repositories.len(),
+        audit.composite_audit_sha256
     );
     Ok(0)
 }

@@ -143,6 +143,27 @@ pub enum BenchmarkCommand {
         /// New immutable selection audit; existing files are never overwritten.
         output: String,
     },
+    /// Validate a complete ranked assessment even when its precommitted quotas are underfilled.
+    AuditSelectionComponent {
+        /// Same precommitted policy used to prepare the worksheet.
+        policy: String,
+        /// Exact pinned sampling-frame CSV declared by the policy.
+        frame: String,
+        /// Completed ranked-prefix assessment worksheet.
+        worksheet: String,
+        /// New immutable component audit; existing files are never overwritten.
+        output: String,
+    },
+    /// Combine precommitted source-selection components and enforce aggregate language quotas.
+    CombineSelection {
+        /// Precommitted aggregate quotas and ordered component policy/frame hashes.
+        policy: String,
+        /// New immutable composite audit; existing files are never overwritten.
+        output: String,
+        /// Verified component audit; repeat in the exact order committed by the policy.
+        #[arg(long = "component", required = true)]
+        components: Vec<String>,
+    },
     /// Freeze a label-free OSS source and eligible-method census before any Sniff run.
     SealSources {
         /// Verified source-selection audit with immutable local checkout identities.
@@ -324,6 +345,19 @@ pub async fn run(args: CliArgs) -> Result<i32, Box<dyn std::error::Error>> {
                 worksheet,
                 output,
             } => pipeline::audit_benchmark_source_selection(&policy, &frame, &worksheet, &output),
+            BenchmarkCommand::AuditSelectionComponent {
+                policy,
+                frame,
+                worksheet,
+                output,
+            } => pipeline::audit_benchmark_source_selection_component(
+                &policy, &frame, &worksheet, &output,
+            ),
+            BenchmarkCommand::CombineSelection {
+                policy,
+                output,
+                components,
+            } => pipeline::combine_benchmark_source_selections(&policy, &output, &components),
             BenchmarkCommand::SealSources {
                 audit,
                 frame,
@@ -538,6 +572,56 @@ mod tests {
                 && frame == "projects.csv"
                 && worksheet == "selection-review.json"
                 && output == "selection-audit.json"
+        ));
+
+        let component = CliArgs::try_parse_from([
+            "sniff",
+            "benchmark",
+            "audit-selection-component",
+            "policy.json",
+            "projects.csv",
+            "selection-review.json",
+            "selection-component.json",
+        ])
+        .expect("benchmark source-selection component arguments");
+        assert!(matches!(
+            component.command,
+            Some(CliCommand::Benchmark {
+                command: BenchmarkCommand::AuditSelectionComponent {
+                    policy,
+                    frame,
+                    worksheet,
+                    output
+                }
+            }) if policy == "policy.json"
+                && frame == "projects.csv"
+                && worksheet == "selection-review.json"
+                && output == "selection-component.json"
+        ));
+
+        let composite = CliArgs::try_parse_from([
+            "sniff",
+            "benchmark",
+            "combine-selection",
+            "composite-policy.json",
+            "selection-composite.json",
+            "--component",
+            "base.json",
+            "--component",
+            "kotlin.json",
+        ])
+        .expect("benchmark composite source-selection arguments");
+        assert!(matches!(
+            composite.command,
+            Some(CliCommand::Benchmark {
+                command: BenchmarkCommand::CombineSelection {
+                    policy,
+                    output,
+                    components
+                }
+            }) if policy == "composite-policy.json"
+                && output == "selection-composite.json"
+                && components == ["base.json", "kotlin.json"]
         ));
 
         let args = CliArgs::try_parse_from([

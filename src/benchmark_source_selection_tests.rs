@@ -119,6 +119,127 @@ fn continuation_policy(frame: &[u8], prior: &SourceSelectionWorksheet) -> Source
     extended
 }
 
+fn exclude_language(
+    worksheet: &mut SourceSelectionWorksheet,
+    language: &str,
+    reason: SourceExclusionReason,
+) {
+    for assessment in &mut worksheet.candidates {
+        if assessment.selection_quota_language != language {
+            continue;
+        }
+        let mut facts = assessment.facts.clone().unwrap();
+        if reason == SourceExclusionReason::MissingLicense {
+            facts.license_path = None;
+        }
+        let payload = serde_json::to_string(&facts).unwrap();
+        assessment.facts = Some(facts);
+        assessment.evidence[0].payload_sha256 = sha256(payload.as_bytes());
+        assessment.evidence[0].payload = payload;
+        assessment.disposition = Some(SourceSelectionDisposition::Excluded);
+        assessment.exclusion_reason = Some(reason);
+        assessment.selected_repository = None;
+    }
+}
+
+fn kotlin_component() -> (Vec<u8>, SourceSelectionComponentAudit) {
+    let frame = b"repo,metadata\ngithub.com/example/kotlin-supplement,fixture\n".to_vec();
+    let policy = SourceSamplingPolicy {
+        schema_version: SOURCE_SAMPLING_POLICY_SCHEMA_VERSION,
+        selection_id: "blind-oss-v1-kotlin-1".to_string(),
+        selected_at: "2026-08-14T00:00:00Z".to_string(),
+        frame_source: "https://example.test/frozen-kotlin-frame.csv".to_string(),
+        frame_revision: "4".repeat(40),
+        frame_blob_sha: "5".repeat(40),
+        frame_sha256: sha256(&frame),
+        seed: "precommitted-kotlin-seed".to_string(),
+        assessment_prefix: 1,
+        minimum_methods: 10,
+        maximum_methods: 500,
+        language_quotas: BTreeMap::from([("kotlin".to_string(), 1)]),
+        attestation: "The Kotlin frame and seed were fixed before ranking.".to_string(),
+        continuation: None,
+    };
+    let mut worksheet = prepare_source_selection(policy.clone(), &frame).unwrap();
+    let assessment = &mut worksheet.candidates[0];
+    assessment.selection_quota_language = "kotlin".to_string();
+    assessment.observed_method_count = Some(100);
+    let facts = SourceAssessmentFacts {
+        repository: assessment.candidate.repository.clone(),
+        selection_quota_language: "kotlin".to_string(),
+        observed_method_count: Some(100),
+        assessed_revision: Some("6".repeat(40)),
+        method_counts: BTreeMap::from([("kotlin".to_string(), 100)]),
+        method_census_contract: Some(SOURCE_ASSESSMENT_CENSUS_CONTRACT.to_string()),
+        repository_empty: false,
+        accessible: true,
+        archived: Some(false),
+        fork: Some(false),
+        license_path: Some("LICENSE".to_string()),
+        supported_project_shape: Some(true),
+    };
+    let payload = serde_json::to_string(&facts).unwrap();
+    assessment.facts = Some(facts);
+    assessment.evidence = vec![
+        SourceAssessmentEvidence {
+            kind: SourceAssessmentEvidenceKind::StructuredFacts,
+            source: "derived:source-assessment-facts-v2".to_string(),
+            observed_at: "2026-08-14T00:00:00Z".to_string(),
+            payload_sha256: sha256(payload.as_bytes()),
+            payload,
+        },
+        SourceAssessmentEvidence {
+            kind: SourceAssessmentEvidenceKind::RawSource,
+            source: "https://example.test/kotlin-metadata".to_string(),
+            observed_at: "2026-08-14T00:00:00Z".to_string(),
+            payload_sha256: sha256(b"kotlin metadata"),
+            payload: "kotlin metadata".to_string(),
+        },
+        SourceAssessmentEvidence {
+            kind: SourceAssessmentEvidenceKind::DerivedCensus,
+            source: SOURCE_ASSESSMENT_CENSUS_CONTRACT.to_string(),
+            observed_at: "2026-08-14T00:00:00Z".to_string(),
+            payload_sha256: sha256(b"kotlin census"),
+            payload: "kotlin census".to_string(),
+        },
+    ];
+    assessment.disposition = Some(SourceSelectionDisposition::Selected);
+    assessment.selected_repository = Some(SourceRepositoryDraft {
+        repository: "https://github.com/example/kotlin-supplement".to_string(),
+        revision: "6".repeat(40),
+        license_path: "LICENSE".to_string(),
+        selection_language: "kotlin".to_string(),
+        observed_method_count: 100,
+        context_paths: Vec::new(),
+    });
+    let audit = audit_source_selection_component(policy, &frame, worksheet).unwrap();
+    (frame, audit)
+}
+
+fn composite_policy(
+    base: &SourceSelectionComponentAudit,
+    kotlin: &SourceSelectionComponentAudit,
+) -> SourceSelectionCompositePolicy {
+    SourceSelectionCompositePolicy {
+        schema_version: SOURCE_SELECTION_COMPOSITE_POLICY_SCHEMA_VERSION,
+        selection_id: "blind-oss-v1-complete".to_string(),
+        selected_at: "2026-08-14T00:00:00Z".to_string(),
+        language_quotas: SUPPORTED_LANGUAGES
+            .into_iter()
+            .map(|language| (language.to_string(), 1))
+            .collect(),
+        components: [&base, &kotlin]
+            .into_iter()
+            .map(|component| SourceSelectionComponentCommitment {
+                selection_id: component.policy.selection_id.clone(),
+                policy_sha256: component.policy_sha256.clone(),
+                frame_sha256: component.frame_sha256.clone(),
+            })
+            .collect(),
+        attestation: "Both source components were fixed before final source sealing.".to_string(),
+    }
+}
+
 #[test]
 fn source_selection_is_hash_ranked_and_fills_every_language_quota() {
     let frame = frame();
@@ -129,6 +250,81 @@ fn source_selection_is_hash_ranked_and_fills_every_language_quota() {
     assert_eq!(audit.selected_repositories.len(), 6);
     assert_eq!(audit.audit_sha256, audit.computed_audit_sha256().unwrap());
     validate_source_selection_audit(&audit).unwrap();
+}
+
+#[test]
+fn underfilled_selection_remains_auditable_without_passing_the_strict_gate() {
+    let frame = frame();
+    let mut worksheet = completed(&frame);
+    exclude_language(
+        &mut worksheet,
+        "kotlin",
+        SourceExclusionReason::MissingLicense,
+    );
+
+    let component =
+        audit_source_selection_component(policy(&frame), &frame, worksheet.clone()).unwrap();
+    assert_eq!(component.selected_counts["kotlin"], 0);
+    validate_source_selection_component_against_frame(&component, &frame).unwrap();
+
+    let error = audit_source_selection(policy(&frame), &frame, worksheet).unwrap_err();
+    assert!(error.contains("filled 0 of 1 required kotlin"));
+}
+
+#[test]
+fn composite_selection_closes_an_underfilled_language_without_changing_components() {
+    let base_frame = frame();
+    let mut worksheet = completed(&base_frame);
+    exclude_language(
+        &mut worksheet,
+        "kotlin",
+        SourceExclusionReason::MissingLicense,
+    );
+    let base =
+        audit_source_selection_component(policy(&base_frame), &base_frame, worksheet).unwrap();
+    let (kotlin_frame, kotlin) = kotlin_component();
+    let composite =
+        combine_source_selections(composite_policy(&base, &kotlin), vec![base, kotlin]).unwrap();
+
+    assert_eq!(composite.selected_repositories.len(), 6);
+    assert!(composite.selected_counts.values().all(|count| *count == 1));
+    validate_source_selection_composite_audit(&composite).unwrap();
+    validate_source_selection_component_against_frame(&composite.components[0], &base_frame)
+        .unwrap();
+    validate_source_selection_component_against_frame(&composite.components[1], &kotlin_frame)
+        .unwrap();
+}
+
+#[test]
+fn composite_selection_rejects_missing_tampered_or_duplicate_components() {
+    let base_frame = frame();
+    let mut worksheet = completed(&base_frame);
+    exclude_language(
+        &mut worksheet,
+        "kotlin",
+        SourceExclusionReason::MissingLicense,
+    );
+    let base =
+        audit_source_selection_component(policy(&base_frame), &base_frame, worksheet).unwrap();
+    let (_, kotlin) = kotlin_component();
+    let policy = composite_policy(&base, &kotlin);
+
+    let error = combine_source_selections(policy.clone(), vec![base.clone()]).unwrap_err();
+    assert!(error.contains("every precommitted component"));
+
+    let mut tampered = kotlin.clone();
+    tampered.policy_sha256 = "0".repeat(64);
+    let error =
+        combine_source_selections(policy.clone(), vec![base.clone(), tampered]).unwrap_err();
+    assert!(error.contains("policy or frame commitment changed"));
+
+    let mut duplicate = kotlin;
+    duplicate.selected_repositories[0] = base.selected_repositories[0].clone();
+    duplicate.selected_repositories[0].selection_language = "kotlin".to_string();
+    duplicate.selected_repositories[0].observed_method_count = 100;
+    duplicate.component_audit_sha256 = duplicate.computed_component_audit_sha256().unwrap();
+    let error = combine_source_selections(policy, vec![base, duplicate]).unwrap_err();
+    assert!(error.contains("repository ledger changed"));
 }
 
 #[test]
