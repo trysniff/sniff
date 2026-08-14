@@ -1040,6 +1040,7 @@ fn profile_path(path: &Path) -> Result<String, SandboxError> {
     Ok(text.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
+#[cfg(any(windows, test))]
 fn read_limited<R: Read>(reader: R, limit: usize) -> IoResult<String> {
     read_limited_hashed(reader, limit).map(|output| output.text)
 }

@@ -74,7 +74,10 @@ pub(crate) fn prepare_historical_runtime(
         _ => generic_launch(&root, program, &expanded_args)?,
     };
 
+    #[cfg(windows)]
     let mut launcher_kind = "direct";
+    #[cfg(not(windows))]
+    let launcher_kind = "direct";
     #[cfg(windows)]
     if is_batch(&launch.target) {
         let cmd = resolve_on_path("cmd")?;
