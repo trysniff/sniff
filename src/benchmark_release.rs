@@ -97,6 +97,11 @@ mod intentional_boundary_ast_go_kotlin;
 
 pub use intentional_boundary_ast_go_kotlin::*;
 
+#[path = "benchmark_intentional_boundary_ast_evidence.rs"]
+mod intentional_boundary_ast_evidence;
+
+pub use intentional_boundary_ast_evidence::*;
+
 #[path = "benchmark_intentional_boundary_compiler_evidence.rs"]
 mod intentional_boundary_compiler_evidence;
 

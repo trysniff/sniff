@@ -11,7 +11,8 @@ use super::{
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 
-const EVIDENCE_CENSUS_CONTRACT: &str = "sniffbench-intentional-boundary-typed-evidence-census-v1";
+const EVIDENCE_CENSUS_CONTRACT: &str = "sniffbench-intentional-boundary-typed-evidence-census-v2";
+const COMPILER_INPUT: &str = "compiler_semantic_index";
 
 pub fn extract_intentional_boundary_compiler_evidence(
     source_census: &IntentionalBoundarySourceCensus,
@@ -193,7 +194,34 @@ fn derive_compiler_evidence(
             )?;
         }
     }
+    let input_census_sha256 = BTreeMap::from([(
+        COMPILER_INPUT.to_string(),
+        semantic_census.semantic_census_sha256.clone(),
+    )]);
+    finish_evidence_census(source_census, semantic_census, input_census_sha256, atoms)
+}
+
+pub(super) fn finish_evidence_census(
+    source_census: &IntentionalBoundarySourceCensus,
+    semantic_census: &IntentionalBoundarySemanticCensus,
+    input_census_sha256: BTreeMap<String, String>,
+    mut atoms: Vec<IntentionalBoundaryEvidenceAtom>,
+) -> Result<IntentionalBoundaryEvidenceCensus, String> {
+    if input_census_sha256.get(COMPILER_INPUT) != Some(&semantic_census.semantic_census_sha256)
+        || input_census_sha256
+            .iter()
+            .any(|(key, value)| key.trim().is_empty() || !is_sha256(value))
+    {
+        return Err("intentional-boundary evidence input commitments are incomplete".to_string());
+    }
     atoms.sort_by(|left, right| left.evidence_id.cmp(&right.evidence_id));
+    if atoms
+        .windows(2)
+        .any(|pair| pair[0].evidence_id == pair[1].evidence_id && pair[0] != pair[1])
+    {
+        return Err("intentional-boundary evidence ID collision".to_string());
+    }
+    atoms.dedup();
     let atom_count_by_kind = atoms.iter().fold(BTreeMap::new(), |mut counts, atom| {
         *counts.entry(atom.evidence_kind).or_insert(0) += 1;
         counts
@@ -205,6 +233,7 @@ fn derive_compiler_evidence(
         revision: semantic_census.revision.clone(),
         source_census_sha256: source_census.census_sha256.clone(),
         semantic_census_sha256: semantic_census.semantic_census_sha256.clone(),
+        input_census_sha256,
         atoms,
         atom_count_by_kind,
         evidence_census_sha256: String::new(),
@@ -219,6 +248,26 @@ fn push_atom(
     subject_symbol_id: &str,
     evidence_kind: BoundaryEvidenceKind,
     compiler_proof: IntentionalBoundaryCompilerProofKind,
+    locations: Vec<super::IntentionalBoundarySemanticRange>,
+    related_symbol_ids: Vec<String>,
+) -> Result<(), String> {
+    push_typed_atom(
+        atoms,
+        method,
+        subject_symbol_id,
+        evidence_kind,
+        IntentionalBoundaryEvidenceProof::CompilerSemanticIndex(compiler_proof),
+        locations,
+        related_symbol_ids,
+    )
+}
+
+pub(super) fn push_typed_atom(
+    atoms: &mut Vec<IntentionalBoundaryEvidenceAtom>,
+    method: &IntentionalBoundarySemanticMethod,
+    subject_symbol_id: &str,
+    evidence_kind: BoundaryEvidenceKind,
+    proof: IntentionalBoundaryEvidenceProof,
     mut locations: Vec<super::IntentionalBoundarySemanticRange>,
     mut related_symbol_ids: Vec<String>,
 ) -> Result<(), String> {
@@ -249,7 +298,7 @@ fn push_atom(
         evidence_kind,
         subject_parser_unit_id: method.parser_unit_id.clone(),
         subject_symbol_id: subject_symbol_id.to_string(),
-        proof: IntentionalBoundaryEvidenceProof::CompilerSemanticIndex(compiler_proof),
+        proof,
         locations,
         related_symbol_ids,
     };
@@ -285,6 +334,7 @@ fn compute_evidence_census_sha256(
         &census.revision,
         &census.source_census_sha256,
         &census.semantic_census_sha256,
+        &census.input_census_sha256,
         &census.atoms,
         &census.atom_count_by_kind,
     ))
@@ -294,6 +344,10 @@ fn compute_evidence_census_sha256(
 
 fn sha256(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
+}
+
+fn is_sha256(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 #[cfg(test)]
