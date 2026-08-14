@@ -223,7 +223,24 @@ async fn seals_selected_history_or_typed_host_sandbox_unavailability() {
     let assessment = &result.assessments[0];
     if assessment.disposition != Some(HistoricalAssessmentDisposition::Selected) {
         #[cfg(not(windows))]
-        panic!("non-Windows host did not select the trusted fixture: {assessment:#?}");
+        {
+            let availability = assessment
+                .evidence
+                .iter()
+                .filter_map(|entry| {
+                    entry
+                        .artifact_path
+                        .ends_with("-availability.json")
+                        .then(|| {
+                            fs::read_to_string(state.path().join(&entry.artifact_path))
+                                .unwrap_or_else(|error| format!("unreadable: {error}"))
+                        })
+                })
+                .collect::<Vec<_>>();
+            panic!(
+                "non-Windows host did not select the trusted fixture: {assessment:#?}\navailability: {availability:#?}"
+            );
+        }
         #[cfg(windows)]
         {
             assert_eq!(

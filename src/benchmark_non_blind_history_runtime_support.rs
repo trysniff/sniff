@@ -14,10 +14,11 @@ pub(super) fn runtime_identity(
     repository_root: &Path,
     launcher_kind: &str,
 ) -> Result<String, HistoricalRuntimePlanError> {
+    let repository_root = canonical_directory(repository_root, "runtime identity repository")?;
     let mut records = Vec::new();
     for path in files {
         let path = canonical_file(path, "runtime identity file")?;
-        if path.starts_with(repository_root) {
+        if path.starts_with(&repository_root) {
             continue;
         }
         let bytes = fs::read(&path).map_err(|error| {
