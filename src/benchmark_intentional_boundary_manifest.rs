@@ -137,6 +137,77 @@ pub fn validate_intentional_boundary_manifest_census(
     Ok(())
 }
 
+pub(super) fn validate_manifest_census_commitment(
+    inventory_sha256: &str,
+    census: &IntentionalBoundaryManifestCensus,
+) -> Result<(), String> {
+    if census.schema_version != INTENTIONAL_BOUNDARY_MANIFEST_CENSUS_SCHEMA_VERSION
+        || census.manifest_contract != MANIFEST_CONTRACT
+        || census.inventory_sha256 != inventory_sha256
+        || census.repository.trim().is_empty()
+        || census.revision.trim().is_empty()
+    {
+        return Err("intentional-boundary manifest census identity changed".to_string());
+    }
+    if census
+        .documents
+        .windows(2)
+        .any(|pair| pair[0].repository_path >= pair[1].repository_path)
+        || census
+            .declarations
+            .windows(2)
+            .any(|pair| pair[0] >= pair[1])
+    {
+        return Err("intentional-boundary manifest census ordering changed".to_string());
+    }
+    for declaration in &census.declarations {
+        if declaration.declaration_id != compute_manifest_declaration_id(declaration)?
+            || !census.documents.iter().any(|document| {
+                document.provider == declaration.provider
+                    && document.repository_path == declaration.manifest_repository_path
+                    && document.object_id == declaration.manifest_object_id
+            })
+        {
+            return Err("intentional-boundary manifest declaration identity changed".to_string());
+        }
+    }
+    let document_count_by_provider =
+        census
+            .documents
+            .iter()
+            .fold(BTreeMap::new(), |mut counts, document| {
+                *counts.entry(document.provider).or_insert(0) += 1;
+                counts
+            });
+    let declaration_count_by_kind =
+        census
+            .declarations
+            .iter()
+            .fold(BTreeMap::new(), |mut counts, declaration| {
+                *counts.entry(declaration.declaration_kind).or_insert(0) += 1;
+                counts
+            });
+    if census.document_count_by_provider != document_count_by_provider
+        || census.declaration_count_by_kind != declaration_count_by_kind
+        || census.documents.iter().any(|document| {
+            document.declaration_count
+                != census
+                    .declarations
+                    .iter()
+                    .filter(|declaration| {
+                        declaration.provider == document.provider
+                            && declaration.manifest_repository_path == document.repository_path
+                            && declaration.manifest_object_id == document.object_id
+                    })
+                    .count()
+        })
+        || compute_manifest_census_sha256(census)? != census.manifest_census_sha256
+    {
+        return Err("intentional-boundary manifest census commitment changed".to_string());
+    }
+    Ok(())
+}
+
 fn provider_for_path(path: &str) -> Option<IntentionalBoundaryManifestProvider> {
     match path.rsplit('/').next()? {
         "Cargo.toml" => Some(IntentionalBoundaryManifestProvider::CargoManifest),
@@ -200,7 +271,7 @@ fn span_range(
     }
 }
 
-fn compute_manifest_census_sha256(
+pub(super) fn compute_manifest_census_sha256(
     census: &IntentionalBoundaryManifestCensus,
 ) -> Result<String, String> {
     let bytes = serde_json::to_vec(&(
@@ -218,7 +289,7 @@ fn compute_manifest_census_sha256(
     Ok(sha256(&bytes))
 }
 
-fn compute_manifest_declaration_id(
+pub(super) fn compute_manifest_declaration_id(
     declaration: &IntentionalBoundaryManifestDeclaration,
 ) -> Result<String, String> {
     let bytes = serde_json::to_vec(&(
