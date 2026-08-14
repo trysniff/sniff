@@ -74,10 +74,18 @@ mod intentional_boundary_ast_schema;
 
 pub use intentional_boundary_ast_schema::*;
 
+#[path = "benchmark_intentional_boundary_ast.rs"]
+mod intentional_boundary_ast;
+
 #[path = "benchmark_intentional_boundary_ast_rust.rs"]
 mod intentional_boundary_ast_rust;
 
 pub use intentional_boundary_ast_rust::*;
+
+#[path = "benchmark_intentional_boundary_ast_python.rs"]
+mod intentional_boundary_ast_python;
+
+pub use intentional_boundary_ast_python::*;
 
 #[path = "benchmark_intentional_boundary_compiler_evidence.rs"]
 mod intentional_boundary_compiler_evidence;
