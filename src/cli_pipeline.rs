@@ -24,9 +24,11 @@ pub(crate) use benchmark_run::{
     extend_benchmark_source_selection, freeze_benchmark, import_benchmark_run,
     prepare_benchmark_label_resolution, prepare_benchmark_labels, prepare_benchmark_run,
     prepare_benchmark_source_selection, prepare_benchmark_source_selection_extension,
-    prepare_non_blind_benchmark_history, prepare_non_blind_benchmark_history_assessment,
-    resolve_benchmark_labels, seal_benchmark_sources, seal_composite_benchmark_sources,
-    seal_non_blind_benchmark_sources, validate_benchmark_labels, validate_benchmark_source_frame,
+    prepare_intentional_boundary_benchmark_frame_task, prepare_non_blind_benchmark_history,
+    prepare_non_blind_benchmark_history_assessment, resolve_benchmark_labels,
+    seal_benchmark_sources, seal_composite_benchmark_sources, seal_non_blind_benchmark_sources,
+    validate_benchmark_labels, validate_benchmark_source_frame,
+    validate_intentional_boundary_benchmark_frame_task,
     validate_intentional_boundary_benchmark_protocol,
 };
 pub use preflight::{doctor, estimate, index_semantic_sources, install_indexers};
