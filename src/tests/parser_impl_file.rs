@@ -29,6 +29,30 @@ fn python_string_fixtures_do_not_become_methods() {
 }
 
 #[test]
+fn checked_python_parse_censuses_async_functions() {
+    let root =
+        std::env::temp_dir().join(format!("sniff-python-async-methods-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    let path = root.join("fixture.py");
+    std::fs::write(
+        &path,
+        "async def process(value: Input) -> Output:\n    return await target(value)\n",
+    )
+    .unwrap();
+
+    let record = parse_file_checked(&path.to_string_lossy()).unwrap();
+
+    assert_eq!(record.methods.len(), 1);
+    assert_eq!(record.methods[0].name, "process");
+    assert_eq!(record.methods[0].param_count, 1);
+    assert_eq!(
+        (record.methods[0].start_line, record.methods[0].end_line),
+        (1, 2)
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn python_all_controls_top_level_export_visibility() {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)

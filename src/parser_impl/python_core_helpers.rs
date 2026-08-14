@@ -86,7 +86,8 @@ pub(super) fn mask_python_non_code(source: &str) -> String {
 
 pub(super) fn parse_python_name(trimmed: &str) -> Option<String> {
     trimmed
-        .strip_prefix("def ")?
+        .strip_prefix("async def ")
+        .or_else(|| trimmed.strip_prefix("def "))?
         .split_once('(')
         .map(|(name, _)| name.trim().to_string())
 }
