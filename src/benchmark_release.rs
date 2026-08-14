@@ -64,6 +64,16 @@ mod intentional_boundary_semantic;
 
 pub use intentional_boundary_semantic::*;
 
+#[path = "benchmark_intentional_boundary_evidence_schema.rs"]
+mod intentional_boundary_evidence_schema;
+
+pub use intentional_boundary_evidence_schema::*;
+
+#[path = "benchmark_intentional_boundary_compiler_evidence.rs"]
+mod intentional_boundary_compiler_evidence;
+
+pub use intentional_boundary_compiler_evidence::*;
+
 #[path = "benchmark_non_blind_history_assessment_schema.rs"]
 mod non_blind_history_assessment_schema;
 

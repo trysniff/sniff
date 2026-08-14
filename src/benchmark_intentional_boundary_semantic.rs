@@ -28,7 +28,7 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-const SEMANTIC_CENSUS_CONTRACT: &str =
+pub(super) const SEMANTIC_CENSUS_CONTRACT: &str =
     "sniffbench-intentional-boundary-compiler-semantic-census-v1";
 type MethodJoinKey = (String, String, u32, u32);
 type ExpectedMethodMap<'a> = BTreeMap<MethodJoinKey, &'a IntentionalBoundaryMethodCensusEntry>;
@@ -183,7 +183,7 @@ mod projection;
 
 use projection::{flatten_method, summarize_index};
 
-fn compute_semantic_census_sha256(
+pub(super) fn compute_semantic_census_sha256(
     census: &IntentionalBoundarySemanticCensus,
 ) -> Result<String, String> {
     let bytes = serde_json::to_vec(&(
