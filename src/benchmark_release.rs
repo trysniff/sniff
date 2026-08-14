@@ -54,6 +54,16 @@ mod intentional_boundary_source_census;
 
 pub use intentional_boundary_source_census::*;
 
+#[path = "benchmark_intentional_boundary_semantic_schema.rs"]
+mod intentional_boundary_semantic_schema;
+
+pub use intentional_boundary_semantic_schema::*;
+
+#[path = "benchmark_intentional_boundary_semantic.rs"]
+mod intentional_boundary_semantic;
+
+pub use intentional_boundary_semantic::*;
+
 #[path = "benchmark_non_blind_history_assessment_schema.rs"]
 mod non_blind_history_assessment_schema;
 
