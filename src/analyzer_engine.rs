@@ -29,6 +29,7 @@ mod dossier;
 mod jobs;
 #[path = "analyzer_journal.rs"]
 mod journal;
+pub use journal::JournalSummary;
 #[path = "analyzer_signal_maps.rs"]
 mod signal_maps;
 
@@ -45,6 +46,10 @@ pub struct AnalysisRun<'a> {
     pub with_file_reviews: bool,
     pub graph: Option<&'a crate::symbol_graph::SymbolGraph>,
     pub journal_path: Option<&'a std::path::Path>,
+}
+
+pub fn summarize_journal(path: &std::path::Path) -> Result<JournalSummary, String> {
+    journal::summarize(path)
 }
 
 impl Analyzer {

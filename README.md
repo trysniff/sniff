@@ -23,8 +23,9 @@ tool, or PR reviewer.
 > [!WARNING]
 > **A normal Sniff scan sends source code to the LLM endpoint you configure.**
 > Check that provider's retention, training, region, and privacy policy before
-> scanning private code. `sniff --estimate` and `sniff doctor` are offline;
-> only `sniff doctor --probe` and a normal scan contact the provider.
+> scanning private code. `sniff --estimate`, `sniff doctor`, and `sniff status`
+> are offline;
+> only `sniff doctor --probe` and normal or resumed scans contact the provider.
 
 ## Quickstart
 
@@ -49,13 +50,24 @@ sniff doctor
 # See method count, runtime range, and cost range without contacting the model.
 sniff --estimate
 
+# Inspect durable progress without contacting the model.
+sniff status
+
 # Start the exhaustive review. Expensive scans ask for confirmation first.
 sniff
+
+# Continue an interrupted scan without repeating completed reviews.
+sniff resume
 ```
 
 Sniff writes `sniff-report.md` at the scanned repository root. A successful run
 reviews every eligible method; it never replaces failed AI reviews with a
 static-only report.
+
+Each completed method is appended to a durable journal. `sniff status [PATH]`
+reads that journal without loading provider configuration or scanning source
+files. `sniff resume [PATH]` requires an existing journal and continues the
+scan; changed or invalidated work is reviewed again.
 
 ## What A Finding Looks Like
 

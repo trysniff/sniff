@@ -22,6 +22,8 @@ pub(super) struct JournalEntry {
     version: u32,
     pub(super) scan_id: String,
     pub(super) unit_id: String,
+    #[serde(default)]
+    pub(super) expected_units: usize,
     pub(super) source_hash: String,
     pub(super) semantic_index_hash: String,
     pub(super) prompt_contract_version: String,
@@ -65,10 +67,11 @@ struct JournalContext {
     model: String,
     endpoint: String,
     review_context_hash: String,
+    expected_units: usize,
 }
 
 impl JournalContext {
-    fn new(semantic_index_hash: &str, review_context: &str) -> Self {
+    fn new(semantic_index_hash: &str, review_context: &str, expected_units: usize) -> Self {
         let fields = review_context
             .lines()
             .filter_map(|line| line.split_once('='))
@@ -101,6 +104,7 @@ impl JournalContext {
             model,
             endpoint,
             review_context_hash,
+            expected_units,
         }
     }
 
@@ -119,13 +123,23 @@ pub(super) struct JournalStore {
 }
 
 impl JournalStore {
+    #[cfg(test)]
     pub(super) fn load<S: ToString>(
         path: &Path,
         semantic_index_hash: S,
         review_context: &str,
     ) -> Result<Self, String> {
+        Self::load_with_expected(path, semantic_index_hash, review_context, 0)
+    }
+
+    pub(super) fn load_with_expected<S: ToString>(
+        path: &Path,
+        semantic_index_hash: S,
+        review_context: &str,
+        expected_units: usize,
+    ) -> Result<Self, String> {
         let semantic_index_hash = semantic_index_hash.to_string();
-        let context = JournalContext::new(&semantic_index_hash, review_context);
+        let context = JournalContext::new(&semantic_index_hash, review_context, expected_units);
         let completed = load_entries(path, &context)?;
         Ok(Self {
             path: path.to_path_buf(),
@@ -163,6 +177,7 @@ impl JournalStore {
             version: JOURNAL_VERSION,
             scan_id: self.context.scan_id.clone(),
             unit_id: unit_id.clone(),
+            expected_units: self.context.expected_units,
             source_hash,
             semantic_index_hash: self.context.semantic_index_hash.clone(),
             prompt_contract_version: self.context.prompt_contract_version.clone(),
@@ -199,6 +214,67 @@ impl JournalStore {
     }
 }
 
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct JournalSummary {
+    pub scan_id: Option<String>,
+    pub expected_units: usize,
+    pub completed_units: usize,
+    pub retryable_units: usize,
+    pub slop: usize,
+    pub kinda_slop: usize,
+    pub unresolved: usize,
+    pub input_tokens: usize,
+    pub cached_input_tokens: usize,
+    pub output_tokens: usize,
+    pub estimated_cost_usd: f64,
+    pub provider: Option<String>,
+    pub model: Option<String>,
+}
+
+pub(super) fn summarize(path: &Path) -> Result<JournalSummary, String> {
+    let entries = read_entries(path, false)?;
+    let Some(latest_scan_id) = entries.last().map(|entry| entry.scan_id.clone()) else {
+        return Ok(JournalSummary::default());
+    };
+    let current_scan = entries
+        .into_iter()
+        .filter(|entry| entry.scan_id == latest_scan_id)
+        .collect::<Vec<_>>();
+    let mut summary = JournalSummary {
+        scan_id: Some(latest_scan_id),
+        ..JournalSummary::default()
+    };
+    for entry in &current_scan {
+        summary.expected_units = summary.expected_units.max(entry.expected_units);
+        summary.input_tokens += entry.in_tok;
+        summary.cached_input_tokens += entry.cached_in_tok;
+        summary.output_tokens += entry.out_tok;
+        summary.estimated_cost_usd += entry.estimated_cost_usd;
+        summary.provider = Some(entry.provider.clone());
+        summary.model = Some(entry.model.clone());
+    }
+    let mut latest = HashMap::new();
+    for entry in current_scan {
+        latest.insert(entry.unit_id.clone(), entry);
+    }
+    for entry in latest.values() {
+        if entry.retry_on_resume {
+            summary.retryable_units += 1;
+            continue;
+        }
+        summary.completed_units += 1;
+        if let Some(verdict) = &entry.verdict {
+            match verdict.tier {
+                FindingTier::Slop => summary.slop += 1,
+                FindingTier::KindaSlop => summary.kinda_slop += 1,
+                FindingTier::Unresolved => summary.unresolved += 1,
+                FindingTier::Clean => {}
+            }
+        }
+    }
+    Ok(summary)
+}
+
 pub(super) fn sha256_text(value: &str) -> String {
     format!("{:x}", Sha256::digest(value.as_bytes()))
 }
@@ -231,9 +307,17 @@ fn load_entries(
     path: &Path,
     context: &JournalContext,
 ) -> Result<HashMap<String, JournalEntry>, String> {
+    Ok(read_entries(path, true)?
+        .into_iter()
+        .filter(|entry| context.matches(entry))
+        .map(|entry| (entry.unit_id.clone(), entry))
+        .collect())
+}
+
+fn read_entries(path: &Path, recover_torn_tail: bool) -> Result<Vec<JournalEntry>, String> {
     let bytes = match std::fs::read(path) {
         Ok(bytes) => bytes,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(HashMap::new()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(err) => {
             return Err(format!(
                 "failed to read Sniff journal {}: {err}",
@@ -241,9 +325,8 @@ fn load_entries(
             ));
         }
     };
-    let mut completed = HashMap::new();
     let has_torn_tail = !bytes.is_empty() && !bytes.ends_with(b"\n");
-    if has_torn_tail {
+    if has_torn_tail && recover_torn_tail {
         let valid_len = bytes
             .iter()
             .rposition(|byte| *byte == b'\n')
@@ -267,6 +350,7 @@ fn load_entries(
             })?;
     }
     let lines = bytes.split(|byte| *byte == b'\n').collect::<Vec<_>>();
+    let mut entries = Vec::new();
 
     for (index, raw_line) in lines.iter().enumerate() {
         if raw_line.is_empty() {
@@ -290,12 +374,10 @@ fn load_entries(
                     index + 1
                 )
             })?;
-        if context.matches(&entry) {
-            completed.insert(entry.unit_id.clone(), entry);
-        }
+        entries.push(entry);
     }
 
-    Ok(completed)
+    Ok(entries)
 }
 
 fn append_entry(path: &Path, entry: &JournalEntry) -> Result<(), String> {

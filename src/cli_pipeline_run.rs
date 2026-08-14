@@ -78,7 +78,7 @@ pub(super) fn report_path_for_target(target_path: &std::path::Path) -> std::path
     }
 }
 
-fn journal_path_for_target(
+pub(super) fn journal_path_for_target(
     target_path: &std::path::Path,
     report_path: &std::path::Path,
 ) -> std::path::PathBuf {
@@ -93,6 +93,76 @@ fn journal_path_for_target(
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     resolved_target.hash(&mut hasher);
     report_path.with_file_name(format!(".sniff-journal-{:016x}.jsonl", hasher.finish()))
+}
+
+fn format_journal_status(
+    journal_path: &std::path::Path,
+    summary: &crate::analyzer::JournalSummary,
+) -> String {
+    let remaining = summary
+        .expected_units
+        .saturating_sub(summary.completed_units);
+    let progress = if summary.expected_units == 0 {
+        "unknown".to_string()
+    } else {
+        format!(
+            "{:.1}%",
+            summary.completed_units as f64 * 100.0 / summary.expected_units as f64
+        )
+    };
+    format!(
+        "Journal: {}\nProgress: {}/{} completed ({progress})\nRemaining: {remaining} ({} retryable)\nFindings so far: {} slop, {} kinda slop, {} unresolved\nUsage so far: {} input, {} cached input, {} output tokens; ${:.4} estimated\nProvider: {} / {}",
+        journal_path.display(),
+        summary.completed_units,
+        summary.expected_units,
+        summary.retryable_units,
+        summary.slop,
+        summary.kinda_slop,
+        summary.unresolved,
+        summary.input_tokens,
+        summary.cached_input_tokens,
+        summary.output_tokens,
+        summary.estimated_cost_usd,
+        summary.provider.as_deref().unwrap_or("unknown"),
+        summary.model.as_deref().unwrap_or("unknown"),
+    )
+}
+
+pub async fn status(path: &str) -> Result<i32, Box<dyn std::error::Error>> {
+    let target_path = std::path::Path::new(path);
+    let report_path = report_path_for_target(target_path);
+    let journal_path = journal_path_for_target(target_path, &report_path);
+    let summary = crate::analyzer::summarize_journal(&journal_path).map_err(IoError::other)?;
+    if summary.scan_id.is_none() {
+        eprintln!("No Sniff journal found for {}.", target_path.display());
+        return Ok(0);
+    }
+
+    eprintln!("{}", format_journal_status(&journal_path, &summary));
+    Ok(0)
+}
+
+pub async fn resume(
+    path: &str,
+    skip_dotenv: bool,
+    assume_yes: bool,
+) -> Result<i32, Box<dyn std::error::Error>> {
+    let target_path = std::path::Path::new(path);
+    let report_path = report_path_for_target(target_path);
+    let journal_path = journal_path_for_target(target_path, &report_path);
+    if !journal_path.exists() {
+        return Err(IoError::new(
+            ErrorKind::NotFound,
+            format!(
+                "No Sniff journal exists for {}. Start a scan with `sniff {}` first.",
+                target_path.display(),
+                path
+            ),
+        )
+        .into());
+    }
+
+    run(path, skip_dotenv, assume_yes).await
 }
 
 fn strip_windows_verbatim_prefix(path: std::path::PathBuf) -> std::path::PathBuf {
@@ -206,8 +276,8 @@ pub async fn run(
 #[cfg(test)]
 mod tests {
     use super::{
-        journal_path_for_target, report_path_for_target, source_inventory_summary,
-        strip_windows_verbatim_prefix,
+        format_journal_status, journal_path_for_target, report_path_for_target,
+        source_inventory_summary, strip_windows_verbatim_prefix,
     };
     use crate::types::{FileRecord, MethodRecord};
     use std::fs;
@@ -287,5 +357,31 @@ mod tests {
             source_inventory_summary(&files),
             "Found 2 supported files, 3 methods."
         );
+    }
+
+    #[test]
+    fn journal_status_is_compact_and_reports_remaining_work() {
+        let summary = crate::analyzer::JournalSummary {
+            scan_id: Some("scan".to_string()),
+            expected_units: 10,
+            completed_units: 4,
+            retryable_units: 1,
+            slop: 1,
+            kinda_slop: 2,
+            unresolved: 0,
+            input_tokens: 100,
+            cached_input_tokens: 60,
+            output_tokens: 20,
+            estimated_cost_usd: 0.0123,
+            provider: Some("openai-compatible".to_string()),
+            model: Some("test-model".to_string()),
+        };
+
+        let rendered = format_journal_status(std::path::Path::new("journal.jsonl"), &summary);
+
+        assert!(rendered.contains("Progress: 4/10 completed (40.0%)"));
+        assert!(rendered.contains("Remaining: 6 (1 retryable)"));
+        assert!(rendered.contains("Usage so far: 100 input, 60 cached input, 20 output tokens"));
+        assert_eq!(rendered.lines().count(), 6);
     }
 }

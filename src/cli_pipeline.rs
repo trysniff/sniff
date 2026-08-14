@@ -16,4 +16,4 @@ mod run;
 mod stats;
 
 pub use preflight::{doctor, estimate};
-pub use run::run;
+pub use run::{resume, run, status};
