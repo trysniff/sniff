@@ -18,6 +18,8 @@ pub(crate) mod review_journal;
 pub mod roles;
 pub mod scorer;
 pub(crate) mod semantic_cache;
+pub mod semantic_index;
+pub mod semantic_index_scip;
 pub mod signal_layers;
 pub(crate) mod slop_reason;
 pub mod symbol_graph;
