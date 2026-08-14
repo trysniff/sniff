@@ -134,6 +134,7 @@ fn records_one_ast_and_compiler_resolved_delegation() {
     assert_eq!(census.languages, ["rust"]);
     assert_eq!(census.method_count, 1);
     assert_eq!(census.fact_count, 1);
+    assert_eq!(census.methods[0].language, "rust");
     let IntentionalBoundaryAstMethodStatus::Resolved { facts, .. } = &census.methods[0].status
     else {
         panic!("expected resolved AST method");

@@ -185,6 +185,7 @@ fn derive_method(
     Ok(IntentionalBoundaryAstMethod {
         parser_unit_id: source_method.parser_unit_id.clone(),
         repository_path: semantic_method.repository_path.clone(),
+        language: "rust".to_string(),
         symbol_name: source_method.symbol_name.clone(),
         start_line: source_method.start_line,
         end_line: source_method.end_line,

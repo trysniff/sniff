@@ -35,6 +35,7 @@ pub enum IntentionalBoundaryAstMethodStatus {
 pub struct IntentionalBoundaryAstMethod {
     pub parser_unit_id: String,
     pub repository_path: String,
+    pub language: String,
     pub symbol_name: String,
     pub start_line: usize,
     pub end_line: usize,
