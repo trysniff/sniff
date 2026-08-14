@@ -27,6 +27,7 @@ pub(crate) use benchmark_run::{
     prepare_non_blind_benchmark_history, prepare_non_blind_benchmark_history_assessment,
     resolve_benchmark_labels, seal_benchmark_sources, seal_composite_benchmark_sources,
     seal_non_blind_benchmark_sources, validate_benchmark_labels, validate_benchmark_source_frame,
+    validate_intentional_boundary_benchmark_protocol,
 };
 pub use preflight::{doctor, estimate, index_semantic_sources, install_indexers};
 pub use run::{resume, run, status};

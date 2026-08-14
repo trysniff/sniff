@@ -34,6 +34,11 @@ mod non_blind_history;
 
 pub use non_blind_history::*;
 
+#[path = "benchmark_intentional_boundary_protocol.rs"]
+mod intentional_boundary_protocol;
+
+pub use intentional_boundary_protocol::*;
+
 #[path = "benchmark_non_blind_history_assessment_schema.rs"]
 mod non_blind_history_assessment_schema;
 

@@ -75,6 +75,8 @@ sniff benchmark audit-labels blind-source-seal.json label-audit.json \
 sniff benchmark prepare-resolution blind-source-seal.json label-audit.json resolution.json
 sniff benchmark resolve-labels blind-source-seal.json label-audit.json \
   resolution.json blind-cases.json
+sniff benchmark validate-intentional-protocol non-blind-policy.json \
+  history-population.json blind-source-seal.json boundary-protocol.json
 sniff benchmark freeze draft.json corpus.json
 sniff benchmark prepare-run corpus.json review.json --artifact .sniff/runs/RUN.json
 sniff benchmark import-run corpus.json review.json run.json

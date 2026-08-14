@@ -103,6 +103,30 @@ must not be relabeled as observed agent slop. If exact trajectory artifacts are
 not publicly available, that source is recorded as unavailable rather than
 reconstructed or approximated.
 
+Intentional clean boundaries use the same precommitted 600-repository
+population as the historical assessment, not hand-picked examples.
+[`non-blind-v1-intentional-boundary-protocol.json`](non-blind-v1-intentional-boundary-protocol.json)
+was frozen before collecting exact symbol candidates. It binds the policy,
+blind-source exclusion, repository population, eight category-specific
+compiler/contract evidence rules, sixteen fixed slots, no-backfill behavior,
+and independent source-only labeling contract. Validate it offline without a
+model provider:
+
+```console
+sniff benchmark validate-intentional-protocol \
+  sniffbench/non-blind-v1-selection-policy.json \
+  sniffbench/non-blind-v1-history-worksheet.json \
+  sniffbench/blind-oss-v1-source-seal.json \
+  sniffbench/non-blind-v1-intentional-boundary-protocol.json
+```
+
+The protocol file SHA-256 is
+`3e4bbeff8fd850fdb2808ab98609070075fbce99e522017c93605f71c14bd220`.
+
+Candidate collection has not started. Every repository in the bound population
+must receive a hash-bound checkpoint, and paths or names may identify a symbol
+but can never prove its category or intentional contract.
+
 ## Blind OSS v1
 
 [`blind-oss-v1-policy.json`](blind-oss-v1-policy.json) was fixed before running

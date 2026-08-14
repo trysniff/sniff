@@ -1,0 +1,173 @@
+{
+  "schema_version": 1,
+  "protocol_id": "sniffbench-intentional-boundary-protocol-v1",
+  "prepared_at": "2026-08-14T00:00:00Z",
+  "precommit_parent_revision": "4487af9d49ef15d8d38c52ba7c7e6af462f21a5e",
+  "no_fallbacks": true,
+  "selection_policy": {
+    "artifact_path": "sniffbench/non-blind-v1-selection-policy.json",
+    "sha256": "43269a234b55ff406edf1893584418d0eefc3a79eada16764c2114fd7f88c44d"
+  },
+  "blind_source_seal": {
+    "artifact_path": "sniffbench/blind-oss-v1-source-seal.json",
+    "sha256": "33bf6eaac53c3e58c6d4ff2f3ecf54321ef59b1c7f81a58f5e19790bb7b4f5a4",
+    "seal_sha256": "45fbabccc0ec2541e5033f2bfd3c85c0fb06c3235d0c077c40109d3e2484298e"
+  },
+  "repository_population": {
+    "artifact_path": "sniffbench/non-blind-v1-history-worksheet.json",
+    "sha256": "73fdbd7b9b49554a2dccb34fc1c19df0fcaa8f2b69e8b72be401cfc67f6dfe85",
+    "task_sha256": "e78e4640072de84ff176538939cd9544cf6aa5027edd0c2941f12233123f8160",
+    "candidate_count": 600
+  },
+  "frame_contract": {
+    "schema_version": 1,
+    "complete_population_required": true,
+    "immutable_revision_required": true,
+    "clean_complete_non_sparse_checkout_required": true,
+    "compiler_semantic_index_required": true,
+    "every_repository_checkpointed": true,
+    "typed_exclusions_required": true,
+    "path_or_name_only_evidence_forbidden": true,
+    "model_access_forbidden": true,
+    "sniff_output_access_forbidden": true,
+    "candidate_identity_fields": [
+      "category",
+      "repository",
+      "revision",
+      "repository_path",
+      "exact_symbol_identity"
+    ]
+  },
+  "category_contracts": [
+    {
+      "category": "adapter",
+      "required_evidence_groups": [
+        {
+          "any_of": [
+            "compiler_resolved_implementation_or_delegation"
+          ]
+        },
+        {
+          "any_of": [
+            "passing_behavior_test"
+          ]
+        }
+      ]
+    },
+    {
+      "category": "retry_boundary",
+      "required_evidence_groups": [
+        {
+          "any_of": [
+            "distinct_retryable_and_terminal_outcomes"
+          ]
+        },
+        {
+          "any_of": [
+            "passing_behavior_test"
+          ]
+        }
+      ]
+    },
+    {
+      "category": "public_wrapper",
+      "required_evidence_groups": [
+        {
+          "any_of": [
+            "exported_api_identity"
+          ]
+        },
+        {
+          "any_of": [
+            "resolved_consumer",
+            "published_api_contract"
+          ]
+        }
+      ]
+    },
+    {
+      "category": "compatibility_api",
+      "required_evidence_groups": [
+        {
+          "any_of": [
+            "versioned_compatibility_contract"
+          ]
+        },
+        {
+          "any_of": [
+            "retained_compatibility_consumer"
+          ]
+        }
+      ]
+    },
+    {
+      "category": "generated_surface",
+      "required_evidence_groups": [
+        {
+          "any_of": [
+            "generator_identity"
+          ]
+        },
+        {
+          "any_of": [
+            "generator_configuration"
+          ]
+        },
+        {
+          "any_of": [
+            "reproducible_generated_output"
+          ]
+        }
+      ]
+    },
+    {
+      "category": "test_seam",
+      "required_evidence_groups": [
+        {
+          "any_of": [
+            "resolved_test_injection_or_replacement"
+          ]
+        }
+      ]
+    },
+    {
+      "category": "entrypoint",
+      "required_evidence_groups": [
+        {
+          "any_of": [
+            "runtime_or_package_manifest"
+          ]
+        }
+      ]
+    },
+    {
+      "category": "framework_callback",
+      "required_evidence_groups": [
+        {
+          "any_of": [
+            "framework_registration",
+            "compiler_resolved_override_or_interface"
+          ]
+        }
+      ]
+    }
+  ],
+  "slot_contract": {
+    "cases_per_category": 2,
+    "total_slots": 16,
+    "ranking_contract": "sha256(sniffbench-intentional-boundary-v1\\0 || ranking_seed || \\0 || immutable_repository_revision || \\0 || repository_path || \\0 || exact_symbol_identity), ascending digest then identity",
+    "selection_after_complete_frame": true,
+    "failed_candidate_closes_slot": true,
+    "backfill_forbidden": true
+  },
+  "label_contract": {
+    "source_only_review": true,
+    "independent_reviewers": 2,
+    "reviewers_must_not_see_sniff_output": true,
+    "reviewers_must_not_see_each_other_labels": true,
+    "required_tier": "clean",
+    "intentional_boundary_must_be_true": true,
+    "distinct_dispute_resolver": true,
+    "rejected_label_closes_slot": true
+  }
+}

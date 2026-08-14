@@ -287,6 +287,17 @@ pub enum BenchmarkCommand {
         /// New immutable blank assessment ledger.
         output: String,
     },
+    /// Validate the candidate-free intentional-boundary protocol offline.
+    ValidateIntentionalProtocol {
+        /// Public non-blind selection policy.
+        policy: String,
+        /// Frozen 600-repository population worksheet.
+        population: String,
+        /// Frozen blind source seal whose repositories remain excluded.
+        blind_seal: String,
+        /// Precommitted intentional-boundary protocol.
+        protocol: String,
+    },
     /// Execute and resume every frozen historical rank without inspecting labels.
     AssessNonBlindHistory {
         /// Public non-blind selection policy.
@@ -527,6 +538,17 @@ pub async fn run(args: CliArgs) -> Result<i32, Box<dyn std::error::Error>> {
                 output,
             } => pipeline::prepare_non_blind_benchmark_history_assessment(
                 &policy, &worksheet, &protocol, &output,
+            ),
+            BenchmarkCommand::ValidateIntentionalProtocol {
+                policy,
+                population,
+                blind_seal,
+                protocol,
+            } => pipeline::validate_intentional_boundary_benchmark_protocol(
+                &policy,
+                &population,
+                &blind_seal,
+                &protocol,
             ),
             BenchmarkCommand::AssessNonBlindHistory {
                 policy,
@@ -835,6 +857,35 @@ mod tests {
                 && state_directory == "state"
                 && output == "completed.json"
                 && max_new_ranks == Some(25)
+        ));
+    }
+
+    #[test]
+    fn parses_offline_intentional_boundary_protocol_validation() {
+        let args = CliArgs::try_parse_from([
+            "sniff",
+            "benchmark",
+            "validate-intentional-protocol",
+            "policy.json",
+            "population.json",
+            "blind-seal.json",
+            "protocol.json",
+        ])
+        .expect("intentional-boundary protocol arguments");
+
+        assert!(matches!(
+            args.command,
+            Some(CliCommand::Benchmark {
+                command: BenchmarkCommand::ValidateIntentionalProtocol {
+                    policy,
+                    population,
+                    blind_seal,
+                    protocol,
+                }
+            }) if policy == "policy.json"
+                && population == "population.json"
+                && blind_seal == "blind-seal.json"
+                && protocol == "protocol.json"
         ));
     }
 
