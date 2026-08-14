@@ -186,6 +186,79 @@ pub fn validate_intentional_boundary_source_census(
     Ok(())
 }
 
+pub(super) fn intentional_boundary_file_records(
+    root: &Path,
+    inventory: &IntentionalBoundaryRepositoryInventory,
+    census: &IntentionalBoundarySourceCensus,
+) -> Result<Vec<crate::types::FileRecord>, String> {
+    let mut records = Vec::with_capacity(census.source_files.len());
+    for source_file in &census.source_files {
+        let inventory_entry = inventory
+            .tracked_entries
+            .iter()
+            .find(|entry| entry.repository_path == source_file.repository_path)
+            .ok_or_else(|| {
+                format!(
+                    "intentional-boundary census source disappeared from inventory: {}",
+                    source_file.repository_path
+                )
+            })?;
+        if inventory_entry.object_id != source_file.object_id
+            || inventory_entry.byte_length != Some(source_file.byte_length)
+        {
+            return Err(format!(
+                "intentional-boundary census source changed its Git identity: {}",
+                source_file.repository_path
+            ));
+        }
+        let bytes = read_intentional_boundary_git_blob(
+            root,
+            &source_file.object_id,
+            source_file.byte_length,
+        )?;
+        let absolute_path = root.join(Path::new(&source_file.repository_path));
+        let absolute_path = absolute_path.to_str().ok_or_else(|| {
+            format!(
+                "intentional-boundary source path is not UTF-8: {}",
+                source_file.repository_path
+            )
+        })?;
+        let record = crate::parser::parse_source_checked(absolute_path, &bytes)?;
+        if record.language != source_file.language
+            || record.methods.len() != source_file.methods.len()
+        {
+            return Err(format!(
+                "intentional-boundary semantic input changed its parser census: {}",
+                source_file.repository_path
+            ));
+        }
+        for (method, expected) in record.methods.iter().zip(&source_file.methods) {
+            let source_sha256 = sha256(method.source.as_bytes());
+            let parser_unit_id = method_unit_id(
+                &source_file.repository_path,
+                &method.name,
+                method.start_line,
+                method.end_line,
+                &source_sha256,
+            )?;
+            if parser_unit_id != expected.parser_unit_id
+                || method.name != expected.symbol_name
+                || method.start_line != expected.start_line
+                || method.end_line != expected.end_line
+                || source_sha256 != expected.source_sha256
+                || method.is_exported != expected.is_exported
+            {
+                return Err(format!(
+                    "intentional-boundary semantic input changed method identity {}",
+                    expected.parser_unit_id
+                ));
+            }
+        }
+        records.push(record);
+    }
+    Ok(records)
+}
+
 fn compute_census_sha256(census: &IntentionalBoundarySourceCensus) -> Result<String, String> {
     let bytes = serde_json::to_vec(&(
         census.schema_version,
