@@ -8,9 +8,27 @@ use std::path::{Component, Path};
 pub const NON_BLIND_HISTORY_WORKSHEET_SCHEMA_VERSION: u32 = 1;
 pub(super) const HISTORY_RANK_CONTRACT: &str = "sniffbench-non-blind-history-v1";
 pub(super) const COMMIT_RANK_CONTRACT: &str = "sniffbench-non-blind-commit-v1";
+pub(super) const INTENTIONAL_BOUNDARY_RANK_CONTRACT: &str = "sniffbench-intentional-boundary-v1";
 const EXPECTED_SUBJECT_REGEX: &str = "(?i)\\b(simplif(?:y|ied|ication)|cleanup|clean up|refactor|remove(?:d|s|ing)? (?:dead|duplicate|duplicated|redundant|unnecessary)|deduplicat(?:e|ed|ion))\\b";
 const REQUIRED_LANGUAGES: [&str; 6] =
     ["go", "javascript", "kotlin", "python", "rust", "typescript"];
+const REQUIRED_BOUNDARY_CATEGORIES: [&str; 8] = [
+    "adapter",
+    "retry_boundary",
+    "public_wrapper",
+    "compatibility_api",
+    "generated_surface",
+    "test_seam",
+    "entrypoint",
+    "framework_callback",
+];
+const REQUIRED_BOUNDARY_REQUIREMENTS: [&str; 5] = [
+    "candidate source is outside the blind OSS seal",
+    "the exact public/framework/test contract is captured as a hash-bound behavioral artifact before labeling",
+    "selection is based on observable role and contract evidence, not path/name alone and never Sniff output",
+    "independent adjudication must confirm Clean and intentional_boundary before the case can satisfy this partition",
+    "a failed candidate closes its precommitted slot rather than allowing a hand-picked replacement",
+];
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -224,12 +242,12 @@ pub(super) fn validate_policy(policy: &NonBlindSelectionPolicy) -> Result<(), St
         "sampling_frame_sha256",
         &policy.historical_simplification.sampling_frame_sha256,
     )?;
-    let languages = policy
+    if !policy
         .supported_languages
         .iter()
         .map(String::as_str)
-        .collect::<BTreeSet<_>>();
-    if languages != REQUIRED_LANGUAGES.into_iter().collect::<BTreeSet<_>>() {
+        .eq(REQUIRED_LANGUAGES)
+    {
         return Err("non-blind selection policy changed the supported languages".to_string());
     }
     let history = &policy.historical_simplification;
@@ -257,10 +275,7 @@ pub(super) fn validate_policy(policy: &NonBlindSelectionPolicy) -> Result<(), St
     if !history.sampling_frame_url.starts_with("https://") {
         return Err("non-blind sampling frame URL must use HTTPS".to_string());
     }
-    if policy.research_trajectories.required_sources.len() != 2
-        || policy.intentional_boundaries.categories.is_empty()
-        || policy.intentional_boundaries.cases_per_category == 0
-    {
+    if policy.research_trajectories.required_sources.len() != 2 {
         return Err("non-blind selection policy removed required corpus sources".to_string());
     }
     let source_ids = policy
@@ -271,6 +286,27 @@ pub(super) fn validate_policy(policy: &NonBlindSelectionPolicy) -> Result<(), St
         .collect::<BTreeSet<_>>();
     if source_ids != BTreeSet::from(["slopcodebench", "trim"]) {
         return Err("non-blind selection policy must require SlopCodeBench and TRIM".to_string());
+    }
+    let boundaries = &policy.intentional_boundaries;
+    let expected_ranking = format!(
+        "sha256({INTENTIONAL_BOUNDARY_RANK_CONTRACT}\\0 || ranking_seed || \\0 || immutable_repository_revision || \\0 || repository_path || \\0 || exact_symbol_identity), ascending digest then identity"
+    );
+    if !boundaries
+        .categories
+        .iter()
+        .map(String::as_str)
+        .eq(REQUIRED_BOUNDARY_CATEGORIES)
+        || boundaries.cases_per_category != 2
+        || boundaries.candidate_ranking_contract != expected_ranking
+        || !boundaries
+            .requirements
+            .iter()
+            .map(String::as_str)
+            .eq(REQUIRED_BOUNDARY_REQUIREMENTS)
+    {
+        return Err(
+            "non-blind intentional-boundary policy changed its executable contract".to_string(),
+        );
     }
     Ok(())
 }
@@ -403,10 +439,10 @@ github.com/example/alpha,duplicate\n"
                 "failure_rule": "fixture"
             },
             "intentional_boundaries": {
-                "categories": ["adapter"],
-                "cases_per_category": 1,
-                "candidate_ranking_contract": "fixture",
-                "requirements": ["fixture"]
+                "categories": REQUIRED_BOUNDARY_CATEGORIES,
+                "cases_per_category": 2,
+                "candidate_ranking_contract": "sha256(sniffbench-intentional-boundary-v1\\0 || ranking_seed || \\0 || immutable_repository_revision || \\0 || repository_path || \\0 || exact_symbol_identity), ascending digest then identity",
+                "requirements": REQUIRED_BOUNDARY_REQUIREMENTS
             }
         }))
         .unwrap()
@@ -475,5 +511,45 @@ github.com/example/alpha,duplicate\n"
             worksheet.blind_source_seal_sha256
         );
         assert_ne!(other.task_sha256, worksheet.task_sha256);
+    }
+
+    #[test]
+    fn policy_rejects_retrofitted_intentional_boundary_selection() {
+        let frame = frame();
+        let policy = policy_bytes(&frame);
+        let parsed: NonBlindSelectionPolicy = serde_json::from_slice(&policy).unwrap();
+        validate_policy(&parsed).unwrap();
+
+        let mut changed = parsed.clone();
+        changed.intentional_boundaries.categories.swap(0, 1);
+        assert!(
+            validate_policy(&changed)
+                .unwrap_err()
+                .contains("intentional-boundary policy changed")
+        );
+
+        let mut changed = parsed.clone();
+        changed.intentional_boundaries.cases_per_category = 1;
+        assert!(
+            validate_policy(&changed)
+                .unwrap_err()
+                .contains("intentional-boundary policy changed")
+        );
+
+        let mut changed = parsed.clone();
+        changed.intentional_boundaries.candidate_ranking_contract = "pick manually".to_string();
+        assert!(
+            validate_policy(&changed)
+                .unwrap_err()
+                .contains("intentional-boundary policy changed")
+        );
+
+        let mut changed = parsed;
+        changed.intentional_boundaries.requirements.pop();
+        assert!(
+            validate_policy(&changed)
+                .unwrap_err()
+                .contains("intentional-boundary policy changed")
+        );
     }
 }
