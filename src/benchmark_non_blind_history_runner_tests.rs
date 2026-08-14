@@ -227,14 +227,10 @@ async fn seals_selected_history_or_typed_host_sandbox_unavailability() {
             let availability = assessment
                 .evidence
                 .iter()
-                .filter_map(|entry| {
-                    entry
-                        .artifact_path
-                        .ends_with("-availability.json")
-                        .then(|| {
-                            fs::read_to_string(state.path().join(&entry.artifact_path))
-                                .unwrap_or_else(|error| format!("unreadable: {error}"))
-                        })
+                .filter(|entry| entry.artifact_path.ends_with("-availability.json"))
+                .map(|entry| {
+                    fs::read_to_string(state.path().join(&entry.artifact_path))
+                        .unwrap_or_else(|error| format!("unreadable: {error}"))
                 })
                 .collect::<Vec<_>>();
             panic!(
