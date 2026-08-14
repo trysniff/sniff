@@ -1,17 +1,16 @@
 use crate::report_types::LLMVerdict;
 use crate::types::{FileRecord, FindingTier, MethodRecord};
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::future::Future;
 use std::hash::{Hash, Hasher};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
-use std::time::Duration;
 use tokio::task::JoinSet;
 
 use super::dossier::MethodDossier;
+use super::journal::{JournalCompletion, JournalEntry, JournalStore, sha256_text};
 use super::method_batch_review::BatchMethodReview;
 use super::method_review::MethodReviewContext;
 use super::{Analyzer, ReviewProgress, ReviewProgressCallback};
@@ -83,9 +82,10 @@ where
     let mut completed = Vec::with_capacity(pending.len());
     let mut active_keys = std::collections::HashSet::new();
     let max_concurrency = max_concurrency.max(1);
+    let mut first_error = None;
 
     loop {
-        while tasks.len() < max_concurrency {
+        while first_error.is_none() && tasks.len() < max_concurrency {
             let Some(position) = pending
                 .iter()
                 .position(|item| keys_for(item).iter().all(|key| !active_keys.contains(key)))
@@ -116,19 +116,23 @@ where
                 }
                 completed.push(result);
             }
-            Some(Ok((_, Err(err)))) => {
-                abort_and_drain(&mut tasks).await;
-                return Err(err);
+            Some(Ok((keys, Err(err)))) => {
+                for key in keys {
+                    active_keys.remove(&key);
+                }
+                first_error.get_or_insert(err);
             }
             Some(Err(err)) => {
-                abort_and_drain(&mut tasks).await;
-                return Err(format!("LLM review task failed: {err}"));
+                first_error.get_or_insert_with(|| format!("LLM review task failed: {err}"));
             }
             None => break,
         }
     }
 
-    Ok(completed)
+    match first_error {
+        Some(error) => Err(error),
+        None => Ok(completed),
+    }
 }
 
 fn review_unit_cache_keys(unit: &[(String, ReviewJob)]) -> Vec<String> {
@@ -144,217 +148,8 @@ fn review_unit_cache_keys(unit: &[(String, ReviewJob)]) -> Vec<String> {
     keys
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct CheckpointEntry {
-    key: String,
-    verdict: Option<LLMVerdict>,
-    in_tok: usize,
-    out_tok: usize,
-    #[serde(default)]
-    cached_in_tok: usize,
-    #[serde(default)]
-    retry_on_resume: Option<bool>,
-}
-
-fn checkpoint_entry_is_reusable(entry: &CheckpointEntry) -> bool {
-    match entry.retry_on_resume {
-        Some(retry_on_resume) => !retry_on_resume,
-        None => !entry.verdict.as_ref().is_some_and(|verdict| {
-            verdict.tier == FindingTier::Unresolved
-                && verdict
-                    .reason
-                    .starts_with("AI review could not be validated.")
-        }),
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct CheckpointFile {
-    version: u32,
-    fingerprint: u64,
-    #[serde(default)]
-    context: String,
-    completed: Vec<CheckpointEntry>,
-}
-
-struct CheckpointStore {
-    path: PathBuf,
-    fingerprint: u64,
-    context: String,
-    completed: HashMap<String, CheckpointEntry>,
-    migrated_from_previous_contract: bool,
-}
-
-impl CheckpointStore {
-    fn load(path: &Path, fingerprint: u64, context: &str) -> Result<Self, String> {
-        let (completed, migrated_from_previous_contract) = match std::fs::read_to_string(path) {
-            Ok(contents) => match serde_json::from_str::<CheckpointFile>(&contents) {
-                Ok(file)
-                    if file.version == 2
-                        && (same_review_context(&file.context, context)
-                            || previous_contract_context(&file.context, context)) =>
-                {
-                    let migrated = previous_contract_context(&file.context, context);
-                    (
-                        file.completed
-                            .into_iter()
-                            .map(|entry| (entry.key.clone(), entry))
-                            .collect(),
-                        migrated,
-                    )
-                }
-                Ok(file) if file.version == 1 => {
-                    let legacy_keys = file.fingerprint != fingerprint
-                        && !file.completed.is_empty()
-                        && file
-                            .completed
-                            .iter()
-                            .all(|entry| entry.key.split_once(':').is_some());
-                    if file.fingerprint != fingerprint && !legacy_keys {
-                        (HashMap::new(), false)
-                    } else {
-                        (
-                            file.completed
-                                .into_iter()
-                                .map(|mut entry| {
-                                    if legacy_keys
-                                        && let Some((_, stable_key)) = entry.key.split_once(':')
-                                    {
-                                        entry.key = stable_key.to_string();
-                                    }
-                                    (entry.key.clone(), entry)
-                                })
-                                .collect(),
-                            false,
-                        )
-                    }
-                }
-                Ok(_) => (HashMap::new(), false),
-                Err(err) => {
-                    eprintln!(
-                        "Ignoring unreadable Sniff checkpoint {}: {}",
-                        path.display(),
-                        err
-                    );
-                    (HashMap::new(), false)
-                }
-            },
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => (HashMap::new(), false),
-            Err(err) => {
-                return Err(format!(
-                    "failed to read Sniff checkpoint {}: {err}",
-                    path.display()
-                ));
-            }
-        };
-
-        Ok(Self {
-            path: path.to_path_buf(),
-            fingerprint,
-            context: context.to_string(),
-            completed,
-            migrated_from_previous_contract,
-        })
-    }
-
-    fn migrate_previous_contract(&mut self, jobs: &[ReviewJob]) -> Result<(), String> {
-        if !self.migrated_from_previous_contract {
-            return Ok(());
-        }
-
-        // Method-review contracts may change judgment or evidence semantics.
-        // Only independent file reviews are safe to carry across that boundary.
-        let reusable_file_keys = jobs
-            .iter()
-            .filter(|job| matches!(job, ReviewJob::File { .. }))
-            .map(ReviewJob::checkpoint_key)
-            .collect::<std::collections::HashSet<_>>();
-        self.completed.retain(|key, entry| {
-            reusable_file_keys.contains(key) && checkpoint_entry_is_reusable(entry)
-        });
-        self.migrated_from_previous_contract = false;
-        self.persist()
-    }
-
-    fn record(&mut self, key: String, outcome: &ReviewOutcome) -> Result<(), String> {
-        self.completed.insert(
-            key.clone(),
-            CheckpointEntry {
-                key,
-                verdict: outcome.verdict.clone(),
-                in_tok: outcome.in_tok,
-                out_tok: outcome.out_tok,
-                cached_in_tok: outcome.cached_in_tok,
-                retry_on_resume: Some(outcome.retry_on_resume),
-            },
-        );
-        self.persist()
-    }
-
-    fn persist(&self) -> Result<(), String> {
-        let mut completed: Vec<_> = self.completed.values().cloned().collect();
-        completed.sort_by(|left, right| left.key.cmp(&right.key));
-        let contents = serde_json::to_string_pretty(&CheckpointFile {
-            version: 2,
-            fingerprint: self.fingerprint,
-            context: self.context.clone(),
-            completed,
-        })
-        .map_err(|err| format!("failed to serialize Sniff checkpoint: {err}"))?;
-
-        if let Some(parent) = self.path.parent() {
-            std::fs::create_dir_all(parent).map_err(|err| {
-                format!(
-                    "failed to create Sniff checkpoint directory {}: {err}",
-                    parent.display()
-                )
-            })?;
-        }
-
-        let temporary = self.path.with_extension("json.tmp");
-        std::fs::write(&temporary, contents).map_err(|err| {
-            format!(
-                "failed to write Sniff checkpoint {}: {err}",
-                temporary.display()
-            )
-        })?;
-        let mut last_error = None;
-        for attempt in 0..8 {
-            if self.path.exists()
-                && let Err(err) = std::fs::remove_file(&self.path)
-            {
-                last_error = Some(format!("failed to replace checkpoint: {err}"));
-                std::thread::sleep(Duration::from_millis(100 * (attempt + 1)));
-                continue;
-            }
-
-            match std::fs::rename(&temporary, &self.path) {
-                Ok(()) => return Ok(()),
-                Err(err) => {
-                    last_error = Some(format!("failed to finalize checkpoint: {err}"));
-                    std::thread::sleep(Duration::from_millis(100 * (attempt + 1)));
-                }
-            }
-        }
-
-        Err(format!(
-            "failed to replace Sniff checkpoint {} after retries: {}",
-            self.path.display(),
-            last_error.unwrap_or_else(|| "unknown file replacement error".to_string())
-        ))
-    }
-
-    #[cfg(test)]
-    fn remove(self) -> Result<(), String> {
-        match std::fs::remove_file(&self.path) {
-            Ok(()) => Ok(()),
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(err) => Err(format!(
-                "failed to remove completed Sniff checkpoint {}: {err}",
-                self.path.display()
-            )),
-        }
-    }
+fn journal_entry_is_reusable(entry: &JournalEntry) -> bool {
+    entry.is_reusable()
 }
 
 impl ReviewJob {
@@ -365,7 +160,7 @@ impl ReviewJob {
         }
     }
 
-    fn checkpoint_key(&self) -> String {
+    fn journal_unit_id(&self) -> String {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         match self {
             Self::Method {
@@ -456,55 +251,19 @@ impl ReviewJob {
         format!("{:016x}", hasher.finish())
     }
 
+    fn source_hash(&self) -> String {
+        match self {
+            Self::Method { method, .. } => sha256_text(&method.source),
+            Self::File { file, .. } => sha256_text(&file.source),
+        }
+    }
+
     fn method_file_path(&self) -> Option<&str> {
         match self {
             Self::Method { method, .. } => Some(&method.file_path),
             Self::File { .. } => None,
         }
     }
-}
-
-fn previous_contract_context(previous: &str, current: &str) -> bool {
-    let previous = without_binary_version(previous);
-    let current = without_binary_version(current);
-    [
-        "semantic-method-v12",
-        "semantic-method-v13",
-        "semantic-method-v14",
-        "semantic-method-v15",
-        "semantic-method-v16",
-        "semantic-method-v17",
-        "semantic-method-v18",
-        "semantic-method-v19",
-        "semantic-method-v20",
-        "semantic-method-v21",
-        "semantic-method-v22",
-        "semantic-method-v23",
-        "semantic-method-v24",
-        "semantic-method-v25",
-        "semantic-method-v26",
-        "semantic-method-v27",
-    ]
-    .into_iter()
-    .any(|version| {
-        previous.replace(
-            &format!("review_contract={version}"),
-            "review_contract=semantic-method-v28",
-        ) == current
-            && previous.contains(&format!("review_contract={version}"))
-    })
-}
-
-fn same_review_context(left: &str, right: &str) -> bool {
-    without_binary_version(left) == without_binary_version(right)
-}
-
-fn without_binary_version(context: &str) -> String {
-    context
-        .lines()
-        .filter(|line| !line.starts_with("sniff_version="))
-        .collect::<Vec<_>>()
-        .join("\n")
 }
 
 fn method_batch_size() -> usize {
@@ -631,18 +390,13 @@ fn group_pending_reviews(
     grouped
 }
 
-fn jobs_fingerprint(jobs: &[ReviewJob], review_context_key: &str) -> u64 {
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    review_context_key.hash(&mut hasher);
+fn semantic_index_hash(jobs: &[ReviewJob]) -> String {
     let mut keys = jobs
         .iter()
-        .map(ReviewJob::checkpoint_key)
+        .map(ReviewJob::journal_unit_id)
         .collect::<Vec<_>>();
     keys.sort();
-    for key in keys {
-        key.hash(&mut hasher);
-    }
-    hasher.finish()
+    sha256_text(&keys.join("\n"))
 }
 
 async fn run_review_job(
@@ -922,23 +676,24 @@ pub(super) async fn run_review_jobs(
     jobs: Vec<ReviewJob>,
     on_progress: Option<ReviewProgressCallback>,
     review_context_key: &str,
-    checkpoint_path: Option<&Path>,
+    journal_path: Option<&Path>,
 ) -> Result<Vec<LLMVerdict>, String> {
-    let fingerprint = jobs_fingerprint(&jobs, review_context_key);
-    let mut checkpoint = checkpoint_path
-        .map(|path| CheckpointStore::load(path, fingerprint, review_context_key))
+    let semantic_index_hash = semantic_index_hash(&jobs);
+    let source_hashes = jobs
+        .iter()
+        .map(|job| (job.journal_unit_id(), job.source_hash()))
+        .collect::<HashMap<_, _>>();
+    let mut journal = journal_path
+        .map(|path| JournalStore::load(path, &semantic_index_hash, review_context_key))
         .transpose()?;
-    if let Some(store) = checkpoint.as_mut() {
-        store.migrate_previous_contract(&jobs)?;
-    }
     let mut outcomes = Vec::with_capacity(jobs.len());
     let mut pending = Vec::new();
     for (index, job) in jobs.into_iter().enumerate() {
-        let checkpoint_key = job.checkpoint_key();
-        if let Some(entry) = checkpoint
+        let journal_unit_id = job.journal_unit_id();
+        if let Some(entry) = journal
             .as_ref()
-            .and_then(|store| store.completed.get(&checkpoint_key))
-            .filter(|entry| checkpoint_entry_is_reusable(entry))
+            .and_then(|store| store.completed.get(&journal_unit_id))
+            .filter(|entry| journal_entry_is_reusable(entry))
         {
             analyzer.in_tok.fetch_add(entry.in_tok, Ordering::SeqCst);
             analyzer.out_tok.fetch_add(entry.out_tok, Ordering::SeqCst);
@@ -959,7 +714,7 @@ pub(super) async fn run_review_jobs(
             continue;
         }
 
-        pending.push((checkpoint_key, job));
+        pending.push((journal_unit_id, job));
     }
     let pending = group_pending_reviews(
         pending,
@@ -983,13 +738,26 @@ pub(super) async fn run_review_jobs(
             }
         },
         |unit| {
-            for (checkpoint_key, outcome) in unit {
+            for (journal_unit_id, outcome) in unit {
                 analyzer.in_tok.fetch_add(outcome.in_tok, Ordering::SeqCst);
                 analyzer
                     .out_tok
                     .fetch_add(outcome.out_tok, Ordering::SeqCst);
-                if let Some(store) = checkpoint.as_mut() {
-                    store.record(checkpoint_key.clone(), outcome)?;
+                if let Some(store) = journal.as_mut() {
+                    let source_hash = source_hashes.get(journal_unit_id).ok_or_else(|| {
+                        format!("missing source hash for completed review {journal_unit_id}")
+                    })?;
+                    store.record(
+                        journal_unit_id.clone(),
+                        source_hash.clone(),
+                        JournalCompletion {
+                            verdict: outcome.verdict.clone(),
+                            in_tok: outcome.in_tok,
+                            out_tok: outcome.out_tok,
+                            cached_in_tok: outcome.cached_in_tok,
+                            retry_on_resume: outcome.retry_on_resume,
+                        },
+                    )?;
                 }
                 if let Some(callback) = on_progress.as_ref() {
                     callback(ReviewProgress::Completed);
@@ -1001,10 +769,6 @@ pub(super) async fn run_review_jobs(
     )
     .await?;
     outcomes.extend(completed.into_iter().flatten().map(|(_, outcome)| outcome));
-
-    if let Some(store) = checkpoint {
-        store.persist()?;
-    }
 
     outcomes.sort_by_key(|outcome| outcome.index);
     Ok(outcomes

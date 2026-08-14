@@ -21,7 +21,7 @@ pub(super) struct LlmCheckInput<'a> {
     pub(super) llm_client: Option<Arc<LLMClient>>,
     pub(super) role_input_tokens: usize,
     pub(super) role_output_tokens: usize,
-    pub(super) checkpoint_path: Option<&'a Path>,
+    pub(super) journal_path: Option<&'a Path>,
 }
 
 const MAX_PROGRESS_LABEL_CHARS: usize = 76;
@@ -89,14 +89,14 @@ pub(super) async fn run_llm_checks(
     });
 
     let usage_client = Arc::clone(&client);
-    let result = crate::analyzer::analyze_with_client_and_graph_and_checkpoint_with_context(
+    let result = crate::analyzer::analyze_with_client_and_graph_and_journal_with_context(
         crate::analyzer::AnalysisRun {
             file_records: input.file_records,
             context_file_records: input.context_file_records,
             static_flags: input.static_flags,
             with_file_reviews: false,
             graph: Some(input.graph),
-            checkpoint_path: input.checkpoint_path,
+            journal_path: input.journal_path,
         },
         client,
         Some(on_progress),
@@ -211,7 +211,7 @@ pub(super) async fn prepare_review_artifacts(
     config: &ResolvedConfig,
     file_records: &mut [FileRecord],
     bar_style: &ProgressStyle,
-    checkpoint_path: Option<&Path>,
+    journal_path: Option<&Path>,
 ) -> Result<ReviewArtifacts, Box<dyn std::error::Error>> {
     let ai_expected_reviews_before_roles =
         super::stats::expected_ai_reviews_after_role_resolution(file_records);
@@ -228,12 +228,12 @@ pub(super) async fn prepare_review_artifacts(
     )?;
 
     let llm_client_for_roles = llm_client.as_ref().map(Arc::clone);
-    let role_checkpoint_path = checkpoint_path.map(|path| {
+    let role_checkpoint_path = journal_path.map(|path| {
         let checkpoint_name = path
             .file_name()
             .and_then(|name| name.to_str())
-            .unwrap_or(".sniff-checkpoint.json");
-        let role_name = checkpoint_name.replace(".sniff-checkpoint", ".sniff-role-checkpoint");
+            .unwrap_or(".sniff-journal.jsonl");
+        let role_name = checkpoint_name.replace(".sniff-journal", ".sniff-role-checkpoint");
         path.with_file_name(role_name)
     });
     let (role_in_tok, role_out_tok, llm_client) = resolve_roles(
@@ -273,7 +273,7 @@ pub(super) async fn prepare_review_artifacts(
         llm_client,
         role_input_tokens: role_in_tok,
         role_output_tokens: role_out_tok,
-        checkpoint_path,
+        journal_path,
     })
     .await
     .map_err(IoError::other);

@@ -78,12 +78,12 @@ pub(super) fn report_path_for_target(target_path: &std::path::Path) -> std::path
     }
 }
 
-fn checkpoint_path_for_target(
+fn journal_path_for_target(
     target_path: &std::path::Path,
     report_path: &std::path::Path,
 ) -> std::path::PathBuf {
     if target_path.is_dir() {
-        return report_path.with_file_name(".sniff-checkpoint.json");
+        return report_path.with_file_name(".sniff-journal.jsonl");
     }
 
     let resolved_target = std::fs::canonicalize(target_path)
@@ -92,7 +92,7 @@ fn checkpoint_path_for_target(
         .to_string();
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     resolved_target.hash(&mut hasher);
-    report_path.with_file_name(format!(".sniff-checkpoint-{:016x}.json", hasher.finish()))
+    report_path.with_file_name(format!(".sniff-journal-{:016x}.jsonl", hasher.finish()))
 }
 
 fn strip_windows_verbatim_prefix(path: std::path::PathBuf) -> std::path::PathBuf {
@@ -118,10 +118,10 @@ async fn build_run_report(
     config: &crate::config::ResolvedConfig,
     file_records: &mut [crate::types::FileRecord],
     bar_style: &ProgressStyle,
-    checkpoint_path: &std::path::Path,
+    journal_path: &std::path::Path,
 ) -> Result<(RunReport, bool), Box<dyn std::error::Error>> {
     let review =
-        llm::prepare_review_artifacts(path, config, file_records, bar_style, Some(checkpoint_path))
+        llm::prepare_review_artifacts(path, config, file_records, bar_style, Some(journal_path))
             .await?;
 
     let stats = stats::generate_stats(stats::StatsInput {
@@ -158,7 +158,7 @@ pub async fn run(
 ) -> Result<i32, Box<dyn std::error::Error>> {
     let target_path = std::path::Path::new(path);
     let report_path = report_path_for_target(target_path);
-    let checkpoint_path = checkpoint_path_for_target(target_path, &report_path);
+    let journal_path = journal_path_for_target(target_path, &report_path);
     env::load_working_dir_env(skip_dotenv).map_err(IoError::other)?;
     env::load_target_env(target_path, skip_dotenv).map_err(IoError::other)?;
     let config = crate::config_loader::resolve_config(target_path)
@@ -181,11 +181,8 @@ pub async fn run(
     let estimate = super::preflight::ScanEstimate::from_files(&file_records);
     super::preflight::print_scan_cost_summary(&estimate);
     super::preflight::confirm_expensive_scan(&estimate, assume_yes)?;
-    if checkpoint_path.exists() {
-        eprintln!(
-            "Resuming completed reviews from {}",
-            checkpoint_path.display()
-        );
+    if journal_path.exists() {
+        eprintln!("Resuming completed reviews from {}", journal_path.display());
     }
     if !config.llm.endpoint.trim().is_empty() {
         eprintln!("Using LLM endpoint: {}", config.llm.endpoint.trim());
@@ -193,14 +190,8 @@ pub async fn run(
     eprintln!("Preparing report...");
     let bar_style = build_progress_style()
         .map_err(|err| IoError::other(format!("failed to build progress style: {}", err)))?;
-    let (run_report, has_issues) = build_run_report(
-        path,
-        &config,
-        &mut file_records,
-        &bar_style,
-        &checkpoint_path,
-    )
-    .await?;
+    let (run_report, has_issues) =
+        build_run_report(path, &config, &mut file_records, &bar_style, &journal_path).await?;
 
     let report_path_text = report_path.to_string_lossy().to_string();
     crate::reporter::render_report(&run_report, &config, Some(&report_path_text))
@@ -215,7 +206,7 @@ pub async fn run(
 #[cfg(test)]
 mod tests {
     use super::{
-        checkpoint_path_for_target, report_path_for_target, source_inventory_summary,
+        journal_path_for_target, report_path_for_target, source_inventory_summary,
         strip_windows_verbatim_prefix,
     };
     use crate::types::{FileRecord, MethodRecord};
@@ -248,13 +239,13 @@ mod tests {
         fs::write(&target, "def run():\n    return 1\n").unwrap();
         let report = root.join("sniff-report.md");
 
-        let path = checkpoint_path_for_target(&target, &report);
-        assert_ne!(path, root.join(".sniff-checkpoint.json"));
+        let path = journal_path_for_target(&target, &report);
+        assert_ne!(path, root.join(".sniff-journal.jsonl"));
         assert!(
             path.file_name()
                 .and_then(|name| name.to_str())
                 .is_some_and(
-                    |name| name.starts_with(".sniff-checkpoint-") && name.ends_with(".json")
+                    |name| name.starts_with(".sniff-journal-") && name.ends_with(".jsonl")
                 )
         );
 

@@ -819,7 +819,7 @@ async fn unresolved_adversarial_review_retries_after_history_expansion() {
 }
 
 #[tokio::test]
-async fn interrupted_method_reviews_resume_from_checkpoint() {
+async fn interrupted_method_reviews_resume_from_journal() {
     let _lock = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
     unsafe {
         env::set_var("SNIFF_LLM_MAX_CONCURRENCY", "1");
@@ -926,66 +926,84 @@ async fn interrupted_method_reviews_resume_from_checkpoint() {
             },
         ],
     };
-    let checkpoint = std::env::temp_dir().join(format!(
-        "sniff-review-resume-{}.json",
+    let journal = std::env::temp_dir().join(format!(
+        "sniff-review-resume-{}.jsonl",
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos()
     ));
 
-    let first_result = analyze_with_client_and_graph_and_checkpoint(
+    let first_result = analyze_with_client_and_graph_and_journal(
         std::slice::from_ref(&file),
         &[],
         Arc::clone(&client),
         false,
         None,
         None,
-        Some(&checkpoint),
+        Some(&journal),
     )
     .await;
-    let checkpoint_exists_after_failure = checkpoint.exists();
+    let journal_exists_after_failure = journal.exists();
     assert!(
         first_result.is_err(),
         "the injected provider failure should stop the first run; hits={}",
         hits.load(Ordering::SeqCst)
     );
     assert!(
-        checkpoint_exists_after_failure,
-        "completed batch should be checkpointed before the later failure; error={:?}; hits={}",
+        journal_exists_after_failure,
+        "completed batch should be journaled before the later failure; error={:?}; hits={}",
         first_result.as_ref().err(),
         hits.load(Ordering::SeqCst)
     );
-    let checkpoint_json: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&checkpoint).unwrap()).unwrap();
-    let completed = checkpoint_json["completed"].as_array().unwrap();
-    let checkpoint_input_tokens = completed
+    let completed = std::fs::read_to_string(&journal)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .collect::<Vec<_>>();
+    let journal_input_tokens = completed
         .iter()
         .map(|entry| entry["in_tok"].as_u64().unwrap())
         .sum::<u64>();
-    let checkpoint_output_tokens = completed
+    let journal_output_tokens = completed
         .iter()
         .map(|entry| entry["out_tok"].as_u64().unwrap())
         .sum::<u64>();
-    let checkpoint_cached_input_tokens = completed
+    let journal_cached_input_tokens = completed
         .iter()
         .map(|entry| entry["cached_in_tok"].as_u64().unwrap())
         .sum::<u64>();
+    assert!(completed.iter().all(|entry| entry["status"] == "completed"));
+    assert!(completed.iter().all(|entry| {
+        entry["source_hash"]
+            .as_str()
+            .is_some_and(|hash| hash.len() == 64)
+    }));
+    assert!(completed.iter().all(|entry| {
+        entry["semantic_index_hash"]
+            .as_str()
+            .is_some_and(|hash| hash.len() == 64)
+    }));
+    assert!(
+        completed
+            .iter()
+            .all(|entry| entry["prompt_contract_version"] == "semantic-method-v28")
+    );
     let resumed_client = Arc::new(
         LLMClient::new(cfg(&endpoint), Some("test-key".to_string())).with_max_attempt_count(1),
     );
-    let resumed = analyze_with_client_and_graph_and_checkpoint(
+    let resumed = analyze_with_client_and_graph_and_journal(
         std::slice::from_ref(&file),
         &[],
         Arc::clone(&resumed_client),
         false,
         None,
         None,
-        Some(&checkpoint),
+        Some(&journal),
     )
     .await;
     let hit_count = hits.load(Ordering::SeqCst);
-    let checkpoint_exists_after_resume = checkpoint.exists();
+    let journal_exists_after_resume = journal.exists();
     unsafe {
         env::remove_var("SNIFF_LLM_MAX_CONCURRENCY");
         env::remove_var("SNIFF_LLM_METHOD_BATCH_SIZE");
@@ -993,16 +1011,16 @@ async fn interrupted_method_reviews_resume_from_checkpoint() {
 
     let (verdicts, input_tokens, output_tokens) = resumed.expect("the resumed run should complete");
     assert_eq!(completed.len(), 4);
-    assert_eq!(checkpoint_input_tokens, 310);
-    assert_eq!(checkpoint_output_tokens, 34);
-    assert_eq!(checkpoint_cached_input_tokens, 54);
+    assert_eq!(journal_input_tokens, 310);
+    assert_eq!(journal_output_tokens, 34);
+    assert_eq!(journal_cached_input_tokens, 54);
     assert_eq!(input_tokens, 330);
     assert_eq!(output_tokens, 36);
     assert_eq!(resumed_client.cached_input_tokens(), 54);
     assert_eq!(verdicts.len(), 5);
     assert_eq!(hit_count, 6);
-    assert!(checkpoint_exists_after_resume);
-    std::fs::remove_file(checkpoint).ok();
+    assert!(journal_exists_after_resume);
+    std::fs::remove_file(journal).ok();
 }
 
 #[tokio::test]
