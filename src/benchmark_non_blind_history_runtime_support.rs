@@ -59,12 +59,20 @@ pub(super) fn runtime_identity(
     Ok(format!("{:x}", digest.finalize()))
 }
 
+#[cfg(windows)]
 pub(super) fn resolve_rust_tool(name: &str) -> Result<PathBuf, HistoricalRuntimePlanError> {
     if let Ok(rustup) = resolve_on_path("rustup") {
         let output = run_query(&rustup, &["which", name], "rustup tool resolution")?;
         return canonical_file(Path::new(&output), "active Rust tool");
     }
     resolve_on_path(name)
+}
+
+#[cfg(not(windows))]
+pub(super) fn resolve_rust_tool(name: &str) -> Result<PathBuf, HistoricalRuntimePlanError> {
+    let rustc = resolve_on_path("rustc")?;
+    let sysroot = query_path(&rustc, &["--print", "sysroot"], "active Rust sysroot")?;
+    canonical_file(&sysroot.join("bin").join(name), "active Rust tool")
 }
 
 pub(super) fn rust_toolchain_root(path: &Path) -> Result<PathBuf, HistoricalRuntimePlanError> {
