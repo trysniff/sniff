@@ -70,9 +70,28 @@ pub(super) fn resolve_rust_tool(name: &str) -> Result<PathBuf, HistoricalRuntime
 
 #[cfg(not(windows))]
 pub(super) fn resolve_rust_tool(name: &str) -> Result<PathBuf, HistoricalRuntimePlanError> {
-    let rustc = resolve_on_path("rustc")?;
+    let rustc = resolve_on_path_preserving_alias("rustc")?;
     let sysroot = query_path(&rustc, &["--print", "sysroot"], "active Rust sysroot")?;
     canonical_file(&sysroot.join("bin").join(name), "active Rust tool")
+}
+
+#[cfg(not(windows))]
+fn resolve_on_path_preserving_alias(program: &str) -> Result<PathBuf, HistoricalRuntimePlanError> {
+    let path = std::env::var_os("PATH").ok_or_else(|| {
+        unavailable(format!(
+            "{program} runtime is unavailable because PATH is unset"
+        ))
+    })?;
+    for directory in std::env::split_paths(&path) {
+        let candidate = directory.join(program);
+        if candidate.is_file() {
+            let directory = canonical_directory(&directory, "runtime program directory")?;
+            return Ok(directory.join(program));
+        }
+    }
+    Err(unavailable(format!(
+        "required runtime {program} is unavailable"
+    )))
 }
 
 pub(super) fn rust_toolchain_root(path: &Path) -> Result<PathBuf, HistoricalRuntimePlanError> {
