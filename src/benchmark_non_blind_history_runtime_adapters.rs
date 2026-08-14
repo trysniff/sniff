@@ -26,8 +26,9 @@ pub(super) fn cargo_launch(args: &[String]) -> Result<Launch, HistoricalRuntimeP
     let (runtime_roots, env) = {
         let xcode_select = resolve_on_path("xcode-select")?;
         let developer_dir = query_path(&xcode_select, &["-p"], "active macOS developer directory")?;
+        let developer_root = parent_directory(&developer_dir, "active macOS developer root")?;
         (
-            vec![cargo_root, rustc_root, developer_dir.clone()],
+            vec![cargo_root, rustc_root, developer_root],
             vec![
                 ("CARGO".to_string(), path_value(&cargo)),
                 ("RUSTC".to_string(), path_value(&rustc)),
