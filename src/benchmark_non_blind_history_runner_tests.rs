@@ -1,7 +1,7 @@
 use super::*;
-use crate::benchmark::{
-    HistoricalCloneOutcome, HistoricalEvidenceKind, prepare_non_blind_history_assessment,
-};
+#[cfg(windows)]
+use crate::benchmark::HistoricalEvidenceKind;
+use crate::benchmark::{HistoricalCloneOutcome, prepare_non_blind_history_assessment};
 use std::cell::Cell;
 use std::path::PathBuf;
 use std::process::Command;
