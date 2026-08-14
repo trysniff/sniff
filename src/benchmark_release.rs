@@ -49,6 +49,11 @@ mod intentional_boundary_inventory;
 
 pub use intentional_boundary_inventory::*;
 
+#[path = "benchmark_intentional_boundary_source_census.rs"]
+mod intentional_boundary_source_census;
+
+pub use intentional_boundary_source_census::*;
+
 #[path = "benchmark_non_blind_history_assessment_schema.rs"]
 mod non_blind_history_assessment_schema;
 

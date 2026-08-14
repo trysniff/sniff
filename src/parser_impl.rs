@@ -29,5 +29,6 @@ mod shared;
 
 pub(in crate::parser) use file::{
     parse_file, parse_file_checked, parse_file_symbols, parse_file_symbols_checked,
+    parse_source_checked,
 };
 pub(super) use line_index::LineIndex;
