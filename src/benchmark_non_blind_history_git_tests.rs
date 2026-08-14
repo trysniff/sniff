@@ -41,6 +41,29 @@ fn changed_path_parser_preserves_rename_score_and_both_paths() {
 }
 
 #[test]
+fn changed_path_parser_uses_the_ledger_canonical_order() {
+    let fields = [
+        b"A".as_slice(),
+        b"z-last.rs",
+        b"M",
+        b"a-first.rs",
+        b"R100",
+        b"old-middle.rs",
+        b"m-middle.rs",
+    ];
+
+    let paths = parse_changed_path_fields(&fields).unwrap();
+
+    assert_eq!(
+        paths
+            .iter()
+            .map(|path| path.path.as_str())
+            .collect::<Vec<_>>(),
+        ["a-first.rs", "m-middle.rs", "z-last.rs"]
+    );
+}
+
+#[test]
 fn dirty_or_sparse_history_fails_closed() {
     let repository = fixture_repository();
     let policy: NonBlindSelectionPolicy = serde_json::from_slice(POLICY).unwrap();

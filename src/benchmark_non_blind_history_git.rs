@@ -193,7 +193,18 @@ fn parse_changed_path_fields(fields: &[&[u8]]) -> Result<Vec<HistoricalChangedPa
             path: utf8(value, "changed path")?.to_string(),
         });
     }
-    paths.sort();
+    paths.sort_by(|left, right| {
+        (
+            left.path.as_str(),
+            left.previous_path.as_deref(),
+            left.status.as_str(),
+        )
+            .cmp(&(
+                right.path.as_str(),
+                right.previous_path.as_deref(),
+                right.status.as_str(),
+            ))
+    });
     Ok(paths)
 }
 
