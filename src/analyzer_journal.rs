@@ -1,6 +1,6 @@
 use crate::pricing::PricingRates;
 use crate::report_types::LLMVerdict;
-use crate::types::FindingTier;
+use crate::types::{FileRecord, FindingTier};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -8,7 +8,15 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const JOURNAL_VERSION: u32 = 1;
+const JOURNAL_VERSION: u32 = 2;
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum JournalStage {
+    Role,
+    #[default]
+    Method,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -21,6 +29,10 @@ enum JournalStatus {
 pub(super) struct JournalEntry {
     version: u32,
     pub(super) scan_id: String,
+    #[serde(default)]
+    stage: JournalStage,
+    #[serde(default)]
+    is_manifest: bool,
     pub(super) unit_id: String,
     #[serde(default)]
     pub(super) expected_units: usize,
@@ -33,6 +45,8 @@ pub(super) struct JournalEntry {
     review_context_hash: String,
     status: JournalStatus,
     pub(super) verdict: Option<LLMVerdict>,
+    #[serde(default)]
+    role: Option<String>,
     pub(super) in_tok: usize,
     pub(super) out_tok: usize,
     #[serde(default)]
@@ -58,9 +72,18 @@ pub(super) struct JournalCompletion {
     pub(super) retry_on_resume: bool,
 }
 
+pub(crate) struct JournalRoleCompletion {
+    pub(crate) role: Option<String>,
+    pub(crate) in_tok: usize,
+    pub(crate) out_tok: usize,
+    pub(crate) cached_in_tok: usize,
+    pub(crate) retry_on_resume: bool,
+}
+
 #[derive(Debug, Clone)]
 struct JournalContext {
     scan_id: String,
+    stage: JournalStage,
     semantic_index_hash: String,
     prompt_contract_version: String,
     provider: String,
@@ -71,7 +94,13 @@ struct JournalContext {
 }
 
 impl JournalContext {
-    fn new(semantic_index_hash: &str, review_context: &str, expected_units: usize) -> Self {
+    fn new(
+        scan_id: Option<&str>,
+        stage: JournalStage,
+        semantic_index_hash: &str,
+        review_context: &str,
+        expected_units: usize,
+    ) -> Self {
         let fields = review_context
             .lines()
             .filter_map(|line| line.split_once('='))
@@ -94,10 +123,13 @@ impl JournalContext {
         let provider = provider_label(&raw_endpoint).to_string();
         let endpoint = safe_endpoint(&raw_endpoint);
         let review_context_hash = sha256_text(review_context);
-        let scan_id = sha256_text(&format!("{semantic_index_hash}\n{review_context_hash}"));
+        let scan_id = scan_id.map(str::to_string).unwrap_or_else(|| {
+            sha256_text(&format!("{semantic_index_hash}\n{review_context_hash}"))
+        });
 
         Self {
             scan_id,
+            stage,
             semantic_index_hash: semantic_index_hash.to_string(),
             prompt_contract_version,
             provider,
@@ -108,10 +140,9 @@ impl JournalContext {
         }
     }
 
-    fn matches(&self, entry: &JournalEntry) -> bool {
+    fn matches_cache(&self, entry: &JournalEntry) -> bool {
         entry.version == JOURNAL_VERSION
-            && entry.scan_id == self.scan_id
-            && entry.semantic_index_hash == self.semantic_index_hash
+            && entry.stage == self.stage
             && entry.review_context_hash == self.review_context_hash
     }
 }
@@ -139,7 +170,13 @@ impl JournalStore {
         expected_units: usize,
     ) -> Result<Self, String> {
         let semantic_index_hash = semantic_index_hash.to_string();
-        let context = JournalContext::new(&semantic_index_hash, review_context, expected_units);
+        let context = JournalContext::new(
+            None,
+            JournalStage::Method,
+            &semantic_index_hash,
+            review_context,
+            expected_units,
+        );
         let completed = load_entries(path, &context)?;
         Ok(Self {
             path: path.to_path_buf(),
@@ -148,12 +185,43 @@ impl JournalStore {
         })
     }
 
+    pub(crate) fn load_for_scan<S: ToString>(
+        path: &Path,
+        scan_id: &str,
+        stage: JournalStage,
+        semantic_index_hash: S,
+        review_context: &str,
+        expected_units: usize,
+    ) -> Result<Self, String> {
+        let semantic_index_hash = semantic_index_hash.to_string();
+        let context = JournalContext::new(
+            Some(scan_id),
+            stage,
+            &semantic_index_hash,
+            review_context,
+            expected_units,
+        );
+        let completed = load_entries(path, &context)?;
+        let mut store = Self {
+            path: path.to_path_buf(),
+            context,
+            completed,
+        };
+        store.ensure_stage_manifest()?;
+        Ok(store)
+    }
+
     pub(super) fn record(
         &mut self,
         unit_id: String,
         source_hash: String,
         completion: JournalCompletion,
     ) -> Result<(), String> {
+        if self.context.stage != JournalStage::Method {
+            return Err(
+                "method result cannot be written to a non-method journal stage".to_string(),
+            );
+        }
         let status = if completion.retry_on_resume {
             JournalStatus::RetryableUnresolved
         } else {
@@ -176,6 +244,8 @@ impl JournalStore {
         let entry = JournalEntry {
             version: JOURNAL_VERSION,
             scan_id: self.context.scan_id.clone(),
+            stage: self.context.stage,
+            is_manifest: false,
             unit_id: unit_id.clone(),
             expected_units: self.context.expected_units,
             source_hash,
@@ -187,6 +257,7 @@ impl JournalStore {
             review_context_hash: self.context.review_context_hash.clone(),
             status,
             verdict: completion.verdict,
+            role: None,
             in_tok: completion.in_tok,
             out_tok: completion.out_tok,
             cached_in_tok: completion.cached_in_tok,
@@ -199,6 +270,108 @@ impl JournalStore {
         append_entry(&self.path, &entry)?;
         self.completed.insert(unit_id, entry);
         Ok(())
+    }
+
+    pub(crate) fn is_current_scan(&self, entry: &JournalEntry) -> bool {
+        entry.scan_id == self.context.scan_id
+    }
+
+    pub(crate) fn reusable_role(&self, unit_id: &str) -> Option<(String, bool)> {
+        self.completed
+            .get(unit_id)
+            .filter(|entry| entry.is_reusable())
+            .and_then(|entry| {
+                entry
+                    .role
+                    .as_ref()
+                    .map(|role| (role.clone(), self.is_current_scan(entry)))
+            })
+    }
+
+    pub(crate) fn record_role(
+        &mut self,
+        unit_id: String,
+        source_hash: String,
+        completion: JournalRoleCompletion,
+    ) -> Result<(), String> {
+        if self.context.stage != JournalStage::Role {
+            return Err("role result cannot be written to a non-role journal stage".to_string());
+        }
+        let entry = JournalEntry {
+            version: JOURNAL_VERSION,
+            scan_id: self.context.scan_id.clone(),
+            stage: self.context.stage,
+            is_manifest: false,
+            unit_id: unit_id.clone(),
+            expected_units: self.context.expected_units,
+            source_hash,
+            semantic_index_hash: self.context.semantic_index_hash.clone(),
+            prompt_contract_version: self.context.prompt_contract_version.clone(),
+            provider: self.context.provider.clone(),
+            model: self.context.model.clone(),
+            endpoint: self.context.endpoint.clone(),
+            review_context_hash: self.context.review_context_hash.clone(),
+            status: if completion.retry_on_resume {
+                JournalStatus::RetryableUnresolved
+            } else {
+                JournalStatus::Completed
+            },
+            verdict: None,
+            role: completion.role,
+            in_tok: completion.in_tok,
+            out_tok: completion.out_tok,
+            cached_in_tok: completion.cached_in_tok,
+            estimated_cost_usd: PricingRates::from_env().cost(
+                completion.in_tok,
+                completion.cached_in_tok,
+                completion.out_tok,
+            ),
+            timestamp_unix_ms: now_unix_ms(),
+            proof_level: "not_applicable".to_string(),
+            retry_on_resume: completion.retry_on_resume,
+        };
+
+        append_entry(&self.path, &entry)?;
+        self.completed.insert(unit_id, entry);
+        Ok(())
+    }
+
+    fn ensure_stage_manifest(&mut self) -> Result<(), String> {
+        let entries = read_entries(&self.path, true)?;
+        if entries.iter().any(|entry| {
+            entry.version == JOURNAL_VERSION
+                && entry.scan_id == self.context.scan_id
+                && entry.stage == self.context.stage
+                && entry.is_manifest
+        }) {
+            return Ok(());
+        }
+        let entry = JournalEntry {
+            version: JOURNAL_VERSION,
+            scan_id: self.context.scan_id.clone(),
+            stage: self.context.stage,
+            is_manifest: true,
+            unit_id: format!("__manifest__:{:?}", self.context.stage).to_ascii_lowercase(),
+            expected_units: self.context.expected_units,
+            source_hash: String::new(),
+            semantic_index_hash: self.context.semantic_index_hash.clone(),
+            prompt_contract_version: self.context.prompt_contract_version.clone(),
+            provider: self.context.provider.clone(),
+            model: self.context.model.clone(),
+            endpoint: self.context.endpoint.clone(),
+            review_context_hash: self.context.review_context_hash.clone(),
+            status: JournalStatus::Completed,
+            verdict: None,
+            role: None,
+            in_tok: 0,
+            out_tok: 0,
+            cached_in_tok: 0,
+            estimated_cost_usd: 0.0,
+            timestamp_unix_ms: now_unix_ms(),
+            proof_level: "not_applicable".to_string(),
+            retry_on_resume: false,
+        };
+        append_entry(&self.path, &entry)
     }
 
     #[cfg(test)]
@@ -220,6 +393,9 @@ pub struct JournalSummary {
     pub expected_units: usize,
     pub completed_units: usize,
     pub retryable_units: usize,
+    pub expected_role_units: usize,
+    pub completed_role_units: usize,
+    pub retryable_role_units: usize,
     pub slop: usize,
     pub kinda_slop: usize,
     pub unresolved: usize,
@@ -245,7 +421,14 @@ pub(super) fn summarize(path: &Path) -> Result<JournalSummary, String> {
         ..JournalSummary::default()
     };
     for entry in &current_scan {
-        summary.expected_units = summary.expected_units.max(entry.expected_units);
+        match entry.stage {
+            JournalStage::Method => {
+                summary.expected_units = summary.expected_units.max(entry.expected_units);
+            }
+            JournalStage::Role => {
+                summary.expected_role_units = summary.expected_role_units.max(entry.expected_units);
+            }
+        }
         summary.input_tokens += entry.in_tok;
         summary.cached_input_tokens += entry.cached_in_tok;
         summary.output_tokens += entry.out_tok;
@@ -258,6 +441,17 @@ pub(super) fn summarize(path: &Path) -> Result<JournalSummary, String> {
         latest.insert(entry.unit_id.clone(), entry);
     }
     for entry in latest.values() {
+        if entry.is_manifest {
+            continue;
+        }
+        if entry.stage == JournalStage::Role {
+            if entry.retry_on_resume {
+                summary.retryable_role_units += 1;
+            } else {
+                summary.completed_role_units += 1;
+            }
+            continue;
+        }
         if entry.retry_on_resume {
             summary.retryable_units += 1;
             continue;
@@ -277,6 +471,38 @@ pub(super) fn summarize(path: &Path) -> Result<JournalSummary, String> {
 
 pub(super) fn sha256_text(value: &str) -> String {
     format!("{:x}", Sha256::digest(value.as_bytes()))
+}
+
+pub(crate) fn scan_id(file_records: &[FileRecord], review_context: &str) -> String {
+    let mut files = file_records.iter().collect::<Vec<_>>();
+    files.sort_by(|left, right| left.file_path.cmp(&right.file_path));
+    let mut identity = String::from(review_context);
+    for file in files {
+        identity.push('\n');
+        identity.push_str(&file.file_path);
+        identity.push('\n');
+        identity.push_str(&file.language);
+        identity.push('\n');
+        identity.push_str(&sha256_text(&file.source));
+    }
+    sha256_text(&identity)
+}
+
+pub(crate) fn initialize_method_stage(
+    path: &Path,
+    scan_id: &str,
+    review_context: &str,
+    expected_units: usize,
+) -> Result<(), String> {
+    JournalStore::load_for_scan(
+        path,
+        scan_id,
+        JournalStage::Method,
+        "pending-semantic-index",
+        review_context,
+        expected_units,
+    )
+    .map(|_| ())
 }
 
 fn provider_label(endpoint: &str) -> &'static str {
@@ -309,7 +535,7 @@ fn load_entries(
 ) -> Result<HashMap<String, JournalEntry>, String> {
     Ok(read_entries(path, true)?
         .into_iter()
-        .filter(|entry| context.matches(entry))
+        .filter(|entry| !entry.is_manifest && context.matches_cache(entry))
         .map(|entry| (entry.unit_id.clone(), entry))
         .collect())
 }

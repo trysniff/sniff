@@ -81,8 +81,9 @@ fn doctor_without_probe_succeeds_with_an_unreachable_provider() {
 fn status_reads_a_journal_without_provider_configuration() {
     let root = fixture();
     let journal = serde_json::json!({
-        "version": 1,
+        "version": 2,
         "scan_id": "scan",
+        "stage": "method",
         "unit_id": "example.py::greet",
         "expected_units": 2,
         "source_hash": "source",

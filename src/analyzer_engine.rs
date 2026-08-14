@@ -27,9 +27,8 @@ use support::review_key;
 mod dossier;
 #[path = "analyzer_engine_jobs.rs"]
 mod jobs;
-#[path = "analyzer_journal.rs"]
-mod journal;
-pub use journal::JournalSummary;
+use crate::review_journal as journal;
+pub use crate::review_journal::JournalSummary;
 #[path = "analyzer_signal_maps.rs"]
 mod signal_maps;
 
@@ -46,6 +45,7 @@ pub struct AnalysisRun<'a> {
     pub with_file_reviews: bool,
     pub graph: Option<&'a crate::symbol_graph::SymbolGraph>,
     pub journal_path: Option<&'a std::path::Path>,
+    pub scan_id: Option<&'a str>,
 }
 
 pub fn summarize_journal(path: &std::path::Path) -> Result<JournalSummary, String> {
@@ -159,6 +159,7 @@ pub async fn analyze_with_client_and_graph_and_journal(
             with_file_reviews,
             graph,
             journal_path,
+            scan_id: None,
         },
         client,
         on_progress,
@@ -178,6 +179,7 @@ pub async fn analyze_with_client_and_graph_and_journal_with_context(
         with_file_reviews,
         graph,
         journal_path,
+        scan_id,
     } = run;
     let analyzer = Arc::new(Analyzer {
         llm_client: client,
@@ -247,6 +249,7 @@ pub async fn analyze_with_client_and_graph_and_journal_with_context(
         on_progress,
         &review_context_key,
         journal_path,
+        scan_id,
     )
     .await?;
 

@@ -14,6 +14,15 @@ const CONSERVATIVE_CHARS_PER_TOKEN: usize = 3;
 
 tokio::task_local! {
     static TASK_CACHED_INPUT_TOKENS: AtomicUsize;
+    static TASK_FAILED_INPUT_TOKENS: AtomicUsize;
+    static TASK_FAILED_OUTPUT_TOKENS: AtomicUsize;
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct TrackedUsage {
+    pub(crate) cached_input_tokens: usize,
+    pub(crate) failed_input_tokens: usize,
+    pub(crate) failed_output_tokens: usize,
 }
 
 #[path = "llm_call.rs"]
@@ -124,10 +133,12 @@ impl LLMClient {
         self.cached_input_tokens.load(Ordering::Relaxed)
     }
 
+    #[cfg(test)]
     pub(crate) fn failed_input_tokens(&self) -> usize {
         self.failed_input_tokens.load(Ordering::Relaxed)
     }
 
+    #[cfg(test)]
     pub(crate) fn failed_output_tokens(&self) -> usize {
         self.failed_output_tokens.load(Ordering::Relaxed)
     }
@@ -137,6 +148,12 @@ impl LLMClient {
             .fetch_add(input_tokens, Ordering::Relaxed);
         self.failed_output_tokens
             .fetch_add(output_tokens, Ordering::Relaxed);
+        let _ = TASK_FAILED_INPUT_TOKENS.try_with(|tokens| {
+            tokens.fetch_add(input_tokens, Ordering::Relaxed);
+        });
+        let _ = TASK_FAILED_OUTPUT_TOKENS.try_with(|tokens| {
+            tokens.fetch_add(output_tokens, Ordering::Relaxed);
+        });
     }
 
     pub(crate) fn restore_cached_input_tokens(&self, tokens: usize) {
@@ -144,17 +161,41 @@ impl LLMClient {
             .fetch_add(tokens, Ordering::Relaxed);
     }
 
-    pub(crate) async fn track_cached_input_tokens<F>(future: F) -> (F::Output, usize)
+    pub(crate) async fn track_usage<F>(future: F) -> (F::Output, TrackedUsage)
     where
         F: Future,
     {
         TASK_CACHED_INPUT_TOKENS
             .scope(AtomicUsize::new(0), async move {
-                let output = future.await;
-                let cached = TASK_CACHED_INPUT_TOKENS.with(|tokens| tokens.load(Ordering::Relaxed));
-                (output, cached)
+                TASK_FAILED_INPUT_TOKENS
+                    .scope(AtomicUsize::new(0), async move {
+                        TASK_FAILED_OUTPUT_TOKENS
+                            .scope(AtomicUsize::new(0), async move {
+                                let output = future.await;
+                                let usage = TrackedUsage {
+                                    cached_input_tokens: TASK_CACHED_INPUT_TOKENS
+                                        .with(|tokens| tokens.load(Ordering::Relaxed)),
+                                    failed_input_tokens: TASK_FAILED_INPUT_TOKENS
+                                        .with(|tokens| tokens.load(Ordering::Relaxed)),
+                                    failed_output_tokens: TASK_FAILED_OUTPUT_TOKENS
+                                        .with(|tokens| tokens.load(Ordering::Relaxed)),
+                                };
+                                (output, usage)
+                            })
+                            .await
+                    })
+                    .await
             })
             .await
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn track_cached_input_tokens<F>(future: F) -> (F::Output, usize)
+    where
+        F: Future,
+    {
+        let (output, usage) = Self::track_usage(future).await;
+        (output, usage.cached_input_tokens)
     }
 
     #[cfg(test)]
