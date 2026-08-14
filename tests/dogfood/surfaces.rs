@@ -203,7 +203,6 @@ fn service_worker_support_boundaries_are_reviewed_end_to_end() {
     let output = Command::new(env!("CARGO_BIN_EXE_sniff"))
         .current_dir(&root)
         .arg(&root)
-        .arg("--only-files")
         .output()
         .unwrap();
 
@@ -239,18 +238,18 @@ fn service_worker_support_boundaries_are_reviewed_end_to_end() {
 
     let prompt_text = prompts.lock().unwrap().join("\n");
     assert!(
-        prompt_text.contains("Filename: service-worker-support.ts"),
-        "support boundary glue should be sent for AI review:\n{}",
+        prompt_text.contains("File path: ") && prompt_text.contains("service-worker-support.ts"),
+        "support boundary methods should be sent for AI review:\n{}",
         prompt_text
     );
     assert!(
-        prompt_text.contains("Filename: feature-flags.ts"),
-        "feature-flag glue should be sent for AI review:\n{}",
+        prompt_text.contains("File path: ") && prompt_text.contains("feature-flags.ts"),
+        "feature-flag methods should be sent for AI review:\n{}",
         prompt_text
     );
     assert!(
-        prompt_text.contains("Filename: password-session-cache.ts"),
-        "session cache glue should be sent for AI review:\n{}",
+        prompt_text.contains("File path: ") && prompt_text.contains("password-session-cache.ts"),
+        "session cache methods should be sent for AI review:\n{}",
         prompt_text
     );
 
@@ -325,7 +324,6 @@ export async function handler(req: Request) {
     let output = Command::new(env!("CARGO_BIN_EXE_sniff"))
         .current_dir(&root)
         .arg(&root)
-        .arg("--only-files")
         .output()
         .unwrap();
 
@@ -428,7 +426,6 @@ export function createServiceWorkerRuntimeHandlers() {
     let output = Command::new(env!("CARGO_BIN_EXE_sniff"))
         .current_dir(&root)
         .arg(&root)
-        .arg("--only-files")
         .output()
         .unwrap();
 
@@ -510,7 +507,6 @@ fn brandset_feedback_and_crypto_survive_while_auth_flow_stays_clean_end_to_end()
     let output = Command::new(env!("CARGO_BIN_EXE_sniff"))
         .current_dir(&root)
         .arg(&root)
-        .arg("--only-files")
         .output()
         .unwrap();
 
@@ -596,7 +592,6 @@ fn bumpkin_serverless_entrypoints_stay_clean_while_release_job_surfaces_end_to_e
     let output = Command::new(env!("CARGO_BIN_EXE_sniff"))
         .current_dir(&root)
         .arg(".")
-        .arg("--only-files")
         .output()
         .unwrap();
 
@@ -649,26 +644,26 @@ fn bumpkin_serverless_entrypoints_stay_clean_while_release_job_surfaces_end_to_e
     assert!(
         prompts
             .iter()
-            .any(|prompt| prompt.contains("Filename: checkout-rpc.ts")),
+            .any(|prompt| prompt.contains("File path: ") && prompt.contains("checkout-rpc.ts")),
         "expected checkout-rpc.ts to be reviewed by the mock provider"
     );
     assert!(
         prompts
             .iter()
-            .any(|prompt| prompt.contains("Filename: index.ts")),
-        "serverless entrypoints should be reviewed as slop candidates"
+            .any(|prompt| prompt.contains("File path: ") && prompt.contains("index.ts")),
+        "serverless entrypoint methods should be reviewed as slop candidates"
     );
     assert!(
         prompts
             .iter()
-            .any(|prompt| prompt.contains("Filename: release_job.py")),
+            .any(|prompt| prompt.contains("File path: ") && prompt.contains("release_job.py")),
         "release_job.py should be reviewed as slop candidates"
     );
     assert!(
         prompts
             .iter()
-            .any(|prompt| prompt.contains("Filename: App.tsx")),
-        "small root app shells should be reviewed as slop candidates"
+            .any(|prompt| prompt.contains("File path: ") && prompt.contains("App.tsx")),
+        "small root app shell methods should be reviewed as slop candidates"
     );
 
     let _ = fs::remove_dir_all(&root);

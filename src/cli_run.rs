@@ -17,9 +17,6 @@ pub struct CliArgs {
     #[arg(default_value = ".")]
     pub path: String,
 
-    #[arg(long = "with-file-reviews", alias = "only-files")]
-    pub with_file_reviews: bool,
-
     #[arg(long, global = true)]
     pub skip_dotenv: bool,
 
@@ -52,18 +49,8 @@ pub async fn run(args: CliArgs) -> Result<i32, Box<dyn std::error::Error>> {
         Some(CliCommand::Doctor { path, probe }) => {
             pipeline::doctor(&path, args.skip_dotenv, probe).await
         }
-        None if args.estimate => {
-            pipeline::estimate(&args.path, args.with_file_reviews, args.skip_dotenv).await
-        }
-        None => {
-            pipeline::run(
-                &args.path,
-                args.with_file_reviews,
-                args.skip_dotenv,
-                args.yes,
-            )
-            .await
-        }
+        None if args.estimate => pipeline::estimate(&args.path, args.skip_dotenv).await,
+        None => pipeline::run(&args.path, args.skip_dotenv, args.yes).await,
     }
 }
 
@@ -97,6 +84,15 @@ mod tests {
         let args = CliArgs::try_parse_from(["sniff", "repo", "--yes"]).expect("scan arguments");
 
         assert!(args.yes);
+    }
+
+    #[test]
+    fn rejects_removed_optional_file_review_modes() {
+        for flag in ["--with-file-reviews", "--only-files"] {
+            let error = CliArgs::try_parse_from(["sniff", flag])
+                .expect_err("legacy optional review mode must not parse");
+            assert_eq!(error.kind(), clap::error::ErrorKind::UnknownArgument);
+        }
     }
 
     #[tokio::test]

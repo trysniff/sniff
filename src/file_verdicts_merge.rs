@@ -49,9 +49,9 @@ fn add_llm_verdict(
         // its wording happens to resemble wrapper noise.
         builder.add_method_reason(method_name.clone(), severity, reason);
     } else {
-        // File reviews remain available for the explicit --with-file-reviews mode
-        // and for independent cross-method observations. Static signals never
-        // enter this path.
+        // Legacy file-review results remain parseable for checkpoint and unit
+        // isolation. The public pipeline no longer schedules this path; the
+        // case engine will replace it with typed cross-method synthesis.
         builder.add_file_reason(severity, reason);
     }
 }

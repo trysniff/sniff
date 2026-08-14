@@ -362,7 +362,7 @@ fn batch_method_source(prompt: &str, index: usize) -> Option<(String, usize)> {
     let (start, end) = range.split_once(" through ")?;
     let start = start.trim().parse::<usize>().ok()?;
     let end = end.trim().parse::<usize>().ok()?;
-    let file_source = authoritative_file_source(prompt, path)?;
+    let file_source = remove_method_line_number_prefixes(authoritative_file_source(prompt, path)?);
     let method_source = file_source
         .lines()
         .skip(start.saturating_sub(1))

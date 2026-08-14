@@ -33,7 +33,6 @@ fn brandset_runtime_wireup_surfaces_real_slop_while_supporting_neighbors_stay_cl
     let output = Command::new(env!("CARGO_BIN_EXE_sniff"))
         .current_dir(&root)
         .arg(root.join("ui").join("background").join("core"))
-        .arg("--only-files")
         .output()
         .unwrap();
 
@@ -99,7 +98,6 @@ fn brandset_frame_sync_surfaces_real_slop_while_progress_runtime_stays_clean() {
     let output = Command::new(env!("CARGO_BIN_EXE_sniff"))
         .current_dir(&root)
         .arg(root.join("ui").join("background").join("core"))
-        .arg("--only-files")
         .output()
         .unwrap();
 
@@ -167,7 +165,6 @@ fn bumpkin_release_orchestration_surfaces_real_slop_while_analysis_stays_clean()
     let output = Command::new(env!("CARGO_BIN_EXE_sniff"))
         .current_dir(&root)
         .arg(".")
-        .arg("--only-files")
         .output()
         .unwrap();
 
@@ -246,7 +243,6 @@ fn bumpkin_repository_client_surfaces_real_slop_while_release_helpers_stay_clean
     let output = Command::new(env!("CARGO_BIN_EXE_sniff"))
         .current_dir(&root)
         .arg(".")
-        .arg("--only-files")
         .output()
         .unwrap();
 
@@ -318,7 +314,6 @@ fn bumpkin_release_rationale_surfaces_real_slop_while_publish_stays_clean() {
     let output = Command::new(env!("CARGO_BIN_EXE_sniff"))
         .current_dir(&root)
         .arg(".")
-        .arg("--only-files")
         .output()
         .unwrap();
 
@@ -384,7 +379,6 @@ fn bumpkin_release_comments_surfaces_real_slop_while_tokens_stays_clean() {
     let output = Command::new(env!("CARGO_BIN_EXE_sniff"))
         .current_dir(&root)
         .arg(".")
-        .arg("--only-files")
         .output()
         .unwrap();
 
@@ -446,7 +440,6 @@ fn bumpkin_policy_engine_surfaces_real_slop_while_guards_stays_clean() {
     let output = Command::new(env!("CARGO_BIN_EXE_sniff"))
         .current_dir(&root)
         .arg(".")
-        .arg("--only-files")
         .output()
         .unwrap();
 

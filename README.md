@@ -207,14 +207,12 @@ The command labels that request as paid before sending it.
 
 ```console
 sniff [PATH]
-sniff --with-file-reviews [PATH]
 sniff --skip-dotenv [PATH]
 sniff --yes [PATH]
 ```
 
-Methods are always reviewed. `--with-file-reviews` adds a secondary file-level
-review. Supported source languages are Rust, Python, JavaScript, TypeScript, Go,
-and Kotlin.
+Every eligible method is reviewed. Supported source languages are Rust, Python,
+JavaScript, TypeScript, Go, and Kotlin.
 
 Sniff runs up to four independent review pipelines concurrently and batches up
 to eight same-file methods per request. Tune these with

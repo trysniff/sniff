@@ -115,21 +115,14 @@ async fn scan_target(
 
 async fn build_run_report(
     path: &str,
-    with_file_reviews: bool,
     config: &crate::config::ResolvedConfig,
     file_records: &mut [crate::types::FileRecord],
     bar_style: &ProgressStyle,
     checkpoint_path: &std::path::Path,
 ) -> Result<(RunReport, bool), Box<dyn std::error::Error>> {
-    let review = llm::prepare_review_artifacts(
-        path,
-        with_file_reviews,
-        config,
-        file_records,
-        bar_style,
-        Some(checkpoint_path),
-    )
-    .await?;
+    let review =
+        llm::prepare_review_artifacts(path, config, file_records, bar_style, Some(checkpoint_path))
+            .await?;
 
     let stats = stats::generate_stats(stats::StatsInput {
         file_records,
@@ -154,14 +147,12 @@ async fn build_run_report(
         file_records,
         review.static_flags,
         review.verdicts,
-        with_file_reviews,
         stats,
     ))
 }
 
 pub async fn run(
     path: &str,
-    with_file_reviews: bool,
     skip_dotenv: bool,
     assume_yes: bool,
 ) -> Result<i32, Box<dyn std::error::Error>> {
@@ -187,7 +178,7 @@ pub async fn run(
         .into());
     }
     eprintln!("{}", source_inventory_summary(&file_records));
-    let estimate = super::preflight::ScanEstimate::from_files(&file_records, with_file_reviews);
+    let estimate = super::preflight::ScanEstimate::from_files(&file_records);
     super::preflight::print_scan_cost_summary(&estimate);
     super::preflight::confirm_expensive_scan(&estimate, assume_yes)?;
     if checkpoint_path.exists() {
@@ -204,7 +195,6 @@ pub async fn run(
         .map_err(|err| IoError::other(format!("failed to build progress style: {}", err)))?;
     let (run_report, has_issues) = build_run_report(
         path,
-        with_file_reviews,
         &config,
         &mut file_records,
         &bar_style,
