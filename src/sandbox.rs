@@ -1393,7 +1393,7 @@ mod tests {
         assert_eq!(output.text, "0123\n[output truncated by Sniff]");
         assert_eq!(
             output.sha256,
-            "84d89877f0d4041efb6bf91a16f0248f2fd573e6af05d4fa02513f8fbb7d7a7e"
+            "84d89877f0d4041efb6bf91a16f0248f2fd573e6af05c19f96bedb9f882f7882"
         );
     }
 

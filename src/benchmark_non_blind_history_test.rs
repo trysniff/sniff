@@ -60,13 +60,32 @@ pub fn run_historical_test(
     let root = canonical_directory(snapshot_root, "historical test snapshot")?;
     verify_snapshot(&root, revision)?;
     let cache = initialize_private_cache(&root)?;
+    let execution =
+        run_historical_test_in_cache(&root, &cache, revision, preparation_commands, test_command);
+    let integrity = verify_tracked_snapshot(&root, revision);
+    match (execution, integrity) {
+        (Ok(execution), Ok(())) => Ok(execution),
+        (Err(error), Ok(())) | (Ok(_), Err(error)) => Err(error),
+        (Err(execution), Err(integrity)) => Err(format!(
+            "{execution}; additionally, historical snapshot integrity failed: {integrity}"
+        )),
+    }
+}
+
+fn run_historical_test_in_cache(
+    root: &Path,
+    cache: &Path,
+    revision: &str,
+    preparation_commands: &[Vec<String>],
+    test_command: &[String],
+) -> Result<HistoricalTestExecutionOutcome, String> {
     let mut raw_preparation = Vec::new();
     let mut preparation_results = Vec::new();
     let mut runtime_identity = None::<String>;
 
     for (index, command) in preparation_commands.iter().enumerate() {
         let stage = format!("preparation_{}", index + 1);
-        let executed = match execute_step(&root, &cache, command, &stage) {
+        let executed = match execute_step(root, cache, command, &stage) {
             Ok(executed) => executed,
             Err(StepError::RuntimeUnavailable(reason)) if raw_preparation.is_empty() => {
                 return Ok(HistoricalTestExecutionOutcome::RuntimeUnavailable(reason));
@@ -93,7 +112,7 @@ pub fn run_historical_test(
         }
     }
 
-    let executed = match execute_step(&root, &cache, test_command, "test") {
+    let executed = match execute_step(root, cache, test_command, "test") {
         Ok(executed) => executed,
         Err(StepError::RuntimeUnavailable(reason)) if raw_preparation.is_empty() => {
             return Ok(HistoricalTestExecutionOutcome::RuntimeUnavailable(reason));
@@ -151,15 +170,89 @@ fn execute_step(
             }
             HistoricalRuntimePlanError::Invalid(message) => StepError::Invalid(message),
         })?;
-    let output = crate::sandbox::run(&plan.command).map_err(|error| match error {
-        SandboxError::Unavailable(message) => StepError::SandboxUnavailable(message),
-        SandboxError::Invalid(message) => StepError::Invalid(message),
-        SandboxError::Failed(message) => StepError::Failed(message),
-    })?;
+    #[cfg(windows)]
+    if logical_command
+        .first()
+        .is_some_and(|program| program == "cargo")
+    {
+        ensure_windows_cargo_runtime(root, cache, &plan.command)?;
+    }
+    let output = crate::sandbox::run(&plan.command).map_err(map_sandbox_error)?;
     Ok(ExecutedStep {
         runtime_identity: plan.runtime_identity,
         raw: raw_step(root, stage, logical_command, plan.launcher_kind, output),
     })
+}
+
+fn map_sandbox_error(error: SandboxError) -> StepError {
+    match error {
+        SandboxError::Unavailable(message) => StepError::SandboxUnavailable(message),
+        SandboxError::Invalid(message) => StepError::Invalid(message),
+        SandboxError::Failed(message) => StepError::Failed(message),
+    }
+}
+
+#[cfg(windows)]
+fn ensure_windows_cargo_runtime(
+    root: &Path,
+    cache: &Path,
+    command: &crate::sandbox::SandboxCommand,
+) -> Result<(), StepError> {
+    const MARKER_CONTENT: &str = "sniff-windows-cargo-preflight-v1\n";
+    let marker = cache.join("windows-cargo-preflight.ok");
+    if fs::read_to_string(&marker).is_ok_and(|contents| contents == MARKER_CONTENT) {
+        return Ok(());
+    }
+
+    let probe = cache.join("windows-cargo-preflight");
+    let source = probe.join("src");
+    fs::create_dir_all(&source).map_err(|error| {
+        StepError::Failed(format!("failed to create trusted Cargo preflight: {error}"))
+    })?;
+    fs::write(
+        probe.join("Cargo.toml"),
+        "[package]\nname = \"sniff-cargo-preflight\"\nversion = \"0.0.0\"\nedition = \"2024\"\n\n[workspace]\n",
+    )
+    .map_err(|error| {
+        StepError::Failed(format!("failed to write trusted Cargo preflight manifest: {error}"))
+    })?;
+    fs::write(source.join("lib.rs"), "pub fn sniff_cargo_preflight() {}\n").map_err(|error| {
+        StepError::Failed(format!("failed to write trusted Cargo preflight: {error}"))
+    })?;
+
+    let mut preflight = command.clone();
+    preflight.args = vec![
+        "check".to_string(),
+        "--offline".to_string(),
+        "--manifest-path".to_string(),
+        probe.join("Cargo.toml").to_string_lossy().into_owned(),
+    ];
+    let output = crate::sandbox::run(&preflight).map_err(map_sandbox_error)?;
+    if output.status_code == Some(0) && !output.timed_out {
+        fs::write(&marker, MARKER_CONTENT).map_err(|error| {
+            StepError::Failed(format!("failed to seal trusted Cargo preflight: {error}"))
+        })?;
+        return Ok(());
+    }
+    if windows_cargo_child_launch_denied(&output.stderr) {
+        return Err(StepError::SandboxUnavailable(
+            "Windows AppContainer denied Cargo's compiler child during Sniff's trusted preflight; run historical assessment on a supported Linux host"
+                .to_string(),
+        ));
+    }
+    Err(StepError::Failed(format!(
+        "trusted Windows Cargo preflight failed: status={:?} timed_out={} stderr={}",
+        output.status_code,
+        output.timed_out,
+        sanitize_output(root, &output.stderr)
+    )))
+}
+
+#[cfg(any(windows, test))]
+fn windows_cargo_child_launch_denied(stderr: &str) -> bool {
+    stderr.contains("could not execute process")
+        && stderr.contains("never executed")
+        && stderr.contains("Access is denied. (os error 5)")
 }
 
 fn completed_execution(
@@ -330,6 +423,17 @@ fn verify_snapshot(root: &Path, revision: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn verify_tracked_snapshot(root: &Path, revision: &str) -> Result<(), String> {
+    let head = git_text(root, &["rev-parse", "HEAD"])?;
+    let changed = git_text(root, &["diff", "--name-only", "HEAD", "--"])?;
+    if head != revision || !changed.is_empty() {
+        return Err(format!(
+            "historical test changed its revision or tracked files: expected {revision}, found {head}, changed={changed:?}"
+        ));
+    }
+    Ok(())
+}
+
 fn git_text(root: &Path, args: &[&str]) -> Result<String, String> {
     git_output(root, args, false)?.ok_or_else(|| format!("git {} failed", args.join(" ")))
 }
@@ -457,6 +561,19 @@ mod tests {
     }
 
     #[test]
+    fn cargo_child_denial_requires_the_complete_host_signature() {
+        let denial = "error: could not execute process `rustc -vV` (never executed)\n\nCaused by:\n  Access is denied. (os error 5)\n";
+
+        assert!(windows_cargo_child_launch_denied(denial));
+        assert!(!windows_cargo_child_launch_denied(
+            "candidate test failed: Access is denied. (os error 5)"
+        ));
+        assert!(!windows_cargo_child_launch_denied(
+            "error: could not execute process `rustc -vV` (never executed): file not found"
+        ));
+    }
+
+    #[test]
     fn clean_snapshot_executes_once_through_the_real_sandbox() {
         let root = tempfile::tempdir().unwrap();
         git(root.path(), &["init", "-b", "main"]);
@@ -488,6 +605,27 @@ mod tests {
             execution.result.raw_result_sha256,
             sha256(&execution.raw_result)
         );
+    }
+
+    #[test]
+    fn tracked_snapshot_mutation_is_rejected() {
+        let root = tempfile::tempdir().unwrap();
+        git(root.path(), &["init", "-b", "main"]);
+        git(
+            root.path(),
+            &["config", "user.email", "fixture@example.test"],
+        );
+        git(root.path(), &["config", "user.name", "Fixture"]);
+        fs::write(root.path().join("README.md"), "before\n").unwrap();
+        git(root.path(), &["add", "."]);
+        git(root.path(), &["commit", "-m", "fixture"]);
+        let revision = git_value(root.path(), &["rev-parse", "HEAD"]);
+
+        fs::write(root.path().join("README.md"), "after\n").unwrap();
+
+        let error = verify_tracked_snapshot(root.path(), &revision).unwrap_err();
+        assert!(error.contains("changed its revision or tracked files"));
+        assert!(error.contains("README.md"));
     }
 
     fn git(root: &Path, args: &[&str]) {
