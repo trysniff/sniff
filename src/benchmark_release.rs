@@ -69,6 +69,16 @@ mod intentional_boundary_evidence_schema;
 
 pub use intentional_boundary_evidence_schema::*;
 
+#[path = "benchmark_intentional_boundary_ast_schema.rs"]
+mod intentional_boundary_ast_schema;
+
+pub use intentional_boundary_ast_schema::*;
+
+#[path = "benchmark_intentional_boundary_ast_rust.rs"]
+mod intentional_boundary_ast_rust;
+
+pub use intentional_boundary_ast_rust::*;
+
 #[path = "benchmark_intentional_boundary_compiler_evidence.rs"]
 mod intentional_boundary_compiler_evidence;
 
