@@ -59,7 +59,7 @@ pub fn validate_intentional_boundary_rust_ast_census(
 }
 
 #[cfg(test)]
-fn derive_rust_ast_census(
+pub(super) fn derive_rust_ast_census(
     source_census: &IntentionalBoundarySourceCensus,
     semantic_census: &IntentionalBoundarySemanticCensus,
     files: &[crate::types::FileRecord],
