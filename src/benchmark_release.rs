@@ -44,6 +44,11 @@ mod intentional_boundary_frame_task;
 
 pub use intentional_boundary_frame_task::*;
 
+#[path = "benchmark_intentional_boundary_inventory.rs"]
+mod intentional_boundary_inventory;
+
+pub use intentional_boundary_inventory::*;
+
 #[path = "benchmark_non_blind_history_assessment_schema.rs"]
 mod non_blind_history_assessment_schema;
 
