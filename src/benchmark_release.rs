@@ -59,6 +59,11 @@ mod non_blind_history_recipe;
 
 pub use non_blind_history_recipe::*;
 
+#[path = "benchmark_non_blind_history_materialize.rs"]
+mod non_blind_history_materialize;
+
+pub use non_blind_history_materialize::*;
+
 #[path = "benchmark_source_seal.rs"]
 mod source_seal;
 
