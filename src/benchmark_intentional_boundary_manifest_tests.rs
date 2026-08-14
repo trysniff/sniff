@@ -91,6 +91,12 @@ fn censuses_typed_cargo_node_and_python_declarations_with_exact_spans() {
 
     assert_eq!(census.documents.len(), 3);
     assert_eq!(census.declarations.len(), 9);
+    assert!(
+        census
+            .declarations
+            .iter()
+            .all(|declaration| declaration.declaration_id.starts_with("ibmd-v1:"))
+    );
     assert_eq!(
         census
             .declaration_count_by_kind

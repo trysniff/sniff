@@ -47,6 +47,7 @@ pub struct IntentionalBoundaryManifestDocument {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct IntentionalBoundaryManifestDeclaration {
+    pub declaration_id: String,
     pub provider: IntentionalBoundaryManifestProvider,
     pub manifest_repository_path: String,
     pub manifest_object_id: String,

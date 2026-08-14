@@ -77,16 +77,19 @@ pub fn census_intentional_boundary_manifests(
             source_sha256: sha256(&bytes),
             declaration_count: parsed.len(),
         });
-        declarations.extend(parsed.into_iter().map(|declaration| {
-            IntentionalBoundaryManifestDeclaration {
+        for declaration in parsed {
+            let mut declaration = IntentionalBoundaryManifestDeclaration {
+                declaration_id: String::new(),
                 provider,
                 manifest_repository_path: entry.repository_path.clone(),
                 manifest_object_id: entry.object_id.clone(),
                 declaration_kind: declaration.declaration_kind,
                 declaration_location: span_range(&entry.repository_path, source, declaration.span),
                 target: declaration.target,
-            }
-        }));
+            };
+            declaration.declaration_id = compute_manifest_declaration_id(&declaration)?;
+            declarations.push(declaration);
+        }
     }
     documents.sort_by(|left, right| left.repository_path.cmp(&right.repository_path));
     declarations.sort();
@@ -213,6 +216,22 @@ fn compute_manifest_census_sha256(
     ))
     .map_err(|error| format!("failed to commit intentional-boundary manifest census: {error}"))?;
     Ok(sha256(&bytes))
+}
+
+fn compute_manifest_declaration_id(
+    declaration: &IntentionalBoundaryManifestDeclaration,
+) -> Result<String, String> {
+    let bytes = serde_json::to_vec(&(
+        "sniffbench-intentional-boundary-manifest-declaration-v1",
+        declaration.provider,
+        &declaration.manifest_repository_path,
+        &declaration.manifest_object_id,
+        declaration.declaration_kind,
+        &declaration.declaration_location,
+        &declaration.target,
+    ))
+    .map_err(|error| format!("failed to commit manifest declaration identity: {error}"))?;
+    Ok(format!("ibmd-v1:{}", sha256(&bytes)))
 }
 
 fn sha256(bytes: &[u8]) -> String {
