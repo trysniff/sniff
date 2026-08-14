@@ -5,8 +5,11 @@ use std::path::{Path, PathBuf};
 const REPOSITORY_MARKERS: &[&str] = &[
     ".git",
     "Cargo.toml",
+    "go.mod",
+    "go.work",
     "pyproject.toml",
     "package.json",
+    "tsconfig.json",
     "settings.gradle",
     "settings.gradle.kts",
 ];
@@ -63,12 +66,27 @@ pub(super) async fn scan_files_with_cache(
     parse_files(&file_paths, semantic_cache).await
 }
 
-#[cfg(test)]
 pub(super) async fn scan_evidence_files(
     path: &str,
     config: &ResolvedConfig,
 ) -> Result<Vec<FileRecord>, String> {
     scan_evidence_files_with_cache(path, config, None).await
+}
+
+pub(super) async fn scan_semantic_files(
+    path: &str,
+    config: &ResolvedConfig,
+) -> Result<Vec<FileRecord>, String> {
+    let mut files = scan_files(path, config).await?;
+    for evidence_file in scan_evidence_files(path, config).await? {
+        if !files
+            .iter()
+            .any(|file| file.file_path == evidence_file.file_path)
+        {
+            files.push(evidence_file);
+        }
+    }
+    Ok(files)
 }
 
 async fn scan_evidence_files_with_cache(
@@ -302,6 +320,30 @@ mod tests {
                 .any(|file| file.file_path.ends_with("test_target.py"))
         );
         fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn compiler_project_markers_bound_the_semantic_index_root() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let outer = std::env::temp_dir().join(format!("sniff-index-root-{nanos}"));
+        let project = outer.join("project");
+        let source = project.join("src").join("main.ts");
+        fs::create_dir_all(source.parent().unwrap()).unwrap();
+        fs::create_dir_all(outer.join(".git")).unwrap();
+        fs::write(&source, "export function target() {}\n").unwrap();
+
+        for marker in ["tsconfig.json", "go.mod"] {
+            fs::write(project.join(marker), "").unwrap();
+            let expected_project =
+                strip_windows_verbatim_prefix(fs::canonicalize(&project).unwrap());
+            assert_eq!(repository_root_for_target(&source), expected_project);
+            fs::remove_file(project.join(marker)).unwrap();
+        }
+
+        fs::remove_dir_all(outer).ok();
     }
 
     #[tokio::test]

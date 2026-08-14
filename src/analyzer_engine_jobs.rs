@@ -1,7 +1,7 @@
-use crate::report_types::LLMVerdict;
+use crate::report_types::{LLMVerdict, MethodReviewRecord};
 use crate::types::{FileRecord, FindingTier, MethodRecord};
-use std::collections::HashMap;
 use std::collections::VecDeque;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -11,6 +11,7 @@ use tokio::task::JoinSet;
 use super::dossier::MethodDossier;
 use super::method_batch_review::BatchMethodReview;
 use super::method_review::MethodReviewContext;
+use super::verdicts::build_method_review_record;
 use super::{Analyzer, ReviewProgress, ReviewProgressCallback};
 use crate::review_journal::{JournalCompletion, JournalEntry, JournalStore, sha256_text};
 
@@ -31,6 +32,7 @@ pub(super) enum ReviewJob {
 struct ReviewOutcome {
     index: usize,
     verdict: Option<LLMVerdict>,
+    method_record: Option<MethodReviewRecord>,
     in_tok: usize,
     out_tok: usize,
     cached_in_tok: usize,
@@ -40,6 +42,11 @@ struct ReviewOutcome {
 
 type ReviewItemCompletionCallback =
     Arc<dyn Fn(&str, &ReviewOutcome) -> Result<(), String> + Send + Sync>;
+
+pub(super) struct ReviewJobResult {
+    pub(super) verdicts: Vec<LLMVerdict>,
+    pub(super) method_records: Vec<MethodReviewRecord>,
+}
 
 async fn abort_and_drain<T: Send + 'static>(tasks: &mut JoinSet<T>) {
     tasks.abort_all();
@@ -553,6 +560,7 @@ async fn run_review_job(
     job: ReviewJob,
     on_progress: Option<&ReviewProgressCallback>,
 ) -> Result<ReviewOutcome, String> {
+    let unit_id = job.journal_unit_id();
     match job {
         ReviewJob::Method {
             index,
@@ -560,7 +568,7 @@ async fn run_review_job(
             static_signals,
             dossier,
         } => match analyzer
-            .analyze_method_review_with_context(
+            .analyze_method_record_with_context(
                 &method,
                 &static_signals,
                 MethodReviewContext {
@@ -576,28 +584,47 @@ async fn run_review_job(
             )
             .await
         {
-            Ok((Some(verdict), in_tok, out_tok)) => Ok(ReviewOutcome {
-                index,
-                verdict: Some(verdict),
-                in_tok,
-                out_tok,
-                cached_in_tok: 0,
-                retry_on_resume: false,
-                persisted: false,
-            }),
+            Ok((Some(analysis), in_tok, out_tok)) => {
+                let verdict = analysis.verdict.clone();
+                let method_record = build_method_review_record(
+                    &analysis.review,
+                    unit_id,
+                    sha256_text(&method.source),
+                    &method,
+                );
+                Ok(ReviewOutcome {
+                    index,
+                    method_record: Some(method_record),
+                    verdict: Some(verdict),
+                    in_tok,
+                    out_tok,
+                    cached_in_tok: 0,
+                    retry_on_resume: false,
+                    persisted: false,
+                })
+            }
             Ok((None, _, _)) => Err(format!(
                 "LLM review failed: method {}::{} returned no verdict",
                 method.file_path, method.name
             )),
-            Err(err) if recoverable_method_review_error(&err) => Ok(ReviewOutcome {
-                index,
-                verdict: Some(unresolved_method_verdict(&method, &err)),
-                in_tok: 0,
-                out_tok: 0,
-                cached_in_tok: 0,
-                retry_on_resume: true,
-                persisted: false,
-            }),
+            Err(err) if recoverable_method_review_error(&err) => {
+                let verdict = unresolved_method_verdict(&method, &err);
+                Ok(ReviewOutcome {
+                    index,
+                    method_record: Some(MethodReviewRecord::from_method(
+                        unit_id,
+                        sha256_text(&method.source),
+                        &method,
+                        verdict.clone(),
+                    )),
+                    verdict: Some(verdict),
+                    in_tok: 0,
+                    out_tok: 0,
+                    cached_in_tok: 0,
+                    retry_on_resume: true,
+                    persisted: false,
+                })
+            }
             Err(err) => Err(format!(
                 "LLM review failed: method {}::{}: {}",
                 method.file_path, method.name, err
@@ -614,6 +641,7 @@ async fn run_review_job(
             Ok((verdict, in_tok, out_tok)) => Ok(ReviewOutcome {
                 index,
                 verdict,
+                method_record: None,
                 in_tok,
                 out_tok,
                 cached_in_tok: 0,
@@ -645,11 +673,18 @@ fn unresolved_batch_outcomes(
             let error = format!(
                 "AI batch review could not be validated after targeted repair: {batch_error}"
             );
+            let verdict = unresolved_method_verdict(&item.method, &error);
             (
-                key,
+                key.clone(),
                 ReviewOutcome {
                     index,
-                    verdict: Some(unresolved_method_verdict(&item.method, &error)),
+                    method_record: Some(MethodReviewRecord::from_method(
+                        key.clone(),
+                        sha256_text(&item.method.source),
+                        &item.method,
+                        verdict.clone(),
+                    )),
+                    verdict: Some(verdict),
                     in_tok: 0,
                     out_tok: 0,
                     cached_in_tok: 0,
@@ -706,55 +741,78 @@ async fn run_review_unit_untracked(
     let mut pending_batches = VecDeque::from([(keys, indices, methods)]);
     let mut completed = Vec::new();
     while let Some((mut keys, mut indices, mut methods)) = pending_batches.pop_front() {
+        let method_metadata = Arc::new(
+            methods
+                .iter()
+                .map(|item| item.method.clone())
+                .collect::<Vec<_>>(),
+        );
         let completion_count = Arc::new(AtomicUsize::new(0));
         let batch_completion = on_item_completed.map(|callback| {
             let callback = Arc::clone(callback);
+            let method_metadata = Arc::clone(&method_metadata);
             let completion_count = Arc::clone(&completion_count);
             let completion_keys = keys.clone();
             let completion_indices = indices.clone();
-            Arc::new(move |position: usize, verdict: &LLMVerdict| {
-                let key = completion_keys
-                    .get(position)
-                    .ok_or_else(|| format!("batch completed unknown method position {position}"))?;
-                let index = *completion_indices
-                    .get(position)
-                    .ok_or_else(|| format!("batch completed unknown method position {position}"))?;
-                let outcome = ReviewOutcome {
-                    index,
-                    verdict: Some(verdict.clone()),
-                    in_tok: 0,
-                    out_tok: 0,
-                    cached_in_tok: 0,
-                    retry_on_resume: verdict.tier == FindingTier::Unresolved
-                        && verdict
-                            .reason
-                            .starts_with("AI review could not be validated."),
-                    persisted: true,
-                };
-                callback(key, &outcome)?;
-                completion_count.fetch_add(1, Ordering::SeqCst);
-                Ok(())
-            }) as super::method_batch_review::BatchCompletionCallback
+            Arc::new(
+                move |position: usize,
+                      verdict: &LLMVerdict,
+                      review: &super::verdicts::SemanticMethodReview| {
+                    let key = completion_keys.get(position).ok_or_else(|| {
+                        format!("batch completed unknown method position {position}")
+                    })?;
+                    let index = *completion_indices.get(position).ok_or_else(|| {
+                        format!("batch completed unknown method position {position}")
+                    })?;
+                    let outcome = ReviewOutcome {
+                        index,
+                        method_record: Some(build_method_review_record(
+                            review,
+                            key.clone(),
+                            sha256_text(&method_metadata[position].source),
+                            &method_metadata[position],
+                        )),
+                        verdict: Some(verdict.clone()),
+                        in_tok: 0,
+                        out_tok: 0,
+                        cached_in_tok: 0,
+                        retry_on_resume: verdict.tier == FindingTier::Unresolved
+                            && verdict
+                                .reason
+                                .starts_with("AI review could not be validated."),
+                        persisted: true,
+                    };
+                    callback(key, &outcome)?;
+                    completion_count.fetch_add(1, Ordering::SeqCst);
+                    Ok(())
+                },
+            ) as super::method_batch_review::BatchCompletionCallback
         });
         match analyzer
             .analyze_method_review_batch(&methods, on_progress, on_usage, batch_completion.as_ref())
             .await
         {
-            Ok((verdicts, _, _)) => {
-                if verdicts.len() != methods.len() {
+            Ok((reviews, _, _)) => {
+                if reviews.len() != methods.len() {
                     return Err(format!(
                         "method batch returned {} verdicts for {} methods",
-                        verdicts.len(),
+                        reviews.len(),
                         methods.len()
                     ));
                 }
                 let persisted = batch_completion.is_some();
-                completed.extend(keys.into_iter().zip(indices).zip(verdicts).map(
-                    |((key, index), verdict)| {
+                completed.extend(keys.into_iter().zip(indices).zip(methods).zip(reviews).map(
+                    |(((key, index), method), (verdict, review))| {
                         (
-                            key,
+                            key.clone(),
                             ReviewOutcome {
                                 index,
+                                method_record: Some(build_method_review_record(
+                                    &review,
+                                    key.clone(),
+                                    sha256_text(&method.method.source),
+                                    &method.method,
+                                )),
                                 retry_on_resume: verdict.tier == FindingTier::Unresolved
                                     && verdict
                                         .reason
@@ -883,6 +941,62 @@ fn unresolved_method_verdict(method: &MethodRecord, error: &str) -> LLMVerdict {
     }
 }
 
+fn validate_method_coverage(
+    expected_methods: &HashMap<String, (MethodRecord, String)>,
+    outcomes: &[ReviewOutcome],
+) -> Result<(), String> {
+    let mut seen_methods = HashSet::with_capacity(expected_methods.len());
+    for outcome in outcomes {
+        let Some(verdict) = outcome.verdict.as_ref() else {
+            continue;
+        };
+        if verdict.check_type != "method" {
+            continue;
+        }
+        let Some(record) = outcome.method_record.as_ref() else {
+            return Err(format!(
+                "method review {} produced a verdict without a durable method record",
+                verdict.method_name.as_deref().unwrap_or("<unnamed>")
+            ));
+        };
+        let Some((method, source_hash)) = expected_methods.get(&record.unit_id) else {
+            return Err(format!(
+                "method review produced a record for an unknown unit {}",
+                record.unit_id
+            ));
+        };
+        if !record.matches_method(&record.unit_id, source_hash, method)
+            || record.verdict != *verdict
+        {
+            return Err(format!(
+                "method review record does not match its source identity for {}::{}",
+                method.file_path, method.name
+            ));
+        }
+        if !seen_methods.insert(record.unit_id.clone()) {
+            return Err(format!(
+                "method review produced duplicate durable record {}",
+                record.unit_id
+            ));
+        }
+    }
+    let missing = expected_methods
+        .keys()
+        .filter(|unit_id| !seen_methods.contains(*unit_id))
+        .cloned()
+        .collect::<Vec<_>>();
+    if !missing.is_empty() {
+        return Err(format!(
+            "method review coverage incomplete: {} of {} eligible methods have durable records; missing {}",
+            seen_methods.len(),
+            expected_methods.len(),
+            missing.join(", ")
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
 pub(super) async fn run_review_jobs(
     analyzer: Arc<Analyzer>,
     jobs: Vec<ReviewJob>,
@@ -892,6 +1006,37 @@ pub(super) async fn run_review_jobs(
     scan_id: Option<&str>,
     budget_usd: Option<f64>,
 ) -> Result<Vec<LLMVerdict>, String> {
+    Ok(run_review_jobs_with_records(
+        analyzer,
+        jobs,
+        on_progress,
+        review_context_key,
+        journal_path,
+        scan_id,
+        budget_usd,
+    )
+    .await?
+    .verdicts)
+}
+
+pub(super) async fn run_review_jobs_with_records(
+    analyzer: Arc<Analyzer>,
+    jobs: Vec<ReviewJob>,
+    on_progress: Option<ReviewProgressCallback>,
+    review_context_key: &str,
+    journal_path: Option<&Path>,
+    scan_id: Option<&str>,
+    budget_usd: Option<f64>,
+) -> Result<ReviewJobResult, String> {
+    let expected_methods = jobs
+        .iter()
+        .filter_map(|job| match job {
+            ReviewJob::Method { method, .. } => {
+                Some((job.journal_unit_id(), (method.clone(), job.source_hash())))
+            }
+            ReviewJob::File { .. } => None,
+        })
+        .collect::<HashMap<_, _>>();
     let semantic_index_hash = semantic_index_hash(&jobs);
     let source_hashes = jobs
         .iter()
@@ -944,7 +1089,12 @@ pub(super) async fn run_review_jobs(
         if let Some(entry) = journal
             .as_ref()
             .and_then(|store| store.completed.get(&journal_unit_id))
-            .filter(|entry| journal_entry_is_reusable(entry))
+            .filter(|entry| {
+                journal_entry_is_reusable(entry)
+                    && source_hashes
+                        .get(&journal_unit_id)
+                        .is_some_and(|source_hash| entry.source_hash == *source_hash)
+            })
             .cloned()
         {
             let is_current_scan = journal
@@ -957,11 +1107,16 @@ pub(super) async fn run_review_jobs(
                 journal
                     .as_mut()
                     .expect("cached journal entry requires a store")
+                    .record_cross_scan_reuse(&journal_unit_id, source_hash)?;
+                journal
+                    .as_mut()
+                    .expect("cached journal entry requires a store")
                     .record(
                         journal_unit_id.clone(),
                         source_hash.clone(),
                         JournalCompletion {
                             verdict: entry.verdict.clone(),
+                            method_record: entry.method_record.clone(),
                             in_tok: 0,
                             out_tok: 0,
                             cached_in_tok: 0,
@@ -972,6 +1127,7 @@ pub(super) async fn run_review_jobs(
             outcomes.push(ReviewOutcome {
                 index,
                 verdict: entry.verdict.clone(),
+                method_record: entry.method_record.clone(),
                 in_tok: 0,
                 out_tok: 0,
                 cached_in_tok: 0,
@@ -1012,6 +1168,7 @@ pub(super) async fn run_review_jobs(
                         source_hash.clone(),
                         JournalCompletion {
                             verdict: outcome.verdict.clone(),
+                            method_record: outcome.method_record.clone(),
                             in_tok: outcome.in_tok,
                             out_tok: outcome.out_tok,
                             cached_in_tok: outcome.cached_in_tok,
@@ -1123,11 +1280,23 @@ pub(super) async fn run_review_jobs(
             .map(|(_, outcome)| outcome),
     );
 
+    validate_method_coverage(&expected_methods, &outcomes)?;
+
     outcomes.sort_by_key(|outcome| outcome.index);
-    Ok(outcomes
-        .into_iter()
-        .filter_map(|outcome| outcome.verdict)
-        .collect())
+    let mut verdicts = Vec::with_capacity(outcomes.len());
+    let mut method_records = Vec::with_capacity(expected_methods.len());
+    for outcome in outcomes {
+        if let Some(verdict) = outcome.verdict {
+            verdicts.push(verdict);
+        }
+        if let Some(record) = outcome.method_record {
+            method_records.push(record);
+        }
+    }
+    Ok(ReviewJobResult {
+        verdicts,
+        method_records,
+    })
 }
 
 #[cfg(test)]

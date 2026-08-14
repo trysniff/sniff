@@ -1,6 +1,7 @@
 use crate::report_types::{LLMVerdict, RunReport};
 use crate::types::FindingTier;
 use std::io::Write;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::summary::append_footer;
 
@@ -10,6 +11,7 @@ pub(super) fn write_markdown_report(
     cost_str: &str,
 ) -> Result<(), String> {
     validate_method_report_contract(run_report)?;
+    validate_case_report_contract(run_report)?;
     let mut md_lines = vec!["# Sniff Report".to_string(), "".to_string()];
     let method_verdicts = run_report
         .llm_verdicts
@@ -19,15 +21,15 @@ pub(super) fn write_markdown_report(
     if method_verdicts.is_empty() && run_report.stats.method_reviews_expected == 0 {
         render_file_only_findings(run_report, &mut md_lines);
     } else {
-        render_method_tier(
-            &method_verdicts,
+        render_case_tier(
+            &run_report.slop_cases,
             FindingTier::Slop,
             "Slop Findings",
             None,
             &mut md_lines,
         );
-        render_method_tier(
-            &method_verdicts,
+        render_case_tier(
+            &run_report.slop_cases,
             FindingTier::KindaSlop,
             "Kinda Slop Findings",
             Some("_These are proven unnecessary, local or minor sources of friction._"),
@@ -40,8 +42,10 @@ pub(super) fn write_markdown_report(
             Some(
                 "_The evidence ladder could not establish a trustworthy verdict. Do not edit from these entries._",
             ),
+            &run_report.slop_cases,
             &mut md_lines,
         );
+        render_unresolved_synthesis_cases(run_report, &mut md_lines);
     }
     append_footer(
         &mut md_lines,
@@ -49,11 +53,233 @@ pub(super) fn write_markdown_report(
         &run_report.llm_verdicts,
         cost_str,
     );
-    let mut f = std::fs::File::create(out_path)
-        .map_err(|err| format!("failed to create report file {out_path}: {}", err))?;
-    f.write_all(md_lines.join("\n").as_bytes())
-        .map_err(|err| format!("failed to write report file {out_path}: {}", err))?;
+    write_report_atomically(
+        std::path::Path::new(out_path),
+        md_lines.join("\n").as_bytes(),
+    )
+}
+
+fn write_report_atomically(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> {
+    static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
+    let parent = path.parent().unwrap_or_else(|| std::path::Path::new("."));
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("sniff-report.md");
+    let temp = parent.join(format!(
+        ".{name}.{}.{}.tmp",
+        std::process::id(),
+        NEXT_TEMP.fetch_add(1, Ordering::Relaxed)
+    ));
+    let result = (|| {
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp)
+            .map_err(|error| {
+                format!(
+                    "failed to create report temporary file {}: {error}",
+                    temp.display()
+                )
+            })?;
+        file.write_all(bytes)
+            .and_then(|_| file.sync_all())
+            .map_err(|error| {
+                format!(
+                    "failed to persist report temporary file {}: {error}",
+                    temp.display()
+                )
+            })?;
+        drop(file);
+        commit_report(&temp, path)
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temp);
+    }
+    result
+}
+
+#[cfg(windows)]
+fn commit_report(temp: &std::path::Path, path: &std::path::Path) -> Result<(), String> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
+    };
+
+    let source = temp
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let destination = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let result = unsafe {
+        MoveFileExW(
+            source.as_ptr(),
+            destination.as_ptr(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    };
+    if result == 0 {
+        return Err(format!(
+            "failed to commit report file {}: {}",
+            path.display(),
+            std::io::Error::last_os_error()
+        ));
+    }
     Ok(())
+}
+
+#[cfg(not(windows))]
+fn commit_report(temp: &std::path::Path, path: &std::path::Path) -> Result<(), String> {
+    std::fs::rename(temp, path)
+        .map_err(|error| format!("failed to commit report file {}: {error}", path.display()))
+}
+
+fn validate_case_report_contract(run_report: &RunReport) -> Result<(), String> {
+    for record in run_report.method_review_records.iter().filter(|record| {
+        matches!(
+            record.verdict.tier,
+            FindingTier::Slop | FindingTier::KindaSlop
+        )
+    }) {
+        let Some(case) = run_report
+            .slop_cases
+            .iter()
+            .find(|case| case.case_id == record.unit_id)
+        else {
+            return Err(format!(
+                "case report gate rejected {}::{}: missing typed case {}",
+                record.file_path, record.method_name, record.unit_id
+            ));
+        };
+        if case.evidence.is_empty()
+            || !crate::slop_cases::case_evidence_matches_record(case, record)
+        {
+            return Err(format!(
+                "case report gate rejected {}::{}: typed case has no exact method evidence",
+                record.file_path, record.method_name
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn render_case_tier(
+    cases: &[crate::slop_cases::SlopCase],
+    tier: FindingTier,
+    heading: &str,
+    note: Option<&str>,
+    md_lines: &mut Vec<String>,
+) {
+    let matching = cases.iter().filter(|case| case.tier == tier);
+    if !cases.iter().any(|case| case.tier == tier) {
+        return;
+    }
+
+    md_lines.push(format!("## {heading}"));
+    md_lines.push(String::new());
+    if let Some(note) = note {
+        md_lines.push(note.to_string());
+        md_lines.push(String::new());
+    }
+    for case in matching {
+        render_case(case, md_lines);
+    }
+}
+
+fn render_case(case: &crate::slop_cases::SlopCase, md_lines: &mut Vec<String>) {
+    let title = if case.affected_units.len() == 1 {
+        case.evidence
+            .first()
+            .map(|evidence| format!("`{}` :: `{}`", evidence.file_path, evidence.method_name))
+            .unwrap_or_else(|| format!("`{}`", case.case_id))
+    } else {
+        format!("`{}`", case.case_id)
+    };
+    md_lines.push(format!("### {title}"));
+    md_lines.push(String::new());
+    md_lines.push(format!("- **Verdict:** `{}`", case.tier.label()));
+    md_lines.push(format!("- **Pattern:** `{}`", case.pattern.as_str()));
+    md_lines.push(format!("- **Proof level:** `{}`", case.proof_level.label()));
+    if let Some(evidence) = case.evidence.first() {
+        md_lines.push(format!(
+            "- **Lines:** `{}-{}`",
+            evidence.start_line, evidence.end_line
+        ));
+    }
+    md_lines.push(format!("- **Mechanism:** {}", case.mechanism));
+    md_lines.push(format!("- **Intent:** {}", case.intent));
+    md_lines.push(format!(
+        "- **Affected methods:** {}",
+        case.affected_units
+            .iter()
+            .map(|unit| format!("`{unit}`"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    ));
+    md_lines.push(format!(
+        "- **Contract boundary:** {}",
+        case.contract_boundary
+    ));
+    md_lines.push(format!("- **Counterfactual:** {}", case.counterfactual));
+    if !case.counterfactual_edits.is_empty() {
+        md_lines.push("- **Syntax-validated counterfactual edits:**".to_string());
+        for edit in &case.counterfactual_edits {
+            md_lines.push(format!(
+                "  - `{}` lines `{}-{}`:",
+                edit.file_path, edit.start_line, edit.end_line
+            ));
+            md_lines.push("    ```text".to_string());
+            md_lines.push(format!("    {}", edit.replacement));
+            md_lines.push("    ```".to_string());
+        }
+    }
+    md_lines.push("- **Exact evidence:**".to_string());
+    for evidence in &case.evidence {
+        md_lines.push(format!(
+            "  - `{}` lines `{}-{}`:",
+            evidence.unit_id, evidence.start_line, evidence.end_line
+        ));
+        md_lines.push("    ```text".to_string());
+        md_lines.push(format!("    {}", evidence.quote));
+        md_lines.push("    ```".to_string());
+    }
+    md_lines.push(String::new());
+}
+
+fn render_unresolved_synthesis_cases(run_report: &RunReport, md_lines: &mut Vec<String>) {
+    let cases = run_report
+        .slop_cases
+        .iter()
+        .filter(|case| {
+            case.tier == FindingTier::Unresolved
+                && case.provenance.iter().any(|source| {
+                    source.starts_with("adversarial_verifier:")
+                        || source.starts_with("counterfactual:")
+                })
+        })
+        .collect::<Vec<_>>();
+    if cases.is_empty() {
+        return;
+    }
+    md_lines.push("## Unresolved Case Reviews".to_string());
+    md_lines.push(String::new());
+    md_lines.push(
+        "_The verifier could not establish that the proposed simplification preserves behavior. These are not findings._".to_string(),
+    );
+    md_lines.push(String::new());
+    for case in cases {
+        md_lines.push(format!(
+            "- `{}`: {}",
+            case.case_id,
+            case.unresolved_assumptions.join("; ")
+        ));
+    }
+    md_lines.push(String::new());
 }
 
 fn validate_method_report_contract(run_report: &RunReport) -> Result<(), String> {
@@ -118,6 +344,7 @@ fn render_method_tier(
     tier: FindingTier,
     heading: &str,
     note: Option<&str>,
+    cases: &[crate::slop_cases::SlopCase],
     md_lines: &mut Vec<String>,
 ) {
     let matching = verdicts
@@ -136,11 +363,15 @@ fn render_method_tier(
         md_lines.push(String::new());
     }
     for verdict in matching {
-        render_method_verdict_markdown(verdict, md_lines);
+        render_method_verdict_markdown(verdict, cases, md_lines);
     }
 }
 
-fn render_method_verdict_markdown(verdict: &LLMVerdict, md_lines: &mut Vec<String>) {
+fn render_method_verdict_markdown(
+    verdict: &LLMVerdict,
+    cases: &[crate::slop_cases::SlopCase],
+    md_lines: &mut Vec<String>,
+) {
     let method_name = verdict.method_name.as_deref().unwrap_or("<unknown>");
     md_lines.push(format!("### `{}` :: `{method_name}`", verdict.file_path));
     md_lines.push(String::new());
@@ -155,6 +386,27 @@ fn render_method_verdict_markdown(verdict: &LLMVerdict, md_lines: &mut Vec<Strin
         md_lines.push("```text".to_string());
         md_lines.push(verdict.evidence.clone());
         md_lines.push("```".to_string());
+    }
+    if let Some(case) = cases.iter().find(|case| {
+        case.affected_units.len() == 1
+            && case.evidence.iter().any(|evidence| {
+                evidence.file_path == verdict.file_path
+                    && evidence.method_name == method_name
+                    && evidence.start_line == verdict.start_line
+                    && evidence.end_line == verdict.end_line
+            })
+    }) && !case.counterfactual_edits.is_empty()
+    {
+        md_lines.push("- **Syntax-validated counterfactual edits:**".to_string());
+        for edit in &case.counterfactual_edits {
+            md_lines.push(format!(
+                "  - `{}` lines `{}-{}`:",
+                edit.file_path, edit.start_line, edit.end_line
+            ));
+            md_lines.push("    ```text".to_string());
+            md_lines.push(format!("    {}", edit.replacement));
+            md_lines.push("    ```".to_string());
+        }
     }
     md_lines.push(String::new());
 }
@@ -242,7 +494,9 @@ pub(super) fn render_file_verdict_markdown(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::product_contract::SlopPattern;
     use crate::report_types::{FileVerdict, LLMVerdict, RunReport, RunStats};
+    use crate::slop_cases::{ProofLevel, SlopCase};
     use crate::types::FindingTier;
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -300,6 +554,8 @@ mod tests {
             ],
             static_flags: vec![],
             llm_verdicts: vec![],
+            method_review_records: vec![],
+            slop_cases: vec![],
             stats: RunStats {
                 files_scanned: 2,
                 methods_analyzed: 2,
@@ -319,11 +575,45 @@ mod tests {
     }
 
     #[test]
+    fn markdown_report_atomically_replaces_an_existing_report() {
+        let report = RunReport {
+            file_verdicts: vec![verdict("fresh.rs", FindingTier::Slop)],
+            static_flags: vec![],
+            llm_verdicts: vec![],
+            method_review_records: vec![],
+            slop_cases: vec![],
+            stats: RunStats::default(),
+        };
+        let out_path = temp_report_path();
+        fs::write(&out_path, "stale report").unwrap();
+
+        write_markdown_report(&report, &out_path, "$0.00").unwrap();
+
+        let path = std::path::Path::new(&out_path);
+        let md = fs::read_to_string(path).unwrap();
+        let parent = path.parent().unwrap();
+        let name = path.file_name().unwrap().to_string_lossy();
+        assert!(md.contains("fresh.rs"));
+        assert!(!md.contains("stale report"));
+        assert!(!fs::read_dir(parent).unwrap().any(|entry| {
+            entry.ok().is_some_and(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(&format!(".{name}."))
+            })
+        }));
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
     fn markdown_report_does_not_turn_unresolved_into_edit_advice() {
         let report = RunReport {
             file_verdicts: vec![verdict("unknown.rs", FindingTier::Unresolved)],
             static_flags: vec![],
             llm_verdicts: vec![],
+            method_review_records: vec![],
+            slop_cases: vec![],
             stats: RunStats {
                 files_scanned: 1,
                 methods_analyzed: 1,
@@ -343,11 +633,74 @@ mod tests {
     }
 
     #[test]
+    fn markdown_report_separates_unresolved_adjudicated_cases() {
+        let report = RunReport {
+            file_verdicts: vec![],
+            static_flags: vec![],
+            llm_verdicts: vec![method_verdict(FindingTier::Clean)],
+            method_review_records: vec![],
+            slop_cases: vec![SlopCase {
+                case_id: "case-maybe".to_string(),
+                tier: FindingTier::Unresolved,
+                pattern: SlopPattern::None,
+                mechanism: "Possible ceremony".to_string(),
+                intent: "Unknown".to_string(),
+                evidence: vec![],
+                affected_units: vec!["unit-maybe".to_string()],
+                contract_boundary: "Unknown".to_string(),
+                counterfactual: "Unknown".to_string(),
+                counterfactual_edits: Vec::new(),
+                proof_level: ProofLevel::P0SourceReasoning,
+                unresolved_assumptions: vec!["External contract is unknown".to_string()],
+                provenance: vec!["adversarial_verifier:unresolved".to_string()],
+            }],
+            stats: RunStats {
+                method_reviews_expected: 1,
+                method_reviews_completed: 1,
+                ..RunStats::default()
+            },
+        };
+        let out_path = temp_report_path();
+
+        write_markdown_report(&report, &out_path, "$0.00").unwrap();
+        let md = fs::read_to_string(&out_path).unwrap();
+        let _ = fs::remove_file(&out_path);
+
+        assert!(md.contains("## Unresolved Case Reviews"));
+        assert!(md.contains("case-maybe"));
+        assert!(md.contains("These are not findings"));
+        assert!(!md.contains("## Cross-Method Slop Cases"));
+    }
+
+    #[test]
     fn markdown_report_renders_each_method_with_its_proof() {
         let report = RunReport {
             file_verdicts: vec![verdict("src/demo.py", FindingTier::Slop)],
             static_flags: vec![],
             llm_verdicts: vec![method_verdict(FindingTier::Slop)],
+            method_review_records: vec![],
+            slop_cases: vec![SlopCase {
+                case_id: "unit-demo".to_string(),
+                tier: FindingTier::Slop,
+                pattern: SlopPattern::CeremonialLogic,
+                mechanism: "The branch adds no distinct behavior.".to_string(),
+                intent: "Return the value.".to_string(),
+                evidence: vec![crate::slop_cases::CaseEvidence {
+                    unit_id: "unit-demo".to_string(),
+                    file_path: "src/demo.py".to_string(),
+                    method_name: "demo".to_string(),
+                    start_line: 10,
+                    end_line: 12,
+                    quote: "if enabled:\n    return value".to_string(),
+                }],
+                affected_units: vec!["unit-demo".to_string()],
+                contract_boundary: "The signature and behavior stay unchanged.".to_string(),
+                counterfactual: "Return value directly.".to_string(),
+                counterfactual_edits: Vec::new(),
+                proof_level: ProofLevel::P0SourceReasoning,
+                unresolved_assumptions: Vec::new(),
+                provenance: vec!["method:src/demo.py:demo:10-12".to_string()],
+            }],
             stats: RunStats {
                 files_scanned: 1,
                 methods_analyzed: 1,
@@ -365,7 +718,7 @@ mod tests {
         assert!(md.contains("## Slop Findings"));
         assert!(md.contains("`src/demo.py` :: `demo`"));
         assert!(md.contains("**Lines:** `10-12`"));
-        assert!(md.contains("Simplification: return value directly"));
+        assert!(md.contains("**Counterfactual:** Return value directly."));
         assert!(md.contains("if enabled:"));
     }
 
@@ -377,6 +730,8 @@ mod tests {
             file_verdicts: vec![],
             static_flags: vec![],
             llm_verdicts: vec![unproven],
+            method_review_records: vec![],
+            slop_cases: vec![],
             stats: RunStats {
                 method_reviews_expected: 1,
                 ..RunStats::default()

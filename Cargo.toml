@@ -12,20 +12,20 @@ keywords = ["code-analysis", "ai", "slop", "developer-tools"]
 categories = ["command-line-utilities", "development-tools"]
 
 include = [
-  "assets/**",
-  "case-studies/**",
-  "CHANGELOG.md",
-  "Cargo.lock",
-  "LICENSE",
-  "README.md",
-  "SECURITY.md",
-  "TRADEMARKS.md",
-  "gold_fixtures/**",
-  "scripts/**",
-  "src/*.rs",
-  "src/**/*.rs",
-  "tests/**",
-  "sniff.config.toml",
+  "/assets/**",
+  "/case-studies/**",
+  "/CHANGELOG.md",
+  "/Cargo.lock",
+  "/LICENSE",
+  "/README.md",
+  "/SECURITY.md",
+  "/TRADEMARKS.md",
+  "/gold_fixtures/**",
+  "/scripts/**",
+  "/src/*.rs",
+  "/src/**/*.rs",
+  "/tests/**",
+  "/sniff.config.toml",
 ]
 
 [lib]
@@ -40,9 +40,11 @@ path = "src/main.rs"
 clap = { version = "4", features = ["derive"] }
 colored = "2"
 dotenvy = "0.15"
+flate2 = "1"
 ignore = "0.4"
 indicatif = "0.17"
-reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-native-roots"] }
+regex = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
@@ -50,6 +52,7 @@ tokio = { version = "1", features = ["full"] }
 toml = "0.8"
 tree-sitter = "0.22"
 tree-sitter-go = "0.21"
+zip = { version = "2", default-features = false, features = ["deflate"] }
 tree-sitter-kotlin = { package = "tree-sitter-kotlin-ng", version = "1.1.0" }
 oxc_allocator = "0.13"
 oxc_parser = "0.13"
@@ -62,3 +65,21 @@ syn = { version = "2.0.118", features = ["full", "visit"] }
 proc-macro2 = { version = "1.0.106", features = ["span-locations"] }
 protobuf = "=3.7.2"
 scip = "=0.9.0"
+
+[dev-dependencies]
+tempfile = "3"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = [
+  "Win32_Foundation",
+  "Win32_Security",
+  "Win32_Security_Authorization",
+  "Win32_Security_Isolation",
+  "Win32_Storage_FileSystem",
+  "Win32_System_JobObjects",
+  "Win32_System_Pipes",
+  "Win32_System_Threading",
+] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

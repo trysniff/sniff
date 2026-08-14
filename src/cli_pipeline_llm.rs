@@ -1,7 +1,8 @@
 use crate::analyzer::{ReviewProgress, ReviewProgressCallback};
 use crate::config::ResolvedConfig;
 use crate::llm::LLMClient;
-use crate::report_types::{LLMVerdict, StaticFlag};
+use crate::report_types::{LLMVerdict, MethodReviewRecord, StaticFlag};
+use crate::slop_cases::SlopCase;
 use crate::types::FileRecord;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use std::collections::HashSet;
@@ -24,6 +25,23 @@ pub(super) struct LlmCheckInput<'a> {
     pub(super) journal_path: Option<&'a Path>,
     pub(super) scan_id: Option<&'a str>,
     pub(super) budget_usd: Option<f64>,
+    pub(super) compiler_method_contexts:
+        Option<&'a crate::semantic_method_join::CompilerMethodContexts>,
+    pub(super) repository_root: &'a Path,
+    pub(super) proof_test_command: Option<&'a [String]>,
+    pub(super) proof_differential_command: Option<&'a [String]>,
+}
+
+pub(super) struct ReviewExecutionContext<'a> {
+    pub(super) bar_style: &'a ProgressStyle,
+    pub(super) journal_path: Option<&'a Path>,
+    pub(super) semantic_cache: &'a crate::semantic_cache::SemanticIndexCache,
+    pub(super) budget_usd: Option<f64>,
+    pub(super) compiler_method_contexts:
+        Option<&'a crate::semantic_method_join::CompilerMethodContexts>,
+    pub(super) repository_root: &'a Path,
+    pub(super) proof_test_command: Option<&'a [String]>,
+    pub(super) proof_differential_command: Option<&'a [String]>,
 }
 
 const MAX_PROGRESS_LABEL_CHARS: usize = 76;
@@ -43,11 +61,25 @@ fn compact_progress_label(label: &str) -> String {
 
 pub(super) async fn run_llm_checks(
     input: LlmCheckInput<'_>,
-) -> Result<(Vec<LLMVerdict>, usize, usize, usize), String> {
+) -> Result<
+    (
+        Vec<LLMVerdict>,
+        Vec<MethodReviewRecord>,
+        Vec<SlopCase>,
+        Vec<SlopCase>,
+        usize,
+        usize,
+        usize,
+    ),
+    String,
+> {
     let method_total = super::stats::expected_method_reviews(input.file_records);
     let llm_total = method_total;
     if llm_total == 0 {
         return Ok((
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
             Vec::new(),
             input.role_input_tokens,
             input.role_output_tokens,
@@ -91,28 +123,129 @@ pub(super) async fn run_llm_checks(
     });
 
     let usage_client = Arc::clone(&client);
-    let result = crate::analyzer::analyze_with_client_and_graph_and_journal_with_context(
-        crate::analyzer::AnalysisRun {
-            file_records: input.file_records,
-            context_file_records: input.context_file_records,
-            static_flags: input.static_flags,
-            with_file_reviews: false,
-            graph: Some(input.graph),
+    let result =
+        crate::analyzer::analyze_with_client_and_graph_and_journal_with_context_and_records(
+            crate::analyzer::AnalysisRun {
+                file_records: input.file_records,
+                context_file_records: input.context_file_records,
+                static_flags: input.static_flags,
+                with_file_reviews: false,
+                graph: Some(input.graph),
+                journal_path: input.journal_path,
+                scan_id: input.scan_id,
+                budget_usd: input.budget_usd,
+                compiler_method_contexts: input.compiler_method_contexts,
+            },
+            Arc::clone(&client),
+            Some(on_progress),
+        )
+        .await;
+    status_line.finish_and_clear();
+    pb_llm.finish_and_clear();
+    let (analysis, in_tok, out_tok) = result?;
+    let graph_facts = crate::synthesis::build_graph_facts_with_compiler(
+        &analysis.method_records,
+        input.graph,
+        input.compiler_method_contexts,
+    );
+    let synthesis = crate::synthesis::run_synthesis(
+        &analysis.method_records,
+        &graph_facts,
+        Arc::clone(&client),
+        input.journal_path,
+        input.scan_id,
+        input.budget_usd,
+    )
+    .await?;
+    let adjudication = crate::synthesis::run_case_adjudication(
+        &synthesis.cases,
+        &analysis.method_records,
+        &graph_facts,
+        Arc::clone(&client),
+        input.journal_path,
+        input.scan_id,
+        input.budget_usd,
+    )
+    .await?;
+    let method_cases = crate::slop_cases::seed_method_cases(&analysis.method_records);
+    let method_case_ids = method_cases
+        .iter()
+        .map(|case| case.case_id.clone())
+        .collect::<HashSet<_>>();
+    let mut proof_input = method_cases.clone();
+    proof_input.extend(adjudication.cases);
+    proof_input = crate::slop_cases::deduplicate_cases(proof_input)?;
+    let proof = crate::counterfactual::run_counterfactual_proof_with_context(
+        &proof_input,
+        input.context_file_records,
+        Arc::clone(&client),
+        crate::counterfactual::CounterfactualRunContext {
             journal_path: input.journal_path,
             scan_id: input.scan_id,
             budget_usd: input.budget_usd,
+            compiler_contexts: input.compiler_method_contexts,
+            repository_context: Some(crate::repository_proof::RepositoryProofContext {
+                repository_root: input.repository_root,
+                test_command: input.proof_test_command,
+                differential_command: input.proof_differential_command,
+            }),
         },
-        client,
-        Some(on_progress),
     )
-    .await;
-    status_line.finish_and_clear();
-    pb_llm.finish_and_clear();
-    let (verdicts, in_tok, out_tok) = result?;
+    .await?;
+    let mut verdicts = analysis.verdicts;
+    let mut method_records = analysis.method_records;
+    let proofed_method_cases = proof
+        .cases
+        .iter()
+        .filter(|case| method_case_ids.contains(&case.case_id))
+        .cloned()
+        .collect::<Vec<_>>();
+    for case in &proofed_method_cases {
+        if case.tier != crate::types::FindingTier::Unresolved {
+            continue;
+        }
+        if let Some(record) = method_records
+            .iter_mut()
+            .find(|record| record.unit_id == case.case_id)
+        {
+            record.verdict.tier = crate::types::FindingTier::Unresolved;
+            record.verdict.smelly = false;
+            record.verdict.reason = format!(
+                "Missing evidence: counterfactual preservation could not be established: {}",
+                case.unresolved_assumptions.join("; ")
+            );
+            if let Some(verdict) = verdicts.iter_mut().find(|verdict| {
+                verdict.file_path == record.file_path
+                    && verdict.method_name.as_deref() == Some(record.method_name.as_str())
+                    && verdict.start_line == record.start_line
+                    && verdict.end_line == record.end_line
+            }) {
+                verdict.tier = crate::types::FindingTier::Unresolved;
+                verdict.smelly = false;
+                verdict.reason = record.verdict.reason.clone();
+            }
+        }
+    }
+    let synthesis_cases = proof
+        .cases
+        .into_iter()
+        .filter(|case| !method_case_ids.contains(&case.case_id))
+        .collect();
     Ok((
         verdicts,
-        in_tok + input.role_input_tokens,
-        out_tok + input.role_output_tokens,
+        method_records,
+        proofed_method_cases,
+        synthesis_cases,
+        in_tok
+            + input.role_input_tokens
+            + synthesis.input_tokens
+            + adjudication.input_tokens
+            + proof.input_tokens,
+        out_tok
+            + input.role_output_tokens
+            + synthesis.output_tokens
+            + adjudication.output_tokens
+            + proof.output_tokens,
         usage_client.cached_input_tokens(),
     ))
 }
@@ -120,11 +253,18 @@ pub(super) async fn run_llm_checks(
 pub(super) struct ReviewArtifacts {
     pub(super) static_flags: Vec<StaticFlag>,
     pub(super) verdicts: Vec<LLMVerdict>,
+    pub(super) method_records: Vec<MethodReviewRecord>,
+    pub(super) method_cases: Vec<SlopCase>,
+    pub(super) synthesis_cases: Vec<SlopCase>,
     pub(super) in_tok: usize,
     pub(super) out_tok: usize,
     pub(super) cached_in_tok: usize,
     pub(super) ai_expected_reviews: usize,
     pub(super) method_reviews_expected: usize,
+    pub(super) estimated_cost_usd: f64,
+    pub(super) pricing_snapshots: Vec<crate::pricing::PricingRates>,
+    pub(super) pricing_provenance_complete: bool,
+    pub(super) context_file_records: Vec<FileRecord>,
 }
 
 fn ensure_ai_path(
@@ -214,10 +354,7 @@ pub(super) async fn prepare_review_artifacts(
     path: &str,
     config: &ResolvedConfig,
     file_records: &mut [FileRecord],
-    bar_style: &ProgressStyle,
-    journal_path: Option<&Path>,
-    semantic_cache: &crate::semantic_cache::SemanticIndexCache,
-    budget_usd: Option<f64>,
+    execution: ReviewExecutionContext<'_>,
 ) -> Result<ReviewArtifacts, Box<dyn std::error::Error>> {
     let ai_expected_reviews_before_roles =
         super::stats::expected_ai_reviews_after_role_resolution(file_records);
@@ -232,12 +369,26 @@ pub(super) async fn prepare_review_artifacts(
         path,
         config,
     )?;
-    let scan_id = llm_client
-        .as_ref()
-        .map(|client| crate::review_journal::scan_id(file_records, &client.review_context_key()));
-    if let (Some(journal_path), Some(scan_id), Some(client)) =
-        (journal_path, scan_id.as_deref(), llm_client.as_ref())
-    {
+    let production_paths = file_records
+        .iter()
+        .map(|file| file.file_path.clone())
+        .collect::<HashSet<_>>();
+    let (context_root, mut evidence_records) =
+        super::io::scan_context_files_with_cache(path, config, Some(execution.semantic_cache))
+            .await
+            .map_err(IoError::other)?;
+    evidence_records.retain(|file| !production_paths.contains(&file.file_path));
+    let mut context_file_records = file_records.to_vec();
+    context_file_records.extend(evidence_records.iter().cloned());
+    crate::source_privacy::reject_likely_secrets(&context_file_records).map_err(IoError::other)?;
+    let scan_id = llm_client.as_ref().map(|client| {
+        crate::review_journal::scan_id(&context_file_records, &client.review_context_key())
+    });
+    if let (Some(journal_path), Some(scan_id), Some(client)) = (
+        execution.journal_path,
+        scan_id.as_deref(),
+        llm_client.as_ref(),
+    ) {
         crate::review_journal::initialize_method_stage(
             journal_path,
             scan_id,
@@ -251,63 +402,85 @@ pub(super) async fn prepare_review_artifacts(
     let (role_in_tok, role_out_tok, llm_client) = resolve_roles(
         file_records,
         llm_client_for_roles,
-        journal_path,
+        execution.journal_path,
         scan_id.as_deref(),
-        budget_usd,
+        execution.budget_usd,
     )
     .await
     .map_err(IoError::other)?;
 
     let ai_expected_reviews = super::stats::expected_ai_reviews_after_role_resolution(file_records);
 
-    let production_paths = file_records
-        .iter()
-        .map(|file| file.file_path.clone())
-        .collect::<HashSet<_>>();
-    let (context_root, mut evidence_records) =
-        super::io::scan_context_files_with_cache(path, config, Some(semantic_cache))
-            .await
-            .map_err(IoError::other)?;
-    evidence_records.retain(|file| !production_paths.contains(&file.file_path));
     let (static_flags, graph) = super::graph::build_static_flags(
         file_records,
         &evidence_records,
         &context_root.to_string_lossy(),
         config,
-        Some(semantic_cache),
+        Some(execution.semantic_cache),
     )
     .map_err(IoError::other)?;
-    let mut context_file_records = file_records.to_vec();
-    context_file_records.extend(evidence_records);
     let review_result = run_llm_checks(LlmCheckInput {
         file_records,
         context_file_records: &context_file_records,
         static_flags: &static_flags,
         graph: &graph,
-        bar_style: bar_style.clone(),
+        bar_style: execution.bar_style.clone(),
         llm_client,
         role_input_tokens: role_in_tok,
         role_output_tokens: role_out_tok,
-        journal_path,
+        journal_path: execution.journal_path,
         scan_id: scan_id.as_deref(),
-        budget_usd,
+        budget_usd: execution.budget_usd,
+        compiler_method_contexts: execution.compiler_method_contexts,
+        repository_root: execution.repository_root,
+        proof_test_command: execution.proof_test_command,
+        proof_differential_command: execution.proof_differential_command,
     })
     .await
     .map_err(IoError::other);
 
-    let (verdicts, fallback_in_tok, fallback_out_tok, fallback_cached_in_tok) = review_result?;
-    let journal_usage = journal_path
+    let (
+        verdicts,
+        method_records,
+        method_cases,
+        synthesis_cases,
+        fallback_in_tok,
+        fallback_out_tok,
+        fallback_cached_in_tok,
+    ) = review_result?;
+    let journal_usage = execution
+        .journal_path
         .map(crate::review_journal::summarize)
         .transpose()
         .map_err(IoError::other)?
         .filter(|summary| summary.scan_id.as_deref() == scan_id.as_deref());
-    let (in_tok, out_tok, cached_in_tok) = journal_usage.map_or(
-        (fallback_in_tok, fallback_out_tok, fallback_cached_in_tok),
+    let fallback_rates = crate::pricing::PricingRates::from_env();
+    let fallback_cost =
+        fallback_rates.cost(fallback_in_tok, fallback_cached_in_tok, fallback_out_tok);
+    let (
+        in_tok,
+        out_tok,
+        cached_in_tok,
+        estimated_cost_usd,
+        pricing_snapshots,
+        pricing_provenance_complete,
+    ) = journal_usage.map_or(
+        (
+            fallback_in_tok,
+            fallback_out_tok,
+            fallback_cached_in_tok,
+            fallback_cost,
+            vec![fallback_rates],
+            true,
+        ),
         |summary| {
             (
                 summary.input_tokens,
                 summary.output_tokens,
                 summary.cached_input_tokens,
+                summary.estimated_cost_usd,
+                summary.pricing_snapshots,
+                summary.pricing_provenance_complete,
             )
         },
     );
@@ -315,11 +488,18 @@ pub(super) async fn prepare_review_artifacts(
     Ok(ReviewArtifacts {
         static_flags,
         verdicts,
+        method_records,
+        method_cases,
+        synthesis_cases,
         in_tok,
         out_tok,
         cached_in_tok,
         ai_expected_reviews,
         method_reviews_expected: super::stats::expected_method_reviews(file_records),
+        estimated_cost_usd,
+        pricing_snapshots,
+        pricing_provenance_complete,
+        context_file_records,
     })
 }
 

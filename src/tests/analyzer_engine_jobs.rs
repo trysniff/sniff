@@ -4,13 +4,13 @@ use super::super::journal::{JournalCompletion, JournalStore, sha256_text};
 use super::{
     ReviewJob, ReviewOutcome, group_pending_reviews, recoverable_method_review_error,
     run_bounded_review_tasks, run_bounded_review_tasks_keyed, run_bounded_review_tasks_keyed_until,
-    run_review_jobs, semantic_index_hash, unresolved_method_verdict,
+    run_review_jobs, semantic_index_hash, unresolved_method_verdict, validate_method_coverage,
 };
 use crate::config::ResolvedConfig;
 use crate::llm::LLMClient;
-use crate::report_types::LLMVerdict;
+use crate::report_types::{LLMVerdict, MethodReviewRecord};
 use crate::types::{FindingTier, MethodRecord};
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -47,6 +47,13 @@ fn method_job(source: &str) -> ReviewJob {
     }
 }
 
+fn durable_record(job: &ReviewJob, key: &str, verdict: &LLMVerdict) -> MethodReviewRecord {
+    let ReviewJob::Method { method, .. } = job else {
+        panic!("test durable records require a method job");
+    };
+    MethodReviewRecord::from_method(key, sha256_text(&method.source), method, verdict.clone())
+}
+
 fn temp_journal_path() -> std::path::PathBuf {
     static NEXT_CHECKPOINT: AtomicUsize = AtomicUsize::new(0);
     let nonce = SystemTime::now()
@@ -65,11 +72,17 @@ fn record_outcome(
     key: String,
     outcome: &ReviewOutcome,
 ) -> Result<(), String> {
+    let source_hash = outcome
+        .method_record
+        .as_ref()
+        .map(|record| record.source_hash.clone())
+        .unwrap_or_else(|| sha256_text(&key));
     store.record(
         key.clone(),
-        sha256_text(&key),
+        source_hash,
         JournalCompletion {
             verdict: outcome.verdict.clone(),
+            method_record: outcome.method_record.clone(),
             in_tok: outcome.in_tok,
             out_tok: outcome.out_tok,
             cached_in_tok: outcome.cached_in_tok,
@@ -101,6 +114,7 @@ fn journal_round_trip_preserves_completed_verdicts() {
     let outcome = ReviewOutcome {
         index: 0,
         verdict: Some(verdict),
+        method_record: None,
         in_tok: 12,
         out_tok: 3,
         cached_in_tok: 2,
@@ -116,6 +130,7 @@ fn journal_round_trip_preserves_completed_verdicts() {
     assert_eq!(entry.out_tok, 3);
     assert_eq!(entry.cached_in_tok, 2);
     assert_eq!(entry.verdict.as_ref().unwrap().tier, FindingTier::Clean);
+    assert!(!entry.is_reusable());
     loaded.remove().unwrap();
 }
 
@@ -126,23 +141,25 @@ async fn resumed_journal_restores_cached_input_usage_without_an_api_call() {
     let context = "review_contract=test\nmodel=test";
     let semantic_hash = semantic_index_hash(std::slice::from_ref(&job));
     let key = job.journal_unit_id();
+    let verdict = LLMVerdict {
+        verdict_type: "method".to_string(),
+        file_path: "src/demo.py".to_string(),
+        method_name: Some("demo".to_string()),
+        check_type: "method".to_string(),
+        smelly: false,
+        tier: FindingTier::Clean,
+        cohesive: None,
+        name_accurate: None,
+        evidence: String::new(),
+        reason: "The method directly serves its contract.".to_string(),
+        loc: 1,
+        start_line: 1,
+        end_line: 1,
+    };
     let outcome = ReviewOutcome {
         index: 0,
-        verdict: Some(LLMVerdict {
-            verdict_type: "method".to_string(),
-            file_path: "src/demo.py".to_string(),
-            method_name: Some("demo".to_string()),
-            check_type: "method".to_string(),
-            smelly: false,
-            tier: FindingTier::Clean,
-            cohesive: None,
-            name_accurate: None,
-            evidence: String::new(),
-            reason: "The method directly serves its contract.".to_string(),
-            loc: 1,
-            start_line: 1,
-            end_line: 1,
-        }),
+        method_record: Some(durable_record(&job, &key, &verdict)),
+        verdict: Some(verdict),
         in_tok: 100,
         out_tok: 10,
         cached_in_tok: 75,
@@ -177,23 +194,25 @@ async fn cross_scan_content_cache_records_zero_cost_coverage_without_an_api_call
     let context = "review_contract=test\nmodel=test";
     let semantic_hash = semantic_index_hash(std::slice::from_ref(&job));
     let key = job.journal_unit_id();
+    let verdict = LLMVerdict {
+        verdict_type: "method".to_string(),
+        file_path: "src/demo.py".to_string(),
+        method_name: Some("demo".to_string()),
+        check_type: "method".to_string(),
+        smelly: false,
+        tier: FindingTier::Clean,
+        cohesive: None,
+        name_accurate: None,
+        evidence: String::new(),
+        reason: "The method directly serves its contract.".to_string(),
+        loc: 1,
+        start_line: 1,
+        end_line: 1,
+    };
     let outcome = ReviewOutcome {
         index: 0,
-        verdict: Some(LLMVerdict {
-            verdict_type: "method".to_string(),
-            file_path: "src/demo.py".to_string(),
-            method_name: Some("demo".to_string()),
-            check_type: "method".to_string(),
-            smelly: false,
-            tier: FindingTier::Clean,
-            cohesive: None,
-            name_accurate: None,
-            evidence: String::new(),
-            reason: "The method directly serves its contract.".to_string(),
-            loc: 1,
-            start_line: 1,
-            end_line: 1,
-        }),
+        method_record: Some(durable_record(&job, &key, &verdict)),
+        verdict: Some(verdict),
         in_tok: 100,
         out_tok: 10,
         cached_in_tok: 75,
@@ -234,6 +253,7 @@ async fn cross_scan_content_cache_records_zero_cost_coverage_without_an_api_call
     let summary = crate::review_journal::summarize(&path).unwrap();
     assert_eq!(summary.scan_id.as_deref(), Some("run-b"));
     assert_eq!(summary.completed_units, 1);
+    assert_eq!(summary.reused_units, 1);
     assert_eq!(summary.input_tokens, 0);
     assert_eq!(summary.output_tokens, 0);
     std::fs::remove_file(path).unwrap();
@@ -281,6 +301,7 @@ fn changed_scan_fingerprint_does_not_reuse_old_reviews() {
     let outcome = ReviewOutcome {
         index: 0,
         verdict: None,
+        method_record: None,
         in_tok: 1,
         out_tok: 1,
         cached_in_tok: 0,
@@ -307,6 +328,55 @@ fn semantic_index_identity_is_independent_of_job_order() {
     ];
 
     assert_eq!(semantic_index_hash(&first), semantic_index_hash(&second));
+}
+
+#[test]
+fn method_coverage_rejects_a_verdict_without_a_durable_record() {
+    let job = method_job("def demo():\n    return 1\n");
+    let key = job.journal_unit_id();
+    let ReviewJob::Method { method, .. } = &job else {
+        panic!("test job should be a method");
+    };
+    let expected = HashMap::from([(key, (method.clone(), sha256_text(&method.source)))]);
+    let outcome = ReviewOutcome {
+        index: 0,
+        verdict: Some(unresolved_method_verdict(method, "missing evidence")),
+        method_record: None,
+        in_tok: 0,
+        out_tok: 0,
+        cached_in_tok: 0,
+        retry_on_resume: true,
+        persisted: false,
+    };
+
+    let error = validate_method_coverage(&expected, &[outcome]).unwrap_err();
+    assert!(error.contains("without a durable method record"));
+}
+
+#[test]
+fn method_coverage_rejects_a_record_for_the_wrong_source() {
+    let job = method_job("def demo():\n    return 1\n");
+    let key = job.journal_unit_id();
+    let ReviewJob::Method { method, .. } = &job else {
+        panic!("test job should be a method");
+    };
+    let expected = HashMap::from([(key.clone(), (method.clone(), sha256_text(&method.source)))]);
+    let verdict = unresolved_method_verdict(method, "missing evidence");
+    let mut record = durable_record(&job, &key, &verdict);
+    record.source_hash = sha256_text("different source");
+    let outcome = ReviewOutcome {
+        index: 0,
+        verdict: Some(verdict),
+        method_record: Some(record),
+        in_tok: 0,
+        out_tok: 0,
+        cached_in_tok: 0,
+        retry_on_resume: true,
+        persisted: false,
+    };
+
+    let error = validate_method_coverage(&expected, &[outcome]).unwrap_err();
+    assert!(error.contains("does not match its source identity"));
 }
 
 #[test]
@@ -604,6 +674,7 @@ async fn bounded_review_tasks_journal_completed_work_before_a_failure() {
             let outcome = ReviewOutcome {
                 index: *index,
                 verdict: None,
+                method_record: None,
                 in_tok: 1,
                 out_tok: 1,
                 cached_in_tok: 0,

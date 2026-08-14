@@ -77,6 +77,9 @@ fn schema_name(schema: ResponseSchema) -> &'static str {
         ResponseSchema::SemanticMethodReview => "semantic_method",
         ResponseSchema::SemanticMethodBatchReview => "semantic_method_batch",
         ResponseSchema::ScopedTierReview => "scoped_tier",
+        ResponseSchema::CaseSynthesis => "case_synthesis",
+        ResponseSchema::CaseAdjudication => "case_adjudication",
+        ResponseSchema::CaseProof => "case_proof",
         ResponseSchema::FileReview => "file",
         ResponseSchema::RoleClassification => "role",
     }

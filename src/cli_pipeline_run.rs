@@ -110,8 +110,28 @@ fn format_journal_status(
             summary.completed_units as f64 * 100.0 / summary.expected_units as f64
         )
     };
+    let adjudication = if summary.expected_adjudication_units == 0 {
+        String::new()
+    } else {
+        format!(
+            "\nAdjudication: {}/{} completed ({} retryable)",
+            summary.completed_adjudication_units,
+            summary.expected_adjudication_units,
+            summary.retryable_adjudication_units
+        )
+    };
+    let proof = if summary.expected_proof_units == 0 {
+        String::new()
+    } else {
+        format!(
+            "\nProof: {}/{} completed ({} retryable)",
+            summary.completed_proof_units,
+            summary.expected_proof_units,
+            summary.retryable_proof_units
+        )
+    };
     format!(
-        "Journal: {}\nProgress: {}/{} completed ({progress})\nRemaining: {remaining} ({} retryable)\nRole metadata: {}/{} completed ({} retryable)\nFindings so far: {} slop, {} kinda slop, {} unresolved\nUsage so far: {} input, {} cached input, {} output tokens; ${:.4} estimated\nProvider: {} / {}",
+        "Journal: {}\nProgress: {}/{} completed ({progress})\nRemaining: {remaining} ({} retryable)\nRole metadata: {}/{} completed ({} retryable){adjudication}{proof}\nFindings so far: {} slop, {} kinda slop, {} unresolved\nUsage so far: {} input, {} cached input, {} output tokens; ${:.4} estimated\nProvider: {} / {}",
         journal_path.display(),
         summary.completed_units,
         summary.expected_units,
@@ -192,23 +212,15 @@ async fn build_run_report(
     path: &str,
     config: &crate::config::ResolvedConfig,
     file_records: &mut [crate::types::FileRecord],
-    bar_style: &ProgressStyle,
-    journal_path: &std::path::Path,
-    semantic_cache: &crate::semantic_cache::SemanticIndexCache,
-    budget_usd: Option<f64>,
-) -> Result<(RunReport, bool), Box<dyn std::error::Error>> {
-    let review = llm::prepare_review_artifacts(
-        path,
-        config,
-        file_records,
-        bar_style,
-        Some(journal_path),
-        semantic_cache,
-        budget_usd,
-    )
-    .await?;
+    execution: llm::ReviewExecutionContext<'_>,
+) -> Result<(RunReport, bool, Vec<crate::types::FileRecord>), Box<dyn std::error::Error>> {
+    let compiler_methods_expected = file_records.iter().map(|file| file.methods.len()).sum();
+    let compiler_methods_covered = execution
+        .compiler_method_contexts
+        .map_or(0, std::collections::BTreeMap::len);
+    let review = llm::prepare_review_artifacts(path, config, file_records, execution).await?;
 
-    let stats = stats::generate_stats(stats::StatsInput {
+    let mut stats = stats::generate_stats(stats::StatsInput {
         file_records,
         static_flags: &review.static_flags,
         verdicts: &review.verdicts,
@@ -217,7 +229,12 @@ async fn build_run_report(
         cached_in_tok: review.cached_in_tok,
         ai_expected_reviews: review.ai_expected_reviews,
         method_reviews_expected: review.method_reviews_expected,
+        estimated_cost_usd: review.estimated_cost_usd,
+        pricing_snapshots: review.pricing_snapshots,
+        pricing_provenance_complete: review.pricing_provenance_complete,
     });
+    stats.compiler_methods_expected = compiler_methods_expected;
+    stats.compiler_methods_covered = compiler_methods_covered;
 
     if stats.ai_failed_reviews > 0 {
         return Err(IoError::other(format!(
@@ -227,12 +244,17 @@ async fn build_run_report(
         .into());
     }
 
-    Ok(stats::build_run_report_from_parts(
+    let context_file_records = review.context_file_records;
+    let (report, has_issues) = stats::build_run_report_from_parts(
         file_records,
         review.static_flags,
         review.verdicts,
+        review.method_records,
+        review.method_cases,
+        review.synthesis_cases,
         stats,
-    ))
+    );
+    Ok((report, has_issues, context_file_records))
 }
 
 pub async fn run(
@@ -270,6 +292,33 @@ pub async fn run(
     let estimate = super::preflight::ScanEstimate::from_files(&file_records);
     super::preflight::print_scan_cost_summary(&estimate);
     super::preflight::confirm_expensive_scan(&estimate, assume_yes)?;
+    if budget_usd == Some(0.0) {
+        let context_client =
+            crate::llm::LLMClient::try_new(config.clone(), None).map_err(IoError::other)?;
+        let review_context = context_client.review_context_key();
+        let scan_id = crate::review_journal::scan_id(&file_records, &review_context);
+        crate::review_journal::initialize_method_stage(
+            &journal_path,
+            &scan_id,
+            &review_context,
+            estimate.methods,
+        )
+        .map_err(IoError::other)?;
+        let message = crate::review_journal::budget_pause(0.0, 0.0);
+        eprintln!("{message}");
+        return Ok(3);
+    }
+    eprintln!("Building compiler semantic index...");
+    let compiler_method_contexts =
+        super::preflight::build_compiler_method_contexts(&repository_root, &file_records)
+            .await
+            .map_err(|err| IoError::other(format!("compiler semantic indexing failed: {err}")))?;
+    let proof_commands =
+        crate::config_loader::resolve_proof_commands(target_path).map_err(IoError::other)?;
+    eprintln!(
+        "Compiler semantic context ready for {} methods.",
+        compiler_method_contexts.len()
+    );
     if journal_path.exists() {
         eprintln!("Resuming completed reviews from {}", journal_path.display());
     }
@@ -283,13 +332,19 @@ pub async fn run(
         path,
         &config,
         &mut file_records,
-        &bar_style,
-        &journal_path,
-        &semantic_cache,
-        budget_usd,
+        llm::ReviewExecutionContext {
+            bar_style: &bar_style,
+            journal_path: Some(&journal_path),
+            semantic_cache: &semantic_cache,
+            budget_usd,
+            compiler_method_contexts: Some(&compiler_method_contexts),
+            repository_root: &repository_root,
+            proof_test_command: proof_commands.test_command.as_deref(),
+            proof_differential_command: proof_commands.differential_command.as_deref(),
+        },
     )
     .await;
-    let (run_report, has_issues) = match report_result {
+    let (run_report, has_issues, context_file_records) = match report_result {
         Ok(report) => report,
         Err(error) if crate::review_journal::is_budget_pause(&error.to_string()) => {
             eprintln!("{error}");
@@ -298,9 +353,33 @@ pub async fn run(
         Err(error) => return Err(error),
     };
 
-    let report_path_text = report_path.to_string_lossy().to_string();
-    crate::reporter::render_report(&run_report, &config, Some(&report_path_text))
+    let completed_run = if run_report.stats.method_reviews_expected > 0 {
+        let journal_summary =
+            crate::analyzer::summarize_journal(&journal_path).map_err(IoError::other)?;
+        crate::completed_run::build_final_completed_run(
+            &run_report,
+            &journal_summary,
+            &context_file_records,
+            &repository_root,
+        )
+        .map_err(IoError::other)?
+    } else {
+        None
+    };
+    let completed_write = completed_run
+        .as_ref()
+        .map(|artifact| crate::completed_run::write_completed_run(artifact, &report_path))
+        .transpose()
         .map_err(IoError::other)?;
+    let report_path_text = report_path.to_string_lossy().to_string();
+    if let Err(error) =
+        crate::reporter::render_report(&run_report, &config, Some(&report_path_text))
+    {
+        if let Some((artifact_path, true)) = completed_write.as_ref() {
+            let _ = std::fs::remove_file(artifact_path);
+        }
+        return Err(IoError::other(error).into());
+    }
 
     Ok(exit_code_for_run(
         has_issues,
@@ -398,12 +477,22 @@ mod tests {
     fn journal_status_is_compact_and_reports_remaining_work() {
         let summary = crate::analyzer::JournalSummary {
             scan_id: Some("scan".to_string()),
+            execution_commitment_sha256: Some("a".repeat(64)),
             expected_units: 10,
             completed_units: 4,
             retryable_units: 1,
             expected_role_units: 0,
             completed_role_units: 0,
             retryable_role_units: 0,
+            expected_synthesis_units: 0,
+            completed_synthesis_units: 0,
+            retryable_synthesis_units: 0,
+            expected_adjudication_units: 0,
+            completed_adjudication_units: 0,
+            retryable_adjudication_units: 0,
+            expected_proof_units: 0,
+            completed_proof_units: 0,
+            retryable_proof_units: 0,
             slop: 1,
             kinda_slop: 2,
             unresolved: 0,
@@ -411,6 +500,12 @@ mod tests {
             cached_input_tokens: 60,
             output_tokens: 20,
             estimated_cost_usd: 0.0123,
+            pricing_snapshots: Vec::new(),
+            pricing_provenance_complete: false,
+            reused_units: 0,
+            prompt_contract_version: Some("test-contract".to_string()),
+            endpoint: Some("https://example.invalid/v1".to_string()),
+            semantic_index_hashes: Vec::new(),
             provider: Some("openai-compatible".to_string()),
             model: Some("test-model".to_string()),
         };

@@ -1,0 +1,22 @@
+{
+  "schema_version": 2,
+  "selection_id": "sniffbench-blind-oss-v1-extension-1",
+  "selected_at": "2026-08-13T08:30:00Z",
+  "frame_source": "https://raw.githubusercontent.com/ossf/scorecard/40c1e35996730d4fdcbdb2e6a23917a2467e29b7/cron/internal/data/projects.csv",
+  "frame_revision": "40c1e35996730d4fdcbdb2e6a23917a2467e29b7",
+  "frame_blob_sha": "01e0927123bd7e8ffcf2ec313ccf1404fe4c5229",
+  "frame_sha256": "55b1de849d6d401bd6529a2806d587b53170cfbe7cdbc2ac5799ab65bf42807a",
+  "seed": "10afa5d22d090d7ac02e4621d89de24d0a8fd926",
+  "assessment_prefix": 1440,
+  "minimum_methods": 50,
+  "maximum_methods": 250,
+  "language_quotas": {
+    "go": 2,
+    "javascript": 2,
+    "kotlin": 2,
+    "python": 2,
+    "rust": 2,
+    "typescript": 2
+  },
+  "attestation": "Round one assessed the precommitted ranks 1-240 and filled 0/2 Kotlin and 0/2 Rust quotas after seal-compatible reproducibility checks. Before rank 241 was generated or inspected, this extension fixed a single conservative endpoint of rank 1440. The pinned frame, seed, method bounds, quotas, ranking contract, and completed round-one assessments remain unchanged."
+}

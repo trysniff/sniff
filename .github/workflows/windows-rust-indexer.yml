@@ -1,0 +1,110 @@
+name: Windows Rust indexer bundle
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/windows-rust-indexer.yml"
+      - "tools/indexers/**"
+      - "src/semantic_indexer_installation.rs"
+      - "src/semantic_indexer_installer.rs"
+      - "src/semantic_indexer_manifest.rs"
+      - "src/semantic_indexer_runner.rs"
+      - "src/sandbox_windows.rs"
+      - "src/sandbox_windows_drive.rs"
+      - "src/tests/semantic_indexer_installation.rs"
+      - "src/tests/semantic_indexer_installer.rs"
+      - "src/tests/semantic_indexer_runner.rs"
+
+permissions:
+  contents: read
+  id-token: write
+  attestations: write
+
+concurrency:
+  group: windows-rust-indexer-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-2025
+            architecture: x86_64
+            target: x86_64-pc-windows-msvc
+          - runner: windows-11-arm
+            architecture: aarch64
+            target: aarch64-pc-windows-msvc
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: Build the pinned compatibility bundle
+        shell: pwsh
+        run: |
+          $output = Join-Path $env:RUNNER_TEMP "sniff-rust-indexer-output"
+          $work = Join-Path $env:RUNNER_TEMP "sniff-rust-indexer-work"
+          ./tools/indexers/build-windows-rust-indexer.ps1 `
+            -Architecture "${{ matrix.architecture }}" `
+            -OutputDirectory $output `
+            -WorkDirectory $work
+      - name: Preserve the raw release archive
+        uses: actions/upload-artifact@v6
+        with:
+          name: raw-sniff-rust-indexer-${{ matrix.target }}
+          path: |
+            ${{ runner.temp }}/sniff-rust-indexer-output/*.zip
+            ${{ runner.temp }}/sniff-rust-indexer-output/*.sha256
+            ${{ runner.temp }}/sniff-rust-indexer-output/*.provenance.json
+          if-no-files-found: error
+          retention-days: 3
+      - name: Rebuild and prove byte-for-byte reproducibility
+        if: github.event_name != 'pull_request'
+        shell: pwsh
+        run: |
+          $firstOutput = Join-Path $env:RUNNER_TEMP "sniff-rust-indexer-output"
+          $secondOutput = Join-Path $env:RUNNER_TEMP "sniff-rust-indexer-repro-output"
+          $secondWork = Join-Path $env:RUNNER_TEMP "sniff-rust-indexer-repro-work"
+          ./tools/indexers/build-windows-rust-indexer.ps1 `
+            -Architecture "${{ matrix.architecture }}" `
+            -OutputDirectory $secondOutput `
+            -WorkDirectory $secondWork
+          $asset = "sniff-rust-indexer-${{ matrix.target }}.zip"
+          $firstHash = (Get-FileHash -Algorithm SHA256 (Join-Path $firstOutput $asset)).Hash
+          $secondHash = (Get-FileHash -Algorithm SHA256 (Join-Path $secondOutput $asset)).Hash
+          if ($firstHash -ne $secondHash) {
+            throw "Clean rebuild was not reproducible: $firstHash != $secondHash"
+          }
+      - name: Generate SPDX SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          path: ${{ runner.temp }}/sniff-rust-indexer-output/sniff-rust-indexer-${{ matrix.target }}
+          format: spdx-json
+          output-file: ${{ runner.temp }}/sniff-rust-indexer-output/sniff-rust-indexer-${{ matrix.target }}.spdx.json
+          upload-artifact: false
+      - name: Prove full SCIP indexing inside AppContainer
+        shell: pwsh
+        run: |
+          rustup default 1.96.0
+          $env:SNIFF_TEST_WINDOWS_RUST_ANALYZER = Join-Path `
+            $env:RUNNER_TEMP `
+            "sniff-rust-indexer-output\sniff-rust-indexer-${{ matrix.target }}\bin\rust-analyzer.exe"
+          $env:SNIFF_DEBUG_INDEXERS = "1"
+          cargo test --locked --lib `
+            semantic_indexer_runner::tests::windows_compatible_rust_analyzer_emits_scip_inside_appcontainer `
+            -- --ignored --exact --nocapture
+      - name: Attest the release archive
+        if: github.event_name != 'pull_request'
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-path: ${{ runner.temp }}/sniff-rust-indexer-output/sniff-rust-indexer-${{ matrix.target }}.zip
+      - name: Upload bundle evidence
+        uses: actions/upload-artifact@v6
+        with:
+          name: sniff-rust-indexer-${{ matrix.target }}
+          path: ${{ runner.temp }}/sniff-rust-indexer-output/*
+          if-no-files-found: error
+          retention-days: 14

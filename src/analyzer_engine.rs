@@ -1,7 +1,7 @@
 use crate::config::ResolvedConfig;
 use crate::env_value;
 use crate::llm::LLMClient;
-use crate::report_types::{LLMVerdict, StaticFlag};
+use crate::report_types::{LLMVerdict, MethodReviewRecord, StaticFlag};
 use crate::types::{FileRecord, MethodRecord};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -47,6 +47,12 @@ pub struct AnalysisRun<'a> {
     pub journal_path: Option<&'a std::path::Path>,
     pub scan_id: Option<&'a str>,
     pub budget_usd: Option<f64>,
+    pub compiler_method_contexts: Option<&'a crate::semantic_method_join::CompilerMethodContexts>,
+}
+
+pub struct AnalysisResult {
+    pub verdicts: Vec<LLMVerdict>,
+    pub method_records: Vec<MethodReviewRecord>,
 }
 
 pub fn summarize_journal(path: &std::path::Path) -> Result<JournalSummary, String> {
@@ -59,7 +65,20 @@ impl Analyzer {
         method: &MethodRecord,
         static_signals: &[String],
     ) -> Result<(Option<LLMVerdict>, usize, usize), String> {
-        method_review::analyze_method_review(self, method, static_signals, None).await
+        self.analyze_method_review_with_context(
+            method,
+            static_signals,
+            method_review::MethodReviewContext {
+                file_context: "",
+                project_root: None,
+                callee_context: &[],
+                boundary_requirements: &[],
+                repository_private_unused_candidate: false,
+                stale_discard_signature_proof: None,
+            },
+            None,
+        )
+        .await
     }
 
     async fn analyze_method_review_with_context(
@@ -85,13 +104,37 @@ impl Analyzer {
         on_progress: Option<&ReviewProgressCallback>,
         on_usage: Option<&method_batch_review::BatchUsageCallback>,
         on_completed: Option<&method_batch_review::BatchCompletionCallback>,
-    ) -> Result<(Vec<LLMVerdict>, usize, usize), String> {
+    ) -> Result<
+        (
+            Vec<(LLMVerdict, verdicts::SemanticMethodReview)>,
+            usize,
+            usize,
+        ),
+        String,
+    > {
         method_batch_review::analyze_method_review_batch(
             self,
             items,
             on_progress,
             on_usage,
             on_completed,
+        )
+        .await
+    }
+
+    async fn analyze_method_record_with_context(
+        &self,
+        method: &MethodRecord,
+        static_signals: &[String],
+        context: method_review::MethodReviewContext<'_>,
+        on_progress: Option<&ReviewProgressCallback>,
+    ) -> Result<(Option<method_review::MethodReviewAnalysis>, usize, usize), String> {
+        method_review::analyze_method_record_with_context(
+            self,
+            method,
+            static_signals,
+            context,
+            on_progress,
         )
         .await
     }
@@ -171,6 +214,7 @@ pub async fn analyze_with_client_and_graph_and_journal(
             journal_path,
             scan_id: None,
             budget_usd: None,
+            compiler_method_contexts: None,
         },
         client,
         on_progress,
@@ -183,6 +227,21 @@ pub async fn analyze_with_client_and_graph_and_journal_with_context(
     client: Arc<LLMClient>,
     on_progress: Option<ReviewProgressCallback>,
 ) -> Result<(Vec<LLMVerdict>, usize, usize), String> {
+    let (result, total_in, total_out) =
+        analyze_with_client_and_graph_and_journal_with_context_and_records(
+            run,
+            client,
+            on_progress,
+        )
+        .await?;
+    Ok((result.verdicts, total_in, total_out))
+}
+
+pub async fn analyze_with_client_and_graph_and_journal_with_context_and_records(
+    run: AnalysisRun<'_>,
+    client: Arc<LLMClient>,
+    on_progress: Option<ReviewProgressCallback>,
+) -> Result<(AnalysisResult, usize, usize), String> {
     let AnalysisRun {
         file_records,
         context_file_records,
@@ -192,6 +251,7 @@ pub async fn analyze_with_client_and_graph_and_journal_with_context(
         journal_path,
         scan_id,
         budget_usd,
+        compiler_method_contexts,
     } = run;
     let analyzer = Arc::new(Analyzer {
         llm_client: client,
@@ -223,12 +283,29 @@ pub async fn analyze_with_client_and_graph_and_journal_with_context(
                 ))
                 .cloned()
                 .unwrap_or_default();
-            let dossier = dossier::build_method_dossier_with_index(
+            let mut dossier = dossier::build_method_dossier_with_index(
                 file,
                 method,
                 &dossier_index,
                 callee_context,
             );
+            if let Some(contexts) = compiler_method_contexts {
+                let context_key = crate::semantic_method_join::method_context_key(
+                    &method.file_path,
+                    &method.name,
+                    method.start_line,
+                );
+                let compiler_context = contexts.get(&context_key).ok_or_else(|| {
+                    format!(
+                        "compiler semantic context is missing for {}::{}:{}",
+                        method.file_path, method.name, method.start_line
+                    )
+                })?;
+                dossier
+                    .context
+                    .push_str("\n\nCompiler-resolved semantic facts:\n");
+                dossier.context.push_str(compiler_context);
+            }
             jobs.push(jobs::ReviewJob::Method {
                 index: review_index,
                 method: method.clone(),
@@ -255,7 +332,7 @@ pub async fn analyze_with_client_and_graph_and_journal_with_context(
     }
 
     let review_context_key = analyzer.llm_client.review_context_key();
-    let verdicts = jobs::run_review_jobs(
+    let result = jobs::run_review_jobs_with_records(
         Arc::clone(&analyzer),
         jobs,
         on_progress,
@@ -268,7 +345,14 @@ pub async fn analyze_with_client_and_graph_and_journal_with_context(
 
     let total_in = analyzer.in_tok.load(Ordering::SeqCst);
     let total_out = analyzer.out_tok.load(Ordering::SeqCst);
-    Ok((verdicts, total_in, total_out))
+    Ok((
+        AnalysisResult {
+            verdicts: result.verdicts,
+            method_records: result.method_records,
+        },
+        total_in,
+        total_out,
+    ))
 }
 
 pub async fn analyze(

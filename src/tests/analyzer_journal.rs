@@ -1,8 +1,10 @@
 use super::{
-    JournalCompletion, JournalRoleCompletion, JournalStage, JournalStore, scan_id, sha256_text,
-    summarize,
+    JournalAdjudicationCompletion, JournalCompletion, JournalProofCompletion,
+    JournalRoleCompletion, JournalStage, JournalStore, JournalSynthesisCompletion, scan_id,
+    sha256_text, summarize,
 };
 use crate::report_types::LLMVerdict;
+use crate::slop_cases::{CaseAdjudication, CaseDecision, CaseProof, CounterfactualDecision};
 use crate::types::{FileRecord, FindingTier};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -18,6 +20,29 @@ fn temp_journal_path() -> std::path::PathBuf {
         std::process::id(),
         NEXT.fetch_add(1, Ordering::Relaxed)
     ))
+}
+
+#[test]
+fn scan_identity_changes_when_only_repository_evidence_changes() {
+    let production = FileRecord {
+        file_path: "src/demo.py".to_string(),
+        source: "def demo():\n    return 1\n".to_string(),
+        language: "python".to_string(),
+        methods: Vec::new(),
+    };
+    let evidence_a = FileRecord {
+        file_path: "tests/test_demo.py".to_string(),
+        source: "def test_demo():\n    assert demo() == 1\n".to_string(),
+        language: "python".to_string(),
+        methods: Vec::new(),
+    };
+    let mut evidence_b = evidence_a.clone();
+    evidence_b.source = "def test_demo():\n    assert demo() == 2\n".to_string();
+
+    let first = scan_id(&[production.clone(), evidence_a], "review-contract");
+    let second = scan_id(&[production, evidence_b], "review-contract");
+
+    assert_ne!(first, second);
 }
 
 fn clean_completion() -> JournalCompletion {
@@ -37,6 +62,7 @@ fn clean_completion() -> JournalCompletion {
             start_line: 1,
             end_line: 1,
         }),
+        method_record: None,
         in_tok: 120,
         out_tok: 12,
         cached_in_tok: 80,
@@ -280,6 +306,172 @@ fn one_scan_summary_combines_role_and_method_usage_without_mixing_coverage() {
     assert_eq!(summary.cached_input_tokens, 4);
     assert_eq!(methods.spent_usd(), summary.estimated_cost_usd);
     methods.remove().unwrap();
+}
+
+#[test]
+fn synthesis_stage_persists_empty_case_results_for_resume() {
+    let path = temp_journal_path();
+    let context =
+        "review_contract=semantic-method-v28\nmodel=test\nendpoint=https://example.invalid";
+    let mut synthesis = JournalStore::load_for_scan(
+        &path,
+        "run-a",
+        JournalStage::Synthesis,
+        "synthesis-index",
+        context,
+        1,
+    )
+    .unwrap();
+    synthesis
+        .record_synthesis(
+            "synthesis-unit".to_string(),
+            sha256_text("methods"),
+            JournalSynthesisCompletion {
+                cases: Vec::new(),
+                in_tok: 40,
+                out_tok: 4,
+                cached_in_tok: 0,
+                retry_on_resume: false,
+            },
+        )
+        .unwrap();
+
+    let loaded = JournalStore::load_for_scan(
+        &path,
+        "run-a",
+        JournalStage::Synthesis,
+        "synthesis-index",
+        context,
+        1,
+    )
+    .unwrap();
+    assert_eq!(
+        loaded.reusable_synthesis("synthesis-unit", &sha256_text("methods")),
+        Some((Vec::new(), true))
+    );
+    assert_eq!(loaded.reusable_synthesis("synthesis-unit", "changed"), None);
+    let summary = summarize(&path).unwrap();
+    assert_eq!(summary.expected_synthesis_units, 1);
+    assert_eq!(summary.completed_synthesis_units, 1);
+    assert_eq!(summary.retryable_synthesis_units, 0);
+    assert_eq!(summary.input_tokens, 40);
+    assert_eq!(summary.output_tokens, 4);
+    loaded.remove().unwrap();
+}
+
+#[test]
+fn adjudication_stage_persists_complete_decisions_for_resume() {
+    let path = temp_journal_path();
+    let context =
+        "review_contract=semantic-method-v28\nmodel=test\nendpoint=https://example.invalid";
+    let mut adjudication = JournalStore::load_for_scan(
+        &path,
+        "run-a",
+        JournalStage::Adjudication,
+        "adjudication-index",
+        context,
+        1,
+    )
+    .unwrap();
+    let decision = CaseAdjudication {
+        case_id: "case-a".to_string(),
+        decision: CaseDecision::Keep,
+        reason: "The challenge found no contract dependency.".to_string(),
+        merge_into_case_id: None,
+    };
+    adjudication
+        .record_adjudication(
+            "adjudication-unit".to_string(),
+            sha256_text("case-a"),
+            JournalAdjudicationCompletion {
+                decisions: vec![decision.clone()],
+                in_tok: 20,
+                out_tok: 3,
+                cached_in_tok: 0,
+                retry_on_resume: false,
+            },
+        )
+        .unwrap();
+
+    let loaded = JournalStore::load_for_scan(
+        &path,
+        "run-a",
+        JournalStage::Adjudication,
+        "adjudication-index",
+        context,
+        1,
+    )
+    .unwrap();
+    assert_eq!(
+        loaded.reusable_adjudication("adjudication-unit", &sha256_text("case-a")),
+        Some((vec![decision], true))
+    );
+    assert_eq!(
+        loaded.reusable_adjudication("adjudication-unit", "changed"),
+        None
+    );
+    let summary = summarize(&path).unwrap();
+    assert_eq!(summary.expected_adjudication_units, 1);
+    assert_eq!(summary.completed_adjudication_units, 1);
+    assert_eq!(summary.retryable_adjudication_units, 0);
+    loaded.remove().unwrap();
+}
+
+#[test]
+fn proof_stage_persists_complete_counterfactuals_for_resume() {
+    let path = temp_journal_path();
+    let context =
+        "review_contract=semantic-method-v28\nmodel=test\nendpoint=https://example.invalid";
+    let proof = CaseProof {
+        case_id: "case-a".to_string(),
+        decision: CounterfactualDecision::Unresolved,
+        reason: "The contract could not be preserved from the available evidence.".to_string(),
+        edits: Vec::new(),
+    };
+    let mut store = JournalStore::load_for_scan(
+        &path,
+        "run-a",
+        JournalStage::Proof,
+        "proof-index",
+        context,
+        1,
+    )
+    .unwrap();
+    store
+        .record_proof(
+            "proof-unit".to_string(),
+            sha256_text("case-a"),
+            JournalProofCompletion {
+                proofs: vec![proof.clone()],
+                in_tok: 30,
+                out_tok: 4,
+                cached_in_tok: 0,
+                retry_on_resume: false,
+            },
+        )
+        .unwrap();
+
+    let loaded = JournalStore::load_for_scan(
+        &path,
+        "run-a",
+        JournalStage::Proof,
+        "proof-index",
+        context,
+        1,
+    )
+    .unwrap();
+    assert_eq!(
+        loaded.reusable_proof("proof-unit", &sha256_text("case-a")),
+        Some((vec![proof], true))
+    );
+    assert_eq!(loaded.reusable_proof("proof-unit", "changed"), None);
+    let summary = summarize(&path).unwrap();
+    assert_eq!(summary.expected_proof_units, 1);
+    assert_eq!(summary.completed_proof_units, 1);
+    assert_eq!(summary.retryable_proof_units, 0);
+    assert_eq!(summary.input_tokens, 30);
+    assert_eq!(summary.output_tokens, 4);
+    loaded.remove().unwrap();
 }
 
 #[test]

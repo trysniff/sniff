@@ -1,0 +1,103 @@
+name: SniffBench historical assessment
+
+on:
+  workflow_dispatch:
+    inputs:
+      resume_run_id:
+        description: "Prior run ID whose history-state artifact should be resumed"
+        required: false
+        type: string
+      max_new_ranks:
+        description: "Maximum repositories to assess in this run"
+        required: true
+        default: "100"
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: sniffbench-non-blind-history-v1
+  cancel-in-progress: false
+
+jobs:
+  assess:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 330
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_RELEASE_DEBUG: "0"
+      MAX_NEW_RANKS: ${{ inputs.max_new_ranks }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install the hardened Linux sandbox
+        run: sudo apt-get update && sudo apt-get install --yes bubblewrap
+      - name: Restore the prior verified state
+        if: inputs.resume_run_id != ''
+        uses: actions/download-artifact@v8
+        with:
+          name: non-blind-history-state-${{ inputs.resume_run_id }}
+          path: ${{ runner.temp }}/sniffbench-history-state
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.resume_run_id }}
+      - name: Initialize state
+        run: |
+          history_state="${RUNNER_TEMP}/sniffbench-history-state"
+          completed_ledger="${RUNNER_TEMP}/non-blind-history-assessment.json"
+          mkdir -p "$history_state"
+          printf 'HISTORY_STATE=%s\n' "$history_state" >> "$GITHUB_ENV"
+          printf 'COMPLETED_LEDGER=%s\n' "$completed_ledger" >> "$GITHUB_ENV"
+      - name: Build the assessor
+        run: cargo build --release --locked
+      - name: Prepare the immutable blank ledger
+        run: |
+          target/release/sniff benchmark prepare-non-blind-history-assessment \
+            sniffbench/non-blind-v1-selection-policy.json \
+            sniffbench/non-blind-v1-history-worksheet.json \
+            sniffbench/non-blind-v1-history-assessment-protocol.json \
+            "${RUNNER_TEMP}/non-blind-history-blank.json"
+      - name: Assess a resumable rank slice
+        id: assess
+        shell: bash
+        run: |
+          set +e
+          timeout --foreground --signal=INT --kill-after=60s 300m \
+            target/release/sniff benchmark assess-non-blind-history \
+              sniffbench/non-blind-v1-selection-policy.json \
+              sniffbench/non-blind-v1-history-worksheet.json \
+              sniffbench/non-blind-v1-history-assessment-protocol.json \
+              "${RUNNER_TEMP}/non-blind-history-blank.json" \
+              "$HISTORY_STATE" \
+              "$COMPLETED_LEDGER" \
+              --max-new-ranks "$MAX_NEW_RANKS"
+          status=$?
+          set -e
+          printf 'status=%s\n' "$status" >> "$GITHUB_OUTPUT"
+          if [[ -f "$COMPLETED_LEDGER" ]]; then
+            printf 'completed=true\n' >> "$GITHUB_OUTPUT"
+          else
+            printf 'completed=false\n' >> "$GITHUB_OUTPUT"
+          fi
+          if [[ "$status" -ne 0 && "$status" -ne 124 && "$status" -ne 130 ]]; then
+            exit "$status"
+          fi
+      - name: Upload resumable evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: non-blind-history-state-${{ github.run_id }}
+          path: ${{ runner.temp }}/sniffbench-history-state
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 90
+      - name: Upload completed ledger
+        if: success() && steps.assess.outputs.completed == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: non-blind-history-completed-${{ github.run_id }}
+          path: ${{ runner.temp }}/non-blind-history-assessment.json
+          if-no-files-found: error
+          retention-days: 90

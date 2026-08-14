@@ -1,5 +1,7 @@
 use crate::product_contract::SlopPattern;
-use crate::report_types::LLMVerdict;
+use crate::report_types::{
+    LLMVerdict, MethodEvidenceRecord, MethodReviewRecord, MethodSemanticFields,
+};
 use crate::types::FindingTier;
 use serde::{Deserialize, Serialize};
 
@@ -735,6 +737,46 @@ pub(crate) fn build_semantic_method_verdict(
         start_line,
         end_line,
     }
+}
+
+pub(crate) fn build_method_review_record(
+    review: &SemanticMethodReview,
+    unit_id: impl Into<String>,
+    source_hash: impl Into<String>,
+    method: &crate::types::MethodRecord,
+) -> MethodReviewRecord {
+    let verdict = build_semantic_method_verdict(
+        review,
+        &method.file_path,
+        &method.name,
+        method.loc,
+        method.start_line,
+        method.end_line,
+    );
+    let evidence = review
+        .evidence
+        .iter()
+        .map(|entry| MethodEvidenceRecord {
+            start_line: entry.start_line,
+            end_line: entry.end_line,
+            quote: entry.quote.clone(),
+        })
+        .collect();
+    MethodReviewRecord::from_method(unit_id, source_hash, method, verdict).with_semantic_fields(
+        MethodSemanticFields {
+            pattern: review.pattern.as_str().to_string(),
+            intent: review.intent.clone(),
+            necessity_check: review.necessity_check.clone(),
+            contract_status: review.contract_status.clone(),
+            contract_impact: review.contract_impact.clone(),
+            dependency_impact: review.dependency_impact.clone(),
+            simplification: review.simplification.clone(),
+            change_scope: review.change_scope.clone(),
+            behavior_status: review.behavior_status.clone(),
+            missing_evidence: review.missing_evidence.clone(),
+            evidence,
+        },
+    )
 }
 
 pub(crate) fn build_file_verdict(result: &serde_json::Value, file_path: &str) -> LLMVerdict {

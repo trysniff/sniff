@@ -350,7 +350,7 @@ fn real_sniff_graph_preserves_rust_call_identity_and_test_evidence() {
     let contextual_review = method(
         &production,
         "src/analyzer_engine.rs",
-        "analyze_method_review_with_context",
+        "analyze_method_record_with_context",
         "&self",
     );
     assert!(has_caller(contextual_review, "src/analyzer_engine_jobs.rs"));

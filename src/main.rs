@@ -1,6 +1,7 @@
 pub mod analyzer;
 pub mod callgraph;
 pub mod cli;
+pub mod completed_run;
 pub mod config;
 pub mod config_loader;
 pub mod env_value;
@@ -13,6 +14,7 @@ pub mod pricing;
 pub mod product_contract;
 pub mod report_types;
 pub mod reporter;
+mod repository_proof;
 #[path = "analyzer_journal.rs"]
 pub(crate) mod review_journal;
 pub mod roles;
@@ -20,16 +22,31 @@ pub mod scorer;
 pub(crate) mod semantic_cache;
 pub mod semantic_index;
 pub mod semantic_index_scip;
+pub(crate) mod semantic_indexer_doctor;
+pub(crate) mod semantic_indexer_installation;
+pub(crate) mod semantic_indexer_installer;
+pub(crate) mod semantic_indexer_manifest;
+pub(crate) mod semantic_indexer_runner;
+pub(crate) mod semantic_method_join;
 pub mod signal_layers;
+pub mod slop_cases;
 pub(crate) mod slop_reason;
 pub mod symbol_graph;
+pub mod synthesis;
 pub mod types;
 pub mod walker;
 
+mod bounded_process;
 mod cli_banner;
+mod counterfactual;
+mod sandbox;
+mod source_privacy;
 
 use clap::Parser;
 use std::thread;
+
+pub mod benchmark;
+pub mod benchmark_import;
 
 fn main() {
     let args = cli::CliArgs::parse();

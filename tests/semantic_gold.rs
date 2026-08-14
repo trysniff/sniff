@@ -1,5 +1,8 @@
 use serde::Deserialize;
-use sniff::analyzer::analyze_with_client_and_graph;
+use sniff::analyzer::{
+    AnalysisRun, analyze_with_client_and_graph_and_journal_with_context_and_records,
+};
+use sniff::benchmark::{BenchmarkCase, BenchmarkPrediction, evaluate};
 use sniff::callgraph::build_references;
 use sniff::config::{LLMConfig, ResolvedConfig, ThresholdsConfig};
 use sniff::llm::LLMClient;
@@ -33,6 +36,8 @@ struct GoldCase {
     explanation: String,
     #[serde(default)]
     change_scope: Option<String>,
+    #[serde(default)]
+    intentional_boundary: bool,
 }
 
 fn read_http_request(stream: TcpStream) -> (TcpStream, String) {
@@ -378,6 +383,7 @@ fn spawn_gold_server(cases: Vec<GoldCase>) -> GoldServer {
                                     "The deterministic gold server could not match the method target."
                                         .to_string(),
                                 change_scope: None,
+                                intentional_boundary: false,
                             };
                             semantic_response(&request, &unmatched)
                         }
@@ -553,12 +559,26 @@ async fn semantic_gold_corpus_runs_through_complete_method_pipeline() {
         },
     };
     let client = Arc::new(LLMClient::new(config, Some("gold-test-key".to_string())));
-    let (verdicts, _, _) =
-        analyze_with_client_and_graph(&files, &[], client, false, None, Some(&graph))
-            .await
-            .expect("gold semantic review should complete");
+    let (analysis, _, _) = analyze_with_client_and_graph_and_journal_with_context_and_records(
+        AnalysisRun {
+            file_records: &files,
+            context_file_records: &files,
+            static_flags: &[],
+            with_file_reviews: false,
+            graph: Some(&graph),
+            journal_path: None,
+            scan_id: None,
+            budget_usd: None,
+            compiler_method_contexts: None,
+        },
+        client,
+        None,
+    )
+    .await
+    .expect("gold semantic review should complete");
 
-    let method_verdicts = verdicts
+    let method_verdicts = analysis
+        .verdicts
         .iter()
         .filter(|verdict| verdict.check_type == "method")
         .collect::<Vec<_>>();
@@ -582,6 +602,59 @@ async fn semantic_gold_corpus_runs_through_complete_method_pipeline() {
             .join("\n---\n")
     );
     assert_eq!(method_verdicts.len(), manifest.cases.len());
+    assert_eq!(analysis.method_records.len(), manifest.cases.len());
+    let benchmark_cases = manifest
+        .cases
+        .iter()
+        .map(|case| BenchmarkCase {
+            case_id: format!("{}:{}:{}", case.language, case.path, case.method),
+            language: case.language.clone(),
+            expected_tier: match case.tier.as_str() {
+                "slop" => FindingTier::Slop,
+                "kinda_slop" => FindingTier::KindaSlop,
+                "clean" => FindingTier::Clean,
+                "unresolved" => FindingTier::Unresolved,
+                other => panic!("invalid expected tier {other}"),
+            },
+            expected_pattern: case.pattern.clone(),
+            intentional_boundary: case.intentional_boundary,
+        })
+        .collect::<Vec<_>>();
+    let benchmark_predictions = manifest
+        .cases
+        .iter()
+        .map(|case| {
+            let record = analysis
+                .method_records
+                .iter()
+                .find(|record| {
+                    record.method_name == case.method
+                        && record.file_path.replace('\\', "/").ends_with(
+                            &staged_relative_path(&case.path)
+                                .to_string_lossy()
+                                .replace('\\', "/"),
+                        )
+                })
+                .unwrap_or_else(|| panic!("missing benchmark verdict for {}", case.method));
+            BenchmarkPrediction {
+                case_id: format!("{}:{}:{}", case.language, case.path, case.method),
+                tier: record.verdict.tier,
+                pattern: record.pattern.clone(),
+                evidence_valid: !matches!(
+                    record.verdict.tier,
+                    FindingTier::Slop | FindingTier::KindaSlop
+                ) || !record.evidence.is_empty(),
+            }
+        })
+        .collect::<Vec<_>>();
+    let benchmark_metrics = evaluate(&benchmark_cases, &benchmark_predictions)
+        .expect("semantic gold benchmark ledger should be complete");
+    assert!(benchmark_metrics.release_gate_errors().is_empty());
+    assert!(benchmark_metrics.intentional_boundary_cases > 0);
+    assert_eq!(
+        benchmark_metrics.intentional_boundary_false_positive_rate,
+        0.0
+    );
     let mut slop_true_positive = 0usize;
     let mut slop_false_positive = 0usize;
     let mut slop_false_negative = 0usize;

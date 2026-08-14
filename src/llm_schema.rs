@@ -29,6 +29,18 @@ pub(super) fn schema_description(schema: ResponseSchema) -> String {
             "Required fields: tier (string) and reason (string). Allowed tiers are slop, kinda_slop, clean, or unresolved."
                 .to_string()
         }
+        ResponseSchema::CaseSynthesis => {
+            "Required root field: cases (array). Each case must contain tier, pattern, mechanism, intent, affected_units (array of strings), evidence (array), contract_boundary, counterfactual, and unresolved_assumptions (array of strings)."
+                .to_string()
+        }
+        ResponseSchema::CaseAdjudication => {
+            "Required root field: decisions (array). Each decision must contain case_id (string), decision (keep, discard, unresolved, or merge), and reason (string). A merge decision must also contain merge_into_case_id naming a different existing case; use merge only when the mechanism, contract boundary, and counterfactual are the same."
+                .to_string()
+        }
+        ResponseSchema::CaseProof => {
+            "Required root field: proofs (array). Return exactly one proof for every case. Each proof must contain case_id (string), decision (validated or unresolved), reason (string), and edits (array). Validated proofs require at least one edit with file_path (string), start_line (positive integer), end_line (positive integer), and replacement (string); unresolved proofs must contain no edits."
+                .to_string()
+        }
         ResponseSchema::FileReview => {
             "Required fields: smelly (bool), tier (string), evidence (string), cohesive (bool), name_accurate (bool), reason (string). Allowed tiers are slop, kinda_slop, clean, unresolved; unresolved means the file-level evidence is insufficient and must use smelly=false."
                 .to_string()
@@ -182,6 +194,30 @@ pub(super) fn validate_schema(
         }
     }
 
+    fn check_case_array_envelope(
+        obj: &serde_json::Map<String, serde_json::Value>,
+        missing: &mut Vec<String>,
+        wrong_type: &mut Vec<String>,
+    ) {
+        match obj.get("cases") {
+            Some(value) if value.is_array() => {}
+            Some(_) => wrong_type.push("cases".to_string()),
+            None => missing.push("cases".to_string()),
+        }
+    }
+
+    fn check_decision_array_envelope(
+        obj: &serde_json::Map<String, serde_json::Value>,
+        missing: &mut Vec<String>,
+        wrong_type: &mut Vec<String>,
+    ) {
+        match obj.get("decisions") {
+            Some(value) if value.is_array() => {}
+            Some(_) => wrong_type.push("decisions".to_string()),
+            None => missing.push("decisions".to_string()),
+        }
+    }
+
     match schema {
         ResponseSchema::MethodReview => {
             check_bool(obj, "smelly", &mut missing, &mut wrong_type);
@@ -209,6 +245,17 @@ pub(super) fn validate_schema(
             check_string(obj, "tier", &mut missing, &mut wrong_type);
             check_string(obj, "reason", &mut missing, &mut wrong_type);
         }
+        ResponseSchema::CaseSynthesis => {
+            check_case_array_envelope(obj, &mut missing, &mut wrong_type);
+        }
+        ResponseSchema::CaseAdjudication => {
+            check_decision_array_envelope(obj, &mut missing, &mut wrong_type);
+        }
+        ResponseSchema::CaseProof => match obj.get("proofs") {
+            Some(value) if value.is_array() => {}
+            Some(_) => wrong_type.push("proofs".to_string()),
+            None => missing.push("proofs".to_string()),
+        },
         ResponseSchema::FileReview => {
             check_bool(obj, "smelly", &mut missing, &mut wrong_type);
             check_string(obj, "tier", &mut missing, &mut wrong_type);
@@ -335,5 +382,25 @@ mod tests {
         }
         assert!(!description.contains("intent_hidden"));
         assert!(!description.contains("dead_code"));
+    }
+
+    #[test]
+    fn synthesis_schema_requires_cases_instead_of_reviews() {
+        let valid = serde_json::json!({"cases": []});
+        assert!(validate_schema(&valid, ResponseSchema::CaseSynthesis).is_ok());
+
+        let invalid = serde_json::json!({"reviews": []});
+        let error = validate_schema(&invalid, ResponseSchema::CaseSynthesis).unwrap_err();
+        assert!(error.contains("missing fields: cases"));
+    }
+
+    #[test]
+    fn proof_schema_requires_proofs_instead_of_cases() {
+        let valid = serde_json::json!({"proofs": []});
+        assert!(validate_schema(&valid, ResponseSchema::CaseProof).is_ok());
+
+        let invalid = serde_json::json!({"cases": []});
+        let error = validate_schema(&invalid, ResponseSchema::CaseProof).unwrap_err();
+        assert!(error.contains("missing fields: proofs"));
     }
 }

@@ -61,11 +61,38 @@ sniff resume
 
 # Optionally pause after about $0.50 of cumulative estimated scan spend.
 sniff --budget-usd 0.50
+
+# Rank and audit a precommitted blind OSS selection before labels or Sniff runs.
+sniff benchmark prepare-selection selection-policy.json projects.csv selection-review.json
+sniff benchmark audit-selection selection-policy.json projects.csv \
+  selection-review.json selection-audit.json
+sniff benchmark seal-sources selection-audit.json projects.csv \
+  checkouts blind-source-seal.json
+sniff benchmark prepare-labels blind-source-seal.json reviewer-a.json
+sniff benchmark prepare-labels blind-source-seal.json reviewer-b.json
+sniff benchmark audit-labels blind-source-seal.json label-audit.json \
+  --review reviewer-a.json --review reviewer-b.json
+sniff benchmark prepare-resolution blind-source-seal.json label-audit.json resolution.json
+sniff benchmark resolve-labels blind-source-seal.json label-audit.json \
+  resolution.json blind-cases.json
+sniff benchmark freeze draft.json corpus.json
+sniff benchmark prepare-run corpus.json review.json --artifact .sniff/runs/RUN.json
+sniff benchmark import-run corpus.json review.json run.json
+sniff benchmark evaluate corpus.json submission.json
 ```
 
 Sniff writes `sniff-report.md` at the scanned repository root. A successful run
 reviews every eligible method; it never replaces failed AI reviews with a
 static-only report.
+
+Final scans with eligible methods and no retryable unresolved work also write a
+versioned, hash-bound machine record under `.sniff/runs/`. It contains the
+hashed scanned-source inventory, complete method ledger, final cases, semantic
+coverage, provider/model contract, token usage, and the pricing snapshots used
+for the displayed estimate. The directory is ignored by Git and is intended
+for offline audit and later SniffBench import. Its `estimated_cost_usd` is not
+an invoice: release benchmarking still requires separately verified actual
+cost.
 
 Each completed method is appended to a durable journal. `sniff status [PATH]`
 reads that journal without loading provider configuration or scanning source
@@ -80,6 +107,100 @@ does not write an incomplete report. Continue with a higher limit, for example
 above the limit, and configured token rates may differ from the provider's
 invoice, so this is a resumable admission control rather than an exact billing
 cap.
+
+## SniffBench Evaluation
+
+The blind OSS workflow operates entirely offline after its sampling-frame file
+has been obtained. `prepare-selection POLICY FRAME OUTPUT` verifies the exact
+frame SHA-256, deterministically hash-ranks its repositories from a precommitted
+seed, and emits the complete ranked assessment prefix without consulting labels
+or Sniff output. Complete every candidate with a quota language, method census,
+typed repository facts, exactly one canonical fact payload, at least one retained
+raw-source payload, and either a selected
+immutable revision or a typed exclusion. `audit-selection POLICY FRAME WORKSHEET
+OUTPUT` rejects skipped/reordered candidates, contradictory evidence, premature
+quota claims, and incomplete quotas, then writes an immutable selection audit.
+Each selected repository fills the quota for its dominant eligible-method
+language; equal method counts use lexicographic language order as the fixed
+tie-break, and source sealing rederives that assignment from committed source.
+The audit commitment proves exactly what was assessed and preserves the raw
+payloads for independent review; it does not make an unverifiable external
+claim true. Selected repository identity, revision, license path, method count,
+quota language, and declared context are independently rederived from the local
+checkouts during source sealing. External exclusion facts such as inaccessible,
+archived, or fork status remain reviewable attestations unless their retained
+source payload can be independently reproduced.
+
+`sniff benchmark seal-sources AUDIT FRAME CHECKOUT_ROOT OUTPUT` revalidates the
+audit against the exact frame and requires each selected GitHub repository at
+`CHECKOUT_ROOT/OWNER/REPOSITORY`. Checkouts must be clean, non-sparse Git roots at
+their audited complete commit IDs. The command copies Sniff-supported production
+sources, tests, common package/build/API contracts, explicitly declared context,
+and license evidence into a create-new bundle. It embeds the exact selection
+audit and frame, reproduces every audited method count and quota language, and
+stores no operator filesystem paths. Only production methods enter the eligible
+census; context remains separately hash-bound for human review. Commit or attest
+this label-free source seal before creating labels or running Sniff. The later
+corpus must hash-bind it and assign every sealed blind method to exactly one
+adjudicated case.
+
+`sniff benchmark prepare-labels SEAL OUTPUT` creates a source-only worksheet for
+one independent reviewer. It contains every sealed method and exact source, but
+no Sniff output or prefilled label, plus the sealed repository source, tests, and
+declared contract context needed to inspect callers and intent. Reviewers must
+attest that they inspected the repository context. Complete separate worksheets
+without sharing answers. `sniff benchmark audit-labels SEAL OUTPUT --review A --review B`
+requires at least two distinct experienced reviewers, verifies the complete
+method census and immutable source facts, rejects unblinded or incomplete
+worksheets, and preserves every tier, mechanism, or related-method disagreement
+as an explicit dispute. Reviewers must explicitly classify Clean intentional
+boundaries; Sniff never infers that benchmark label from paths or names. Both
+commands are offline.
+
+`sniff benchmark prepare-resolution SEAL AUDIT OUTPUT` creates a human-resolution
+draft. Undisputed tiers, mechanisms, and cross-method components are immutable
+and prefilled; disputed labels remain blank. Complete resolver identity, every
+dispute rationale, and hash-bound after/proof artifacts for findings.
+`sniff benchmark resolve-labels SEAL AUDIT RESOLUTION OUTPUT` requires a distinct
+resolver for disputes, refuses omitted or multiply assigned methods, verifies
+after artifacts relative to the resolution manifest, and emits a committed
+corpus-ready blind-case bundle. It never generates a label or counterfactual
+itself. Both commands are offline.
+
+`sniff benchmark freeze DRAFT OUTPUT` verifies every declared local source
+snapshot, computes separate SHA-256 commitments for analyzed sources and hidden
+labels, verifies the referenced source seal and exhaustive blind-method
+coverage, verifies that every BlindOss label exactly matches the committed
+independent-resolution bundle, verifies the separately precommitted non-blind
+real-evidence seal, and creates a new immutable SniffBench v6 corpus manifest without
+overwriting files.
+
+`sniff benchmark evaluate CORPUS SUBMISSION` evaluates that corpus and
+three or more complete runs. The corpus binds labels and local before/after
+source snapshots by SHA-256. The submission binds provider/model identity,
+actual usage and cost, proof levels, exact evidence, blind reviewer outcomes,
+and complete competitor ledgers to that corpus. Missing or invented coverage,
+tampered snapshots or labels, invalid evidence, unstable verdicts, duplicate
+findings, weak real-world or blind-OSS metrics, and incomplete baseline results
+fail closed. Synthetic fixtures remain development signals and cannot carry the
+release gate. The command is fully offline: it never loads provider
+configuration or sends source code to an API.
+
+`sniff benchmark prepare-run` verifies one immutable completed-run artifact per
+frozen repository revision. Completed artifacts must be inside the benchmark
+bundle; the generated worksheet stores only portable relative paths. It exposes
+opaque case IDs, source snapshots, and Sniff's committed outcomes, never frozen
+labels or label-side case IDs.
+
+After an experienced independent reviewer records finding matches,
+dispositions, measured review time, identity, affiliation, and a label-blindness
+attestation, `sniff benchmark import-run` re-derives every protected field and
+emits one verified `BenchmarkRun`. The worksheet must also identify actual
+provider cost and wall-clock time. Cost evidence is a hash-verified JSON receipt
+inside the benchmark bundle; the receipt binds provider, model, USD amount,
+provenance, and the hash of the underlying invoice or usage export. Neither
+command contacts a provider, and neither accepts estimated cost as actual
+spend.
 
 ## What A Finding Looks Like
 
@@ -235,8 +356,29 @@ sniff --skip-dotenv [PATH]
 sniff --yes [PATH]
 ```
 
+### Optional behavioral proof
+
+Sniff never guesses or shells out to a repository test runner. To let a
+counterfactual earn test or differential proof, declare argv explicitly in
+`sniff.config.toml`:
+
+```toml
+[proof]
+test_command = ["python", "-m", "pytest", "tests"]
+# Optional: a deterministic probe whose bounded output must match exactly.
+differential_command = ["python", "scripts", "behavior_probe.py"]
+```
+
+The original and edited snapshots run through an isolated worker. Missing
+commands, failing baselines, output differences, or unavailable platform
+isolation remain unresolved; Sniff never falls back to executing repository
+code on the host. Windows requires a hardened runner configured through
+`SNIFF_SANDBOX_RUNNER`.
+
 Every eligible method is reviewed. Supported source languages are Rust, Python,
-JavaScript, TypeScript, Go, and Kotlin.
+JavaScript, TypeScript, Go, and Kotlin/JVM. Android/KMP Gradle projects are
+detected explicitly and fail closed until an Android-capable SCIP provider is
+available; Sniff does not fall back to name-based graph guesses.
 
 Sniff runs up to four independent review pipelines concurrently and batches up
 to eight same-file methods per request. Tune these with
@@ -261,6 +403,11 @@ and report-writing failures are fatal. Sniff never emits a partial report as a
 successful result. Every completed review is durably appended to a local journal
 for safe resume; changed source, semantic context, or review contracts invalidate
 stale entries.
+
+A completed machine record is emitted only after exhaustive method and compiler
+coverage and all required synthesis, adjudication, and proof units finish. Cache
+reuse is recorded explicitly; reused scans are not independent SniffBench
+repeatability trials.
 
 Per-file semantic artifacts are cached separately under the operating system's
 user cache directory and reused only when their source hash, language, cache

@@ -1,5 +1,7 @@
 package gold
 
+class Payload
+
 fun cleanParseTokens(text: String): List<String> {
     val tokens = mutableListOf<String>()
     val current = StringBuilder()

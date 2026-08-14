@@ -9,6 +9,7 @@ use scip::types::{
     Relationship, Signature, SingleLineRange, SymbolInformation, TextEncoding, ToolInfo,
     symbol_information::Kind,
 };
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -155,6 +156,92 @@ fn document_local_symbols_are_collision_free_across_files() {
     assert_ne!(a, b);
     assert!(imported.symbols.contains_key(&a));
     assert!(imported.symbols.contains_key(&b));
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn python_local_external_symbols_are_discarded_with_a_provenance_diagnostic() {
+    let root = root("python-local-external");
+    let mut index = base_index();
+    index
+        .metadata
+        .as_mut()
+        .unwrap()
+        .tool_info
+        .as_mut()
+        .unwrap()
+        .name = "scip-python".to_string();
+    let mut external = SymbolInformation::new();
+    external.symbol = "local 5".to_string();
+    index.external_symbols.push(external);
+
+    let mut source = document("src/main.py");
+    source.language = "python".to_string();
+    source.position_encoding =
+        EnumOrUnknown::new(PositionEncoding::UTF8CodeUnitOffsetFromLineStart);
+    source.occurrences.push(single_line("local 5", 0, 0, 1, 2));
+    index.documents.push(source);
+
+    let imported = ingest(&root, &index).unwrap();
+    assert!(!imported.symbols.values().any(|symbol| {
+        symbol.origin == SemanticSymbolOrigin::External && symbol.provider_identity == "local 5"
+    }));
+    assert_eq!(imported.provenance.diagnostics.len(), 1);
+    assert!(imported.provenance.diagnostics[0].contains("local 5"));
+    assert!(imported.provenance.diagnostics[0].contains("document-scoped"));
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn non_python_local_external_symbols_remain_strictly_rejected() {
+    let root = root("non-python-local-external");
+    let mut index = base_index();
+    let mut external = SymbolInformation::new();
+    external.symbol = "local 5".to_string();
+    index.external_symbols.push(external);
+
+    let error = ingest(&root, &index).unwrap_err();
+    assert!(
+        error.contains("has no containing document identity"),
+        "{error}"
+    );
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn malformed_python_local_occurrences_remain_unresolved() {
+    let root = root("python-malformed-local");
+    let mut index = base_index();
+    index
+        .metadata
+        .as_mut()
+        .unwrap()
+        .tool_info
+        .as_mut()
+        .unwrap()
+        .name = "scip-python".to_string();
+
+    let mut source = document("src/main.py");
+    source.language = "python".to_string();
+    source.position_encoding =
+        EnumOrUnknown::new(PositionEncoding::UTF8CodeUnitOffsetFromLineStart);
+    source
+        .occurrences
+        .push(single_line("local 1(event)", 0, 0, 1, 8));
+    index.documents.push(source);
+
+    let imported = ingest(&root, &index).unwrap();
+    let occurrence = &imported
+        .documents
+        .get(&crate::semantic_index::RepositoryPath(
+            "src/main.py".to_string(),
+        ))
+        .unwrap()
+        .occurrences[0];
+    assert!(occurrence.symbol.is_none());
+    assert_eq!(imported.provenance.diagnostics.len(), 1);
+    assert!(imported.provenance.diagnostics[0].contains("local 1(event)"));
+    assert!(imported.provenance.diagnostics[0].contains("unresolved"));
     fs::remove_dir_all(root).ok();
 }
 
@@ -360,5 +447,187 @@ fn file_ingestion_uses_the_same_strict_contract() {
         Some(crate::semantic_index::SemanticTextEncoding::Utf8)
     );
     assert_eq!(imported.documents.len(), 1);
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn missing_document_language_requires_an_explicit_expected_source_language() {
+    let root = root("language");
+    let mut index = base_index();
+    let mut source = document("src/main.ts");
+    source.language.clear();
+    source.position_encoding = EnumOrUnknown::new(PositionEncoding::UnspecifiedPositionEncoding);
+    index.documents.push(source);
+    let path = root.join("index.scip");
+    fs::write(&path, index.write_to_bytes().unwrap()).unwrap();
+
+    let error = ingest_scip_file(&root, &path).unwrap_err();
+    assert!(error.contains("has no language"), "{error}");
+
+    let expected = BTreeMap::from([(
+        crate::semantic_index::RepositoryPath("src/main.ts".to_string()),
+        "typescript".to_string(),
+    )]);
+    let imported = super::ingest_scip_file_with_expected_languages(
+        &root,
+        &path,
+        Some(&expected),
+        Some(crate::semantic_index::SemanticPositionEncoding::Utf16),
+    )
+    .unwrap();
+    assert_eq!(
+        imported.documents[&crate::semantic_index::RepositoryPath("src/main.ts".to_string())]
+            .language,
+        "typescript"
+    );
+    assert_eq!(
+        imported.documents[&crate::semantic_index::RepositoryPath("src/main.ts".to_string())]
+            .position_encoding,
+        crate::semantic_index::SemanticPositionEncoding::Utf16
+    );
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn typescript_repository_prefixed_documents_use_explicit_inventory_paths() {
+    let root = root("typescript-prefix");
+    let repository_name = root.file_name().unwrap().to_string_lossy();
+    let mut index = base_index();
+    index
+        .metadata
+        .as_mut()
+        .unwrap()
+        .tool_info
+        .as_mut()
+        .unwrap()
+        .name = "scip-typescript".to_string();
+    let mut source = document(&format!("{repository_name}/src/main.ts"));
+    source.language.clear();
+    source.position_encoding = EnumOrUnknown::new(PositionEncoding::UnspecifiedPositionEncoding);
+    index.documents.push(source);
+    let mut excluded = document(&format!("{repository_name}/generated/next-env.d.ts"));
+    excluded.language.clear();
+    excluded.position_encoding = EnumOrUnknown::new(PositionEncoding::UnspecifiedPositionEncoding);
+    index.documents.push(excluded);
+    let path = root.join("index.scip");
+    fs::write(&path, index.write_to_bytes().unwrap()).unwrap();
+
+    let expected = BTreeMap::from([(
+        crate::semantic_index::RepositoryPath("src/main.ts".to_string()),
+        "typescript".to_string(),
+    )]);
+    let imported = super::ingest_scip_file_with_expected_languages(
+        &root,
+        &path,
+        Some(&expected),
+        Some(crate::semantic_index::SemanticPositionEncoding::Utf16),
+    )
+    .unwrap();
+
+    assert!(
+        imported
+            .documents
+            .contains_key(&crate::semantic_index::RepositoryPath(
+                "src/main.ts".to_string(),
+            ))
+    );
+    assert!(
+        imported
+            .provenance
+            .diagnostics
+            .iter()
+            .any(|diagnostic| { diagnostic.contains("repository-prefixed document paths") })
+    );
+    assert!(
+        imported
+            .provenance
+            .diagnostics
+            .iter()
+            .any(|diagnostic| { diagnostic.contains("outside Sniff's semantic inventory") })
+    );
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn typescript_absolute_documents_use_repository_relative_inventory_paths() {
+    let root = root("typescript-absolute");
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::write(root.join("src/main.ts"), "export function main() {}\n").unwrap();
+    let mut index = base_index();
+    index
+        .metadata
+        .as_mut()
+        .unwrap()
+        .tool_info
+        .as_mut()
+        .unwrap()
+        .name = "scip-typescript".to_string();
+    let mut source = document(&root.join("src/main.ts").to_string_lossy());
+    source.language.clear();
+    source.position_encoding = EnumOrUnknown::new(PositionEncoding::UnspecifiedPositionEncoding);
+    index.documents.push(source);
+    let path = root.join("index.scip");
+    fs::write(&path, index.write_to_bytes().unwrap()).unwrap();
+
+    let expected = BTreeMap::from([(
+        crate::semantic_index::RepositoryPath("src/main.ts".to_string()),
+        "typescript".to_string(),
+    )]);
+    let imported = super::ingest_scip_file_with_expected_languages(
+        &root,
+        &path,
+        Some(&expected),
+        Some(crate::semantic_index::SemanticPositionEncoding::Utf16),
+    )
+    .unwrap();
+
+    assert!(
+        imported
+            .documents
+            .contains_key(&crate::semantic_index::RepositoryPath(
+                "src/main.ts".to_string(),
+            ))
+    );
+    assert!(
+        imported
+            .provenance
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.contains("absolute document paths"))
+    );
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn unspecified_callable_identities_are_classified_without_promoting_types() {
+    let root = root("unspecified-kind");
+    let mut index = base_index();
+    let mut source = document("src/main.ts");
+    let mut function = SymbolInformation::new();
+    function.symbol = "scip-typescript npm . . demo/`main.ts`/target().".to_string();
+    function.kind = EnumOrUnknown::new(Kind::UnspecifiedKind);
+    source
+        .occurrences
+        .push(single_line(&function.symbol, 1, 0, 6, 1));
+    source.symbols.push(function);
+    let mut type_information = SymbolInformation::new();
+    type_information.symbol = "scip-typescript npm . . demo/`main.ts`/Payload#".to_string();
+    type_information.kind = EnumOrUnknown::new(Kind::UnspecifiedKind);
+    source.symbols.push(type_information);
+    index.documents.push(source);
+
+    let imported = ingest(&root, &index).unwrap();
+    let callable = imported
+        .symbols
+        .values()
+        .find(|symbol| symbol.provider_identity.ends_with("target()."))
+        .unwrap();
+    let type_symbol = imported
+        .symbols
+        .values()
+        .find(|symbol| symbol.provider_identity.ends_with("Payload#"))
+        .unwrap();
+    assert_eq!(callable.kind.category, SemanticSymbolCategory::Callable);
+    assert_eq!(type_symbol.kind.category, SemanticSymbolCategory::Unknown);
     fs::remove_dir_all(root).ok();
 }

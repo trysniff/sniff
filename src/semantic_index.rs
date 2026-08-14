@@ -32,6 +32,8 @@ pub struct SemanticIndexProvenance {
     pub tool_version: Option<String>,
     pub arguments: Vec<String>,
     pub source_text_encoding: Option<SemanticTextEncoding>,
+    #[serde(default)]
+    pub diagnostics: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -109,6 +111,7 @@ pub struct SemanticSymbol {
     pub visibility: SemanticVisibility,
     pub surfaces: BTreeSet<SemanticSurface>,
     pub origin: SemanticSymbolOrigin,
+    pub ambiguity_notes: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

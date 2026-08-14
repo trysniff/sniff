@@ -187,6 +187,55 @@ fn standard_method_census_surfaces_signature_hotspots() {
     let _ = fs::remove_dir_all(&root);
 }
 
+#[cfg(not(target_os = "windows"))]
+#[test]
+fn differential_proof_runs_through_the_cli_sandbox() {
+    let root = unique_root("sniff-dogfood-differential-proof");
+    fs::create_dir_all(&root).unwrap();
+
+    let (endpoint, _hits, _prompts) = spawn_prompt_logging_server();
+    let endpoint = format!("{endpoint}/chat/completions");
+    write_file(
+        &root,
+        "src/sloppy.py",
+        "def sloppy(value):\n    total = value\n    return total\n",
+    );
+    fs::write(
+        root.join(".env"),
+        format!("SNIFF_API_KEY=test-key\nSNIFF_ENDPOINT={endpoint}\nSNIFF_MODEL=test-model\n"),
+    )
+    .unwrap();
+    fs::write(
+        root.join("sniff.config.toml"),
+        r#"[proof]
+        differential_command = ["sh", "-c", "printf stable"]
+"#,
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_sniff"))
+        .current_dir(&root)
+        .arg(root.join("src"))
+        .output()
+        .unwrap();
+
+    assert!(
+        matches!(output.status.code(), Some(0) | Some(1)),
+        "unexpected exit status: {:?}\nstdout:\n{}\nstderr:\n{}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let report = fs::read_to_string(root.join("sniff-report.md")).unwrap();
+    assert!(
+        report.contains("P4 differential validated"),
+        "the configured differential probe must run through the sandbox and upgrade the proof:\n{}",
+        report
+    );
+
+    let _ = fs::remove_dir_all(root);
+}
+
 #[test]
 fn support_facades_are_reviewed_and_real_slop_still_surfaces_end_to_end() {
     let root = unique_root("sniff-dogfood-slf");
@@ -261,14 +310,10 @@ fn support_facades_are_reviewed_and_real_slop_still_surfaces_end_to_end() {
         "export function buildApp() {\n  return null;\n}\n",
     );
     write_file(&root, "src/bumpkin/core/lib.rs", "pub fn run() {}\n");
+    write_file(&root, "server.go", "package core\n\nfunc Run() {}\n");
     write_file(
         &root,
-        "src/bumpkin/core/server.go",
-        "package core\n\nfunc Run() {}\n",
-    );
-    write_file(
-        &root,
-        "src/bumpkin/core/Helper.kt",
+        "src/main/kotlin/Helper.kt",
         "fun helper(): Int = 1\n",
     );
 

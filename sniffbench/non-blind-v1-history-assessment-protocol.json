@@ -1,0 +1,76 @@
+{
+  "schema_version": 3,
+  "protocol_id": "sniffbench-non-blind-history-assessment-v1",
+  "prepared_at": "2026-08-14T00:00:00Z",
+  "precommit_parent_revision": "258fcf89e13599286f46f719199cb0d9cddb6cb4",
+  "no_fallbacks": true,
+  "history_worksheet": {
+    "artifact_path": "sniffbench/non-blind-v1-history-worksheet.json",
+    "sha256": "73fdbd7b9b49554a2dccb34fc1c19df0fcaa8f2b69e8b72be401cfc67f6dfe85",
+    "task_sha256": "e78e4640072de84ff176538939cd9544cf6aa5027edd0c2941f12233123f8160",
+    "candidate_count": 600
+  },
+  "repository_snapshot": {
+    "remote_contract": "https://canonical_repository_identity.git",
+    "reference_scope": "Every commit reachable from the remote default branch HEAD observed at assessment time; tags, pull-request refs, unmerged refs, and commits outside that immutable HEAD are excluded.",
+    "recorded_identity": "Record the advertised default-branch name and its complete 40-character HEAD revision before commit selection.",
+    "history_completeness": "The reachable commit graph and required blobs must be complete. Shallow, sparse, promisor-dependent, or dirty repositories are typed exclusions.",
+    "repository_order": "Assess all 600 worksheet repositories in ascending worksheet rank. Checkpoints must form one contiguous prefix bound to the worksheet and this protocol.",
+    "failure_rule": "A repository-level transport failure is retryable and does not create a checkpoint. A reproducible repository fact creates a typed exclusion. No repository may be replaced, reordered, or silently omitted."
+  },
+  "commit_selection": {
+    "subject_regex_source": "sniffbench/non-blind-v1-selection-policy.json#/historical_simplification/commit_subject_regex",
+    "candidate_metadata": [
+      "complete lowercase commit SHA",
+      "complete parent SHA list",
+      "raw UTF-8 subject bytes",
+      "changed path and status ledger"
+    ],
+    "metadata_filter": [
+      "subject matches the exact policy regex",
+      "commit has exactly one parent",
+      "commit and parent are reachable and materializable from the recorded default-branch HEAD"
+    ],
+    "rank_contract_source": "sniffbench/non-blind-v1-selection-policy.json#/historical_simplification/commit_ranking_contract",
+    "single_attempt_rule": "Rank every metadata-filtered commit by the policy contract and assess only rank 1. No later commit is considered when rank 1 fails any downstream requirement.",
+    "no_match_rule": "If no metadata-filtered commit exists, close the repository as no_matching_commit."
+  },
+  "source_eligibility": {
+    "supported_languages_source": "sniffbench/non-blind-v1-selection-policy.json#/supported_languages",
+    "production_source_contract": "Use Sniff's frozen eligible-production walker and parser contract on both parent and commit. Generated, vendored, test, fixture, example, documentation, lock, build-script, and formatting-only paths do not qualify.",
+    "changed_method_contract": "A method is affected when its exact parent or commit source range intersects a non-context diff hunk in a qualifying changed production file. Deleted parent methods and added commit methods participate.",
+    "language_assignment": "Count the union of affected parent and commit methods by language. The unique greatest count is the repository quota language; ties use lexicographically ascending language.",
+    "method_bounds": "The complete eligible production-method census at the parent revision, across all supported languages, must satisfy the policy's inclusive source_method_bounds.",
+    "simplification_floor": "Across qualifying changed production files, the commit must delete at least one non-whitespace source line and total non-whitespace source lines after the commit must be strictly lower than before it. Formatting-only changes are excluded.",
+    "license_rule": "The commit revision must contain a tracked repository license selected by the same deterministic license-path contract used by the blind source assessor."
+  },
+  "test_recipe": {
+    "selection_order": [
+      "A root sniff.config.toml explicit proof.test_command argv present unchanged in parent and commit.",
+      "A root package.json scripts.test string present unchanged in parent and commit, prepared by the unique root lockfile's immutable install command and tested by that package manager.",
+      "A root Cargo.toml present in both revisions: cargo test --workspace --all-targets, with --locked only when the same root Cargo.lock exists in both revisions.",
+      "A root go.mod present unchanged in both revisions: go test ./... .",
+      "A root pytest.ini, pyproject.toml pytest configuration, tox.ini pytest environment, or setup.cfg pytest configuration present unchanged in both revisions: create a fresh private venv, install the project plus pytest into it, then run that private python -m pytest.",
+      "A root Gradle wrapper plus settings.gradle(.kts) or build.gradle(.kts) present unchanged in both revisions: the platform wrapper test --no-daemon."
+    ],
+    "dependency_preparation": "Before the test argv, execute the recipe's frozen preparation argv in order inside the same hardened sandbox and revision snapshot. npm uses npm ci; pnpm uses install --frozen-lockfile; Yarn v1 uses install --frozen-lockfile; Yarn Berry uses install --immutable; Bun uses install --frozen-lockfile; pytest uses python -I -m venv for a fresh private environment followed by private pip install --disable-pip-version-check . pytest. Cargo, Go, Gradle, and explicit proof commands have no implicit preparation. The reserved sniff_private_python placeholders expand only to the revision's fresh private cache paths and are committed as logical argv. Preparation may not read a host dependency cache and is never reused across revisions.",
+    "ambiguity_rule": "If more than one recipe matches at the same priority, required recipe files changed, a package-manager lockfile is absent or ambiguous, an immutable install contract cannot be derived, argv cannot be parsed without a shell, or the required runtime is unavailable, close the repository with a typed test_recipe exclusion.",
+    "execution_contract": "Run every frozen preparation argv and then the exact frozen test argv once on clean, separate parent and commit snapshots through Sniff's hardened repository-proof sandbox with a cleared environment, no host secrets, no mutable host dependency cache, bounded output, a 30-minute per-step timeout, and the repository root as the working directory. Network is enabled only inside that sandbox so preparation and the repository's exact command may resolve public dependencies into its fresh private HOME/cache; record that network-enabled execution in every raw step result.",
+    "pass_rule": "Every preparation step and both test executions must exit zero. Timeout, sandbox unavailability, missing dependencies, or a nonzero preparation, parent, or commit result is a typed exclusion and never permission to choose a smaller command or another commit.",
+    "evidence": "Persist preparation and test argv, runtime identity, every status and timeout flag, complete stdout and stderr SHA-256, bounded sanitized display output, and SHA-256 commitments to every complete untruncated raw step result for both revisions."
+  },
+  "quota_and_output": {
+    "quota_source": "Two selected repositories for each supported language, from repositories_per_language in the selection policy.",
+    "decision_order": "Derive every intrinsic source, license, and test fact before applying quota state. If the quota language already has two earlier selected repositories, close as quota_filled and do not select another commit.",
+    "selected_artifacts": [
+      "complete immutable repository, parent, commit, and observed default-branch HEAD identities",
+      "exact changed production source bytes at parent and commit",
+      "exact license bytes",
+      "complete method census and affected-method ledger",
+      "commit metadata and changed-path ledger",
+      "parent and commit behavioral test evidence"
+    ],
+    "label_separation": "Assessment records no Sniff output, slop tier, slop mechanism, human explanation, or expected proof level. Independent ontology review occurs only after the label-free provenance seal is frozen.",
+    "completion_rule": "The assessment is complete only when all 600 repositories have a validated contiguous checkpoint and every language quota equals two. An unfilled quota is a failed benchmark prerequisite, not permission to extend, rerank, or hand-pick replacements."
+  }
+}

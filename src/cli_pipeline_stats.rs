@@ -1,4 +1,6 @@
-use crate::report_types::{LLMVerdict, RunReport, RunStats, StaticFlag};
+use crate::pricing::PricingRates;
+use crate::report_types::{LLMVerdict, MethodReviewRecord, RunReport, RunStats, StaticFlag};
+use crate::slop_cases::SlopCase;
 use crate::types::{FileRecord, FindingTier};
 
 pub(super) struct StatsInput<'a> {
@@ -10,6 +12,9 @@ pub(super) struct StatsInput<'a> {
     pub cached_in_tok: usize,
     pub ai_expected_reviews: usize,
     pub method_reviews_expected: usize,
+    pub estimated_cost_usd: f64,
+    pub pricing_snapshots: Vec<PricingRates>,
+    pub pricing_provenance_complete: bool,
 }
 
 #[allow(clippy::field_reassign_with_default)]
@@ -121,6 +126,9 @@ pub(super) fn generate_stats(input: StatsInput<'_>) -> RunStats {
     stats.input_tokens = input.in_tok;
     stats.cached_input_tokens = input.cached_in_tok.min(input.in_tok);
     stats.output_tokens = input.out_tok;
+    stats.estimated_cost_usd = input.estimated_cost_usd;
+    stats.pricing_snapshots = input.pricing_snapshots;
+    stats.pricing_provenance_complete = input.pricing_provenance_complete;
     stats
 }
 
@@ -128,6 +136,9 @@ pub(super) fn build_run_report_from_parts(
     file_records: &[FileRecord],
     static_flags: Vec<StaticFlag>,
     verdicts: Vec<LLMVerdict>,
+    method_review_records: Vec<MethodReviewRecord>,
+    method_cases: Vec<SlopCase>,
+    synthesis_cases: Vec<SlopCase>,
     stats: RunStats,
 ) -> (RunReport, bool) {
     let file_verdicts = crate::file_verdicts::build_file_verdicts_with_mode(
@@ -136,17 +147,25 @@ pub(super) fn build_run_report_from_parts(
         &verdicts,
         false,
     );
+    let mut slop_cases = method_cases;
+    slop_cases.extend(synthesis_cases);
     let run_report = RunReport {
         file_verdicts,
         static_flags,
         llm_verdicts: verdicts,
+        method_review_records,
+        slop_cases,
         stats,
     };
 
     let has_method_issues = run_report.llm_verdicts.iter().any(|verdict| {
         verdict.check_type == "method" && verdict.tier != crate::types::FindingTier::Clean
     });
-    let has_issues = has_method_issues;
+    let has_case_issues = run_report
+        .slop_cases
+        .iter()
+        .any(|case| case.tier != crate::types::FindingTier::Clean);
+    let has_issues = has_method_issues || has_case_issues;
 
     (run_report, has_issues)
 }

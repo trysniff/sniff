@@ -1,8 +1,10 @@
 use super::{
-    IntentMethodReview, build_semantic_method_verdict, evidence_matches_source,
-    parse_adversarial_method_review, parse_semantic_method_review, validate_file_review,
+    IntentMethodReview, SemanticEvidence, SemanticMethodReview, build_method_review_record,
+    build_semantic_method_verdict, evidence_matches_source, parse_adversarial_method_review,
+    parse_semantic_method_review, validate_file_review,
 };
-use crate::types::FindingTier;
+use crate::product_contract::SlopPattern;
+use crate::types::{FindingTier, MethodRecord};
 
 fn established_intent() -> IntentMethodReview {
     IntentMethodReview {
@@ -11,6 +13,53 @@ fn established_intent() -> IntentMethodReview {
         necessity_check: "A resolved caller consumes the normalized value.".to_string(),
         missing_evidence: Vec::new(),
     }
+}
+
+#[test]
+fn method_review_record_persists_the_full_semantic_review() {
+    let method = MethodRecord {
+        name: "normalize".to_string(),
+        file_path: "src/demo.py".to_string(),
+        source: "def normalize(value):\n    return value.strip()\n".to_string(),
+        loc: 2,
+        param_count: 1,
+        start_line: 1,
+        end_line: 2,
+        is_exported: false,
+        language: "python".to_string(),
+        nesting_depth: 0,
+        references: Vec::new(),
+        real_ref_count: 0,
+    };
+    let review = SemanticMethodReview {
+        tier: FindingTier::Slop,
+        pattern: SlopPattern::CeremonialLogic,
+        intent: "Normalize the value before returning it.".to_string(),
+        reason: "The temporary layer adds no distinct behavior.".to_string(),
+        evidence: vec![SemanticEvidence {
+            start_line: 2,
+            end_line: 2,
+            quote: "return value.strip()".to_string(),
+        }],
+        necessity_check: "The method can return the expression directly.".to_string(),
+        contract_status: "unnecessary".to_string(),
+        contract_impact: "The return contract is preserved.".to_string(),
+        dependency_impact: "No caller depends on the temporary layer.".to_string(),
+        simplification: "Return value.strip() directly.".to_string(),
+        change_scope: "local".to_string(),
+        behavior_status: "preserved".to_string(),
+        missing_evidence: Vec::new(),
+    };
+
+    let record = build_method_review_record(&review, "method-1", "hash-1", &method);
+
+    assert_eq!(record.unit_id, "method-1");
+    assert_eq!(record.source_hash, "hash-1");
+    assert_eq!(record.pattern, "ceremonial_logic");
+    assert_eq!(record.intent, review.intent);
+    assert_eq!(record.evidence.len(), 1);
+    assert_eq!(record.evidence[0].quote, "return value.strip()");
+    assert_eq!(record.verdict.tier, FindingTier::Slop);
 }
 
 #[test]

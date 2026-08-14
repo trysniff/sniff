@@ -29,7 +29,7 @@ pub(super) struct BatchUsage {
 
 pub(super) type BatchUsageCallback = Arc<dyn Fn(BatchUsage) -> Result<(), String> + Send + Sync>;
 pub(super) type BatchCompletionCallback =
-    Arc<dyn Fn(usize, &LLMVerdict) -> Result<(), String> + Send + Sync>;
+    Arc<dyn Fn(usize, &LLMVerdict, &SemanticMethodReview) -> Result<(), String> + Send + Sync>;
 
 fn observed_usage(
     direct_input: usize,
@@ -641,7 +641,7 @@ pub(super) async fn analyze_method_review_batch(
     on_progress: Option<&ReviewProgressCallback>,
     on_usage: Option<&BatchUsageCallback>,
     on_completed: Option<&BatchCompletionCallback>,
-) -> Result<(Vec<LLMVerdict>, usize, usize), String> {
+) -> Result<(Vec<(LLMVerdict, SemanticMethodReview)>, usize, usize), String> {
     if items.is_empty() {
         return Err("method review batch is empty".to_string());
     }
@@ -891,9 +891,9 @@ pub(super) async fn analyze_method_review_batch(
             item.method.end_line,
         );
         if let Some(callback) = on_completed {
-            callback(index, &verdict)?;
+            callback(index, &verdict, &review)?;
         }
-        verdicts.push(verdict);
+        verdicts.push((verdict, review));
     }
 
     Ok((verdicts, input_tokens, output_tokens))

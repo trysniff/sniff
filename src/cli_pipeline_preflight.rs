@@ -16,6 +16,45 @@ const LOWER_SECONDS_PER_REQUEST: usize = 5;
 // 60-second ceiling. Keep the public estimate conservative across providers.
 const UPPER_SECONDS_PER_REQUEST: usize = 120;
 
+/// Run every required pinned compiler indexer and render its resolved facts
+/// for the exact AST methods that will be reviewed. A missing or unresolved
+/// indexed method is fatal; the normal scan never substitutes the custom graph
+/// for a missing compiler fact.
+pub(super) async fn build_compiler_method_contexts(
+    repository_root: &Path,
+    files: &[FileRecord],
+) -> Result<crate::semantic_method_join::CompilerMethodContexts, String> {
+    let indexes =
+        crate::semantic_indexer_runner::run_required_indexers(repository_root, files).await?;
+    let mut contexts = BTreeMap::new();
+    for (kind, index) in indexes {
+        let index_files = crate::semantic_indexer_runner::files_for_indexer(files, kind);
+        let join =
+            crate::semantic_method_join::join_methods(repository_root, &index_files, &index)?;
+        join.require_complete()?;
+        let provider_contexts = crate::semantic_method_join::render_compiler_method_contexts(
+            repository_root,
+            &index_files,
+            &index,
+            &join,
+        )?;
+        for (key, context) in provider_contexts {
+            if contexts.insert(key.clone(), context).is_some() {
+                return Err(format!("compiler semantic context repeats method {key}"));
+            }
+        }
+    }
+    let expected = files.iter().map(|file| file.methods.len()).sum::<usize>();
+    if contexts.len() != expected {
+        return Err(format!(
+            "compiler semantic context covered {} of {} methods",
+            contexts.len(),
+            expected
+        ));
+    }
+    Ok(contexts)
+}
+
 #[derive(Debug, Clone)]
 pub(super) struct ScanEstimate {
     pub files: usize,
@@ -352,7 +391,21 @@ pub async fn doctor(
                     "no supported Rust, Python, JavaScript/TypeScript, Go, or Kotlin files found",
                     &mut failures,
                 ),
-                Ok(files) => print_ok("source scan", &run::source_inventory_summary(&files)),
+                Ok(files) => {
+                    print_ok("source scan", &run::source_inventory_summary(&files));
+                    let indexer_failures =
+                        crate::semantic_indexer_doctor::check_required_indexers(&files).await;
+                    if indexer_failures.is_empty() {
+                        print_ok(
+                            "semantic indexers",
+                            "all required pinned indexers are installed and verified",
+                        );
+                    } else {
+                        for failure in indexer_failures {
+                            print_fail("semantic indexers", &failure, &mut failures);
+                        }
+                    }
+                }
                 Err(err) => print_fail("source scan", &err, &mut failures),
             }
             match check_report_writable(&target) {
@@ -398,6 +451,99 @@ pub async fn doctor(
         )
         .into())
     }
+}
+
+pub async fn install_indexers(path: &str, force: bool) -> Result<i32, Box<dyn std::error::Error>> {
+    let target = PathBuf::from(path);
+    if !target.exists() {
+        return Err(IoError::new(
+            ErrorKind::NotFound,
+            format!("target path does not exist: {}", target.display()),
+        )
+        .into());
+    }
+    let files = io::scan_semantic_files(path, &crate::config::ResolvedConfig::default())
+        .await
+        .map_err(IoError::other)?;
+    if files.is_empty() {
+        return Err(IoError::new(
+            ErrorKind::InvalidInput,
+            "no supported Rust, Python, JavaScript/TypeScript, Go, or Kotlin files found",
+        )
+        .into());
+    }
+    println!(
+        "Installing pinned semantic indexers for {}",
+        run::source_inventory_summary(&files)
+    );
+    let installed = crate::semantic_indexer_installer::install_required_indexers(&files, force)
+        .await
+        .map_err(IoError::other)?;
+    for indexer in installed {
+        println!("  [ok] semantic indexer: {}", indexer.entrypoint.display());
+    }
+    println!("Pinned semantic indexers are ready. No LLM request was made.");
+    Ok(0)
+}
+
+pub async fn index_semantic_sources(path: &str) -> Result<i32, Box<dyn std::error::Error>> {
+    let target = PathBuf::from(path);
+    if !target.exists() {
+        return Err(IoError::new(
+            ErrorKind::NotFound,
+            format!("target path does not exist: {}", target.display()),
+        )
+        .into());
+    }
+    let files = io::scan_semantic_files(path, &ResolvedConfig::default())
+        .await
+        .map_err(IoError::other)?;
+    if files.is_empty() {
+        return Err(IoError::new(
+            ErrorKind::InvalidInput,
+            "no supported Rust, Python, JavaScript/TypeScript, Go, or Kotlin files found",
+        )
+        .into());
+    }
+    let root = io::repository_root_for_target(&target);
+    let indexes = crate::semantic_indexer_runner::run_required_indexers(&root, &files)
+        .await
+        .map_err(IoError::other)?;
+    for (kind, index) in indexes {
+        println!(
+            "  [ok] {}: {} documents, {} symbols, {} calls",
+            kind.display_name(),
+            index.documents.len(),
+            index.symbols.len(),
+            index.calls.len()
+        );
+        let ambiguous = index
+            .symbols
+            .values()
+            .filter(|symbol| !symbol.ambiguity_notes.is_empty())
+            .count();
+        if ambiguous > 0 {
+            println!(
+                "       unresolved semantic ambiguity: {} symbol(s); those facts are not trusted",
+                ambiguous
+            );
+        }
+        for diagnostic in &index.provenance.diagnostics {
+            println!("       semantic provider diagnostic: {diagnostic}");
+        }
+        let index_files = crate::semantic_indexer_runner::files_for_indexer(&files, kind);
+        let joined = crate::semantic_method_join::join_methods(&root, &index_files, &index)
+            .map_err(IoError::other)?;
+        println!(
+            "       AST identity join: {} resolved, {} compiler-excluded, {} unresolved",
+            joined.resolved_count(),
+            joined.compiler_excluded_count(),
+            joined.unresolved_count()
+        );
+        joined.require_complete().map_err(IoError::other)?;
+    }
+    println!("SCIP semantic indexing completed. No LLM request was made.");
+    Ok(0)
 }
 
 fn validate_endpoint(endpoint: &str, failures: &mut Vec<String>) {

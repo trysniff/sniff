@@ -129,7 +129,7 @@ impl SemanticIndexCache {
     }
 }
 
-fn cache_base_directory() -> Result<PathBuf, String> {
+pub(crate) fn cache_base_directory() -> Result<PathBuf, String> {
     if let Some(configured) = std::env::var_os("SNIFF_CACHE_DIR")
         && !configured.is_empty()
     {

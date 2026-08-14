@@ -67,6 +67,9 @@ fn object_looks_like_result(map: &serde_json::Map<String, serde_json::Value>) ->
         || map.contains_key("role")
         || map.contains_key("verdict")
         || map.contains_key("reviews")
+        || map.contains_key("cases")
+        || map.contains_key("decisions")
+        || map.contains_key("proofs")
 }
 
 fn repair_unclosed_object(content: &str) -> Option<String> {
@@ -323,5 +326,17 @@ mod tests {
         let value = extract_json_object(content).unwrap();
 
         assert_eq!(value["reviews"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn extract_json_object_preserves_case_and_adjudication_roots() {
+        let cases = r#"{"cases":[{"case_id":"a","tier":"slop"}]}"#;
+        let decisions = r#"{"decisions":[{"case_id":"a","decision":"keep","reason":"verified"}]}"#;
+
+        let cases_value = extract_json_object(cases).unwrap();
+        let decisions_value = extract_json_object(decisions).unwrap();
+
+        assert_eq!(cases_value["cases"].as_array().unwrap().len(), 1);
+        assert_eq!(decisions_value["decisions"].as_array().unwrap().len(), 1);
     }
 }

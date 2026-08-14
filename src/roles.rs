@@ -277,17 +277,23 @@ pub async fn resolve_file_roles_with_journal(
     }
     for file in unresolved {
         let key = role_journal_key(&file);
-        if let Some((role_label, is_current_scan)) =
-            journal.as_ref().and_then(|store| store.reusable_role(&key))
+        let source_hash = sha256_text(&file.source);
+        if let Some((role_label, is_current_scan)) = journal
+            .as_ref()
+            .and_then(|store| store.reusable_role(&key, &source_hash))
         {
             let role = parse_role(&serde_json::json!({"role": role_label}))?;
             if !is_current_scan {
                 journal
                     .as_mut()
                     .expect("cached role requires a journal store")
+                    .record_cross_scan_reuse(&key, &source_hash)?;
+                journal
+                    .as_mut()
+                    .expect("cached role requires a journal store")
                     .record_role(
                         key,
-                        sha256_text(&file.source),
+                        source_hash,
                         JournalRoleCompletion {
                             role: Some(file_role_label(role).to_string()),
                             in_tok: 0,

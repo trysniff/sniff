@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "selection_id": "sniffbench-blind-oss-v1-composite",
+  "selected_at": "2026-08-13T11:59:38Z",
+  "language_quotas": {
+    "go": 2,
+    "javascript": 2,
+    "kotlin": 2,
+    "python": 2,
+    "rust": 2,
+    "typescript": 2
+  },
+  "components": [
+    {
+      "selection_id": "sniffbench-blind-oss-v1-extension-1",
+      "policy_sha256": "5bac12f5a9651bf9bfa008fee7773cd9ca76b712504212a663ea12fe5623da27",
+      "frame_sha256": "55b1de849d6d401bd6529a2806d587b53170cfbe7cdbc2ac5799ab65bf42807a"
+    },
+    {
+      "selection_id": "sniffbench-blind-oss-v1-kotlin-selection-1",
+      "policy_sha256": "68a60eb917c6a0c23fc8871e169dd8d5c83b81ebcf61ee7e208b108e9f7bd02c",
+      "frame_sha256": "a293019c63666f7875e05d7637c02309a53971316aa5194d94430c1281d8a233"
+    }
+  ],
+  "attestation": "This policy preserves the ten independently selected Go, JavaScript, Python, Rust, and TypeScript repositories from the complete OpenSSF-frame assessment and adds exactly two Kotlin repositories from the separately frozen Kotlin frame. Component identities, policy hashes, frame hashes, order, and all six two-repository quotas were fixed before the Kotlin ranked worksheet was generated or inspected."
+}
