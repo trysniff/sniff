@@ -3,8 +3,8 @@ use super::super::dossier::MethodDossier;
 use super::super::journal::{JournalCompletion, JournalStore, sha256_text};
 use super::{
     ReviewJob, ReviewOutcome, group_pending_reviews, recoverable_method_review_error,
-    run_bounded_review_tasks, run_bounded_review_tasks_keyed, run_review_jobs, semantic_index_hash,
-    unresolved_method_verdict,
+    run_bounded_review_tasks, run_bounded_review_tasks_keyed, run_bounded_review_tasks_keyed_until,
+    run_review_jobs, semantic_index_hash, unresolved_method_verdict,
 };
 use crate::config::ResolvedConfig;
 use crate::llm::LLMClient;
@@ -156,7 +156,7 @@ async fn resumed_journal_restores_cached_input_usage_without_an_api_call() {
         in_tok: AtomicUsize::new(0),
         out_tok: AtomicUsize::new(0),
     });
-    let verdicts = run_review_jobs(analyzer, vec![job], None, context, Some(&path), None)
+    let verdicts = run_review_jobs(analyzer, vec![job], None, context, Some(&path), None, None)
         .await
         .unwrap();
 
@@ -221,6 +221,7 @@ async fn cross_scan_content_cache_records_zero_cost_coverage_without_an_api_call
         context,
         Some(&path),
         Some("run-b"),
+        None,
     )
     .await
     .unwrap();
@@ -232,6 +233,40 @@ async fn cross_scan_content_cache_records_zero_cost_coverage_without_an_api_call
     assert_eq!(summary.completed_units, 1);
     assert_eq!(summary.input_tokens, 0);
     assert_eq!(summary.output_tokens, 0);
+    std::fs::remove_file(path).unwrap();
+}
+
+#[tokio::test]
+async fn zero_budget_pauses_before_the_first_method_call_and_leaves_a_resumable_manifest() {
+    let path = temp_journal_path();
+    let job = method_job("def demo():\n    return 1\n");
+    let context = "review_contract=test\nmodel=test";
+    let client = Arc::new(LLMClient::new(ResolvedConfig::default(), None));
+    let analyzer = Arc::new(Analyzer {
+        llm_client: Arc::clone(&client),
+        in_tok: AtomicUsize::new(0),
+        out_tok: AtomicUsize::new(0),
+    });
+
+    let error = run_review_jobs(
+        analyzer,
+        vec![job],
+        None,
+        context,
+        Some(&path),
+        Some("budget-run"),
+        Some(0.0),
+    )
+    .await
+    .expect_err("zero budget should pause before review admission");
+
+    assert!(crate::review_journal::is_budget_pause(&error));
+    assert!(path.exists());
+    assert_eq!(client.failed_input_tokens(), 0);
+    let summary = crate::review_journal::summarize(&path).unwrap();
+    assert_eq!(summary.scan_id.as_deref(), Some("budget-run"));
+    assert_eq!(summary.expected_units, 1);
+    assert_eq!(summary.completed_units, 0);
     std::fs::remove_file(path).unwrap();
 }
 
@@ -451,6 +486,47 @@ async fn bounded_review_tasks_overlap_without_exceeding_the_limit() {
     assert_eq!(completed.len(), 8);
     assert_eq!(peak.load(Ordering::SeqCst), 4);
     assert_eq!(active.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn scheduler_pause_drains_active_tasks_without_starting_more_work() {
+    let started = Arc::new(AtomicUsize::new(0));
+    let admitted_cost = Arc::new(AtomicUsize::new(0));
+    let pending = (0usize..3).collect::<VecDeque<_>>();
+
+    let run = run_bounded_review_tasks_keyed_until(
+        pending,
+        2,
+        {
+            let started = Arc::clone(&started);
+            move |index| {
+                started.fetch_add(1, Ordering::SeqCst);
+                async move {
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                    Ok(index)
+                }
+            }
+        },
+        {
+            let admitted_cost = Arc::clone(&admitted_cost);
+            move |_| {
+                admitted_cost.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            }
+        },
+        |_| Vec::new(),
+        {
+            let admitted_cost = Arc::clone(&admitted_cost);
+            move || admitted_cost.load(Ordering::SeqCst) == 0
+        },
+    )
+    .await
+    .unwrap();
+
+    assert!(run.stopped_early);
+    assert_eq!(run.completed.len(), 2);
+    assert_eq!(started.load(Ordering::SeqCst), 2);
+    assert_eq!(admitted_cost.load(Ordering::SeqCst), 2);
 }
 
 #[tokio::test]

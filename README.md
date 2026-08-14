@@ -58,6 +58,9 @@ sniff
 
 # Continue an interrupted scan without repeating completed reviews.
 sniff resume
+
+# Optionally pause after about $0.50 of cumulative estimated scan spend.
+sniff --budget-usd 0.50
 ```
 
 Sniff writes `sniff-report.md` at the scanned repository root. A successful run
@@ -68,6 +71,15 @@ Each completed method is appended to a durable journal. `sniff status [PATH]`
 reads that journal without loading provider configuration or scanning source
 files. `sniff resume [PATH]` requires an existing journal and continues the
 scan; changed or invalidated work is reviewed again.
+
+`--budget-usd` is a cumulative estimated limit for one scan. Sniff stops
+admitting new paid review batches when the journaled estimate reaches the
+limit, drains and persists already-running requests, exits with code `3`, and
+does not write an incomplete report. Continue with a higher limit, for example
+`sniff resume --budget-usd 1.00`. Concurrent in-flight requests can finish
+above the limit, and configured token rates may differ from the provider's
+invoice, so this is a resumable admission control rather than an exact billing
+cap.
 
 ## What A Finding Looks Like
 

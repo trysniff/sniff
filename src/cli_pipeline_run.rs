@@ -149,6 +149,7 @@ pub async fn resume(
     path: &str,
     skip_dotenv: bool,
     assume_yes: bool,
+    budget_usd: Option<f64>,
 ) -> Result<i32, Box<dyn std::error::Error>> {
     let target_path = std::path::Path::new(path);
     let report_path = report_path_for_target(target_path);
@@ -165,7 +166,7 @@ pub async fn resume(
         .into());
     }
 
-    run(path, skip_dotenv, assume_yes).await
+    run(path, skip_dotenv, assume_yes, budget_usd).await
 }
 
 fn strip_windows_verbatim_prefix(path: std::path::PathBuf) -> std::path::PathBuf {
@@ -192,10 +193,17 @@ async fn build_run_report(
     file_records: &mut [crate::types::FileRecord],
     bar_style: &ProgressStyle,
     journal_path: &std::path::Path,
+    budget_usd: Option<f64>,
 ) -> Result<(RunReport, bool), Box<dyn std::error::Error>> {
-    let review =
-        llm::prepare_review_artifacts(path, config, file_records, bar_style, Some(journal_path))
-            .await?;
+    let review = llm::prepare_review_artifacts(
+        path,
+        config,
+        file_records,
+        bar_style,
+        Some(journal_path),
+        budget_usd,
+    )
+    .await?;
 
     let stats = stats::generate_stats(stats::StatsInput {
         file_records,
@@ -228,6 +236,7 @@ pub async fn run(
     path: &str,
     skip_dotenv: bool,
     assume_yes: bool,
+    budget_usd: Option<f64>,
 ) -> Result<i32, Box<dyn std::error::Error>> {
     let target_path = std::path::Path::new(path);
     let report_path = report_path_for_target(target_path);
@@ -263,8 +272,23 @@ pub async fn run(
     eprintln!("Preparing report...");
     let bar_style = build_progress_style()
         .map_err(|err| IoError::other(format!("failed to build progress style: {}", err)))?;
-    let (run_report, has_issues) =
-        build_run_report(path, &config, &mut file_records, &bar_style, &journal_path).await?;
+    let report_result = build_run_report(
+        path,
+        &config,
+        &mut file_records,
+        &bar_style,
+        &journal_path,
+        budget_usd,
+    )
+    .await;
+    let (run_report, has_issues) = match report_result {
+        Ok(report) => report,
+        Err(error) if crate::review_journal::is_budget_pause(&error.to_string()) => {
+            eprintln!("{error}");
+            return Ok(3);
+        }
+        Err(error) => return Err(error),
+    };
 
     let report_path_text = report_path.to_string_lossy().to_string();
     crate::reporter::render_report(&run_report, &config, Some(&report_path_text))

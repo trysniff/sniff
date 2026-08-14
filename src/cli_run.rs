@@ -3,6 +3,17 @@ use clap::{Parser, Subcommand};
 #[path = "cli_pipeline.rs"]
 mod pipeline;
 
+fn parse_budget_usd(value: &str) -> Result<f64, String> {
+    let budget = value
+        .trim()
+        .parse::<f64>()
+        .map_err(|_| "budget must be a number in USD".to_string())?;
+    if !budget.is_finite() || budget < 0.0 {
+        return Err("budget must be a finite, non-negative number in USD".to_string());
+    }
+    Ok(budget)
+}
+
 #[derive(Parser, Debug)]
 #[command(name = "sniff")]
 #[command(version)]
@@ -29,6 +40,15 @@ pub struct CliArgs {
         help = "approve an unusually expensive scan without prompting"
     )]
     pub yes: bool,
+
+    #[arg(
+        long,
+        global = true,
+        allow_hyphen_values = true,
+        value_parser = parse_budget_usd,
+        help = "pause before admitting more paid reviews at this cumulative estimated scan cost"
+    )]
+    pub budget_usd: Option<f64>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -58,6 +78,15 @@ pub async fn run(args: CliArgs) -> Result<i32, Box<dyn std::error::Error>> {
     if args.command.is_some() && args.estimate {
         return Err("--estimate cannot be combined with a subcommand".into());
     }
+    if args.budget_usd.is_some()
+        && (args.estimate
+            || matches!(
+                &args.command,
+                Some(CliCommand::Doctor { .. } | CliCommand::Status { .. })
+            ))
+    {
+        return Err("--budget-usd is only valid for a normal scan or `sniff resume`".into());
+    }
 
     match args.command {
         Some(CliCommand::Doctor { path, probe }) => {
@@ -65,10 +94,10 @@ pub async fn run(args: CliArgs) -> Result<i32, Box<dyn std::error::Error>> {
         }
         Some(CliCommand::Status { path }) => pipeline::status(&path).await,
         Some(CliCommand::Resume { path }) => {
-            pipeline::resume(&path, args.skip_dotenv, args.yes).await
+            pipeline::resume(&path, args.skip_dotenv, args.yes, args.budget_usd).await
         }
         None if args.estimate => pipeline::estimate(&args.path, args.skip_dotenv).await,
-        None => pipeline::run(&args.path, args.skip_dotenv, args.yes).await,
+        None => pipeline::run(&args.path, args.skip_dotenv, args.yes, args.budget_usd).await,
     }
 }
 
@@ -124,6 +153,23 @@ mod tests {
         let args = CliArgs::try_parse_from(["sniff", "repo", "--yes"]).expect("scan arguments");
 
         assert!(args.yes);
+    }
+
+    #[test]
+    fn parses_a_non_negative_scan_budget() {
+        let args = CliArgs::try_parse_from(["sniff", "repo", "--budget-usd", "0.75"])
+            .expect("budget arguments");
+
+        assert_eq!(args.budget_usd, Some(0.75));
+    }
+
+    #[test]
+    fn rejects_negative_and_non_finite_scan_budgets() {
+        for value in ["-0.01", "NaN", "inf", "-inf"] {
+            let error = CliArgs::try_parse_from(["sniff", "--budget-usd", value])
+                .expect_err("invalid budget must not parse");
+            assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
+        }
     }
 
     #[test]

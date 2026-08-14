@@ -137,3 +137,35 @@ fn resume_without_a_journal_fails_before_loading_provider_configuration() {
     assert!(stderr.contains("No Sniff journal exists"), "{stderr}");
     assert!(!stderr.contains("SNIFF_API_KEY"), "{stderr}");
 }
+
+#[test]
+fn zero_budget_creates_a_resumable_journal_without_reaching_the_provider() {
+    let root = fixture();
+    let output = run_sniff(&[
+        "--skip-dotenv",
+        "--yes",
+        "--budget-usd",
+        "0",
+        root.to_str().expect("UTF-8 fixture path"),
+    ]);
+
+    assert_eq!(output.status.code(), Some(3), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Sniff budget pause:"), "{stderr}");
+    assert!(!stderr.contains("connection refused"), "{stderr}");
+    assert!(root.join(".sniff-journal.jsonl").exists());
+    assert!(!root.join("sniff-report.md").exists());
+
+    let status = run_sniff_without_provider(&[
+        "--skip-dotenv",
+        "status",
+        root.to_str().expect("UTF-8 fixture path"),
+    ]);
+    std::fs::remove_dir_all(&root).ok();
+    assert!(status.status.success(), "{status:?}");
+    let status_stderr = String::from_utf8_lossy(&status.stderr);
+    assert!(
+        status_stderr.contains("Progress: 0/1 completed"),
+        "{status_stderr}"
+    );
+}

@@ -52,10 +52,15 @@ async fn ambiguous_role_failure_aborts_resolution() {
             .as_nanos()
     ));
 
-    let err =
-        resolve_file_roles_with_journal(&[file], Arc::clone(&client), Some(&journal_path), None)
-            .await
-            .expect_err("expected role resolution to fail hard");
+    let err = resolve_file_roles_with_journal(
+        &[file],
+        Arc::clone(&client),
+        Some(&journal_path),
+        None,
+        None,
+    )
+    .await
+    .expect_err("expected role resolution to fail hard");
     assert!(err.contains("Role resolution failed"));
     assert!(err.contains("HTTP 402"));
     assert_eq!(hits.load(Ordering::SeqCst), 1);
@@ -94,12 +99,13 @@ async fn role_journal_reuses_completed_classification_without_an_api_call() {
         Arc::clone(&client),
         Some(&journal_path),
         Some("run-a"),
+        None,
     )
     .await
     .unwrap();
     assert!(journal_path.exists());
     clear_file_role_cache();
-    resolve_file_roles_with_journal(&[file], client, Some(&journal_path), Some("run-b"))
+    resolve_file_roles_with_journal(&[file], client, Some(&journal_path), Some("run-b"), None)
         .await
         .unwrap();
     assert_eq!(hits.load(Ordering::SeqCst), 1);
@@ -111,6 +117,48 @@ async fn role_journal_reuses_completed_classification_without_an_api_call() {
     assert_eq!(summary.output_tokens, 0);
 
     std::fs::remove_file(&journal_path).unwrap();
+}
+
+#[tokio::test]
+async fn zero_budget_pauses_before_role_classification_and_leaves_a_manifest() {
+    let _role_lock = ROLE_TEST_LOCK
+        .get_or_init(|| std::sync::Mutex::new(()))
+        .lock()
+        .unwrap();
+    clear_file_role_cache();
+    let body = r#"{"choices":[{"message":{"content":"{\"role\":\"adapter_integration\",\"reason\":\"framework glue\"}"}}]}"#;
+    let (endpoint, hits) = spawn_openai_style_server(body);
+    let client = Arc::new(LLMClient::new(cfg(&endpoint), Some("test-key".to_string())));
+    let file = FileRecord {
+        file_path: "reporting.rs".to_string(),
+        source: "use reqwest::Client;\n".to_string(),
+        language: "rust".to_string(),
+        methods: vec![],
+    };
+    let journal_path = std::env::temp_dir().join(format!(
+        "sniff-role-budget-journal-test-{}.jsonl",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+
+    let error = resolve_file_roles_with_journal(
+        &[file],
+        client,
+        Some(&journal_path),
+        Some("budget-run"),
+        Some(0.0),
+    )
+    .await
+    .expect_err("zero budget should pause before role review admission");
+
+    assert!(crate::review_journal::is_budget_pause(&error));
+    assert_eq!(hits.load(Ordering::SeqCst), 0);
+    let summary = crate::review_journal::summarize(&journal_path).unwrap();
+    assert_eq!(summary.expected_role_units, 1);
+    assert_eq!(summary.completed_role_units, 0);
+    std::fs::remove_file(journal_path).unwrap();
 }
 
 #[test]

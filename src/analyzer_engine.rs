@@ -46,6 +46,7 @@ pub struct AnalysisRun<'a> {
     pub graph: Option<&'a crate::symbol_graph::SymbolGraph>,
     pub journal_path: Option<&'a std::path::Path>,
     pub scan_id: Option<&'a str>,
+    pub budget_usd: Option<f64>,
 }
 
 pub fn summarize_journal(path: &std::path::Path) -> Result<JournalSummary, String> {
@@ -160,6 +161,7 @@ pub async fn analyze_with_client_and_graph_and_journal(
             graph,
             journal_path,
             scan_id: None,
+            budget_usd: None,
         },
         client,
         on_progress,
@@ -180,6 +182,7 @@ pub async fn analyze_with_client_and_graph_and_journal_with_context(
         graph,
         journal_path,
         scan_id,
+        budget_usd,
     } = run;
     let analyzer = Arc::new(Analyzer {
         llm_client: client,
@@ -250,6 +253,7 @@ pub async fn analyze_with_client_and_graph_and_journal_with_context(
         &review_context_key,
         journal_path,
         scan_id,
+        budget_usd,
     )
     .await?;
 

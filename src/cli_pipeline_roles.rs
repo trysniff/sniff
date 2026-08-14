@@ -21,6 +21,7 @@ pub(super) async fn resolve_roles(
     client: Option<Arc<LLMClient>>,
     journal_path: Option<&Path>,
     scan_id: Option<&str>,
+    budget_usd: Option<f64>,
 ) -> Result<(usize, usize, Option<Arc<LLMClient>>), String> {
     let (role_in_tok, role_out_tok) = if let Some(client) = client.as_ref() {
         roles::resolve_file_roles_with_journal(
@@ -28,6 +29,7 @@ pub(super) async fn resolve_roles(
             Arc::clone(client),
             journal_path,
             scan_id,
+            budget_usd,
         )
         .await?
     } else {
