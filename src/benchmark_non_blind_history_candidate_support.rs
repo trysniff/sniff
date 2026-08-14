@@ -73,9 +73,7 @@ pub(super) async fn probe_inaccessible(
     let mut last_error = String::new();
     for attempt in 0..3_u32 {
         match client.get(&url).send().await {
-            Ok(response)
-                if matches!(response.status(), StatusCode::NOT_FOUND | StatusCode::GONE) =>
-            {
+            Ok(response) if inaccessible_repository_status(response.status()) => {
                 return Ok(Some(InaccessibleProbe {
                     url,
                     status: response.status().as_u16(),
@@ -97,6 +95,13 @@ pub(super) async fn probe_inaccessible(
     Err(format!(
         "historical repository availability probe failed for {repository}: {last_error}"
     ))
+}
+
+fn inaccessible_repository_status(status: StatusCode) -> bool {
+    matches!(
+        status,
+        StatusCode::UNAUTHORIZED | StatusCode::NOT_FOUND | StatusCode::GONE
+    )
 }
 
 pub(super) fn cleanup_rank_work(
@@ -148,4 +153,28 @@ pub(super) fn provenance_id(repository: &str, revision: &str) -> String {
     ]
     .concat();
     format!("historical-{:x}", Sha256::digest(bytes))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn smart_git_auth_challenge_is_a_reproducible_inaccessible_state() {
+        for status in [
+            StatusCode::UNAUTHORIZED,
+            StatusCode::NOT_FOUND,
+            StatusCode::GONE,
+        ] {
+            assert!(inaccessible_repository_status(status));
+        }
+        for status in [
+            StatusCode::OK,
+            StatusCode::FORBIDDEN,
+            StatusCode::TOO_MANY_REQUESTS,
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ] {
+            assert!(!inaccessible_repository_status(status));
+        }
+    }
 }
