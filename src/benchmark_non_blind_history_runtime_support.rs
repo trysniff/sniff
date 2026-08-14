@@ -111,6 +111,10 @@ fn run_query(
 ) -> Result<String, HistoricalRuntimePlanError> {
     let mut command = Command::new(program);
     command.args(args);
+    let program_directory = program
+        .parent()
+        .ok_or_else(|| unavailable(format!("{label} program has no containing directory")))?;
+    command.current_dir(program_directory);
     let output = crate::bounded_process::run_with_output_limit(
         &mut command,
         QUERY_TIMEOUT,
