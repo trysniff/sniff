@@ -251,3 +251,19 @@ fn offline_validation_rejects_semantic_checkpoint_tampering() {
             .contains("commitment")
     );
 }
+
+#[test]
+fn offline_validation_rejects_unrelated_compiler_facts() {
+    let (root, source_census, files, indexes) = fixture();
+    let mut census = build_semantic_census(root.path(), &source_census, &files, &indexes).unwrap();
+    census.methods[0].calls[0].callee = IntentionalBoundarySemanticResolution::Resolved {
+        value: "rust unrelated symbol".to_string(),
+    };
+    census.semantic_census_sha256 = compute_semantic_census_sha256(&census).unwrap();
+
+    assert!(
+        validate_intentional_boundary_semantic_census(&source_census, &census)
+            .unwrap_err()
+            .contains("unrelated compiler facts")
+    );
+}

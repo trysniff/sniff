@@ -116,7 +116,7 @@ pub enum IntentionalBoundarySemanticTestKind {
     AssertsContract,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct IntentionalBoundarySemanticRange {
     pub repository_path: String,

@@ -1,6 +1,7 @@
 use super::{
     INTENTIONAL_BOUNDARY_SEMANTIC_CENSUS_SCHEMA_VERSION, IntentionalBoundarySemanticCensus,
-    IntentionalBoundarySemanticMethodStatus, IntentionalBoundarySourceCensus,
+    IntentionalBoundarySemanticMethodStatus, IntentionalBoundarySemanticRange,
+    IntentionalBoundarySemanticResolution, IntentionalBoundarySourceCensus,
     SEMANTIC_CENSUS_CONTRACT, compute_semantic_census_sha256, indexer_for_language, indexer_kind,
     is_sha256,
 };
@@ -63,6 +64,11 @@ pub fn validate_intentional_boundary_semantic_census(
         return Err("intentional-boundary semantic method coverage changed".to_string());
     }
     let mut seen_methods = BTreeSet::new();
+    let source_paths = source_census
+        .source_files
+        .iter()
+        .map(|file| file.repository_path.as_str())
+        .collect::<BTreeSet<_>>();
     for method in &census.methods {
         let expected = expected_methods
             .get(method.parser_unit_id.as_str())
@@ -87,6 +93,56 @@ pub fn validate_intentional_boundary_semantic_census(
         {
             return Err(
                 "unresolved intentional-boundary method contains invented semantic facts"
+                    .to_string(),
+            );
+        }
+        if let IntentionalBoundarySemanticMethodStatus::Resolved {
+            symbol,
+            joined_definition,
+        } = &method.status
+            && (symbol.symbol_id.trim().is_empty()
+                || symbol.definitions.is_empty()
+                || symbol
+                    .definitions
+                    .iter()
+                    .chain(joined_definition.iter())
+                    .any(|location| !valid_location(location, &source_paths))
+                || method
+                    .occurrences
+                    .iter()
+                    .any(|fact| !valid_location(&fact.location, &source_paths))
+                || method.calls.iter().any(|fact| {
+                    !valid_location(&fact.callsite, &source_paths)
+                        || (fact.caller != symbol.symbol_id
+                            && !matches!(
+                                &fact.callee,
+                                IntentionalBoundarySemanticResolution::Resolved { value }
+                                    if value == &symbol.symbol_id
+                            ))
+                })
+                || method
+                    .relationships
+                    .iter()
+                    .any(|fact| fact.source != symbol.symbol_id && fact.target != symbol.symbol_id)
+                || method.imports.iter().any(|fact| {
+                    !valid_location(&fact.location, &source_paths)
+                        || !matches!(
+                            &fact.target,
+                            IntentionalBoundarySemanticResolution::Resolved { value }
+                                if value == &symbol.symbol_id
+                        )
+                })
+                || method.test_relationships.iter().any(|fact| {
+                    fact.test_symbol != symbol.symbol_id
+                        && !matches!(
+                            &fact.production,
+                            IntentionalBoundarySemanticResolution::Resolved { value }
+                                if value == &symbol.symbol_id
+                        )
+                }))
+        {
+            return Err(
+                "intentional-boundary semantic method contains unrelated compiler facts"
                     .to_string(),
             );
         }
@@ -120,4 +176,14 @@ pub fn validate_intentional_boundary_semantic_census(
         return Err("intentional-boundary semantic census commitment changed".to_string());
     }
     Ok(())
+}
+
+fn valid_location(
+    location: &IntentionalBoundarySemanticRange,
+    source_paths: &BTreeSet<&str>,
+) -> bool {
+    source_paths.contains(location.repository_path.as_str())
+        && (location.end_line_zero_based > location.start_line_zero_based
+            || (location.end_line_zero_based == location.start_line_zero_based
+                && location.end_character_zero_based >= location.start_character_zero_based))
 }
