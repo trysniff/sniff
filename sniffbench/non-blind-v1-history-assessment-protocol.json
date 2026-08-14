@@ -1,8 +1,8 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "protocol_id": "sniffbench-non-blind-history-assessment-v1",
-  "prepared_at": "2026-08-13T00:00:00Z",
-  "precommit_parent_revision": "f321bedddde8735c827b95247ff324e759341356",
+  "prepared_at": "2026-08-14T00:00:00Z",
+  "precommit_parent_revision": "1b4357bba855ddf3184421c4d3c1601e7f2ff73b",
   "no_fallbacks": true,
   "history_worksheet": {
     "artifact_path": "sniffbench/non-blind-v1-history-worksheet.json",
@@ -54,7 +54,7 @@
       "A root Gradle wrapper plus settings.gradle(.kts) or build.gradle(.kts) present unchanged in both revisions: the platform wrapper test --no-daemon."
     ],
     "ambiguity_rule": "If more than one recipe matches at the same priority, required recipe files changed, a package-manager lockfile is absent or ambiguous, argv cannot be parsed without a shell, or the required runtime is unavailable, close the repository with a typed test_recipe exclusion.",
-    "execution_contract": "Run the exact same argv once on clean, separate parent and commit snapshots through Sniff's hardened repository-proof sandbox with cleared environment, no host secrets, no network, bounded output, a 30-minute timeout, and the repository root as the working directory.",
+    "execution_contract": "Run the exact same argv once on clean, separate parent and commit snapshots through Sniff's hardened repository-proof sandbox with a cleared environment, no host secrets, no mutable host dependency cache, bounded output, a 30-minute timeout, and the repository root as the working directory. Network is enabled only inside that sandbox so the repository's exact command may resolve public dependencies into its fresh private HOME/cache; record that network-enabled execution in both raw results.",
     "pass_rule": "Both executions must exit zero. Timeout, sandbox unavailability, missing dependencies, or a nonzero parent or commit result is a typed exclusion and never permission to choose a smaller command or another commit.",
     "evidence": "Persist command argv, runtime identity, status, timeout flag, bounded stdout and stderr SHA-256, and a SHA-256 commitment to the complete untruncated raw result for both revisions."
   },

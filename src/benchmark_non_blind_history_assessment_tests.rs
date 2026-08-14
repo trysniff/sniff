@@ -363,6 +363,7 @@ fn test_result(revision: &str, command: &[String]) -> HistoricalTestResult {
         runtime_identity: "fixture-runtime".to_string(),
         status_code: Some(0),
         timed_out: false,
+        network_enabled: true,
         stdout_sha256: "9".repeat(64),
         stderr_sha256: "a".repeat(64),
         raw_result_sha256: "b".repeat(64),

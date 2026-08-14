@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 pub const NON_BLIND_HISTORY_ASSESSMENT_SCHEMA_VERSION: u32 = 1;
-pub const NON_BLIND_HISTORY_ASSESSMENT_PROTOCOL_SCHEMA_VERSION: u32 = 1;
+pub const NON_BLIND_HISTORY_ASSESSMENT_PROTOCOL_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -121,6 +121,7 @@ pub struct HistoricalTestResult {
     pub runtime_identity: String,
     pub status_code: Option<i32>,
     pub timed_out: bool,
+    pub network_enabled: bool,
     pub stdout_sha256: String,
     pub stderr_sha256: String,
     pub raw_result_sha256: String,

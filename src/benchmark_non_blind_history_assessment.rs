@@ -17,7 +17,7 @@ mod assessment_state;
 
 const ASSESSMENT_CONTRACT: &str = "sniffbench-non-blind-history-assessment-v1";
 const FROZEN_PROTOCOL_SHA256: &str =
-    "2044866f0d3c84b6220a66f646cf3f92d19fbec2a241e0897918f74fc5541e2b";
+    "74f0f0a3deba8980b08ebf57b6f470e1d77901d89a101e84f95fe4dffa325ac7";
 const FROZEN_WORKSHEET_PATH: &str = "sniffbench/non-blind-v1-history-worksheet.json";
 const SUPPORTED_LANGUAGES: [&str; 6] =
     ["go", "javascript", "kotlin", "python", "rust", "typescript"];
@@ -589,6 +589,8 @@ fn validate_test_pair(facts: &HistoricalRepositoryFacts) -> Result<(), String> {
                 || commit.status_code != Some(0)
                 || parent.timed_out
                 || commit.timed_out
+                || !parent.network_enabled
+                || !commit.network_enabled
             {
                 return Err("historical test evidence changed its frozen recipe".to_string());
             }
