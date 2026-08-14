@@ -22,3 +22,10 @@ pub fn parse_file_symbols(file_path: &str) -> LocalFileSymbols {
 pub fn parse_file_symbols_checked(file_path: &str) -> Result<LocalFileSymbols, String> {
     parser_impl::parse_file_symbols_checked(file_path)
 }
+
+pub(crate) fn parse_tree_sitter_source_checked(
+    file_path: &str,
+    source_bytes: &[u8],
+) -> Result<tree_sitter::Tree, String> {
+    parser_impl::parse_tree_sitter_source_checked(file_path, source_bytes)
+}
