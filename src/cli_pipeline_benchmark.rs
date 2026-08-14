@@ -2,6 +2,7 @@ use crate::benchmark::{
     BenchmarkCorpus, BenchmarkSubmission, NonBlindHistoryAssessment, NonBlindSourceSeal,
     assess_non_blind_history, assess_non_blind_history_slice, evaluate_release, freeze_corpus,
     freeze_non_blind_source_seal, prepare_non_blind_history, prepare_non_blind_history_assessment,
+    validate_intentional_boundary_protocol,
 };
 use crate::benchmark::{
     BenchmarkSourceSeal, LabelResolutionManifest, LabelReviewAudit, LabelReviewWorksheet,
@@ -148,6 +149,33 @@ pub(crate) fn prepare_non_blind_benchmark_history_assessment(
         assessment.assessments.len(),
         assessment.quota_target.len(),
         assessment.task_sha256
+    );
+    Ok(0)
+}
+
+pub(crate) fn validate_intentional_boundary_benchmark_protocol(
+    policy_path: &str,
+    population_path: &str,
+    blind_seal_path: &str,
+    protocol_path: &str,
+) -> Result<i32, Box<dyn std::error::Error>> {
+    let policy = fs::read(policy_path)?;
+    let population = fs::read(population_path)?;
+    let blind_seal = fs::read(blind_seal_path)?;
+    let protocol = fs::read(protocol_path)?;
+    let validated =
+        validate_intentional_boundary_protocol(&policy, &population, &blind_seal, &protocol)
+            .map_err(|error| {
+                IoError::new(
+                    ErrorKind::InvalidData,
+                    format!("intentional-boundary protocol is invalid: {error}"),
+                )
+            })?;
+    eprintln!(
+        "Intentional-boundary protocol validated\nCategories: {}\nFixed slots: {}\nProtocol SHA-256: {}",
+        validated.protocol.category_contracts.len(),
+        validated.protocol.slot_contract.total_slots,
+        validated.protocol_sha256
     );
     Ok(0)
 }
