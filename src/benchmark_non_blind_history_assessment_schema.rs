@@ -2,8 +2,8 @@ use super::{HistoricalRepositoryCandidate, ProvenanceArtifact, SourceSnapshot};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-pub const NON_BLIND_HISTORY_ASSESSMENT_SCHEMA_VERSION: u32 = 1;
-pub const NON_BLIND_HISTORY_ASSESSMENT_PROTOCOL_SCHEMA_VERSION: u32 = 2;
+pub const NON_BLIND_HISTORY_ASSESSMENT_SCHEMA_VERSION: u32 = 2;
+pub const NON_BLIND_HISTORY_ASSESSMENT_PROTOCOL_SCHEMA_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -117,8 +117,22 @@ pub struct AffectedHistoricalMethod {
 #[serde(deny_unknown_fields)]
 pub struct HistoricalTestResult {
     pub revision: String,
+    pub preparation_results: Vec<HistoricalTestStepResult>,
     pub command: Vec<String>,
+    pub test_executed: bool,
     pub runtime_identity: String,
+    pub status_code: Option<i32>,
+    pub timed_out: bool,
+    pub network_enabled: bool,
+    pub stdout_sha256: String,
+    pub stderr_sha256: String,
+    pub raw_result_sha256: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HistoricalTestStepResult {
+    pub command: Vec<String>,
     pub status_code: Option<i32>,
     pub timed_out: bool,
     pub network_enabled: bool,
@@ -150,6 +164,7 @@ pub struct HistoricalTestRecipeInput {
 #[serde(deny_unknown_fields)]
 pub struct HistoricalTestRecipeDiscovery {
     pub status: HistoricalTestRecipeStatus,
+    pub preparation_commands: Vec<Vec<String>>,
     pub command: Option<Vec<String>>,
     pub runtime_program: Option<String>,
     pub inputs: Vec<HistoricalTestRecipeInput>,
@@ -177,6 +192,7 @@ pub struct HistoricalRepositoryFacts {
     pub source_non_whitespace_lines_after: Option<usize>,
     pub production_paths: Vec<HistoricalProductionPathDelta>,
     pub license_path: Option<String>,
+    pub test_preparation: Vec<Vec<String>>,
     pub test_recipe: Option<Vec<String>>,
     pub parent_test: Option<HistoricalTestResult>,
     pub commit_test: Option<HistoricalTestResult>,

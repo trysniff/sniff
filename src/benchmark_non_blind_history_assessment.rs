@@ -3,7 +3,8 @@ use super::{
     HistoricalAssessmentDisposition, HistoricalAssessmentEvidence, HistoricalCommitMetadata,
     HistoricalEvidenceKind, HistoricalExclusionReason, HistoricalRepositoryAssessment,
     HistoricalRepositoryCandidate, HistoricalRepositoryFacts, HistoricalSelectedProvenance,
-    HistoricalTestOutcome, NON_BLIND_HISTORY_ASSESSMENT_PROTOCOL_SCHEMA_VERSION,
+    HistoricalTestOutcome, HistoricalTestResult,
+    NON_BLIND_HISTORY_ASSESSMENT_PROTOCOL_SCHEMA_VERSION,
     NON_BLIND_HISTORY_ASSESSMENT_SCHEMA_VERSION, NonBlindHistoryAssessment,
     NonBlindHistoryWorksheet, NonBlindSelectionPolicy,
 };
@@ -17,7 +18,7 @@ mod assessment_state;
 
 const ASSESSMENT_CONTRACT: &str = "sniffbench-non-blind-history-assessment-v1";
 const FROZEN_PROTOCOL_SHA256: &str =
-    "74f0f0a3deba8980b08ebf57b6f470e1d77901d89a101e84f95fe4dffa325ac7";
+    "891cd1d48ba563515cab38cfbf438dc7dc290ccdd6ba01793c4e13ddbadbcd26";
 const FROZEN_WORKSHEET_PATH: &str = "sniffbench/non-blind-v1-history-worksheet.json";
 const SUPPORTED_LANGUAGES: [&str; 6] =
     ["go", "javascript", "kotlin", "python", "rust", "typescript"];
@@ -567,6 +568,9 @@ fn validate_facts(
 }
 
 fn validate_test_pair(facts: &HistoricalRepositoryFacts) -> Result<(), String> {
+    if facts.test_recipe.is_none() && !facts.test_preparation.is_empty() {
+        return Err("historical preparation exists without a selected test recipe".to_string());
+    }
     match (
         facts.test_outcome,
         &facts.test_recipe,
@@ -581,6 +585,10 @@ fn validate_test_pair(facts: &HistoricalRepositoryFacts) -> Result<(), String> {
             if recipe.is_empty()
                 || parent.command != *recipe
                 || commit.command != *recipe
+                || preparation_commands(parent) != facts.test_preparation
+                || preparation_commands(commit) != facts.test_preparation
+                || !parent.test_executed
+                || !commit.test_executed
                 || parent.runtime_identity.trim().is_empty()
                 || commit.runtime_identity != parent.runtime_identity
                 || parent.revision != selected.parent_sha
@@ -595,14 +603,7 @@ fn validate_test_pair(facts: &HistoricalRepositoryFacts) -> Result<(), String> {
                 return Err("historical test evidence changed its frozen recipe".to_string());
             }
             for result in [parent, commit] {
-                require_git_revision("historical tested revision", &result.revision)?;
-                for value in [
-                    &result.stdout_sha256,
-                    &result.stderr_sha256,
-                    &result.raw_result_sha256,
-                ] {
-                    require_sha256("historical test evidence", value)?;
-                }
+                validate_historical_test_result(result, &facts.test_preparation, true)?;
             }
             Ok(())
         }
@@ -613,19 +614,75 @@ fn validate_test_pair(facts: &HistoricalRepositoryFacts) -> Result<(), String> {
                 );
             }
             for result in [parent, commit].into_iter().flatten() {
-                require_git_revision("historical tested revision", &result.revision)?;
-                for value in [
-                    &result.stdout_sha256,
-                    &result.stderr_sha256,
-                    &result.raw_result_sha256,
-                ] {
-                    require_sha256("historical test evidence", value)?;
+                if result.command
+                    != *recipe.as_ref().ok_or_else(|| {
+                        "historical failed result lacks its selected recipe".to_string()
+                    })?
+                {
+                    return Err("historical failed result changed its test recipe".to_string());
                 }
+                validate_historical_test_result(result, &facts.test_preparation, false)?;
             }
             Ok(())
         }
         _ => Err("historical assessment has an incomplete test-evidence pair".to_string()),
     }
+}
+
+fn preparation_commands(result: &HistoricalTestResult) -> Vec<Vec<String>> {
+    result
+        .preparation_results
+        .iter()
+        .map(|step| step.command.clone())
+        .collect()
+}
+
+fn validate_historical_test_result(
+    result: &HistoricalTestResult,
+    expected_preparation: &[Vec<String>],
+    require_success: bool,
+) -> Result<(), String> {
+    require_git_revision("historical tested revision", &result.revision)?;
+    if result.runtime_identity.trim().is_empty() || !result.network_enabled {
+        return Err("historical test result lacks runtime or network identity".to_string());
+    }
+    let actual_preparation = preparation_commands(result);
+    if actual_preparation.len() > expected_preparation.len()
+        || actual_preparation != expected_preparation[..actual_preparation.len()]
+    {
+        return Err("historical preparation changed its frozen argv".to_string());
+    }
+    for step in &result.preparation_results {
+        if step.command.is_empty() || !step.network_enabled {
+            return Err("historical preparation result is incomplete".to_string());
+        }
+        for value in [
+            &step.stdout_sha256,
+            &step.stderr_sha256,
+            &step.raw_result_sha256,
+        ] {
+            require_sha256("historical preparation evidence", value)?;
+        }
+        if require_success && (step.status_code != Some(0) || step.timed_out) {
+            return Err("passing historical result has failed preparation".to_string());
+        }
+    }
+    for value in [
+        &result.stdout_sha256,
+        &result.stderr_sha256,
+        &result.raw_result_sha256,
+    ] {
+        require_sha256("historical test evidence", value)?;
+    }
+    if require_success
+        && (actual_preparation.len() != expected_preparation.len()
+            || !result.test_executed
+            || result.status_code != Some(0)
+            || result.timed_out)
+    {
+        return Err("passing historical result did not complete its frozen recipe".to_string());
+    }
+    Ok(())
 }
 
 fn derive_exclusion(

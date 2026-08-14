@@ -59,6 +59,20 @@ mod non_blind_history_recipe;
 
 pub use non_blind_history_recipe::*;
 
+#[path = "benchmark_non_blind_history_runtime.rs"]
+mod non_blind_history_runtime;
+
+#[path = "benchmark_non_blind_history_runtime_adapters.rs"]
+mod non_blind_history_runtime_adapters;
+
+#[path = "benchmark_non_blind_history_runtime_support.rs"]
+mod non_blind_history_runtime_support;
+
+#[path = "benchmark_non_blind_history_test.rs"]
+mod non_blind_history_test;
+
+pub use non_blind_history_test::*;
+
 #[path = "benchmark_non_blind_history_materialize.rs"]
 mod non_blind_history_materialize;
 

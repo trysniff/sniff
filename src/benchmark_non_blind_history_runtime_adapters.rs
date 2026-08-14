@@ -1,0 +1,211 @@
+use super::non_blind_history_runtime::HistoricalRuntimePlanError;
+use super::non_blind_history_runtime_support::{
+    canonical_file, is_system_runtime, looks_repository_relative, parent_directory, path_value,
+    query_path, reject_broad_user_root, repository_program, resolve_on_path, resolve_rust_tool,
+    rust_toolchain_root, sandbox_repository_path, unavailable,
+};
+use std::path::{Path, PathBuf};
+
+pub(super) struct Launch {
+    pub(super) target: PathBuf,
+    pub(super) args: Vec<String>,
+    pub(super) runtime_files: Vec<PathBuf>,
+    pub(super) runtime_roots: Vec<PathBuf>,
+    pub(super) env: Vec<(String, String)>,
+    pub(super) repository_target: bool,
+}
+
+pub(super) fn cargo_launch(args: &[String]) -> Result<Launch, HistoricalRuntimePlanError> {
+    let cargo = resolve_rust_tool("cargo")?;
+    let rustc = resolve_rust_tool("rustc")?;
+    let cargo_root = rust_toolchain_root(&cargo)?;
+    let rustc_root = rust_toolchain_root(&rustc)?;
+    reject_broad_user_root(&cargo_root)?;
+    reject_broad_user_root(&rustc_root)?;
+    Ok(Launch {
+        target: cargo.clone(),
+        args: args.to_vec(),
+        runtime_files: vec![cargo.clone(), rustc.clone()],
+        runtime_roots: vec![cargo_root, rustc_root],
+        env: vec![
+            ("CARGO".to_string(), path_value(&cargo)),
+            ("RUSTC".to_string(), path_value(&rustc)),
+        ],
+        repository_target: false,
+    })
+}
+
+pub(super) fn go_launch(args: &[String]) -> Result<Launch, HistoricalRuntimePlanError> {
+    let go = resolve_on_path("go")?;
+    let go_root = query_path(&go, &["env", "GOROOT"], "Go GOROOT")?;
+    Ok(Launch {
+        target: go.clone(),
+        args: args.to_vec(),
+        runtime_files: vec![go],
+        runtime_roots: vec![go_root.clone()],
+        env: vec![("GOROOT".to_string(), path_value(&go_root))],
+        repository_target: false,
+    })
+}
+
+pub(super) fn python_launch(
+    program: &str,
+    args: &[String],
+) -> Result<Launch, HistoricalRuntimePlanError> {
+    let python = resolve_on_path(program)?;
+    let prefix = query_path(
+        &python,
+        &["-c", "import sys; print(sys.prefix)"],
+        "Python prefix",
+    )?;
+    Ok(Launch {
+        target: python.clone(),
+        args: args.to_vec(),
+        runtime_files: vec![python],
+        runtime_roots: vec![prefix],
+        env: Vec::new(),
+        repository_target: false,
+    })
+}
+
+pub(super) fn private_python_launch(
+    cache_root: &Path,
+    args: &[String],
+) -> Result<Launch, HistoricalRuntimePlanError> {
+    let host = resolve_on_path("python")?;
+    let prefix = query_path(
+        &host,
+        &["-c", "import sys; print(sys.prefix)"],
+        "Python prefix",
+    )?;
+    #[cfg(windows)]
+    let private = cache_root
+        .join("python-env")
+        .join("Scripts")
+        .join("python.exe");
+    #[cfg(not(windows))]
+    let private = cache_root.join("python-env").join("bin").join("python");
+    let private = canonical_file(&private, "private historical Python runtime")?;
+    Ok(Launch {
+        target: private,
+        args: args.to_vec(),
+        runtime_files: vec![host],
+        runtime_roots: vec![prefix],
+        env: Vec::new(),
+        repository_target: true,
+    })
+}
+
+pub(super) fn node_launch(args: &[String]) -> Result<Launch, HistoricalRuntimePlanError> {
+    let node = resolve_on_path("node")?;
+    let root = parent_directory(&node, "Node runtime")?;
+    Ok(Launch {
+        target: node.clone(),
+        args: args.to_vec(),
+        runtime_files: vec![node],
+        runtime_roots: vec![root],
+        env: Vec::new(),
+        repository_target: false,
+    })
+}
+
+pub(super) fn node_manager_launch(
+    manager: &str,
+    args: &[String],
+) -> Result<Launch, HistoricalRuntimePlanError> {
+    let manager_path = resolve_on_path(manager)?;
+    let node = resolve_on_path("node")?;
+    Ok(Launch {
+        target: manager_path.clone(),
+        args: args.to_vec(),
+        runtime_files: vec![manager_path.clone(), node.clone()],
+        runtime_roots: vec![
+            parent_directory(&manager_path, "package-manager runtime")?,
+            parent_directory(&node, "Node runtime")?,
+        ],
+        env: Vec::new(),
+        repository_target: false,
+    })
+}
+
+pub(super) fn bun_launch(args: &[String]) -> Result<Launch, HistoricalRuntimePlanError> {
+    let bun = resolve_on_path("bun")?;
+    Ok(Launch {
+        target: bun.clone(),
+        args: args.to_vec(),
+        runtime_files: vec![bun.clone()],
+        runtime_roots: vec![parent_directory(&bun, "Bun runtime")?],
+        env: Vec::new(),
+        repository_target: false,
+    })
+}
+
+pub(super) fn gradle_launch(
+    root: &Path,
+    program: &str,
+    args: &[String],
+) -> Result<Launch, HistoricalRuntimePlanError> {
+    let wrapper = repository_program(root, program)?;
+    let java = resolve_on_path("java")?;
+    let java_home = java
+        .parent()
+        .and_then(Path::parent)
+        .ok_or_else(|| unavailable("Java runtime has no JAVA_HOME"))?
+        .to_path_buf();
+    Ok(Launch {
+        target: wrapper,
+        args: args.to_vec(),
+        runtime_files: vec![java],
+        runtime_roots: vec![java_home.clone()],
+        env: vec![("JAVA_HOME".to_string(), path_value(&java_home))],
+        repository_target: true,
+    })
+}
+
+pub(super) fn generic_launch(
+    root: &Path,
+    program: &str,
+    args: &[String],
+) -> Result<Launch, HistoricalRuntimePlanError> {
+    if looks_repository_relative(program) {
+        let target = repository_program(root, program)?;
+        let extension = target
+            .extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default();
+        if extension.eq_ignore_ascii_case("py") {
+            let mut launch = python_launch("python", &[])?;
+            launch.args.push(sandbox_repository_path(root, &target));
+            launch.args.extend_from_slice(args);
+            return Ok(launch);
+        }
+        if extension.eq_ignore_ascii_case("js") {
+            let mut launch = node_launch(&[])?;
+            launch.args.push(sandbox_repository_path(root, &target));
+            launch.args.extend_from_slice(args);
+            return Ok(launch);
+        }
+        return Ok(Launch {
+            target,
+            args: args.to_vec(),
+            runtime_files: Vec::new(),
+            runtime_roots: Vec::new(),
+            env: Vec::new(),
+            repository_target: true,
+        });
+    }
+    let target = resolve_on_path(program)?;
+    let runtime_roots = if is_system_runtime(&target) {
+        Vec::new()
+    } else {
+        vec![parent_directory(&target, "host runtime")?]
+    };
+    Ok(Launch {
+        target: target.clone(),
+        args: args.to_vec(),
+        runtime_files: vec![target.clone()],
+        runtime_roots,
+        env: Vec::new(),
+        repository_target: false,
+    })
+}

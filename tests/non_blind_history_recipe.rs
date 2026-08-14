@@ -65,7 +65,44 @@ fn package_recipe_requires_one_unchanged_lockfile() {
     let recipe = discover_historical_test_recipe(parent.path(), commit.path()).unwrap();
 
     assert_eq!(recipe.status, HistoricalTestRecipeStatus::Selected);
-    assert_eq!(recipe.command.unwrap(), ["pnpm", "test"]);
+    assert_eq!(
+        recipe.preparation_commands,
+        vec![vec![
+            "pnpm".to_string(),
+            "install".to_string(),
+            "--frozen-lockfile".to_string(),
+        ]]
+    );
+    assert_eq!(
+        recipe.command,
+        Some(vec!["pnpm".to_string(), "test".to_string()])
+    );
+}
+
+#[test]
+fn pytest_recipe_uses_a_fresh_private_environment() {
+    let parent = tempfile::tempdir().unwrap();
+    let commit = tempfile::tempdir().unwrap();
+    for root in [parent.path(), commit.path()] {
+        std::fs::write(root.join("pytest.ini"), "[pytest]\n").unwrap();
+    }
+
+    let recipe = discover_historical_test_recipe(parent.path(), commit.path()).unwrap();
+
+    assert_eq!(recipe.status, HistoricalTestRecipeStatus::Selected);
+    assert_eq!(recipe.preparation_commands.len(), 2);
+    assert_eq!(
+        recipe.preparation_commands[0],
+        ["python", "-I", "-m", "venv", "{sniff_private_python_env}"]
+    );
+    assert_eq!(
+        recipe.command,
+        Some(vec![
+            "{sniff_private_python}".to_string(),
+            "-m".to_string(),
+            "pytest".to_string(),
+        ])
+    );
 }
 
 #[test]

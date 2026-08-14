@@ -1,8 +1,8 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "protocol_id": "sniffbench-non-blind-history-assessment-v1",
   "prepared_at": "2026-08-14T00:00:00Z",
-  "precommit_parent_revision": "1b4357bba855ddf3184421c4d3c1601e7f2ff73b",
+  "precommit_parent_revision": "258fcf89e13599286f46f719199cb0d9cddb6cb4",
   "no_fallbacks": true,
   "history_worksheet": {
     "artifact_path": "sniffbench/non-blind-v1-history-worksheet.json",
@@ -47,16 +47,17 @@
   "test_recipe": {
     "selection_order": [
       "A root sniff.config.toml explicit proof.test_command argv present unchanged in parent and commit.",
-      "A root package.json scripts.test string present unchanged in parent and commit, executed by the unique root lockfile's package manager.",
+      "A root package.json scripts.test string present unchanged in parent and commit, prepared by the unique root lockfile's immutable install command and tested by that package manager.",
       "A root Cargo.toml present in both revisions: cargo test --workspace --all-targets, with --locked only when the same root Cargo.lock exists in both revisions.",
       "A root go.mod present unchanged in both revisions: go test ./... .",
-      "A root pytest.ini, pyproject.toml pytest configuration, tox.ini pytest environment, or setup.cfg pytest configuration present unchanged in both revisions: python -m pytest.",
+      "A root pytest.ini, pyproject.toml pytest configuration, tox.ini pytest environment, or setup.cfg pytest configuration present unchanged in both revisions: create a fresh private venv, install the project plus pytest into it, then run that private python -m pytest.",
       "A root Gradle wrapper plus settings.gradle(.kts) or build.gradle(.kts) present unchanged in both revisions: the platform wrapper test --no-daemon."
     ],
-    "ambiguity_rule": "If more than one recipe matches at the same priority, required recipe files changed, a package-manager lockfile is absent or ambiguous, argv cannot be parsed without a shell, or the required runtime is unavailable, close the repository with a typed test_recipe exclusion.",
-    "execution_contract": "Run the exact same argv once on clean, separate parent and commit snapshots through Sniff's hardened repository-proof sandbox with a cleared environment, no host secrets, no mutable host dependency cache, bounded output, a 30-minute timeout, and the repository root as the working directory. Network is enabled only inside that sandbox so the repository's exact command may resolve public dependencies into its fresh private HOME/cache; record that network-enabled execution in both raw results.",
-    "pass_rule": "Both executions must exit zero. Timeout, sandbox unavailability, missing dependencies, or a nonzero parent or commit result is a typed exclusion and never permission to choose a smaller command or another commit.",
-    "evidence": "Persist command argv, runtime identity, status, timeout flag, bounded stdout and stderr SHA-256, and a SHA-256 commitment to the complete untruncated raw result for both revisions."
+    "dependency_preparation": "Before the test argv, execute the recipe's frozen preparation argv in order inside the same hardened sandbox and revision snapshot. npm uses npm ci; pnpm uses install --frozen-lockfile; Yarn v1 uses install --frozen-lockfile; Yarn Berry uses install --immutable; Bun uses install --frozen-lockfile; pytest uses python -I -m venv for a fresh private environment followed by private pip install --disable-pip-version-check . pytest. Cargo, Go, Gradle, and explicit proof commands have no implicit preparation. The reserved sniff_private_python placeholders expand only to the revision's fresh private cache paths and are committed as logical argv. Preparation may not read a host dependency cache and is never reused across revisions.",
+    "ambiguity_rule": "If more than one recipe matches at the same priority, required recipe files changed, a package-manager lockfile is absent or ambiguous, an immutable install contract cannot be derived, argv cannot be parsed without a shell, or the required runtime is unavailable, close the repository with a typed test_recipe exclusion.",
+    "execution_contract": "Run every frozen preparation argv and then the exact frozen test argv once on clean, separate parent and commit snapshots through Sniff's hardened repository-proof sandbox with a cleared environment, no host secrets, no mutable host dependency cache, bounded output, a 30-minute per-step timeout, and the repository root as the working directory. Network is enabled only inside that sandbox so preparation and the repository's exact command may resolve public dependencies into its fresh private HOME/cache; record that network-enabled execution in every raw step result.",
+    "pass_rule": "Every preparation step and both test executions must exit zero. Timeout, sandbox unavailability, missing dependencies, or a nonzero preparation, parent, or commit result is a typed exclusion and never permission to choose a smaller command or another commit.",
+    "evidence": "Persist preparation and test argv, runtime identity, every status and timeout flag, complete stdout and stderr SHA-256, bounded sanitized display output, and SHA-256 commitments to every complete untruncated raw step result for both revisions."
   },
   "quota_and_output": {
     "quota_source": "Two selected repositories for each supported language, from repositories_per_language in the selection policy.",

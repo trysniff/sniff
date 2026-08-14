@@ -17,6 +17,7 @@ enum PairState {
 
 #[derive(Debug)]
 struct RecipeMatch {
+    preparation_commands: Vec<Vec<String>>,
     command: Vec<String>,
     inputs: Vec<HistoricalTestRecipeInput>,
 }
@@ -45,6 +46,7 @@ pub fn discover_historical_test_recipe(
                 let runtime_program = recipe.command.first().cloned();
                 return Ok(HistoricalTestRecipeDiscovery {
                     status: HistoricalTestRecipeStatus::Selected,
+                    preparation_commands: recipe.preparation_commands,
                     command: Some(recipe.command),
                     runtime_program,
                     inputs: recipe.inputs,
@@ -98,6 +100,7 @@ fn explicit_sniff_recipe(parent: &Path, commit: &Path) -> Result<Selection, Stri
                 return Ok(Selection::NoMatch);
             };
             Ok(Selection::Match(RecipeMatch {
+                preparation_commands: Vec::new(),
                 command,
                 inputs: vec![recipe_input("sniff.config.toml", &bytes)],
             }))
@@ -152,8 +155,53 @@ fn package_recipe(parent: &Path, commit: &Path) -> Result<Selection, String> {
         ));
     }
     let (lock_path, manager, lock_bytes) = matches.remove(0);
+    let (preparation, command) = match manager {
+        "npm" => (
+            vec![vec!["npm".to_string(), "ci".to_string()]],
+            vec!["npm".to_string(), "test".to_string()],
+        ),
+        "pnpm" => (
+            vec![vec![
+                "pnpm".to_string(),
+                "install".to_string(),
+                "--frozen-lockfile".to_string(),
+            ]],
+            vec!["pnpm".to_string(), "test".to_string()],
+        ),
+        "yarn" => {
+            let lock = utf8(&lock_bytes, "yarn.lock")?;
+            let frozen_flag = if lock.lines().any(|line| line.trim() == "# yarn lockfile v1") {
+                "--frozen-lockfile"
+            } else if lock.lines().any(|line| line.trim() == "__metadata:") {
+                "--immutable"
+            } else {
+                return Ok(Selection::Ambiguous(
+                    "root yarn.lock does not identify a supported immutable install contract"
+                        .to_string(),
+                ));
+            };
+            (
+                vec![vec![
+                    "yarn".to_string(),
+                    "install".to_string(),
+                    frozen_flag.to_string(),
+                ]],
+                vec!["yarn".to_string(), "test".to_string()],
+            )
+        }
+        "bun" => (
+            vec![vec![
+                "bun".to_string(),
+                "install".to_string(),
+                "--frozen-lockfile".to_string(),
+            ]],
+            vec!["bun".to_string(), "run".to_string(), "test".to_string()],
+        ),
+        _ => unreachable!("package manager comes from the frozen lockfile table"),
+    };
     Ok(Selection::Match(RecipeMatch {
-        command: vec![manager.to_string(), "test".to_string()],
+        preparation_commands: preparation,
+        command,
         inputs: vec![
             recipe_input("package.json", &package_bytes),
             recipe_input(lock_path, &lock_bytes),
@@ -197,7 +245,11 @@ fn cargo_recipe(parent: &Path, commit: &Path) -> Result<Selection, String> {
             inputs.push(recipe_input("Cargo.lock", &bytes));
         }
     }
-    Ok(Selection::Match(RecipeMatch { command, inputs }))
+    Ok(Selection::Match(RecipeMatch {
+        preparation_commands: Vec::new(),
+        command,
+        inputs,
+    }))
 }
 
 fn go_recipe(parent: &Path, commit: &Path) -> Result<Selection, String> {
@@ -207,6 +259,7 @@ fn go_recipe(parent: &Path, commit: &Path) -> Result<Selection, String> {
             "root go.mod changed between revisions".to_string(),
         )),
         PairState::Same(bytes) => Ok(Selection::Match(RecipeMatch {
+            preparation_commands: Vec::new(),
             command: vec!["go".to_string(), "test".to_string(), "./...".to_string()],
             inputs: vec![recipe_input("go.mod", &bytes)],
         })),
@@ -252,7 +305,29 @@ fn pytest_recipe(parent: &Path, commit: &Path) -> Result<Selection, String> {
         return Ok(Selection::NoMatch);
     };
     Ok(Selection::Match(RecipeMatch {
-        command: vec!["python".to_string(), "-m".to_string(), "pytest".to_string()],
+        preparation_commands: vec![
+            vec![
+                "python".to_string(),
+                "-I".to_string(),
+                "-m".to_string(),
+                "venv".to_string(),
+                "{sniff_private_python_env}".to_string(),
+            ],
+            vec![
+                "{sniff_private_python}".to_string(),
+                "-m".to_string(),
+                "pip".to_string(),
+                "install".to_string(),
+                "--disable-pip-version-check".to_string(),
+                ".".to_string(),
+                "pytest".to_string(),
+            ],
+        ],
+        command: vec![
+            "{sniff_private_python}".to_string(),
+            "-m".to_string(),
+            "pytest".to_string(),
+        ],
         inputs: vec![recipe_input(path, &bytes)],
     }))
 }
@@ -307,6 +382,7 @@ fn gradle_recipe(parent: &Path, commit: &Path) -> Result<Selection, String> {
         "./gradlew".to_string()
     };
     Ok(Selection::Match(RecipeMatch {
+        preparation_commands: Vec::new(),
         command: vec![program, "test".to_string(), "--no-daemon".to_string()],
         inputs,
     }))
@@ -470,6 +546,7 @@ fn rejected(
 ) -> HistoricalTestRecipeDiscovery {
     HistoricalTestRecipeDiscovery {
         status,
+        preparation_commands: Vec::new(),
         command: None,
         runtime_program: None,
         inputs: Vec::new(),

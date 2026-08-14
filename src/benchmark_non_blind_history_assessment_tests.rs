@@ -2,7 +2,7 @@ use super::*;
 use crate::benchmark::{
     AffectedHistoricalMethod, HistoricalChangedPath, HistoricalEvidenceKind,
     HistoricalProductionPathDelta, HistoricalRevisionSide, HistoricalTestOutcome,
-    HistoricalTestResult, ProvenanceArtifact, SourceSnapshot,
+    HistoricalTestResult, HistoricalTestStepResult, ProvenanceArtifact, SourceSnapshot,
 };
 
 const POLICY: &[u8] = include_bytes!("../sniffbench/non-blind-v1-selection-policy.json");
@@ -134,6 +134,35 @@ fn complete_selected_case_requires_all_label_free_provenance() {
 }
 
 #[test]
+fn passing_preparation_must_match_on_both_revisions() {
+    let mut assessment = prepare_non_blind_history_assessment(POLICY, WORKSHEET, PROTOCOL).unwrap();
+    let mut entry = selected(assessment.assessments[0].clone());
+    let facts = entry.facts.as_mut().unwrap();
+    let command = vec!["npm".to_string(), "ci".to_string()];
+    facts.test_preparation = vec![command.clone()];
+    facts.parent_test.as_mut().unwrap().preparation_results = vec![test_step(&command)];
+    facts.commit_test.as_mut().unwrap().preparation_results = vec![test_step(&command)];
+    assessment.assessments[0] = entry;
+
+    validate_non_blind_history_assessment(POLICY, WORKSHEET, PROTOCOL, &assessment).unwrap();
+
+    assessment.assessments[0]
+        .facts
+        .as_mut()
+        .unwrap()
+        .commit_test
+        .as_mut()
+        .unwrap()
+        .preparation_results[0]
+        .command = vec!["npm".to_string(), "install".to_string()];
+    assert!(
+        validate_non_blind_history_assessment(POLICY, WORKSHEET, PROTOCOL, &assessment)
+            .unwrap_err()
+            .contains("frozen recipe")
+    );
+}
+
+#[test]
 fn quota_filled_is_derived_only_after_two_earlier_selections() {
     let mut assessment = prepare_non_blind_history_assessment(POLICY, WORKSHEET, PROTOCOL).unwrap();
     assessment.assessments[0] = selected(assessment.assessments[0].clone());
@@ -213,6 +242,7 @@ fn excluded(mut assessment: HistoricalRepositoryAssessment) -> HistoricalReposit
         source_non_whitespace_lines_after: None,
         production_paths: Vec::new(),
         license_path: None,
+        test_preparation: Vec::new(),
         test_recipe: None,
         parent_test: None,
         commit_test: None,
@@ -279,6 +309,7 @@ fn selected(mut assessment: HistoricalRepositoryAssessment) -> HistoricalReposit
             commit_non_whitespace_lines: 9,
         }],
         license_path: Some("LICENSE".to_string()),
+        test_preparation: Vec::new(),
         test_recipe: Some(command.clone()),
         parent_test: Some(parent_test),
         commit_test: Some(commit_test),
@@ -359,7 +390,9 @@ fn selected(mut assessment: HistoricalRepositoryAssessment) -> HistoricalReposit
 fn test_result(revision: &str, command: &[String]) -> HistoricalTestResult {
     HistoricalTestResult {
         revision: revision.to_string(),
+        preparation_results: Vec::new(),
         command: command.to_vec(),
+        test_executed: true,
         runtime_identity: "fixture-runtime".to_string(),
         status_code: Some(0),
         timed_out: false,
@@ -367,5 +400,17 @@ fn test_result(revision: &str, command: &[String]) -> HistoricalTestResult {
         stdout_sha256: "9".repeat(64),
         stderr_sha256: "a".repeat(64),
         raw_result_sha256: "b".repeat(64),
+    }
+}
+
+fn test_step(command: &[String]) -> HistoricalTestStepResult {
+    HistoricalTestStepResult {
+        command: command.to_vec(),
+        status_code: Some(0),
+        timed_out: false,
+        network_enabled: true,
+        stdout_sha256: "c".repeat(64),
+        stderr_sha256: "d".repeat(64),
+        raw_result_sha256: "e".repeat(64),
     }
 }
