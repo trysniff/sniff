@@ -298,6 +298,32 @@ pub enum BenchmarkCommand {
         /// Precommitted intentional-boundary protocol.
         protocol: String,
     },
+    /// Create the immutable blank task for the complete intentional-boundary frame.
+    PrepareIntentionalFrameTask {
+        /// Public non-blind selection policy.
+        policy: String,
+        /// Frozen 600-repository population worksheet.
+        population: String,
+        /// Frozen blind source seal whose repositories remain excluded.
+        blind_seal: String,
+        /// Precommitted intentional-boundary protocol.
+        protocol: String,
+        /// New immutable blank frame task; existing files are never overwritten.
+        output: String,
+    },
+    /// Validate the immutable blank intentional-boundary frame task offline.
+    ValidateIntentionalFrameTask {
+        /// Public non-blind selection policy.
+        policy: String,
+        /// Frozen 600-repository population worksheet.
+        population: String,
+        /// Frozen blind source seal whose repositories remain excluded.
+        blind_seal: String,
+        /// Precommitted intentional-boundary protocol.
+        protocol: String,
+        /// Blank frame task produced by `prepare-intentional-frame-task`.
+        task: String,
+    },
     /// Execute and resume every frozen historical rank without inspecting labels.
     AssessNonBlindHistory {
         /// Public non-blind selection policy.
@@ -549,6 +575,32 @@ pub async fn run(args: CliArgs) -> Result<i32, Box<dyn std::error::Error>> {
                 &population,
                 &blind_seal,
                 &protocol,
+            ),
+            BenchmarkCommand::PrepareIntentionalFrameTask {
+                policy,
+                population,
+                blind_seal,
+                protocol,
+                output,
+            } => pipeline::prepare_intentional_boundary_benchmark_frame_task(
+                &policy,
+                &population,
+                &blind_seal,
+                &protocol,
+                &output,
+            ),
+            BenchmarkCommand::ValidateIntentionalFrameTask {
+                policy,
+                population,
+                blind_seal,
+                protocol,
+                task,
+            } => pipeline::validate_intentional_boundary_benchmark_frame_task(
+                &policy,
+                &population,
+                &blind_seal,
+                &protocol,
+                &task,
             ),
             BenchmarkCommand::AssessNonBlindHistory {
                 policy,
@@ -886,6 +938,65 @@ mod tests {
                 && population == "population.json"
                 && blind_seal == "blind-seal.json"
                 && protocol == "protocol.json"
+        ));
+    }
+
+    #[test]
+    fn parses_offline_intentional_boundary_frame_task_commands() {
+        let prepare = CliArgs::try_parse_from([
+            "sniff",
+            "benchmark",
+            "prepare-intentional-frame-task",
+            "policy.json",
+            "population.json",
+            "blind-seal.json",
+            "protocol.json",
+            "task.json",
+        ])
+        .expect("intentional-boundary frame preparation arguments");
+        assert!(matches!(
+            prepare.command,
+            Some(CliCommand::Benchmark {
+                command: BenchmarkCommand::PrepareIntentionalFrameTask {
+                    policy,
+                    population,
+                    blind_seal,
+                    protocol,
+                    output,
+                }
+            }) if policy == "policy.json"
+                && population == "population.json"
+                && blind_seal == "blind-seal.json"
+                && protocol == "protocol.json"
+                && output == "task.json"
+        ));
+
+        let validate = CliArgs::try_parse_from([
+            "sniff",
+            "benchmark",
+            "validate-intentional-frame-task",
+            "policy.json",
+            "population.json",
+            "blind-seal.json",
+            "protocol.json",
+            "task.json",
+        ])
+        .expect("intentional-boundary frame validation arguments");
+        assert!(matches!(
+            validate.command,
+            Some(CliCommand::Benchmark {
+                command: BenchmarkCommand::ValidateIntentionalFrameTask {
+                    policy,
+                    population,
+                    blind_seal,
+                    protocol,
+                    task,
+                }
+            }) if policy == "policy.json"
+                && population == "population.json"
+                && blind_seal == "blind-seal.json"
+                && protocol == "protocol.json"
+                && task == "task.json"
         ));
     }
 

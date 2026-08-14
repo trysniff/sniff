@@ -123,9 +123,35 @@ sniff benchmark validate-intentional-protocol \
 The protocol file SHA-256 is
 `3e4bbeff8fd850fdb2808ab98609070075fbce99e522017c93605f71c14bd220`.
 
-Candidate collection has not started. Every repository in the bound population
-must receive a hash-bound checkpoint, and paths or names may identify a symbol
-but can never prove its category or intentional contract.
+[`non-blind-v1-intentional-boundary-frame-task.json`](non-blind-v1-intentional-boundary-frame-task.json)
+is the immutable blank execution task derived from those four bound inputs. It
+contains all 600 repositories in exact population order and commits the narrow
+set of terminal repository exclusions. Transport, rate-limit, tool,
+checkout-integrity, indexer, and method-join failures are not exclusions: the
+future collector must stop and resume rather than silently remove those
+repositories. Reproduce and validate the task offline:
+
+```console
+sniff benchmark prepare-intentional-frame-task \
+  sniffbench/non-blind-v1-selection-policy.json \
+  sniffbench/non-blind-v1-history-worksheet.json \
+  sniffbench/blind-oss-v1-source-seal.json \
+  sniffbench/non-blind-v1-intentional-boundary-protocol.json \
+  frame-task.json
+
+sniff benchmark validate-intentional-frame-task \
+  sniffbench/non-blind-v1-selection-policy.json \
+  sniffbench/non-blind-v1-history-worksheet.json \
+  sniffbench/blind-oss-v1-source-seal.json \
+  sniffbench/non-blind-v1-intentional-boundary-protocol.json \
+  frame-task.json
+```
+
+The frame task commitment is
+`8bac634f0f0feb0a6634b41c26907c7116b7cb1427002b9f71b7803521c90114`.
+Candidate collection has not started. Every repository in the task must receive
+a hash-bound checkpoint, and paths or names may identify a symbol but can never
+prove its category or intentional contract.
 
 ## Blind OSS v1
 
