@@ -301,6 +301,9 @@ pub enum BenchmarkCommand {
         state_directory: String,
         /// New completed assessment ledger; existing files are never overwritten.
         output: String,
+        /// Process at most this many new ranks, retaining resumable state without writing a partial final ledger.
+        #[arg(long)]
+        max_new_ranks: Option<usize>,
     },
     /// Verify all source seals and labels and create a SniffBench v6 corpus.
     Freeze {
@@ -532,6 +535,7 @@ pub async fn run(args: CliArgs) -> Result<i32, Box<dyn std::error::Error>> {
                 assessment,
                 state_directory,
                 output,
+                max_new_ranks,
             } => {
                 pipeline::assess_non_blind_benchmark_history(
                     &policy,
@@ -540,6 +544,7 @@ pub async fn run(args: CliArgs) -> Result<i32, Box<dyn std::error::Error>> {
                     &assessment,
                     &state_directory,
                     &output,
+                    max_new_ranks,
                 )
                 .await
             }
@@ -806,6 +811,8 @@ mod tests {
             "blank.json",
             "state",
             "completed.json",
+            "--max-new-ranks",
+            "25",
         ])
         .expect("resumable non-blind history assessment arguments");
 
@@ -819,6 +826,7 @@ mod tests {
                     assessment,
                     state_directory,
                     output,
+                    max_new_ranks,
                 }
             }) if policy == "policy.json"
                 && worksheet == "history.json"
@@ -826,6 +834,7 @@ mod tests {
                 && assessment == "blank.json"
                 && state_directory == "state"
                 && output == "completed.json"
+                && max_new_ranks == Some(25)
         ));
     }
 

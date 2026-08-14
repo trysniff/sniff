@@ -1,7 +1,7 @@
 use crate::benchmark::{
     BenchmarkCorpus, BenchmarkSubmission, NonBlindHistoryAssessment, NonBlindSourceSeal,
-    assess_non_blind_history, evaluate_release, freeze_corpus, freeze_non_blind_source_seal,
-    prepare_non_blind_history, prepare_non_blind_history_assessment,
+    assess_non_blind_history, assess_non_blind_history_slice, evaluate_release, freeze_corpus,
+    freeze_non_blind_source_seal, prepare_non_blind_history, prepare_non_blind_history_assessment,
 };
 use crate::benchmark::{
     BenchmarkSourceSeal, LabelResolutionManifest, LabelReviewAudit, LabelReviewWorksheet,
@@ -159,25 +159,53 @@ pub(crate) async fn assess_non_blind_benchmark_history(
     assessment_path: &str,
     state_directory: &str,
     output_path: &str,
+    maximum_new_ranks: Option<usize>,
 ) -> Result<i32, Box<dyn std::error::Error>> {
     let policy = fs::read(policy_path)?;
     let worksheet = fs::read(worksheet_path)?;
     let protocol = fs::read(protocol_path)?;
     let assessment = read_json::<NonBlindHistoryAssessment>(assessment_path)?;
-    let completed = assess_non_blind_history(
-        &policy,
-        &worksheet,
-        &protocol,
-        assessment,
-        Path::new(state_directory),
-    )
-    .await
+    let completed = match maximum_new_ranks {
+        Some(maximum) => {
+            assess_non_blind_history_slice(
+                &policy,
+                &worksheet,
+                &protocol,
+                assessment,
+                Path::new(state_directory),
+                maximum,
+            )
+            .await
+        }
+        None => {
+            assess_non_blind_history(
+                &policy,
+                &worksheet,
+                &protocol,
+                assessment,
+                Path::new(state_directory),
+            )
+            .await
+        }
+    }
     .map_err(|error| {
         IoError::new(
             ErrorKind::InvalidData,
             format!("non-blind history assessment failed: {error}"),
         )
     })?;
+    let completed_ranks = completed
+        .assessments
+        .iter()
+        .take_while(|assessment| assessment.disposition.is_some())
+        .count();
+    if completed_ranks < completed.assessments.len() {
+        eprintln!(
+            "Non-blind history assessment checkpointed in {state_directory}\nRepositories complete: {completed_ranks}/{}\nFinal output not written; rerun the same command to resume.",
+            completed.assessments.len()
+        );
+        return Ok(0);
+    }
     write_new_file(
         Path::new(output_path),
         &serde_json::to_vec_pretty(&completed)?,

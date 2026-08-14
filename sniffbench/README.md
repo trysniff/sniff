@@ -63,6 +63,25 @@ task commitment is
 the pretty-printed file SHA-256 is
 `fb5bc4f65f72cf4fb86fabde3520ea19427dfe7f8a7ddb1085fe00b83e48ec39`.
 
+Execute the immutable ledger in bounded slices when the host cannot safely
+finish all 600 repositories in one process. Every completed rank is published
+transactionally under the state directory; rerunning the identical command
+verifies and resumes that contiguous prefix. A partial slice does not write the
+final ledger:
+
+```console
+sniff benchmark assess-non-blind-history \
+  sniffbench/non-blind-v1-selection-policy.json \
+  sniffbench/non-blind-v1-history-worksheet.json \
+  sniffbench/non-blind-v1-history-assessment-protocol.json \
+  history-assessment.json history-state completed-history-assessment.json \
+  --max-new-ranks 25
+```
+
+The manual `SniffBench historical assessment` GitHub workflow provides the
+same Linux-only bounded execution. Resume it with the preceding workflow run
+ID so its hash-verified state artifact is restored before processing new ranks.
+
 ```console
 sniff benchmark seal-non-blind-sources \
   non-blind-source-draft.json non-blind-source-seal.json

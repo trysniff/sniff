@@ -40,6 +40,35 @@ pub async fn assess_non_blind_history(
     .await
 }
 
+pub async fn assess_non_blind_history_slice(
+    policy_bytes: &[u8],
+    worksheet_bytes: &[u8],
+    protocol_bytes: &[u8],
+    template: NonBlindHistoryAssessment,
+    state_directory: &Path,
+    maximum_new_ranks: usize,
+) -> Result<NonBlindHistoryAssessment, String> {
+    if maximum_new_ranks == 0 {
+        return Err("historical assessment slice must process at least one new rank".to_string());
+    }
+    let client = Client::builder()
+        .user_agent("trysniff-sniffbench-history-assessor/1")
+        .build()
+        .map_err(|error| format!("failed to build historical assessment client: {error}"))?;
+    assess_with_cloner(
+        policy_bytes,
+        worksheet_bytes,
+        protocol_bytes,
+        template,
+        state_directory,
+        &client,
+        &NetworkHistoricalCloner,
+        Some(maximum_new_ranks),
+        false,
+    )
+    .await
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn assess_with_cloner<C: HistoricalRepositoryCloner>(
     policy_bytes: &[u8],
@@ -127,7 +156,11 @@ async fn assess_with_cloner<C: HistoricalRepositoryCloner>(
         completed.push(assessment);
     }
 
-    if require_complete {
+    let all_ranks_complete = result
+        .assessments
+        .iter()
+        .all(|assessment| assessment.disposition.is_some());
+    if require_complete || all_ranks_complete {
         complete_non_blind_history_assessment(
             policy_bytes,
             worksheet_bytes,
