@@ -47,7 +47,7 @@ pub use release::{
     SourceSelectionAudit, SourceSelectionComponentAudit, SourceSelectionComponentCommitment,
     SourceSelectionCompositeAudit, SourceSelectionCompositePolicy, SourceSelectionContinuation,
     SourceSelectionDisposition, SourceSelectionDraft, SourceSelectionWorksheet, SourceSnapshot,
-    assess_source_selection, audit_label_reviews, audit_source_selection,
+    assess_non_blind_history, assess_source_selection, audit_label_reviews, audit_source_selection,
     audit_source_selection_component, build_blind_case_bundle, capture_historical_diffs,
     census_historical_source_delta, clone_complete_historical_repository, collect_source_frame,
     combine_source_selections, complete_non_blind_history_assessment, create_composite_source_seal,

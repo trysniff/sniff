@@ -78,6 +78,26 @@ mod non_blind_history_materialize;
 
 pub use non_blind_history_materialize::*;
 
+#[path = "benchmark_non_blind_history_artifacts.rs"]
+mod non_blind_history_artifacts;
+
+#[path = "benchmark_non_blind_history_candidate.rs"]
+mod non_blind_history_candidate;
+
+#[path = "benchmark_non_blind_history_candidate_evidence.rs"]
+mod non_blind_history_candidate_evidence;
+
+#[path = "benchmark_non_blind_history_candidate_support.rs"]
+mod non_blind_history_candidate_support;
+
+#[path = "benchmark_non_blind_history_candidate_test.rs"]
+mod non_blind_history_candidate_test;
+
+#[path = "benchmark_non_blind_history_runner.rs"]
+mod non_blind_history_runner;
+
+pub use non_blind_history_runner::assess_non_blind_history;
+
 #[path = "benchmark_source_seal.rs"]
 mod source_seal;
 

@@ -390,7 +390,7 @@ fn validate_completed_assessment(
     })?;
     validate_facts(&assessment.candidate, facts, policy, subject)?;
     validate_evidence(&assessment.evidence)?;
-    let derived_exclusion = derive_exclusion(facts, policy, selected_counts)?;
+    let derived_exclusion = derive_historical_exclusion(facts, policy, selected_counts)?;
     validate_evidence_coverage(facts, derived_exclusion, &assessment.evidence)?;
     match disposition {
         HistoricalAssessmentDisposition::Selected => {
@@ -685,10 +685,54 @@ fn validate_historical_test_result(
     Ok(())
 }
 
-fn derive_exclusion(
+pub(super) fn derive_historical_exclusion(
     facts: &HistoricalRepositoryFacts,
     policy: &NonBlindSelectionPolicy,
     selected_counts: &BTreeMap<String, usize>,
+) -> Result<Option<HistoricalExclusionReason>, String> {
+    if let Some(reason) = derive_historical_source_exclusion(facts, policy)? {
+        return Ok(Some(reason));
+    }
+    let test_exclusion = match facts
+        .test_outcome
+        .ok_or_else(|| "historical assessment lacks test outcome".to_string())?
+    {
+        HistoricalTestOutcome::Passed => None,
+        HistoricalTestOutcome::RecipeUnavailable => {
+            Some(HistoricalExclusionReason::TestRecipeUnavailable)
+        }
+        HistoricalTestOutcome::RecipeAmbiguous => {
+            Some(HistoricalExclusionReason::TestRecipeAmbiguous)
+        }
+        HistoricalTestOutcome::RecipeChanged => Some(HistoricalExclusionReason::TestRecipeChanged),
+        HistoricalTestOutcome::RuntimeUnavailable => {
+            Some(HistoricalExclusionReason::RuntimeUnavailable)
+        }
+        HistoricalTestOutcome::SandboxUnavailable => {
+            Some(HistoricalExclusionReason::SandboxUnavailable)
+        }
+        HistoricalTestOutcome::ParentFailed => Some(HistoricalExclusionReason::ParentTestsFailed),
+        HistoricalTestOutcome::CommitFailed => Some(HistoricalExclusionReason::CommitTestsFailed),
+        HistoricalTestOutcome::TimedOut => Some(HistoricalExclusionReason::TestTimedOut),
+    };
+    if test_exclusion.is_some() {
+        return Ok(test_exclusion);
+    }
+    let language = derived_quota_language(&facts.affected_methods)?;
+    if facts.quota_language.as_deref() != Some(language) {
+        return Err("historical quota language disagrees with affected methods".to_string());
+    }
+    if selected_counts.get(language).copied().unwrap_or_default()
+        >= policy.historical_simplification.repositories_per_language
+    {
+        return Ok(Some(HistoricalExclusionReason::QuotaFilled));
+    }
+    Ok(None)
+}
+
+pub(super) fn derive_historical_source_exclusion(
+    facts: &HistoricalRepositoryFacts,
+    policy: &NonBlindSelectionPolicy,
 ) -> Result<Option<HistoricalExclusionReason>, String> {
     if !facts.accessible {
         return Ok(Some(HistoricalExclusionReason::Inaccessible));
@@ -746,40 +790,6 @@ fn derive_exclusion(
     }
     if facts.license_path.as_deref().is_none_or(str::is_empty) {
         return Ok(Some(HistoricalExclusionReason::MissingLicense));
-    }
-    let test_exclusion = match facts
-        .test_outcome
-        .ok_or_else(|| "historical assessment lacks test outcome".to_string())?
-    {
-        HistoricalTestOutcome::Passed => None,
-        HistoricalTestOutcome::RecipeUnavailable => {
-            Some(HistoricalExclusionReason::TestRecipeUnavailable)
-        }
-        HistoricalTestOutcome::RecipeAmbiguous => {
-            Some(HistoricalExclusionReason::TestRecipeAmbiguous)
-        }
-        HistoricalTestOutcome::RecipeChanged => Some(HistoricalExclusionReason::TestRecipeChanged),
-        HistoricalTestOutcome::RuntimeUnavailable => {
-            Some(HistoricalExclusionReason::RuntimeUnavailable)
-        }
-        HistoricalTestOutcome::SandboxUnavailable => {
-            Some(HistoricalExclusionReason::SandboxUnavailable)
-        }
-        HistoricalTestOutcome::ParentFailed => Some(HistoricalExclusionReason::ParentTestsFailed),
-        HistoricalTestOutcome::CommitFailed => Some(HistoricalExclusionReason::CommitTestsFailed),
-        HistoricalTestOutcome::TimedOut => Some(HistoricalExclusionReason::TestTimedOut),
-    };
-    if test_exclusion.is_some() {
-        return Ok(test_exclusion);
-    }
-    let language = derived_quota_language(&facts.affected_methods)?;
-    if facts.quota_language.as_deref() != Some(language) {
-        return Err("historical quota language disagrees with affected methods".to_string());
-    }
-    if selected_counts.get(language).copied().unwrap_or_default()
-        >= policy.historical_simplification.repositories_per_language
-    {
-        return Ok(Some(HistoricalExclusionReason::QuotaFilled));
     }
     Ok(None)
 }
@@ -853,6 +863,16 @@ fn validate_evidence_coverage(
     }
     if facts.commit_test.is_some() {
         required.insert(HistoricalEvidenceKind::CommitTest);
+    }
+    if matches!(
+        facts.test_outcome,
+        Some(HistoricalTestOutcome::RuntimeUnavailable | HistoricalTestOutcome::SandboxUnavailable)
+    ) {
+        required.insert(if facts.parent_test.is_some() {
+            HistoricalEvidenceKind::CommitTest
+        } else {
+            HistoricalEvidenceKind::ParentTest
+        });
     }
     if !required.is_subset(&present) {
         return Err(format!(
