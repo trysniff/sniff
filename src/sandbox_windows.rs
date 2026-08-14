@@ -73,9 +73,12 @@ pub(super) fn run(spec: &SandboxCommand) -> Result<SandboxOutput, SandboxError> 
     let _cross_process_lock = CrossProcessLock::acquire()?;
     trace_phase(started, "coordination lock acquired");
     let program = resolve_program(&spec.program)?;
+    let system_program = is_system_program(&program)?;
     let mut effective_spec = spec.clone();
     effective_spec.program = program.to_string_lossy().into_owned();
-    effective_spec.read_only_paths.push(program.clone());
+    if !system_program {
+        effective_spec.read_only_paths.push(program.clone());
+    }
     effective_spec
         .read_only_paths
         .extend(effective_spec.executable_paths.iter().cloned());
@@ -159,7 +162,9 @@ pub(super) fn run(spec: &SandboxCommand) -> Result<SandboxOutput, SandboxError> 
     )?;
     trace_phase(started, "filesystem access granted");
     // AppContainer file-read permission is not enough to launch an executable.
-    acl_guard.grant_once(&program, "RX", false, &recovery_ledger)?;
+    if !system_program {
+        acl_guard.grant_once(&program, "RX", false, &recovery_ledger)?;
+    }
     for path in &effective_spec.executable_paths {
         acl_guard.grant_external_executable(path, &recovery_ledger)?;
     }
@@ -433,6 +438,18 @@ fn resolve_program(program: &str) -> Result<std::path::PathBuf, SandboxError> {
     Err(SandboxError::Failed(format!(
         "sandbox program {program} was not found on the host PATH"
     )))
+}
+
+fn is_system_program(program: &Path) -> Result<bool, SandboxError> {
+    let root = std::env::var_os("SystemRoot").ok_or_else(|| {
+        SandboxError::Unavailable("Windows sandbox requires SystemRoot".to_string())
+    })?;
+    let system32 = normalize_windows_path(
+        std::fs::canonicalize(PathBuf::from(root).join("System32")).map_err(|error| {
+            SandboxError::Unavailable(format!("resolve Windows System32 failed: {error}"))
+        })?,
+    );
+    Ok(program.starts_with(system32))
 }
 
 fn normalize_windows_path(path: std::path::PathBuf) -> std::path::PathBuf {
@@ -984,6 +1001,49 @@ fn update_acl_entry(
         return Err(format!("read DACL failed with Windows error {get_status}"));
     }
 
+    if access_mode == REVOKE_ACCESS {
+        let mut entries = std::ptr::null_mut();
+        let mut entry_count = 0_u32;
+        let status = unsafe { GetExplicitEntriesFromAclW(old_acl, &mut entry_count, &mut entries) };
+        if status != 0 {
+            unsafe {
+                if !descriptor.is_null() {
+                    LocalFree(descriptor);
+                }
+                LocalFree(sid_ptr);
+            }
+            return Err(format!(
+                "inspect DACL before revoke failed with Windows error {status}"
+            ));
+        }
+        let present = if entries.is_null() {
+            false
+        } else {
+            unsafe { std::slice::from_raw_parts(entries, entry_count as usize) }
+                .iter()
+                .any(|entry| {
+                    let trustee_sid = entry.Trustee.ptstrName as *mut c_void;
+                    entry.Trustee.TrusteeForm == TRUSTEE_IS_SID
+                        && !trustee_sid.is_null()
+                        && unsafe { EqualSid(trustee_sid, sid_ptr) != 0 }
+                })
+        };
+        unsafe {
+            if !entries.is_null() {
+                LocalFree(entries as _);
+            }
+        }
+        if !present {
+            unsafe {
+                if !descriptor.is_null() {
+                    LocalFree(descriptor);
+                }
+                LocalFree(sid_ptr);
+            }
+            return Ok(());
+        }
+    }
+
     let trustee = TRUSTEE_W {
         TrusteeForm: TRUSTEE_IS_SID,
         TrusteeType: TRUSTEE_IS_WELL_KNOWN_GROUP,
@@ -1353,7 +1413,7 @@ mod tests {
     use super::{
         CREATE_SUSPENDED, CapabilitySid, SANDBOX_PROCESS_CREATION_FLAGS,
         ensure_persistent_read_acl, explicit_acl_paths, extend_executable_mapping_roots,
-        persistent_read_acl_exists, sid_string,
+        persistent_read_acl_exists, revoke_acl, sid_string,
     };
     use std::path::{Path, PathBuf};
     use windows_sys::Win32::Security::EqualSid;
@@ -1361,6 +1421,17 @@ mod tests {
     #[test]
     fn appcontainer_process_starts_suspended_before_job_assignment() {
         assert_ne!(SANDBOX_PROCESS_CREATION_FLAGS & CREATE_SUSPENDED, 0);
+    }
+
+    #[test]
+    fn revoking_an_absent_sid_does_not_rewrite_a_protected_dacl() {
+        let capability = CapabilitySid::derive(super::PERSISTENT_READ_CAPABILITY).unwrap();
+        let sid = sid_string(capability.sid).unwrap();
+        let cmd = PathBuf::from(std::env::var_os("SystemRoot").unwrap())
+            .join("System32")
+            .join("cmd.exe");
+
+        revoke_acl(&cmd, &sid).unwrap();
     }
 
     #[test]
