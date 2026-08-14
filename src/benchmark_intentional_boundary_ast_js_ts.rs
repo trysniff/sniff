@@ -11,11 +11,11 @@ use oxc_ast::ast::{
 use oxc_ast::visit::walk;
 use oxc_span::{SourceType, Span};
 use oxc_syntax::scope::ScopeFlags;
-use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use super::intentional_boundary_ast::{
-    AstMethodSyntaxFact, AstMethodSyntaxFacts, census_language_ast, validate_language_ast,
+    AstCallableCandidate, AstMethodSyntaxFacts, align_callable_candidates, census_language_ast,
+    validate_language_ast,
 };
 
 pub fn census_intentional_boundary_javascript_ast(
@@ -144,14 +144,6 @@ fn validate_js_ts_ast(
     )
 }
 
-#[derive(Clone)]
-struct CallableCandidate {
-    span: Span,
-    start_line: usize,
-    end_line: usize,
-    thin_delegation: Option<IntentionalBoundarySemanticRange>,
-}
-
 fn js_ts_syntax_facts(
     repository_path: &str,
     record: &crate::types::FileRecord,
@@ -172,13 +164,18 @@ fn js_ts_syntax_facts(
         candidates: Vec::new(),
     };
     visitor.visit_program(&parsed.program);
-    align_candidates(repository_path, record, visitor.candidates)
+    align_callable_candidates(
+        repository_path,
+        "JavaScript/TypeScript",
+        record,
+        visitor.candidates,
+    )
 }
 
 struct JsTsBodyVisitor<'a> {
     repository_path: &'a str,
     line_starts: Vec<usize>,
-    candidates: Vec<CallableCandidate>,
+    candidates: Vec<AstCallableCandidate>,
 }
 
 impl JsTsBodyVisitor<'_> {
@@ -188,8 +185,9 @@ impl JsTsBodyVisitor<'_> {
         let thin_delegation = body
             .and_then(thin_delegation_expression)
             .map(|call| offset_range(self.repository_path, call, &self.line_starts));
-        self.candidates.push(CallableCandidate {
-            span,
+        self.candidates.push(AstCallableCandidate {
+            byte_start: span.start as usize,
+            byte_end: span.end as usize,
             start_line,
             end_line,
             thin_delegation,
@@ -212,65 +210,6 @@ impl<'a> Visit<'a> for JsTsBodyVisitor<'_> {
         self.record(definition.span, definition.value.body.as_deref());
         walk::walk_function(self, &definition.value, Some(definition.kind.scope_flags()));
     }
-}
-
-fn align_candidates(
-    repository_path: &str,
-    record: &crate::types::FileRecord,
-    candidates: Vec<CallableCandidate>,
-) -> Result<AstMethodSyntaxFacts, String> {
-    let mut candidates_by_lines = BTreeMap::<(usize, usize), Vec<CallableCandidate>>::new();
-    let mut seen_spans = BTreeSet::new();
-    for candidate in candidates {
-        if seen_spans.insert((candidate.span.start, candidate.span.end)) {
-            candidates_by_lines
-                .entry((candidate.start_line, candidate.end_line))
-                .or_default()
-                .push(candidate);
-        }
-    }
-    let mut methods_by_lines = BTreeMap::<(usize, usize), Vec<&crate::types::MethodRecord>>::new();
-    for method in &record.methods {
-        methods_by_lines
-            .entry((method.start_line, method.end_line))
-            .or_default()
-            .push(method);
-    }
-    if candidates_by_lines.keys().collect::<Vec<_>>() != methods_by_lines.keys().collect::<Vec<_>>()
-    {
-        return Err(format!(
-            "JavaScript/TypeScript AST callable ranges changed from parser census: {repository_path}"
-        ));
-    }
-    let mut facts = BTreeMap::new();
-    for (lines, methods) in methods_by_lines {
-        let candidates = candidates_by_lines
-            .get_mut(&lines)
-            .expect("candidate keys were compared");
-        candidates.sort_by_key(|candidate| (candidate.span.start, candidate.span.end));
-        if methods.len() != candidates.len() {
-            return Err(format!(
-                "JavaScript/TypeScript AST callable count changed at {}:{}-{}",
-                repository_path, lines.0, lines.1
-            ));
-        }
-        for (method, candidate) in methods.into_iter().zip(candidates.iter()) {
-            let previous = facts.insert(
-                (method.name.clone(), method.start_line),
-                AstMethodSyntaxFact {
-                    end_line: candidate.end_line,
-                    thin_delegation: candidate.thin_delegation.clone(),
-                },
-            );
-            if previous.is_some() {
-                return Err(format!(
-                    "JavaScript/TypeScript AST repeated parser method identity: {}:{}:{}",
-                    repository_path, method.start_line, method.name
-                ));
-            }
-        }
-    }
-    Ok(facts)
 }
 
 fn thin_delegation_expression(body: &FunctionBody<'_>) -> Option<Span> {

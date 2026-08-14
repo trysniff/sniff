@@ -10,7 +10,7 @@ use super::{
 };
 use crate::types::FileRecord;
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 const AST_CONTRACT: &str = "sniffbench-intentional-boundary-source-ast-v1";
@@ -21,8 +21,77 @@ pub(super) struct AstMethodSyntaxFact {
     pub thin_delegation: Option<IntentionalBoundarySemanticRange>,
 }
 
+#[derive(Clone)]
+pub(super) struct AstCallableCandidate {
+    pub byte_start: usize,
+    pub byte_end: usize,
+    pub start_line: usize,
+    pub end_line: usize,
+    pub thin_delegation: Option<IntentionalBoundarySemanticRange>,
+}
+
 pub(super) type AstMethodSyntaxFacts = BTreeMap<AstMethodKey, AstMethodSyntaxFact>;
 pub(super) type AstSyntaxExtractor = fn(&str, &FileRecord) -> Result<AstMethodSyntaxFacts, String>;
+
+pub(super) fn align_callable_candidates(
+    repository_path: &str,
+    language: &str,
+    record: &FileRecord,
+    candidates: Vec<AstCallableCandidate>,
+) -> Result<AstMethodSyntaxFacts, String> {
+    let mut candidates_by_lines = BTreeMap::<(usize, usize), Vec<AstCallableCandidate>>::new();
+    let mut seen_spans = BTreeSet::new();
+    for candidate in candidates {
+        if seen_spans.insert((candidate.byte_start, candidate.byte_end)) {
+            candidates_by_lines
+                .entry((candidate.start_line, candidate.end_line))
+                .or_default()
+                .push(candidate);
+        }
+    }
+    let mut methods_by_lines = BTreeMap::<(usize, usize), Vec<&crate::types::MethodRecord>>::new();
+    for method in &record.methods {
+        methods_by_lines
+            .entry((method.start_line, method.end_line))
+            .or_default()
+            .push(method);
+    }
+    if candidates_by_lines.keys().collect::<Vec<_>>() != methods_by_lines.keys().collect::<Vec<_>>()
+    {
+        return Err(format!(
+            "{language} AST callable ranges changed from parser census: {repository_path}"
+        ));
+    }
+    let mut facts = BTreeMap::new();
+    for (lines, methods) in methods_by_lines {
+        let candidates = candidates_by_lines
+            .get_mut(&lines)
+            .expect("candidate keys were compared");
+        candidates.sort_by_key(|candidate| (candidate.byte_start, candidate.byte_end));
+        if methods.len() != candidates.len() {
+            return Err(format!(
+                "{language} AST callable count changed at {}:{}-{}",
+                repository_path, lines.0, lines.1
+            ));
+        }
+        for (method, candidate) in methods.into_iter().zip(candidates.iter()) {
+            let previous = facts.insert(
+                (method.name.clone(), method.start_line),
+                AstMethodSyntaxFact {
+                    end_line: candidate.end_line,
+                    thin_delegation: candidate.thin_delegation.clone(),
+                },
+            );
+            if previous.is_some() {
+                return Err(format!(
+                    "{language} AST repeated parser method identity: {}:{}:{}",
+                    repository_path, method.start_line, method.name
+                ));
+            }
+        }
+    }
+    Ok(facts)
+}
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn census_language_ast(
