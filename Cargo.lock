@@ -1941,6 +1941,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "toml",
+ "toml_edit",
  "tree-sitter",
  "tree-sitter-go",
  "tree-sitter-kotlin-ng",

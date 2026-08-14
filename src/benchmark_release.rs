@@ -107,6 +107,11 @@ mod intentional_boundary_manifest_schema;
 
 pub use intentional_boundary_manifest_schema::*;
 
+#[path = "benchmark_intentional_boundary_manifest.rs"]
+mod intentional_boundary_manifest;
+
+pub use intentional_boundary_manifest::*;
+
 #[path = "benchmark_intentional_boundary_compiler_evidence.rs"]
 mod intentional_boundary_compiler_evidence;
 
