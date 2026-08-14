@@ -103,6 +103,20 @@ pub fn validate_intentional_boundary_repository_inventory(
     Ok(())
 }
 
+pub(super) fn read_intentional_boundary_git_blob(
+    root: &Path,
+    object_id: &str,
+    expected_length: u64,
+) -> Result<Vec<u8>, String> {
+    let bytes = git_bytes(root, &["cat-file", "blob", object_id])?;
+    if bytes.len() as u64 != expected_length {
+        return Err(format!(
+            "intentional-boundary Git blob {object_id} changed its committed length"
+        ));
+    }
+    Ok(bytes)
+}
+
 fn require_complete_checkout(
     repository: &str,
     revision: &str,

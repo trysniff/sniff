@@ -45,15 +45,38 @@ pub(in crate::parser) fn parse_file(file_path: &str) -> FileRecord {
 
 pub(in crate::parser) fn parse_file_checked(file_path: &str) -> Result<FileRecord, String> {
     let (source_bytes, adapter) = load_file_context_checked(file_path)?;
-    let source = String::from_utf8(source_bytes)
-        .map_err(|err| format!("source file is not valid UTF-8 {file_path}: {err}"))?;
+    parse_source_with_adapter_checked(file_path, &source_bytes, &adapter)
+}
+
+pub(in crate::parser) fn parse_source_checked(
+    file_path: &str,
+    source_bytes: &[u8],
+) -> Result<FileRecord, String> {
+    let path = Path::new(file_path);
+    let ext = path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .ok_or_else(|| format!("source file has no supported extension: {file_path}"))?;
+    let adapter = languages::get_adapter(ext)
+        .ok_or_else(|| format!("unsupported source extension for {file_path}"))?;
+    parse_source_with_adapter_checked(file_path, source_bytes, &adapter)
+}
+
+fn parse_source_with_adapter_checked(
+    file_path: &str,
+    source_bytes: &[u8],
+    adapter: &LanguageAdapter,
+) -> Result<FileRecord, String> {
+    let source = std::str::from_utf8(source_bytes)
+        .map_err(|err| format!("source file is not valid UTF-8 {file_path}: {err}"))?
+        .to_string();
     let mut record = FileRecord {
         file_path: file_path.to_string(),
         source,
         language: adapter.name.clone(),
         methods: Vec::new(),
     };
-    methods::parse_methods_for_language(&mut record, file_path, &adapter)?;
+    methods::parse_methods_for_language(&mut record, file_path, adapter)?;
     Ok(record)
 }
 
