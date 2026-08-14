@@ -92,6 +92,11 @@ mod intentional_boundary_ast_js_ts;
 
 pub use intentional_boundary_ast_js_ts::*;
 
+#[path = "benchmark_intentional_boundary_ast_go_kotlin.rs"]
+mod intentional_boundary_ast_go_kotlin;
+
+pub use intentional_boundary_ast_go_kotlin::*;
+
 #[path = "benchmark_intentional_boundary_compiler_evidence.rs"]
 mod intentional_boundary_compiler_evidence;
 
