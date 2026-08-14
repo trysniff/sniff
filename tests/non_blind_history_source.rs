@@ -1,6 +1,6 @@
 use sniff::benchmark::{
-    HistoricalDiffHunk, HistoricalRevisionSide, census_historical_source_delta,
-    historical_diff_hunks,
+    HistoricalChangedPath, HistoricalDiffHunk, HistoricalRevisionSide, capture_historical_diffs,
+    census_historical_source_delta, historical_diff_hunks,
 };
 use std::fs;
 use std::path::Path;
@@ -101,6 +101,28 @@ fn context_only_hunks_do_not_become_production_changes() {
     assert!(census.production_paths.is_empty());
     assert!(census.affected_methods.is_empty());
     assert!(census.quota_language.is_none());
+}
+
+#[test]
+fn changed_path_capture_commits_exact_zero_context_diff() {
+    let fixture = source_fixture();
+    let captured = capture_historical_diffs(
+        fixture.repository.path(),
+        &fixture.parent_revision,
+        &fixture.commit_revision,
+        &[HistoricalChangedPath {
+            status: "M".to_string(),
+            previous_path: None,
+            path: "src/main.rs".to_string(),
+        }],
+    )
+    .unwrap();
+
+    assert_eq!(captured.len(), 1);
+    assert_eq!(captured[0].sha256.len(), 64);
+    assert!(!captured[0].bytes.is_empty());
+    assert!(!captured[0].hunks.is_empty());
+    assert!(captured[0].bytes.windows(3).any(|window| window == b"@@ "));
 }
 
 #[test]

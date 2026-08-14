@@ -1,15 +1,27 @@
 use super::source_assessment::deterministic_license_path;
 use super::{
-    AffectedHistoricalMethod, HistoricalDiffHunk, HistoricalProductionPathDelta,
-    HistoricalRevisionSide, HistoricalSourceDeltaCensus,
+    AffectedHistoricalMethod, HistoricalChangedPath, HistoricalDiffHunk,
+    HistoricalProductionPathDelta, HistoricalRevisionSide, HistoricalSourceDeltaCensus,
 };
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
 use std::process::Command;
+use std::time::Duration;
 
 const MAX_SOURCE_BYTES: u64 = 1024 * 1024;
+const MAX_DIFF_BYTES: usize = 32 * 1024 * 1024;
+const GIT_DIFF_TIMEOUT: Duration = Duration::from_secs(300);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HistoricalCapturedDiff {
+    pub previous_path: Option<String>,
+    pub path: String,
+    pub bytes: Vec<u8>,
+    pub sha256: String,
+    pub hunks: Vec<HistoricalDiffHunk>,
+}
 
 #[derive(Debug)]
 struct SourceMethod {
@@ -78,6 +90,82 @@ pub fn historical_diff_hunks(
     hunks.sort();
     hunks.dedup();
     Ok(hunks)
+}
+
+pub fn capture_historical_diffs(
+    repository_root: &Path,
+    parent_revision: &str,
+    commit_revision: &str,
+    changed_paths: &[HistoricalChangedPath],
+) -> Result<Vec<HistoricalCapturedDiff>, String> {
+    require_git_revision(parent_revision)?;
+    require_git_revision(commit_revision)?;
+    let mut captured = Vec::with_capacity(changed_paths.len());
+    for changed in changed_paths {
+        require_safe_path(&changed.path)?;
+        if let Some(previous_path) = &changed.previous_path {
+            require_safe_path(previous_path)?;
+        }
+        let mut command = Command::new("git");
+        command.arg("-C").arg(repository_root).args([
+            "diff",
+            "--unified=0",
+            "--no-ext-diff",
+            "--no-color",
+            "--no-textconv",
+            "-M",
+            "-C",
+            parent_revision,
+            commit_revision,
+            "--",
+        ]);
+        if let Some(previous_path) = &changed.previous_path {
+            command.arg(previous_path);
+        }
+        command.arg(&changed.path);
+        let output = crate::bounded_process::run_with_output_limit(
+            &mut command,
+            GIT_DIFF_TIMEOUT,
+            MAX_DIFF_BYTES,
+        )
+        .map_err(|error| format!("historical source delta requires git: {error}"))?;
+        if output.timed_out {
+            return Err(format!(
+                "historical diff for {} exceeded its {}-second deadline",
+                changed.path,
+                GIT_DIFF_TIMEOUT.as_secs()
+            ));
+        }
+        if output.stdout_truncated || output.stderr_truncated {
+            return Err(format!(
+                "historical diff for {} exceeded the {MAX_DIFF_BYTES}-byte evidence limit",
+                changed.path
+            ));
+        }
+        if !output.status.success() {
+            return Err(format!(
+                "historical diff failed for {}: {}",
+                changed.path,
+                String::from_utf8_lossy(&output.stderr)
+                    .chars()
+                    .take(2048)
+                    .collect::<String>()
+            ));
+        }
+        let hunks = historical_diff_hunks(
+            changed.previous_path.as_deref(),
+            &changed.path,
+            &output.stdout,
+        )?;
+        captured.push(HistoricalCapturedDiff {
+            previous_path: changed.previous_path.clone(),
+            path: changed.path.clone(),
+            sha256: sha256(&output.stdout),
+            bytes: output.stdout,
+            hunks,
+        });
+    }
+    Ok(captured)
 }
 
 pub fn census_historical_source_delta(
