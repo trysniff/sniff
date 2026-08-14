@@ -28,8 +28,6 @@ jobs:
     env:
       CARGO_INCREMENTAL: "0"
       CARGO_PROFILE_RELEASE_DEBUG: "0"
-      HISTORY_STATE: ${{ runner.temp }}/sniffbench-history-state
-      COMPLETED_LEDGER: ${{ runner.temp }}/non-blind-history-assessment.json
       MAX_NEW_RANKS: ${{ inputs.max_new_ranks }}
     steps:
       - uses: actions/checkout@v6
@@ -46,7 +44,12 @@ jobs:
           repository: ${{ github.repository }}
           run-id: ${{ inputs.resume_run_id }}
       - name: Initialize state
-        run: mkdir -p "$HISTORY_STATE"
+        run: |
+          history_state="${RUNNER_TEMP}/sniffbench-history-state"
+          completed_ledger="${RUNNER_TEMP}/non-blind-history-assessment.json"
+          mkdir -p "$history_state"
+          printf 'HISTORY_STATE=%s\n' "$history_state" >> "$GITHUB_ENV"
+          printf 'COMPLETED_LEDGER=%s\n' "$completed_ledger" >> "$GITHUB_ENV"
       - name: Build the assessor
         run: cargo build --release --locked
       - name: Prepare the immutable blank ledger
