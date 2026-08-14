@@ -18,9 +18,9 @@ mod run;
 mod stats;
 
 pub(crate) use benchmark_run::{
-    assess_benchmark_source_selection, audit_benchmark_labels, audit_benchmark_source_selection,
-    audit_benchmark_source_selection_component, benchmark, benchmark_label_status,
-    collect_benchmark_source_frame, combine_benchmark_source_selections,
+    assess_benchmark_source_selection, assess_non_blind_benchmark_history, audit_benchmark_labels,
+    audit_benchmark_source_selection, audit_benchmark_source_selection_component, benchmark,
+    benchmark_label_status, collect_benchmark_source_frame, combine_benchmark_source_selections,
     extend_benchmark_source_selection, freeze_benchmark, import_benchmark_run,
     prepare_benchmark_label_resolution, prepare_benchmark_labels, prepare_benchmark_run,
     prepare_benchmark_source_selection, prepare_benchmark_source_selection_extension,

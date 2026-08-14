@@ -1,6 +1,7 @@
 use crate::benchmark::{
-    BenchmarkCorpus, BenchmarkSubmission, NonBlindSourceSeal, evaluate_release, freeze_corpus,
-    freeze_non_blind_source_seal, prepare_non_blind_history, prepare_non_blind_history_assessment,
+    BenchmarkCorpus, BenchmarkSubmission, NonBlindHistoryAssessment, NonBlindSourceSeal,
+    assess_non_blind_history, evaluate_release, freeze_corpus, freeze_non_blind_source_seal,
+    prepare_non_blind_history, prepare_non_blind_history_assessment,
 };
 use crate::benchmark::{
     BenchmarkSourceSeal, LabelResolutionManifest, LabelReviewAudit, LabelReviewWorksheet,
@@ -147,6 +148,51 @@ pub(crate) fn prepare_non_blind_benchmark_history_assessment(
         assessment.assessments.len(),
         assessment.quota_target.len(),
         assessment.task_sha256
+    );
+    Ok(0)
+}
+
+pub(crate) async fn assess_non_blind_benchmark_history(
+    policy_path: &str,
+    worksheet_path: &str,
+    protocol_path: &str,
+    assessment_path: &str,
+    state_directory: &str,
+    output_path: &str,
+) -> Result<i32, Box<dyn std::error::Error>> {
+    let policy = fs::read(policy_path)?;
+    let worksheet = fs::read(worksheet_path)?;
+    let protocol = fs::read(protocol_path)?;
+    let assessment = read_json::<NonBlindHistoryAssessment>(assessment_path)?;
+    let completed = assess_non_blind_history(
+        &policy,
+        &worksheet,
+        &protocol,
+        assessment,
+        Path::new(state_directory),
+    )
+    .await
+    .map_err(|error| {
+        IoError::new(
+            ErrorKind::InvalidData,
+            format!("non-blind history assessment failed: {error}"),
+        )
+    })?;
+    write_new_file(
+        Path::new(output_path),
+        &serde_json::to_vec_pretty(&completed)?,
+    )?;
+    let selected = completed
+        .assessments
+        .iter()
+        .filter(|assessment| {
+            assessment.disposition
+                == Some(crate::benchmark::HistoricalAssessmentDisposition::Selected)
+        })
+        .count();
+    eprintln!(
+        "Completed non-blind history assessment written to {output_path}\nRepositories: {}\nSelected: {selected}\nEvidence root: {state_directory}",
+        completed.assessments.len()
     );
     Ok(0)
 }

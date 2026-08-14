@@ -287,6 +287,21 @@ pub enum BenchmarkCommand {
         /// New immutable blank assessment ledger.
         output: String,
     },
+    /// Execute and resume every frozen historical rank without inspecting labels.
+    AssessNonBlindHistory {
+        /// Public non-blind selection policy.
+        policy: String,
+        /// Frozen 600-repository history worksheet.
+        worksheet: String,
+        /// Precommitted historical assessment protocol.
+        protocol: String,
+        /// Immutable blank ledger from prepare-non-blind-history-assessment.
+        assessment: String,
+        /// Durable checkpoints, evidence transactions, and temporary worktrees.
+        state_directory: String,
+        /// New completed assessment ledger; existing files are never overwritten.
+        output: String,
+    },
     /// Verify all source seals and labels and create a SniffBench v6 corpus.
     Freeze {
         /// Draft corpus manifest; snapshot paths are relative to its directory.
@@ -510,6 +525,24 @@ pub async fn run(args: CliArgs) -> Result<i32, Box<dyn std::error::Error>> {
             } => pipeline::prepare_non_blind_benchmark_history_assessment(
                 &policy, &worksheet, &protocol, &output,
             ),
+            BenchmarkCommand::AssessNonBlindHistory {
+                policy,
+                worksheet,
+                protocol,
+                assessment,
+                state_directory,
+                output,
+            } => {
+                pipeline::assess_non_blind_benchmark_history(
+                    &policy,
+                    &worksheet,
+                    &protocol,
+                    &assessment,
+                    &state_directory,
+                    &output,
+                )
+                .await
+            }
             BenchmarkCommand::Freeze { draft, output } => {
                 pipeline::freeze_benchmark(&draft, &output)
             }
@@ -758,6 +791,41 @@ mod tests {
                 && worksheet == "history.json"
                 && protocol == "protocol.json"
                 && output == "assessment.json"
+        ));
+    }
+
+    #[test]
+    fn parses_resumable_non_blind_history_assessment() {
+        let args = CliArgs::try_parse_from([
+            "sniff",
+            "benchmark",
+            "assess-non-blind-history",
+            "policy.json",
+            "history.json",
+            "protocol.json",
+            "blank.json",
+            "state",
+            "completed.json",
+        ])
+        .expect("resumable non-blind history assessment arguments");
+
+        assert!(matches!(
+            args.command,
+            Some(CliCommand::Benchmark {
+                command: BenchmarkCommand::AssessNonBlindHistory {
+                    policy,
+                    worksheet,
+                    protocol,
+                    assessment,
+                    state_directory,
+                    output,
+                }
+            }) if policy == "policy.json"
+                && worksheet == "history.json"
+                && protocol == "protocol.json"
+                && assessment == "blank.json"
+                && state_directory == "state"
+                && output == "completed.json"
         ));
     }
 
