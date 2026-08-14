@@ -22,15 +22,33 @@ pub(super) fn cargo_launch(args: &[String]) -> Result<Launch, HistoricalRuntimeP
     let rustc_root = rust_toolchain_root(&rustc)?;
     reject_broad_user_root(&cargo_root)?;
     reject_broad_user_root(&rustc_root)?;
+    #[cfg(target_os = "macos")]
+    let (runtime_roots, env) = {
+        let xcode_select = resolve_on_path("xcode-select")?;
+        let developer_dir = query_path(&xcode_select, &["-p"], "active macOS developer directory")?;
+        (
+            vec![cargo_root, rustc_root, developer_dir.clone()],
+            vec![
+                ("CARGO".to_string(), path_value(&cargo)),
+                ("RUSTC".to_string(), path_value(&rustc)),
+                ("DEVELOPER_DIR".to_string(), path_value(&developer_dir)),
+            ],
+        )
+    };
+    #[cfg(not(target_os = "macos"))]
+    let (runtime_roots, env) = (
+        vec![cargo_root, rustc_root],
+        vec![
+            ("CARGO".to_string(), path_value(&cargo)),
+            ("RUSTC".to_string(), path_value(&rustc)),
+        ],
+    );
     Ok(Launch {
         target: cargo.clone(),
         args: args.to_vec(),
         runtime_files: vec![cargo.clone(), rustc.clone()],
-        runtime_roots: vec![cargo_root, rustc_root],
-        env: vec![
-            ("CARGO".to_string(), path_value(&cargo)),
-            ("RUSTC".to_string(), path_value(&rustc)),
-        ],
+        runtime_roots,
+        env,
         repository_target: false,
     })
 }
