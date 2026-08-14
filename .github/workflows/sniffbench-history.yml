@@ -33,7 +33,17 @@ jobs:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
       - name: Install the hardened Linux sandbox
-        run: sudo apt-get update && sudo apt-get install --yes bubblewrap
+        run: sudo apt-get update && sudo apt-get install --no-install-recommends --yes bubblewrap
+      - name: Enable Linux user namespaces for the historical sandbox
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: Verify the network-enabled historical sandbox
+        run: |
+          bwrap --die-with-parent --unshare-all --share-net --clearenv \
+            --ro-bind /usr /usr --ro-bind /bin /bin --ro-bind /lib /lib \
+            --ro-bind-try /lib64 /lib64 --ro-bind-try /etc /etc \
+            --ro-bind /run /run \
+            --proc /proc --dev /dev --tmpfs /tmp -- \
+            /usr/bin/true
       - name: Restore the prior verified state
         if: inputs.resume_run_id != ''
         uses: actions/download-artifact@v8

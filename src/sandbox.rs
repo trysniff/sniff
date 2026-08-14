@@ -121,6 +121,8 @@ pub(crate) fn run(spec: &SandboxCommand) -> Result<SandboxOutput, SandboxError> 
 }
 
 fn run_external(spec: &SandboxCommand) -> Result<SandboxOutput, SandboxError> {
+    #[cfg(target_os = "linux")]
+    let using_bubblewrap = external_runner()?.is_none();
     let mut command = build_command(spec)?;
     #[cfg(target_os = "linux")]
     configure_linux_resource_limits(&mut command, spec)?;
@@ -256,6 +258,18 @@ fn run_external(spec: &SandboxCommand) -> Result<SandboxOutput, SandboxError> {
         stderr_text.push_str("Sniff terminated the sandbox after its process limit was exceeded");
     }
 
+    #[cfg(target_os = "linux")]
+    if using_bubblewrap
+        && let Some(reason) = bubblewrap_startup_failure(
+            status.as_ref().and_then(std::process::ExitStatus::code),
+            timed_out,
+            &stdout.text,
+            &stderr_text,
+        )
+    {
+        return Err(SandboxError::Unavailable(reason));
+    }
+
     Ok(SandboxOutput {
         status_code: status.and_then(|status| status.code()),
         stdout: stdout.text,
@@ -264,6 +278,31 @@ fn run_external(spec: &SandboxCommand) -> Result<SandboxOutput, SandboxError> {
         stderr_sha256: stderr.sha256,
         timed_out,
     })
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn bubblewrap_startup_failure(
+    status_code: Option<i32>,
+    timed_out: bool,
+    stdout: &str,
+    stderr: &str,
+) -> Option<String> {
+    if status_code == Some(0) || timed_out || !stdout.trim().is_empty() {
+        return None;
+    }
+    const SETUP_FAILURES: &[&str] = &[
+        "bwrap: setting up uid map:",
+        "bwrap: No permissions to creating new namespace",
+        "bwrap: Creating new namespace failed",
+        "bwrap: Can't bind mount",
+        "bwrap: Can't mount proc",
+        "bwrap: Can't make symlink",
+    ];
+    let first_line = stderr.lines().next()?.trim();
+    SETUP_FAILURES
+        .iter()
+        .any(|prefix| first_line.starts_with(prefix))
+        .then(|| format!("Linux bubblewrap sandbox is unavailable: {first_line}"))
 }
 
 #[cfg(target_os = "linux")]
@@ -1125,6 +1164,7 @@ fn terminate_macos_process_group(process_group: u32) -> Result<(), SandboxError>
 
 #[cfg(test)]
 mod tests {
+    use super::bubblewrap_startup_failure;
     use super::{
         DEFAULT_MEMORY_LIMIT, DEFAULT_PROCESS_LIMIT, SandboxCommand, SandboxError, read_limited,
         read_limited_hashed, read_limited_with_observer, validate_external_runner, validate_spec,
@@ -1179,6 +1219,40 @@ mod tests {
 
         assert_eq!(linux_proc_stat_parent(stat), Some(17));
         assert_eq!(linux_proc_stat_parent("malformed"), None);
+    }
+
+    #[test]
+    fn classifies_bubblewrap_uid_map_failure_as_sandbox_unavailable() {
+        let failure = bubblewrap_startup_failure(
+            Some(1),
+            false,
+            "",
+            "bwrap: setting up uid map: Permission denied\n",
+        );
+
+        assert_eq!(
+            failure.as_deref(),
+            Some(
+                "Linux bubblewrap sandbox is unavailable: bwrap: setting up uid map: Permission denied"
+            )
+        );
+    }
+
+    #[test]
+    fn does_not_misclassify_a_sandboxed_command_failure() {
+        assert_eq!(
+            bubblewrap_startup_failure(Some(1), false, "", "application failed\n"),
+            None
+        );
+        assert_eq!(
+            bubblewrap_startup_failure(
+                Some(1),
+                false,
+                "",
+                "bwrap: Can't fork: Resource temporarily unavailable\n"
+            ),
+            None
+        );
     }
 
     #[test]
