@@ -123,14 +123,13 @@ pub fn census_intentional_boundary_repository(
             .into_iter()
             .map(|method| {
                 let source_sha256 = sha256(method.source.as_bytes());
-                let parser_unit_id = format!(
-                    "{}:{}:{}:{}:{}",
-                    entry.repository_path,
-                    method.name,
+                let parser_unit_id = method_unit_id(
+                    &entry.repository_path,
+                    &method.name,
                     method.start_line,
                     method.end_line,
-                    source_sha256
-                );
+                    &source_sha256,
+                )?;
                 if !parser_unit_ids.insert(parser_unit_id.clone()) {
                     return Err(format!(
                         "intentional-boundary parser repeated unit identity {parser_unit_id}"
@@ -201,6 +200,25 @@ fn compute_census_sha256(census: &IntentionalBoundarySourceCensus) -> Result<Str
     ))
     .map_err(|error| format!("failed to commit intentional-boundary source census: {error}"))?;
     Ok(sha256(&bytes))
+}
+
+fn method_unit_id(
+    repository_path: &str,
+    symbol_name: &str,
+    start_line: usize,
+    end_line: usize,
+    source_sha256: &str,
+) -> Result<String, String> {
+    let bytes = serde_json::to_vec(&(
+        "sniffbench-intentional-boundary-method-v1",
+        repository_path,
+        symbol_name,
+        start_line,
+        end_line,
+        source_sha256,
+    ))
+    .map_err(|error| format!("failed to commit intentional-boundary method identity: {error}"))?;
+    Ok(format!("ibm-v1:{}", sha256(&bytes)))
 }
 
 fn sha256(bytes: &[u8]) -> String {
