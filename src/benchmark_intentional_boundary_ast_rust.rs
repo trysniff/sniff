@@ -73,8 +73,11 @@ fn derive_rust_ast_census(
     )
 }
 
-fn rust_syntax_facts(repository_path: &str, source: &str) -> Result<AstMethodSyntaxFacts, String> {
-    let file = syn::parse_file(source)
+fn rust_syntax_facts(
+    repository_path: &str,
+    record: &crate::types::FileRecord,
+) -> Result<AstMethodSyntaxFacts, String> {
+    let file = syn::parse_file(&record.source)
         .map_err(|error| format!("failed to parse Rust AST {repository_path}: {error}"))?;
     let mut visitor = RustBodyVisitor {
         repository_path,

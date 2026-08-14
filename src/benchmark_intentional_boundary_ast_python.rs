@@ -74,8 +74,9 @@ fn derive_python_ast_census(
 
 fn python_syntax_facts(
     repository_path: &str,
-    source: &str,
+    record: &crate::types::FileRecord,
 ) -> Result<AstMethodSyntaxFacts, String> {
+    let source = &record.source;
     let parsed = rustpython_parser::parse(source, rustpython_parser::Mode::Module, repository_path)
         .map_err(|error| format!("failed to parse Python AST {repository_path}: {error}"))?;
     let rustpython_ast::Mod::Module(module) = parsed else {

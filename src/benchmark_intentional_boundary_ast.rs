@@ -22,7 +22,7 @@ pub(super) struct AstMethodSyntaxFact {
 }
 
 pub(super) type AstMethodSyntaxFacts = BTreeMap<AstMethodKey, AstMethodSyntaxFact>;
-pub(super) type AstSyntaxExtractor = fn(&str, &str) -> Result<AstMethodSyntaxFacts, String>;
+pub(super) type AstSyntaxExtractor = fn(&str, &FileRecord) -> Result<AstMethodSyntaxFacts, String>;
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn census_language_ast(
@@ -103,7 +103,7 @@ pub(super) fn derive_language_ast_census(
         if source_file.language != language {
             continue;
         }
-        let syntax = extractor(&source_file.repository_path, &file.source)?;
+        let syntax = extractor(&source_file.repository_path, file)?;
         for source_method in &source_file.methods {
             let semantic_method = semantic_methods
                 .get(source_method.parser_unit_id.as_str())
