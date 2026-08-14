@@ -83,8 +83,17 @@ impl Analyzer {
         &self,
         items: &[method_batch_review::BatchMethodReview],
         on_progress: Option<&ReviewProgressCallback>,
+        on_usage: Option<&method_batch_review::BatchUsageCallback>,
+        on_completed: Option<&method_batch_review::BatchCompletionCallback>,
     ) -> Result<(Vec<LLMVerdict>, usize, usize), String> {
-        method_batch_review::analyze_method_review_batch(self, items, on_progress).await
+        method_batch_review::analyze_method_review_batch(
+            self,
+            items,
+            on_progress,
+            on_usage,
+            on_completed,
+        )
+        .await
     }
 
     pub async fn analyze_file(

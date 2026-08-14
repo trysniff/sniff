@@ -20,6 +20,36 @@ use super::verdicts::{
 };
 use super::{Analyzer, ReviewProgress, ReviewProgressCallback, analyzer_prompts};
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(super) struct BatchUsage {
+    pub(super) in_tok: usize,
+    pub(super) out_tok: usize,
+    pub(super) cached_in_tok: usize,
+}
+
+pub(super) type BatchUsageCallback = Arc<dyn Fn(BatchUsage) -> Result<(), String> + Send + Sync>;
+pub(super) type BatchCompletionCallback =
+    Arc<dyn Fn(usize, &LLMVerdict) -> Result<(), String> + Send + Sync>;
+
+fn observed_usage(
+    direct_input: usize,
+    direct_output: usize,
+    tracked: crate::llm::TrackedUsage,
+) -> BatchUsage {
+    BatchUsage {
+        in_tok: direct_input.saturating_add(tracked.failed_input_tokens),
+        out_tok: direct_output.saturating_add(tracked.failed_output_tokens),
+        cached_in_tok: tracked.cached_input_tokens,
+    }
+}
+
+fn persist_usage(callback: Option<&BatchUsageCallback>, usage: BatchUsage) -> Result<(), String> {
+    if let Some(callback) = callback {
+        callback(usage)?;
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone)]
 pub(super) struct BatchMethodReview {
     pub(super) method: MethodRecord,
@@ -351,6 +381,7 @@ async fn call_intent_batch(
     analyzer: &Analyzer,
     items: &[BatchMethodReview],
     on_progress: Option<&ReviewProgressCallback>,
+    on_usage: Option<&BatchUsageCallback>,
 ) -> Result<(Vec<IntentMethodReview>, usize, usize), String> {
     let mut input_tokens = 0;
     let mut output_tokens = 0;
@@ -394,12 +425,23 @@ async fn call_intent_batch(
                 "{prompt}\n\nOnly the methods in this reduced repair batch remain invalid. The previous validation errors were: {repair}. Return one corrected intent review for every supplied method_key."
             )
         };
-        let (result, retry_input, retry_output) = analyzer
-            .llm_client
-            .call_single(&request, ResponseSchema::MethodIntentBatchReview)
-            .await?;
-        input_tokens += retry_input;
-        output_tokens += retry_output;
+        let (attempt, tracked) = crate::llm::LLMClient::track_usage(
+            analyzer
+                .llm_client
+                .call_single(&request, ResponseSchema::MethodIntentBatchReview),
+        )
+        .await;
+        let (result, retry_input, retry_output) = match attempt {
+            Ok(response) => response,
+            Err(error) => {
+                persist_usage(on_usage, observed_usage(0, 0, tracked))?;
+                return Err(error);
+            }
+        };
+        let usage = observed_usage(retry_input, retry_output, tracked);
+        persist_usage(on_usage, usage)?;
+        input_tokens += usage.in_tok;
+        output_tokens += usage.out_tok;
         let Some(result) = result else {
             repair = "batch intent pass returned no response".to_string();
             continue;
@@ -472,6 +514,7 @@ async fn call_semantic_batch<Render>(
     adversarial_intents: Option<&[IntentMethodReview]>,
     label: &str,
     on_progress: Option<&ReviewProgressCallback>,
+    on_usage: Option<&BatchUsageCallback>,
     render_prompt: Render,
 ) -> Result<(Vec<SemanticMethodReview>, usize, usize), String>
 where
@@ -515,12 +558,23 @@ where
                 "{prompt}\n\nOnly the methods in this reduced repair batch remain invalid. The previous semantic validation errors were: {repair}. Return one corrected review for every supplied method_key and copy evidence exactly from that method's source."
             )
         };
-        let (result, retry_input, retry_output) = analyzer
-            .llm_client
-            .call_single(&request, ResponseSchema::SemanticMethodBatchReview)
-            .await?;
-        input_tokens += retry_input;
-        output_tokens += retry_output;
+        let (attempt, tracked) = crate::llm::LLMClient::track_usage(
+            analyzer
+                .llm_client
+                .call_single(&request, ResponseSchema::SemanticMethodBatchReview),
+        )
+        .await;
+        let (result, retry_input, retry_output) = match attempt {
+            Ok(response) => response,
+            Err(error) => {
+                persist_usage(on_usage, observed_usage(0, 0, tracked))?;
+                return Err(error);
+            }
+        };
+        let usage = observed_usage(retry_input, retry_output, tracked);
+        persist_usage(on_usage, usage)?;
+        input_tokens += usage.in_tok;
+        output_tokens += usage.out_tok;
         let Some(result) = result else {
             repair = "batch semantic pass returned no response".to_string();
             continue;
@@ -585,13 +639,15 @@ pub(super) async fn analyze_method_review_batch(
     analyzer: &Analyzer,
     items: &[BatchMethodReview],
     on_progress: Option<&ReviewProgressCallback>,
+    on_usage: Option<&BatchUsageCallback>,
+    on_completed: Option<&BatchCompletionCallback>,
 ) -> Result<(Vec<LLMVerdict>, usize, usize), String> {
     if items.is_empty() {
         return Err("method review batch is empty".to_string());
     }
 
     let (intents, mut input_tokens, mut output_tokens) =
-        call_intent_batch(analyzer, items, on_progress).await?;
+        call_intent_batch(analyzer, items, on_progress, on_usage).await?;
 
     let mut effective_items = items.to_vec();
     let mut history_expanded = vec![false; items.len()];
@@ -615,6 +671,7 @@ pub(super) async fn analyze_method_review_batch(
         Some(&intents),
         "adversarial",
         on_progress,
+        on_usage,
         |indices| {
             let subset_items = indices
                 .iter()
@@ -673,6 +730,7 @@ pub(super) async fn analyze_method_review_batch(
             Some(&retry_intents),
             "expanded adversarial",
             on_progress,
+            on_usage,
             |indices| {
                 let subset_items = indices
                     .iter()
@@ -737,6 +795,7 @@ pub(super) async fn analyze_method_review_batch(
             None,
             "adjudication",
             on_progress,
+            on_usage,
             |indices| {
                 let subset_items = indices
                     .iter()
@@ -761,70 +820,82 @@ pub(super) async fn analyze_method_review_batch(
         }
     }
 
-    let mut resolved_reviews = Vec::with_capacity(final_reviews.len());
-    for (review, item) in final_reviews.into_iter().zip(&effective_items) {
-        let review = enforce_boundary_requirements(review, &item.boundary_requirements);
-        let complete_context = complete_method_context(item);
-        let coordinated_signature_removal =
-            private_unused_requires_signature_change(&complete_context);
-        let (review, private_input, private_output) = refine_private_unused_if_needed(
-            analyzer,
-            &item.method,
-            review,
-            &complete_context,
-            item.repository_private_unused_candidate,
-            coordinated_signature_removal,
-            on_progress,
-        )
-        .await?;
-        input_tokens += private_input;
-        output_tokens += private_output;
-        let review = if item.repository_private_unused_candidate
-            && matches!(
-                review.tier,
-                crate::types::FindingTier::Slop | crate::types::FindingTier::KindaSlop
-            ) {
-            proven_private_unused_review(&item.method, review, coordinated_signature_removal)
-        } else {
-            review
+    let mut verdicts = Vec::with_capacity(final_reviews.len());
+    for (index, (review, item)) in final_reviews.into_iter().zip(&effective_items).enumerate() {
+        let (attempt, tracked) = crate::llm::LLMClient::track_usage(async {
+            let review = enforce_boundary_requirements(review, &item.boundary_requirements);
+            let complete_context = complete_method_context(item);
+            let coordinated_signature_removal =
+                private_unused_requires_signature_change(&complete_context);
+            let (review, private_input, private_output) = refine_private_unused_if_needed(
+                analyzer,
+                &item.method,
+                review,
+                &complete_context,
+                item.repository_private_unused_candidate,
+                coordinated_signature_removal,
+                on_progress,
+            )
+            .await?;
+            let review = if item.repository_private_unused_candidate
+                && matches!(
+                    review.tier,
+                    crate::types::FindingTier::Slop | crate::types::FindingTier::KindaSlop
+                ) {
+                proven_private_unused_review(&item.method, review, coordinated_signature_removal)
+            } else {
+                review
+            };
+            let (review, scoped_input, scoped_output) = refine_scoped_construct_if_needed(
+                analyzer,
+                &item.method,
+                review,
+                &complete_context,
+                item.stale_discard_signature_proof.as_deref(),
+                on_progress,
+            )
+            .await?;
+            let review = enforce_dead_code_proof(
+                review,
+                &item.method,
+                item.repository_private_unused_candidate,
+            );
+            Ok::<_, String>((
+                enforce_exported_change_scope(
+                    review,
+                    &item.method,
+                    item.repository_private_unused_candidate,
+                ),
+                private_input.saturating_add(scoped_input),
+                private_output.saturating_add(scoped_output),
+            ))
+        })
+        .await;
+        let (review, direct_input, direct_output) = match attempt {
+            Ok(review) => review,
+            Err(error) => {
+                persist_usage(on_usage, observed_usage(0, 0, tracked))?;
+                return Err(error);
+            }
         };
-        let (review, scoped_input, scoped_output) = refine_scoped_construct_if_needed(
-            analyzer,
-            &item.method,
-            review,
-            &complete_context,
-            item.stale_discard_signature_proof.as_deref(),
-            on_progress,
-        )
-        .await?;
-        input_tokens += scoped_input;
-        output_tokens += scoped_output;
-        let review = enforce_dead_code_proof(
-            review,
-            &item.method,
-            item.repository_private_unused_candidate,
+        let usage = observed_usage(direct_input, direct_output, tracked);
+        persist_usage(on_usage, usage)?;
+        input_tokens += usage.in_tok;
+        output_tokens += usage.out_tok;
+        let verdict = build_semantic_method_verdict(
+            &review,
+            &item.method.file_path,
+            &item.method.name,
+            item.method.loc,
+            item.method.start_line,
+            item.method.end_line,
         );
-        resolved_reviews.push(enforce_exported_change_scope(
-            review,
-            &item.method,
-            item.repository_private_unused_candidate,
-        ));
+        if let Some(callback) = on_completed {
+            callback(index, &verdict)?;
+        }
+        verdicts.push(verdict);
     }
 
-    let verdicts = resolved_reviews
-        .into_iter()
-        .zip(&effective_items)
-        .map(|(review, item)| {
-            build_semantic_method_verdict(
-                &review,
-                &item.method.file_path,
-                &item.method.name,
-                item.method.loc,
-                item.method.start_line,
-                item.method.end_line,
-            )
-        })
-        .collect();
     Ok((verdicts, input_tokens, output_tokens))
 }
 

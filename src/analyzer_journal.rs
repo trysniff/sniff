@@ -6,6 +6,7 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const JOURNAL_VERSION: u32 = 2;
@@ -94,6 +95,12 @@ struct JournalContext {
     expected_units: usize,
 }
 
+struct LoadedJournalState {
+    completed: HashMap<String, JournalEntry>,
+    spent_usd: f64,
+    stage_usage: (usize, usize, usize),
+}
+
 impl JournalContext {
     fn new(
         scan_id: Option<&str>,
@@ -153,6 +160,9 @@ pub(super) struct JournalStore {
     context: JournalContext,
     pub(super) completed: HashMap<String, JournalEntry>,
     spent_usd: f64,
+    stage_in_tok: usize,
+    stage_out_tok: usize,
+    stage_cached_in_tok: usize,
 }
 
 impl JournalStore {
@@ -179,12 +189,15 @@ impl JournalStore {
             review_context,
             expected_units,
         );
-        let (completed, spent_usd) = load_state(path, &context)?;
+        let state = load_state(path, &context)?;
         Ok(Self {
             path: path.to_path_buf(),
             context,
-            completed,
-            spent_usd,
+            completed: state.completed,
+            spent_usd: state.spent_usd,
+            stage_in_tok: state.stage_usage.0,
+            stage_out_tok: state.stage_usage.1,
+            stage_cached_in_tok: state.stage_usage.2,
         })
     }
 
@@ -204,12 +217,15 @@ impl JournalStore {
             review_context,
             expected_units,
         );
-        let (completed, spent_usd) = load_state(path, &context)?;
+        let state = load_state(path, &context)?;
         let mut store = Self {
             path: path.to_path_buf(),
             context,
-            completed,
-            spent_usd,
+            completed: state.completed,
+            spent_usd: state.spent_usd,
+            stage_in_tok: state.stage_usage.0,
+            stage_out_tok: state.stage_usage.1,
+            stage_cached_in_tok: state.stage_usage.2,
         };
         store.ensure_stage_manifest()?;
         Ok(store)
@@ -273,6 +289,9 @@ impl JournalStore {
 
         append_entry(&self.path, &entry)?;
         self.spent_usd += entry.estimated_cost_usd;
+        self.stage_in_tok += entry.in_tok;
+        self.stage_out_tok += entry.out_tok;
+        self.stage_cached_in_tok += entry.cached_in_tok;
         self.completed.insert(unit_id, entry);
         Ok(())
     }
@@ -338,7 +357,60 @@ impl JournalStore {
 
         append_entry(&self.path, &entry)?;
         self.spent_usd += entry.estimated_cost_usd;
+        self.stage_in_tok += entry.in_tok;
+        self.stage_out_tok += entry.out_tok;
+        self.stage_cached_in_tok += entry.cached_in_tok;
         self.completed.insert(unit_id, entry);
+        Ok(())
+    }
+
+    pub(crate) fn record_usage(
+        &mut self,
+        in_tok: usize,
+        out_tok: usize,
+        cached_in_tok: usize,
+    ) -> Result<(), String> {
+        if in_tok == 0 && out_tok == 0 && cached_in_tok == 0 {
+            return Ok(());
+        }
+        static NEXT_USAGE_EVENT: AtomicU64 = AtomicU64::new(0);
+        let estimated_cost_usd = PricingRates::from_env().cost(in_tok, cached_in_tok, out_tok);
+        let entry = JournalEntry {
+            version: JOURNAL_VERSION,
+            scan_id: self.context.scan_id.clone(),
+            stage: self.context.stage,
+            is_manifest: true,
+            unit_id: format!(
+                "__usage__:{:?}:{}:{}",
+                self.context.stage,
+                now_unix_ms(),
+                NEXT_USAGE_EVENT.fetch_add(1, Ordering::Relaxed)
+            )
+            .to_ascii_lowercase(),
+            expected_units: self.context.expected_units,
+            source_hash: String::new(),
+            semantic_index_hash: self.context.semantic_index_hash.clone(),
+            prompt_contract_version: self.context.prompt_contract_version.clone(),
+            provider: self.context.provider.clone(),
+            model: self.context.model.clone(),
+            endpoint: self.context.endpoint.clone(),
+            review_context_hash: self.context.review_context_hash.clone(),
+            status: JournalStatus::Completed,
+            verdict: None,
+            role: None,
+            in_tok,
+            out_tok,
+            cached_in_tok,
+            estimated_cost_usd,
+            timestamp_unix_ms: now_unix_ms(),
+            proof_level: "not_applicable".to_string(),
+            retry_on_resume: false,
+        };
+        append_entry(&self.path, &entry)?;
+        self.spent_usd += estimated_cost_usd;
+        self.stage_in_tok += in_tok;
+        self.stage_out_tok += out_tok;
+        self.stage_cached_in_tok += cached_in_tok;
         Ok(())
     }
 
@@ -346,13 +418,23 @@ impl JournalStore {
         self.spent_usd
     }
 
+    pub(crate) fn stage_usage(&self) -> (usize, usize, usize) {
+        (
+            self.stage_in_tok,
+            self.stage_out_tok,
+            self.stage_cached_in_tok,
+        )
+    }
+
     fn ensure_stage_manifest(&mut self) -> Result<(), String> {
         let entries = read_entries(&self.path, true)?;
+        let manifest_id = format!("__manifest__:{:?}", self.context.stage).to_ascii_lowercase();
         if entries.iter().any(|entry| {
             entry.version == JOURNAL_VERSION
                 && entry.scan_id == self.context.scan_id
                 && entry.stage == self.context.stage
                 && entry.is_manifest
+                && entry.unit_id == manifest_id
         }) {
             return Ok(());
         }
@@ -361,7 +443,7 @@ impl JournalStore {
             scan_id: self.context.scan_id.clone(),
             stage: self.context.stage,
             is_manifest: true,
-            unit_id: format!("__manifest__:{:?}", self.context.stage).to_ascii_lowercase(),
+            unit_id: manifest_id,
             expected_units: self.context.expected_units,
             source_hash: String::new(),
             semantic_index_hash: self.context.semantic_index_hash.clone(),
@@ -485,7 +567,7 @@ pub(super) fn sha256_text(value: &str) -> String {
 
 pub(crate) fn budget_pause(spent_usd: f64, limit_usd: f64) -> String {
     format!(
-        "{BUDGET_PAUSE_PREFIX} estimated scan spend ${spent_usd:.4} reached the ${limit_usd:.4} limit. Completed work is journaled; resume with a higher --budget-usd limit. In-flight requests may finish above the limit."
+        "{BUDGET_PAUSE_PREFIX} estimated scan spend ${spent_usd:.4} reached the ${limit_usd:.4} limit. Completed work is journaled; resume with a higher --budget-usd limit. In-flight review batches may finish above the limit."
     )
 }
 
@@ -549,22 +631,37 @@ fn safe_endpoint(endpoint: &str) -> String {
     format!("{scheme}://{safe_authority}{path}")
 }
 
-fn load_state(
-    path: &Path,
-    context: &JournalContext,
-) -> Result<(HashMap<String, JournalEntry>, f64), String> {
+fn load_state(path: &Path, context: &JournalContext) -> Result<LoadedJournalState, String> {
     let entries = read_entries(path, true)?;
     let spent_usd = entries
         .iter()
         .filter(|entry| entry.version == JOURNAL_VERSION && entry.scan_id == context.scan_id)
         .map(|entry| entry.estimated_cost_usd)
         .sum();
+    let stage_usage = entries
+        .iter()
+        .filter(|entry| {
+            entry.version == JOURNAL_VERSION
+                && entry.scan_id == context.scan_id
+                && entry.stage == context.stage
+        })
+        .fold((0usize, 0usize, 0usize), |usage, entry| {
+            (
+                usage.0.saturating_add(entry.in_tok),
+                usage.1.saturating_add(entry.out_tok),
+                usage.2.saturating_add(entry.cached_in_tok),
+            )
+        });
     let completed = entries
         .into_iter()
         .filter(|entry| !entry.is_manifest && context.matches_cache(entry))
         .map(|entry| (entry.unit_id.clone(), entry))
         .collect();
-    Ok((completed, spent_usd))
+    Ok(LoadedJournalState {
+        completed,
+        spent_usd,
+        stage_usage,
+    })
 }
 
 fn read_entries(path: &Path, recover_torn_tail: bool) -> Result<Vec<JournalEntry>, String> {
