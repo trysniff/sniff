@@ -12,20 +12,20 @@ keywords = ["code-analysis", "ai", "slop", "developer-tools"]
 categories = ["command-line-utilities", "development-tools"]
 
 include = [
-  "assets/**",
-  "case-studies/**",
-  "CHANGELOG.md",
-  "Cargo.lock",
-  "LICENSE",
-  "README.md",
-  "SECURITY.md",
-  "TRADEMARKS.md",
-  "gold_fixtures/**",
-  "scripts/**",
-  "src/*.rs",
-  "src/**/*.rs",
-  "tests/**",
-  "sniff.config.toml",
+  "/assets/**",
+  "/case-studies/**",
+  "/CHANGELOG.md",
+  "/Cargo.lock",
+  "/LICENSE",
+  "/README.md",
+  "/SECURITY.md",
+  "/TRADEMARKS.md",
+  "/gold_fixtures/**",
+  "/scripts/**",
+  "/src/*.rs",
+  "/src/**/*.rs",
+  "/tests/**",
+  "/sniff.config.toml",
 ]
 
 [lib]
