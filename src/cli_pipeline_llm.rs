@@ -216,6 +216,7 @@ pub(super) async fn prepare_review_artifacts(
     file_records: &mut [FileRecord],
     bar_style: &ProgressStyle,
     journal_path: Option<&Path>,
+    semantic_cache: &crate::semantic_cache::SemanticIndexCache,
     budget_usd: Option<f64>,
 ) -> Result<ReviewArtifacts, Box<dyn std::error::Error>> {
     let ai_expected_reviews_before_roles =
@@ -263,15 +264,17 @@ pub(super) async fn prepare_review_artifacts(
         .iter()
         .map(|file| file.file_path.clone())
         .collect::<HashSet<_>>();
-    let (context_root, mut evidence_records) = super::io::scan_context_files(path, config)
-        .await
-        .map_err(IoError::other)?;
+    let (context_root, mut evidence_records) =
+        super::io::scan_context_files_with_cache(path, config, Some(semantic_cache))
+            .await
+            .map_err(IoError::other)?;
     evidence_records.retain(|file| !production_paths.contains(&file.file_path));
     let (static_flags, graph) = super::graph::build_static_flags(
         file_records,
         &evidence_records,
         &context_root.to_string_lossy(),
         config,
+        Some(semantic_cache),
     )
     .map_err(IoError::other)?;
     let mut context_file_records = file_records.to_vec();

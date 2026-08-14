@@ -11,20 +11,31 @@ const REPOSITORY_MARKERS: &[&str] = &[
     "settings.gradle.kts",
 ];
 
-pub(super) async fn parse_files(file_paths: &[String]) -> Result<Vec<FileRecord>, String> {
+pub(super) async fn parse_files(
+    file_paths: &[String],
+    semantic_cache: Option<&crate::semantic_cache::SemanticIndexCache>,
+) -> Result<Vec<FileRecord>, String> {
     let mut file_records = Vec::new();
     for fp in file_paths {
         let fp_clone = fp.clone();
-        let record =
-            match tokio::task::spawn_blocking(move || crate::parser::parse_file_checked(&fp_clone))
-                .await
-            {
-                Ok(Ok(record)) => record,
-                Ok(Err(err)) => return Err(err),
-                Err(err) => {
-                    return Err(format!("parser task failed for {fp}: {err}"));
-                }
-            };
+        let cache = semantic_cache.cloned();
+        let record = match tokio::task::spawn_blocking(move || {
+            if let Some(cache) = cache {
+                cache
+                    .load_or_build_file(std::path::Path::new(&fp_clone))
+                    .map(|(record, _)| record)
+            } else {
+                crate::parser::parse_file_checked(&fp_clone)
+            }
+        })
+        .await
+        {
+            Ok(Ok(record)) => record,
+            Ok(Err(err)) => return Err(err),
+            Err(err) => {
+                return Err(format!("parser task failed for {fp}: {err}"));
+            }
+        };
         if !record.language.is_empty() {
             file_records.push(record);
         }
@@ -36,23 +47,40 @@ pub(super) async fn scan_files(
     path: &str,
     config: &ResolvedConfig,
 ) -> Result<Vec<FileRecord>, String> {
+    scan_files_with_cache(path, config, None).await
+}
+
+pub(super) async fn scan_files_with_cache(
+    path: &str,
+    config: &ResolvedConfig,
+    semantic_cache: Option<&crate::semantic_cache::SemanticIndexCache>,
+) -> Result<Vec<FileRecord>, String> {
     let file_paths = crate::walker::walk(path, config)?;
     if file_paths.is_empty() {
         return Ok(Vec::new());
     }
 
-    parse_files(&file_paths).await
+    parse_files(&file_paths, semantic_cache).await
 }
 
+#[cfg(test)]
 pub(super) async fn scan_evidence_files(
     path: &str,
     config: &ResolvedConfig,
+) -> Result<Vec<FileRecord>, String> {
+    scan_evidence_files_with_cache(path, config, None).await
+}
+
+async fn scan_evidence_files_with_cache(
+    path: &str,
+    config: &ResolvedConfig,
+    semantic_cache: Option<&crate::semantic_cache::SemanticIndexCache>,
 ) -> Result<Vec<FileRecord>, String> {
     let file_paths = crate::walker::walk_evidence(path, config)?;
     if file_paths.is_empty() {
         return Ok(Vec::new());
     }
-    parse_files(&file_paths).await
+    parse_files(&file_paths, semantic_cache).await
 }
 
 pub(super) fn repository_root_for_target(target: &Path) -> PathBuf {
@@ -103,14 +131,26 @@ fn strip_windows_verbatim_prefix(path: PathBuf) -> PathBuf {
     path
 }
 
+#[cfg(test)]
 pub(super) async fn scan_context_files(
     path: &str,
     config: &ResolvedConfig,
 ) -> Result<(PathBuf, Vec<FileRecord>), String> {
+    scan_context_files_with_cache(path, config, None).await
+}
+
+pub(super) async fn scan_context_files_with_cache(
+    path: &str,
+    config: &ResolvedConfig,
+    semantic_cache: Option<&crate::semantic_cache::SemanticIndexCache>,
+) -> Result<(PathBuf, Vec<FileRecord>), String> {
     let target = Path::new(path);
     let root = repository_root_for_target(target);
     if !target.is_file() {
-        return Ok((root, scan_evidence_files(path, config).await?));
+        return Ok((
+            root,
+            scan_evidence_files_with_cache(path, config, semantic_cache).await?,
+        ));
     }
 
     let root_text = root.to_string_lossy().to_string();
@@ -118,16 +158,17 @@ pub(super) async fn scan_context_files(
     paths.extend(crate::walker::walk_evidence(&root_text, config)?);
     paths.sort();
     paths.dedup();
-    Ok((root, parse_files(&paths).await?))
+    Ok((root, parse_files(&paths, semantic_cache).await?))
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
         repository_root_for_target, scan_context_files, scan_evidence_files, scan_files,
-        strip_windows_verbatim_prefix,
+        scan_files_with_cache, strip_windows_verbatim_prefix,
     };
     use crate::config::ResolvedConfig;
+    use crate::semantic_cache::{CacheDisposition, SemanticIndexCache};
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -152,6 +193,34 @@ mod tests {
         assert!(files[0].file_path.ends_with("main.rs"));
 
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn production_inventory_writes_the_shared_semantic_artifact() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("sniff-inventory-cache-{nanos}"));
+        let src_dir = root.join("src");
+        fs::create_dir_all(&src_dir).unwrap();
+        let source_path = src_dir.join("main.rs");
+        fs::write(&source_path, "pub fn cached_inventory() {}\n").unwrap();
+        let cache = SemanticIndexCache::at(root.join("cache"));
+
+        let files = scan_files_with_cache(
+            root.to_str().unwrap(),
+            &ResolvedConfig::default(),
+            Some(&cache),
+        )
+        .await
+        .unwrap();
+        let (_, disposition) = cache.load_or_build_file(&source_path).unwrap();
+
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].methods.len(), 1);
+        assert_eq!(disposition, CacheDisposition::Hit);
+        fs::remove_dir_all(root).ok();
     }
 
     #[tokio::test]
@@ -273,6 +342,7 @@ mod tests {
             &context,
             &root_text,
             &config,
+            None,
         )
         .expect("build live target graph");
         for method_name in method_names {

@@ -262,6 +262,14 @@ successful result. Every completed review is durably appended to a local journal
 for safe resume; changed source, semantic context, or review contracts invalidate
 stale entries.
 
+Per-file semantic artifacts are cached separately under the operating system's
+user cache directory and reused only when their source hash, language, cache
+format, and index contract match. Set `SNIFF_CACHE_DIR` to choose another local
+cache root. Corrupt or mismatched artifacts fail the scan instead of silently
+falling back to weaker indexing. The cache contains source code and is written
+with private local permissions where the platform supports them; protect it like
+the scanned repository.
+
 Exit codes:
 
 - `0`: complete report with no findings
