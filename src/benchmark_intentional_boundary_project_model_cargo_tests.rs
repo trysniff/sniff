@@ -372,4 +372,8 @@ fn real_cargo_metadata_runs_through_the_hardened_sandbox() {
     assert_eq!(census.target_count_by_status.get("boundary"), Some(&3));
     assert_eq!(census.target_count_by_status.get("non_boundary"), Some(&1));
     assert!(!census.target_count_by_status.contains_key("unresolved"));
+    assert!(
+        !root.path().join("Cargo.lock").exists(),
+        "Cargo metadata must not create a lockfile in the immutable checkout"
+    );
 }
