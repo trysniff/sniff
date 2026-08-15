@@ -158,6 +158,7 @@ fn run_go_list(
         "-json".to_string(),
         "-find".to_string(),
         "-mod=readonly".to_string(),
+        "-buildvcs=false".to_string(),
         "./...".to_string(),
     ];
     let mut plan = prepare_historical_runtime(root, &cache, &logical_command)
