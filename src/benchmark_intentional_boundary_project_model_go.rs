@@ -186,14 +186,42 @@ fn normalize_package(
     {
         return Err("go list package identity is inconsistent with its module".to_string());
     }
-    let module_directory = canonical_path(Path::new(&module.dir), "Go module directory")?;
-    let package_directory = canonical_path(Path::new(&package.dir), "Go package directory")?;
-    if !module_directory.starts_with(context.root)
+    let emitted_root = emitted_repository_root(&module.go_mod, context.manifest_repository_path)?;
+    let module_directory = emitted_host_path(
+        context.root,
+        &emitted_root,
+        &module.dir,
+        "Go module directory",
+        true,
+    )?;
+    let package_directory = emitted_host_path(
+        context.root,
+        &emitted_root,
+        &package.dir,
+        "Go package directory",
+        true,
+    )?;
+    let emitted_manifest_path = emitted_host_path(
+        context.root,
+        &emitted_root,
+        &module.go_mod,
+        "Go module manifest",
+        false,
+    )?;
+    let invocation_directory = context
+        .manifest_repository_path
+        .rsplit_once('/')
+        .map_or("", |(directory, _)| directory);
+    let expected_module_directory = canonical_path(
+        &context.root.join(invocation_directory),
+        "invoked Go module directory",
+    )?;
+    if module_directory != expected_module_directory
         || !package_directory.starts_with(&module_directory)
     {
         return Err("go list package directory is outside its immutable module".to_string());
     }
-    let emitted_manifest = repository_path(context.root, Path::new(&module.go_mod))?;
+    let emitted_manifest = repository_path(context.root, &emitted_manifest_path)?;
     if emitted_manifest != context.manifest_repository_path {
         return Err(format!(
             "go list module manifest changed: expected {}, found {emitted_manifest}",
@@ -364,6 +392,79 @@ fn canonical_path(path: &Path, label: &str) -> Result<PathBuf, String> {
     fs::canonicalize(path)
         .map(strip_windows_verbatim_prefix)
         .map_err(|error| format!("failed to resolve {label}: {error}"))
+}
+
+fn emitted_repository_root(
+    emitted_manifest: &str,
+    invocation_manifest_repository_path: &str,
+) -> Result<String, String> {
+    let emitted_manifest = emitted_manifest.replace('\\', "/");
+    let suffix = format!("/{invocation_manifest_repository_path}");
+    let matches = if cfg!(windows) {
+        emitted_manifest
+            .to_ascii_lowercase()
+            .ends_with(&suffix.to_ascii_lowercase())
+    } else {
+        emitted_manifest.ends_with(&suffix)
+    };
+    if !matches {
+        return Err("go list module manifest does not match the invocation anchor".to_string());
+    }
+    let root = emitted_manifest[..emitted_manifest.len() - suffix.len()].trim_end_matches('/');
+    if root.is_empty() {
+        return Err("go list emitted an invalid repository root".to_string());
+    }
+    Ok(root.to_string())
+}
+
+fn emitted_host_path(
+    root: &Path,
+    emitted_root: &str,
+    raw: &str,
+    label: &str,
+    allow_root: bool,
+) -> Result<PathBuf, String> {
+    let raw = raw.replace('\\', "/");
+    let emitted_root = emitted_root.trim_end_matches('/');
+    let relative = if path_eq(&raw, emitted_root) {
+        ""
+    } else {
+        let prefix = format!("{emitted_root}/");
+        if !path_starts_with(&raw, &prefix) {
+            return Err(format!("{label} is outside the emitted repository"));
+        }
+        &raw[prefix.len()..]
+    };
+    let relative_path = Path::new(relative);
+    if (!allow_root && relative.is_empty())
+        || relative_path
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return Err(format!("{label} is not safely repository-relative"));
+    }
+    let path = canonical_path(&root.join(relative_path), label)?;
+    if !path.starts_with(root) {
+        return Err(format!("{label} escaped the immutable repository"));
+    }
+    Ok(path)
+}
+
+fn path_eq(left: &str, right: &str) -> bool {
+    if cfg!(windows) {
+        left.eq_ignore_ascii_case(right)
+    } else {
+        left == right
+    }
+}
+
+fn path_starts_with(path: &str, prefix: &str) -> bool {
+    if cfg!(windows) {
+        path.get(..prefix.len())
+            .is_some_and(|value| value.eq_ignore_ascii_case(prefix))
+    } else {
+        path.starts_with(prefix)
+    }
 }
 
 fn repository_path(root: &Path, raw: &Path) -> Result<String, String> {

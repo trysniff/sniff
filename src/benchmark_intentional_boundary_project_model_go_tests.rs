@@ -89,6 +89,14 @@ fn emitted_path(root: &Path, relative: &str) -> String {
         .into_owned()
 }
 
+fn model_path(root: &Path, emitted_root: Option<&str>, relative: &str) -> String {
+    match emitted_root {
+        Some(emitted_root) if relative.is_empty() => emitted_root.to_string(),
+        Some(emitted_root) => format!("{}/{relative}", emitted_root.trim_end_matches('/')),
+        None => emitted_path(root, relative),
+    }
+}
+
 struct PackageFixture<'a> {
     module_directory: &'a str,
     module_path: &'a str,
@@ -99,14 +107,18 @@ struct PackageFixture<'a> {
     ignored_go_files: &'a [&'a str],
 }
 
-fn package_json(root: &Path, fixture: PackageFixture<'_>) -> serde_json::Value {
+fn package_json(
+    root: &Path,
+    emitted_root: Option<&str>,
+    fixture: PackageFixture<'_>,
+) -> serde_json::Value {
     let manifest = if fixture.module_directory.is_empty() {
         "go.mod".to_string()
     } else {
         format!("{}/go.mod", fixture.module_directory)
     };
     serde_json::json!({
-        "Dir": emitted_path(root, fixture.package_directory),
+        "Dir": model_path(root, emitted_root, fixture.package_directory),
         "ImportPath": fixture.import_path,
         "Name": fixture.name,
         "GoFiles": fixture.go_files,
@@ -116,8 +128,8 @@ fn package_json(root: &Path, fixture: PackageFixture<'_>) -> serde_json::Value {
         "Module": {
             "Path": fixture.module_path,
             "Version": "",
-            "Dir": emitted_path(root, fixture.module_directory),
-            "GoMod": emitted_path(root, &manifest),
+            "Dir": model_path(root, emitted_root, fixture.module_directory),
+            "GoMod": model_path(root, emitted_root, &manifest),
             "Main": true
         },
         "future_field": {"ignored": true}
@@ -125,10 +137,15 @@ fn package_json(root: &Path, fixture: PackageFixture<'_>) -> serde_json::Value {
 }
 
 fn go_list_output(root: &Path, manifest: &str) -> Vec<u8> {
+    go_list_output_at(root, manifest, None)
+}
+
+fn go_list_output_at(root: &Path, manifest: &str, emitted_root: Option<&str>) -> Vec<u8> {
     let packages = match manifest {
         "go.mod" => vec![
             package_json(
                 root,
+                emitted_root,
                 PackageFixture {
                     module_directory: "",
                     module_path: "example.com/sample",
@@ -141,6 +158,7 @@ fn go_list_output(root: &Path, manifest: &str) -> Vec<u8> {
             ),
             package_json(
                 root,
+                emitted_root,
                 PackageFixture {
                     module_directory: "",
                     module_path: "example.com/sample",
@@ -154,6 +172,7 @@ fn go_list_output(root: &Path, manifest: &str) -> Vec<u8> {
         ],
         "tools/go.mod" => vec![package_json(
             root,
+            emitted_root,
             PackageFixture {
                 module_directory: "tools",
                 module_path: "example.com/sample/tools",
@@ -341,6 +360,30 @@ fn normalizes_go_packages_as_exact_multi_file_boundaries() {
 }
 
 #[test]
+fn maps_sandbox_emitted_paths_back_to_the_immutable_snapshot() {
+    let (root, inventory) = repository();
+    let output = go_list_output_at(root.path(), "go.mod", Some("/workspace"));
+
+    let census = parse_intentional_boundary_go_list(
+        root.path(),
+        &inventory,
+        "go.mod",
+        &"a".repeat(64),
+        &output,
+    )
+    .unwrap();
+
+    assert_eq!(census.targets.len(), 2);
+    assert!(census.targets.iter().all(|target| {
+        target
+            .source_repository_paths
+            .iter()
+            .all(|path| !path.starts_with('/') && !path.contains("workspace"))
+    }));
+    validate_intentional_boundary_project_model_census_commitment(&inventory, &census).unwrap();
+}
+
+#[test]
 fn go_project_model_identity_ignores_checkout_location() {
     let (root, inventory) = repository();
     let clone = tempfile::tempdir().unwrap();
@@ -378,6 +421,7 @@ fn records_untracked_go_sources_as_unresolved_without_losing_commitment() {
     fs::write(root.path().join("api/untracked.go"), "package api\n").unwrap();
     let package = package_json(
         root.path(),
+        None,
         PackageFixture {
             module_directory: "",
             module_path: "example.com/sample",
@@ -412,6 +456,7 @@ fn rejects_incomplete_or_malformed_go_project_models() {
     let (root, inventory) = repository();
     let mut package = package_json(
         root.path(),
+        None,
         PackageFixture {
             module_directory: "",
             module_path: "example.com/sample",
@@ -443,6 +488,30 @@ fn rejects_incomplete_or_malformed_go_project_models() {
     )
     .unwrap_err();
     assert!(error.contains("parse"));
+
+    let mut escaped = package_json(
+        root.path(),
+        Some("/workspace"),
+        PackageFixture {
+            module_directory: "",
+            module_path: "example.com/sample",
+            package_directory: "api",
+            import_path: "example.com/sample/api",
+            name: "api",
+            go_files: &["api.go"],
+            ignored_go_files: &[],
+        },
+    );
+    escaped["Dir"] = serde_json::Value::String("/outside/api".to_string());
+    let error = parse_intentional_boundary_go_list(
+        root.path(),
+        &inventory,
+        "go.mod",
+        &"d".repeat(64),
+        serde_json::to_string(&escaped).unwrap().as_bytes(),
+    )
+    .unwrap_err();
+    assert!(error.contains("outside the emitted repository"));
 }
 
 #[test]
