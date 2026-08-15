@@ -34,6 +34,62 @@ pub fn validate_intentional_boundary_compiler_evidence(
     Ok(())
 }
 
+pub(super) fn validate_evidence_census_commitment(
+    source_census: &IntentionalBoundarySourceCensus,
+    semantic_census: &IntentionalBoundarySemanticCensus,
+    census: &IntentionalBoundaryEvidenceCensus,
+) -> Result<(), String> {
+    if census.schema_version != INTENTIONAL_BOUNDARY_EVIDENCE_CENSUS_SCHEMA_VERSION
+        || census.evidence_contract != EVIDENCE_CENSUS_CONTRACT
+        || census.repository != source_census.repository
+        || census.revision != source_census.revision
+        || census.source_census_sha256 != source_census.census_sha256
+        || census.semantic_census_sha256 != semantic_census.semantic_census_sha256
+        || census.input_census_sha256.get(COMPILER_INPUT)
+            != Some(&semantic_census.semantic_census_sha256)
+        || census
+            .input_census_sha256
+            .iter()
+            .any(|(key, value)| key.trim().is_empty() || !is_sha256(value))
+    {
+        return Err("intentional-boundary evidence identity changed".to_string());
+    }
+    if census
+        .atoms
+        .windows(2)
+        .any(|pair| pair[0].evidence_id >= pair[1].evidence_id)
+    {
+        return Err("intentional-boundary evidence atom commitment changed".to_string());
+    }
+    for atom in &census.atoms {
+        if atom.evidence_id != compute_atom_id(atom)?
+            || atom.subject_parser_unit_id.trim().is_empty()
+            || atom.subject_symbol_id.trim().is_empty()
+            || atom.locations.is_empty()
+            || atom.locations.windows(2).any(|pair| pair[0] >= pair[1])
+            || atom
+                .related_symbol_ids
+                .windows(2)
+                .any(|pair| pair[0] >= pair[1])
+        {
+            return Err("intentional-boundary evidence atom commitment changed".to_string());
+        }
+    }
+    let atom_count_by_kind = census
+        .atoms
+        .iter()
+        .fold(BTreeMap::new(), |mut counts, atom| {
+            *counts.entry(atom.evidence_kind).or_insert(0) += 1;
+            counts
+        });
+    if census.atom_count_by_kind != atom_count_by_kind
+        || compute_evidence_census_sha256(census)? != census.evidence_census_sha256
+    {
+        return Err("intentional-boundary evidence census commitment changed".to_string());
+    }
+    Ok(())
+}
+
 fn derive_compiler_evidence(
     source_census: &IntentionalBoundarySourceCensus,
     semantic_census: &IntentionalBoundarySemanticCensus,
@@ -310,7 +366,7 @@ pub(super) fn push_typed_atom(
     Ok(())
 }
 
-fn compute_atom_id(atom: &IntentionalBoundaryEvidenceAtom) -> Result<String, String> {
+pub(super) fn compute_atom_id(atom: &IntentionalBoundaryEvidenceAtom) -> Result<String, String> {
     let bytes = serde_json::to_vec(&(
         "sniffbench-intentional-boundary-evidence-atom-v1",
         atom.evidence_kind,
@@ -324,7 +380,7 @@ fn compute_atom_id(atom: &IntentionalBoundaryEvidenceAtom) -> Result<String, Str
     Ok(format!("ibe-v1:{}", sha256(&bytes)))
 }
 
-fn compute_evidence_census_sha256(
+pub(super) fn compute_evidence_census_sha256(
     census: &IntentionalBoundaryEvidenceCensus,
 ) -> Result<String, String> {
     let bytes = serde_json::to_vec(&(

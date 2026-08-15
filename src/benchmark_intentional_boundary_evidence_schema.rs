@@ -33,6 +33,8 @@ pub enum IntentionalBoundaryAstProofKind {
 pub enum IntentionalBoundaryManifestProofKind {
     PublishedExport,
     RuntimeEntrypoint,
+    ProjectModelPublishedExport,
+    ProjectModelRuntimeEntrypoint,
     GeneratorConfiguration,
     VersionedCompatibilityDeclaration,
 }

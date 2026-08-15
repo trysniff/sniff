@@ -1,6 +1,7 @@
 use super::*;
 use crate::benchmark::release::{
-    IntentionalBoundaryIndexerKind, IntentionalBoundaryProjectModelBindingOutcome,
+    BoundaryEvidenceKind, IntentionalBoundaryEvidenceProof, IntentionalBoundaryIndexerKind,
+    IntentionalBoundaryManifestProofKind, IntentionalBoundaryProjectModelBindingOutcome,
     IntentionalBoundarySemanticCensus, IntentionalBoundarySemanticIndexerCensus,
     IntentionalBoundarySemanticMethod, IntentionalBoundarySemanticMethodStatus,
     IntentionalBoundarySemanticOrigin, IntentionalBoundarySemanticRange,
@@ -556,4 +557,85 @@ fn binds_inferred_cargo_boundaries_only_to_compiler_subjects() {
         .unwrap_err()
         .contains("changed")
     );
+}
+
+#[test]
+fn composes_only_compiler_bound_project_model_evidence() {
+    let (root, inventory) = repository();
+    let project_model = parse_intentional_boundary_cargo_metadata(
+        root.path(),
+        &inventory,
+        "Cargo.toml",
+        &"6".repeat(64),
+        &metadata(root.path()),
+    )
+    .unwrap();
+    let (source, semantic) = semantic_censuses(root.path(), &inventory);
+    let bindings = super::super::bind_intentional_boundary_project_models(
+        &inventory,
+        &source,
+        &semantic,
+        &project_model,
+    )
+    .unwrap();
+    let base =
+        super::super::extract_intentional_boundary_compiler_evidence(&source, &semantic).unwrap();
+    let evidence = super::super::compose_intentional_boundary_project_model_evidence(
+        &inventory,
+        &source,
+        &semantic,
+        &project_model,
+        &bindings,
+        base.clone(),
+    )
+    .unwrap();
+
+    assert_eq!(
+        evidence.input_census_sha256.get("compiler_project_models"),
+        Some(&project_model.project_model_census_sha256)
+    );
+    assert_eq!(
+        evidence
+            .input_census_sha256
+            .get("compiler_project_model_bindings"),
+        Some(&bindings.binding_census_sha256)
+    );
+    let project_atoms = evidence
+        .atoms
+        .iter()
+        .filter(|atom| {
+            matches!(
+                atom.proof,
+                IntentionalBoundaryEvidenceProof::ManifestContract(
+                    IntentionalBoundaryManifestProofKind::ProjectModelPublishedExport
+                        | IntentionalBoundaryManifestProofKind::ProjectModelRuntimeEntrypoint
+                )
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(project_atoms.len(), 3);
+    assert_eq!(
+        project_atoms
+            .iter()
+            .filter(|atom| atom.evidence_kind == BoundaryEvidenceKind::PublishedApiContract)
+            .count(),
+        1
+    );
+    assert_eq!(
+        project_atoms
+            .iter()
+            .filter(|atom| atom.evidence_kind == BoundaryEvidenceKind::RuntimeOrPackageManifest)
+            .count(),
+        1
+    );
+    super::super::validate_intentional_boundary_project_model_evidence(
+        &inventory,
+        &source,
+        &semantic,
+        &project_model,
+        &bindings,
+        base,
+        &evidence,
+    )
+    .unwrap();
 }
