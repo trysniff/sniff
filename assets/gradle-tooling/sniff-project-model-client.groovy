@@ -39,6 +39,13 @@ def connector = GradleConnector.newConnector()
 def connection = connector.connect()
 try {
     def builder = connection.model(SniffGradleBuildModel)
+        .setJvmArguments(
+            "-Xms64m",
+            "-Xmx768m",
+            "-XX:MaxMetaspaceSize=256m",
+            "-XX:ReservedCodeCacheSize=128m",
+            "-XX:+UseSerialGC",
+        )
         .withArguments(
             "--offline",
             "--no-build-cache",

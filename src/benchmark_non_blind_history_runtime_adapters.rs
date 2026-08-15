@@ -218,6 +218,11 @@ pub(super) fn gradle_tooling_launch(args: &[String]) -> Result<Launch, Historica
             .to_string_lossy()
     );
     let java_args = vec![
+        "-Xms64m".to_string(),
+        "-Xmx768m".to_string(),
+        "-XX:MaxMetaspaceSize=256m".to_string(),
+        "-XX:ReservedCodeCacheSize=128m".to_string(),
+        "-XX:+UseSerialGC".to_string(),
         "-cp".to_string(),
         classpath,
         "groovy.ui.GroovyMain".to_string(),
