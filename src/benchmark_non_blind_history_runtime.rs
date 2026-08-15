@@ -12,6 +12,7 @@ use super::non_blind_history_runtime_support::{
     runtime_identity, sandbox_repository_path,
 };
 use crate::sandbox::{SandboxCommand, sandbox_path};
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -19,6 +20,22 @@ const TEST_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 const TEST_OUTPUT_LIMIT: usize = 1024 * 1024;
 const TEST_MEMORY_LIMIT: u64 = 4 * 1024 * 1024 * 1024;
 const TEST_PROCESS_LIMIT: u32 = 256;
+const PRIVATE_ENVIRONMENT_DIRECTORIES: &[&str] = &[
+    "home",
+    "bun-cache",
+    "cargo-home",
+    "cargo-target",
+    "corepack",
+    "go-build",
+    "go-mod",
+    "go-path",
+    "gradle",
+    "npm",
+    "pip",
+    "pycache",
+    "tmp",
+    "xdg-cache",
+];
 
 pub(crate) struct HistoricalRuntimePlan {
     pub(crate) command: SandboxCommand,
@@ -44,6 +61,7 @@ pub(crate) fn prepare_historical_runtime(
             "historical test cache must remain inside its snapshot".to_string(),
         ));
     }
+    prepare_private_environment_directories(&cache_root)?;
     let program = logical_command
         .first()
         .filter(|value| !value.trim().is_empty())
@@ -171,6 +189,17 @@ pub(crate) fn prepare_historical_runtime(
     })
 }
 
+fn prepare_private_environment_directories(cache: &Path) -> Result<(), HistoricalRuntimePlanError> {
+    for directory in PRIVATE_ENVIRONMENT_DIRECTORIES {
+        fs::create_dir_all(cache.join(directory)).map_err(|error| {
+            HistoricalRuntimePlanError::Invalid(format!(
+                "failed to create private historical runtime directory {directory}: {error}"
+            ))
+        })?;
+    }
+    Ok(())
+}
+
 fn private_environment(root: &Path, cache: &Path) -> Vec<(String, String)> {
     let path = |name: &str| sandbox_repository_path(root, &cache.join(name));
     let home = path("home");
@@ -228,6 +257,34 @@ mod tests {
             prepare_historical_runtime(root.path(), &cache, &command),
             Err(HistoricalRuntimePlanError::Unavailable(_))
         ));
+    }
+
+    #[test]
+    fn runtime_prepares_every_directory_advertised_by_private_environment() {
+        let root = tempfile::tempdir().unwrap();
+        let cache = root.path().join("cache");
+        fs::create_dir(&cache).unwrap();
+        let command = if cfg!(windows) {
+            vec!["cmd".to_string(), "/c".to_string(), "exit 0".to_string()]
+        } else {
+            vec!["sh".to_string(), "-c".to_string(), "exit 0".to_string()]
+        };
+
+        let plan = prepare_historical_runtime(root.path(), &cache, &command).unwrap();
+        for directory in PRIVATE_ENVIRONMENT_DIRECTORIES {
+            assert!(
+                cache.join(directory).is_dir(),
+                "{directory} was not created"
+            );
+            let sandbox_value = sandbox_repository_path(root.path(), &cache.join(directory));
+            assert!(
+                plan.command
+                    .env
+                    .iter()
+                    .any(|(_, value)| value == &sandbox_value),
+                "{directory} was not advertised by the private environment"
+            );
+        }
     }
 
     #[test]
