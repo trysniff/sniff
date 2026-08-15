@@ -102,6 +102,11 @@ mod intentional_boundary_ast_evidence;
 
 pub use intentional_boundary_ast_evidence::*;
 
+#[path = "benchmark_intentional_boundary_manifest_evidence.rs"]
+mod intentional_boundary_manifest_evidence;
+
+pub use intentional_boundary_manifest_evidence::*;
+
 #[path = "benchmark_intentional_boundary_manifest_schema.rs"]
 mod intentional_boundary_manifest_schema;
 

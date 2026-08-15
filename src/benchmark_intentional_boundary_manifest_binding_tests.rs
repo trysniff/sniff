@@ -1,12 +1,14 @@
 use super::*;
 use crate::benchmark::release::{
-    IntentionalBoundaryIndexerKind, IntentionalBoundaryManifestDeclarationKind as DeclarationKind,
-    IntentionalBoundaryManifestDocument, IntentionalBoundaryManifestProvider as Provider,
-    IntentionalBoundaryManifestTarget as Target, IntentionalBoundaryMethodCensusEntry,
-    IntentionalBoundarySemanticIndexerCensus, IntentionalBoundarySemanticOrigin,
-    IntentionalBoundarySemanticRange, IntentionalBoundarySemanticSymbolCategory,
-    IntentionalBoundarySemanticSymbolFacts, IntentionalBoundarySemanticUnresolvedReason,
-    IntentionalBoundarySemanticVisibility, IntentionalBoundarySourceFile,
+    BoundaryEvidenceKind, IntentionalBoundaryEvidenceProof, IntentionalBoundaryIndexerKind,
+    IntentionalBoundaryManifestDeclarationKind as DeclarationKind,
+    IntentionalBoundaryManifestDocument, IntentionalBoundaryManifestProofKind,
+    IntentionalBoundaryManifestProvider as Provider, IntentionalBoundaryManifestTarget as Target,
+    IntentionalBoundaryMethodCensusEntry, IntentionalBoundarySemanticIndexerCensus,
+    IntentionalBoundarySemanticOrigin, IntentionalBoundarySemanticRange,
+    IntentionalBoundarySemanticSymbolCategory, IntentionalBoundarySemanticSymbolFacts,
+    IntentionalBoundarySemanticUnresolvedReason, IntentionalBoundarySemanticVisibility,
+    IntentionalBoundarySourceFile,
 };
 use std::collections::BTreeMap;
 
@@ -439,4 +441,79 @@ fn duplicate_manifest_declarations_fail_closed_even_with_a_recomputed_hash() {
         .unwrap_err()
         .contains("ordering")
     );
+}
+
+#[test]
+fn emits_manifest_evidence_only_for_compiler_bound_method_subjects() {
+    let (source, semantic, manifest) = fixture();
+    let bindings = bind_intentional_boundary_manifests(&source, &semantic, &manifest).unwrap();
+    let compiler =
+        super::super::extract_intentional_boundary_compiler_evidence(&source, &semantic).unwrap();
+
+    let evidence = super::super::intentional_boundary_manifest_evidence::derive_manifest_evidence(
+        &source, &semantic, &manifest, &bindings, compiler,
+    )
+    .unwrap();
+
+    assert_eq!(
+        evidence
+            .input_census_sha256
+            .get("package_manifest_declarations"),
+        Some(&manifest.manifest_census_sha256)
+    );
+    assert_eq!(
+        evidence
+            .input_census_sha256
+            .get("package_manifest_bindings"),
+        Some(&bindings.binding_census_sha256)
+    );
+    let manifest_atoms = evidence
+        .atoms
+        .iter()
+        .filter(|atom| {
+            matches!(
+                atom.proof,
+                IntentionalBoundaryEvidenceProof::ManifestContract(_)
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(manifest_atoms.len(), 4);
+    assert_eq!(
+        manifest_atoms
+            .iter()
+            .filter(|atom| {
+                matches!(
+                    atom.proof,
+                    IntentionalBoundaryEvidenceProof::ManifestContract(
+                        IntentionalBoundaryManifestProofKind::PublishedExport
+                    )
+                )
+            })
+            .count(),
+        2
+    );
+    assert_eq!(
+        manifest_atoms
+            .iter()
+            .filter(|atom| atom.evidence_kind == BoundaryEvidenceKind::RuntimeOrPackageManifest)
+            .count(),
+        2
+    );
+    assert!(manifest_atoms.iter().all(|atom| {
+        atom.locations.iter().any(|location| {
+            matches!(
+                location.repository_path.as_str(),
+                "Cargo.toml" | "package.json" | "pyproject.toml"
+            )
+        })
+    }));
+    assert!(!manifest_atoms.iter().any(|atom| {
+        atom.subject_parser_unit_id.contains("Plugin")
+            || matches!(
+                atom.proof,
+                IntentionalBoundaryEvidenceProof::ManifestContract(
+                    IntentionalBoundaryManifestProofKind::GeneratorConfiguration
+                )
+            )
+    }));
 }
