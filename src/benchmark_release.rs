@@ -127,6 +127,11 @@ mod intentional_boundary_project_model_binding;
 
 pub use intentional_boundary_project_model_binding::*;
 
+#[path = "benchmark_intentional_boundary_project_model_evidence.rs"]
+mod intentional_boundary_project_model_evidence;
+
+pub use intentional_boundary_project_model_evidence::*;
+
 #[path = "benchmark_intentional_boundary_manifest_schema.rs"]
 mod intentional_boundary_manifest_schema;
 
