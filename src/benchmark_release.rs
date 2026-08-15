@@ -107,6 +107,16 @@ mod intentional_boundary_manifest_evidence;
 
 pub use intentional_boundary_manifest_evidence::*;
 
+#[path = "benchmark_intentional_boundary_project_model_schema.rs"]
+mod intentional_boundary_project_model_schema;
+
+pub use intentional_boundary_project_model_schema::*;
+
+#[path = "benchmark_intentional_boundary_project_model_cargo.rs"]
+mod intentional_boundary_project_model_cargo;
+
+pub use intentional_boundary_project_model_cargo::*;
+
 #[path = "benchmark_intentional_boundary_manifest_schema.rs"]
 mod intentional_boundary_manifest_schema;
 
