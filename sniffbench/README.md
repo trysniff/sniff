@@ -30,7 +30,7 @@ sniff benchmark validate-historical-v2-protocol \
 ```
 
 Protocol file SHA-256:
-`143f3a78a47b0105cdd7a7c98ae2fe831cdd73a34b06b664b61f6f0c94b5268b`.
+`deb98a285867fc5ea52761c252839d74268f239824bfc1a82027a352695cfc6f`.
 
 ## Non-blind real evidence
 
