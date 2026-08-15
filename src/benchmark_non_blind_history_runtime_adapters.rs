@@ -237,13 +237,7 @@ pub(super) fn gradle_tooling_launch(args: &[String]) -> Result<Launch, Historica
         args: java_args,
         runtime_files: vec![java, gradle, tooling_api],
         runtime_roots: vec![java_home.clone(), gradle_home],
-        env: vec![
-            ("JAVA_HOME".to_string(), path_value(&java_home)),
-            (
-                "GRADLE_DAEMON_BIND_ADDRESS".to_string(),
-                "127.0.0.1".to_string(),
-            ),
-        ],
+        env: vec![("JAVA_HOME".to_string(), path_value(&java_home))],
         repository_target: false,
     })
 }

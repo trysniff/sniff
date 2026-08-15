@@ -996,7 +996,9 @@ fn build_macos_sandbox_command(spec: &SandboxCommand) -> Result<Command, Sandbox
     let network_rule = if spec.allow_network {
         "(allow network*)\n"
     } else if spec.allow_local_network {
-        "(allow network-bind (local ip \"*:*\"))\n(allow network-inbound (local ip \"localhost:*\"))\n(allow network* (remote ip \"localhost:*\"))\n(allow network* (remote unix-socket))\n"
+        // Seatbelt evaluates listen(2) as wildcard inbound even when the socket is
+        // bound to loopback. Outbound traffic remains restricted to loopback.
+        "(allow network-bind (local ip \"*:*\"))\n(allow network-inbound (local ip \"*:*\"))\n(allow network-outbound (remote ip \"localhost:*\"))\n(allow network* (remote unix-socket))\n"
     } else {
         "(deny network*)\n"
     };
@@ -1187,6 +1189,60 @@ mod tests {
             .expect("macOS resource wrapper should start");
 
         assert!(status.success());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_local_network_policy_allows_loopback_and_denies_external_outbound() {
+        const CHILD_ENV: &str = "SNIFF_MACOS_LOCAL_NETWORK_POLICY_CHILD";
+        if std::env::var_os(CHILD_ENV).is_some() {
+            let listener = std::net::TcpListener::bind(("127.0.0.1", 0))
+                .expect("sandbox should allow a loopback listener");
+            let address = listener.local_addr().expect("read loopback address");
+            let connector = std::thread::spawn(move || {
+                std::net::TcpStream::connect(address)
+                    .expect("sandbox should allow a loopback connection")
+            });
+            let _accepted = listener.accept().expect("accept loopback connection");
+            connector.join().expect("join loopback connector");
+
+            let external = std::net::SocketAddr::from(([192, 0, 2, 1], 9));
+            let error = std::net::TcpStream::connect_timeout(
+                &external,
+                std::time::Duration::from_millis(250),
+            )
+            .expect_err("sandbox must deny external outbound traffic");
+            assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+            return;
+        }
+
+        let root = std::env::temp_dir().join(format!(
+            "sniff-macos-loopback-sandbox-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).expect("create sandbox root");
+        let executable = std::env::current_exe().expect("locate test executable");
+        let mut command = spec(root.clone());
+        command.program = executable.to_string_lossy().into_owned();
+        command.args = vec![
+            "macos_local_network_policy_allows_loopback_and_denies_external_outbound".to_string(),
+            "--nocapture".to_string(),
+        ];
+        command.executable_paths = vec![executable];
+        command.env = vec![(CHILD_ENV.to_string(), "1".to_string())];
+        command.allow_local_network = true;
+        command.timeout = Duration::from_secs(10);
+        command.output_limit = 4096;
+
+        let output = super::run(&command).expect("macOS sandbox should start");
+        let _ = std::fs::remove_dir_all(root);
+        assert_eq!(
+            output.status_code,
+            Some(0),
+            "stdout={:?} stderr={:?}",
+            output.stdout,
+            output.stderr
+        );
     }
 
     fn spec(root: PathBuf) -> SandboxCommand {
