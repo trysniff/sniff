@@ -18,7 +18,8 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
-pub(super) const GO_LIST_COMMAND_CONTRACT: &str = "go-list-json-find-mod-readonly-workspace-off-v1";
+pub(super) const GO_LIST_COMMAND_CONTRACT: &str =
+    "go-list-json-find-mod-readonly-buildvcs-off-workspace-off-v1";
 
 #[path = "benchmark_intentional_boundary_project_model_go_runtime.rs"]
 mod runtime;
