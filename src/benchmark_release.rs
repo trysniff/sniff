@@ -160,6 +160,26 @@ mod intentional_boundary_project_model_evidence;
 
 pub use intentional_boundary_project_model_evidence::*;
 
+#[path = "benchmark_intentional_boundary_candidate_schema.rs"]
+mod intentional_boundary_candidate_schema;
+
+pub use intentional_boundary_candidate_schema::*;
+
+#[path = "benchmark_intentional_boundary_candidate.rs"]
+mod intentional_boundary_candidate;
+
+pub use intentional_boundary_candidate::*;
+
+#[path = "benchmark_intentional_boundary_frame_schema.rs"]
+mod intentional_boundary_frame_schema;
+
+pub use intentional_boundary_frame_schema::*;
+
+#[path = "benchmark_intentional_boundary_frame.rs"]
+mod intentional_boundary_frame;
+
+pub use intentional_boundary_frame::*;
+
 #[path = "benchmark_intentional_boundary_manifest_schema.rs"]
 mod intentional_boundary_manifest_schema;
 
