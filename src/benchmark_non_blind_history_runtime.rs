@@ -271,12 +271,14 @@ mod tests {
         };
 
         let plan = prepare_historical_runtime(root.path(), &cache, &command).unwrap();
+        let canonical_cache = fs::canonicalize(&cache).unwrap();
         for directory in PRIVATE_ENVIRONMENT_DIRECTORIES {
             assert!(
                 cache.join(directory).is_dir(),
                 "{directory} was not created"
             );
-            let sandbox_value = sandbox_repository_path(root.path(), &cache.join(directory));
+            let sandbox_value =
+                sandbox_repository_path(&plan.command.root, &canonical_cache.join(directory));
             assert!(
                 plan.command
                     .env
