@@ -142,6 +142,17 @@ pub fn complete_intentional_boundary_candidate_frame(
     finish_candidate_frame(task, records)
 }
 
+pub fn validate_intentional_boundary_candidate_frame(
+    task: &IntentionalBoundaryFrameTask,
+    frame: &IntentionalBoundaryCandidateFrame,
+) -> Result<(), String> {
+    let expected = finish_candidate_frame(task, frame.rank_records.clone())?;
+    if frame != &expected {
+        return Err("intentional-boundary candidate frame changed".to_string());
+    }
+    Ok(())
+}
+
 fn finish_rank_record(
     task: &IntentionalBoundaryFrameTask,
     population_rank: usize,
@@ -248,7 +259,7 @@ fn validate_candidate_commitment(
     Ok(())
 }
 
-fn finish_candidate_frame(
+pub(super) fn finish_candidate_frame(
     task: &IntentionalBoundaryFrameTask,
     rank_records: Vec<IntentionalBoundaryFrameRankRecord>,
 ) -> Result<IntentionalBoundaryCandidateFrame, String> {

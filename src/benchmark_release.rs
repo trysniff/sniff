@@ -180,6 +180,16 @@ mod intentional_boundary_frame;
 
 pub use intentional_boundary_frame::*;
 
+#[path = "benchmark_intentional_boundary_slots_schema.rs"]
+mod intentional_boundary_slots_schema;
+
+pub use intentional_boundary_slots_schema::*;
+
+#[path = "benchmark_intentional_boundary_slots.rs"]
+mod intentional_boundary_slots;
+
+pub use intentional_boundary_slots::*;
+
 #[path = "benchmark_intentional_boundary_manifest_schema.rs"]
 mod intentional_boundary_manifest_schema;
 
