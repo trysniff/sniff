@@ -4,6 +4,9 @@ use super::intentional_boundary_project_model_cargo::{
 use super::intentional_boundary_project_model_go::{
     GO_LIST_COMMAND_CONTRACT, validate_go_target_classification,
 };
+use super::intentional_boundary_project_model_gradle::{
+    GRADLE_TOOLING_COMMAND_CONTRACT, validate_gradle_target_classification,
+};
 use super::{
     BoundaryGitEntryKind, INTENTIONAL_BOUNDARY_PROJECT_MODEL_CENSUS_SCHEMA_VERSION,
     IntentionalBoundaryProjectModelCensus, IntentionalBoundaryProjectModelExecution,
@@ -163,11 +166,7 @@ pub fn validate_intentional_boundary_project_model_census_commitment(
         let command_contract = match execution.provider {
             Provider::CargoMetadata => CARGO_COMMAND_CONTRACT,
             Provider::GoList => GO_LIST_COMMAND_CONTRACT,
-            Provider::GradleToolingApi => {
-                return Err(
-                    "intentional-boundary project-model provider is not implemented".to_string(),
-                );
-            }
+            Provider::GradleToolingApi => GRADLE_TOOLING_COMMAND_CONTRACT,
         };
         if execution.command_contract != command_contract
             || !is_sha256(&execution.toolchain_identity_sha256)
@@ -280,7 +279,7 @@ fn validate_target_classification(
     match target.provider {
         Provider::CargoMetadata => validate_cargo_target_classification(inventory, target),
         Provider::GoList => validate_go_target_classification(inventory, target),
-        Provider::GradleToolingApi => false,
+        Provider::GradleToolingApi => validate_gradle_target_classification(inventory, target),
     }
 }
 
