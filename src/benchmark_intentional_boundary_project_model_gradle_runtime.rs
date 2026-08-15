@@ -206,7 +206,8 @@ fn run_gradle_tooling_model(
     plan.command.allow_network = false;
     #[cfg(target_os = "macos")]
     {
-        plan.command.allow_local_network = false;
+        // Gradle's daemon and cache lock coordinator require loopback IPC.
+        plan.command.allow_local_network = true;
     }
     plan.command.timeout = GRADLE_TOOLING_TIMEOUT;
     plan.command.output_limit = GRADLE_TOOLING_OUTPUT_LIMIT;
