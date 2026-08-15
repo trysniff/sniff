@@ -998,7 +998,7 @@ fn build_macos_sandbox_command(spec: &SandboxCommand) -> Result<Command, Sandbox
     } else if spec.allow_local_network {
         // Seatbelt evaluates listen(2) as wildcard inbound even when the socket is
         // bound to loopback. Outbound traffic remains restricted to loopback.
-        "(allow network-bind (local ip \"*:*\"))\n(allow network-inbound (local ip \"*:*\"))\n(allow network-outbound (remote ip \"localhost:*\"))\n(allow network* (remote unix-socket))\n"
+        "(allow network-bind (local ip \"*:*\"))\n(allow network-inbound (local ip \"*:*\"))\n(allow network* (remote ip \"localhost:*\"))\n(allow network* (remote unix-socket))\n"
     } else {
         "(deny network*)\n"
     };
