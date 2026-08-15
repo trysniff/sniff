@@ -125,6 +125,11 @@ mod intentional_boundary_behavior;
 
 pub use intentional_boundary_behavior::*;
 
+#[path = "benchmark_intentional_boundary_project_model.rs"]
+mod intentional_boundary_project_model;
+
+pub use intentional_boundary_project_model::*;
+
 #[path = "benchmark_intentional_boundary_project_model_cargo.rs"]
 mod intentional_boundary_project_model_cargo;
 

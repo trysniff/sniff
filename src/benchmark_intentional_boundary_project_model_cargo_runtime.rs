@@ -154,7 +154,7 @@ where
         immutable_root,
         inventory,
     )?;
-    finish_census(inventory, executions, targets)
+    finish_project_model_census(inventory, executions, targets)
 }
 
 fn run_cargo_metadata(
