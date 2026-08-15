@@ -25,6 +25,7 @@ pub enum IntentionalBoundaryProjectModelNonBoundaryReason {
 pub enum IntentionalBoundaryProjectModelUnresolvedReason {
     ConflictingTargetKinds,
     UnknownTargetKind,
+    SourceSetEmpty,
     SourceOutsideRepository,
     SourceNotTracked,
     SourceNotRegularBlob,
