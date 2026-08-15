@@ -194,7 +194,9 @@ fn candidate(
     })
 }
 
-fn candidate_census_sha256(census: &IntentionalBoundaryCandidateCensus) -> Result<String, String> {
+pub(super) fn candidate_census_sha256(
+    census: &IntentionalBoundaryCandidateCensus,
+) -> Result<String, String> {
     hash_json(&(
         census.schema_version,
         &census.candidate_contract,
