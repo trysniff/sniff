@@ -3,7 +3,8 @@ use crate::benchmark::{
     NonBlindSourceSeal, assess_non_blind_history, assess_non_blind_history_slice, evaluate_release,
     freeze_corpus, freeze_non_blind_source_seal, prepare_intentional_boundary_frame_task,
     prepare_non_blind_history, prepare_non_blind_history_assessment,
-    validate_intentional_boundary_frame_task, validate_intentional_boundary_protocol,
+    validate_historical_v2_protocol, validate_intentional_boundary_frame_task,
+    validate_intentional_boundary_protocol,
 };
 use crate::benchmark::{
     BenchmarkSourceSeal, LabelResolutionManifest, LabelReviewAudit, LabelReviewWorksheet,
@@ -176,6 +177,26 @@ pub(crate) fn validate_intentional_boundary_benchmark_protocol(
         "Intentional-boundary protocol validated\nCategories: {}\nFixed slots: {}\nProtocol SHA-256: {}",
         validated.protocol.category_contracts.len(),
         validated.protocol.slot_contract.total_slots,
+        validated.protocol_sha256
+    );
+    Ok(0)
+}
+
+pub(crate) fn validate_historical_v2_benchmark_protocol(
+    protocol_path: &str,
+) -> Result<i32, Box<dyn std::error::Error>> {
+    let protocol = fs::read(protocol_path)?;
+    let validated = validate_historical_v2_protocol(&protocol).map_err(|error| {
+        IoError::new(
+            ErrorKind::InvalidData,
+            format!("historical-v2 protocol is invalid: {error}"),
+        )
+    })?;
+    eprintln!(
+        "Historical-v2 protocol validated\nLanguages: {}\nFixed slots: {}\nMinimum accepted cases: {}\nProtocol SHA-256: {}",
+        validated.protocol.selection.supported_languages.len(),
+        validated.protocol.selection.total_slots,
+        validated.protocol.review.minimum_total_accepted,
         validated.protocol_sha256
     );
     Ok(0)

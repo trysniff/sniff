@@ -4,6 +4,34 @@ SniffBench is Sniff's reproducible evaluation protocol. Blind OSS source
 selection, source sealing, independent method labeling, run import, and final
 evaluation use create-new, hash-bound artifacts.
 
+## Candidate-blind historical v2
+
+Historical-v2 is a separate, precommitted protocol; it does not reroll or
+replace the failed historical-v1 evaluation. The pinned
+[`historical-v2-protocol.json`](historical-v2-protocol.json) uses
+`nebius/SWE-rebench-V2-PRs` only as an untrusted pull-request frame. Selection
+may project repository identity, base revision, timestamp, license, and patch
+bytes. It must not read descriptions, hints, benchmark labels, reference test
+outcomes, interfaces, or model-authored metadata.
+
+The protocol fixes 128 no-backfill slots for each of Go, JavaScript, Kotlin,
+Python, Rust, and TypeScript before repository assessment. Exact Git objects,
+compiler-derived method censuses, the same sandboxed test recipe on both
+revisions, preserved public surfaces, and two independent source-only reviews
+are required. A rejected or unassessable candidate closes its slot; an
+underfilled language fails the release.
+
+Validate the commitment offline without loading configuration or contacting a
+model provider:
+
+```console
+sniff benchmark validate-historical-v2-protocol \
+  sniffbench/historical-v2-protocol.json
+```
+
+Protocol file SHA-256:
+`44f85f06a358660d7a2a46764f0e203f6514b08d7db992f51fa18c1cdccc7c4d`.
+
 ## Non-blind real evidence
 
 Historical simplifications, research trajectories, and intentional clean
