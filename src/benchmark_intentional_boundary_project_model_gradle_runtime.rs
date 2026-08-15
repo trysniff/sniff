@@ -223,15 +223,23 @@ fn run_gradle_tooling_model(
     }
     if output.status_code != Some(0) {
         let stderr = output.stderr.trim();
+        let stdout = output.stdout.trim();
+        let diagnostics = if !stderr.is_empty() {
+            diagnostic_tail(stderr)
+        } else if !stdout.is_empty() {
+            diagnostic_tail(stdout)
+        } else {
+            String::new()
+        };
         return Err(format!(
             "sandboxed Gradle Tooling API exited with status {}{}",
             output
                 .status_code
                 .map_or_else(|| "unknown".to_string(), |status| status.to_string()),
-            if stderr.is_empty() {
+            if diagnostics.is_empty() {
                 String::new()
             } else {
-                format!(": {stderr}")
+                format!(": {diagnostics}")
             }
         ));
     }
@@ -239,6 +247,18 @@ fn run_gradle_tooling_model(
         toolchain_identity_sha256,
         stdout: output.stdout,
     })
+}
+
+fn diagnostic_tail(value: &str) -> String {
+    const MAX_DIAGNOSTIC_BYTES: usize = 8 * 1024;
+    if value.len() <= MAX_DIAGNOSTIC_BYTES {
+        return value.to_string();
+    }
+    let start = value
+        .char_indices()
+        .find_map(|(index, _)| (value.len() - index <= MAX_DIAGNOSTIC_BYTES).then_some(index))
+        .unwrap_or(0);
+    format!("[truncated] {}", &value[start..])
 }
 
 fn project_model_runtime_error(error: HistoricalRuntimePlanError) -> String {
