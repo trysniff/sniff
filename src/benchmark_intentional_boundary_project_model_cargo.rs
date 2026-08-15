@@ -1,3 +1,4 @@
+use super::non_blind_history_runtime::{HistoricalRuntimePlanError, prepare_historical_runtime};
 use super::{
     BoundaryGitEntryKind, INTENTIONAL_BOUNDARY_PROJECT_MODEL_CENSUS_SCHEMA_VERSION,
     IntentionalBoundaryManifestDeclarationKind, IntentionalBoundaryManifestTarget,
@@ -7,20 +8,73 @@ use super::{
     IntentionalBoundaryProjectModelTargetStatus as TargetStatus,
     IntentionalBoundaryProjectModelUnresolvedReason as UnresolvedReason,
     IntentionalBoundaryRepositoryInventory, IntentionalBoundaryTrackedEntry,
+    validate_intentional_boundary_repository_inventory,
 };
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 const PROJECT_MODEL_CONTRACT: &str = "sniffbench-intentional-boundary-project-model-v1";
 const CARGO_COMMAND_CONTRACT: &str = "cargo-metadata-format-v1-no-deps-offline-v1";
+const CARGO_METADATA_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+const CARGO_METADATA_OUTPUT_LIMIT: usize = 16 * 1024 * 1024;
+static CARGO_RUNTIME_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+struct CargoMetadataRuntime(PathBuf);
+
+impl CargoMetadataRuntime {
+    fn create(root: &Path) -> Result<Self, String> {
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|error| {
+                format!("system clock cannot allocate Cargo metadata runtime: {error}")
+            })?
+            .as_nanos();
+        for _ in 0..128 {
+            let sequence = CARGO_RUNTIME_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+            let path = root.join(format!(
+                ".sniff-cargo-metadata-{}-{timestamp}-{sequence}",
+                std::process::id()
+            ));
+            match fs::create_dir(&path) {
+                Ok(()) => return Ok(Self(path)),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => {
+                    return Err(format!(
+                        "failed to create private Cargo metadata runtime: {error}"
+                    ));
+                }
+            }
+        }
+        Err("failed to allocate a unique private Cargo metadata runtime".to_string())
+    }
+
+    fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for CargoMetadataRuntime {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+struct CargoMetadataExecutionOutput {
+    toolchain_identity_sha256: String,
+    stdout: String,
+}
 
 #[derive(Deserialize)]
 struct CargoMetadata {
     packages: Vec<CargoPackage>,
     workspace_members: Vec<String>,
+    workspace_root: String,
     version: u32,
 }
 
@@ -43,6 +97,16 @@ struct CargoTarget {
     required_features: Vec<String>,
 }
 
+struct CargoPackageContext<'a> {
+    root: &'a Path,
+    emitted_repository_root: &'a str,
+    inventory: &'a IntentionalBoundaryRepositoryInventory,
+    manifest_repository_path: &'a str,
+    manifest_object_id: &'a str,
+    package_name: &'a str,
+    package_version: &'a str,
+}
+
 #[derive(serde::Serialize)]
 struct NormalizedCargoTarget<'a> {
     manifest_repository_path: &'a str,
@@ -55,6 +119,149 @@ struct NormalizedCargoTarget<'a> {
     source_repository_path: &'a Option<String>,
     required_features: &'a [String],
     target_status: &'a TargetStatus,
+}
+
+pub fn census_intentional_boundary_cargo_project_models(
+    repository: &str,
+    revision: &str,
+    root: &Path,
+    inventory: &IntentionalBoundaryRepositoryInventory,
+) -> Result<IntentionalBoundaryProjectModelCensus, String> {
+    census_cargo_project_models_with_executor(
+        repository,
+        revision,
+        root,
+        inventory,
+        run_cargo_metadata,
+    )
+}
+
+fn census_cargo_project_models_with_executor<F>(
+    repository: &str,
+    revision: &str,
+    root: &Path,
+    inventory: &IntentionalBoundaryRepositoryInventory,
+    mut executor: F,
+) -> Result<IntentionalBoundaryProjectModelCensus, String>
+where
+    F: FnMut(&Path, &str) -> Result<CargoMetadataExecutionOutput, String>,
+{
+    validate_intentional_boundary_repository_inventory(repository, revision, root, inventory)?;
+    let cargo_manifests = inventory
+        .tracked_entries
+        .iter()
+        .filter(|entry| entry.repository_path.rsplit('/').next() == Some("Cargo.toml"))
+        .map(|entry| {
+            if entry.kind != BoundaryGitEntryKind::RegularBlob {
+                return Err(format!(
+                    "Cargo manifest is not a regular Git blob: {}",
+                    entry.repository_path
+                ));
+            }
+            Ok(entry.repository_path.clone())
+        })
+        .collect::<Result<BTreeSet<_>, String>>()?;
+    let mut covered_manifests = BTreeSet::new();
+    let mut executions = Vec::new();
+    let mut targets = Vec::new();
+    for manifest_path in &cargo_manifests {
+        if covered_manifests.contains(manifest_path) {
+            continue;
+        }
+        let output = executor(root, manifest_path);
+        let post_execution_inventory = validate_intentional_boundary_repository_inventory(
+            repository, revision, root, inventory,
+        );
+        if let Err(error) = post_execution_inventory {
+            return Err(format!(
+                "Cargo metadata changed the immutable repository: {error}"
+            ));
+        }
+        let output = output?;
+        let contribution = parse_intentional_boundary_cargo_metadata(
+            root,
+            inventory,
+            manifest_path,
+            &output.toolchain_identity_sha256,
+            output.stdout.as_bytes(),
+        )?;
+        let [execution] = contribution.executions.as_slice() else {
+            return Err("Cargo project-model contribution changed cardinality".to_string());
+        };
+        for covered in &execution.covered_manifest_repository_paths {
+            if !cargo_manifests.contains(covered) {
+                return Err(format!(
+                    "Cargo metadata covered an unrecognized manifest: {covered}"
+                ));
+            }
+            covered_manifests.insert(covered.clone());
+        }
+        executions.extend(contribution.executions);
+        targets.extend(contribution.targets);
+    }
+    if covered_manifests != cargo_manifests {
+        return Err("Cargo metadata omitted a tracked Cargo manifest".to_string());
+    }
+    validate_intentional_boundary_repository_inventory(repository, revision, root, inventory)?;
+    finish_census(inventory, executions, targets)
+}
+
+fn run_cargo_metadata(
+    root: &Path,
+    manifest_repository_path: &str,
+) -> Result<CargoMetadataExecutionOutput, String> {
+    let runtime = CargoMetadataRuntime::create(root)?;
+    let cache = runtime.path().join("cache");
+    fs::create_dir(&cache)
+        .map_err(|error| format!("failed to create private Cargo metadata cache: {error}"))?;
+    let logical_command = vec![
+        "cargo".to_string(),
+        "metadata".to_string(),
+        "--format-version".to_string(),
+        "1".to_string(),
+        "--no-deps".to_string(),
+        "--offline".to_string(),
+        "--manifest-path".to_string(),
+        manifest_repository_path.to_string(),
+    ];
+    let mut plan = prepare_historical_runtime(root, &cache, &logical_command)
+        .map_err(project_model_runtime_error)?;
+    plan.command.allow_network = false;
+    #[cfg(target_os = "macos")]
+    {
+        plan.command.allow_local_network = false;
+    }
+    plan.command.timeout = CARGO_METADATA_TIMEOUT;
+    plan.command.output_limit = CARGO_METADATA_OUTPUT_LIMIT;
+    let toolchain_identity_sha256 = plan.runtime_identity;
+    let output = crate::sandbox::run(&plan.command)
+        .map_err(|error| format!("sandboxed Cargo metadata failed: {error}"))?;
+    if output.timed_out {
+        return Err("sandboxed Cargo metadata timed out".to_string());
+    }
+    if output.status_code != Some(0) {
+        return Err(format!(
+            "sandboxed Cargo metadata exited with status {}",
+            output
+                .status_code
+                .map_or_else(|| "unknown".to_string(), |status| status.to_string())
+        ));
+    }
+    Ok(CargoMetadataExecutionOutput {
+        toolchain_identity_sha256,
+        stdout: output.stdout,
+    })
+}
+
+fn project_model_runtime_error(error: HistoricalRuntimePlanError) -> String {
+    match error {
+        HistoricalRuntimePlanError::Unavailable(message) => {
+            format!("Cargo metadata runtime is unavailable: {message}")
+        }
+        HistoricalRuntimePlanError::Invalid(message) => {
+            format!("Cargo metadata runtime is invalid: {message}")
+        }
+    }
 }
 
 pub fn parse_intentional_boundary_cargo_metadata(
@@ -84,6 +291,10 @@ pub fn parse_intentional_boundary_cargo_metadata(
             metadata.version
         ));
     }
+    let emitted_repository_root = emitted_repository_root(
+        &metadata.workspace_root,
+        invocation_manifest_repository_path,
+    )?;
     let workspace_member_count = metadata.workspace_members.len();
     let workspace_members = metadata
         .workspace_members
@@ -114,24 +325,29 @@ pub fn parse_intentional_boundary_cargo_metadata(
         .into_iter()
         .filter(|package| workspace_members.contains(&package.id))
     {
-        let manifest_repository_path = repository_path(&canonical_root, &package.manifest_path)
-            .map_err(|_| "Cargo workspace manifest is outside the repository".to_string())?;
+        let manifest_repository_path = repository_path(
+            &canonical_root,
+            &emitted_repository_root,
+            &package.manifest_path,
+        )
+        .map_err(|_| "Cargo workspace manifest is outside the repository".to_string())?;
         let manifest_entry = regular_inventory_entry(
             inventory,
             &manifest_repository_path,
             "Cargo workspace manifest",
         )?;
         covered_manifests.insert(manifest_repository_path.clone());
+        let context = CargoPackageContext {
+            root: &canonical_root,
+            emitted_repository_root: &emitted_repository_root,
+            inventory,
+            manifest_repository_path: &manifest_repository_path,
+            manifest_object_id: &manifest_entry.object_id,
+            package_name: &package.name,
+            package_version: &package.version,
+        };
         for target in package.targets {
-            targets.push(normalize_target(
-                &canonical_root,
-                inventory,
-                &manifest_repository_path,
-                &manifest_entry.object_id,
-                &package.name,
-                &package.version,
-                target,
-            )?);
+            targets.push(normalize_target(&context, target)?);
         }
     }
     covered_manifests.insert(invocation_manifest_repository_path.to_string());
@@ -198,12 +414,7 @@ pub fn validate_intentional_boundary_cargo_metadata(
 }
 
 fn normalize_target(
-    root: &Path,
-    inventory: &IntentionalBoundaryRepositoryInventory,
-    manifest_repository_path: &str,
-    manifest_object_id: &str,
-    package_name: &str,
-    package_version: &str,
+    context: &CargoPackageContext<'_>,
     target: CargoTarget,
 ) -> Result<IntentionalBoundaryProjectModelTarget, String> {
     let mut provider_kinds = target.kind;
@@ -215,10 +426,14 @@ fn normalize_target(
     let mut required_features = target.required_features;
     required_features.sort();
     required_features.dedup();
-    let source_path = repository_path(root, &target.src_path);
+    let source_path = repository_path(
+        context.root,
+        context.emitted_repository_root,
+        &target.src_path,
+    );
     let source_repository_path = source_path.as_ref().ok().cloned();
     let target_status = classify_target(
-        inventory,
+        context.inventory,
         &provider_kinds,
         source_path.as_ref().ok().map(String::as_str),
     );
@@ -226,10 +441,10 @@ fn normalize_target(
         target_id: String::new(),
         execution_id: String::new(),
         provider: Provider::CargoMetadata,
-        manifest_repository_path: manifest_repository_path.to_string(),
-        manifest_object_id: manifest_object_id.to_string(),
-        package_name: package_name.to_string(),
-        package_version: package_version.to_string(),
+        manifest_repository_path: context.manifest_repository_path.to_string(),
+        manifest_object_id: context.manifest_object_id.to_string(),
+        package_name: context.package_name.to_string(),
+        package_version: context.package_version.to_string(),
         target_name: target.name,
         provider_kinds,
         provider_crate_types,
@@ -346,9 +561,58 @@ fn regular_inventory_entry<'a>(
     Ok(entry)
 }
 
-fn repository_path(root: &Path, raw: &str) -> Result<String, String> {
+fn emitted_repository_root(
+    workspace_root: &str,
+    invocation_manifest_repository_path: &str,
+) -> Result<String, String> {
+    let workspace_root = workspace_root.replace('\\', "/");
+    let invocation_directory = invocation_manifest_repository_path
+        .rsplit_once('/')
+        .map_or("", |(directory, _)| directory);
+    if invocation_directory.is_empty() {
+        return Ok(workspace_root.trim_end_matches('/').to_string());
+    }
+    let suffix = format!("/{invocation_directory}");
+    let matches = if cfg!(windows) {
+        workspace_root
+            .to_ascii_lowercase()
+            .ends_with(&suffix.to_ascii_lowercase())
+    } else {
+        workspace_root.ends_with(&suffix)
+    };
+    if !matches {
+        return Err(
+            "Cargo workspace root does not match the invocation manifest directory".to_string(),
+        );
+    }
+    Ok(workspace_root[..workspace_root.len() - suffix.len()].to_string())
+}
+
+fn repository_path(root: &Path, emitted_root: &str, raw: &str) -> Result<String, String> {
+    let raw = raw.replace('\\', "/");
+    let emitted_root = emitted_root.trim_end_matches('/');
+    let prefix = format!("{emitted_root}/");
+    let matches = if cfg!(windows) {
+        raw.get(..prefix.len())
+            .is_some_and(|value| value.eq_ignore_ascii_case(&prefix))
+    } else {
+        raw.starts_with(&prefix)
+    };
+    if !matches {
+        return Err("project-model path is outside repository".to_string());
+    }
+    let emitted_relative = &raw[prefix.len()..];
+    let relative_path = Path::new(emitted_relative);
+    if emitted_relative.is_empty()
+        || relative_path
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return Err("project-model path is not safely repository-relative".to_string());
+    }
     let path = strip_windows_verbatim_prefix(
-        fs::canonicalize(raw).map_err(|_| "project-model path cannot be resolved".to_string())?,
+        fs::canonicalize(root.join(relative_path))
+            .map_err(|_| "project-model path cannot be resolved".to_string())?,
     );
     let relative = path
         .strip_prefix(root)
@@ -416,9 +680,33 @@ fn compute_target_id(target: &IntentionalBoundaryProjectModelTarget) -> Result<S
 
 fn finish_census(
     inventory: &IntentionalBoundaryRepositoryInventory,
-    executions: Vec<IntentionalBoundaryProjectModelExecution>,
-    targets: Vec<IntentionalBoundaryProjectModelTarget>,
+    mut executions: Vec<IntentionalBoundaryProjectModelExecution>,
+    mut targets: Vec<IntentionalBoundaryProjectModelTarget>,
 ) -> Result<IntentionalBoundaryProjectModelCensus, String> {
+    executions.sort();
+    targets.sort();
+    if executions.windows(2).any(|pair| pair[0] >= pair[1])
+        || targets.windows(2).any(|pair| pair[0] >= pair[1])
+    {
+        return Err("project-model census contains duplicate records".to_string());
+    }
+    let execution_ids = executions
+        .iter()
+        .map(|execution| execution.execution_id.as_str())
+        .collect::<BTreeSet<_>>();
+    if targets
+        .iter()
+        .any(|target| !execution_ids.contains(target.execution_id.as_str()))
+        || executions.iter().any(|execution| {
+            execution.target_count
+                != targets
+                    .iter()
+                    .filter(|target| target.execution_id == execution.execution_id)
+                    .count()
+        })
+    {
+        return Err("project-model target execution commitment changed".to_string());
+    }
     let execution_count_by_provider =
         executions
             .iter()
