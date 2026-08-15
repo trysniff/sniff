@@ -12,6 +12,7 @@ use std::time::Duration;
 
 const GRADLE_TOOLING_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 const GRADLE_TOOLING_OUTPUT_LIMIT: usize = 64 * 1024 * 1024;
+const GRADLE_MACOS_JAVA_TOOL_OPTIONS: &str = "-Djava.net.preferIPv4Stack=true";
 const GRADLE_CLIENT_SOURCE: &str =
     include_str!("../assets/gradle-tooling/sniff-project-model-client.groovy");
 const GRADLE_INIT_SOURCE: &str =
@@ -208,12 +209,19 @@ fn run_gradle_tooling_model(
     {
         // Gradle's daemon and cache lock coordinator require loopback IPC.
         plan.command.allow_local_network = true;
+        // Java's dual-stack socket path is denied by Seatbelt even when the
+        // equivalent IPv4 child-process connection is admitted.
+        plan.command.env.push((
+            "JAVA_TOOL_OPTIONS".to_string(),
+            GRADLE_MACOS_JAVA_TOOL_OPTIONS.to_string(),
+        ));
     }
     plan.command.timeout = GRADLE_TOOLING_TIMEOUT;
     plan.command.output_limit = GRADLE_TOOLING_OUTPUT_LIMIT;
     let toolchain_identity_sha256 = hash_json(&(
-        "sniffbench-gradle-tooling-runtime-v2",
+        "sniffbench-gradle-tooling-runtime-v3",
         &plan.runtime_identity,
+        GRADLE_MACOS_JAVA_TOOL_OPTIONS,
         GRADLE_CLIENT_SOURCE,
         GRADLE_INIT_SOURCE,
     ))?;
