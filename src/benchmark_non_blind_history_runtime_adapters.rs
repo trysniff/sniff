@@ -181,6 +181,67 @@ pub(super) fn gradle_launch(
     })
 }
 
+pub(super) fn gradle_tooling_launch(args: &[String]) -> Result<Launch, HistoricalRuntimePlanError> {
+    if args.len() != 4 {
+        return Err(HistoricalRuntimePlanError::Invalid(
+            "Gradle Tooling API launch requires client, project, cache, and init-script arguments"
+                .to_string(),
+        ));
+    }
+    let java = resolve_on_path("java")?;
+    let java_home = java
+        .parent()
+        .and_then(Path::parent)
+        .ok_or_else(|| unavailable("Java runtime has no JAVA_HOME"))?
+        .to_path_buf();
+    let gradle = resolve_on_path("gradle")?;
+    let gradle_home = gradle
+        .parent()
+        .and_then(Path::parent)
+        .ok_or_else(|| unavailable("Gradle runtime has no installation root"))?
+        .to_path_buf();
+    reject_broad_user_root(&java_home)?;
+    reject_broad_user_root(&gradle_home)?;
+    let tooling_api = canonical_file(
+        &gradle_home.join("lib").join("gradle-tooling-api-8.8.jar"),
+        "pinned Gradle 8.8 Tooling API",
+    )?;
+    let separator = if cfg!(windows) { ";" } else { ":" };
+    let classpath = format!(
+        "{}{}{}",
+        gradle_home.join("lib").join("*").to_string_lossy(),
+        separator,
+        gradle_home
+            .join("lib")
+            .join("plugins")
+            .join("*")
+            .to_string_lossy()
+    );
+    let java_args = vec![
+        "-Xms64m".to_string(),
+        "-Xmx768m".to_string(),
+        "-XX:MaxMetaspaceSize=256m".to_string(),
+        "-XX:ReservedCodeCacheSize=128m".to_string(),
+        "-XX:+UseSerialGC".to_string(),
+        "-cp".to_string(),
+        classpath,
+        "groovy.ui.GroovyMain".to_string(),
+        args[0].clone(),
+        args[1].clone(),
+        path_value(&gradle_home),
+        args[2].clone(),
+        args[3].clone(),
+    ];
+    Ok(Launch {
+        target: java.clone(),
+        args: java_args,
+        runtime_files: vec![java, gradle, tooling_api],
+        runtime_roots: vec![java_home.clone(), gradle_home],
+        env: vec![("JAVA_HOME".to_string(), path_value(&java_home))],
+        repository_target: false,
+    })
+}
+
 pub(super) fn generic_launch(
     root: &Path,
     program: &str,

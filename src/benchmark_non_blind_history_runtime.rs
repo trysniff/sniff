@@ -1,6 +1,6 @@
 use super::non_blind_history_runtime_adapters::{
-    bun_launch, cargo_launch, generic_launch, go_launch, gradle_launch, node_launch,
-    node_manager_launch, private_python_launch, python_launch,
+    bun_launch, cargo_launch, generic_launch, go_launch, gradle_launch, gradle_tooling_launch,
+    node_launch, node_manager_launch, private_python_launch, python_launch,
 };
 #[cfg(windows)]
 use super::non_blind_history_runtime_support::{
@@ -89,6 +89,7 @@ pub(crate) fn prepare_historical_runtime(
         "npm" | "pnpm" | "yarn" => node_manager_launch(program, &expanded_args)?,
         "bun" => bun_launch(&expanded_args)?,
         "gradlew.bat" | "./gradlew" => gradle_launch(&root, program, &expanded_args)?,
+        "{sniff_gradle_tooling}" => gradle_tooling_launch(&expanded_args)?,
         _ => generic_launch(&root, program, &expanded_args)?,
     };
 

@@ -1,0 +1,114 @@
+import org.gradle.api.Plugin
+import org.gradle.api.Project
+import org.gradle.api.plugins.JavaPluginExtension
+import org.gradle.api.publish.PublishingExtension
+import org.gradle.api.tasks.SourceSet
+import org.gradle.tooling.provider.model.ToolingModelBuilder
+import org.gradle.tooling.provider.model.ToolingModelBuilderRegistry
+
+import javax.inject.Inject
+
+class SniffGradleProjectModelData implements Serializable {
+    String projectPath
+    String projectName
+    String groupName
+    String projectVersion
+    String projectDirectory
+    String buildFile
+    boolean buildFileExists
+    List<String> providerKinds
+    List<String> productionSourceFiles
+}
+
+class SniffGradleBuildModelData implements Serializable {
+    String contract
+    String gradleVersion
+    String settingsDirectory
+    List<SniffGradleProjectModelData> projects
+}
+
+class SniffGradleModelBuilder implements ToolingModelBuilder {
+    private static final String MODEL_NAME = "SniffGradleBuildModel"
+
+    @Override
+    boolean canBuild(String modelName) {
+        modelName == MODEL_NAME
+    }
+
+    @Override
+    Object buildAll(String modelName, Project requestedProject) {
+        Project root = requestedProject.rootProject
+        List<SniffGradleProjectModelData> projects = root.allprojects
+            .toList()
+            .sort { left, right -> left.path <=> right.path }
+            .collect { project -> projectModel(project) }
+        new SniffGradleBuildModelData(
+            contract: "sniff-gradle-tooling-project-model-v2",
+            gradleVersion: root.gradle.gradleVersion,
+            settingsDirectory: root.gradle.startParameter.currentDir.canonicalPath,
+            projects: projects,
+        )
+    }
+
+    private static SniffGradleProjectModelData projectModel(Project project) {
+        Set<String> kinds = new TreeSet<>()
+        if (project.pluginManager.hasPlugin("application")) {
+            kinds.add("application")
+        }
+        if (project.pluginManager.hasPlugin("java-library")) {
+            kinds.add("java_library")
+        }
+        if (project.pluginManager.hasPlugin("java-gradle-plugin")) {
+            kinds.add("gradle_plugin")
+        }
+        PublishingExtension publishing = project.extensions.findByType(PublishingExtension)
+        if (publishing != null && !publishing.publications.empty) {
+            kinds.add("publication")
+        }
+        if (kinds.empty) {
+            kinds.add("unclassified")
+        }
+
+        Set<String> sourceFiles = new TreeSet<>()
+        JavaPluginExtension java = project.extensions.findByType(JavaPluginExtension)
+        SourceSet main = java?.sourceSets?.findByName(SourceSet.MAIN_SOURCE_SET_NAME)
+        main?.allSource?.files?.each { file ->
+            String name = file.name.toLowerCase(Locale.ROOT)
+            if (file.isFile() && (name.endsWith(".java") || name.endsWith(".kt"))) {
+                sourceFiles.add(file.canonicalPath)
+            }
+        }
+
+        new SniffGradleProjectModelData(
+            projectPath: project.path,
+            projectName: project.name,
+            groupName: project.group?.toString() ?: "",
+            projectVersion: project.version?.toString() ?: "",
+            projectDirectory: project.projectDir.canonicalPath,
+            buildFile: project.buildFile.canonicalPath,
+            buildFileExists: project.buildFile.isFile(),
+            providerKinds: kinds.toList(),
+            productionSourceFiles: sourceFiles.toList(),
+        )
+    }
+}
+
+class SniffGradleModelPlugin implements Plugin<Project> {
+    private final ToolingModelBuilderRegistry registry
+
+    @Inject
+    SniffGradleModelPlugin(ToolingModelBuilderRegistry registry) {
+        this.registry = registry
+    }
+
+    @Override
+    void apply(Project project) {
+        if (project == project.rootProject) {
+            registry.register(new SniffGradleModelBuilder())
+        }
+    }
+}
+
+allprojects {
+    apply plugin: SniffGradleModelPlugin
+}
