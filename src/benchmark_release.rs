@@ -117,6 +117,16 @@ mod intentional_boundary_project_model_cargo;
 
 pub use intentional_boundary_project_model_cargo::*;
 
+#[path = "benchmark_intentional_boundary_project_model_binding_schema.rs"]
+mod intentional_boundary_project_model_binding_schema;
+
+pub use intentional_boundary_project_model_binding_schema::*;
+
+#[path = "benchmark_intentional_boundary_project_model_binding.rs"]
+mod intentional_boundary_project_model_binding;
+
+pub use intentional_boundary_project_model_binding::*;
+
 #[path = "benchmark_intentional_boundary_manifest_schema.rs"]
 mod intentional_boundary_manifest_schema;
 

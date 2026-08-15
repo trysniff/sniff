@@ -1,4 +1,12 @@
 use super::*;
+use crate::benchmark::release::{
+    IntentionalBoundaryIndexerKind, IntentionalBoundaryProjectModelBindingOutcome,
+    IntentionalBoundarySemanticCensus, IntentionalBoundarySemanticIndexerCensus,
+    IntentionalBoundarySemanticMethod, IntentionalBoundarySemanticMethodStatus,
+    IntentionalBoundarySemanticOrigin, IntentionalBoundarySemanticRange,
+    IntentionalBoundarySemanticSymbolCategory, IntentionalBoundarySemanticSymbolFacts,
+    IntentionalBoundarySemanticVisibility, IntentionalBoundarySourceCensus,
+};
 use std::cell::Cell;
 use std::fs;
 use std::process::Command;
@@ -122,6 +130,111 @@ fn metadata(root: &Path) -> Vec<u8> {
     .unwrap()
 }
 
+fn semantic_censuses(
+    root: &Path,
+    inventory: &IntentionalBoundaryRepositoryInventory,
+) -> (
+    IntentionalBoundarySourceCensus,
+    IntentionalBoundarySemanticCensus,
+) {
+    let source = super::super::census_intentional_boundary_repository(
+        &inventory.repository,
+        &inventory.revision,
+        root,
+        inventory,
+    )
+    .unwrap();
+    let methods = source
+        .source_files
+        .iter()
+        .flat_map(|file| {
+            file.methods.iter().map(|method| {
+                let range = IntentionalBoundarySemanticRange {
+                    repository_path: file.repository_path.clone(),
+                    start_line_zero_based: (method.start_line - 1) as u32,
+                    start_character_zero_based: 0,
+                    end_line_zero_based: (method.start_line - 1) as u32,
+                    end_character_zero_based: 1,
+                };
+                IntentionalBoundarySemanticMethod {
+                    parser_unit_id: method.parser_unit_id.clone(),
+                    repository_path: file.repository_path.clone(),
+                    symbol_name: method.symbol_name.clone(),
+                    start_line: method.start_line,
+                    end_line: method.end_line,
+                    indexer: IntentionalBoundaryIndexerKind::Rust,
+                    status: IntentionalBoundarySemanticMethodStatus::Resolved {
+                        symbol: Box::new(IntentionalBoundarySemanticSymbolFacts {
+                            symbol_id: format!(
+                                "rust fixture {} {}",
+                                file.repository_path, method.symbol_name
+                            ),
+                            provider_identity: format!(
+                                "rust fixture {} {}",
+                                file.repository_path, method.symbol_name
+                            ),
+                            display_name: Some(method.symbol_name.clone()),
+                            category: IntentionalBoundarySemanticSymbolCategory::Callable,
+                            provider_kind: "function".to_string(),
+                            documentation: Vec::new(),
+                            signature: None,
+                            signature_referenced_symbols: Vec::new(),
+                            owner: None,
+                            definitions: vec![range.clone()],
+                            visibility: if method.is_exported {
+                                IntentionalBoundarySemanticVisibility::Public
+                            } else {
+                                IntentionalBoundarySemanticVisibility::Private
+                            },
+                            surfaces: Vec::new(),
+                            origin: IntentionalBoundarySemanticOrigin::Repository,
+                            ambiguity_notes: Vec::new(),
+                        }),
+                        joined_definition: Some(range),
+                    },
+                    occurrences: Vec::new(),
+                    calls: Vec::new(),
+                    relationships: Vec::new(),
+                    imports: Vec::new(),
+                    test_relationships: Vec::new(),
+                }
+            })
+        })
+        .collect::<Vec<_>>();
+    let mut semantic = IntentionalBoundarySemanticCensus {
+        schema_version: super::super::INTENTIONAL_BOUNDARY_SEMANTIC_CENSUS_SCHEMA_VERSION,
+        semantic_contract: super::super::intentional_boundary_semantic::SEMANTIC_CENSUS_CONTRACT
+            .to_string(),
+        repository: source.repository.clone(),
+        revision: source.revision.clone(),
+        source_census_sha256: source.census_sha256.clone(),
+        indexers: vec![IntentionalBoundarySemanticIndexerCensus {
+            indexer: IntentionalBoundaryIndexerKind::Rust,
+            tool_name: "fixture-indexer".to_string(),
+            tool_version: Some("1.0.0".to_string()),
+            semantic_facts_sha256: "3".repeat(64),
+            diagnostic_count: 0,
+            diagnostics_sha256: "4".repeat(64),
+            document_count: source.source_file_count,
+            symbol_count: methods.len(),
+            relationship_count: 0,
+            import_count: 0,
+            call_count: 0,
+            test_relationship_count: 0,
+            unresolved_edge_count: 0,
+        }],
+        resolved_method_count: methods.len(),
+        compiler_excluded_method_count: 0,
+        unresolved_method_count: 0,
+        methods,
+        semantic_census_sha256: String::new(),
+    };
+    semantic.semantic_census_sha256 =
+        super::super::intentional_boundary_semantic::compute_semantic_census_sha256(&semantic)
+            .unwrap();
+    (source, semantic)
+}
+
 #[test]
 fn normalizes_every_cargo_target_to_a_typed_outcome() {
     let (root, inventory) = repository();
@@ -163,6 +276,7 @@ fn normalizes_every_cargo_target_to_a_typed_outcome() {
             ..
         }
     )));
+    validate_intentional_boundary_project_model_census_commitment(&inventory, &census).unwrap();
 }
 
 #[test]
@@ -298,6 +412,13 @@ fn replay_validation_rejects_project_model_tampering() {
         .unwrap_err()
         .contains("changed")
     );
+    let commitment_error =
+        validate_intentional_boundary_project_model_census_commitment(&inventory, &census)
+            .unwrap_err();
+    assert!(
+        commitment_error.contains("commitment") || commitment_error.contains("ordering"),
+        "unexpected commitment error: {commitment_error}"
+    );
 }
 
 #[test]
@@ -375,5 +496,64 @@ fn real_cargo_metadata_runs_through_the_hardened_sandbox() {
     assert!(
         !root.path().join("Cargo.lock").exists(),
         "Cargo metadata must not create a lockfile in the immutable checkout"
+    );
+}
+
+#[test]
+fn binds_inferred_cargo_boundaries_only_to_compiler_subjects() {
+    let (root, inventory) = repository();
+    let project_model = parse_intentional_boundary_cargo_metadata(
+        root.path(),
+        &inventory,
+        "Cargo.toml",
+        &"5".repeat(64),
+        &metadata(root.path()),
+    )
+    .unwrap();
+    let (source, semantic) = semantic_censuses(root.path(), &inventory);
+
+    let bindings = super::super::bind_intentional_boundary_project_models(
+        &inventory,
+        &source,
+        &semantic,
+        &project_model,
+    )
+    .unwrap();
+
+    assert_eq!(bindings.bindings.len(), project_model.targets.len());
+    assert_eq!(bindings.bound_target_count, 2);
+    assert_eq!(bindings.awaiting_generator_replay_count, 1);
+    assert_eq!(bindings.non_boundary_target_count, 1);
+    assert_eq!(bindings.upstream_unresolved_target_count, 1);
+    assert_eq!(bindings.non_method_target_count, 0);
+    assert_eq!(bindings.binding_unresolved_target_count, 0);
+    assert!(bindings.bindings.iter().all(|binding| {
+        match &binding.outcome {
+            IntentionalBoundaryProjectModelBindingOutcome::Bound { subjects } => subjects
+                .iter()
+                .all(|subject| subject.subject_symbol_id.starts_with("rust fixture ")),
+            _ => true,
+        }
+    }));
+    super::super::validate_intentional_boundary_project_model_bindings(
+        &inventory,
+        &source,
+        &semantic,
+        &project_model,
+        &bindings,
+    )
+    .unwrap();
+    let mut tampered_bindings = bindings.clone();
+    tampered_bindings.bindings.pop();
+    assert!(
+        super::super::validate_intentional_boundary_project_model_bindings(
+            &inventory,
+            &source,
+            &semantic,
+            &project_model,
+            &tampered_bindings,
+        )
+        .unwrap_err()
+        .contains("changed")
     );
 }
