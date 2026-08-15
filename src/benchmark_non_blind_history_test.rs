@@ -23,7 +23,7 @@ pub struct HistoricalTestExecution {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HistoricalTestExecutionOutcome {
-    Completed(HistoricalTestExecution),
+    Completed(Box<HistoricalTestExecution>),
     RuntimeUnavailable(String),
     SandboxUnavailable(String),
 }
@@ -148,7 +148,6 @@ fn run_historical_test_in_cache(
                 raw_preparation,
                 None,
                 runtime_identity,
-                allow_network,
             );
         }
     }
@@ -172,7 +171,6 @@ fn run_historical_test_in_cache(
         raw_preparation,
         Some(executed.raw),
         runtime_identity,
-        allow_network,
     )
 }
 
@@ -318,10 +316,27 @@ fn completed_execution(
     raw_preparation: Vec<RawStepArtifact>,
     raw_test: Option<RawStepArtifact>,
     runtime_identity: Option<String>,
-    network_enabled: bool,
 ) -> Result<HistoricalTestExecutionOutcome, String> {
     let runtime_identity = runtime_identity
         .ok_or_else(|| "historical execution produced no runtime identity".to_string())?;
+    let representative = raw_test
+        .as_ref()
+        .or_else(|| raw_preparation.last())
+        .ok_or_else(|| "historical execution produced no process result".to_string())?;
+    let network_enabled = representative.network_enabled;
+    if raw_preparation
+        .iter()
+        .chain(raw_test.iter())
+        .any(|step| step.network_enabled != network_enabled)
+    {
+        return Err("historical execution changed network policy between steps".to_string());
+    }
+    let status_code = raw_test.as_ref().and_then(|step| step.status_code);
+    let timed_out = representative.timed_out;
+    let stdout_sha256 = representative.stdout_complete_sha256.clone();
+    let stderr_sha256 = representative.stderr_complete_sha256.clone();
+    let bounded_sanitized_stdout = representative.stdout_bounded_sanitized.clone();
+    let bounded_sanitized_stderr = representative.stderr_bounded_sanitized.clone();
     let artifact = RawExecutionArtifact {
         schema_version: RAW_RESULT_SCHEMA_VERSION,
         revision: revision.to_string(),
@@ -334,31 +349,27 @@ fn completed_execution(
         .map_err(|error| format!("failed to serialize historical test result: {error}"))?;
     raw_result.push(b'\n');
     let aggregate_sha256 = sha256(&raw_result);
-    let representative = raw_test
-        .as_ref()
-        .or_else(|| artifact.preparation.last())
-        .ok_or_else(|| "historical execution produced no process result".to_string())?;
     let result = HistoricalTestResult {
         revision: revision.to_string(),
         preparation_results,
         command: test_command.to_vec(),
         test_executed,
         runtime_identity,
-        status_code: raw_test.as_ref().and_then(|step| step.status_code),
-        timed_out: representative.timed_out,
+        status_code,
+        timed_out,
         network_enabled,
-        stdout_sha256: representative.stdout_complete_sha256.clone(),
-        stderr_sha256: representative.stderr_complete_sha256.clone(),
+        stdout_sha256,
+        stderr_sha256,
         raw_result_sha256: aggregate_sha256,
     };
-    Ok(HistoricalTestExecutionOutcome::Completed(
+    Ok(HistoricalTestExecutionOutcome::Completed(Box::new(
         HistoricalTestExecution {
             result,
             raw_result,
-            bounded_sanitized_stdout: representative.stdout_bounded_sanitized.clone(),
-            bounded_sanitized_stderr: representative.stderr_bounded_sanitized.clone(),
+            bounded_sanitized_stdout,
+            bounded_sanitized_stderr,
         },
-    ))
+    )))
 }
 
 fn step_result(

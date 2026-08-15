@@ -115,6 +115,16 @@ pub use intentional_boundary_project_model_schema::*;
 #[path = "benchmark_intentional_boundary_runtime_snapshot.rs"]
 mod intentional_boundary_runtime_snapshot;
 
+#[path = "benchmark_intentional_boundary_behavior_schema.rs"]
+mod intentional_boundary_behavior_schema;
+
+pub use intentional_boundary_behavior_schema::*;
+
+#[path = "benchmark_intentional_boundary_behavior.rs"]
+mod intentional_boundary_behavior;
+
+pub use intentional_boundary_behavior::*;
+
 #[path = "benchmark_intentional_boundary_project_model_cargo.rs"]
 mod intentional_boundary_project_model_cargo;
 
