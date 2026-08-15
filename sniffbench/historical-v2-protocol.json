@@ -2,7 +2,7 @@
   "schema_version": 1,
   "protocol_id": "sniffbench-historical-v2-protocol-v1",
   "prepared_at": "2026-08-16T00:00:00Z",
-  "precommit_parent_revision": "596549c57f8acaf926a6f0859fcf7e8786b96960",
+  "precommit_parent_revision": "3fdd5f8f0ec5b64f7c16c997f2492acd75275952",
   "no_fallbacks": true,
   "dataset": {
     "dataset_id": "nebius/SWE-rebench-V2-PRs",
@@ -63,7 +63,7 @@
     "slots_per_language": 128,
     "total_slots": 768,
     "ranking_contract": "sha256(sniffbench-historical-v2-rank-v1\\0 || ranking_seed || \\0 || canonical_repository || \\0 || pull_number || \\0 || base_revision || \\0 || patch_sha256), ascending digest then canonical identity",
-    "ranking_seed": "596549c57f8acaf926a6f0859fcf7e8786b96960",
+    "ranking_seed": "3fdd5f8f0ec5b64f7c16c997f2492acd75275952",
     "language_derived_from_patch_and_git_objects": true,
     "changed_methods_derived_from_compiler_census": true,
     "net_non_whitespace_production_reduction_required": true,
