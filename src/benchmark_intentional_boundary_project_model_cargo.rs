@@ -1,22 +1,25 @@
+#[cfg(test)]
+use super::intentional_boundary_project_model::validate_intentional_boundary_project_model_census_commitment;
+use super::intentional_boundary_project_model::{
+    compute_execution_id, compute_normalized_model_sha256, compute_target_id,
+    finish_project_model_census, is_sha256, regular_inventory_entry,
+};
 use super::{
-    BoundaryGitEntryKind, INTENTIONAL_BOUNDARY_PROJECT_MODEL_CENSUS_SCHEMA_VERSION,
-    IntentionalBoundaryManifestDeclarationKind, IntentionalBoundaryManifestTarget,
-    IntentionalBoundaryProjectModelCensus, IntentionalBoundaryProjectModelExecution,
+    BoundaryGitEntryKind, IntentionalBoundaryManifestDeclarationKind,
+    IntentionalBoundaryManifestTarget, IntentionalBoundaryProjectModelCensus,
+    IntentionalBoundaryProjectModelExecution,
     IntentionalBoundaryProjectModelNonBoundaryReason as NonBoundaryReason,
     IntentionalBoundaryProjectModelProvider as Provider, IntentionalBoundaryProjectModelTarget,
     IntentionalBoundaryProjectModelTargetStatus as TargetStatus,
     IntentionalBoundaryProjectModelUnresolvedReason as UnresolvedReason,
-    IntentionalBoundaryRepositoryInventory, IntentionalBoundaryTrackedEntry,
-    validate_intentional_boundary_repository_inventory,
+    IntentionalBoundaryRepositoryInventory, validate_intentional_boundary_repository_inventory,
 };
 use serde::Deserialize;
-use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
-const PROJECT_MODEL_CONTRACT: &str = "sniffbench-intentional-boundary-project-model-v1";
-const CARGO_COMMAND_CONTRACT: &str = "cargo-metadata-format-v1-no-deps-offline-v1";
+pub(super) const CARGO_COMMAND_CONTRACT: &str = "cargo-metadata-format-v1-no-deps-offline-v1";
 
 #[path = "benchmark_intentional_boundary_project_model_cargo_runtime.rs"]
 mod runtime;
@@ -26,10 +29,7 @@ use runtime::{CargoMetadataExecutionOutput, census_cargo_project_models_with_exe
 
 #[path = "benchmark_intentional_boundary_project_model_cargo_validation.rs"]
 mod validation;
-pub use validation::{
-    validate_intentional_boundary_cargo_metadata,
-    validate_intentional_boundary_project_model_census_commitment,
-};
+pub use validation::validate_intentional_boundary_cargo_metadata;
 
 #[derive(Deserialize)]
 struct CargoMetadata {
@@ -66,20 +66,6 @@ struct CargoPackageContext<'a> {
     manifest_object_id: &'a str,
     package_name: &'a str,
     package_version: &'a str,
-}
-
-#[derive(serde::Serialize)]
-struct NormalizedCargoTarget<'a> {
-    manifest_repository_path: &'a str,
-    manifest_object_id: &'a str,
-    package_name: &'a str,
-    package_version: &'a str,
-    target_name: &'a str,
-    provider_kinds: &'a [String],
-    provider_crate_types: &'a [String],
-    source_repository_path: &'a Option<String>,
-    required_features: &'a [String],
-    target_status: &'a TargetStatus,
 }
 
 pub fn parse_intentional_boundary_cargo_metadata(
@@ -171,7 +157,8 @@ pub fn parse_intentional_boundary_cargo_metadata(
     covered_manifests.insert(invocation_manifest_repository_path.to_string());
     targets.sort();
 
-    let normalized_model_sha256 = compute_normalized_cargo_model_sha256(
+    let normalized_model_sha256 = compute_normalized_model_sha256(
+        Provider::CargoMetadata,
         &covered_manifests.iter().cloned().collect::<Vec<_>>(),
         &targets,
     )?;
@@ -202,7 +189,7 @@ pub fn parse_intentional_boundary_cargo_metadata(
         covered_manifest_repository_paths: covered_manifests.into_iter().collect(),
         target_count: targets.len(),
     };
-    finish_census(inventory, vec![execution], targets)
+    finish_project_model_census(inventory, vec![execution], targets)
 }
 
 fn normalize_target(
@@ -212,9 +199,9 @@ fn normalize_target(
     let mut provider_kinds = target.kind;
     provider_kinds.sort();
     provider_kinds.dedup();
-    let mut provider_crate_types = target.crate_types;
-    provider_crate_types.sort();
-    provider_crate_types.dedup();
+    let mut provider_output_types = target.crate_types;
+    provider_output_types.sort();
+    provider_output_types.dedup();
     let mut required_features = target.required_features;
     required_features.sort();
     required_features.dedup();
@@ -223,7 +210,7 @@ fn normalize_target(
         context.emitted_repository_root,
         &target.src_path,
     );
-    let source_repository_path = source_path.as_ref().ok().cloned();
+    let source_repository_paths = source_path.as_ref().ok().cloned().into_iter().collect();
     let target_status = classify_target(
         context.inventory,
         &provider_kinds,
@@ -239,8 +226,8 @@ fn normalize_target(
         package_version: context.package_version.to_string(),
         target_name: target.name,
         provider_kinds,
-        provider_crate_types,
-        source_repository_path,
+        provider_output_types,
+        source_repository_paths,
         required_features,
         target_status,
     })
@@ -321,6 +308,20 @@ fn classify_target(
     }
 }
 
+pub(super) fn validate_cargo_target_classification(
+    inventory: &IntentionalBoundaryRepositoryInventory,
+    target: &IntentionalBoundaryProjectModelTarget,
+) -> bool {
+    target.provider == Provider::CargoMetadata
+        && target.source_repository_paths.len() <= 1
+        && target.target_status
+            == classify_target(
+                inventory,
+                &target.provider_kinds,
+                target.source_repository_paths.first().map(String::as_str),
+            )
+}
+
 fn boundary(
     declaration_kind: IntentionalBoundaryManifestDeclarationKind,
     repository_path: &str,
@@ -335,22 +336,6 @@ fn boundary(
 
 fn unresolved(reason: UnresolvedReason, detail: String) -> TargetStatus {
     TargetStatus::Unresolved { reason, detail }
-}
-
-fn regular_inventory_entry<'a>(
-    inventory: &'a IntentionalBoundaryRepositoryInventory,
-    repository_path: &str,
-    label: &str,
-) -> Result<&'a IntentionalBoundaryTrackedEntry, String> {
-    let entry = inventory
-        .tracked_entries
-        .iter()
-        .find(|entry| entry.repository_path == repository_path)
-        .ok_or_else(|| format!("{label} is absent from the immutable Git inventory"))?;
-    if entry.kind != BoundaryGitEntryKind::RegularBlob {
-        return Err(format!("{label} is not a regular Git blob"));
-    }
-    Ok(entry)
 }
 
 fn emitted_repository_root(
@@ -442,179 +427,6 @@ fn strip_windows_verbatim_prefix(path: PathBuf) -> PathBuf {
     {
         path
     }
-}
-
-fn normalized_target(target: &IntentionalBoundaryProjectModelTarget) -> NormalizedCargoTarget<'_> {
-    NormalizedCargoTarget {
-        manifest_repository_path: &target.manifest_repository_path,
-        manifest_object_id: &target.manifest_object_id,
-        package_name: &target.package_name,
-        package_version: &target.package_version,
-        target_name: &target.target_name,
-        provider_kinds: &target.provider_kinds,
-        provider_crate_types: &target.provider_crate_types,
-        source_repository_path: &target.source_repository_path,
-        required_features: &target.required_features,
-        target_status: &target.target_status,
-    }
-}
-
-fn compute_normalized_cargo_model_sha256(
-    covered_manifest_repository_paths: &[String],
-    targets: &[IntentionalBoundaryProjectModelTarget],
-) -> Result<String, String> {
-    let mut normalized_targets = targets
-        .iter()
-        .map(|target| {
-            serde_json::to_vec(&normalized_target(target))
-                .map_err(|error| format!("failed to normalize Cargo target facts: {error}"))
-        })
-        .collect::<Result<Vec<_>, String>>()?;
-    normalized_targets.sort();
-    hash_json(&(
-        "sniffbench-intentional-boundary-cargo-normalized-model-v1",
-        covered_manifest_repository_paths,
-        normalized_targets,
-    ))
-}
-
-fn compute_execution_id(
-    provider: Provider,
-    invocation_anchor_repository_path: &str,
-    invocation_anchor_object_id: &str,
-    toolchain_identity_sha256: &str,
-    command_contract: &str,
-    normalized_model_sha256: &str,
-) -> Result<String, String> {
-    Ok(format!(
-        "ibpme-v1:{}",
-        hash_json(&(
-            "sniffbench-intentional-boundary-project-model-execution-v1",
-            provider,
-            invocation_anchor_repository_path,
-            invocation_anchor_object_id,
-            toolchain_identity_sha256,
-            command_contract,
-            normalized_model_sha256,
-        ))?
-    ))
-}
-
-fn compute_target_id(target: &IntentionalBoundaryProjectModelTarget) -> Result<String, String> {
-    Ok(format!(
-        "ibpmt-v1:{}",
-        hash_json(&(
-            "sniffbench-intentional-boundary-project-model-target-v1",
-            &target.execution_id,
-            normalized_target(target),
-        ))?
-    ))
-}
-
-fn finish_census(
-    inventory: &IntentionalBoundaryRepositoryInventory,
-    mut executions: Vec<IntentionalBoundaryProjectModelExecution>,
-    mut targets: Vec<IntentionalBoundaryProjectModelTarget>,
-) -> Result<IntentionalBoundaryProjectModelCensus, String> {
-    executions.sort();
-    targets.sort();
-    if executions.windows(2).any(|pair| pair[0] >= pair[1])
-        || targets.windows(2).any(|pair| pair[0] >= pair[1])
-    {
-        return Err("project-model census contains duplicate records".to_string());
-    }
-    let execution_ids = executions
-        .iter()
-        .map(|execution| execution.execution_id.as_str())
-        .collect::<BTreeSet<_>>();
-    if targets
-        .iter()
-        .any(|target| !execution_ids.contains(target.execution_id.as_str()))
-        || executions.iter().any(|execution| {
-            execution.target_count
-                != targets
-                    .iter()
-                    .filter(|target| target.execution_id == execution.execution_id)
-                    .count()
-        })
-    {
-        return Err("project-model target execution commitment changed".to_string());
-    }
-    let execution_count_by_provider =
-        executions
-            .iter()
-            .fold(BTreeMap::new(), |mut counts, execution| {
-                *counts.entry(execution.provider).or_insert(0) += 1;
-                counts
-            });
-    let target_count_by_status = target_status_counts(&targets);
-    let mut census = IntentionalBoundaryProjectModelCensus {
-        schema_version: INTENTIONAL_BOUNDARY_PROJECT_MODEL_CENSUS_SCHEMA_VERSION,
-        project_model_contract: PROJECT_MODEL_CONTRACT.to_string(),
-        repository: inventory.repository.clone(),
-        revision: inventory.revision.clone(),
-        inventory_sha256: inventory.inventory_sha256.clone(),
-        executions,
-        targets,
-        execution_count_by_provider,
-        target_count_by_status,
-        project_model_census_sha256: String::new(),
-    };
-    census.project_model_census_sha256 = compute_project_model_census_sha256(&census)?;
-    Ok(census)
-}
-
-fn target_status_counts(
-    targets: &[IntentionalBoundaryProjectModelTarget],
-) -> BTreeMap<String, usize> {
-    targets.iter().fold(BTreeMap::new(), |mut counts, target| {
-        let status = match target.target_status {
-            TargetStatus::Boundary { .. } => "boundary",
-            TargetStatus::NonBoundary { .. } => "non_boundary",
-            TargetStatus::Unresolved { .. } => "unresolved",
-        };
-        *counts.entry(status.to_string()).or_insert(0) += 1;
-        counts
-    })
-}
-
-fn compute_project_model_census_sha256(
-    census: &IntentionalBoundaryProjectModelCensus,
-) -> Result<String, String> {
-    hash_json(&(
-        census.schema_version,
-        &census.project_model_contract,
-        &census.repository,
-        &census.revision,
-        &census.inventory_sha256,
-        &census.executions,
-        &census.targets,
-        &census.execution_count_by_provider,
-        &census.target_count_by_status,
-    ))
-}
-
-fn sorted_unique(values: &[String]) -> bool {
-    values.windows(2).all(|pair| pair[0] < pair[1])
-}
-
-fn is_safe_repository_path(path: &str) -> bool {
-    !path.is_empty()
-        && !path.contains('\\')
-        && !path.contains('\0')
-        && Path::new(path)
-            .components()
-            .all(|component| matches!(component, Component::Normal(_)))
-}
-
-fn hash_json(value: &impl serde::Serialize) -> Result<String, String> {
-    let bytes = serde_json::to_vec(value)
-        .map_err(|error| format!("failed to commit project-model facts: {error}"))?;
-    Ok(format!("{:x}", Sha256::digest(bytes)))
-}
-
-fn is_sha256(value: &str) -> bool {
-    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 #[cfg(test)]

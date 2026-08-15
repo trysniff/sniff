@@ -2,7 +2,7 @@ use super::IntentionalBoundarySemanticRange;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-pub const INTENTIONAL_BOUNDARY_MANIFEST_CENSUS_SCHEMA_VERSION: u32 = 1;
+pub const INTENTIONAL_BOUNDARY_MANIFEST_CENSUS_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -27,6 +27,9 @@ pub enum IntentionalBoundaryManifestDeclarationKind {
 pub enum IntentionalBoundaryManifestTarget {
     RepositoryPath {
         repository_path: String,
+    },
+    RepositoryPaths {
+        repository_paths: Vec<String>,
     },
     PythonObject {
         module: Vec<String>,

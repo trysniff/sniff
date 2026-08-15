@@ -15,7 +15,7 @@ use super::{
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
-const BINDING_CONTRACT: &str = "sniffbench-intentional-boundary-manifest-bindings-v1";
+const BINDING_CONTRACT: &str = "sniffbench-intentional-boundary-manifest-bindings-v2";
 
 pub fn bind_intentional_boundary_manifests(
     source_census: &IntentionalBoundarySourceCensus,
@@ -76,6 +76,14 @@ fn bind_declaration(
                 repository_path,
             )
         }
+        IntentionalBoundaryManifestTarget::RepositoryPaths { repository_paths } => {
+            bind_repository_paths(
+                source_census,
+                semantic_methods,
+                declaration,
+                repository_paths,
+            )
+        }
         IntentionalBoundaryManifestTarget::PythonObject { module, qualname } => bind_python_object(
             source_census,
             semantic_methods,
@@ -92,21 +100,39 @@ fn bind_repository_path(
     declaration: &IntentionalBoundaryManifestDeclaration,
     repository_path: &str,
 ) -> Result<Outcome, String> {
-    let Some(file) = source_census
-        .source_files
-        .iter()
-        .find(|file| file.repository_path == repository_path)
-    else {
-        return Ok(unresolved(
-            UnresolvedReason::TargetNotInSourceCensus,
-            format!("manifest target is not a supported source file: {repository_path}"),
-        ));
-    };
+    bind_repository_paths(
+        source_census,
+        semantic_methods,
+        declaration,
+        &[repository_path.to_string()],
+    )
+}
+
+fn bind_repository_paths(
+    source_census: &IntentionalBoundarySourceCensus,
+    semantic_methods: &BTreeMap<&str, &IntentionalBoundarySemanticMethod>,
+    declaration: &IntentionalBoundaryManifestDeclaration,
+    repository_paths: &[String],
+) -> Result<Outcome, String> {
+    let mut files = Vec::with_capacity(repository_paths.len());
+    for repository_path in repository_paths {
+        let Some(file) = source_census
+            .source_files
+            .iter()
+            .find(|file| file.repository_path == *repository_path)
+        else {
+            return Ok(unresolved(
+                UnresolvedReason::TargetNotInSourceCensus,
+                format!("manifest target is not a supported source file: {repository_path}"),
+            ));
+        };
+        files.push(file);
+    }
     match declaration.declaration_kind {
         IntentionalBoundaryManifestDeclarationKind::PublishedModule => {
-            let methods = file
-                .methods
+            let methods = files
                 .iter()
+                .flat_map(|file| file.methods.iter())
                 .filter(|method| method.is_exported)
                 .collect::<Vec<_>>();
             if methods.is_empty() {
@@ -118,11 +144,11 @@ fn bind_repository_path(
         }
         IntentionalBoundaryManifestDeclarationKind::RuntimeEntrypoint
             if declaration.provider == IntentionalBoundaryManifestProvider::CargoManifest
-                && file.language == "rust" =>
+                && files.iter().all(|file| file.language == "rust") =>
         {
-            let methods = file
-                .methods
+            let methods = files
                 .iter()
+                .flat_map(|file| file.methods.iter())
                 .filter(|method| method.symbol_name == "main")
                 .collect::<Vec<_>>();
             match methods.as_slice() {
@@ -132,7 +158,7 @@ fn bind_repository_path(
                 [_] => bind_methods(semantic_methods, &methods),
                 _ => Ok(unresolved(
                     UnresolvedReason::AmbiguousSourceTarget,
-                    format!("Cargo binary target has repeated main methods: {repository_path}"),
+                    "Cargo binary target has repeated main methods".to_string(),
                 )),
             }
         }

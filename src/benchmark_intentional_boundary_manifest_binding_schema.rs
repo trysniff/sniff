@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-pub const INTENTIONAL_BOUNDARY_MANIFEST_BINDING_CENSUS_SCHEMA_VERSION: u32 = 1;
+pub const INTENTIONAL_BOUNDARY_MANIFEST_BINDING_CENSUS_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

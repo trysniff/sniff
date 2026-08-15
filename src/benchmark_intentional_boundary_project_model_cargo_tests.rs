@@ -255,13 +255,10 @@ fn normalizes_every_cargo_target_to_a_typed_outcome() {
     assert_eq!(census.target_count_by_status.get("non_boundary"), Some(&1));
     assert_eq!(census.target_count_by_status.get("unresolved"), Some(&1));
     assert!(census.targets.iter().all(|target| {
-        target.target_id.starts_with("ibpmt-v1:")
-            && target
-                .source_repository_path
-                .as_deref()
-                .is_some_and(|path| {
-                    !path.contains(root.path().to_string_lossy().as_ref()) && !path.contains('\\')
-                })
+        target.target_id.starts_with("ibpmt-v2:")
+            && target.source_repository_paths.first().is_some_and(|path| {
+                !path.contains(root.path().to_string_lossy().as_ref()) && !path.contains('\\')
+            })
     }));
     assert!(census.targets.iter().any(|target| matches!(
         target.target_status,
@@ -417,7 +414,9 @@ fn replay_validation_rejects_project_model_tampering() {
         validate_intentional_boundary_project_model_census_commitment(&inventory, &census)
             .unwrap_err();
     assert!(
-        commitment_error.contains("commitment") || commitment_error.contains("ordering"),
+        commitment_error.contains("commitment")
+            || commitment_error.contains("identity")
+            || commitment_error.contains("ordering"),
         "unexpected commitment error: {commitment_error}"
     );
 }
