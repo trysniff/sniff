@@ -998,7 +998,7 @@ fn build_macos_sandbox_command(spec: &SandboxCommand) -> Result<Command, Sandbox
     } else if spec.allow_local_network {
         // Seatbelt evaluates listen(2) as wildcard inbound even when the socket is
         // bound to loopback. Outbound traffic remains restricted to loopback.
-        "(allow network-bind (local ip \"*:*\"))\n(allow network-inbound (local ip \"*:*\"))\n(allow network* (remote ip \"localhost:*\"))\n(allow network* (remote unix-socket))\n"
+        "(allow network-bind (local ip \"*:*\"))\n(allow network-inbound (local ip \"*:*\"))\n(allow network-outbound (remote tcp \"localhost:*\"))\n(allow network* (remote unix-socket))\n"
     } else {
         "(deny network*)\n"
     };
@@ -1195,16 +1195,32 @@ mod tests {
     #[test]
     fn macos_local_network_policy_allows_loopback_and_denies_external_outbound() {
         const CHILD_ENV: &str = "SNIFF_MACOS_LOCAL_NETWORK_POLICY_CHILD";
+        const CONNECT_ENV: &str = "SNIFF_MACOS_LOCAL_NETWORK_POLICY_CONNECT";
+        if let Some(address) = std::env::var_os(CONNECT_ENV) {
+            std::net::TcpStream::connect(address.to_string_lossy().as_ref())
+                .expect("sandboxed child should connect to the loopback listener");
+            return;
+        }
         if std::env::var_os(CHILD_ENV).is_some() {
             let listener = std::net::TcpListener::bind(("127.0.0.1", 0))
                 .expect("sandbox should allow a loopback listener");
             let address = listener.local_addr().expect("read loopback address");
-            let connector = std::thread::spawn(move || {
-                std::net::TcpStream::connect(address)
-                    .expect("sandbox should allow a loopback connection")
-            });
+            let executable = std::env::current_exe().expect("locate test executable");
+            let mut connector = std::process::Command::new(executable)
+                .arg("sandbox::tests::macos_local_network_policy_allows_loopback_and_denies_external_outbound")
+                .arg("--exact")
+                .arg("--nocapture")
+                .env(CONNECT_ENV, address.to_string())
+                .spawn()
+                .expect("start sandboxed loopback connector process");
             let _accepted = listener.accept().expect("accept loopback connection");
-            connector.join().expect("join loopback connector");
+            assert!(
+                connector
+                    .wait()
+                    .expect("wait for sandboxed loopback connector")
+                    .success(),
+                "sandboxed loopback connector failed"
+            );
 
             let external = std::net::SocketAddr::from(([192, 0, 2, 1], 9));
             let error = std::net::TcpStream::connect_timeout(
