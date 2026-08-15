@@ -17,6 +17,8 @@ const GIT_OUTPUT_LIMIT: usize = 1024 * 1024;
 pub struct HistoricalTestExecution {
     pub result: HistoricalTestResult,
     pub raw_result: Vec<u8>,
+    pub bounded_sanitized_stdout: String,
+    pub bounded_sanitized_stderr: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -56,12 +58,49 @@ pub fn run_historical_test(
     preparation_commands: &[Vec<String>],
     test_command: &[String],
 ) -> Result<HistoricalTestExecutionOutcome, String> {
+    run_test_with_network_policy(
+        snapshot_root,
+        revision,
+        preparation_commands,
+        test_command,
+        true,
+    )
+}
+
+pub fn run_intentional_boundary_test(
+    snapshot_root: &Path,
+    revision: &str,
+    preparation_commands: &[Vec<String>],
+    test_command: &[String],
+) -> Result<HistoricalTestExecutionOutcome, String> {
+    run_test_with_network_policy(
+        snapshot_root,
+        revision,
+        preparation_commands,
+        test_command,
+        false,
+    )
+}
+
+fn run_test_with_network_policy(
+    snapshot_root: &Path,
+    revision: &str,
+    preparation_commands: &[Vec<String>],
+    test_command: &[String],
+    allow_network: bool,
+) -> Result<HistoricalTestExecutionOutcome, String> {
     require_revision(revision)?;
     let root = canonical_directory(snapshot_root, "historical test snapshot")?;
     verify_snapshot(&root, revision)?;
     let cache = initialize_private_cache(&root)?;
-    let execution =
-        run_historical_test_in_cache(&root, &cache, revision, preparation_commands, test_command);
+    let execution = run_historical_test_in_cache(
+        &root,
+        &cache,
+        revision,
+        preparation_commands,
+        test_command,
+        allow_network,
+    );
     let integrity = verify_tracked_snapshot(&root, revision);
     match (execution, integrity) {
         (Ok(execution), Ok(())) => Ok(execution),
@@ -78,6 +117,7 @@ fn run_historical_test_in_cache(
     revision: &str,
     preparation_commands: &[Vec<String>],
     test_command: &[String],
+    allow_network: bool,
 ) -> Result<HistoricalTestExecutionOutcome, String> {
     let mut raw_preparation = Vec::new();
     let mut preparation_results = Vec::new();
@@ -85,7 +125,7 @@ fn run_historical_test_in_cache(
 
     for (index, command) in preparation_commands.iter().enumerate() {
         let stage = format!("preparation_{}", index + 1);
-        let executed = match execute_step(root, cache, command, &stage) {
+        let executed = match execute_step(root, cache, command, &stage, allow_network) {
             Ok(executed) => executed,
             Err(StepError::RuntimeUnavailable(reason)) if raw_preparation.is_empty() => {
                 return Ok(HistoricalTestExecutionOutcome::RuntimeUnavailable(reason));
@@ -108,11 +148,12 @@ fn run_historical_test_in_cache(
                 raw_preparation,
                 None,
                 runtime_identity,
+                allow_network,
             );
         }
     }
 
-    let executed = match execute_step(root, cache, test_command, "test") {
+    let executed = match execute_step(root, cache, test_command, "test", allow_network) {
         Ok(executed) => executed,
         Err(StepError::RuntimeUnavailable(reason)) if raw_preparation.is_empty() => {
             return Ok(HistoricalTestExecutionOutcome::RuntimeUnavailable(reason));
@@ -131,6 +172,7 @@ fn run_historical_test_in_cache(
         raw_preparation,
         Some(executed.raw),
         runtime_identity,
+        allow_network,
     )
 }
 
@@ -162,14 +204,20 @@ fn execute_step(
     cache: &Path,
     logical_command: &[String],
     stage: &str,
+    allow_network: bool,
 ) -> Result<ExecutedStep, StepError> {
-    let plan =
+    let mut plan =
         prepare_historical_runtime(root, cache, logical_command).map_err(|error| match error {
             HistoricalRuntimePlanError::Unavailable(message) => {
                 StepError::RuntimeUnavailable(message)
             }
             HistoricalRuntimePlanError::Invalid(message) => StepError::Invalid(message),
         })?;
+    plan.command.allow_network = allow_network;
+    #[cfg(target_os = "macos")]
+    if !allow_network {
+        plan.command.allow_local_network = false;
+    }
     #[cfg(windows)]
     if logical_command
         .first()
@@ -180,7 +228,14 @@ fn execute_step(
     let output = crate::sandbox::run(&plan.command).map_err(map_sandbox_error)?;
     Ok(ExecutedStep {
         runtime_identity: plan.runtime_identity,
-        raw: raw_step(root, stage, logical_command, plan.launcher_kind, output),
+        raw: raw_step(
+            root,
+            stage,
+            logical_command,
+            plan.launcher_kind,
+            allow_network,
+            output,
+        ),
     })
 }
 
@@ -263,6 +318,7 @@ fn completed_execution(
     raw_preparation: Vec<RawStepArtifact>,
     raw_test: Option<RawStepArtifact>,
     runtime_identity: Option<String>,
+    network_enabled: bool,
 ) -> Result<HistoricalTestExecutionOutcome, String> {
     let runtime_identity = runtime_identity
         .ok_or_else(|| "historical execution produced no runtime identity".to_string())?;
@@ -270,7 +326,7 @@ fn completed_execution(
         schema_version: RAW_RESULT_SCHEMA_VERSION,
         revision: revision.to_string(),
         runtime_identity: runtime_identity.clone(),
-        network_enabled: true,
+        network_enabled,
         preparation: raw_preparation,
         test: raw_test.clone(),
     };
@@ -290,13 +346,18 @@ fn completed_execution(
         runtime_identity,
         status_code: raw_test.as_ref().and_then(|step| step.status_code),
         timed_out: representative.timed_out,
-        network_enabled: true,
+        network_enabled,
         stdout_sha256: representative.stdout_complete_sha256.clone(),
         stderr_sha256: representative.stderr_complete_sha256.clone(),
         raw_result_sha256: aggregate_sha256,
     };
     Ok(HistoricalTestExecutionOutcome::Completed(
-        HistoricalTestExecution { result, raw_result },
+        HistoricalTestExecution {
+            result,
+            raw_result,
+            bounded_sanitized_stdout: representative.stdout_bounded_sanitized.clone(),
+            bounded_sanitized_stderr: representative.stderr_bounded_sanitized.clone(),
+        },
     ))
 }
 
@@ -323,6 +384,7 @@ fn raw_step(
     stage: &str,
     command: &[String],
     launcher_kind: &str,
+    network_enabled: bool,
     output: SandboxOutput,
 ) -> RawStepArtifact {
     RawStepArtifact {
@@ -331,7 +393,7 @@ fn raw_step(
         launcher_kind: launcher_kind.to_string(),
         status_code: output.status_code,
         timed_out: output.timed_out,
-        network_enabled: true,
+        network_enabled,
         stdout_complete_sha256: output.stdout_sha256,
         stderr_complete_sha256: output.stderr_sha256,
         stdout_bounded_sanitized: sanitize_output(root, &output.stdout),
@@ -544,6 +606,7 @@ mod tests {
             "test",
             &["tool".to_string()],
             "direct",
+            false,
             SandboxOutput {
                 status_code: Some(0),
                 stdout: "visible".to_string(),
@@ -557,6 +620,7 @@ mod tests {
 
         assert_eq!(result.stdout_sha256, "a".repeat(64));
         assert_eq!(result.stderr_sha256, "b".repeat(64));
+        assert!(!result.network_enabled);
         assert_eq!(result.raw_result_sha256.len(), 64);
     }
 
@@ -600,6 +664,7 @@ mod tests {
 
         assert!(execution.result.test_executed);
         assert_eq!(execution.result.status_code, Some(0));
+        assert!(execution.result.network_enabled);
         assert_eq!(execution.result.command, command);
         assert_eq!(
             execution.result.raw_result_sha256,
