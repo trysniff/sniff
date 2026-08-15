@@ -190,6 +190,16 @@ mod intentional_boundary_slots;
 
 pub use intentional_boundary_slots::*;
 
+#[path = "benchmark_intentional_boundary_source_bundle_schema.rs"]
+mod intentional_boundary_source_bundle_schema;
+
+pub use intentional_boundary_source_bundle_schema::*;
+
+#[path = "benchmark_intentional_boundary_source_bundle.rs"]
+mod intentional_boundary_source_bundle;
+
+pub use intentional_boundary_source_bundle::*;
+
 #[path = "benchmark_intentional_boundary_manifest_schema.rs"]
 mod intentional_boundary_manifest_schema;
 
