@@ -348,6 +348,7 @@ fn records_an_untracked_cargo_source_as_unresolved() {
             ..
         }
     )));
+    validate_intentional_boundary_project_model_census_commitment(&inventory, &census).unwrap();
 }
 
 #[test]
