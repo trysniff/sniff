@@ -407,4 +407,4 @@ fn sha256(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 #[path = "benchmark_intentional_boundary_label_review_tests.rs"]
-mod tests;
+pub(super) mod tests;
