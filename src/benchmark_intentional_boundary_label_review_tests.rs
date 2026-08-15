@@ -8,11 +8,11 @@ const BLIND_SEAL: &[u8] = include_bytes!("../sniffbench/blind-oss-v1-source-seal
 const PROTOCOL: &[u8] =
     include_bytes!("../sniffbench/non-blind-v1-intentional-boundary-protocol.json");
 
-fn protocol() -> ValidatedIntentionalBoundaryProtocol {
+pub(crate) fn protocol() -> ValidatedIntentionalBoundaryProtocol {
     validate_intentional_boundary_protocol(POLICY, POPULATION, BLIND_SEAL, PROTOCOL).unwrap()
 }
 
-fn source_bundle() -> (TempDir, IntentionalBoundarySourceBundle) {
+pub(crate) fn source_bundle() -> (TempDir, IntentionalBoundarySourceBundle) {
     let protocol = protocol();
     let root = tempfile::tempdir().unwrap();
     let artifact_path =
@@ -87,7 +87,7 @@ fn source_bundle() -> (TempDir, IntentionalBoundarySourceBundle) {
     (root, bundle)
 }
 
-fn completed(
+pub(crate) fn completed(
     root: &Path,
     bundle: &IntentionalBoundarySourceBundle,
     reviewer_id: &str,

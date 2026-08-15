@@ -210,6 +210,16 @@ mod intentional_boundary_label_review;
 
 pub use intentional_boundary_label_review::*;
 
+#[path = "benchmark_intentional_boundary_label_resolution_schema.rs"]
+mod intentional_boundary_label_resolution_schema;
+
+pub use intentional_boundary_label_resolution_schema::*;
+
+#[path = "benchmark_intentional_boundary_label_resolution.rs"]
+mod intentional_boundary_label_resolution;
+
+pub use intentional_boundary_label_resolution::*;
+
 #[path = "benchmark_intentional_boundary_manifest_schema.rs"]
 mod intentional_boundary_manifest_schema;
 
