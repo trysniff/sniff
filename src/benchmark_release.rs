@@ -200,6 +200,16 @@ mod intentional_boundary_source_bundle;
 
 pub use intentional_boundary_source_bundle::*;
 
+#[path = "benchmark_intentional_boundary_label_schema.rs"]
+mod intentional_boundary_label_schema;
+
+pub use intentional_boundary_label_schema::*;
+
+#[path = "benchmark_intentional_boundary_label_review.rs"]
+mod intentional_boundary_label_review;
+
+pub use intentional_boundary_label_review::*;
+
 #[path = "benchmark_intentional_boundary_manifest_schema.rs"]
 mod intentional_boundary_manifest_schema;
 
