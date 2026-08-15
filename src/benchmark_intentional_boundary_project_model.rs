@@ -246,7 +246,6 @@ pub fn validate_intentional_boundary_project_model_census_commitment(
                 .source_repository_paths
                 .iter()
                 .any(|path| !is_safe_repository_path(path))
-            || !target_source_entries_are_regular(inventory, target)
             || !validate_target_classification(inventory, target)
             || compute_target_id(target)? != target.target_id
         {
@@ -278,17 +277,6 @@ fn validate_target_classification(
         Provider::CargoMetadata => validate_cargo_target_classification(inventory, target),
         Provider::GoList | Provider::GradleToolingApi => false,
     }
-}
-
-fn target_source_entries_are_regular(
-    inventory: &IntentionalBoundaryRepositoryInventory,
-    target: &IntentionalBoundaryProjectModelTarget,
-) -> bool {
-    target.source_repository_paths.iter().all(|path| {
-        inventory.tracked_entries.iter().any(|entry| {
-            entry.repository_path == *path && entry.kind == BoundaryGitEntryKind::RegularBlob
-        })
-    })
 }
 
 fn normalized_target(target: &IntentionalBoundaryProjectModelTarget) -> NormalizedTarget<'_> {
