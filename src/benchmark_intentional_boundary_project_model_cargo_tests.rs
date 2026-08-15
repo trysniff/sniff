@@ -1,4 +1,5 @@
 use super::*;
+use std::cell::Cell;
 use std::fs;
 use std::process::Command;
 use tempfile::TempDir;
@@ -73,6 +74,7 @@ fn metadata(root: &Path) -> Vec<u8> {
     };
     serde_json::to_vec(&serde_json::json!({
         "version": 1,
+        "workspace_root": path("."),
         "workspace_members": ["opaque-package-id"],
         "packages": [{
             "id": "opaque-package-id",
@@ -241,6 +243,7 @@ fn accepts_an_empty_virtual_workspace_as_a_zero_target_execution() {
     let (root, inventory) = repository();
     let output = serde_json::to_vec(&serde_json::json!({
         "version": 1,
+        "workspace_root": fs::canonicalize(root.path()).unwrap().to_string_lossy(),
         "workspace_members": [],
         "packages": []
     }))
@@ -295,4 +298,78 @@ fn replay_validation_rejects_project_model_tampering() {
         .unwrap_err()
         .contains("changed")
     );
+}
+
+#[test]
+fn collector_executes_each_uncovered_cargo_workspace_and_commits_the_result() {
+    let (root, inventory) = repository();
+    let call_count = Cell::new(0);
+
+    let census = census_cargo_project_models_with_executor(
+        &inventory.repository,
+        &inventory.revision,
+        root.path(),
+        &inventory,
+        |execution_root, manifest_path| {
+            call_count.set(call_count.get() + 1);
+            assert_eq!(execution_root, root.path());
+            assert_eq!(manifest_path, "Cargo.toml");
+            Ok(CargoMetadataExecutionOutput {
+                toolchain_identity_sha256: "f".repeat(64),
+                stdout: String::from_utf8(metadata(root.path())).unwrap(),
+            })
+        },
+    )
+    .unwrap();
+
+    assert_eq!(call_count.get(), 1);
+    assert_eq!(census.executions.len(), 1);
+    assert_eq!(census.targets.len(), 5);
+    assert_eq!(
+        census
+            .execution_count_by_provider
+            .get(&Provider::CargoMetadata),
+        Some(&1)
+    );
+}
+
+#[test]
+fn collector_rejects_repository_mutation_by_the_metadata_boundary() {
+    let (root, inventory) = repository();
+
+    let error = census_cargo_project_models_with_executor(
+        &inventory.repository,
+        &inventory.revision,
+        root.path(),
+        &inventory,
+        |_, _| {
+            fs::write(root.path().join("src/lib.rs"), "pub fn changed() {}\n").unwrap();
+            Ok(CargoMetadataExecutionOutput {
+                toolchain_identity_sha256: "1".repeat(64),
+                stdout: String::from_utf8(metadata(root.path())).unwrap(),
+            })
+        },
+    )
+    .unwrap_err();
+
+    assert!(error.contains("dirty") || error.contains("changed"));
+}
+
+#[test]
+fn real_cargo_metadata_runs_through_the_hardened_sandbox() {
+    let (root, inventory) = repository();
+
+    let census = census_intentional_boundary_cargo_project_models(
+        &inventory.repository,
+        &inventory.revision,
+        root.path(),
+        &inventory,
+    )
+    .unwrap();
+
+    assert_eq!(census.executions.len(), 1);
+    assert_eq!(census.executions[0].provider, Provider::CargoMetadata);
+    assert_eq!(census.target_count_by_status.get("boundary"), Some(&3));
+    assert_eq!(census.target_count_by_status.get("non_boundary"), Some(&1));
+    assert!(!census.target_count_by_status.contains_key("unresolved"));
 }
