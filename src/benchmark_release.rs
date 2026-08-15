@@ -135,6 +135,11 @@ mod intentional_boundary_project_model_cargo;
 
 pub use intentional_boundary_project_model_cargo::*;
 
+#[path = "benchmark_intentional_boundary_project_model_go.rs"]
+mod intentional_boundary_project_model_go;
+
+pub use intentional_boundary_project_model_go::*;
+
 #[path = "benchmark_intentional_boundary_project_model_binding_schema.rs"]
 mod intentional_boundary_project_model_binding_schema;
 
