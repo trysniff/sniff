@@ -222,10 +222,23 @@ mod history_v2_execution_checkpoint_schema;
 
 pub use history_v2_execution_checkpoint_schema::*;
 
+#[path = "benchmark_history_v2_slot_store_support.rs"]
+mod history_v2_slot_store_support;
+
 #[path = "benchmark_history_v2_execution_checkpoint.rs"]
 mod history_v2_execution_checkpoint;
 
 pub use history_v2_execution_checkpoint::*;
+
+#[path = "benchmark_history_v2_slot_stage_schema.rs"]
+mod history_v2_slot_stage_schema;
+
+pub use history_v2_slot_stage_schema::*;
+
+#[path = "benchmark_history_v2_slot_stage.rs"]
+mod history_v2_slot_stage;
+
+pub use history_v2_slot_stage::*;
 
 #[path = "benchmark_intentional_boundary_frame_task.rs"]
 mod intentional_boundary_frame_task;
