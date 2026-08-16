@@ -56,7 +56,7 @@ enum Command {
         exclusions: PathBuf,
         selection: PathBuf,
     },
-    /// Open only the two allowed payload fields after replaying the fixed slots.
+    /// Open the selected patch and two post-selection fields after replaying fixed slots.
     ExtractSelectedPayloads {
         protocol: PathBuf,
         dataset_root: PathBuf,

@@ -10,6 +10,7 @@ use std::path::Path;
 const POST_SELECTION_SCHEMA: &str = r#"
 message schema {
   OPTIONAL BYTE_ARRAY instance_id (UTF8);
+  OPTIONAL BYTE_ARRAY patch (UTF8);
   OPTIONAL BYTE_ARRAY install_config (UTF8);
   OPTIONAL BYTE_ARRAY test_patch (UTF8);
 }
@@ -78,6 +79,7 @@ fn projected_payload_row(
         source_row_index,
         global_row_index,
         instance_id: take_required_string(&mut fields, "instance_id")?,
+        patch: take_required_string(&mut fields, "patch")?,
         install_config: take_optional_string(&mut fields, "install_config")?,
         test_patch: take_optional_string(&mut fields, "test_patch")?,
     };
@@ -161,6 +163,7 @@ message schema {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].global_row_index, 10);
         assert_eq!(rows[0].instance_id, "owner__repo-42");
+        assert_eq!(rows[0].patch, "diff --git a/x.py b/x.py");
         assert_eq!(rows[0].install_config.as_deref(), Some("install config"));
         assert_eq!(rows[0].test_patch.as_deref(), Some("test patch"));
     }

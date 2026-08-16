@@ -11,6 +11,8 @@ pub struct HistoricalV2SelectedPayload {
     pub source_row_index: usize,
     pub global_row_index: usize,
     pub instance_id: String,
+    pub patch: String,
+    pub patch_sha256: String,
     pub install_config: Option<String>,
     pub install_config_sha256: Option<String>,
     pub test_patch: Option<String>,
@@ -38,6 +40,7 @@ pub(super) struct HistoricalV2ProjectedPayloadRow {
     pub(super) source_row_index: usize,
     pub(super) global_row_index: usize,
     pub(super) instance_id: String,
+    pub(super) patch: String,
     pub(super) install_config: Option<String>,
     pub(super) test_patch: Option<String>,
 }

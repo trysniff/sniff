@@ -193,6 +193,7 @@ struct SelectedBinding {
     source_shard_index: usize,
     source_row_index: usize,
     instance_id: String,
+    patch_sha256: String,
 }
 
 fn selected_rows(
@@ -226,6 +227,7 @@ fn selected_rows(
             source_shard_index: record.source_shard_index,
             source_row_index: record.source_row_index,
             instance_id: instance_id.clone(),
+            patch_sha256: record.patch_sha256.clone(),
         };
         if selected.insert(*global_row_index, binding).is_some() {
             return Err("historical-v2 fixed slots repeat a source row".to_string());
@@ -241,6 +243,10 @@ fn committed_payload(
     binding: &SelectedBinding,
     row: HistoricalV2ProjectedPayloadRow,
 ) -> Result<HistoricalV2SelectedPayload, String> {
+    let patch_sha256 = sha256(&row.patch);
+    if patch_sha256 != binding.patch_sha256 {
+        return Err("historical-v2 selected patch changed from the fixed frame".to_string());
+    }
     let install_config_sha256 = row.install_config.as_deref().map(sha256);
     let test_patch_sha256 = row.test_patch.as_deref().map(sha256);
     let payload_sha256 = hash_json(&(
@@ -250,6 +256,8 @@ fn committed_payload(
         row.source_row_index,
         row.global_row_index,
         &row.instance_id,
+        &row.patch,
+        &patch_sha256,
         &row.install_config,
         &install_config_sha256,
         &row.test_patch,
@@ -262,6 +270,8 @@ fn committed_payload(
         source_row_index: row.source_row_index,
         global_row_index: row.global_row_index,
         instance_id: row.instance_id,
+        patch: row.patch,
+        patch_sha256,
         install_config: row.install_config,
         install_config_sha256,
         test_patch: row.test_patch,
@@ -319,12 +329,14 @@ mod tests {
             source_shard_index: 1,
             source_row_index: 11,
             instance_id: "owner__repo-42".to_string(),
+            patch_sha256: sha256("diff --git a/src.rs b/src.rs"),
         };
         let row = HistoricalV2ProjectedPayloadRow {
             source_shard_index: 1,
             source_row_index: 11,
             global_row_index: 101,
             instance_id: binding.instance_id.clone(),
+            patch: "diff --git a/src.rs b/src.rs".to_string(),
             install_config: Some("{\"python\":\"3.12\"}".to_string()),
             test_patch: Some("diff --git a/test.rs b/test.rs".to_string()),
         };
@@ -355,6 +367,7 @@ mod tests {
             source_shard_index: 0,
             source_row_index: 0,
             instance_id: "owner__repo-1".to_string(),
+            patch_sha256: sha256("patch"),
         };
         let committed = committed_payload(
             &binding,
@@ -363,6 +376,7 @@ mod tests {
                 source_row_index: 0,
                 global_row_index: 0,
                 instance_id: binding.instance_id.clone(),
+                patch: "patch".to_string(),
                 install_config: None,
                 test_patch: None,
             },
@@ -374,5 +388,32 @@ mod tests {
         assert_eq!(committed.test_patch, None);
         assert_eq!(committed.test_patch_sha256, None);
         assert_eq!(committed.payload_sha256.len(), 64);
+    }
+
+    #[test]
+    fn rejects_a_patch_that_does_not_match_the_fixed_frame() {
+        let binding = SelectedBinding {
+            language: "python".to_string(),
+            slot_number: 3,
+            source_shard_index: 0,
+            source_row_index: 4,
+            instance_id: "owner__repo-3".to_string(),
+            patch_sha256: sha256("expected patch"),
+        };
+        let error = committed_payload(
+            &binding,
+            HistoricalV2ProjectedPayloadRow {
+                source_shard_index: 0,
+                source_row_index: 4,
+                global_row_index: 4,
+                instance_id: binding.instance_id.clone(),
+                patch: "different patch".to_string(),
+                install_config: None,
+                test_patch: None,
+            },
+        )
+        .unwrap_err();
+
+        assert!(error.contains("patch changed"));
     }
 }
