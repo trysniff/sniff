@@ -163,6 +163,16 @@ mod history_v2_source_census_schema;
 
 pub use history_v2_source_census_schema::*;
 
+#[path = "benchmark_history_v2_source_census_stage_schema.rs"]
+mod history_v2_source_census_stage_schema;
+
+pub use history_v2_source_census_stage_schema::*;
+
+#[path = "benchmark_history_v2_source_census_exclusion.rs"]
+mod history_v2_source_census_exclusion;
+
+pub use history_v2_source_census_exclusion::*;
+
 #[path = "benchmark_history_v2_source_census.rs"]
 mod history_v2_source_census;
 

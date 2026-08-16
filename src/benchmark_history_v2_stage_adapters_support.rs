@@ -69,6 +69,16 @@ pub(super) fn test_materialization_exclusion_outcome(
     }
 }
 
+pub(super) fn source_census_exclusion_outcome(
+    exclusion: &HistoricalV2SourceCensusExclusion,
+) -> HistoricalV2SlotStageOutcome {
+    HistoricalV2SlotStageOutcome::Excluded {
+        reason: HistoricalV2TerminalExclusionReason::SourceCensus(exclusion.reasons.clone()),
+        artifact_kind: HistoricalV2StageArtifactKind::SourceCensusExclusion,
+        artifact_sha256: exclusion.exclusion_sha256.clone(),
+    }
+}
+
 pub(super) fn test_recipe_outcome(recipe: &HistoricalV2TestRecipe) -> HistoricalV2SlotStageOutcome {
     match &recipe.outcome {
         HistoricalV2TestRecipeOutcome::Selected { .. } => HistoricalV2SlotStageOutcome::Completed {

@@ -9,16 +9,18 @@ use super::{
     HistoricalV2SemanticCensus, HistoricalV2SlotOutcome, HistoricalV2SlotSelection,
     HistoricalV2SlotStage, HistoricalV2SlotStageCheckpoint, HistoricalV2SlotStageCheckpointInput,
     HistoricalV2SlotStageError, HistoricalV2SlotStageJournal, HistoricalV2SlotStageOutcome,
-    HistoricalV2SourceCensus, HistoricalV2StageArtifactKind, HistoricalV2TerminalExclusionReason,
+    HistoricalV2SourceCensus, HistoricalV2SourceCensusExclusion, HistoricalV2StageArtifactKind,
+    HistoricalV2StageResult, HistoricalV2TerminalExclusionReason,
     HistoricalV2TestMaterializationBinding, HistoricalV2TestMaterializationExclusion,
-    HistoricalV2TestRecipe, HistoricalV2TestRecipeOutcome,
+    HistoricalV2TestRecipe, HistoricalV2TestRecipeOutcome, census_historical_v2_sources_typed,
     validate_historical_v2_assessment_identity_commitment,
     validate_historical_v2_identical_test_execution, validate_historical_v2_materialization,
     validate_historical_v2_materialization_exclusion, validate_historical_v2_protocol,
     validate_historical_v2_qualification_commitment,
     validate_historical_v2_selected_payloads_commitment,
     validate_historical_v2_semantic_census_commitment, validate_historical_v2_slot_selection,
-    validate_historical_v2_source_census, validate_historical_v2_test_materialization,
+    validate_historical_v2_source_census, validate_historical_v2_source_census_exclusion,
+    validate_historical_v2_test_materialization,
     validate_historical_v2_test_materialization_exclusion, validate_historical_v2_test_recipe,
 };
 use std::path::Path;
@@ -266,6 +268,53 @@ pub fn checkpoint_historical_v2_source_census(
             artifact_sha256: census.source_census_sha256.clone(),
         },
         Some(census),
+    )
+}
+
+pub fn checkpoint_historical_v2_source_census_exclusion(
+    journal: &mut HistoricalV2SlotStageJournal,
+    materialization: &HistoricalV2Materialization,
+    roots: &HistoricalV2MaterializedRoots,
+    exclusion: &HistoricalV2SourceCensusExclusion,
+) -> Result<HistoricalV2SlotStageCheckpoint, HistoricalV2SlotStageError> {
+    let stage = HistoricalV2SlotStage::SourceCensus;
+    require_completed_artifact(
+        journal,
+        1,
+        HistoricalV2StageArtifactKind::Materialization,
+        &materialization.materialization_sha256,
+        stage,
+    )?;
+    validate_historical_v2_materialization(materialization, roots)
+        .map_err(|detail| HistoricalV2SlotStageError::invalid(stage, detail))?;
+    validate_historical_v2_source_census_exclusion(exclusion)
+        .map_err(|detail| HistoricalV2SlotStageError::invalid(stage, detail))?;
+    if exclusion.materialization_sha256 != materialization.materialization_sha256 {
+        return Err(HistoricalV2SlotStageError::invalid(
+            stage,
+            "historical-v2 source exclusion crossed its materialization boundary",
+        ));
+    }
+    match census_historical_v2_sources_typed(materialization, roots)? {
+        HistoricalV2StageResult::Excluded(expected) if expected == *exclusion => {}
+        HistoricalV2StageResult::Excluded(_) => {
+            return Err(HistoricalV2SlotStageError::invalid(
+                stage,
+                "historical-v2 source exclusion changed from the exact materialized trees",
+            ));
+        }
+        HistoricalV2StageResult::Completed(_) => {
+            return Err(HistoricalV2SlotStageError::invalid(
+                stage,
+                "historical-v2 source exclusion is not reproduced by the materialized trees",
+            ));
+        }
+    }
+    append_same_slot(
+        journal,
+        stage,
+        source_census_exclusion_outcome(exclusion),
+        Some(exclusion),
     )
 }
 

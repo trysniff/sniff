@@ -3,12 +3,14 @@ use crate::benchmark::{
     HISTORICAL_V2_IDENTICAL_TEST_EXECUTION_SCHEMA_VERSION,
     HISTORICAL_V2_MATERIALIZATION_EXCLUSION_SCHEMA_VERSION,
     HISTORICAL_V2_QUALIFICATION_SCHEMA_VERSION,
+    HISTORICAL_V2_SOURCE_CENSUS_EXCLUSION_SCHEMA_VERSION,
     HISTORICAL_V2_TEST_MATERIALIZATION_EXCLUSION_SCHEMA_VERSION,
     HISTORICAL_V2_TEST_RECIPE_SCHEMA_VERSION, HistoricalV2ExecutionSide,
     HistoricalV2IdenticalTestExclusionReason, HistoricalV2MaterializationExclusion,
     HistoricalV2MaterializationExclusionEvidence, HistoricalV2MaterializationExclusionReason,
     HistoricalV2PublicSurfaceDelta, HistoricalV2QualificationExclusionReason,
-    HistoricalV2SelectedPayload, HistoricalV2TestMaterializationExclusion,
+    HistoricalV2SelectedPayload, HistoricalV2SourceCensusExclusion,
+    HistoricalV2SourceCensusExclusionReason, HistoricalV2TestMaterializationExclusion,
     HistoricalV2TestMaterializationExclusionEvidence,
     HistoricalV2TestMaterializationExclusionReason, HistoricalV2TestMaterializationSide,
     HistoricalV2TestRecipeExclusionReason,
@@ -109,6 +111,29 @@ fn test_materialization_exclusion_keeps_its_exact_evidence_commitment() {
             ),
             artifact_kind: HistoricalV2StageArtifactKind::TestMaterializationExclusion,
             artifact_sha256: digest('8'),
+        }
+    );
+}
+
+#[test]
+fn source_census_exclusion_keeps_all_typed_reasons_and_its_evidence_commitment() {
+    let exclusion = HistoricalV2SourceCensusExclusion {
+        schema_version: HISTORICAL_V2_SOURCE_CENSUS_EXCLUSION_SCHEMA_VERSION,
+        exclusion_contract: "fixture".to_string(),
+        materialization_sha256: digest('1'),
+        reasons: vec![
+            HistoricalV2SourceCensusExclusionReason::SupportedSourceIsNotUtf8,
+            HistoricalV2SourceCensusExclusionReason::SupportedSourceCannotBeParsed,
+        ],
+        failures: Vec::new(),
+        exclusion_sha256: digest('7'),
+    };
+    assert_eq!(
+        source_census_exclusion_outcome(&exclusion),
+        HistoricalV2SlotStageOutcome::Excluded {
+            reason: HistoricalV2TerminalExclusionReason::SourceCensus(exclusion.reasons.clone()),
+            artifact_kind: HistoricalV2StageArtifactKind::SourceCensusExclusion,
+            artifact_sha256: digest('7'),
         }
     );
 }
