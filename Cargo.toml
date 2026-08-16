@@ -24,6 +24,7 @@ include = [
   "/gold_fixtures/**",
   "/scripts/**",
   "/src/*.rs",
+  "/src/benchmark_assets/**",
   "/src/**/*.rs",
   "/tests/**",
   "/sniff.config.toml",

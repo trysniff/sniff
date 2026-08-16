@@ -192,6 +192,16 @@ mod history_v2_test_recipe;
 
 pub use history_v2_test_recipe::*;
 
+#[path = "benchmark_history_v2_execution_harness_schema.rs"]
+mod history_v2_execution_harness_schema;
+
+pub use history_v2_execution_harness_schema::*;
+
+#[path = "benchmark_history_v2_execution_harness.rs"]
+mod history_v2_execution_harness;
+
+pub use history_v2_execution_harness::*;
+
 #[path = "benchmark_intentional_boundary_frame_task.rs"]
 mod intentional_boundary_frame_task;
 
