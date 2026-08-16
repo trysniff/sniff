@@ -114,6 +114,8 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
+      - name: Verify packaged execution contract matches the release artifact
+        run: cmp src/benchmark_assets/historical-v2-execution-harness.json sniffbench/historical-v2-execution-harness.json
       - run: cargo package --locked --target-dir target/package-check
       - name: Keep benchmark data out of the installable crate
         run: |

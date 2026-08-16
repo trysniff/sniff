@@ -7,7 +7,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::process::Command;
 
-const HARNESS_BYTES: &[u8] = include_bytes!("../sniffbench/historical-v2-execution-harness.json");
+const HARNESS_BYTES: &[u8] =
+    include_bytes!("benchmark_assets/historical-v2-execution-harness.json");
 const HARNESS_CONTRACT: &str = "sniffbench-historical-v2-execution-harness-v1";
 const UPSTREAM_REPOSITORY: &str = "github.com/SWE-rebench/SWE-rebench-V2";
 const UPSTREAM_REVISION: &str = "c71902a8cf8d2b725f63d51f199f4d3e56f68d2d";
