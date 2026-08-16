@@ -10,6 +10,8 @@ use std::fs;
 use std::io::{Error as IoError, ErrorKind};
 use std::path::PathBuf;
 
+mod sniffbench_frame_run;
+
 #[derive(Debug, Parser)]
 #[command(name = "sniffbench-frame", version)]
 #[command(about = "Build and replay SniffBench's pinned historical-v2 Parquet frame")]
@@ -76,9 +78,15 @@ enum Command {
         selection: PathBuf,
         payloads: PathBuf,
     },
+    /// Run or resume every fixed selected slot through its exact next stage.
+    RunSlots {
+        #[command(flatten)]
+        args: sniffbench_frame_run::RunSlotsArgs,
+    },
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
     match args.command {
         Command::Collect {
@@ -249,6 +257,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 selection.selection_sha256
             );
         }
+        Command::RunSlots { args } => sniffbench_frame_run::run(args).await?,
     }
     Ok(())
 }
@@ -256,3 +265,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 fn invalid_data(error: String) -> IoError {
     IoError::new(ErrorKind::InvalidData, error)
 }
+
+#[cfg(test)]
+#[path = "sniffbench_frame_tests.rs"]
+mod tests;
