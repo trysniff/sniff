@@ -4,8 +4,50 @@ use crate::benchmark::{
     HISTORICAL_V2_QUALIFICATION_SCHEMA_VERSION, HISTORICAL_V2_TEST_RECIPE_SCHEMA_VERSION,
     HistoricalV2ExecutionSide, HistoricalV2IdenticalTestExclusionReason,
     HistoricalV2PublicSurfaceDelta, HistoricalV2QualificationExclusionReason,
-    HistoricalV2TestRecipeExclusionReason,
+    HistoricalV2SelectedPayload, HistoricalV2TestRecipeExclusionReason,
 };
+
+#[test]
+fn selected_slot_payload_envelope_binds_the_complete_resume_identity() {
+    let artifact = seal_selected_slot_payload(HistoricalV2SelectedSlotPayloadArtifact {
+        schema_version: HISTORICAL_V2_STAGE_ARTIFACT_SCHEMA_VERSION,
+        artifact_contract: SELECTED_PAYLOAD_CONTRACT.to_string(),
+        selection_sha256: digest('1'),
+        language: "rust".to_string(),
+        slot_number: 1,
+        global_row_index: 7,
+        instance_id: "owner__repo-1".to_string(),
+        canonical_repository: "github.com/owner/repo".to_string(),
+        pull_number: 1,
+        base_revision: "a".repeat(40),
+        rank_sha256: digest('2'),
+        payload: payload(),
+        artifact_sha256: String::new(),
+    })
+    .unwrap();
+    validate_selected_slot_payload(&artifact).unwrap();
+
+    let mut changed = artifact;
+    changed.base_revision = "b".repeat(40);
+    assert!(validate_selected_slot_payload(&changed).is_err());
+}
+
+#[test]
+fn no_test_patch_artifact_is_not_an_uncommitted_skip() {
+    let artifact = seal_no_test_patch(HistoricalV2NoTestPatchArtifact {
+        schema_version: HISTORICAL_V2_STAGE_ARTIFACT_SCHEMA_VERSION,
+        artifact_contract: NO_TEST_PATCH_CONTRACT.to_string(),
+        selected_slot_payload_sha256: digest('1'),
+        materialization_sha256: digest('2'),
+        language: "rust".to_string(),
+        slot_number: 1,
+        canonical_repository: "github.com/owner/repo".to_string(),
+        artifact_sha256: String::new(),
+    })
+    .unwrap();
+    assert_ne!(artifact.artifact_sha256, digest('1'));
+    assert_ne!(artifact.artifact_sha256, digest('2'));
+}
 
 #[test]
 fn qualification_exclusion_keeps_its_exact_artifact_commitment() {
@@ -106,6 +148,24 @@ fn qualification(outcome: HistoricalV2QualificationOutcome) -> HistoricalV2Quali
         },
         outcome,
         qualification_sha256: digest('a'),
+    }
+}
+
+fn payload() -> HistoricalV2SelectedPayload {
+    HistoricalV2SelectedPayload {
+        language: "rust".to_string(),
+        slot_number: 1,
+        source_shard_index: 0,
+        source_row_index: 0,
+        global_row_index: 7,
+        instance_id: "owner__repo-1".to_string(),
+        patch: "diff --git a/src/lib.rs b/src/lib.rs".to_string(),
+        patch_sha256: digest('3'),
+        install_config: None,
+        install_config_sha256: None,
+        test_patch: None,
+        test_patch_sha256: None,
+        payload_sha256: digest('4'),
     }
 }
 

@@ -245,6 +245,11 @@ mod history_v2_stage_adapters;
 
 pub use history_v2_stage_adapters::*;
 
+#[path = "benchmark_history_v2_stage_adapters_schema.rs"]
+mod history_v2_stage_adapters_schema;
+
+pub use history_v2_stage_adapters_schema::*;
+
 #[path = "benchmark_intentional_boundary_frame_task.rs"]
 mod intentional_boundary_frame_task;
 
