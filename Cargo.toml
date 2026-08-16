@@ -23,6 +23,7 @@ include = [
   "/TRADEMARKS.md",
   "/gold_fixtures/**",
   "/scripts/**",
+  "/sniffbench/historical-v2-execution-harness.json",
   "/src/*.rs",
   "/src/**/*.rs",
   "/tests/**",
