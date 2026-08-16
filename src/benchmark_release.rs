@@ -182,6 +182,16 @@ mod history_v2_qualification;
 
 pub use history_v2_qualification::*;
 
+#[path = "benchmark_history_v2_test_recipe_schema.rs"]
+mod history_v2_test_recipe_schema;
+
+pub use history_v2_test_recipe_schema::*;
+
+#[path = "benchmark_history_v2_test_recipe.rs"]
+mod history_v2_test_recipe;
+
+pub use history_v2_test_recipe::*;
+
 #[path = "benchmark_intentional_boundary_frame_task.rs"]
 mod intentional_boundary_frame_task;
 
