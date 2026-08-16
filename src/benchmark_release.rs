@@ -49,6 +49,23 @@ mod history_v2_protocol;
 
 pub use history_v2_protocol::*;
 
+#[path = "benchmark_history_v2_frame_schema.rs"]
+mod history_v2_frame_schema;
+
+pub use history_v2_frame_schema::*;
+
+#[path = "benchmark_history_v2_frame.rs"]
+mod history_v2_frame;
+
+pub use history_v2_frame::*;
+
+#[cfg(feature = "sniffbench-frame")]
+#[path = "benchmark_history_v2_parquet.rs"]
+mod history_v2_parquet;
+
+#[cfg(feature = "sniffbench-frame")]
+pub use history_v2_parquet::*;
+
 #[path = "benchmark_intentional_boundary_frame_task.rs"]
 mod intentional_boundary_frame_task;
 

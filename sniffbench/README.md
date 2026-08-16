@@ -32,6 +32,24 @@ sniff benchmark validate-historical-v2-protocol \
 Protocol file SHA-256:
 `deb98a285867fc5ea52761c252839d74268f239824bfc1a82027a352695cfc6f`.
 
+Frame extraction is a maintainer-only optional binary so normal Sniff installs
+do not compile Parquet codecs. Place the three exact pinned shards under their
+protocol paths in `DATASET_ROOT`; the collector does not download data, infer a
+replacement, or read forbidden columns:
+
+```console
+cargo run --locked --features sniffbench-frame --bin sniffbench-frame -- \
+  collect sniffbench/historical-v2-protocol.json DATASET_ROOT frame.json
+```
+
+Replay validation rehashes all three shards, reprojects all 126,300 rows, and
+requires byte-for-byte equality with the committed frame:
+
+```console
+cargo run --locked --features sniffbench-frame --bin sniffbench-frame -- \
+  validate sniffbench/historical-v2-protocol.json DATASET_ROOT frame.json
+```
+
 ## Non-blind real evidence
 
 Historical simplifications, research trajectories, and intentional clean
