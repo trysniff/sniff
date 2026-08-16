@@ -215,7 +215,7 @@ where
     Ok(row_count)
 }
 
-fn validate_dataset_schema(reader: &SerializedFileReader<File>) -> Result<(), String> {
+pub(super) fn validate_dataset_schema(reader: &SerializedFileReader<File>) -> Result<(), String> {
     let fields = reader
         .metadata()
         .file_metadata()
@@ -298,7 +298,7 @@ fn mark_duplicate_pull_requests(records: &mut [HistoricalV2FrameRecord]) {
     }
 }
 
-fn sha256_file(path: &Path) -> Result<String, String> {
+pub(super) fn sha256_file(path: &Path) -> Result<String, String> {
     let file = File::open(path)
         .map_err(|error| format!("failed to open historical-v2 shard for hashing: {error}"))?;
     let mut reader = BufReader::with_capacity(1024 * 1024, file);
@@ -316,7 +316,7 @@ fn sha256_file(path: &Path) -> Result<String, String> {
     Ok(format!("{:x}", digest.finalize()))
 }
 
-fn safe_relative_path(value: &str) -> Result<&Path, String> {
+pub(super) fn safe_relative_path(value: &str) -> Result<&Path, String> {
     let path = Path::new(value);
     if path.as_os_str().is_empty()
         || path.is_absolute()
