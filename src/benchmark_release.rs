@@ -59,6 +59,21 @@ mod history_v2_frame;
 
 pub use history_v2_frame::*;
 
+#[path = "benchmark_history_v2_selection_schema.rs"]
+mod history_v2_selection_schema;
+
+pub use history_v2_selection_schema::*;
+
+#[path = "benchmark_history_v2_exclusions.rs"]
+mod history_v2_exclusions;
+
+pub use history_v2_exclusions::*;
+
+#[path = "benchmark_history_v2_selection.rs"]
+mod history_v2_selection;
+
+pub use history_v2_selection::*;
+
 #[cfg(feature = "sniffbench-frame")]
 #[path = "benchmark_history_v2_parquet.rs"]
 mod history_v2_parquet;

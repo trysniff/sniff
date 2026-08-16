@@ -1,5 +1,6 @@
 use super::{
-    HistoricalV2FrameDisposition, HistoricalV2FrameExclusionReason, HistoricalV2FrameRecord,
+    HISTORICAL_V2_FRAME_SCHEMA_VERSION, HistoricalV2Frame, HistoricalV2FrameDisposition,
+    HistoricalV2FrameExclusionReason, HistoricalV2FrameRecord, HistoricalV2FrameShard,
     HistoricalV2PatchFacts, HistoricalV2ProjectedRow,
 };
 use serde::Serialize;
@@ -153,6 +154,61 @@ pub fn historical_v2_rank_sha256(
         )
         .as_bytes(),
     )
+}
+
+pub fn validate_historical_v2_frame_commitment(frame: &HistoricalV2Frame) -> Result<(), String> {
+    if frame.schema_version != HISTORICAL_V2_FRAME_SCHEMA_VERSION
+        || frame.row_count != frame.records.len()
+        || frame.eligible_count + frame.excluded_count != frame.row_count
+        || frame
+            .records
+            .iter()
+            .enumerate()
+            .any(|(index, record)| record.global_row_index != index)
+        || frame.eligible_count
+            != frame
+                .records
+                .iter()
+                .filter(|record| {
+                    matches!(
+                        record.disposition,
+                        HistoricalV2FrameDisposition::Eligible { .. }
+                    )
+                })
+                .count()
+        || frame.frame_sha256 != historical_v2_frame_sha256(frame)?
+    {
+        return Err("historical-v2 frame commitment changed".to_string());
+    }
+    Ok(())
+}
+
+pub fn historical_v2_frame_sha256(frame: &HistoricalV2Frame) -> Result<String, String> {
+    #[derive(Serialize)]
+    struct Commitment<'a> {
+        schema_version: u32,
+        protocol_sha256: &'a str,
+        dataset_revision: &'a str,
+        ranking_seed: &'a str,
+        shards: &'a [HistoricalV2FrameShard],
+        row_count: usize,
+        eligible_count: usize,
+        excluded_count: usize,
+        records: &'a [HistoricalV2FrameRecord],
+    }
+    let bytes = serde_json::to_vec(&Commitment {
+        schema_version: frame.schema_version,
+        protocol_sha256: &frame.protocol_sha256,
+        dataset_revision: &frame.dataset_revision,
+        ranking_seed: &frame.ranking_seed,
+        shards: &frame.shards,
+        row_count: frame.row_count,
+        eligible_count: frame.eligible_count,
+        excluded_count: frame.excluded_count,
+        records: &frame.records,
+    })
+    .map_err(|error| format!("failed to commit historical-v2 frame: {error}"))?;
+    Ok(sha256(&bytes))
 }
 
 fn exclusion_before_patch(
