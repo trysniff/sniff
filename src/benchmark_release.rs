@@ -217,6 +217,16 @@ mod history_v2_identical_tests_docker;
 
 pub use history_v2_identical_tests_docker::*;
 
+#[path = "benchmark_history_v2_execution_checkpoint_schema.rs"]
+mod history_v2_execution_checkpoint_schema;
+
+pub use history_v2_execution_checkpoint_schema::*;
+
+#[path = "benchmark_history_v2_execution_checkpoint.rs"]
+mod history_v2_execution_checkpoint;
+
+pub use history_v2_execution_checkpoint::*;
+
 #[path = "benchmark_intentional_boundary_frame_task.rs"]
 mod intentional_boundary_frame_task;
 
