@@ -202,6 +202,21 @@ mod history_v2_execution_harness;
 
 pub use history_v2_execution_harness::*;
 
+#[path = "benchmark_history_v2_identical_tests_schema.rs"]
+mod history_v2_identical_tests_schema;
+
+pub use history_v2_identical_tests_schema::*;
+
+#[path = "benchmark_history_v2_identical_tests.rs"]
+mod history_v2_identical_tests;
+
+pub use history_v2_identical_tests::*;
+
+#[path = "benchmark_history_v2_identical_tests_docker.rs"]
+mod history_v2_identical_tests_docker;
+
+pub use history_v2_identical_tests_docker::*;
+
 #[path = "benchmark_intentional_boundary_frame_task.rs"]
 mod intentional_boundary_frame_task;
 
