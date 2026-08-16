@@ -1,10 +1,13 @@
 use super::*;
 use crate::benchmark::{
     HISTORICAL_V2_IDENTICAL_TEST_EXECUTION_SCHEMA_VERSION,
+    HISTORICAL_V2_MATERIALIZATION_EXCLUSION_SCHEMA_VERSION,
     HISTORICAL_V2_QUALIFICATION_SCHEMA_VERSION, HISTORICAL_V2_TEST_RECIPE_SCHEMA_VERSION,
     HistoricalV2ExecutionSide, HistoricalV2IdenticalTestExclusionReason,
-    HistoricalV2PublicSurfaceDelta, HistoricalV2QualificationExclusionReason,
-    HistoricalV2SelectedPayload, HistoricalV2TestRecipeExclusionReason,
+    HistoricalV2MaterializationExclusion, HistoricalV2MaterializationExclusionEvidence,
+    HistoricalV2MaterializationExclusionReason, HistoricalV2PublicSurfaceDelta,
+    HistoricalV2QualificationExclusionReason, HistoricalV2SelectedPayload,
+    HistoricalV2TestRecipeExclusionReason,
 };
 
 #[test]
@@ -47,6 +50,33 @@ fn no_test_patch_artifact_is_not_an_uncommitted_skip() {
     .unwrap();
     assert_ne!(artifact.artifact_sha256, digest('1'));
     assert_ne!(artifact.artifact_sha256, digest('2'));
+}
+
+#[test]
+fn materialization_exclusion_keeps_its_exact_evidence_commitment() {
+    let exclusion = HistoricalV2MaterializationExclusion {
+        schema_version: HISTORICAL_V2_MATERIALIZATION_EXCLUSION_SCHEMA_VERSION,
+        exclusion_contract: "fixture".to_string(),
+        canonical_repository: "github.com/owner/repo".to_string(),
+        base_revision: "a".repeat(40),
+        historical_patch_sha256: digest('3'),
+        reason: HistoricalV2MaterializationExclusionReason::RepositoryUnavailable,
+        evidence: HistoricalV2MaterializationExclusionEvidence::RepositoryProbe {
+            url: "https://github.com/owner/repo.git/info/refs?service=git-upload-pack".to_string(),
+            status: 404,
+        },
+        exclusion_sha256: digest('9'),
+    };
+    assert_eq!(
+        materialization_exclusion_outcome(&exclusion),
+        HistoricalV2SlotStageOutcome::Excluded {
+            reason: HistoricalV2TerminalExclusionReason::Materialization(
+                HistoricalV2MaterializationExclusionReason::RepositoryUnavailable,
+            ),
+            artifact_kind: HistoricalV2StageArtifactKind::MaterializationExclusion,
+            artifact_sha256: digest('9'),
+        }
+    );
 }
 
 #[test]

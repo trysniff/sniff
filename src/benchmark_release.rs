@@ -115,10 +115,25 @@ mod history_v2_materialization_schema;
 
 pub use history_v2_materialization_schema::*;
 
+#[path = "benchmark_history_v2_materialization_stage_schema.rs"]
+mod history_v2_materialization_stage_schema;
+
+pub use history_v2_materialization_stage_schema::*;
+
+#[path = "benchmark_history_v2_materialization_exclusion.rs"]
+mod history_v2_materialization_exclusion;
+
+pub use history_v2_materialization_exclusion::*;
+
 #[path = "benchmark_history_v2_materialization.rs"]
 mod history_v2_materialization;
 
 pub use history_v2_materialization::*;
+
+#[path = "benchmark_history_v2_materialization_stage.rs"]
+mod history_v2_materialization_stage;
+
+pub use history_v2_materialization_stage::*;
 
 #[path = "benchmark_history_v2_materialization_git.rs"]
 mod history_v2_materialization_git;

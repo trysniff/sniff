@@ -1,6 +1,6 @@
 use super::{
-    HistoricalV2IdenticalTestExclusionReason, HistoricalV2QualificationExclusionReason,
-    HistoricalV2TestRecipeExclusionReason,
+    HistoricalV2IdenticalTestExclusionReason, HistoricalV2MaterializationExclusionReason,
+    HistoricalV2QualificationExclusionReason, HistoricalV2TestRecipeExclusionReason,
 };
 use serde::{Deserialize, Serialize};
 
@@ -38,17 +38,6 @@ pub enum HistoricalV2StageArtifactKind {
     TestMaterializationExclusion,
     SourceCensusExclusion,
     SemanticCensusExclusion,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum HistoricalV2MaterializationExclusionReason {
-    RepositoryUnavailable,
-    RepositoryEmpty,
-    BaseRevisionUnavailable,
-    UnsupportedGitObjectFormat,
-    HistoricalPatchDoesNotApply,
-    HistoricalPatchProducesNoTreeChange,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -122,9 +111,9 @@ pub struct HistoricalV2SlotStageCheckpoint {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum HistoricalV2StageResult<T> {
+pub enum HistoricalV2StageResult<T, E = HistoricalV2TerminalExclusionReason> {
     Completed(T),
-    Excluded(HistoricalV2TerminalExclusionReason),
+    Excluded(E),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

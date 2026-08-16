@@ -2,7 +2,8 @@ use super::{
     HISTORICAL_V2_STAGE_ARTIFACT_SCHEMA_VERSION, HistoricalV2AssessmentIdentity,
     HistoricalV2AssessmentIdentityInputs, HistoricalV2ExclusionManifest, HistoricalV2Frame,
     HistoricalV2IdenticalTestExecution, HistoricalV2IdenticalTestOutcome,
-    HistoricalV2IdenticalTestPlan, HistoricalV2Materialization, HistoricalV2MaterializedRoots,
+    HistoricalV2IdenticalTestPlan, HistoricalV2Materialization,
+    HistoricalV2MaterializationExclusion, HistoricalV2MaterializedRoots,
     HistoricalV2NoTestPatchArtifact, HistoricalV2Qualification, HistoricalV2QualificationOutcome,
     HistoricalV2SelectedPayloads, HistoricalV2SelectedSlotPayloadArtifact,
     HistoricalV2SemanticCensus, HistoricalV2SlotOutcome, HistoricalV2SlotSelection,
@@ -12,7 +13,8 @@ use super::{
     HistoricalV2TestMaterializationBinding, HistoricalV2TestRecipe, HistoricalV2TestRecipeOutcome,
     validate_historical_v2_assessment_identity_commitment,
     validate_historical_v2_identical_test_execution, validate_historical_v2_materialization,
-    validate_historical_v2_protocol, validate_historical_v2_qualification_commitment,
+    validate_historical_v2_materialization_exclusion, validate_historical_v2_protocol,
+    validate_historical_v2_qualification_commitment,
     validate_historical_v2_selected_payloads_commitment,
     validate_historical_v2_semantic_census_commitment, validate_historical_v2_slot_selection,
     validate_historical_v2_source_census, validate_historical_v2_test_materialization,
@@ -104,6 +106,33 @@ pub fn checkpoint_historical_v2_materialization(
             artifact_sha256: artifact.materialization_sha256.clone(),
         },
         Some(artifact),
+    )
+}
+
+pub fn checkpoint_historical_v2_materialization_exclusion(
+    journal: &mut HistoricalV2SlotStageJournal,
+    exclusion: &HistoricalV2MaterializationExclusion,
+) -> Result<HistoricalV2SlotStageCheckpoint, HistoricalV2SlotStageError> {
+    let stage = HistoricalV2SlotStage::Materialization;
+    validate_historical_v2_materialization_exclusion(exclusion)
+        .map_err(|detail| HistoricalV2SlotStageError::invalid(stage, detail))?;
+    let payload = stored_artifact::<HistoricalV2SelectedSlotPayloadArtifact>(journal, 0, stage)?;
+    validate_selected_slot_payload(&payload)
+        .map_err(|detail| HistoricalV2SlotStageError::invalid(stage, detail))?;
+    if exclusion.canonical_repository != payload.canonical_repository
+        || exclusion.base_revision != payload.base_revision
+        || exclusion.historical_patch_sha256 != payload.payload.patch_sha256
+    {
+        return Err(HistoricalV2SlotStageError::invalid(
+            stage,
+            "historical-v2 materialization exclusion crossed its selected payload boundary",
+        ));
+    }
+    append_same_slot(
+        journal,
+        stage,
+        materialization_exclusion_outcome(exclusion),
+        Some(exclusion),
     )
 }
 
