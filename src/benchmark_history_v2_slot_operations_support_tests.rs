@@ -1,0 +1,156 @@
+use super::*;
+use crate::benchmark::{
+    HISTORICAL_V2_SLOT_STAGE_CHECKPOINT_SCHEMA_VERSION, HistoricalV2MaterializationExclusionReason,
+    HistoricalV2SlotRunIdentity, HistoricalV2SlotStageCheckpoint, HistoricalV2SlotStageErrorKind,
+    HistoricalV2StoredSlotStage,
+};
+use serde_json::json;
+
+#[test]
+fn invalid_slot_identity_is_rejected_before_creating_any_language_path() {
+    let root = tempfile::tempdir().unwrap();
+    let work_root = root.path().join("work");
+    let escaped = root.path().join("escaped");
+
+    let error = canonical_work_root(&work_root, "../escaped", 1).unwrap_err();
+
+    assert_eq!(error.kind, HistoricalV2SlotStageErrorKind::InvalidInput);
+    assert!(!work_root.exists());
+    assert!(!escaped.exists());
+}
+
+#[test]
+fn materialization_recovery_removes_only_the_exact_slot() {
+    let root = tempfile::tempdir().unwrap();
+    let work_root = canonical_work_root(&root.path().join("work"), "rust", 1).unwrap();
+    let language_root = work_root.join("rust");
+    let target = language_root.join("slot-0001");
+    let sibling = language_root.join("slot-0002");
+    fs::create_dir(&target).unwrap();
+    fs::create_dir(&sibling).unwrap();
+    fs::write(target.join("partial"), b"partial").unwrap();
+    fs::write(sibling.join("committed"), b"committed").unwrap();
+
+    remove_interrupted_materialization(&work_root, "rust", 1).unwrap();
+
+    assert!(!target.exists());
+    assert_eq!(fs::read(sibling.join("committed")).unwrap(), b"committed");
+}
+
+#[test]
+fn materialization_recovery_refuses_a_file_at_the_slot_path() {
+    let root = tempfile::tempdir().unwrap();
+    let work_root = canonical_work_root(&root.path().join("work"), "rust", 1).unwrap();
+    let target = work_root.join("rust").join("slot-0001");
+    fs::write(&target, b"not a directory").unwrap();
+
+    let error = remove_interrupted_materialization(&work_root, "rust", 1).unwrap_err();
+
+    assert_eq!(error.kind, HistoricalV2SlotStageErrorKind::InvalidInput);
+    assert_eq!(fs::read(target).unwrap(), b"not a directory");
+}
+
+#[test]
+fn prerequisite_artifacts_fail_closed_when_missing_or_malformed() {
+    let identity = HistoricalV2SlotRunIdentity {
+        selection_sha256: &"a".repeat(64),
+        language: "rust",
+        slot_number: 1,
+        canonical_repository: "github.com/example/repository",
+    };
+    let empty = HistoricalV2SlotStageContext {
+        identity,
+        stage: HistoricalV2SlotStage::Materialization,
+        history: &[],
+    };
+    assert_eq!(
+        artifact::<String>(empty, 0).unwrap_err().kind,
+        HistoricalV2SlotStageErrorKind::InvalidInput
+    );
+
+    let history = [stored(json!({"unexpected": true}))];
+    let malformed = HistoricalV2SlotStageContext {
+        identity,
+        stage: HistoricalV2SlotStage::Materialization,
+        history: &history,
+    };
+    assert_eq!(
+        artifact::<String>(malformed, 0).unwrap_err().kind,
+        HistoricalV2SlotStageErrorKind::InvalidInput
+    );
+}
+
+#[test]
+fn execution_error_mapping_preserves_all_three_typed_classes() {
+    for (source, expected) in [
+        (
+            HistoricalV2ExecutionErrorKind::InvalidInput,
+            HistoricalV2SlotStageErrorKind::InvalidInput,
+        ),
+        (
+            HistoricalV2ExecutionErrorKind::InfrastructureUnavailable,
+            HistoricalV2SlotStageErrorKind::InfrastructureUnavailable,
+        ),
+        (
+            HistoricalV2ExecutionErrorKind::InfrastructureFailed,
+            HistoricalV2SlotStageErrorKind::InfrastructureFailed,
+        ),
+    ] {
+        let error = slot_execution_error(HistoricalV2ExecutionError {
+            kind: source,
+            detail: "fixture".to_string(),
+        });
+        assert_eq!(error.stage, HistoricalV2SlotStage::IdenticalTests);
+        assert_eq!(error.kind, expected);
+        assert_eq!(error.detail, "fixture");
+    }
+}
+
+#[test]
+fn prepared_outcomes_keep_the_typed_reason_and_exact_artifact() {
+    let artifact = json!({"proof": "exact"});
+    let prepared = excluded(
+        HistoricalV2TerminalExclusionReason::Materialization(
+            HistoricalV2MaterializationExclusionReason::RepositoryUnavailable,
+        ),
+        HistoricalV2StageArtifactKind::MaterializationExclusion,
+        &"b".repeat(64),
+        &artifact,
+        HistoricalV2SlotStage::Materialization,
+    )
+    .unwrap();
+
+    assert_eq!(prepared.artifact, Some(artifact));
+    assert!(matches!(
+        prepared.outcome,
+        HistoricalV2SlotStageOutcome::Excluded {
+            reason: HistoricalV2TerminalExclusionReason::Materialization(
+                HistoricalV2MaterializationExclusionReason::RepositoryUnavailable
+            ),
+            artifact_kind: HistoricalV2StageArtifactKind::MaterializationExclusion,
+            ..
+        }
+    ));
+}
+
+fn stored(artifact: serde_json::Value) -> HistoricalV2StoredSlotStage {
+    HistoricalV2StoredSlotStage {
+        checkpoint: HistoricalV2SlotStageCheckpoint {
+            schema_version: HISTORICAL_V2_SLOT_STAGE_CHECKPOINT_SCHEMA_VERSION,
+            checkpoint_contract: "fixture".to_string(),
+            selection_sha256: "a".repeat(64),
+            language: "rust".to_string(),
+            slot_number: 1,
+            canonical_repository: "github.com/example/repository".to_string(),
+            sequence: 1,
+            previous_checkpoint_sha256: None,
+            stage: HistoricalV2SlotStage::Payload,
+            outcome: HistoricalV2SlotStageOutcome::Completed {
+                artifact_kind: HistoricalV2StageArtifactKind::SelectedPayload,
+                artifact_sha256: "b".repeat(64),
+            },
+            checkpoint_sha256: "c".repeat(64),
+        },
+        artifact: Some(artifact),
+    }
+}

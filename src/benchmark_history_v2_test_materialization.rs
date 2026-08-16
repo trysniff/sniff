@@ -135,6 +135,39 @@ pub fn materialize_historical_v2_test_snapshots_typed(
     }
 }
 
+pub(crate) fn recover_historical_v2_test_materialization(
+    materialization: &HistoricalV2Materialization,
+    materialized_roots: &HistoricalV2MaterializedRoots,
+) -> Result<bool, HistoricalV2SlotStageError> {
+    validate_historical_v2_materialization(materialization, materialized_roots).map_err(invalid)?;
+    let repository_root =
+        canonical_path(&materialized_roots.repository_root, "repository root").map_err(invalid)?;
+    let slot_root = repository_root
+        .parent()
+        .ok_or_else(|| invalid("historical-v2 repository root has no slot parent"))?;
+    let roots = HistoricalV2TestMaterializedRoots {
+        base_test_root: slot_root.join("base-tested"),
+        patched_test_root: slot_root.join("patched-tested"),
+    };
+    let inputs = [
+        slot_root.join("test.patch"),
+        slot_root.join("test-commit-message.txt"),
+    ];
+    let found = roots.base_test_root.exists()
+        || roots.patched_test_root.exists()
+        || inputs.iter().any(|path| path.exists());
+    if !found {
+        return Ok(false);
+    }
+    cleanup_test_materialization(
+        &repository_root,
+        &roots,
+        &[inputs[0].as_path(), inputs[1].as_path()],
+    )
+    .map_err(infrastructure)?;
+    Ok(true)
+}
+
 fn materialize_test_snapshots(
     materialization: &HistoricalV2Materialization,
     repository_root: &Path,
@@ -473,3 +506,7 @@ fn infrastructure(detail: impl Into<String>) -> HistoricalV2SlotStageError {
         detail: detail.into(),
     }
 }
+
+#[cfg(test)]
+#[path = "benchmark_history_v2_test_materialization_recovery_tests.rs"]
+mod recovery_tests;
