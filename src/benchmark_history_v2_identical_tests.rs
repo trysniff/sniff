@@ -25,7 +25,7 @@ const PROCESS_LIMIT: u64 = 1_024;
 const TEMPORARY_FILESYSTEM_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const INSTALL_COMMAND_TIMEOUT_SECONDS: u64 = 30 * 60;
 const TEST_TIMEOUT_SECONDS: u64 = 60 * 60;
-const RETAINED_OUTPUT_BYTES: usize = 1024 * 1024;
+const RETAINED_OUTPUT_BYTES: usize = 64 * 1024;
 
 pub fn prepare_historical_v2_identical_test_plan(
     inputs: &HistoricalV2AssessmentIdentityInputs<'_>,
@@ -138,6 +138,28 @@ pub fn execute_historical_v2_identical_tests<E: HistoricalV2IdenticalTestExecuto
     validate_execution_sources(inputs, identity).map_err(HistoricalV2ExecutionError::invalid)?;
     validate_raw_execution(plan, &raw).map_err(HistoricalV2ExecutionError::invalid)?;
     seal_execution(plan, raw).map_err(HistoricalV2ExecutionError::invalid)
+}
+
+pub fn validate_historical_v2_identical_test_execution(
+    plan: &HistoricalV2IdenticalTestPlan,
+    execution: &HistoricalV2IdenticalTestExecution,
+) -> Result<(), String> {
+    if execution.schema_version != HISTORICAL_V2_IDENTICAL_TEST_EXECUTION_SCHEMA_VERSION
+        || execution.execution_contract != EXECUTION_CONTRACT
+        || execution.plan_sha256 != plan.plan_sha256
+        || execution.execution_sha256
+            != committed_sha256(execution, |value| &mut value.execution_sha256)?
+    {
+        return Err("historical-v2 identical-test execution commitment changed".to_string());
+    }
+    validate_raw_execution(
+        plan,
+        &HistoricalV2RawIdenticalTestExecution {
+            image_id: execution.image_id.clone(),
+            events: execution.events.clone(),
+            outcome: execution.outcome.clone(),
+        },
+    )
 }
 
 pub(crate) fn test_script(commands: &[String]) -> String {

@@ -9,6 +9,10 @@ fn complete_identical_event_sequence_is_accepted() {
         outcome: HistoricalV2IdenticalTestOutcome::Passed,
     };
     validate_raw_execution(&plan, &raw).unwrap();
+    let mut execution = seal_execution(&plan, raw).unwrap();
+    validate_historical_v2_identical_test_execution(&plan, &execution).unwrap();
+    execution.image_id = format!("sha256:{}", "f".repeat(64));
+    assert!(validate_historical_v2_identical_test_execution(&plan, &execution).is_err());
 }
 
 #[test]
