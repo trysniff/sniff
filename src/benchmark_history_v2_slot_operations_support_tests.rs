@@ -107,6 +107,33 @@ fn execution_error_mapping_preserves_all_three_typed_classes() {
 }
 
 #[test]
+fn operation_identity_rejects_the_wrong_canonical_repository() {
+    let selection_sha256 = "a".repeat(64);
+    let context = HistoricalV2SlotStageContext {
+        identity: HistoricalV2SlotRunIdentity {
+            selection_sha256: &selection_sha256,
+            language: "rust",
+            slot_number: 1,
+            canonical_repository: "github.com/wrong/repository",
+        },
+        stage: HistoricalV2SlotStage::Payload,
+        history: &[],
+    };
+
+    let error = require_operation_identity(
+        context,
+        &selection_sha256,
+        "rust",
+        1,
+        "github.com/example/repository",
+    )
+    .unwrap_err();
+
+    assert_eq!(error.kind, HistoricalV2SlotStageErrorKind::InvalidInput);
+    assert!(error.detail.contains("crossed the runner identity"));
+}
+
+#[test]
 fn prepared_outcomes_keep_the_typed_reason_and_exact_artifact() {
     let artifact = json!({"proof": "exact"});
     let prepared = excluded(

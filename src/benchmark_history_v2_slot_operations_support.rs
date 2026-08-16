@@ -118,6 +118,27 @@ pub(super) fn remove_interrupted_materialization(
     })
 }
 
+pub(super) fn require_operation_identity(
+    context: HistoricalV2SlotStageContext<'_>,
+    selection_sha256: &str,
+    language: &str,
+    slot_number: usize,
+    canonical_repository: &str,
+) -> Result<(), HistoricalV2SlotStageError> {
+    if context.identity.selection_sha256 != selection_sha256
+        || context.identity.language != language
+        || context.identity.slot_number != slot_number
+        || context.identity.canonical_repository != canonical_repository
+    {
+        Err(invalid(
+            context.stage,
+            "historical-v2 operation inputs crossed the runner identity",
+        ))
+    } else {
+        Ok(())
+    }
+}
+
 pub(super) struct AssessmentState {
     pub(super) materialization: HistoricalV2Materialization,
     pub(super) materialized_roots: HistoricalV2MaterializedRoots,

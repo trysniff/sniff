@@ -26,6 +26,7 @@ use std::path::{Path, PathBuf};
 pub struct HistoricalV2SlotOperations<'a, E> {
     client: &'a Client,
     payload_inputs: HistoricalV2PayloadStageInputs<'a>,
+    selected_payload: HistoricalV2SelectedSlotPayloadArtifact,
     work_root: PathBuf,
     harness_repository_root: &'a Path,
     test_executor: &'a E,
@@ -39,6 +40,7 @@ impl<'a, E: HistoricalV2RecoverableTestExecutor> HistoricalV2SlotOperations<'a, 
         harness_repository_root: &'a Path,
         test_executor: &'a E,
     ) -> Result<Self, HistoricalV2SlotStageError> {
+        let selected_payload = prepare_historical_v2_selected_slot_payload(&payload_inputs)?;
         let work_root = canonical_work_root(
             work_root,
             payload_inputs.language,
@@ -47,6 +49,7 @@ impl<'a, E: HistoricalV2RecoverableTestExecutor> HistoricalV2SlotOperations<'a, 
         Ok(Self {
             client,
             payload_inputs,
+            selected_payload,
             work_root,
             harness_repository_root,
             test_executor,
@@ -120,11 +123,10 @@ impl<'a, E: HistoricalV2RecoverableTestExecutor> HistoricalV2SlotOperations<'a, 
     }
 
     fn payload_stage(&self) -> Result<HistoricalV2PreparedStage, HistoricalV2SlotStageError> {
-        let artifact = prepare_historical_v2_selected_slot_payload(&self.payload_inputs)?;
         completed(
             HistoricalV2StageArtifactKind::SelectedPayload,
-            &artifact.artifact_sha256,
-            &artifact,
+            &self.selected_payload.artifact_sha256,
+            &self.selected_payload,
             HistoricalV2SlotStage::Payload,
         )
     }
@@ -423,17 +425,13 @@ impl<'a, E: HistoricalV2RecoverableTestExecutor> HistoricalV2SlotOperations<'a, 
         &self,
         context: HistoricalV2SlotStageContext<'_>,
     ) -> Result<(), HistoricalV2SlotStageError> {
-        if context.identity.selection_sha256 != self.payload_inputs.selection.selection_sha256
-            || context.identity.language != self.payload_inputs.language
-            || context.identity.slot_number != self.payload_inputs.slot_number
-        {
-            Err(invalid(
-                context.stage,
-                "historical-v2 operation inputs crossed the runner identity",
-            ))
-        } else {
-            Ok(())
-        }
+        require_operation_identity(
+            context,
+            &self.payload_inputs.selection.selection_sha256,
+            self.payload_inputs.language,
+            self.payload_inputs.slot_number,
+            &self.selected_payload.canonical_repository,
+        )
     }
 
     fn recover_materialization(&self) -> Result<(), HistoricalV2SlotStageError> {
