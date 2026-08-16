@@ -230,6 +230,29 @@ fn durable_journal_never_commits_an_infrastructure_error() {
 }
 
 #[test]
+fn durable_journal_rejects_a_checkpoint_for_another_slot_path() {
+    let temp = tempfile::tempdir().unwrap();
+    let state = temp.path().join("state");
+    let mut journal = HistoricalV2SlotStageJournal::open(&state, "rust", 1).unwrap();
+    let error = journal
+        .append(
+            HistoricalV2SlotStageCheckpointInput {
+                selection_sha256: HASH_A,
+                language: "python",
+                slot_number: 2,
+                canonical_repository: "github.com/example/repository",
+                stage: HistoricalV2SlotStage::Payload,
+                outcome: completed(HistoricalV2StageArtifactKind::SelectedPayload),
+            },
+            Some(&json!({"payload_sha256": HASH_A})),
+        )
+        .unwrap_err();
+    assert_eq!(error.kind, HistoricalV2SlotStageErrorKind::InvalidInput);
+    assert!(error.detail.contains("journal path"));
+    assert!(journal.history().is_empty());
+}
+
+#[test]
 fn durable_terminal_exclusion_survives_resume_and_cannot_be_extended() {
     let temp = tempfile::tempdir().unwrap();
     let state = temp.path().join("state");

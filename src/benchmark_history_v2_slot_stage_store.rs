@@ -48,6 +48,8 @@ pub struct HistoricalV2StoredSlotStage {
 
 #[derive(Debug)]
 pub struct HistoricalV2SlotStageJournal {
+    language: String,
+    slot_number: usize,
     slot_root: PathBuf,
     staging_root: PathBuf,
     history: Vec<HistoricalV2StoredSlotStage>,
@@ -111,6 +113,8 @@ impl HistoricalV2SlotStageJournal {
         let history = load_history(&slot_root)
             .map_err(|detail| HistoricalV2SlotStageError::invalid(stage, detail))?;
         Ok(Self {
+            language: language.to_string(),
+            slot_number,
             slot_root,
             staging_root,
             history,
@@ -128,6 +132,12 @@ impl HistoricalV2SlotStageJournal {
         artifact: Option<&T>,
     ) -> Result<HistoricalV2SlotStageCheckpoint, HistoricalV2SlotStageError> {
         let stage = input.stage;
+        if input.language != self.language || input.slot_number != self.slot_number {
+            return Err(HistoricalV2SlotStageError::invalid(
+                stage,
+                "historical-v2 checkpoint identity does not match its journal path",
+            ));
+        }
         require_artifact_shape(&input.outcome, artifact.is_some())
             .map_err(|detail| HistoricalV2SlotStageError::invalid(stage, detail))?;
         let checkpoints = self
