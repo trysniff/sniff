@@ -7,11 +7,13 @@ use super::super::{
     HistoricalV2SourceCensus, HistoricalV2SourceSnapshotCensus,
     INTENTIONAL_BOUNDARY_SEMANTIC_CENSUS_SCHEMA_VERSION,
     INTENTIONAL_BOUNDARY_SOURCE_CENSUS_SCHEMA_VERSION, IntentionalBoundaryMethodCensusEntry,
-    IntentionalBoundarySemanticCensus, IntentionalBoundarySourceCensus,
+    IntentionalBoundarySemanticCensus, IntentionalBoundarySemanticOrigin,
+    IntentionalBoundarySemanticVisibility, IntentionalBoundarySourceCensus,
     IntentionalBoundarySourceFile, validate_historical_v2_source_census,
     validate_intentional_boundary_semantic_census,
 };
 use super::{SEMANTIC_CENSUS_CONTRACT, semantic_census_sha256, semantic_snapshot_sha256};
+use std::collections::BTreeSet;
 
 pub fn validate_historical_v2_semantic_census_commitment(
     materialization: &HistoricalV2Materialization,
@@ -54,6 +56,7 @@ pub(super) fn validate_snapshot(
     {
         return Err("historical-v2 semantic snapshot identity changed".to_string());
     }
+    validate_public_symbols(source, semantic)?;
     let source_projection = IntentionalBoundarySourceCensus {
         schema_version: INTENTIONAL_BOUNDARY_SOURCE_CENSUS_SCHEMA_VERSION,
         census_contract: "historical-v2-semantic-validation-projection".to_string(),
@@ -105,6 +108,45 @@ pub(super) fn validate_snapshot(
         compute_semantic_census_sha256(&semantic_projection)?;
     validate_intentional_boundary_semantic_census(&source_projection, &semantic_projection)
         .map_err(|error| format!("historical-v2 semantic snapshot is invalid: {error}"))
+}
+
+fn validate_public_symbols(
+    source: &HistoricalV2SourceSnapshotCensus,
+    semantic: &HistoricalV2SemanticSnapshotCensus,
+) -> Result<(), String> {
+    if semantic.public_symbol_count != semantic.public_symbols.len() {
+        return Err("historical-v2 public symbol count changed".to_string());
+    }
+    let indexers = semantic
+        .indexers
+        .iter()
+        .map(|indexer| indexer.indexer)
+        .collect::<BTreeSet<_>>();
+    let source_paths = source
+        .source_files
+        .iter()
+        .map(|file| file.repository_path.as_str())
+        .collect::<BTreeSet<_>>();
+    let mut seen = BTreeSet::new();
+    for public in &semantic.public_symbols {
+        if !indexers.contains(&public.indexer)
+            || !seen.insert((public.indexer, public.symbol.symbol_id.as_str()))
+            || public.symbol.origin != IntentionalBoundarySemanticOrigin::Repository
+            || (!matches!(
+                public.symbol.visibility,
+                IntentionalBoundarySemanticVisibility::Public
+                    | IntentionalBoundarySemanticVisibility::Protected
+            ) && public.symbol.surfaces.is_empty())
+            || public
+                .symbol
+                .definitions
+                .iter()
+                .any(|location| !source_paths.contains(location.repository_path.as_str()))
+        {
+            return Err("historical-v2 public semantic symbol is invalid".to_string());
+        }
+    }
+    Ok(())
 }
 
 fn is_sha256(value: &str) -> bool {

@@ -23,6 +23,11 @@ fn commits_exact_compiler_facts_for_every_historical_method() {
     assert_eq!(snapshot.unresolved_method_count, 0);
     assert_eq!(snapshot.methods[0].parser_unit_id, "h2m-v1:fixture");
     assert_eq!(snapshot.indexers[0].tool_name, "fixture-indexer");
+    assert_eq!(snapshot.public_symbol_count, 1);
+    assert_eq!(
+        snapshot.public_symbols[0].symbol.symbol_id,
+        "rust fixture process"
+    );
     validation::validate_snapshot("github.com/example/repo", &fixture.source, &snapshot).unwrap();
 }
 
@@ -58,6 +63,27 @@ fn semantic_census_requires_the_exact_language_indexer_set() {
     .unwrap_err();
 
     assert!(error.contains("indexer set is incomplete"));
+}
+
+#[test]
+fn semantic_validation_rejects_recommitted_fake_public_surface() {
+    let fixture = fixture();
+    let mut snapshot = build_semantic_snapshot(
+        fixture.root.path(),
+        &fixture.source,
+        &fixture.files,
+        &fixture.indexes,
+    )
+    .unwrap();
+    snapshot.public_symbols[0].symbol.origin =
+        super::super::IntentionalBoundarySemanticOrigin::External;
+    snapshot.semantic_snapshot_sha256 = semantic_snapshot_sha256(&snapshot).unwrap();
+
+    assert!(
+        validation::validate_snapshot("github.com/example/repo", &fixture.source, &snapshot)
+            .unwrap_err()
+            .contains("public semantic symbol")
+    );
 }
 
 struct Fixture {

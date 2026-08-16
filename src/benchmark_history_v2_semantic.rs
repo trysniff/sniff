@@ -1,13 +1,13 @@
 use super::intentional_boundary_inventory::read_intentional_boundary_git_blob;
-use super::intentional_boundary_semantic::{flatten_method, summarize_index};
+use super::intentional_boundary_semantic::{flatten_method, flatten_symbol, summarize_index};
 use super::{
     HISTORICAL_V2_SEMANTIC_CENSUS_SCHEMA_VERSION, HistoricalV2Materialization,
-    HistoricalV2MaterializedRoots, HistoricalV2SemanticCensus, HistoricalV2SemanticSnapshotCensus,
-    HistoricalV2SourceCensus, HistoricalV2SourceSnapshotCensus, IntentionalBoundaryIndexerKind,
-    IntentionalBoundaryMethodCensusEntry, IntentionalBoundarySemanticMethod,
-    validate_historical_v2_source_census,
+    HistoricalV2MaterializedRoots, HistoricalV2PublicSymbol, HistoricalV2SemanticCensus,
+    HistoricalV2SemanticSnapshotCensus, HistoricalV2SourceCensus, HistoricalV2SourceSnapshotCensus,
+    IntentionalBoundaryIndexerKind, IntentionalBoundaryMethodCensusEntry,
+    IntentionalBoundarySemanticMethod, validate_historical_v2_source_census,
 };
-use crate::semantic_index::SemanticIndex;
+use crate::semantic_index::{SemanticIndex, SemanticSymbolOrigin, SemanticVisibility};
 use crate::semantic_indexer_manifest::SemanticIndexerKind;
 use crate::semantic_method_join::join_methods;
 use crate::types::FileRecord;
@@ -128,6 +128,7 @@ fn build_semantic_snapshot(
     }
     let mut expected_methods = expected_method_map(source)?;
     let mut methods = Vec::<IntentionalBoundarySemanticMethod>::with_capacity(source.method_count);
+    let mut public_symbols = Vec::new();
     let mut indexers = Vec::with_capacity(indexes.len());
     for (kind, index) in indexes {
         let files_for_indexer = crate::semantic_indexer_runner::files_for_indexer(files, *kind);
@@ -152,6 +153,22 @@ fn build_semantic_snapshot(
                 index,
             )?);
         }
+        public_symbols.extend(
+            index
+                .symbols
+                .values()
+                .filter(|symbol| {
+                    symbol.origin == SemanticSymbolOrigin::Repository
+                        && (matches!(
+                            symbol.visibility,
+                            SemanticVisibility::Public | SemanticVisibility::Protected
+                        ) || !symbol.surfaces.is_empty())
+                })
+                .map(|symbol| HistoricalV2PublicSymbol {
+                    indexer: indexer_kind(*kind),
+                    symbol: flatten_symbol(symbol),
+                }),
+        );
         indexers.push(summarize_index(*kind, index)?);
     }
     if !expected_methods.is_empty() {
@@ -161,6 +178,15 @@ fn build_semantic_snapshot(
         ));
     }
     methods.sort_by(|left, right| left.parser_unit_id.cmp(&right.parser_unit_id));
+    public_symbols.sort_by(|left, right| {
+        (left.indexer, left.symbol.symbol_id.as_str())
+            .cmp(&(right.indexer, right.symbol.symbol_id.as_str()))
+    });
+    if public_symbols.windows(2).any(|pair| {
+        pair[0].indexer == pair[1].indexer && pair[0].symbol.symbol_id == pair[1].symbol.symbol_id
+    }) {
+        return Err("historical-v2 semantic census repeats a public symbol".to_string());
+    }
     indexers.sort_by_key(|indexer| indexer.indexer);
     let resolved_method_count = methods
         .iter()
@@ -189,6 +215,8 @@ fn build_semantic_snapshot(
         source_snapshot_census_sha256: source.snapshot_census_sha256.clone(),
         indexers,
         methods,
+        public_symbol_count: public_symbols.len(),
+        public_symbols,
         resolved_method_count,
         compiler_excluded_method_count,
         unresolved_method_count,
@@ -308,6 +336,8 @@ pub(super) fn semantic_snapshot_sha256(
         &value.source_snapshot_census_sha256,
         &value.indexers,
         &value.methods,
+        &value.public_symbols,
+        value.public_symbol_count,
         value.resolved_method_count,
         value.compiler_excluded_method_count,
         value.unresolved_method_count,

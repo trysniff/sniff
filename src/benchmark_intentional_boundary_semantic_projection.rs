@@ -75,7 +75,7 @@ pub(in crate::benchmark::release) fn flatten_method(
     })
 }
 
-fn flatten_symbol(
+pub(in crate::benchmark::release) fn flatten_symbol(
     symbol: &crate::semantic_index::SemanticSymbol,
 ) -> IntentionalBoundarySemanticSymbolFacts {
     IntentionalBoundarySemanticSymbolFacts {
