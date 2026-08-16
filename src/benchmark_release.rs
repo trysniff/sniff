@@ -87,6 +87,11 @@ mod history_v2_payload_schema;
 
 pub use history_v2_payload_schema::*;
 
+#[path = "benchmark_history_v2_payload_commitment.rs"]
+mod history_v2_payload_commitment;
+
+pub use history_v2_payload_commitment::validate_historical_v2_selected_payloads_commitment;
+
 #[cfg(feature = "sniffbench-frame")]
 #[path = "benchmark_history_v2_parquet.rs"]
 mod history_v2_parquet;
@@ -147,6 +152,16 @@ pub use history_v2_semantic_schema::*;
 mod history_v2_semantic;
 
 pub use history_v2_semantic::*;
+
+#[path = "benchmark_history_v2_assessment_identity_schema.rs"]
+mod history_v2_assessment_identity_schema;
+
+pub use history_v2_assessment_identity_schema::*;
+
+#[path = "benchmark_history_v2_assessment_identity.rs"]
+mod history_v2_assessment_identity;
+
+pub use history_v2_assessment_identity::*;
 
 #[path = "benchmark_intentional_boundary_frame_task.rs"]
 mod intentional_boundary_frame_task;

@@ -1,4 +1,7 @@
 use super::history_v2_parquet::{safe_relative_path, sha256_file};
+use super::history_v2_payload_commitment::{
+    PAYLOAD_CONTRACT, seal_historical_v2_selected_payload, seal_historical_v2_selected_payloads,
+};
 use super::history_v2_payload_parquet::visit_historical_v2_post_selection_shard;
 use super::{
     HISTORICAL_V2_SELECTED_PAYLOADS_SCHEMA_VERSION, HistoricalV2ExclusionManifest,
@@ -7,14 +10,11 @@ use super::{
     validate_historical_v2_frame_sources, validate_historical_v2_protocol,
     validate_historical_v2_slot_selection,
 };
-use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::Path;
-
-const PAYLOAD_CONTRACT: &str = "sniffbench-historical-v2-selected-payloads-v1";
 
 pub fn extract_historical_v2_selected_payloads(
     protocol_bytes: &[u8],
@@ -122,7 +122,7 @@ pub fn extract_historical_v2_selected_payloads(
         return Err("historical-v2 selected payload count changed".to_string());
     }
 
-    let mut payloads = HistoricalV2SelectedPayloads {
+    let payloads = HistoricalV2SelectedPayloads {
         schema_version: HISTORICAL_V2_SELECTED_PAYLOADS_SCHEMA_VERSION,
         payload_contract: PAYLOAD_CONTRACT.to_string(),
         protocol_sha256: protocol.protocol_sha256,
@@ -133,8 +133,7 @@ pub fn extract_historical_v2_selected_payloads(
         records,
         payloads_sha256: String::new(),
     };
-    payloads.payloads_sha256 = payloads_sha256(&payloads)?;
-    Ok(payloads)
+    seal_historical_v2_selected_payloads(payloads)
 }
 
 pub fn validate_historical_v2_selected_payloads(
@@ -249,21 +248,7 @@ fn committed_payload(
     }
     let install_config_sha256 = row.install_config.as_deref().map(sha256);
     let test_patch_sha256 = row.test_patch.as_deref().map(sha256);
-    let payload_sha256 = hash_json(&(
-        &binding.language,
-        binding.slot_number,
-        row.source_shard_index,
-        row.source_row_index,
-        row.global_row_index,
-        &row.instance_id,
-        &row.patch,
-        &patch_sha256,
-        &row.install_config,
-        &install_config_sha256,
-        &row.test_patch,
-        &test_patch_sha256,
-    ))?;
-    Ok(HistoricalV2SelectedPayload {
+    seal_historical_v2_selected_payload(HistoricalV2SelectedPayload {
         language: binding.language.clone(),
         slot_number: binding.slot_number,
         source_shard_index: row.source_shard_index,
@@ -276,21 +261,8 @@ fn committed_payload(
         install_config_sha256,
         test_patch: row.test_patch,
         test_patch_sha256,
-        payload_sha256,
+        payload_sha256: String::new(),
     })
-}
-
-fn payloads_sha256(payloads: &HistoricalV2SelectedPayloads) -> Result<String, String> {
-    hash_json(&(
-        payloads.schema_version,
-        &payloads.payload_contract,
-        &payloads.protocol_sha256,
-        &payloads.frame_sha256,
-        &payloads.exclusion_manifest_sha256,
-        &payloads.selection_sha256,
-        payloads.selected_count,
-        &payloads.records,
-    ))
 }
 
 fn write_create_new(path: &Path, payloads: &HistoricalV2SelectedPayloads) -> Result<(), String> {
@@ -305,12 +277,6 @@ fn write_create_new(path: &Path, payloads: &HistoricalV2SelectedPayloads) -> Res
         .write_all(&bytes)
         .and_then(|()| output.sync_all())
         .map_err(|error| format!("failed to persist historical-v2 selected payloads: {error}"))
-}
-
-fn hash_json(value: &impl Serialize) -> Result<String, String> {
-    serde_json::to_vec(value)
-        .map(|bytes| format!("{:x}", Sha256::digest(bytes)))
-        .map_err(|error| format!("failed to commit historical-v2 payload artifact: {error}"))
 }
 
 fn sha256(value: &str) -> String {
