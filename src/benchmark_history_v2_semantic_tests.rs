@@ -28,7 +28,7 @@ fn commits_exact_compiler_facts_for_every_historical_method() {
         snapshot.public_symbols[0].symbol.symbol_id,
         "rust fixture process"
     );
-    validation::validate_snapshot("github.com/example/repo", &fixture.source, &snapshot).unwrap();
+    validation::validate_snapshot("example/repo", &fixture.source, &snapshot).unwrap();
 }
 
 #[test]
@@ -45,7 +45,7 @@ fn semantic_validation_rejects_recommitted_invented_method() {
     snapshot.semantic_snapshot_sha256 = semantic_snapshot_sha256(&snapshot).unwrap();
 
     assert!(
-        validation::validate_snapshot("github.com/example/repo", &fixture.source, &snapshot)
+        validation::validate_snapshot("example/repo", &fixture.source, &snapshot)
             .unwrap_err()
             .contains("invented")
     );
@@ -80,7 +80,7 @@ fn semantic_validation_rejects_recommitted_fake_public_surface() {
     snapshot.semantic_snapshot_sha256 = semantic_snapshot_sha256(&snapshot).unwrap();
 
     assert!(
-        validation::validate_snapshot("github.com/example/repo", &fixture.source, &snapshot)
+        validation::validate_snapshot("example/repo", &fixture.source, &snapshot)
             .unwrap_err()
             .contains("public semantic symbol")
     );

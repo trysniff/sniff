@@ -160,7 +160,7 @@ fn fixture_identity(payload: &HistoricalV2SelectedPayload) -> HistoricalV2Assess
         slot_number: payload.slot_number,
         global_row_index: payload.global_row_index,
         instance_id: payload.instance_id.clone(),
-        canonical_repository: "github.com/owner/repo".to_string(),
+        canonical_repository: "owner/repo".to_string(),
         pull_number: 1,
         base_revision: "a".repeat(40),
         rank_sha256: digest('8'),

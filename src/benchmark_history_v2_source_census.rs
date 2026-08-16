@@ -40,14 +40,15 @@ pub fn census_historical_v2_sources_typed(
     roots: &HistoricalV2MaterializedRoots,
 ) -> Result<SourceCensusStageResult, HistoricalV2SlotStageError> {
     validate_historical_v2_materialization(materialization, roots).map_err(invalid)?;
+    let inventory_repository = format!("github.com/{}", materialization.canonical_repository);
     let base_inventory = inventory_intentional_boundary_repository(
-        &materialization.canonical_repository,
+        &inventory_repository,
         &materialization.base_revision,
         &roots.base_root,
     )
     .map_err(infrastructure)?;
     let patched_inventory = inventory_intentional_boundary_repository(
-        &materialization.canonical_repository,
+        &inventory_repository,
         &materialization.patched_commit_oid,
         &roots.patched_root,
     )
@@ -69,14 +70,14 @@ pub fn census_historical_v2_sources_typed(
         return Ok(HistoricalV2StageResult::Excluded(exclusion));
     }
     let base_parser_census = census_intentional_boundary_repository(
-        &materialization.canonical_repository,
+        &inventory_repository,
         &materialization.base_revision,
         &roots.base_root,
         &base_inventory,
     )
     .map_err(infrastructure)?;
     let patched_parser_census = census_intentional_boundary_repository(
-        &materialization.canonical_repository,
+        &inventory_repository,
         &materialization.patched_commit_oid,
         &roots.patched_root,
         &patched_inventory,

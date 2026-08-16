@@ -74,7 +74,7 @@ fn fixtures() -> (
         test_materialization_sha256: None,
         language: "python".to_string(),
         slot_number: 1,
-        canonical_repository: "github.com/example/project".to_string(),
+        canonical_repository: "example/project".to_string(),
         base_commit_oid: "1".repeat(40),
         patched_commit_oid: "2".repeat(40),
         base_image_name: "python_3.11".to_string(),

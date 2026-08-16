@@ -290,9 +290,8 @@ fn valid_sha256(value: &str) -> bool {
 
 fn valid_repository(value: &str) -> bool {
     let parts = value.split('/').collect::<Vec<_>>();
-    parts.len() == 3
-        && parts[0] == "github.com"
-        && parts[1..].iter().all(|part| {
+    parts.len() == 2
+        && parts.iter().all(|part| {
             !part.is_empty()
                 && *part != "."
                 && *part != ".."

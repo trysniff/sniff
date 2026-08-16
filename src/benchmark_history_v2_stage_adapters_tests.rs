@@ -28,7 +28,7 @@ fn selected_slot_payload_envelope_binds_the_complete_resume_identity() {
         slot_number: 1,
         global_row_index: 7,
         instance_id: "owner__repo-1".to_string(),
-        canonical_repository: "github.com/owner/repo".to_string(),
+        canonical_repository: "owner/repo".to_string(),
         pull_number: 1,
         base_revision: "a".repeat(40),
         rank_sha256: digest('2'),
@@ -52,7 +52,7 @@ fn no_test_patch_artifact_is_not_an_uncommitted_skip() {
         materialization_sha256: digest('2'),
         language: "rust".to_string(),
         slot_number: 1,
-        canonical_repository: "github.com/owner/repo".to_string(),
+        canonical_repository: "owner/repo".to_string(),
         artifact_sha256: String::new(),
     })
     .unwrap();
@@ -65,7 +65,7 @@ fn materialization_exclusion_keeps_its_exact_evidence_commitment() {
     let exclusion = HistoricalV2MaterializationExclusion {
         schema_version: HISTORICAL_V2_MATERIALIZATION_EXCLUSION_SCHEMA_VERSION,
         exclusion_contract: "fixture".to_string(),
-        canonical_repository: "github.com/owner/repo".to_string(),
+        canonical_repository: "owner/repo".to_string(),
         base_revision: "a".repeat(40),
         historical_patch_sha256: digest('3'),
         reason: HistoricalV2MaterializationExclusionReason::RepositoryUnavailable,

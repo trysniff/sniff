@@ -245,9 +245,8 @@ pub(super) fn git_common_directory(root: &Path) -> Result<PathBuf, String> {
 
 pub(super) fn require_repository(value: &str) -> Result<(), String> {
     let parts = value.split('/').collect::<Vec<_>>();
-    if parts.len() != 3
-        || parts[0] != "github.com"
-        || parts[1..].iter().any(|part| {
+    if parts.len() != 2
+        || parts.iter().any(|part| {
             part.is_empty()
                 || *part == "."
                 || *part == ".."
@@ -258,7 +257,7 @@ pub(super) fn require_repository(value: &str) -> Result<(), String> {
         })
     {
         return Err(
-            "historical-v2 repository identity is not canonical GitHub owner/repo".to_string(),
+            "historical-v2 repository identity is not canonical owner/repository".to_string(),
         );
     }
     Ok(())

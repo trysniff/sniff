@@ -28,7 +28,7 @@ pub fn materialize_historical_v2_repository(
     expected_patch_sha256: &str,
     slot_root: &Path,
 ) -> Result<(HistoricalV2Materialization, HistoricalV2MaterializedRoots), String> {
-    let url = format!("https://{canonical_repository}.git");
+    let url = format!("https://github.com/{canonical_repository}.git");
     materialize_from_url(
         canonical_repository,
         &url,
