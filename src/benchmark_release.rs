@@ -82,12 +82,28 @@ mod history_v2_selection;
 
 pub use history_v2_selection::*;
 
+#[path = "benchmark_history_v2_payload_schema.rs"]
+mod history_v2_payload_schema;
+
+pub use history_v2_payload_schema::*;
+
 #[cfg(feature = "sniffbench-frame")]
 #[path = "benchmark_history_v2_parquet.rs"]
 mod history_v2_parquet;
 
 #[cfg(feature = "sniffbench-frame")]
 pub use history_v2_parquet::*;
+
+#[cfg(feature = "sniffbench-frame")]
+#[path = "benchmark_history_v2_payload_parquet.rs"]
+mod history_v2_payload_parquet;
+
+#[cfg(feature = "sniffbench-frame")]
+#[path = "benchmark_history_v2_payloads.rs"]
+mod history_v2_payloads;
+
+#[cfg(feature = "sniffbench-frame")]
+pub use history_v2_payloads::*;
 
 #[path = "benchmark_intentional_boundary_frame_task.rs"]
 mod intentional_boundary_frame_task;

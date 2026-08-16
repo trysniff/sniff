@@ -1,8 +1,9 @@
 use clap::{Parser, Subcommand};
 use sniff::benchmark::{
     HistoricalV2ExclusionManifest, HistoricalV2Frame, HistoricalV2SlotSelection,
-    validate_historical_v2_frame_sources, validate_historical_v2_slot_selection,
-    write_derived_historical_v2_exclusion_manifest, write_historical_v2_frame,
+    validate_historical_v2_frame_sources, validate_historical_v2_selected_payloads,
+    validate_historical_v2_slot_selection, write_derived_historical_v2_exclusion_manifest,
+    write_historical_v2_frame, write_historical_v2_selected_payloads,
     write_historical_v2_slot_selection,
 };
 use std::fs;
@@ -54,6 +55,26 @@ enum Command {
         frame: PathBuf,
         exclusions: PathBuf,
         selection: PathBuf,
+    },
+    /// Open only the two allowed payload fields after replaying the fixed slots.
+    ExtractSelectedPayloads {
+        protocol: PathBuf,
+        dataset_root: PathBuf,
+        artifact_root: PathBuf,
+        frame: PathBuf,
+        exclusions: PathBuf,
+        selection: PathBuf,
+        output: PathBuf,
+    },
+    /// Replay the fixed slots and reproduce their selected payloads.
+    ValidateSelectedPayloads {
+        protocol: PathBuf,
+        dataset_root: PathBuf,
+        artifact_root: PathBuf,
+        frame: PathBuf,
+        exclusions: PathBuf,
+        selection: PathBuf,
+        payloads: PathBuf,
     },
 }
 
@@ -164,6 +185,68 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             eprintln!(
                 "Historical-v2 slot selection validated\nSelected: {}\nSelection SHA-256: {}",
                 selection.selected_count, selection.selection_sha256
+            );
+        }
+        Command::ExtractSelectedPayloads {
+            protocol,
+            dataset_root,
+            artifact_root,
+            frame,
+            exclusions,
+            selection,
+            output,
+        } => {
+            let protocol = fs::read(protocol)?;
+            let frame: HistoricalV2Frame = serde_json::from_slice(&fs::read(frame)?)?;
+            let exclusions: HistoricalV2ExclusionManifest =
+                serde_json::from_slice(&fs::read(exclusions)?)?;
+            let selection: HistoricalV2SlotSelection =
+                serde_json::from_slice(&fs::read(selection)?)?;
+            let payloads = write_historical_v2_selected_payloads(
+                &protocol,
+                &dataset_root,
+                &artifact_root,
+                &frame,
+                &exclusions,
+                &selection,
+                &output,
+            )
+            .map_err(invalid_data)?;
+            eprintln!(
+                "Historical-v2 selected payloads written to {}\nSelected: {}\nPayloads SHA-256: {}",
+                output.display(),
+                payloads.selected_count,
+                payloads.payloads_sha256
+            );
+        }
+        Command::ValidateSelectedPayloads {
+            protocol,
+            dataset_root,
+            artifact_root,
+            frame,
+            exclusions,
+            selection,
+            payloads,
+        } => {
+            let protocol = fs::read(protocol)?;
+            let frame: HistoricalV2Frame = serde_json::from_slice(&fs::read(frame)?)?;
+            let exclusions: HistoricalV2ExclusionManifest =
+                serde_json::from_slice(&fs::read(exclusions)?)?;
+            let selection: HistoricalV2SlotSelection =
+                serde_json::from_slice(&fs::read(selection)?)?;
+            validate_historical_v2_selected_payloads(
+                &protocol,
+                &dataset_root,
+                &artifact_root,
+                &frame,
+                &exclusions,
+                &selection,
+                &payloads,
+            )
+            .map_err(invalid_data)?;
+            eprintln!(
+                "Historical-v2 selected payloads validated\nSelection SHA-256: {}",
+                selection.selection_sha256
             );
         }
     }
