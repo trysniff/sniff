@@ -1,6 +1,6 @@
 use super::*;
 
-pub(super) fn flatten_method(
+pub(in crate::benchmark::release) fn flatten_method(
     indexer: IntentionalBoundaryIndexerKind,
     expected: &IntentionalBoundaryMethodCensusEntry,
     binding: &crate::semantic_method_join::SemanticMethodBinding,
@@ -75,7 +75,7 @@ pub(super) fn flatten_method(
     })
 }
 
-fn flatten_symbol(
+pub(in crate::benchmark::release) fn flatten_symbol(
     symbol: &crate::semantic_index::SemanticSymbol,
 ) -> IntentionalBoundarySemanticSymbolFacts {
     IntentionalBoundarySemanticSymbolFacts {
@@ -210,7 +210,7 @@ fn flatten_test_relationships(
         .collect()
 }
 
-pub(super) fn summarize_index(
+pub(in crate::benchmark::release) fn summarize_index(
     kind: SemanticIndexerKind,
     index: &SemanticIndex,
 ) -> Result<IntentionalBoundarySemanticIndexerCensus, String> {

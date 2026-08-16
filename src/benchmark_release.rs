@@ -138,6 +138,16 @@ mod history_v2_source_census;
 
 pub use history_v2_source_census::*;
 
+#[path = "benchmark_history_v2_semantic_schema.rs"]
+mod history_v2_semantic_schema;
+
+pub use history_v2_semantic_schema::*;
+
+#[path = "benchmark_history_v2_semantic.rs"]
+mod history_v2_semantic;
+
+pub use history_v2_semantic::*;
+
 #[path = "benchmark_intentional_boundary_frame_task.rs"]
 mod intentional_boundary_frame_task;
 
