@@ -87,6 +87,11 @@ mod history_v2_payload_schema;
 
 pub use history_v2_payload_schema::*;
 
+#[path = "benchmark_history_v2_payload_commitment.rs"]
+mod history_v2_payload_commitment;
+
+pub use history_v2_payload_commitment::validate_historical_v2_selected_payloads_commitment;
+
 #[cfg(feature = "sniffbench-frame")]
 #[path = "benchmark_history_v2_parquet.rs"]
 mod history_v2_parquet;
