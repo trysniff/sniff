@@ -285,6 +285,16 @@ mod history_v2_slot_stage;
 
 pub use history_v2_slot_stage::*;
 
+#[path = "benchmark_history_v2_slot_runner_schema.rs"]
+mod history_v2_slot_runner_schema;
+
+pub use history_v2_slot_runner_schema::*;
+
+#[path = "benchmark_history_v2_slot_runner.rs"]
+mod history_v2_slot_runner;
+
+pub use history_v2_slot_runner::*;
+
 #[path = "benchmark_history_v2_stage_adapters.rs"]
 mod history_v2_stage_adapters;
 
