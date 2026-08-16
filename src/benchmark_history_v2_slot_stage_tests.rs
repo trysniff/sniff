@@ -53,6 +53,8 @@ fn terminal_exclusion_closes_the_fixed_slot() {
                 reason: HistoricalV2TerminalExclusionReason::Materialization(
                     HistoricalV2MaterializationExclusionReason::HistoricalPatchDoesNotApply,
                 ),
+                artifact_kind: HistoricalV2StageArtifactKind::MaterializationExclusion,
+                artifact_sha256: HASH_A.to_string(),
             },
         )
         .unwrap(),
@@ -84,6 +86,8 @@ fn exclusions_cannot_be_attached_to_an_unrelated_stage() {
             reason: HistoricalV2TerminalExclusionReason::Qualification(vec![
                 HistoricalV2QualificationExclusionReason::NoNetProductionReduction,
             ]),
+            artifact_kind: HistoricalV2StageArtifactKind::Qualification,
+            artifact_sha256: HASH_A.to_string(),
         },
     )
     .unwrap_err();
@@ -98,6 +102,8 @@ fn qualification_exclusions_must_be_nonempty_sorted_and_unique() {
             HistoricalV2QualificationExclusionReason::NoNetProductionReduction,
             HistoricalV2QualificationExclusionReason::NoNetProductionReduction,
         ]),
+        artifact_kind: HistoricalV2StageArtifactKind::Qualification,
+        artifact_sha256: HASH_A.to_string(),
     };
     assert!(
         append(&history, HistoricalV2SlotStage::Qualification, repeated)
@@ -246,9 +252,14 @@ fn durable_terminal_exclusion_survives_resume_and_cannot_be_extended() {
                         reason: HistoricalV2TerminalExclusionReason::Materialization(
                             HistoricalV2MaterializationExclusionReason::RepositoryUnavailable,
                         ),
+                        artifact_kind: HistoricalV2StageArtifactKind::MaterializationExclusion,
+                        artifact_sha256: HASH_A.to_string(),
                     },
                 ),
-                None,
+                Some(&json!({
+                    "reason": "repository_unavailable",
+                    "evidence_sha256": HASH_A
+                })),
             )
             .unwrap();
     }

@@ -163,9 +163,18 @@ fn validate_outcome(
                 return Err("historical-v2 completed stage artifact is invalid".to_string());
             }
         }
-        HistoricalV2SlotStageOutcome::Excluded { reason } => {
+        HistoricalV2SlotStageOutcome::Excluded {
+            reason,
+            artifact_kind,
+            artifact_sha256,
+        } => {
             if exclusion_stage(reason) != stage {
                 return Err("historical-v2 exclusion is attached to the wrong stage".to_string());
+            }
+            if expected_exclusion_artifact(stage) != Some(*artifact_kind)
+                || !valid_sha256(artifact_sha256)
+            {
+                return Err("historical-v2 exclusion artifact is invalid".to_string());
             }
             if let HistoricalV2TerminalExclusionReason::Qualification(reasons) = reason
                 && (reasons.is_empty() || !strictly_sorted_unique(reasons))
@@ -203,6 +212,23 @@ fn expected_artifacts(stage: HistoricalV2SlotStage) -> &'static [HistoricalV2Sta
         Stage::TestRecipe => &[Artifact::TestRecipe],
         Stage::IdenticalTests => &[Artifact::IdenticalTestExecution],
         Stage::ReadyForReview => &[],
+    }
+}
+
+fn expected_exclusion_artifact(
+    stage: HistoricalV2SlotStage,
+) -> Option<HistoricalV2StageArtifactKind> {
+    use HistoricalV2SlotStage as Stage;
+    use HistoricalV2StageArtifactKind as Artifact;
+    match stage {
+        Stage::Materialization => Some(Artifact::MaterializationExclusion),
+        Stage::TestMaterialization => Some(Artifact::TestMaterializationExclusion),
+        Stage::SourceCensus => Some(Artifact::SourceCensusExclusion),
+        Stage::SemanticCensus => Some(Artifact::SemanticCensusExclusion),
+        Stage::Qualification => Some(Artifact::Qualification),
+        Stage::TestRecipe => Some(Artifact::TestRecipe),
+        Stage::IdenticalTests => Some(Artifact::IdenticalTestExecution),
+        Stage::Payload | Stage::AssessmentIdentity | Stage::ReadyForReview => None,
     }
 }
 

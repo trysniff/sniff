@@ -34,6 +34,10 @@ pub enum HistoricalV2StageArtifactKind {
     Qualification,
     TestRecipe,
     IdenticalTestExecution,
+    MaterializationExclusion,
+    TestMaterializationExclusion,
+    SourceCensusExclusion,
+    SemanticCensusExclusion,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -95,6 +99,8 @@ pub enum HistoricalV2SlotStageOutcome {
     },
     Excluded {
         reason: HistoricalV2TerminalExclusionReason,
+        artifact_kind: HistoricalV2StageArtifactKind,
+        artifact_sha256: String,
     },
     ReadyForReview,
 }

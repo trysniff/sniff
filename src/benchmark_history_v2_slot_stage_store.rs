@@ -268,12 +268,12 @@ fn load_stage(root: &Path, sequence: usize) -> Result<HistoricalV2StoredSlotStag
         "stage checkpoint",
     )?)
     .map_err(|error| format!("invalid historical-v2 stage checkpoint: {error}"))?;
-    let completed = matches!(
+    let has_artifact = !matches!(
         checkpoint.outcome,
-        HistoricalV2SlotStageOutcome::Completed { .. }
+        HistoricalV2SlotStageOutcome::ReadyForReview
     );
     let names = transaction_file_names(root)?;
-    let expected_names = if completed {
+    let expected_names = if has_artifact {
         vec![TRANSACTION_FILE, ARTIFACT_FILE, CHECKPOINT_FILE]
     } else {
         vec![TRANSACTION_FILE, CHECKPOINT_FILE]
@@ -291,11 +291,11 @@ fn load_stage(root: &Path, sequence: usize) -> Result<HistoricalV2StoredSlotStag
         || transaction.transaction_contract != TRANSACTION_CONTRACT
         || transaction.sequence != sequence
         || transaction.checkpoint_sha256 != checkpoint.checkpoint_sha256
-        || transaction.files != committed_files(root, completed)?
+        || transaction.files != committed_files(root, has_artifact)?
     {
         return Err("historical-v2 stage transaction commitment changed".to_string());
     }
-    let artifact = completed
+    let artifact = has_artifact
         .then(|| {
             serde_json::from_slice::<Value>(&read_limited(
                 &root.join(ARTIFACT_FILE),
@@ -363,10 +363,10 @@ fn require_artifact_shape(
     outcome: &HistoricalV2SlotStageOutcome,
     has_artifact: bool,
 ) -> Result<(), String> {
-    if matches!(outcome, HistoricalV2SlotStageOutcome::Completed { .. }) == has_artifact {
+    if !matches!(outcome, HistoricalV2SlotStageOutcome::ReadyForReview) == has_artifact {
         Ok(())
     } else {
-        Err("historical-v2 completed stages require exactly one artifact".to_string())
+        Err("historical-v2 completed and excluded stages require exactly one artifact".to_string())
     }
 }
 
