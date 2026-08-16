@@ -36,6 +36,19 @@ pub(super) fn deterministic_commit(
     run_git_command(&mut command, "create deterministic patched commit").and_then(output_text)
 }
 
+pub(super) fn apply_indexed_patch(
+    root: &Path,
+    patch_path: &str,
+    check_only: bool,
+) -> Result<(), String> {
+    let mut args = vec!["apply"];
+    if check_only {
+        args.push("--check");
+    }
+    args.extend(["--index", "--whitespace=nowarn", patch_path]);
+    git(root, &args)
+}
+
 pub(super) fn require_exact_commit(root: &Path, revision: &str) -> Result<(), String> {
     let resolved = git_text(
         root,

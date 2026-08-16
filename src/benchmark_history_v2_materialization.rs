@@ -1,7 +1,8 @@
 use super::history_v2_materialization_git::{
-    canonical_path, create_new_absolute_directory, deterministic_commit, git, git_common_directory,
-    git_text, path_text, remove_generated_root, require_clean, require_exact_commit, require_oid,
-    require_repository, require_revision, require_sha256, write_create_new,
+    apply_indexed_patch, canonical_path, create_new_absolute_directory, deterministic_commit, git,
+    git_common_directory, git_text, path_text, remove_generated_root, require_clean,
+    require_exact_commit, require_oid, require_repository, require_revision, require_sha256,
+    write_create_new,
 };
 use super::{
     HISTORICAL_V2_MATERIALIZATION_SCHEMA_VERSION, HistoricalCloneOutcome,
@@ -32,7 +33,7 @@ pub fn materialize_historical_v2_repository(
     )
 }
 
-fn materialize_from_url(
+pub(super) fn materialize_from_url(
     canonical_repository: &str,
     repository_url: &str,
     base_revision: &str,
@@ -126,20 +127,8 @@ fn materialize_in_root(
     let patch_path = inputs.slot_root.join("historical.patch");
     write_create_new(&patch_path, inputs.historical_patch.as_bytes())?;
     let patch_text = path_text(&patch_path)?;
-    git(
-        &inputs.patched_root,
-        &[
-            "apply",
-            "--check",
-            "--index",
-            "--whitespace=nowarn",
-            &patch_text,
-        ],
-    )?;
-    git(
-        &inputs.patched_root,
-        &["apply", "--index", "--whitespace=nowarn", &patch_text],
-    )?;
+    apply_indexed_patch(&inputs.patched_root, &patch_text, true)?;
+    apply_indexed_patch(&inputs.patched_root, &patch_text, false)?;
     fs::remove_file(&patch_path)
         .map_err(|error| format!("failed to remove historical-v2 patch input: {error}"))?;
     let patched_tree_oid = git_text(&inputs.patched_root, &["write-tree"])?;

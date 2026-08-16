@@ -118,6 +118,16 @@ pub use history_v2_materialization::*;
 #[path = "benchmark_history_v2_materialization_git.rs"]
 mod history_v2_materialization_git;
 
+#[path = "benchmark_history_v2_test_materialization_schema.rs"]
+mod history_v2_test_materialization_schema;
+
+pub use history_v2_test_materialization_schema::*;
+
+#[path = "benchmark_history_v2_test_materialization.rs"]
+mod history_v2_test_materialization;
+
+pub use history_v2_test_materialization::*;
+
 #[path = "benchmark_intentional_boundary_frame_task.rs"]
 mod intentional_boundary_frame_task;
 
