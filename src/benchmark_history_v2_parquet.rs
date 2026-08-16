@@ -1,12 +1,12 @@
 use super::{
     HISTORICAL_V2_FRAME_SCHEMA_VERSION, HistoricalV2Frame, HistoricalV2FrameDisposition,
     HistoricalV2FrameExclusionReason, HistoricalV2FrameRecord, HistoricalV2FrameShard,
-    HistoricalV2ProjectedRow, derive_historical_v2_frame_record, validate_historical_v2_protocol,
+    HistoricalV2ProjectedRow, derive_historical_v2_frame_record, historical_v2_frame_sha256,
+    validate_historical_v2_frame_commitment, validate_historical_v2_protocol,
 };
 use parquet::file::reader::{FileReader, SerializedFileReader};
 use parquet::record::Field;
 use parquet::schema::parser::parse_message_type;
-use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fs::{self, File, OpenOptions};
@@ -173,33 +173,6 @@ pub fn validate_historical_v2_frame_sources(
     Ok(())
 }
 
-pub fn validate_historical_v2_frame_commitment(frame: &HistoricalV2Frame) -> Result<(), String> {
-    if frame.schema_version != HISTORICAL_V2_FRAME_SCHEMA_VERSION
-        || frame.row_count != frame.records.len()
-        || frame.eligible_count + frame.excluded_count != frame.row_count
-        || frame
-            .records
-            .iter()
-            .enumerate()
-            .any(|(index, record)| record.global_row_index != index)
-        || frame.eligible_count
-            != frame
-                .records
-                .iter()
-                .filter(|record| {
-                    matches!(
-                        record.disposition,
-                        HistoricalV2FrameDisposition::Eligible { .. }
-                    )
-                })
-                .count()
-        || frame.frame_sha256 != historical_v2_frame_sha256(frame)?
-    {
-        return Err("historical-v2 frame commitment changed".to_string());
-    }
-    Ok(())
-}
-
 pub fn visit_historical_v2_projected_shard<F>(
     path: &Path,
     source_shard_index: usize,
@@ -325,34 +298,6 @@ fn mark_duplicate_pull_requests(records: &mut [HistoricalV2FrameRecord]) {
     }
 }
 
-fn historical_v2_frame_sha256(frame: &HistoricalV2Frame) -> Result<String, String> {
-    #[derive(Serialize)]
-    struct Commitment<'a> {
-        schema_version: u32,
-        protocol_sha256: &'a str,
-        dataset_revision: &'a str,
-        ranking_seed: &'a str,
-        shards: &'a [HistoricalV2FrameShard],
-        row_count: usize,
-        eligible_count: usize,
-        excluded_count: usize,
-        records: &'a [HistoricalV2FrameRecord],
-    }
-    let bytes = serde_json::to_vec(&Commitment {
-        schema_version: frame.schema_version,
-        protocol_sha256: &frame.protocol_sha256,
-        dataset_revision: &frame.dataset_revision,
-        ranking_seed: &frame.ranking_seed,
-        shards: &frame.shards,
-        row_count: frame.row_count,
-        eligible_count: frame.eligible_count,
-        excluded_count: frame.excluded_count,
-        records: &frame.records,
-    })
-    .map_err(|error| format!("failed to commit historical-v2 frame: {error}"))?;
-    Ok(sha256(&bytes))
-}
-
 fn sha256_file(path: &Path) -> Result<String, String> {
     let file = File::open(path)
         .map_err(|error| format!("failed to open historical-v2 shard for hashing: {error}"))?;
@@ -382,8 +327,4 @@ fn safe_relative_path(value: &str) -> Result<&Path, String> {
         return Err(format!("unsafe historical-v2 shard path: {value}"));
     }
     Ok(path)
-}
-
-fn sha256(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
 }

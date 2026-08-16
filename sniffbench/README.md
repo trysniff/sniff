@@ -50,6 +50,35 @@ cargo run --locked --features sniffbench-frame --bin sniffbench-frame -- \
   validate sniffbench/historical-v2-protocol.json DATASET_ROOT frame.json
 ```
 
+Before slot selection, prepare a draft exclusion manifest with an empty
+`manifest_sha256`. It must contain all six protocol partitions in protocol
+order, sorted canonical `owner/repository` identities, and at least one sorted
+relative artifact commitment per partition. Sealing rehashes every artifact
+under `ARTIFACT_ROOT`; missing, changed, repeated, absolute, traversing, or
+symlink-escaping paths fail closed:
+
+```console
+cargo run --locked --features sniffbench-frame --bin sniffbench-frame -- \
+  seal-exclusions sniffbench/historical-v2-protocol.json ARTIFACT_ROOT \
+  exclusions-draft.json exclusions.json
+```
+
+Selection first replays all pinned Parquet sources. It then recalculates every
+candidate rank, lets the globally lowest rank claim a repository, records the
+fate of every eligible frame row, and writes exactly 128 immutable slots per
+language. Repository-assessment failures close those slots later; selection is
+never rerun to replace them:
+
+```console
+cargo run --locked --features sniffbench-frame --bin sniffbench-frame -- \
+  select sniffbench/historical-v2-protocol.json DATASET_ROOT ARTIFACT_ROOT \
+  frame.json exclusions.json selection.json
+
+cargo run --locked --features sniffbench-frame --bin sniffbench-frame -- \
+  validate-selection sniffbench/historical-v2-protocol.json DATASET_ROOT \
+  ARTIFACT_ROOT frame.json exclusions.json selection.json
+```
+
 ## Non-blind real evidence
 
 Historical simplifications, research trajectories, and intentional clean
