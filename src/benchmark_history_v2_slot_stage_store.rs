@@ -373,7 +373,8 @@ fn require_artifact_shape(
     outcome: &HistoricalV2SlotStageOutcome,
     has_artifact: bool,
 ) -> Result<(), String> {
-    if !matches!(outcome, HistoricalV2SlotStageOutcome::ReadyForReview) == has_artifact {
+    let requires_artifact = !matches!(outcome, HistoricalV2SlotStageOutcome::ReadyForReview);
+    if requires_artifact == has_artifact {
         Ok(())
     } else {
         Err("historical-v2 completed and excluded stages require exactly one artifact".to_string())
