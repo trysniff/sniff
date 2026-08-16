@@ -69,6 +69,14 @@ mod history_v2_exclusions;
 
 pub use history_v2_exclusions::*;
 
+#[path = "benchmark_history_v2_exclusion_identity.rs"]
+mod history_v2_exclusion_identity;
+
+#[path = "benchmark_history_v2_exclusion_derivation.rs"]
+mod history_v2_exclusion_derivation;
+
+pub use history_v2_exclusion_derivation::*;
+
 #[path = "benchmark_history_v2_selection.rs"]
 mod history_v2_selection;
 

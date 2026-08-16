@@ -4,7 +4,7 @@ use sniff::benchmark::{
     HistoricalV2CandidateOutcome, HistoricalV2ExclusionArtifact, HistoricalV2ExclusionManifest,
     HistoricalV2Frame, HistoricalV2FrameDisposition, HistoricalV2PartitionExclusions,
     HistoricalV2ProjectedRow, HistoricalV2SlotOutcome, derive_historical_v2_frame_record,
-    historical_v2_frame_sha256, seal_historical_v2_exclusion_manifest, select_historical_v2_slots,
+    historical_v2_frame_sha256, select_historical_v2_slots,
     validate_historical_v2_exclusion_manifest, validate_historical_v2_protocol,
     validate_historical_v2_slot_selection,
 };
@@ -176,17 +176,19 @@ fn exclusion_artifact_tampering_fails_closed() {
 fn exclusion_partitions_and_paths_are_exact() {
     let fixture = exclusion_fixture(&[]);
     let mut reordered = fixture.manifest.clone();
-    reordered.manifest_sha256.clear();
     reordered.partitions.swap(0, 1);
+    commit_manifest(&mut reordered);
     assert!(
-        seal_historical_v2_exclusion_manifest(PROTOCOL, fixture.root.path(), reordered).is_err()
+        validate_historical_v2_exclusion_manifest(PROTOCOL, fixture.root.path(), &reordered)
+            .is_err()
     );
 
     let mut unsafe_path = fixture.manifest.clone();
-    unsafe_path.manifest_sha256.clear();
     unsafe_path.partitions[0].artifacts[0].artifact_path = "../outside.json".to_string();
+    commit_manifest(&mut unsafe_path);
     assert!(
-        seal_historical_v2_exclusion_manifest(PROTOCOL, fixture.root.path(), unsafe_path).is_err()
+        validate_historical_v2_exclusion_manifest(PROTOCOL, fixture.root.path(), &unsafe_path)
+            .is_err()
     );
 }
 
@@ -249,18 +251,15 @@ fn exclusion_fixture(excluded_repositories: &[&str]) -> ExclusionFixture {
             },
         });
     }
-    let manifest = seal_historical_v2_exclusion_manifest(
-        PROTOCOL,
-        root.path(),
-        HistoricalV2ExclusionManifest {
-            schema_version: HISTORICAL_V2_EXCLUSION_MANIFEST_SCHEMA_VERSION,
-            protocol_sha256: protocol.protocol_sha256,
-            partitions,
-            repository_count: excluded_repositories.len(),
-            manifest_sha256: String::new(),
-        },
-    )
-    .unwrap();
+    let mut manifest = HistoricalV2ExclusionManifest {
+        schema_version: HISTORICAL_V2_EXCLUSION_MANIFEST_SCHEMA_VERSION,
+        protocol_sha256: protocol.protocol_sha256,
+        partitions,
+        repository_count: excluded_repositories.len(),
+        manifest_sha256: String::new(),
+    };
+    commit_manifest(&mut manifest);
+    validate_historical_v2_exclusion_manifest(PROTOCOL, root.path(), &manifest).unwrap();
     ExclusionFixture { root, manifest }
 }
 
@@ -310,4 +309,16 @@ fn projected_record(
 
 fn sha256(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
+}
+
+fn commit_manifest(manifest: &mut HistoricalV2ExclusionManifest) {
+    manifest.manifest_sha256 = sha256(
+        &serde_json::to_vec(&(
+            manifest.schema_version,
+            &manifest.protocol_sha256,
+            &manifest.partitions,
+            manifest.repository_count,
+        ))
+        .unwrap(),
+    );
 }
