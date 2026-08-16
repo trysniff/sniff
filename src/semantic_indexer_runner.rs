@@ -17,6 +17,11 @@ use std::time::Duration;
 #[cfg(windows)]
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[path = "semantic_indexer_runner_outcome.rs"]
+mod outcome;
+
+pub(crate) use outcome::*;
+
 #[path = "semantic_indexer_gradle_preparation.rs"]
 mod gradle_preparation;
 #[cfg(windows)]
@@ -34,6 +39,7 @@ const MAX_RUNTIME_IDENTITY_FILE_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_RUNTIME_IDENTITY_TOTAL_BYTES: u64 = 1024 * 1024 * 1024;
 const INDEXER_CACHE_DIR: &str = ".sniff-indexer-cache";
 const INDEXER_TEMP_DIR: &str = ".sniff-indexer-tmp";
+
 const GRADLE_INDEXER_BASE_JVM_ARGS: &str = concat!(
     "--add-opens=java.base/java.util=ALL-UNNAMED ",
     "--add-opens=java.base/java.lang=ALL-UNNAMED ",
@@ -116,66 +122,173 @@ pub(crate) async fn run_required_indexers(
     repository_root: &Path,
     files: &[FileRecord],
 ) -> Result<BTreeMap<SemanticIndexerKind, SemanticIndex>, String> {
+    run_required_indexers_typed(repository_root, files)
+        .await
+        .map_err(|failure| failure.detail)
+}
+
+pub(crate) async fn run_required_indexers_typed(
+    repository_root: &Path,
+    files: &[FileRecord],
+) -> Result<BTreeMap<SemanticIndexerKind, SemanticIndex>, SemanticIndexerRunFailure> {
+    let outcome = run_required_indexers_exhaustive_typed(repository_root, files).await?;
+    if let Some(failure) = outcome.failures.into_iter().next() {
+        Err(failure)
+    } else {
+        Ok(outcome.indexes)
+    }
+}
+
+pub(crate) async fn run_required_indexers_exhaustive_typed(
+    repository_root: &Path,
+    files: &[FileRecord],
+) -> Result<SemanticIndexerBatchOutcome, SemanticIndexerRunFailure> {
     let root =
         strip_windows_verbatim_prefix(fs::canonicalize(repository_root).map_err(|error| {
-            format!(
-                "failed to resolve semantic index repository root {}: {error}",
-                repository_root.display()
+            failure(
+                SemanticIndexerRunFailureKind::InvalidInput,
+                SemanticIndexerRunPhase::RepositoryValidation,
+                None,
+                format!(
+                    "failed to resolve semantic index repository root {}: {error}",
+                    repository_root.display()
+                ),
             )
         })?);
-    let store = SemanticIndexerStore::for_user()?;
+    let store = SemanticIndexerStore::for_user().map_err(|detail| {
+        failure(
+            SemanticIndexerRunFailureKind::InfrastructureUnavailable,
+            SemanticIndexerRunPhase::InstallationVerification,
+            None,
+            detail,
+        )
+    })?;
     let mut indexes = BTreeMap::new();
+    let mut failures = Vec::new();
     for kind in required_indexers(files) {
-        let spec = pinned_indexer(kind)?;
-        if kind == SemanticIndexerKind::Kotlin {
-            reject_unsupported_android_gradle(&root, files)?;
+        match run_required_indexer_typed(&root, files, &store, kind).await {
+            Ok(index) => {
+                indexes.insert(kind, index);
+            }
+            Err(failure) => failures.push(failure),
         }
-        let installed = store.verify(spec)?;
-        let index_path = root.join("index.scip");
-        if index_path.exists() {
-            return Err(format!(
-                "refusing to overwrite existing SCIP output {}; remove or relocate it before indexing",
-                index_path.display()
-            ));
-        }
-        if std::env::var_os("SNIFF_DEBUG_INDEXERS").is_some() {
-            eprintln!("[sniff] semantic indexer start: {}", spec.display_name);
-        }
-        let run_result = run_one(spec, &root, &installed, files).await;
-        let installation_result = store.verify(spec).map(|_| ()).map_err(|error| {
+    }
+    Ok(SemanticIndexerBatchOutcome { indexes, failures })
+}
+
+async fn run_required_indexer_typed(
+    root: &Path,
+    files: &[FileRecord],
+    store: &SemanticIndexerStore,
+    kind: SemanticIndexerKind,
+) -> Result<SemanticIndex, SemanticIndexerRunFailure> {
+    let spec = pinned_indexer(kind).map_err(|detail| {
+        failure(
+            SemanticIndexerRunFailureKind::InfrastructureUnavailable,
+            SemanticIndexerRunPhase::InstallationVerification,
+            Some(kind),
+            detail,
+        )
+    })?;
+    if kind == SemanticIndexerKind::Kotlin {
+        reject_unsupported_android_gradle_typed(root, files)?;
+    }
+    let installed = store.verify(spec).map_err(|detail| {
+        failure(
+            SemanticIndexerRunFailureKind::InfrastructureUnavailable,
+            SemanticIndexerRunPhase::InstallationVerification,
+            Some(kind),
+            detail,
+        )
+    })?;
+    let index_path = root.join("index.scip");
+    if index_path.exists() {
+        return Err(failure(
+            SemanticIndexerRunFailureKind::UnsupportedProjectShape,
+            SemanticIndexerRunPhase::RepositoryValidation,
+            Some(kind),
+            "refusing to overwrite repository file index.scip; remove or relocate it before indexing",
+        ));
+    }
+    if std::env::var_os("SNIFF_DEBUG_INDEXERS").is_some() {
+        eprintln!("[sniff] semantic indexer start: {}", spec.display_name);
+    }
+    let run_result = run_one(spec, root, &installed, files).await;
+    let installation_result = store.verify(spec).map(|_| ()).map_err(|error| {
+        failure(
+            SemanticIndexerRunFailureKind::InfrastructureFailed,
+            SemanticIndexerRunPhase::IntegrityVerification,
+            Some(kind),
             format!(
                 "{} installation changed while it was running: {error}",
                 spec.display_name
-            )
-        });
-        if let Err(error) = combine_run_and_integrity(run_result, installation_result) {
-            let _ = fs::remove_file(&index_path);
-            return Err(error);
-        }
-        if std::env::var_os("SNIFF_DEBUG_INDEXERS").is_some() {
-            eprintln!("[sniff] semantic indexer complete: {}", spec.display_name);
-        }
-        let index_files = files_for_indexer(files, kind);
-        let expected_languages = expected_document_languages(&root, &index_files)?;
-        let result = crate::semantic_index_scip::ingest_scip_file_with_expected_languages(
-            &root,
-            &index_path,
-            Some(&expected_languages),
-            missing_position_encoding(kind),
+            ),
         )
-        .and_then(|index| validate_expected_documents(&root, files, kind, index));
-        let cleanup = fs::remove_file(&index_path);
-        if let Err(error) = cleanup
-            && result.is_ok()
-        {
-            return Err(format!(
-                "failed to remove generated SCIP output {}: {error}",
-                index_path.display()
-            ));
+    });
+    let process = match combine_typed_run_and_integrity(run_result, installation_result) {
+        Ok(process) => process,
+        Err(run_failure) => {
+            if index_path.exists()
+                && let Err(error) = fs::remove_file(&index_path)
+            {
+                return Err(failure(
+                    SemanticIndexerRunFailureKind::InfrastructureFailed,
+                    SemanticIndexerRunPhase::Cleanup,
+                    Some(kind),
+                    format!(
+                        "{}; additionally failed to remove generated SCIP output {}: {error}",
+                        run_failure.detail,
+                        index_path.display()
+                    ),
+                ));
+            }
+            return Err(run_failure);
         }
-        indexes.insert(kind, result?);
+    };
+    if std::env::var_os("SNIFF_DEBUG_INDEXERS").is_some() {
+        eprintln!("[sniff] semantic indexer complete: {}", spec.display_name);
     }
-    Ok(indexes)
+    let index_files = files_for_indexer(files, kind);
+    let expected_languages = expected_document_languages(root, &index_files).map_err(|detail| {
+        failure(
+            SemanticIndexerRunFailureKind::InvalidInput,
+            SemanticIndexerRunPhase::OutputValidation,
+            Some(kind),
+            detail,
+        )
+    })?;
+    let result = crate::semantic_index_scip::ingest_scip_file_with_expected_languages(
+        root,
+        &index_path,
+        Some(&expected_languages),
+        missing_position_encoding(kind),
+    )
+    .and_then(|index| validate_expected_documents(root, files, kind, index))
+    .map_err(|detail| SemanticIndexerRunFailure {
+        kind: SemanticIndexerRunFailureKind::IncompleteOutput,
+        phase: SemanticIndexerRunPhase::OutputValidation,
+        indexer: Some(kind),
+        detail,
+        process: Some(Box::new(process)),
+    });
+    let cleanup = fs::remove_file(&index_path);
+    if let Err(error) = cleanup {
+        let prior = result
+            .as_ref()
+            .err()
+            .map(|failure| format!("{}; additionally, ", failure.detail))
+            .unwrap_or_default();
+        return Err(failure(
+            SemanticIndexerRunFailureKind::InfrastructureFailed,
+            SemanticIndexerRunPhase::Cleanup,
+            Some(kind),
+            format!(
+                "{prior}failed to remove generated SCIP output {}: {error}",
+                index_path.display()
+            ),
+        ));
+    }
+    result
 }
 
 pub(crate) fn files_for_indexer(
@@ -219,29 +332,51 @@ async fn run_one(
     root: &Path,
     installed: &InstalledIndexer,
     files: &[FileRecord],
-) -> Result<(), String> {
-    let source_digest_before = source_integrity_digest(files)?;
+) -> Result<SemanticIndexerProcessEvidence, SemanticIndexerRunFailure> {
+    let source_digest_before = source_integrity_digest(files).map_err(|detail| {
+        indexer_failure(
+            spec,
+            SemanticIndexerRunFailureKind::InvalidInput,
+            SemanticIndexerRunPhase::IntegrityVerification,
+            detail,
+        )
+    })?;
     let cache_root =
         (spec.kind == SemanticIndexerKind::Kotlin).then(|| root.join(INDEXER_CACHE_DIR));
     if let Some(cache_root) = &cache_root
         && cache_root.exists()
     {
-        return Err(format!(
-            "refusing to reuse an unexpected semantic indexer cache {}; remove it before indexing",
-            cache_root.display()
+        return Err(indexer_failure(
+            spec,
+            SemanticIndexerRunFailureKind::InvalidInput,
+            SemanticIndexerRunPhase::Preparation,
+            format!(
+                "refusing to reuse an unexpected semantic indexer cache {}; remove it before indexing",
+                cache_root.display()
+            ),
         ));
     }
     let temporary_dir = root.join(INDEXER_TEMP_DIR);
     if temporary_dir.exists() {
-        return Err(format!(
-            "refusing to reuse an unexpected semantic indexer temp directory {}; remove it before indexing",
-            temporary_dir.display()
+        return Err(indexer_failure(
+            spec,
+            SemanticIndexerRunFailureKind::InvalidInput,
+            SemanticIndexerRunPhase::Preparation,
+            format!(
+                "refusing to reuse an unexpected semantic indexer temp directory {}; remove it before indexing",
+                temporary_dir.display()
+            ),
         ));
     }
     fs::create_dir(&temporary_dir).map_err(|error| {
-        format!(
-            "failed to create private semantic indexer temp directory {}: {error}",
-            temporary_dir.display()
+        indexer_failure(
+            spec,
+            SemanticIndexerRunFailureKind::InfrastructureFailed,
+            SemanticIndexerRunPhase::Preparation,
+            format!(
+                "failed to create private semantic indexer temp directory {}: {error}",
+                temporary_dir.display()
+            ),
         )
     })?;
     let _temporary_dir_cleanup = TemporaryIndexerDirectory(temporary_dir.clone());
@@ -249,15 +384,45 @@ async fn run_one(
         .as_ref()
         .map(|path| TemporaryIndexerDirectory(path.clone()));
     if spec.kind == SemanticIndexerKind::Kotlin {
-        prepare_kotlin_dependency_cache(spec, root, installed).await?;
+        prepare_kotlin_dependency_cache(spec, root, installed)
+            .await
+            .map_err(|detail| {
+                indexer_failure(
+                    spec,
+                    SemanticIndexerRunFailureKind::InfrastructureFailed,
+                    SemanticIndexerRunPhase::Preparation,
+                    detail,
+                )
+            })?;
     }
-    let workspace = prepare_indexer_workspace(spec, root)?;
+    let workspace = prepare_indexer_workspace(spec, root).map_err(|detail| {
+        indexer_failure(
+            spec,
+            SemanticIndexerRunFailureKind::InfrastructureFailed,
+            SemanticIndexerRunPhase::Preparation,
+            detail,
+        )
+    })?;
     let temporary_project = if spec.kind == SemanticIndexerKind::TypeScriptJavaScript {
-        prepare_mixed_typescript_javascript_project(spec, root, files)?
+        prepare_mixed_typescript_javascript_project(spec, root, files).map_err(|detail| {
+            indexer_failure(
+                spec,
+                SemanticIndexerRunFailureKind::InfrastructureFailed,
+                SemanticIndexerRunPhase::Preparation,
+                detail,
+            )
+        })?
     } else {
         #[cfg(windows)]
         if spec.kind == SemanticIndexerKind::Python {
-            prepare_windows_python_project(root, files)?
+            prepare_windows_python_project(root, files).map_err(|detail| {
+                indexer_failure(
+                    spec,
+                    SemanticIndexerRunFailureKind::InfrastructureFailed,
+                    SemanticIndexerRunPhase::Preparation,
+                    detail,
+                )
+            })?
         } else {
             None
         }
@@ -268,7 +433,16 @@ async fn run_one(
     };
     #[cfg(windows)]
     let python_environment = if spec.kind == SemanticIndexerKind::Python {
-        Some(prepare_windows_python_environment(&temporary_dir)?)
+        Some(
+            prepare_windows_python_environment(&temporary_dir).map_err(|detail| {
+                indexer_failure(
+                    spec,
+                    SemanticIndexerRunFailureKind::InfrastructureFailed,
+                    SemanticIndexerRunPhase::Preparation,
+                    detail,
+                )
+            })?,
+        )
     } else {
         None
     };
@@ -287,7 +461,15 @@ async fn run_one(
         ]);
     }
     let prepared_command =
-        build_indexer_sandbox_command(spec, root, installed, arguments, workspace.as_ref())?;
+        build_indexer_sandbox_command(spec, root, installed, arguments, workspace.as_ref())
+            .map_err(|detail| {
+                indexer_failure(
+                    spec,
+                    SemanticIndexerRunFailureKind::InfrastructureFailed,
+                    SemanticIndexerRunPhase::Preparation,
+                    detail,
+                )
+            })?;
     if std::env::var_os("SNIFF_DEBUG_INDEXERS").is_some() {
         eprintln!(
             "[sniff] semantic indexer sandbox ready: {}",
@@ -296,12 +478,24 @@ async fn run_one(
     }
     if let Some(cache_root) = &cache_root {
         if !cache_root.is_dir() {
-            return Err(format!(
-                "Kotlin dependency preparation did not produce the required offline cache {}",
-                cache_root.display()
+            return Err(indexer_failure(
+                spec,
+                SemanticIndexerRunFailureKind::InfrastructureFailed,
+                SemanticIndexerRunPhase::Preparation,
+                format!(
+                    "Kotlin dependency preparation did not produce the required offline cache {}",
+                    cache_root.display()
+                ),
             ));
         }
-        write_private_gradle_properties(root, cache_root)?;
+        write_private_gradle_properties(root, cache_root).map_err(|detail| {
+            indexer_failure(
+                spec,
+                SemanticIndexerRunFailureKind::InfrastructureFailed,
+                SemanticIndexerRunPhase::Preparation,
+                detail,
+            )
+        })?;
     }
     if std::env::var_os("SNIFF_DEBUG_INDEXERS").is_some() {
         eprintln!(
@@ -322,56 +516,123 @@ async fn run_one(
         .transpose();
     match (temporary_project_cleanup, workspace_cleanup) {
         (Ok(()), Ok(_)) => {}
-        (Err(error), Ok(_)) | (Ok(()), Err(error)) => return Err(error),
+        (Err(error), Ok(_)) | (Ok(()), Err(error)) => {
+            return Err(indexer_failure(
+                spec,
+                SemanticIndexerRunFailureKind::InfrastructureFailed,
+                SemanticIndexerRunPhase::Cleanup,
+                error,
+            ));
+        }
         (Err(project_error), Err(workspace_error)) => {
-            return Err(format!("{project_error}; additionally, {workspace_error}"));
+            return Err(indexer_failure(
+                spec,
+                SemanticIndexerRunFailureKind::InfrastructureFailed,
+                SemanticIndexerRunPhase::Cleanup,
+                format!("{project_error}; additionally, {workspace_error}"),
+            ));
         }
     }
     if let Some(cache_root) = cache_root
         && cache_root.exists()
     {
         fs::remove_dir_all(&cache_root).map_err(|error| {
-            format!(
-                "{} indexing completed but private cache cleanup failed for {}: {error}",
-                spec.display_name,
-                cache_root.display()
+            indexer_failure(
+                spec,
+                SemanticIndexerRunFailureKind::InfrastructureFailed,
+                SemanticIndexerRunPhase::Cleanup,
+                format!(
+                    "{} indexing completed but private cache cleanup failed for {}: {error}",
+                    spec.display_name,
+                    cache_root.display()
+                ),
             )
         })?;
     }
-    let source_digest_after = source_integrity_digest(files)?;
+    let source_digest_after = source_integrity_digest(files).map_err(|detail| {
+        indexer_failure(
+            spec,
+            SemanticIndexerRunFailureKind::InfrastructureFailed,
+            SemanticIndexerRunPhase::IntegrityVerification,
+            detail,
+        )
+    })?;
     if source_digest_before != source_digest_after {
-        return Err(format!(
-            "{} indexing changed an eligible source file; refusing to trust its SCIP output",
-            spec.display_name
+        return Err(indexer_failure(
+            spec,
+            SemanticIndexerRunFailureKind::InfrastructureFailed,
+            SemanticIndexerRunPhase::IntegrityVerification,
+            format!(
+                "{} indexing changed an eligible source file; refusing to trust its SCIP output",
+                spec.display_name
+            ),
         ));
     }
-    let output = output?;
+    let output = output.map_err(|detail| {
+        indexer_failure(
+            spec,
+            SemanticIndexerRunFailureKind::InfrastructureFailed,
+            SemanticIndexerRunPhase::Execution,
+            detail,
+        )
+    })?;
     if output.timed_out {
-        return Err(format!(
-            "{} indexing timed out after {}",
-            spec.display_name,
-            format_timeout(index_timeout())
+        return Err(indexer_process_failure(
+            spec,
+            SemanticIndexerRunFailureKind::InfrastructureUnavailable,
+            SemanticIndexerRunPhase::Execution,
+            format!(
+                "{} indexing timed out after {}",
+                spec.display_name,
+                format_timeout(index_timeout())
+            ),
+            output,
         ));
     }
     if output.status_code == Some(0) {
         let index_path = root.join("index.scip");
         if !index_path.is_file() {
-            return Err(format!(
-                "{} exited successfully but did not emit SCIP index {}; output: {}",
-                spec.display_name,
-                index_path.display(),
-                compact_process_output(output.stdout.as_bytes(), output.stderr.as_bytes())
+            return Err(indexer_process_failure(
+                spec,
+                SemanticIndexerRunFailureKind::IncompleteOutput,
+                SemanticIndexerRunPhase::OutputValidation,
+                format!(
+                    "{} exited successfully but did not emit SCIP index {}; output: {}",
+                    spec.display_name,
+                    index_path.display(),
+                    compact_process_output(output.stdout.as_bytes(), output.stderr.as_bytes())
+                ),
+                output,
             ));
         }
-        return Ok(());
+        return Ok(process_evidence(output));
     }
-    Err(format!(
-        "{} indexing failed with {}; output: {}",
-        spec.display_name,
-        output
-            .status_code
-            .map_or_else(|| "signal".to_string(), |status| status.to_string()),
-        compact_process_output(output.stdout.as_bytes(), output.stderr.as_bytes())
+    if output.status_code.is_none() {
+        return Err(indexer_process_failure(
+            spec,
+            SemanticIndexerRunFailureKind::InfrastructureFailed,
+            SemanticIndexerRunPhase::Execution,
+            format!(
+                "{} indexing terminated without an exit status; output: {}",
+                spec.display_name,
+                compact_process_output(output.stdout.as_bytes(), output.stderr.as_bytes())
+            ),
+            output,
+        ));
+    }
+    Err(indexer_process_failure(
+        spec,
+        SemanticIndexerRunFailureKind::RepositoryRejected,
+        SemanticIndexerRunPhase::Execution,
+        format!(
+            "{} indexing failed with {}; output: {}",
+            spec.display_name,
+            output
+                .status_code
+                .map_or_else(|| "signal".to_string(), |status| status.to_string()),
+            compact_process_output(output.stdout.as_bytes(), output.stderr.as_bytes())
+        ),
+        output,
     ))
 }
 
@@ -1588,9 +1849,23 @@ fn source_integrity_digest(files: &[FileRecord]) -> Result<String, String> {
     Ok(format!("{:x}", digest.finalize()))
 }
 
+#[cfg(test)]
 fn reject_unsupported_android_gradle(root: &Path, files: &[FileRecord]) -> Result<(), String> {
+    reject_unsupported_android_gradle_typed(root, files).map_err(|failure| failure.detail)
+}
+
+fn reject_unsupported_android_gradle_typed(
+    root: &Path,
+    files: &[FileRecord],
+) -> Result<(), SemanticIndexerRunFailure> {
+    let kind = Some(SemanticIndexerKind::Kotlin);
     let root = fs::canonicalize(root).map_err(|error| {
-        format!("failed to resolve repository root for Kotlin Gradle capability: {error}")
+        failure(
+            SemanticIndexerRunFailureKind::InvalidInput,
+            SemanticIndexerRunPhase::RepositoryValidation,
+            kind,
+            format!("failed to resolve repository root for Kotlin Gradle capability: {error}"),
+        )
     })?;
     let mut directories = BTreeSet::new();
     for file in files {
@@ -1598,18 +1873,27 @@ fn reject_unsupported_android_gradle(root: &Path, files: &[FileRecord]) -> Resul
             continue;
         }
         let path = fs::canonicalize(&file.file_path).map_err(|error| {
-            format!(
-                "failed to inspect Kotlin source {} for Gradle capability: {error}",
-                file.file_path
+            failure(
+                SemanticIndexerRunFailureKind::InvalidInput,
+                SemanticIndexerRunPhase::RepositoryValidation,
+                kind,
+                format!(
+                    "failed to inspect Kotlin source {} for Gradle capability: {error}",
+                    file.file_path
+                ),
             )
         })?;
         let mut directory = path.parent();
         while let Some(current) = directory {
             if !current.starts_with(&root) {
-                return Err(format!(
-                    "Kotlin source {} is outside repository root {}",
-                    file.file_path,
-                    root.display()
+                return Err(failure(
+                    SemanticIndexerRunFailureKind::InvalidInput,
+                    SemanticIndexerRunPhase::RepositoryValidation,
+                    kind,
+                    format!(
+                        "Kotlin source {} is outside the semantic repository root",
+                        file.file_path
+                    ),
                 ));
             }
             directories.insert(current.to_path_buf());
@@ -1626,16 +1910,35 @@ fn reject_unsupported_android_gradle(root: &Path, files: &[FileRecord]) -> Resul
             if !path.is_file() {
                 continue;
             }
+            let relative = path
+                .strip_prefix(&root)
+                .map(|path| path.to_string_lossy().replace('\\', "/"))
+                .map_err(|error| {
+                    failure(
+                        SemanticIndexerRunFailureKind::InvalidInput,
+                        SemanticIndexerRunPhase::RepositoryValidation,
+                        kind,
+                        format!("Gradle build script escaped the repository root: {error}"),
+                    )
+                })?;
             let source = fs::read_to_string(&path).map_err(|error| {
-                format!(
-                    "failed to inspect Gradle build script {} for Kotlin capability: {error}",
-                    path.display()
+                failure(
+                    SemanticIndexerRunFailureKind::InfrastructureFailed,
+                    SemanticIndexerRunPhase::RepositoryValidation,
+                    kind,
+                    format!(
+                        "failed to inspect Gradle build script {relative} for Kotlin capability: {error}"
+                    ),
                 )
             })?;
             if gradle_script_uses_android(&source) {
-                return Err(format!(
-                    "scip-java does not support Android Gradle integration; detected Android module {}. Sniff refuses a weaker Kotlin graph provider",
-                    path.display()
+                return Err(failure(
+                    SemanticIndexerRunFailureKind::UnsupportedProjectShape,
+                    SemanticIndexerRunPhase::RepositoryValidation,
+                    kind,
+                    format!(
+                        "scip-java does not support Android Gradle integration; detected Android module {relative}. Sniff refuses a weaker Kotlin graph provider"
+                    ),
                 ));
             }
         }
