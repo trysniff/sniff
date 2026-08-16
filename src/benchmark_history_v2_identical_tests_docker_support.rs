@@ -1,9 +1,6 @@
 use super::*;
 use std::ffi::{OsStr, OsString};
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
-
-static EXECUTION_NONCE: AtomicU64 = AtomicU64::new(0);
 
 pub(super) fn container_create_args(
     request: &HistoricalV2IdenticalTestExecutionRequest<'_>,
@@ -17,6 +14,10 @@ pub(super) fn container_create_args(
         "create".into(),
         "--name".into(),
         container.into(),
+        "--label".into(),
+        "org.trysniff.historical-v2=true".into(),
+        "--label".into(),
+        plan_label(&request.plan.plan_sha256).into(),
         "--platform".into(),
         policy.platform.as_str().into(),
         "--network".into(),
@@ -87,12 +88,7 @@ pub(super) struct ResourceNames {
 
 impl ResourceNames {
     pub(super) fn new(plan_sha256: &str) -> Self {
-        let nonce = EXECUTION_NONCE.fetch_add(1, Ordering::Relaxed);
-        let prefix = format!(
-            "sniff-hv2-{}-{}-{nonce}",
-            &plan_sha256[..16],
-            std::process::id()
-        );
+        let prefix = format!("sniff-hv2-{}", &plan_sha256[..24]);
         Self {
             network: format!("{prefix}-network"),
             base_container: format!("{prefix}-base"),
@@ -122,7 +118,11 @@ impl<'a> DockerResources<'a> {
         }
     }
 
-    pub(super) fn create_network(&mut self, name: &str) -> Result<(), HistoricalV2ExecutionError> {
+    pub(super) fn create_network(
+        &mut self,
+        name: &str,
+        plan_sha256: &str,
+    ) -> Result<(), HistoricalV2ExecutionError> {
         let output = self.docker.run_control(
             [
                 "network",
@@ -131,6 +131,8 @@ impl<'a> DockerResources<'a> {
                 "bridge",
                 "--label",
                 "org.trysniff.historical-v2=true",
+                "--label",
+                &plan_label(plan_sha256),
                 name,
             ],
             CONTROL_TIMEOUT,
@@ -140,13 +142,19 @@ impl<'a> DockerResources<'a> {
         Ok(())
     }
 
-    pub(super) fn create_volume(&mut self, name: &str) -> Result<(), HistoricalV2ExecutionError> {
+    pub(super) fn create_volume(
+        &mut self,
+        name: &str,
+        plan_sha256: &str,
+    ) -> Result<(), HistoricalV2ExecutionError> {
         let output = self.docker.run_control(
             [
                 "volume",
                 "create",
                 "--label",
                 "org.trysniff.historical-v2=true",
+                "--label",
+                &plan_label(plan_sha256),
                 name,
             ],
             CONTROL_TIMEOUT,
@@ -201,6 +209,10 @@ impl<'a> DockerResources<'a> {
     }
 }
 
+pub(super) fn plan_label(plan_sha256: &str) -> String {
+    format!("org.trysniff.historical-v2.plan={plan_sha256}")
+}
+
 impl Drop for DockerResources<'_> {
     fn drop(&mut self) {
         if !self.cleaned {
@@ -209,7 +221,7 @@ impl Drop for DockerResources<'_> {
     }
 }
 
-fn cleanup_resource<'a>(
+pub(super) fn cleanup_resource<'a>(
     docker: &DockerHistoricalV2TestExecutor,
     args: impl IntoIterator<Item = &'a str>,
     kind: &str,
