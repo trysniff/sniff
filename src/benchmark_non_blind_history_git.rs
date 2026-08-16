@@ -138,7 +138,7 @@ fn parse_log_records(bytes: &[u8]) -> Result<Vec<(String, Vec<String>, String)>,
     Ok(records)
 }
 
-fn changed_paths(
+pub(super) fn changed_paths(
     root: &Path,
     parent: &str,
     commit: &str,

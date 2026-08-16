@@ -163,6 +163,25 @@ mod history_v2_assessment_identity;
 
 pub use history_v2_assessment_identity::*;
 
+#[path = "benchmark_history_v2_qualification_schema.rs"]
+mod history_v2_qualification_schema;
+
+pub use history_v2_qualification_schema::*;
+
+#[path = "benchmark_history_v2_qualification_roles.rs"]
+mod history_v2_qualification_roles;
+
+#[path = "benchmark_history_v2_qualification_surface.rs"]
+mod history_v2_qualification_surface;
+
+#[path = "benchmark_history_v2_qualification_methods.rs"]
+mod history_v2_qualification_methods;
+
+#[path = "benchmark_history_v2_qualification.rs"]
+mod history_v2_qualification;
+
+pub use history_v2_qualification::*;
+
 #[path = "benchmark_intentional_boundary_frame_task.rs"]
 mod intentional_boundary_frame_task;
 
