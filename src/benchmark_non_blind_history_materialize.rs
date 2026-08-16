@@ -75,7 +75,7 @@ pub fn clone_complete_historical_repository(
     clone_complete_historical_repository_url(repository, &url, destination)
 }
 
-fn clone_complete_historical_repository_url(
+pub(super) fn clone_complete_historical_repository_url(
     repository: &str,
     url: &str,
     destination: &Path,
