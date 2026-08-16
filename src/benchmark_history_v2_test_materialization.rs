@@ -1,11 +1,17 @@
 use super::history_v2_materialization_git::{
-    apply_indexed_patch, canonical_path, deterministic_commit, git, git_common_directory, git_text,
-    path_text, require_clean, require_oid, require_sha256, write_create_new,
+    HistoricalV2GitCheckOutcome, apply_indexed_patch, canonical_path, deterministic_commit, git,
+    git_check, git_common_directory, git_text, path_text, require_clean, require_oid,
+    require_sha256, write_create_new,
 };
+use super::history_v2_test_materialization_exclusion::seal_test_materialization_exclusion;
 use super::{
     HISTORICAL_V2_TEST_MATERIALIZATION_SCHEMA_VERSION, HistoricalV2Materialization,
-    HistoricalV2MaterializedRoots, HistoricalV2TestMaterialization,
-    HistoricalV2TestMaterializedRoots, validate_historical_v2_materialization,
+    HistoricalV2MaterializedRoots, HistoricalV2SlotStage, HistoricalV2SlotStageError,
+    HistoricalV2SlotStageErrorKind, HistoricalV2StageResult, HistoricalV2TestMaterialization,
+    HistoricalV2TestMaterializationExclusion, HistoricalV2TestMaterializationExclusionEvidence,
+    HistoricalV2TestMaterializationExclusionReason, HistoricalV2TestMaterializationSide,
+    HistoricalV2TestMaterializedRoots, HistoricalV2TestPatchRejectionEvidence,
+    validate_historical_v2_materialization,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -14,6 +20,12 @@ use std::path::Path;
 
 const TEST_MATERIALIZATION_CONTRACT: &str =
     "sniffbench-historical-v2-identical-test-materialization-v1";
+type TestMaterializationValue = (
+    HistoricalV2TestMaterialization,
+    HistoricalV2TestMaterializedRoots,
+);
+type TestMaterializationStageResult =
+    HistoricalV2StageResult<TestMaterializationValue, HistoricalV2TestMaterializationExclusion>;
 
 pub fn materialize_historical_v2_test_snapshots(
     materialization: &HistoricalV2Materialization,
@@ -27,18 +39,41 @@ pub fn materialize_historical_v2_test_snapshots(
     ),
     String,
 > {
-    validate_historical_v2_materialization(materialization, materialized_roots)?;
-    require_sha256(expected_test_patch_sha256)?;
+    match materialize_historical_v2_test_snapshots_typed(
+        materialization,
+        materialized_roots,
+        test_patch,
+        expected_test_patch_sha256,
+    )
+    .map_err(|error| error.detail)?
+    {
+        HistoricalV2StageResult::Completed(value) => Ok(value),
+        HistoricalV2StageResult::Excluded(exclusion) => Err(format!(
+            "historical-v2 test materialization excluded: {:?}",
+            exclusion.reason
+        )),
+    }
+}
+
+pub fn materialize_historical_v2_test_snapshots_typed(
+    materialization: &HistoricalV2Materialization,
+    materialized_roots: &HistoricalV2MaterializedRoots,
+    test_patch: &str,
+    expected_test_patch_sha256: &str,
+) -> Result<TestMaterializationStageResult, HistoricalV2SlotStageError> {
+    validate_historical_v2_materialization(materialization, materialized_roots).map_err(invalid)?;
+    require_sha256(expected_test_patch_sha256).map_err(invalid)?;
     if test_patch.is_empty() || sha256(test_patch.as_bytes()) != expected_test_patch_sha256 {
-        return Err(
-            "historical-v2 test patch does not match its selected payload hash".to_string(),
-        );
+        return Err(invalid(
+            "historical-v2 test patch does not match its selected payload hash",
+        ));
     }
 
-    let repository_root = canonical_path(&materialized_roots.repository_root, "repository root")?;
+    let repository_root =
+        canonical_path(&materialized_roots.repository_root, "repository root").map_err(invalid)?;
     let slot_root = repository_root
         .parent()
-        .ok_or_else(|| "historical-v2 repository root has no slot parent".to_string())?
+        .ok_or_else(|| invalid("historical-v2 repository root has no slot parent"))?
         .to_path_buf();
     let roots = HistoricalV2TestMaterializedRoots {
         base_test_root: slot_root.join("base-tested"),
@@ -53,10 +88,10 @@ pub fn materialize_historical_v2_test_snapshots(
         &message_path,
     ] {
         if path.exists() {
-            return Err(format!(
+            return Err(invalid(format!(
                 "historical-v2 identical-test materialization path already exists: {}",
                 path.display()
-            ));
+            )));
         }
     }
 
@@ -69,14 +104,35 @@ pub fn materialize_historical_v2_test_snapshots(
         &patch_path,
         &message_path,
     );
-    if result.is_err() {
-        cleanup_test_materialization(
-            &repository_root,
-            &roots,
-            &[patch_path.as_path(), message_path.as_path()],
-        );
+    let result = match result {
+        Ok(HistoricalV2StageResult::Completed(artifact)) => {
+            return Ok(HistoricalV2StageResult::Completed((artifact, roots)));
+        }
+        other => other,
+    };
+    if let Err(cleanup) = cleanup_test_materialization(
+        &repository_root,
+        &roots,
+        &[patch_path.as_path(), message_path.as_path()],
+    ) {
+        let prior = match &result {
+            Ok(HistoricalV2StageResult::Excluded(exclusion)) => {
+                format!("terminal exclusion {:?}", exclusion.reason)
+            }
+            Ok(HistoricalV2StageResult::Completed(_)) => unreachable!(),
+            Err(error) => error.detail.clone(),
+        };
+        return Err(infrastructure(format!(
+            "{prior}; test materialization cleanup also failed: {cleanup}"
+        )));
     }
-    result.map(|artifact| (artifact, roots))
+    match result {
+        Ok(HistoricalV2StageResult::Excluded(exclusion)) => {
+            Ok(HistoricalV2StageResult::Excluded(exclusion))
+        }
+        Err(error) => Err(error),
+        Ok(HistoricalV2StageResult::Completed(_)) => unreachable!(),
+    }
 }
 
 fn materialize_test_snapshots(
@@ -87,65 +143,145 @@ fn materialize_test_snapshots(
     expected_test_patch_sha256: &str,
     patch_path: &Path,
     message_path: &Path,
-) -> Result<HistoricalV2TestMaterialization, String> {
+) -> Result<
+    HistoricalV2StageResult<
+        HistoricalV2TestMaterialization,
+        HistoricalV2TestMaterializationExclusion,
+    >,
+    HistoricalV2SlotStageError,
+> {
     add_worktree(
         repository_root,
         &roots.base_test_root,
         &materialization.base_revision,
-    )?;
+    )
+    .map_err(infrastructure)?;
     add_worktree(
         repository_root,
         &roots.patched_test_root,
         &materialization.patched_commit_oid,
-    )?;
-    write_create_new(patch_path, test_patch.as_bytes())?;
-    let patch_text = path_text(patch_path)?;
+    )
+    .map_err(infrastructure)?;
+    write_create_new(patch_path, test_patch.as_bytes()).map_err(infrastructure)?;
+    let patch_text = path_text(patch_path).map_err(infrastructure)?;
 
     // Prove the same patch applies to both snapshots before either index is changed.
-    apply_indexed_patch(&roots.base_test_root, &patch_text, true)?;
-    apply_indexed_patch(&roots.patched_test_root, &patch_text, true)?;
-    apply_indexed_patch(&roots.base_test_root, &patch_text, false)?;
-    apply_indexed_patch(&roots.patched_test_root, &patch_text, false)?;
-    fs::remove_file(patch_path)
-        .map_err(|error| format!("failed to remove historical-v2 test patch input: {error}"))?;
+    let mut rejections = Vec::new();
+    for (side, root) in [
+        (
+            HistoricalV2TestMaterializationSide::Base,
+            &roots.base_test_root,
+        ),
+        (
+            HistoricalV2TestMaterializationSide::Patched,
+            &roots.patched_test_root,
+        ),
+    ] {
+        match git_check(
+            root,
+            &[
+                "apply",
+                "--check",
+                "--index",
+                "--whitespace=nowarn",
+                &patch_text,
+            ],
+        )
+        .map_err(infrastructure)?
+        {
+            HistoricalV2GitCheckOutcome::Accepted(_) => {}
+            HistoricalV2GitCheckOutcome::Rejected(command) => {
+                rejections.push(HistoricalV2TestPatchRejectionEvidence { side, command });
+            }
+        }
+    }
+    if !rejections.is_empty() {
+        let exclusion = seal_test_materialization_exclusion(
+            &materialization.materialization_sha256,
+            expected_test_patch_sha256,
+            HistoricalV2TestMaterializationExclusionReason::TestPatchDoesNotApply,
+            HistoricalV2TestMaterializationExclusionEvidence::TestPatchRejected {
+                test_patch_sha256: expected_test_patch_sha256.to_string(),
+                rejections,
+            },
+        )
+        .map_err(|error| infrastructure(error.detail))?;
+        return Ok(HistoricalV2StageResult::Excluded(exclusion));
+    }
+    apply_indexed_patch(&roots.base_test_root, &patch_text, false).map_err(infrastructure)?;
+    apply_indexed_patch(&roots.patched_test_root, &patch_text, false).map_err(infrastructure)?;
+    fs::remove_file(patch_path).map_err(|error| {
+        infrastructure(format!(
+            "failed to remove historical-v2 test patch input: {error}"
+        ))
+    })?;
 
-    let base_test_tree_oid = git_text(&roots.base_test_root, &["write-tree"])?;
-    let patched_test_tree_oid = git_text(&roots.patched_test_root, &["write-tree"])?;
-    if base_test_tree_oid == materialization.base_tree_oid
-        || patched_test_tree_oid == materialization.patched_tree_oid
-    {
-        return Err("historical-v2 test patch produced no Git tree change".to_string());
+    let base_test_tree_oid =
+        git_text(&roots.base_test_root, &["write-tree"]).map_err(infrastructure)?;
+    let patched_test_tree_oid =
+        git_text(&roots.patched_test_root, &["write-tree"]).map_err(infrastructure)?;
+    let mut unchanged_sides = Vec::new();
+    if base_test_tree_oid == materialization.base_tree_oid {
+        unchanged_sides.push(HistoricalV2TestMaterializationSide::Base);
+    }
+    if patched_test_tree_oid == materialization.patched_tree_oid {
+        unchanged_sides.push(HistoricalV2TestMaterializationSide::Patched);
+    }
+    if !unchanged_sides.is_empty() {
+        let exclusion = seal_test_materialization_exclusion(
+            &materialization.materialization_sha256,
+            expected_test_patch_sha256,
+            HistoricalV2TestMaterializationExclusionReason::TestPatchProducesNoTreeChange,
+            HistoricalV2TestMaterializationExclusionEvidence::TestPatchProducesNoTreeChange {
+                test_patch_sha256: expected_test_patch_sha256.to_string(),
+                unchanged_sides,
+                base_input_tree_oid: materialization.base_tree_oid.clone(),
+                base_test_tree_oid,
+                patched_input_tree_oid: materialization.patched_tree_oid.clone(),
+                patched_test_tree_oid,
+            },
+        )
+        .map_err(|error| infrastructure(error.detail))?;
+        return Ok(HistoricalV2StageResult::Excluded(exclusion));
     }
 
     write_create_new(
         message_path,
         b"SniffBench historical-v2 identical-test snapshot\n",
-    )?;
-    let message_text = path_text(message_path)?;
+    )
+    .map_err(infrastructure)?;
+    let message_text = path_text(message_path).map_err(infrastructure)?;
     let base_test_commit_oid = deterministic_commit(
         &roots.base_test_root,
         &base_test_tree_oid,
         &materialization.base_revision,
         &message_text,
-    )?;
+    )
+    .map_err(infrastructure)?;
     let patched_test_commit_oid = deterministic_commit(
         &roots.patched_test_root,
         &patched_test_tree_oid,
         &materialization.patched_commit_oid,
         &message_text,
-    )?;
-    fs::remove_file(message_path)
-        .map_err(|error| format!("failed to remove historical-v2 test commit input: {error}"))?;
+    )
+    .map_err(infrastructure)?;
+    fs::remove_file(message_path).map_err(|error| {
+        infrastructure(format!(
+            "failed to remove historical-v2 test commit input: {error}"
+        ))
+    })?;
     git(
         &roots.base_test_root,
         &["reset", "--hard", &base_test_commit_oid],
-    )?;
+    )
+    .map_err(infrastructure)?;
     git(
         &roots.patched_test_root,
         &["reset", "--hard", &patched_test_commit_oid],
-    )?;
-    require_clean(&roots.base_test_root)?;
-    require_clean(&roots.patched_test_root)?;
+    )
+    .map_err(infrastructure)?;
+    require_clean(&roots.base_test_root).map_err(infrastructure)?;
+    require_clean(&roots.patched_test_root).map_err(infrastructure)?;
 
     let mut artifact = HistoricalV2TestMaterialization {
         schema_version: HISTORICAL_V2_TEST_MATERIALIZATION_SCHEMA_VERSION,
@@ -160,8 +296,9 @@ fn materialize_test_snapshots(
         patched_test_commit_oid,
         test_materialization_sha256: String::new(),
     };
-    artifact.test_materialization_sha256 = test_materialization_sha256(&artifact)?;
-    Ok(artifact)
+    artifact.test_materialization_sha256 =
+        test_materialization_sha256(&artifact).map_err(infrastructure)?;
+    Ok(HistoricalV2StageResult::Completed(artifact))
 }
 
 pub fn validate_historical_v2_test_materialization(
@@ -261,21 +398,38 @@ fn cleanup_test_materialization(
     repository_root: &Path,
     roots: &HistoricalV2TestMaterializedRoots,
     inputs: &[&Path],
-) {
+) -> Result<(), String> {
+    let mut failures = Vec::new();
     for input in inputs {
-        if input.is_file() {
-            let _ = fs::remove_file(input);
+        if input.exists()
+            && let Err(error) = fs::remove_file(input)
+        {
+            failures.push(format!(
+                "failed to remove historical-v2 test input {}: {error}",
+                input.display()
+            ));
         }
     }
-    for root in [&roots.base_test_root, &roots.patched_test_root] {
-        if root.exists()
-            && let Ok(root_text) = path_text(root)
-        {
-            let _ = git(
-                repository_root,
-                &["worktree", "remove", "--force", &root_text],
-            );
+    for root in [&roots.patched_test_root, &roots.base_test_root] {
+        if root.exists() {
+            match path_text(root).and_then(|root_text| {
+                git(
+                    repository_root,
+                    &["worktree", "remove", "--force", &root_text],
+                )
+            }) {
+                Ok(()) => {}
+                Err(error) => failures.push(error),
+            }
         }
+    }
+    if let Err(error) = git(repository_root, &["worktree", "prune", "--expire", "now"]) {
+        failures.push(error);
+    }
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(failures.join("; "))
     }
 }
 
@@ -302,4 +456,20 @@ fn hash_json(value: &impl Serialize) -> Result<String, String> {
 
 fn sha256(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
+}
+
+fn invalid(detail: impl Into<String>) -> HistoricalV2SlotStageError {
+    HistoricalV2SlotStageError {
+        stage: HistoricalV2SlotStage::TestMaterialization,
+        kind: HistoricalV2SlotStageErrorKind::InvalidInput,
+        detail: detail.into(),
+    }
+}
+
+fn infrastructure(detail: impl Into<String>) -> HistoricalV2SlotStageError {
+    HistoricalV2SlotStageError {
+        stage: HistoricalV2SlotStage::TestMaterialization,
+        kind: HistoricalV2SlotStageErrorKind::InfrastructureFailed,
+        detail: detail.into(),
+    }
 }

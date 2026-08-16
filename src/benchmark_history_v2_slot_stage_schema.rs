@@ -1,6 +1,7 @@
 use super::{
     HistoricalV2IdenticalTestExclusionReason, HistoricalV2MaterializationExclusionReason,
-    HistoricalV2QualificationExclusionReason, HistoricalV2TestRecipeExclusionReason,
+    HistoricalV2QualificationExclusionReason, HistoricalV2TestMaterializationExclusionReason,
+    HistoricalV2TestRecipeExclusionReason,
 };
 use serde::{Deserialize, Serialize};
 
@@ -38,13 +39,6 @@ pub enum HistoricalV2StageArtifactKind {
     TestMaterializationExclusion,
     SourceCensusExclusion,
     SemanticCensusExclusion,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum HistoricalV2TestMaterializationExclusionReason {
-    TestPatchDoesNotApply,
-    TestPatchProducesNoTreeChange,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

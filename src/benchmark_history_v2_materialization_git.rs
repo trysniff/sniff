@@ -85,6 +85,27 @@ pub(super) fn git_check(root: &Path, args: &[&str]) -> Result<HistoricalV2GitChe
     run_git_check(&mut command, &label)
 }
 
+pub(super) fn validate_git_command_rejection_evidence(
+    evidence: &HistoricalV2GitCommandRejectionEvidence,
+) -> Result<(), String> {
+    if evidence.command_label.is_empty()
+        || evidence.stdout_sha256.len() != 64
+        || !evidence
+            .stdout_sha256
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit())
+        || evidence.stderr_sha256.len() != 64
+        || !evidence
+            .stderr_sha256
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit())
+        || evidence.retained_stderr.chars().count() > 4096
+    {
+        return Err("historical-v2 rejected Git command evidence changed".to_string());
+    }
+    Ok(())
+}
+
 fn run_git_command(command: &mut Command, label: &str) -> Result<Vec<u8>, String> {
     match run_git_check(command, label)? {
         HistoricalV2GitCheckOutcome::Accepted(output) => Ok(output),

@@ -8,15 +8,21 @@ mod history_v2_materialization_git;
 mod history_v2_materialization_schema;
 #[path = "../src/benchmark_history_v2_materialization_stage_schema.rs"]
 mod history_v2_materialization_stage_schema;
+#[path = "../src/benchmark_history_v2_test_materialization_exclusion.rs"]
+mod history_v2_test_materialization_exclusion;
 #[path = "../src/benchmark_history_v2_test_materialization_schema.rs"]
 mod history_v2_test_materialization_schema;
+#[path = "../src/benchmark_history_v2_test_materialization_stage_schema.rs"]
+mod history_v2_test_materialization_stage_schema;
 #[path = "../src/benchmark_non_blind_history_materialize.rs"]
 mod non_blind_history_materialize;
 
 pub use history_v2_materialization_exclusion::*;
 pub use history_v2_materialization_schema::*;
 pub use history_v2_materialization_stage_schema::*;
+pub use history_v2_test_materialization_exclusion::*;
 pub use history_v2_test_materialization_schema::*;
+pub use history_v2_test_materialization_stage_schema::*;
 pub use non_blind_history_materialize::*;
 pub use sniff::benchmark::{
     HistoricalV2SlotStage, HistoricalV2SlotStageError, HistoricalV2SlotStageErrorKind,
@@ -74,15 +80,32 @@ fn rejects_patch_that_does_not_apply_to_both_before_retaining_work() {
     let fixture = Fixture::new();
     let (materialization, materialized_roots) = fixture.materialize_snapshots("one-sided");
     let one_sided_patch = fixture.patch_main_to_three();
-    let error = materialize_historical_v2_test_snapshots(
+    let outcome = materialize_historical_v2_test_snapshots_typed(
         &materialization,
         &materialized_roots,
         &one_sided_patch,
         &sha256(one_sided_patch.as_bytes()),
     )
-    .unwrap_err();
+    .unwrap();
+    let HistoricalV2StageResult::Excluded(exclusion) = outcome else {
+        panic!("one-sided test patch was not excluded");
+    };
 
-    assert!(error.contains("git apply"));
+    assert_eq!(
+        exclusion.reason,
+        HistoricalV2TestMaterializationExclusionReason::TestPatchDoesNotApply
+    );
+    let HistoricalV2TestMaterializationExclusionEvidence::TestPatchRejected { rejections, .. } =
+        &exclusion.evidence
+    else {
+        panic!("one-sided test patch rejection evidence is missing");
+    };
+    assert_eq!(rejections.len(), 1);
+    assert_eq!(
+        rejections[0].side,
+        HistoricalV2TestMaterializationSide::Patched
+    );
+    validate_historical_v2_test_materialization_exclusion(&exclusion).unwrap();
     assert!(!fixture.parent.path().join("one-sided/base-tested").exists());
     assert!(
         !fixture
@@ -95,10 +118,55 @@ fn rejects_patch_that_does_not_apply_to_both_before_retaining_work() {
 }
 
 #[test]
+fn records_every_snapshot_that_rejects_the_test_patch() {
+    let fixture = Fixture::new();
+    let (materialization, materialized_roots) = fixture.materialize_snapshots("both-reject");
+    let patch = "not a Git patch\n";
+    let outcome = materialize_historical_v2_test_snapshots_typed(
+        &materialization,
+        &materialized_roots,
+        patch,
+        &sha256(patch.as_bytes()),
+    )
+    .unwrap();
+    let HistoricalV2StageResult::Excluded(exclusion) = outcome else {
+        panic!("invalid test patch was not excluded");
+    };
+    let HistoricalV2TestMaterializationExclusionEvidence::TestPatchRejected { rejections, .. } =
+        &exclusion.evidence
+    else {
+        panic!("test patch rejection evidence is missing");
+    };
+
+    assert_eq!(
+        rejections.iter().map(|item| item.side).collect::<Vec<_>>(),
+        vec![
+            HistoricalV2TestMaterializationSide::Base,
+            HistoricalV2TestMaterializationSide::Patched,
+        ]
+    );
+    validate_historical_v2_test_materialization_exclusion(&exclusion).unwrap();
+    assert!(
+        !fixture
+            .parent
+            .path()
+            .join("both-reject/base-tested")
+            .exists()
+    );
+    assert!(
+        !fixture
+            .parent
+            .path()
+            .join("both-reject/patched-tested")
+            .exists()
+    );
+}
+
+#[test]
 fn rejects_changed_test_patch_hash_before_creating_worktrees() {
     let fixture = Fixture::new();
     let (materialization, materialized_roots) = fixture.materialize_snapshots("changed-hash");
-    let error = materialize_historical_v2_test_snapshots(
+    let error = materialize_historical_v2_test_snapshots_typed(
         &materialization,
         &materialized_roots,
         &fixture.test_patch,
@@ -106,7 +174,8 @@ fn rejects_changed_test_patch_hash_before_creating_worktrees() {
     )
     .unwrap_err();
 
-    assert!(error.contains("selected payload hash"));
+    assert_eq!(error.stage, HistoricalV2SlotStage::TestMaterialization);
+    assert_eq!(error.kind, HistoricalV2SlotStageErrorKind::InvalidInput);
     assert!(
         !fixture
             .parent

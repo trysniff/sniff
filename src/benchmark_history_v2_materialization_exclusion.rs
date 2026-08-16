@@ -1,9 +1,9 @@
 use super::history_v2_materialization_git::{
     require_oid, require_repository, require_revision, require_sha256,
+    validate_git_command_rejection_evidence,
 };
 use super::{
-    HISTORICAL_V2_MATERIALIZATION_EXCLUSION_SCHEMA_VERSION,
-    HistoricalV2GitCommandRejectionEvidence, HistoricalV2MaterializationExclusion,
+    HISTORICAL_V2_MATERIALIZATION_EXCLUSION_SCHEMA_VERSION, HistoricalV2MaterializationExclusion,
     HistoricalV2MaterializationExclusionEvidence, HistoricalV2MaterializationExclusionReason,
     HistoricalV2SlotStage, HistoricalV2SlotStageError, HistoricalV2SlotStageErrorKind,
 };
@@ -103,7 +103,7 @@ fn validate_exclusion_evidence(
             if revision != &exclusion.base_revision {
                 return Err("historical-v2 unavailable base revision changed".to_string());
             }
-            validate_git_rejection(command)?;
+            validate_git_command_rejection_evidence(command)?;
         }
         Evidence::UnsupportedGitObjectFormat { object_format } => {
             if object_format.is_empty() || object_format == "sha1" {
@@ -117,32 +117,11 @@ fn validate_exclusion_evidence(
             if patch_sha256 != &exclusion.historical_patch_sha256 {
                 return Err("historical-v2 rejected patch identity changed".to_string());
             }
-            validate_git_rejection(command)?;
+            validate_git_command_rejection_evidence(command)?;
         }
         Evidence::HistoricalPatchProducesNoTreeChange { base_tree_oid } => {
             require_oid(base_tree_oid)?;
         }
-    }
-    Ok(())
-}
-
-fn validate_git_rejection(
-    evidence: &HistoricalV2GitCommandRejectionEvidence,
-) -> Result<(), String> {
-    if evidence.command_label.is_empty()
-        || evidence.stdout_sha256.len() != 64
-        || !evidence
-            .stdout_sha256
-            .bytes()
-            .all(|byte| byte.is_ascii_hexdigit())
-        || evidence.stderr_sha256.len() != 64
-        || !evidence
-            .stderr_sha256
-            .bytes()
-            .all(|byte| byte.is_ascii_hexdigit())
-        || evidence.retained_stderr.chars().count() > 4096
-    {
-        return Err("historical-v2 rejected Git command evidence changed".to_string());
     }
     Ok(())
 }
