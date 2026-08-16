@@ -49,6 +49,16 @@ pub(super) fn qualification_outcome(
     }
 }
 
+pub(super) fn materialization_exclusion_outcome(
+    exclusion: &HistoricalV2MaterializationExclusion,
+) -> HistoricalV2SlotStageOutcome {
+    HistoricalV2SlotStageOutcome::Excluded {
+        reason: HistoricalV2TerminalExclusionReason::Materialization(exclusion.reason),
+        artifact_kind: HistoricalV2StageArtifactKind::MaterializationExclusion,
+        artifact_sha256: exclusion.exclusion_sha256.clone(),
+    }
+}
+
 pub(super) fn test_recipe_outcome(recipe: &HistoricalV2TestRecipe) -> HistoricalV2SlotStageOutcome {
     match &recipe.outcome {
         HistoricalV2TestRecipeOutcome::Selected { .. } => HistoricalV2SlotStageOutcome::Completed {

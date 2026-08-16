@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
+use super::HistoricalV2GitCommandRejectionEvidence;
+
 const GIT_TIMEOUT: Duration = Duration::from_secs(300);
 const GIT_OUTPUT_LIMIT: usize = 32 * 1024 * 1024;
 
@@ -49,17 +51,6 @@ pub(super) fn apply_indexed_patch(
     git(root, &args)
 }
 
-pub(super) fn require_exact_commit(root: &Path, revision: &str) -> Result<(), String> {
-    let resolved = git_text(
-        root,
-        &["rev-parse", "--verify", &format!("{revision}^{{commit}}")],
-    )?;
-    if resolved != revision {
-        return Err("historical-v2 base revision did not resolve exactly".to_string());
-    }
-    Ok(())
-}
-
 pub(super) fn require_clean(root: &Path) -> Result<(), String> {
     if !git_text(root, &["status", "--porcelain=v1", "--untracked-files=all"])?.is_empty() {
         return Err(format!(
@@ -82,7 +73,31 @@ pub(super) fn git_text(root: &Path, args: &[&str]) -> Result<String, String> {
     run_git_command(&mut command, &format!("git {}", args.join(" "))).and_then(output_text)
 }
 
+pub(super) enum HistoricalV2GitCheckOutcome {
+    Accepted(Vec<u8>),
+    Rejected(HistoricalV2GitCommandRejectionEvidence),
+}
+
+pub(super) fn git_check(root: &Path, args: &[&str]) -> Result<HistoricalV2GitCheckOutcome, String> {
+    let label = format!("git {}", args.join(" "));
+    let mut command = Command::new("git");
+    command.arg("-C").arg(root).args(args);
+    run_git_check(&mut command, &label)
+}
+
 fn run_git_command(command: &mut Command, label: &str) -> Result<Vec<u8>, String> {
+    match run_git_check(command, label)? {
+        HistoricalV2GitCheckOutcome::Accepted(output) => Ok(output),
+        HistoricalV2GitCheckOutcome::Rejected(evidence) => {
+            Err(format!("{label} failed: {}", evidence.retained_stderr))
+        }
+    }
+}
+
+fn run_git_check(
+    command: &mut Command,
+    label: &str,
+) -> Result<HistoricalV2GitCheckOutcome, String> {
     let output =
         crate::bounded_process::run_with_output_limit(command, GIT_TIMEOUT, GIT_OUTPUT_LIMIT)
             .map_err(|error| format!("historical-v2 materialization requires git: {error}"))?;
@@ -98,15 +113,22 @@ fn run_git_command(command: &mut Command, label: &str) -> Result<Vec<u8>, String
         ));
     }
     if !output.status.success() {
-        return Err(format!(
-            "{label} failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-                .chars()
-                .take(4096)
-                .collect::<String>()
+        return Ok(HistoricalV2GitCheckOutcome::Rejected(
+            HistoricalV2GitCommandRejectionEvidence {
+                command_label: label.to_string(),
+                exit_code: output.status.code(),
+                stdout_sha256: output.stdout_sha256,
+                stderr_sha256: output.stderr_sha256,
+                retained_stderr: String::from_utf8_lossy(&output.stderr)
+                    .chars()
+                    .take(4096)
+                    .collect(),
+                stdout_truncated: output.stdout_truncated,
+                stderr_truncated: output.stderr_truncated,
+            },
         ));
     }
-    Ok(output.stdout)
+    Ok(HistoricalV2GitCheckOutcome::Accepted(output.stdout))
 }
 
 fn output_text(bytes: Vec<u8>) -> Result<String, String> {
@@ -116,12 +138,7 @@ fn output_text(bytes: Vec<u8>) -> Result<String, String> {
 }
 
 pub(super) fn create_new_absolute_directory(path: &Path) -> Result<PathBuf, String> {
-    if !path.is_absolute() || path.exists() {
-        return Err(format!(
-            "historical-v2 slot root must be a new absolute path: {}",
-            path.display()
-        ));
-    }
+    require_new_absolute_directory(path)?;
     let parent = path
         .parent()
         .ok_or_else(|| "historical-v2 slot root has no parent".to_string())?;
@@ -135,6 +152,25 @@ pub(super) fn create_new_absolute_directory(path: &Path) -> Result<PathBuf, Stri
     fs::create_dir(&resolved)
         .map_err(|error| format!("failed to create historical-v2 slot root: {error}"))?;
     Ok(resolved)
+}
+
+pub(super) fn require_new_absolute_directory(path: &Path) -> Result<(), String> {
+    if !path.is_absolute() || path.exists() {
+        return Err(format!(
+            "historical-v2 slot root must be a new absolute path: {}",
+            path.display()
+        ));
+    }
+    let parent = path
+        .parent()
+        .ok_or_else(|| "historical-v2 slot root has no parent".to_string())?;
+    if !parent.is_dir() {
+        return Err(format!(
+            "historical-v2 slot root parent must exist: {}",
+            parent.display()
+        ));
+    }
+    Ok(())
 }
 
 pub(super) fn write_create_new(path: &Path, bytes: &[u8]) -> Result<(), String> {
