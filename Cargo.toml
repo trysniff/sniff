@@ -4,6 +4,7 @@ version = "0.2.2"
 edition = "2024"
 rust-version = "1.88"
 autobins = false
+default-run = "sniff"
 description = "An exhaustive LLM-backed slop finder for codebases"
 readme = "README.md"
 license = "AGPL-3.0-only"
