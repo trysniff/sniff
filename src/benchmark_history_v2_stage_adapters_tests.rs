@@ -2,11 +2,15 @@ use super::*;
 use crate::benchmark::{
     HISTORICAL_V2_IDENTICAL_TEST_EXECUTION_SCHEMA_VERSION,
     HISTORICAL_V2_MATERIALIZATION_EXCLUSION_SCHEMA_VERSION,
-    HISTORICAL_V2_QUALIFICATION_SCHEMA_VERSION, HISTORICAL_V2_TEST_RECIPE_SCHEMA_VERSION,
-    HistoricalV2ExecutionSide, HistoricalV2IdenticalTestExclusionReason,
-    HistoricalV2MaterializationExclusion, HistoricalV2MaterializationExclusionEvidence,
-    HistoricalV2MaterializationExclusionReason, HistoricalV2PublicSurfaceDelta,
-    HistoricalV2QualificationExclusionReason, HistoricalV2SelectedPayload,
+    HISTORICAL_V2_QUALIFICATION_SCHEMA_VERSION,
+    HISTORICAL_V2_TEST_MATERIALIZATION_EXCLUSION_SCHEMA_VERSION,
+    HISTORICAL_V2_TEST_RECIPE_SCHEMA_VERSION, HistoricalV2ExecutionSide,
+    HistoricalV2IdenticalTestExclusionReason, HistoricalV2MaterializationExclusion,
+    HistoricalV2MaterializationExclusionEvidence, HistoricalV2MaterializationExclusionReason,
+    HistoricalV2PublicSurfaceDelta, HistoricalV2QualificationExclusionReason,
+    HistoricalV2SelectedPayload, HistoricalV2TestMaterializationExclusion,
+    HistoricalV2TestMaterializationExclusionEvidence,
+    HistoricalV2TestMaterializationExclusionReason, HistoricalV2TestMaterializationSide,
     HistoricalV2TestRecipeExclusionReason,
 };
 
@@ -75,6 +79,36 @@ fn materialization_exclusion_keeps_its_exact_evidence_commitment() {
             ),
             artifact_kind: HistoricalV2StageArtifactKind::MaterializationExclusion,
             artifact_sha256: digest('9'),
+        }
+    );
+}
+
+#[test]
+fn test_materialization_exclusion_keeps_its_exact_evidence_commitment() {
+    let exclusion = HistoricalV2TestMaterializationExclusion {
+        schema_version: HISTORICAL_V2_TEST_MATERIALIZATION_EXCLUSION_SCHEMA_VERSION,
+        exclusion_contract: "fixture".to_string(),
+        materialization_sha256: digest('1'),
+        test_patch_sha256: digest('2'),
+        reason: HistoricalV2TestMaterializationExclusionReason::TestPatchProducesNoTreeChange,
+        evidence: HistoricalV2TestMaterializationExclusionEvidence::TestPatchProducesNoTreeChange {
+            test_patch_sha256: digest('2'),
+            unchanged_sides: vec![HistoricalV2TestMaterializationSide::Base],
+            base_input_tree_oid: "a".repeat(40),
+            base_test_tree_oid: "a".repeat(40),
+            patched_input_tree_oid: "b".repeat(40),
+            patched_test_tree_oid: "c".repeat(40),
+        },
+        exclusion_sha256: digest('8'),
+    };
+    assert_eq!(
+        test_materialization_exclusion_outcome(&exclusion),
+        HistoricalV2SlotStageOutcome::Excluded {
+            reason: HistoricalV2TerminalExclusionReason::TestMaterialization(
+                HistoricalV2TestMaterializationExclusionReason::TestPatchProducesNoTreeChange,
+            ),
+            artifact_kind: HistoricalV2StageArtifactKind::TestMaterializationExclusion,
+            artifact_sha256: digest('8'),
         }
     );
 }
