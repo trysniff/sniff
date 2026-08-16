@@ -86,6 +86,192 @@ fn semantic_validation_rejects_recommitted_fake_public_surface() {
     );
 }
 
+#[test]
+fn repository_rejection_becomes_hash_bound_terminal_evidence() {
+    let detail = "rust-analyzer rejected the repository";
+    let stdout = "compiler output";
+    let stderr = "invalid manifest";
+    let evidence = indexer_failure_evidence(
+        HistoricalV2SemanticSnapshotSide::Base,
+        &"a".repeat(40),
+        SemanticIndexerRunFailure {
+            kind: SemanticIndexerRunFailureKind::RepositoryRejected,
+            phase: SemanticIndexerRunPhase::Execution,
+            indexer: Some(SemanticIndexerKind::Rust),
+            detail: detail.to_string(),
+            process: Some(Box::new(SemanticIndexerProcessEvidence {
+                status_code: Some(1),
+                stdout: stdout.to_string(),
+                stderr: stderr.to_string(),
+                stdout_sha256: sha256(stdout.as_bytes()),
+                stderr_sha256: sha256(stderr.as_bytes()),
+                timed_out: false,
+            })),
+        },
+    )
+    .unwrap();
+    let exclusion =
+        seal_semantic_census_exclusion(&"b".repeat(64), &"c".repeat(64), vec![evidence]).unwrap();
+
+    assert_eq!(
+        exclusion.reasons,
+        vec![HistoricalV2SemanticCensusExclusionReason::CompilerIndexerRejectedRepository]
+    );
+    assert_eq!(
+        exclusion.failures[0].indexer,
+        Some(IntentionalBoundaryIndexerKind::Rust)
+    );
+    assert_eq!(
+        exclusion.failures[0]
+            .process
+            .as_ref()
+            .unwrap()
+            .stderr_sha256,
+        sha256(stderr.as_bytes())
+    );
+    super::super::validate_historical_v2_semantic_census_exclusion(&exclusion).unwrap();
+}
+
+#[test]
+fn infrastructure_failure_cannot_be_sealed_as_candidate_exclusion() {
+    let error = indexer_failure_evidence(
+        HistoricalV2SemanticSnapshotSide::Patched,
+        &"a".repeat(40),
+        SemanticIndexerRunFailure {
+            kind: SemanticIndexerRunFailureKind::InfrastructureUnavailable,
+            phase: SemanticIndexerRunPhase::InstallationVerification,
+            indexer: Some(SemanticIndexerKind::Python),
+            detail: "pinned scip-python installation is unavailable".to_string(),
+            process: None,
+        },
+    )
+    .unwrap_err();
+
+    assert_eq!(error.stage, HistoricalV2SlotStage::SemanticCensus);
+    assert_eq!(
+        error.kind,
+        HistoricalV2SlotStageErrorKind::InfrastructureUnavailable
+    );
+}
+
+#[test]
+fn semantic_exclusion_commits_all_sides_and_rejects_tampering() {
+    let mut failures = Vec::new();
+    let base = resolve_snapshot_build(
+        HistoricalV2SemanticSnapshotSide::Base,
+        &"a".repeat(40),
+        Err("base compiler census omitted a method".to_string()),
+        &mut failures,
+    );
+    let patched = resolve_snapshot_build(
+        HistoricalV2SemanticSnapshotSide::Patched,
+        &"b".repeat(40),
+        Err("patched compiler census invented a symbol".to_string()),
+        &mut failures,
+    );
+    assert!(base.is_none() && patched.is_none());
+    let mut exclusion =
+        seal_semantic_census_exclusion(&"c".repeat(64), &"d".repeat(64), failures).unwrap();
+    assert_eq!(exclusion.failures.len(), 2);
+    assert_eq!(
+        exclusion.reasons,
+        vec![HistoricalV2SemanticCensusExclusionReason::CompilerCensusIncomplete]
+    );
+
+    exclusion.failures[0].revision = "e".repeat(40);
+    assert!(super::super::validate_historical_v2_semantic_census_exclusion(&exclusion).is_err());
+}
+
+#[test]
+fn mixed_language_snapshot_retains_every_indexer_failure() {
+    let mut failures = Vec::new();
+    let mut stage_errors = Vec::new();
+    let indexes = resolve_indexer_run(
+        HistoricalV2SemanticSnapshotSide::Base,
+        &"a".repeat(40),
+        Ok(SemanticIndexerBatchOutcome {
+            indexes: BTreeMap::new(),
+            failures: vec![
+                SemanticIndexerRunFailure {
+                    kind: SemanticIndexerRunFailureKind::UnsupportedProjectShape,
+                    phase: SemanticIndexerRunPhase::RepositoryValidation,
+                    indexer: Some(SemanticIndexerKind::Kotlin),
+                    detail: "Android Gradle module is unsupported".to_string(),
+                    process: None,
+                },
+                SemanticIndexerRunFailure {
+                    kind: SemanticIndexerRunFailureKind::IncompleteOutput,
+                    phase: SemanticIndexerRunPhase::OutputValidation,
+                    indexer: Some(SemanticIndexerKind::Rust),
+                    detail: "rust-analyzer omitted a source document".to_string(),
+                    process: Some(Box::new(SemanticIndexerProcessEvidence {
+                        status_code: Some(0),
+                        stdout: String::new(),
+                        stderr: String::new(),
+                        stdout_sha256: sha256(b""),
+                        stderr_sha256: sha256(b""),
+                        timed_out: false,
+                    })),
+                },
+            ],
+        }),
+        &mut failures,
+        &mut stage_errors,
+    );
+
+    assert!(indexes.is_none());
+    assert!(stage_errors.is_empty());
+    assert_eq!(failures.len(), 2);
+    let exclusion =
+        seal_semantic_census_exclusion(&"b".repeat(64), &"c".repeat(64), failures).unwrap();
+    assert_eq!(
+        exclusion.reasons,
+        vec![
+            HistoricalV2SemanticCensusExclusionReason::UnsupportedProjectShape,
+            HistoricalV2SemanticCensusExclusionReason::CompilerCensusIncomplete,
+        ]
+    );
+}
+
+#[test]
+fn one_infrastructure_failure_prevents_mixed_batch_exclusion() {
+    let mut failures = Vec::new();
+    let mut stage_errors = Vec::new();
+    let indexes = resolve_indexer_run(
+        HistoricalV2SemanticSnapshotSide::Patched,
+        &"a".repeat(40),
+        Ok(SemanticIndexerBatchOutcome {
+            indexes: BTreeMap::new(),
+            failures: vec![
+                SemanticIndexerRunFailure {
+                    kind: SemanticIndexerRunFailureKind::UnsupportedProjectShape,
+                    phase: SemanticIndexerRunPhase::RepositoryValidation,
+                    indexer: Some(SemanticIndexerKind::Kotlin),
+                    detail: "unsupported project".to_string(),
+                    process: None,
+                },
+                SemanticIndexerRunFailure {
+                    kind: SemanticIndexerRunFailureKind::InfrastructureFailed,
+                    phase: SemanticIndexerRunPhase::Cleanup,
+                    indexer: Some(SemanticIndexerKind::Rust),
+                    detail: "sandbox cleanup failed".to_string(),
+                    process: None,
+                },
+            ],
+        }),
+        &mut failures,
+        &mut stage_errors,
+    );
+
+    assert!(indexes.is_none());
+    assert_eq!(failures.len(), 1);
+    assert_eq!(stage_errors.len(), 1);
+    assert_eq!(
+        combine_stage_errors(stage_errors).kind,
+        HistoricalV2SlotStageErrorKind::InfrastructureFailed
+    );
+}
+
 struct Fixture {
     root: tempfile::TempDir,
     source: HistoricalV2SourceSnapshotCensus,
