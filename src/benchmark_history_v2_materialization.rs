@@ -1,7 +1,7 @@
 use super::history_v2_materialization_git::{
-    create_new_absolute_directory, deterministic_commit, git, git_text, path_text,
-    remove_generated_root, require_clean, require_exact_commit, require_oid, require_repository,
-    require_revision, require_sha256, write_create_new,
+    canonical_path, create_new_absolute_directory, deterministic_commit, git, git_common_directory,
+    git_text, path_text, remove_generated_root, require_clean, require_exact_commit, require_oid,
+    require_repository, require_revision, require_sha256, write_create_new,
 };
 use super::{
     HISTORICAL_V2_MATERIALIZATION_SCHEMA_VERSION, HistoricalCloneOutcome,
@@ -206,16 +206,28 @@ pub fn validate_historical_v2_materialization(
     require_oid(&artifact.base_tree_oid)?;
     require_oid(&artifact.patched_tree_oid)?;
     require_oid(&artifact.patched_commit_oid)?;
-    if roots.base_root != roots.repository_root {
+    let repository_root = canonical_path(&roots.repository_root, "repository root")?;
+    let base_root = canonical_path(&roots.base_root, "base snapshot")?;
+    let patched_root = canonical_path(&roots.patched_root, "patched snapshot")?;
+    if base_root != repository_root
+        || repository_root.file_name().and_then(|value| value.to_str()) != Some("repository")
+        || patched_root.file_name().and_then(|value| value.to_str()) != Some("patched")
+        || repository_root.parent() != patched_root.parent()
+        || git_common_directory(&repository_root)? != git_common_directory(&patched_root)?
+    {
         return Err("historical-v2 base snapshot is not the exact cloned repository".to_string());
     }
-    require_clean(&roots.base_root)?;
-    require_clean(&roots.patched_root)?;
-    if git_text(&roots.base_root, &["rev-parse", "HEAD"])? != artifact.base_revision
-        || git_text(&roots.base_root, &["rev-parse", "HEAD^{tree}"])? != artifact.base_tree_oid
-        || git_text(&roots.patched_root, &["rev-parse", "HEAD"])? != artifact.patched_commit_oid
-        || git_text(&roots.patched_root, &["rev-parse", "HEAD^{tree}"])?
-            != artifact.patched_tree_oid
+    require_clean(&base_root)?;
+    require_clean(&patched_root)?;
+    if git_text(&base_root, &["rev-parse", "--is-shallow-repository"])? != "false"
+        || git_text(&patched_root, &["rev-parse", "--is-shallow-repository"])? != "false"
+    {
+        return Err("historical-v2 materialized repository is shallow".to_string());
+    }
+    if git_text(&base_root, &["rev-parse", "HEAD"])? != artifact.base_revision
+        || git_text(&base_root, &["rev-parse", "HEAD^{tree}"])? != artifact.base_tree_oid
+        || git_text(&patched_root, &["rev-parse", "HEAD"])? != artifact.patched_commit_oid
+        || git_text(&patched_root, &["rev-parse", "HEAD^{tree}"])? != artifact.patched_tree_oid
     {
         return Err("historical-v2 materialized Git identities changed".to_string());
     }
@@ -292,6 +304,13 @@ mod tests {
         );
         validate_historical_v2_materialization(&first.0, &first.1).unwrap();
         validate_historical_v2_materialization(&second.0, &second.1).unwrap();
+
+        let crossed = HistoricalV2MaterializedRoots {
+            repository_root: first.1.repository_root.clone(),
+            base_root: first.1.base_root.clone(),
+            patched_root: second.1.patched_root.clone(),
+        };
+        assert!(validate_historical_v2_materialization(&first.0, &crossed).is_err());
     }
 
     #[test]

@@ -157,13 +157,35 @@ pub(super) fn path_text(path: &Path) -> Result<String, String> {
         .ok_or_else(|| "historical-v2 materialization path is not UTF-8".to_string())
 }
 
+pub(super) fn canonical_path(path: &Path, label: &str) -> Result<PathBuf, String> {
+    fs::canonicalize(path)
+        .map(normalize_path)
+        .map_err(|error| format!("failed to resolve historical-v2 {label}: {error}"))
+}
+
+pub(super) fn git_common_directory(root: &Path) -> Result<PathBuf, String> {
+    let common = PathBuf::from(git_text(root, &["rev-parse", "--git-common-dir"])?);
+    let common = if common.is_absolute() {
+        common
+    } else {
+        root.join(common)
+    };
+    canonical_path(&common, "Git common directory")
+}
+
 pub(super) fn require_repository(value: &str) -> Result<(), String> {
     let parts = value.split('/').collect::<Vec<_>>();
     if parts.len() != 3
         || parts[0] != "github.com"
-        || parts[1..]
-            .iter()
-            .any(|part| part.is_empty() || *part == "." || *part == "..")
+        || parts[1..].iter().any(|part| {
+            part.is_empty()
+                || *part == "."
+                || *part == ".."
+                || part.ends_with(".git")
+                || !part
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+        })
     {
         return Err(
             "historical-v2 repository identity is not canonical GitHub owner/repo".to_string(),
