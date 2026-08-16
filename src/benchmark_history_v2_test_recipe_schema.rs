@@ -10,6 +10,7 @@ pub enum HistoricalV2TestRecipeExclusionReason {
     InvalidBaseImageName,
     TooManyInstallCommands,
     InvalidInstallCommand,
+    InvalidTestCommandCount,
     InvalidTestCommand,
     InvalidLogParser,
 }
@@ -20,7 +21,7 @@ pub enum HistoricalV2TestRecipeOutcome {
     Selected {
         base_image_name: String,
         install_commands: Vec<String>,
-        test_command: String,
+        test_commands: Vec<String>,
         log_parser: String,
     },
     Excluded {

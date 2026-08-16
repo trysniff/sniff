@@ -19,7 +19,23 @@ struct RawInstallConfig {
     base_image_name: String,
     install: Vec<String>,
     log_parser: String,
-    test_cmd: String,
+    test_cmd: OneOrManyCommands,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum OneOrManyCommands {
+    One(String),
+    Many(Vec<String>),
+}
+
+impl OneOrManyCommands {
+    fn into_vec(self) -> Vec<String> {
+        match self {
+            Self::One(command) => vec![command],
+            Self::Many(commands) => commands,
+        }
+    }
 }
 
 pub fn prepare_historical_v2_test_recipe(
@@ -129,7 +145,11 @@ fn recipe_outcome(config: Option<&str>) -> HistoricalV2TestRecipeOutcome {
     if config.install.iter().any(|command| !valid_command(command)) {
         return excluded(HistoricalV2TestRecipeExclusionReason::InvalidInstallCommand);
     }
-    if !valid_command(&config.test_cmd) {
+    let test_commands = config.test_cmd.into_vec();
+    if test_commands.is_empty() || test_commands.len() > MAX_INSTALL_COMMANDS {
+        return excluded(HistoricalV2TestRecipeExclusionReason::InvalidTestCommandCount);
+    }
+    if test_commands.iter().any(|command| !valid_command(command)) {
         return excluded(HistoricalV2TestRecipeExclusionReason::InvalidTestCommand);
     }
     if !valid_name(&config.log_parser) {
@@ -138,7 +158,7 @@ fn recipe_outcome(config: Option<&str>) -> HistoricalV2TestRecipeOutcome {
     HistoricalV2TestRecipeOutcome::Selected {
         base_image_name: config.base_image_name,
         install_commands: config.install,
-        test_command: config.test_cmd,
+        test_commands,
         log_parser: config.log_parser,
     }
 }

@@ -18,16 +18,31 @@ fn exact_upstream_recipe_schema_is_committed() {
         HistoricalV2TestRecipeOutcome::Selected {
             base_image_name,
             install_commands,
-            test_command,
+            test_commands,
             log_parser,
         } if base_image_name == "node_16"
             && install_commands == &["npm install"]
-            && test_command == "cd packages/core && npx jest --no-color"
+            && test_commands == &["cd packages/core && npx jest --no-color"]
             && log_parser == "parse_log_js_4"
     ));
     let mut changed = recipe.clone();
     changed.test_recipe_sha256 = digest('f');
     assert_ne!(recipe, changed);
+}
+
+#[test]
+fn upstream_test_command_lists_preserve_order() {
+    let config = r#"{"base_image_name":"c:latest","install":["cmake ."],"log_parser":"parse_log_cmake","test_cmd":["ctest -R unit","ctest -R integration"]}"#;
+    let payload = payload(Some(config));
+    let identity = fixture_identity(&payload);
+    let recipe =
+        prepare_validated_test_recipe(&payload, &identity, &fixture_qualification(&identity))
+            .unwrap();
+    assert!(matches!(
+        recipe.outcome,
+        HistoricalV2TestRecipeOutcome::Selected { test_commands, .. }
+            if test_commands == ["ctest -R unit", "ctest -R integration"]
+    ));
 }
 
 #[test]
