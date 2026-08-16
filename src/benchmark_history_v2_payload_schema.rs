@@ -35,6 +35,7 @@ pub struct HistoricalV2SelectedPayloads {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg(feature = "sniffbench-frame")]
 pub(super) struct HistoricalV2ProjectedPayloadRow {
     pub(super) source_shard_index: usize,
     pub(super) source_row_index: usize,
