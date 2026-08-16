@@ -1,3 +1,4 @@
+use sha2::{Digest, Sha256};
 use std::io::{self, Read};
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
@@ -13,6 +14,8 @@ pub(crate) struct BoundedOutput {
     pub(crate) status: ExitStatus,
     pub(crate) stdout: Vec<u8>,
     pub(crate) stderr: Vec<u8>,
+    pub(crate) stdout_sha256: String,
+    pub(crate) stderr_sha256: String,
     pub(crate) timed_out: bool,
     pub(crate) stdout_truncated: bool,
     pub(crate) stderr_truncated: bool,
@@ -67,27 +70,31 @@ pub(crate) fn run_with_output_limit(
         // already killed the process group before waiting for the parent.
         terminate_process_group(child.id())?;
     }
-    let (stdout, stdout_truncated) = join_reader(stdout_reader, "stdout")?;
-    let (stderr, stderr_truncated) = join_reader(stderr_reader, "stderr")?;
+    let (stdout, stdout_truncated, stdout_sha256) = join_reader(stdout_reader, "stdout")?;
+    let (stderr, stderr_truncated, stderr_sha256) = join_reader(stderr_reader, "stderr")?;
     Ok(BoundedOutput {
         status,
         stdout,
         stderr,
+        stdout_sha256,
+        stderr_sha256,
         timed_out,
         stdout_truncated,
         stderr_truncated,
     })
 }
 
-fn read_limited(mut reader: impl Read, limit: usize) -> io::Result<(Vec<u8>, bool)> {
+fn read_limited(mut reader: impl Read, limit: usize) -> io::Result<(Vec<u8>, bool, String)> {
     let mut retained = Vec::new();
     let mut truncated = false;
+    let mut digest = Sha256::new();
     let mut buffer = [0_u8; 8192];
     loop {
         let count = reader.read(&mut buffer)?;
         if count == 0 {
-            return Ok((retained, truncated));
+            return Ok((retained, truncated, format!("{:x}", digest.finalize())));
         }
+        digest.update(&buffer[..count]);
         if retained.len() < limit {
             let keep = count.min(limit - retained.len());
             retained.extend_from_slice(&buffer[..keep]);
@@ -99,9 +106,9 @@ fn read_limited(mut reader: impl Read, limit: usize) -> io::Result<(Vec<u8>, boo
 }
 
 fn join_reader(
-    reader: thread::JoinHandle<io::Result<(Vec<u8>, bool)>>,
+    reader: thread::JoinHandle<io::Result<(Vec<u8>, bool, String)>>,
     label: &str,
-) -> io::Result<(Vec<u8>, bool)> {
+) -> io::Result<(Vec<u8>, bool, String)> {
     reader
         .join()
         .map_err(|_| io::Error::other(format!("bounded child {label} reader panicked")))?
@@ -241,6 +248,14 @@ mod tests {
         let output = run_with_output_limit(&mut command, Duration::from_secs(5), 4).unwrap();
 
         assert_eq!(output.stdout, b"0123");
+        assert_eq!(
+            output.stdout_sha256,
+            "84d89877f0d4041efb6bf91a16f0248f2fd573e6af05c19f96bedb9f882f7882"
+        );
+        assert_eq!(
+            output.stderr_sha256,
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
         assert!(output.stdout_truncated);
         assert!(!output.stderr_truncated);
     }
