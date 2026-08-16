@@ -50,17 +50,17 @@ cargo run --locked --features sniffbench-frame --bin sniffbench-frame -- \
   validate sniffbench/historical-v2-protocol.json DATASET_ROOT frame.json
 ```
 
-Before slot selection, prepare a draft exclusion manifest with an empty
-`manifest_sha256`. It must contain all six protocol partitions in protocol
-order, sorted canonical `owner/repository` identities, and at least one sorted
-relative artifact commitment per partition. Sealing rehashes every artifact
-under `ARTIFACT_ROOT`; missing, changed, repeated, absolute, traversing, or
-symlink-escaping paths fail closed:
+Before slot selection, derive the exclusion manifest from the committed blind
+source seal, historical-v1 worksheet, intentional-boundary task, research
+policy, and complete synthetic-gold source inventory. There is no hand-written
+repository-list mode. Derivation validates the source commitments, canonicalizes
+their repository identities, and rehashes every artifact under `ARTIFACT_ROOT`;
+missing, changed, absolute, traversing, or symlink-escaping paths fail closed:
 
 ```console
 cargo run --locked --features sniffbench-frame --bin sniffbench-frame -- \
-  seal-exclusions sniffbench/historical-v2-protocol.json ARTIFACT_ROOT \
-  exclusions-draft.json exclusions.json
+  derive-exclusions sniffbench/historical-v2-protocol.json ARTIFACT_ROOT \
+  exclusions.json
 ```
 
 Selection first replays all pinned Parquet sources. It then recalculates every

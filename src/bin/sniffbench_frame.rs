@@ -2,7 +2,7 @@ use clap::{Parser, Subcommand};
 use sniff::benchmark::{
     HistoricalV2ExclusionManifest, HistoricalV2Frame, HistoricalV2SlotSelection,
     validate_historical_v2_frame_sources, validate_historical_v2_slot_selection,
-    write_historical_v2_exclusion_manifest, write_historical_v2_frame,
+    write_derived_historical_v2_exclusion_manifest, write_historical_v2_frame,
     write_historical_v2_slot_selection,
 };
 use std::fs;
@@ -31,11 +31,10 @@ enum Command {
         dataset_root: PathBuf,
         frame: PathBuf,
     },
-    /// Seal the exact six-partition repository exclusion manifest.
-    SealExclusions {
+    /// Derive and seal the exact six-partition repository exclusions.
+    DeriveExclusions {
         protocol: PathBuf,
         artifact_root: PathBuf,
-        draft: PathBuf,
         output: PathBuf,
     },
     /// Freeze the 128 no-backfill slots for every supported language.
@@ -92,16 +91,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 frame.row_count, frame.frame_sha256
             );
         }
-        Command::SealExclusions {
+        Command::DeriveExclusions {
             protocol,
             artifact_root,
-            draft,
             output,
         } => {
             let protocol = fs::read(protocol)?;
-            let draft: HistoricalV2ExclusionManifest = serde_json::from_slice(&fs::read(draft)?)?;
             let manifest =
-                write_historical_v2_exclusion_manifest(&protocol, &artifact_root, draft, &output)
+                write_derived_historical_v2_exclusion_manifest(&protocol, &artifact_root, &output)
                     .map_err(invalid_data)?;
             eprintln!(
                 "Historical-v2 exclusions written to {}\nRepositories: {}\nManifest SHA-256: {}",

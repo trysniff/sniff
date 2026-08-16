@@ -5,11 +5,11 @@ use super::{
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
-use std::fs::{self, File, OpenOptions};
-use std::io::{BufReader, Read, Write};
+use std::fs::{self, File};
+use std::io::{BufReader, Read};
 use std::path::{Component, Path};
 
-pub fn seal_historical_v2_exclusion_manifest(
+pub(crate) fn seal_historical_v2_exclusion_manifest(
     protocol_bytes: &[u8],
     artifact_root: &Path,
     mut manifest: HistoricalV2ExclusionManifest,
@@ -19,28 +19,6 @@ pub fn seal_historical_v2_exclusion_manifest(
     }
     manifest.manifest_sha256 = exclusion_manifest_sha256(&manifest)?;
     validate_historical_v2_exclusion_manifest(protocol_bytes, artifact_root, &manifest)?;
-    Ok(manifest)
-}
-
-pub fn write_historical_v2_exclusion_manifest(
-    protocol_bytes: &[u8],
-    artifact_root: &Path,
-    draft: HistoricalV2ExclusionManifest,
-    output_path: &Path,
-) -> Result<HistoricalV2ExclusionManifest, String> {
-    let manifest = seal_historical_v2_exclusion_manifest(protocol_bytes, artifact_root, draft)?;
-    let bytes = serde_json::to_vec_pretty(&manifest).map_err(|error| {
-        format!("failed to serialize historical-v2 exclusion manifest: {error}")
-    })?;
-    let mut output = OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .open(output_path)
-        .map_err(|error| format!("failed to create historical-v2 exclusion manifest: {error}"))?;
-    output
-        .write_all(&bytes)
-        .and_then(|()| output.sync_all())
-        .map_err(|error| format!("failed to persist historical-v2 exclusion manifest: {error}"))?;
     Ok(manifest)
 }
 
@@ -67,7 +45,6 @@ pub fn validate_historical_v2_exclusion_manifest(
 
     let canonical_root = fs::canonicalize(artifact_root)
         .map_err(|error| format!("failed to resolve exclusion artifact root: {error}"))?;
-    let mut artifact_paths = BTreeSet::new();
     let mut repositories = BTreeSet::new();
     for partition in &manifest.partitions {
         if partition.artifacts.is_empty()
@@ -89,9 +66,6 @@ pub fn validate_historical_v2_exclusion_manifest(
                 "historical-v2 exclusion artifact",
                 &artifact.artifact_sha256,
             )?;
-            if !artifact_paths.insert(artifact.artifact_path.as_str()) {
-                return Err("historical-v2 exclusion artifact path is repeated".to_string());
-            }
             validate_artifact(
                 &canonical_root,
                 &artifact.artifact_path,
