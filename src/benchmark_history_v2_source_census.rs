@@ -1,8 +1,11 @@
+use super::history_v2_source_census_exclusion::seal_source_census_exclusion;
 use super::intentional_boundary_inventory::read_intentional_boundary_git_blob;
 use super::{
-    HISTORICAL_V2_SOURCE_CENSUS_SCHEMA_VERSION, HistoricalV2Materialization,
-    HistoricalV2MaterializedRoots, HistoricalV2SourceCensus, HistoricalV2SourceFile,
-    HistoricalV2SourceMethod, HistoricalV2SourceSnapshotCensus,
+    BoundaryGitEntryKind, HISTORICAL_V2_SOURCE_CENSUS_SCHEMA_VERSION, HistoricalV2Materialization,
+    HistoricalV2MaterializedRoots, HistoricalV2SlotStage, HistoricalV2SlotStageError,
+    HistoricalV2SlotStageErrorKind, HistoricalV2SourceCensus, HistoricalV2SourceCensusExclusion,
+    HistoricalV2SourceCensusFailureEvidence, HistoricalV2SourceFile, HistoricalV2SourceMethod,
+    HistoricalV2SourceSnapshotCensus, HistoricalV2SourceSnapshotSide, HistoricalV2StageResult,
     IntentionalBoundaryRepositoryInventory, IntentionalBoundarySourceCensus,
     census_intentional_boundary_repository, inventory_intentional_boundary_repository,
     validate_historical_v2_materialization,
@@ -13,50 +16,90 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 const SOURCE_CENSUS_CONTRACT: &str = "sniffbench-historical-v2-source-census-v1";
+pub(super) const PARSER_ERROR_LIMIT: usize = 4 * 1024;
+type SourceCensusStageResult =
+    HistoricalV2StageResult<HistoricalV2SourceCensus, HistoricalV2SourceCensusExclusion>;
 
 pub fn census_historical_v2_sources(
     materialization: &HistoricalV2Materialization,
     roots: &HistoricalV2MaterializedRoots,
 ) -> Result<HistoricalV2SourceCensus, String> {
-    validate_historical_v2_materialization(materialization, roots)?;
+    match census_historical_v2_sources_typed(materialization, roots)
+        .map_err(|error| error.detail)?
+    {
+        HistoricalV2StageResult::Completed(census) => Ok(census),
+        HistoricalV2StageResult::Excluded(exclusion) => Err(format!(
+            "historical-v2 source census excluded: {:?}",
+            exclusion.reasons
+        )),
+    }
+}
+
+pub fn census_historical_v2_sources_typed(
+    materialization: &HistoricalV2Materialization,
+    roots: &HistoricalV2MaterializedRoots,
+) -> Result<SourceCensusStageResult, HistoricalV2SlotStageError> {
+    validate_historical_v2_materialization(materialization, roots).map_err(invalid)?;
     let base_inventory = inventory_intentional_boundary_repository(
         &materialization.canonical_repository,
         &materialization.base_revision,
         &roots.base_root,
-    )?;
+    )
+    .map_err(infrastructure)?;
     let patched_inventory = inventory_intentional_boundary_repository(
         &materialization.canonical_repository,
         &materialization.patched_commit_oid,
         &roots.patched_root,
+    )
+    .map_err(infrastructure)?;
+    let mut failures = inspect_snapshot_sources(
+        HistoricalV2SourceSnapshotSide::Base,
+        &roots.base_root,
+        &base_inventory,
     )?;
+    failures.extend(inspect_snapshot_sources(
+        HistoricalV2SourceSnapshotSide::Patched,
+        &roots.patched_root,
+        &patched_inventory,
+    )?);
+    if !failures.is_empty() {
+        let exclusion =
+            seal_source_census_exclusion(&materialization.materialization_sha256, failures)
+                .map_err(|error| infrastructure(error.detail))?;
+        return Ok(HistoricalV2StageResult::Excluded(exclusion));
+    }
     let base_parser_census = census_intentional_boundary_repository(
         &materialization.canonical_repository,
         &materialization.base_revision,
         &roots.base_root,
         &base_inventory,
-    )?;
+    )
+    .map_err(infrastructure)?;
     let patched_parser_census = census_intentional_boundary_repository(
         &materialization.canonical_repository,
         &materialization.patched_commit_oid,
         &roots.patched_root,
         &patched_inventory,
-    )?;
+    )
+    .map_err(infrastructure)?;
 
     let mut census = HistoricalV2SourceCensus {
         schema_version: HISTORICAL_V2_SOURCE_CENSUS_SCHEMA_VERSION,
         source_census_contract: SOURCE_CENSUS_CONTRACT.to_string(),
         canonical_repository: materialization.canonical_repository.clone(),
         materialization_sha256: materialization.materialization_sha256.clone(),
-        base: project_snapshot(&roots.base_root, &base_inventory, &base_parser_census)?,
+        base: project_snapshot(&roots.base_root, &base_inventory, &base_parser_census)
+            .map_err(infrastructure)?,
         patched: project_snapshot(
             &roots.patched_root,
             &patched_inventory,
             &patched_parser_census,
-        )?,
+        )
+        .map_err(infrastructure)?,
         source_census_sha256: String::new(),
     };
-    census.source_census_sha256 = source_census_sha256(&census)?;
-    Ok(census)
+    census.source_census_sha256 = source_census_sha256(&census).map_err(infrastructure)?;
+    Ok(HistoricalV2StageResult::Completed(census))
 }
 
 pub fn validate_historical_v2_source_census(
@@ -64,11 +107,114 @@ pub fn validate_historical_v2_source_census(
     roots: &HistoricalV2MaterializedRoots,
     census: &HistoricalV2SourceCensus,
 ) -> Result<(), String> {
-    let expected = census_historical_v2_sources(materialization, roots)?;
+    let expected = match census_historical_v2_sources_typed(materialization, roots)
+        .map_err(|error| error.detail)?
+    {
+        HistoricalV2StageResult::Completed(census) => census,
+        HistoricalV2StageResult::Excluded(_) => {
+            return Err("historical-v2 source census claims completion for excluded source".into());
+        }
+    };
     if census != &expected {
         return Err("historical-v2 source census changed".to_string());
     }
     Ok(())
+}
+
+fn inspect_snapshot_sources(
+    side: HistoricalV2SourceSnapshotSide,
+    root: &Path,
+    inventory: &IntentionalBoundaryRepositoryInventory,
+) -> Result<Vec<HistoricalV2SourceCensusFailureEvidence>, HistoricalV2SlotStageError> {
+    let mut failures = Vec::new();
+    for entry in &inventory.tracked_entries {
+        if entry.kind == BoundaryGitEntryKind::Gitlink {
+            failures.push(
+                HistoricalV2SourceCensusFailureEvidence::RepositoryContainsGitlink {
+                    side,
+                    revision: inventory.revision.clone(),
+                    repository_path: entry.repository_path.clone(),
+                    object_id: entry.object_id.clone(),
+                },
+            );
+            continue;
+        }
+        let extension = Path::new(&entry.repository_path)
+            .extension()
+            .and_then(|value| value.to_str());
+        let Some(adapter) = extension.and_then(crate::languages::get_adapter) else {
+            continue;
+        };
+        if !matches!(
+            entry.kind,
+            BoundaryGitEntryKind::RegularBlob | BoundaryGitEntryKind::ExecutableBlob
+        ) {
+            failures.push(
+                HistoricalV2SourceCensusFailureEvidence::SupportedSourceIsNotRegularBlob {
+                    side,
+                    revision: inventory.revision.clone(),
+                    repository_path: entry.repository_path.clone(),
+                    object_id: entry.object_id.clone(),
+                    entry_kind: entry.kind,
+                },
+            );
+            continue;
+        }
+        let expected_length = entry.byte_length.ok_or_else(|| {
+            infrastructure(format!(
+                "historical-v2 source has no committed byte length: {}",
+                entry.repository_path
+            ))
+        })?;
+        let bytes = read_intentional_boundary_git_blob(root, &entry.object_id, expected_length)
+            .map_err(infrastructure)?;
+        let source_sha256 = sha256(&bytes);
+        if let Err(error) = std::str::from_utf8(&bytes) {
+            failures.push(
+                HistoricalV2SourceCensusFailureEvidence::SupportedSourceIsNotUtf8 {
+                    side,
+                    revision: inventory.revision.clone(),
+                    repository_path: entry.repository_path.clone(),
+                    object_id: entry.object_id.clone(),
+                    byte_length: expected_length,
+                    source_sha256,
+                    language: adapter.name,
+                    valid_up_to: error.valid_up_to(),
+                    error_length: error.error_len(),
+                },
+            );
+            continue;
+        }
+        if let Err(error) = crate::parser::parse_source_checked(&entry.repository_path, &bytes) {
+            let (retained_parser_error, parser_error_truncated) = retain_error(&error);
+            failures.push(
+                HistoricalV2SourceCensusFailureEvidence::SupportedSourceCannotBeParsed {
+                    side,
+                    revision: inventory.revision.clone(),
+                    repository_path: entry.repository_path.clone(),
+                    object_id: entry.object_id.clone(),
+                    byte_length: expected_length,
+                    source_sha256,
+                    language: adapter.name,
+                    parser_error_sha256: sha256(error.as_bytes()),
+                    retained_parser_error,
+                    parser_error_truncated,
+                },
+            );
+        }
+    }
+    Ok(failures)
+}
+
+fn retain_error(error: &str) -> (String, bool) {
+    if error.len() <= PARSER_ERROR_LIMIT {
+        return (error.to_string(), false);
+    }
+    let mut end = PARSER_ERROR_LIMIT;
+    while !error.is_char_boundary(end) {
+        end -= 1;
+    }
+    (error[..end].to_string(), true)
 }
 
 fn project_snapshot(
@@ -228,6 +374,22 @@ fn hash_json(value: &impl Serialize) -> Result<String, String> {
 
 fn sha256(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
+}
+
+fn invalid(detail: impl Into<String>) -> HistoricalV2SlotStageError {
+    HistoricalV2SlotStageError {
+        stage: HistoricalV2SlotStage::SourceCensus,
+        kind: HistoricalV2SlotStageErrorKind::InvalidInput,
+        detail: detail.into(),
+    }
+}
+
+fn infrastructure(detail: impl Into<String>) -> HistoricalV2SlotStageError {
+    HistoricalV2SlotStageError {
+        stage: HistoricalV2SlotStage::SourceCensus,
+        kind: HistoricalV2SlotStageErrorKind::InfrastructureFailed,
+        detail: detail.into(),
+    }
 }
 
 #[cfg(test)]

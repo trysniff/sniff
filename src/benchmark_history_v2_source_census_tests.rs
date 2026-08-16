@@ -1,3 +1,10 @@
+use super::super::{
+    HistoricalV2SlotStage, HistoricalV2SlotStageCheckpointInput, HistoricalV2SlotStageJournal,
+    HistoricalV2SlotStageOutcome, HistoricalV2SourceCensusExclusionReason,
+    HistoricalV2StageArtifactKind, HistoricalV2TerminalExclusionReason,
+    checkpoint_historical_v2_source_census_exclusion,
+    validate_historical_v2_source_census_exclusion,
+};
 use super::*;
 use std::fs;
 use std::path::Path;
@@ -64,6 +71,141 @@ fn source_method_ids_are_stable_only_for_identical_units() {
     );
 }
 
+#[test]
+fn typed_census_records_every_permanent_source_failure_before_excluding() {
+    let fixture = Fixture::with_sources_and_extra(
+        b"pub fn broken( { // base\n",
+        b"pub fn broken( { // patched\n",
+        Some(&[0xff, b'\n']),
+    );
+    let materialized = fixture.materialize("mixed-source-failures");
+    let HistoricalV2StageResult::Excluded(exclusion) =
+        census_historical_v2_sources_typed(&materialized.0, &materialized.1).unwrap()
+    else {
+        panic!("mixed malformed sources must exclude their fixed slot");
+    };
+
+    assert_eq!(
+        exclusion.reasons,
+        vec![
+            HistoricalV2SourceCensusExclusionReason::SupportedSourceIsNotUtf8,
+            HistoricalV2SourceCensusExclusionReason::SupportedSourceCannotBeParsed,
+        ]
+    );
+    assert_eq!(exclusion.failures.len(), 4);
+    assert!(exclusion.failures.iter().any(|failure| matches!(
+        failure,
+        HistoricalV2SourceCensusFailureEvidence::SupportedSourceIsNotUtf8 {
+            side: HistoricalV2SourceSnapshotSide::Base,
+            repository_path,
+            valid_up_to: 0,
+            error_length: Some(1),
+            ..
+        } if repository_path == "src/non_utf8.rs"
+    )));
+    assert!(exclusion.failures.iter().any(|failure| matches!(
+        failure,
+        HistoricalV2SourceCensusFailureEvidence::SupportedSourceCannotBeParsed {
+            side: HistoricalV2SourceSnapshotSide::Patched,
+            repository_path,
+            ..
+        } if repository_path == "src/lib.rs"
+    )));
+    validate_historical_v2_source_census_exclusion(&exclusion).unwrap();
+}
+
+#[test]
+fn source_exclusion_rejects_evidence_tampering() {
+    let fixture = Fixture::with_sources_and_extra(
+        b"pub fn value() -> u8 { 1 }\n",
+        b"pub fn value() -> u8 { 2 }\n",
+        Some(&[0xff]),
+    );
+    let materialized = fixture.materialize("tampered-source-exclusion");
+    let HistoricalV2StageResult::Excluded(mut exclusion) =
+        census_historical_v2_sources_typed(&materialized.0, &materialized.1).unwrap()
+    else {
+        panic!("non-UTF-8 source must exclude its fixed slot");
+    };
+    let HistoricalV2SourceCensusFailureEvidence::SupportedSourceIsNotUtf8 { valid_up_to, .. } =
+        &mut exclusion.failures[0]
+    else {
+        unreachable!();
+    };
+    *valid_up_to = 1;
+
+    assert!(validate_historical_v2_source_census_exclusion(&exclusion).is_err());
+}
+
+#[test]
+fn source_exclusion_checkpoint_reproduces_the_exact_materialized_failure() {
+    let fixture = Fixture::with_sources_and_extra(
+        b"pub fn value() -> u8 { 1 }\n",
+        b"pub fn value() -> u8 { 2 }\n",
+        Some(&[0xff]),
+    );
+    let materialized = fixture.materialize("checkpointed-source-exclusion");
+    let HistoricalV2StageResult::Excluded(exclusion) =
+        census_historical_v2_sources_typed(&materialized.0, &materialized.1).unwrap()
+    else {
+        panic!("non-UTF-8 source must exclude its fixed slot");
+    };
+    let state = tempfile::tempdir().unwrap();
+    let mut journal = HistoricalV2SlotStageJournal::open(state.path(), "rust", 1).unwrap();
+    let selection_sha256 = sha256(b"selection");
+    let placeholder = serde_json::json!({"fixture": true});
+    for (stage, artifact_kind, artifact_sha256) in [
+        (
+            HistoricalV2SlotStage::Payload,
+            HistoricalV2StageArtifactKind::SelectedPayload,
+            sha256(b"payload"),
+        ),
+        (
+            HistoricalV2SlotStage::Materialization,
+            HistoricalV2StageArtifactKind::Materialization,
+            materialized.0.materialization_sha256.clone(),
+        ),
+        (
+            HistoricalV2SlotStage::TestMaterialization,
+            HistoricalV2StageArtifactKind::NoTestPatch,
+            sha256(b"no-test-patch"),
+        ),
+    ] {
+        journal
+            .append(
+                HistoricalV2SlotStageCheckpointInput {
+                    selection_sha256: &selection_sha256,
+                    language: "rust",
+                    slot_number: 1,
+                    canonical_repository: &materialized.0.canonical_repository,
+                    stage,
+                    outcome: HistoricalV2SlotStageOutcome::Completed {
+                        artifact_kind,
+                        artifact_sha256,
+                    },
+                },
+                Some(&placeholder),
+            )
+            .unwrap();
+    }
+
+    let checkpoint = checkpoint_historical_v2_source_census_exclusion(
+        &mut journal,
+        &materialized.0,
+        &materialized.1,
+        &exclusion,
+    )
+    .unwrap();
+    assert_eq!(
+        checkpoint.outcome,
+        HistoricalV2SlotStageOutcome::Excluded {
+            reason: HistoricalV2TerminalExclusionReason::SourceCensus(exclusion.reasons.clone()),
+            artifact_kind: HistoricalV2StageArtifactKind::SourceCensusExclusion,
+            artifact_sha256: exclusion.exclusion_sha256,
+        }
+    );
+}
+
 fn source_lines(census: &HistoricalV2SourceSnapshotCensus, path: &str) -> usize {
     source_file(census, path).non_whitespace_lines
 }
@@ -99,6 +241,21 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
+        Self::with_lib_sources(
+            b"pub fn value() -> u8 {\n    let value = 1;\n    value\n}\n",
+            b"pub fn value() -> u8 {\n    1\n}\n",
+        )
+    }
+
+    fn with_lib_sources(base_source: &[u8], patched_source: &[u8]) -> Self {
+        Self::with_sources_and_extra(base_source, patched_source, None)
+    }
+
+    fn with_sources_and_extra(
+        base_source: &[u8],
+        patched_source: &[u8],
+        extra_source: Option<&[u8]>,
+    ) -> Self {
         let source = tempfile::tempdir().unwrap();
         git_ok(source.path(), &["init", "-b", "main"]);
         git_ok(
@@ -108,11 +265,10 @@ impl Fixture {
         git_ok(source.path(), &["config", "user.name", "Fixture"]);
         fs::create_dir_all(source.path().join("src")).unwrap();
         fs::create_dir_all(source.path().join("tests")).unwrap();
-        fs::write(
-            source.path().join("src/lib.rs"),
-            "pub fn value() -> u8 {\n    let value = 1;\n    value\n}\n",
-        )
-        .unwrap();
+        fs::write(source.path().join("src/lib.rs"), base_source).unwrap();
+        if let Some(extra_source) = extra_source {
+            fs::write(source.path().join("src/non_utf8.rs"), extra_source).unwrap();
+        }
         fs::write(
             source.path().join("tests/value.rs"),
             "#[test] fn value_is_one() { assert_eq!(1, 1); }\n",
@@ -121,11 +277,7 @@ impl Fixture {
         git_ok(source.path(), &["add", "."]);
         git_ok(source.path(), &["commit", "-m", "base"]);
         let base_revision = git_text(source.path(), &["rev-parse", "HEAD"]);
-        fs::write(
-            source.path().join("src/lib.rs"),
-            "pub fn value() -> u8 {\n    1\n}\n",
-        )
-        .unwrap();
+        fs::write(source.path().join("src/lib.rs"), patched_source).unwrap();
         let historical_patch = git_text(source.path(), &["diff", "--binary", "HEAD"]) + "\n";
         git_ok(source.path(), &["reset", "--hard", "HEAD"]);
         Self {

@@ -1,6 +1,7 @@
 use super::*;
 use crate::benchmark::{
     HistoricalV2MaterializationExclusionReason, HistoricalV2QualificationExclusionReason,
+    HistoricalV2SourceCensusExclusionReason,
 };
 use serde_json::json;
 use std::fs;
@@ -107,6 +108,27 @@ fn qualification_exclusions_must_be_nonempty_sorted_and_unique() {
     };
     assert!(
         append(&history, HistoricalV2SlotStage::Qualification, repeated)
+            .unwrap_err()
+            .contains("canonical")
+    );
+}
+
+#[test]
+fn source_exclusions_must_be_nonempty_sorted_and_unique() {
+    let mut history = Vec::new();
+    for (stage, artifact_kind) in completed_stages().into_iter().take(3) {
+        history.push(append(&history, stage, completed(artifact_kind)).unwrap());
+    }
+    let repeated = HistoricalV2SlotStageOutcome::Excluded {
+        reason: HistoricalV2TerminalExclusionReason::SourceCensus(vec![
+            HistoricalV2SourceCensusExclusionReason::SupportedSourceIsNotUtf8,
+            HistoricalV2SourceCensusExclusionReason::SupportedSourceIsNotUtf8,
+        ]),
+        artifact_kind: HistoricalV2StageArtifactKind::SourceCensusExclusion,
+        artifact_sha256: HASH_A.to_string(),
+    };
+    assert!(
+        append(&history, HistoricalV2SlotStage::SourceCensus, repeated)
             .unwrap_err()
             .contains("canonical")
     );

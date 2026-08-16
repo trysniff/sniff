@@ -1,7 +1,7 @@
 use super::{
     HistoricalV2IdenticalTestExclusionReason, HistoricalV2MaterializationExclusionReason,
-    HistoricalV2QualificationExclusionReason, HistoricalV2TestMaterializationExclusionReason,
-    HistoricalV2TestRecipeExclusionReason,
+    HistoricalV2QualificationExclusionReason, HistoricalV2SourceCensusExclusionReason,
+    HistoricalV2TestMaterializationExclusionReason, HistoricalV2TestRecipeExclusionReason,
 };
 use serde::{Deserialize, Serialize};
 
@@ -43,13 +43,6 @@ pub enum HistoricalV2StageArtifactKind {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum HistoricalV2SourceCensusExclusionReason {
-    SupportedSourceIsNotUtf8,
-    SupportedSourceCannotBeParsed,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
 pub enum HistoricalV2SemanticCensusExclusionReason {
     UnsupportedProjectShape,
     CompilerIndexerRejectedRepository,
@@ -66,7 +59,7 @@ pub enum HistoricalV2SemanticCensusExclusionReason {
 pub enum HistoricalV2TerminalExclusionReason {
     Materialization(HistoricalV2MaterializationExclusionReason),
     TestMaterialization(HistoricalV2TestMaterializationExclusionReason),
-    SourceCensus(HistoricalV2SourceCensusExclusionReason),
+    SourceCensus(Vec<HistoricalV2SourceCensusExclusionReason>),
     SemanticCensus(HistoricalV2SemanticCensusExclusionReason),
     Qualification(Vec<HistoricalV2QualificationExclusionReason>),
     TestRecipe(HistoricalV2TestRecipeExclusionReason),
