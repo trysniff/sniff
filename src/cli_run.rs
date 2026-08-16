@@ -298,6 +298,11 @@ pub enum BenchmarkCommand {
         /// Precommitted intentional-boundary protocol.
         protocol: String,
     },
+    /// Validate the candidate-blind historical-v2 protocol offline.
+    ValidateHistoricalV2Protocol {
+        /// Precommitted historical-v2 protocol.
+        protocol: String,
+    },
     /// Create the immutable blank task for the complete intentional-boundary frame.
     PrepareIntentionalFrameTask {
         /// Public non-blind selection policy.
@@ -576,6 +581,9 @@ pub async fn run(args: CliArgs) -> Result<i32, Box<dyn std::error::Error>> {
                 &blind_seal,
                 &protocol,
             ),
+            BenchmarkCommand::ValidateHistoricalV2Protocol { protocol } => {
+                pipeline::validate_historical_v2_benchmark_protocol(&protocol)
+            }
             BenchmarkCommand::PrepareIntentionalFrameTask {
                 policy,
                 population,
@@ -938,6 +946,24 @@ mod tests {
                 && population == "population.json"
                 && blind_seal == "blind-seal.json"
                 && protocol == "protocol.json"
+        ));
+    }
+
+    #[test]
+    fn parses_offline_historical_v2_protocol_validation() {
+        let args = CliArgs::try_parse_from([
+            "sniff",
+            "benchmark",
+            "validate-historical-v2-protocol",
+            "protocol.json",
+        ])
+        .expect("historical-v2 protocol arguments");
+
+        assert!(matches!(
+            args.command,
+            Some(CliCommand::Benchmark {
+                command: BenchmarkCommand::ValidateHistoricalV2Protocol { protocol }
+            }) if protocol == "protocol.json"
         ));
     }
 

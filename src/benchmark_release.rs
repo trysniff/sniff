@@ -39,6 +39,16 @@ mod intentional_boundary_protocol;
 
 pub use intentional_boundary_protocol::*;
 
+#[path = "benchmark_history_v2_protocol_schema.rs"]
+mod history_v2_protocol_schema;
+
+pub use history_v2_protocol_schema::*;
+
+#[path = "benchmark_history_v2_protocol.rs"]
+mod history_v2_protocol;
+
+pub use history_v2_protocol::*;
+
 #[path = "benchmark_intentional_boundary_frame_task.rs"]
 mod intentional_boundary_frame_task;
 
