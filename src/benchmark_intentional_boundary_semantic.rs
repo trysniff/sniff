@@ -181,7 +181,7 @@ fn method_identity_map(
 #[path = "benchmark_intentional_boundary_semantic_projection.rs"]
 mod projection;
 
-use projection::{flatten_method, summarize_index};
+pub(super) use projection::{flatten_method, summarize_index};
 
 pub(super) fn compute_semantic_census_sha256(
     census: &IntentionalBoundarySemanticCensus,
