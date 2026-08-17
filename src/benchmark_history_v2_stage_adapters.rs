@@ -6,19 +6,20 @@ use super::{
     HistoricalV2MaterializationExclusion, HistoricalV2MaterializedRoots,
     HistoricalV2NoTestPatchArtifact, HistoricalV2Qualification, HistoricalV2QualificationOutcome,
     HistoricalV2SelectedPayloads, HistoricalV2SelectedSlotPayloadArtifact,
-    HistoricalV2SemanticCensus, HistoricalV2SlotOutcome, HistoricalV2SlotSelection,
-    HistoricalV2SlotStage, HistoricalV2SlotStageCheckpoint, HistoricalV2SlotStageCheckpointInput,
-    HistoricalV2SlotStageError, HistoricalV2SlotStageJournal, HistoricalV2SlotStageOutcome,
-    HistoricalV2SourceCensus, HistoricalV2SourceCensusExclusion, HistoricalV2StageArtifactKind,
-    HistoricalV2StageResult, HistoricalV2TerminalExclusionReason,
+    HistoricalV2SemanticCensus, HistoricalV2SemanticCensusExclusion, HistoricalV2SlotOutcome,
+    HistoricalV2SlotSelection, HistoricalV2SlotStage, HistoricalV2SlotStageCheckpoint,
+    HistoricalV2SlotStageCheckpointInput, HistoricalV2SlotStageError, HistoricalV2SlotStageJournal,
+    HistoricalV2SlotStageOutcome, HistoricalV2SourceCensus, HistoricalV2SourceCensusExclusion,
+    HistoricalV2StageArtifactKind, HistoricalV2StageResult, HistoricalV2TerminalExclusionReason,
     HistoricalV2TestMaterializationBinding, HistoricalV2TestMaterializationExclusion,
-    HistoricalV2TestRecipe, HistoricalV2TestRecipeOutcome, census_historical_v2_sources_typed,
-    validate_historical_v2_assessment_identity_commitment,
+    HistoricalV2TestRecipe, HistoricalV2TestRecipeOutcome, census_historical_v2_semantics_typed,
+    census_historical_v2_sources_typed, validate_historical_v2_assessment_identity_commitment,
     validate_historical_v2_identical_test_execution, validate_historical_v2_materialization,
     validate_historical_v2_materialization_exclusion, validate_historical_v2_protocol,
     validate_historical_v2_qualification_commitment,
     validate_historical_v2_selected_payloads_commitment,
-    validate_historical_v2_semantic_census_commitment, validate_historical_v2_slot_selection,
+    validate_historical_v2_semantic_census_commitment,
+    validate_historical_v2_semantic_census_exclusion, validate_historical_v2_slot_selection,
     validate_historical_v2_source_census, validate_historical_v2_source_census_exclusion,
     validate_historical_v2_test_materialization,
     validate_historical_v2_test_materialization_exclusion, validate_historical_v2_test_recipe,
@@ -355,6 +356,61 @@ pub fn checkpoint_historical_v2_semantic_census(
             artifact_sha256: census.semantic_census_sha256.clone(),
         },
         Some(census),
+    )
+}
+
+pub async fn checkpoint_historical_v2_semantic_census_exclusion(
+    journal: &mut HistoricalV2SlotStageJournal,
+    materialization: &HistoricalV2Materialization,
+    roots: &HistoricalV2MaterializedRoots,
+    source_census: &HistoricalV2SourceCensus,
+    exclusion: &HistoricalV2SemanticCensusExclusion,
+) -> Result<HistoricalV2SlotStageCheckpoint, HistoricalV2SlotStageError> {
+    let stage = HistoricalV2SlotStage::SemanticCensus;
+    require_completed_artifact(
+        journal,
+        1,
+        HistoricalV2StageArtifactKind::Materialization,
+        &materialization.materialization_sha256,
+        stage,
+    )?;
+    require_completed_artifact(
+        journal,
+        3,
+        HistoricalV2StageArtifactKind::SourceCensus,
+        &source_census.source_census_sha256,
+        stage,
+    )?;
+    validate_historical_v2_semantic_census_exclusion(exclusion)
+        .map_err(|detail| HistoricalV2SlotStageError::invalid(stage, detail))?;
+    if exclusion.materialization_sha256 != materialization.materialization_sha256
+        || exclusion.source_census_sha256 != source_census.source_census_sha256
+    {
+        return Err(HistoricalV2SlotStageError::invalid(
+            stage,
+            "historical-v2 semantic exclusion crossed its source boundary",
+        ));
+    }
+    match census_historical_v2_semantics_typed(materialization, roots, source_census).await? {
+        HistoricalV2StageResult::Excluded(expected) if expected == *exclusion => {}
+        HistoricalV2StageResult::Excluded(_) => {
+            return Err(HistoricalV2SlotStageError::invalid(
+                stage,
+                "historical-v2 semantic exclusion changed on exact replay",
+            ));
+        }
+        HistoricalV2StageResult::Completed(_) => {
+            return Err(HistoricalV2SlotStageError::invalid(
+                stage,
+                "historical-v2 semantic exclusion is not reproduced by exact replay",
+            ));
+        }
+    }
+    append_same_slot(
+        journal,
+        stage,
+        semantic_census_exclusion_outcome(exclusion),
+        Some(exclusion),
     )
 }
 

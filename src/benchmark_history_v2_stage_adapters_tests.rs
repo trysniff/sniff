@@ -3,13 +3,15 @@ use crate::benchmark::{
     HISTORICAL_V2_IDENTICAL_TEST_EXECUTION_SCHEMA_VERSION,
     HISTORICAL_V2_MATERIALIZATION_EXCLUSION_SCHEMA_VERSION,
     HISTORICAL_V2_QUALIFICATION_SCHEMA_VERSION,
+    HISTORICAL_V2_SEMANTIC_CENSUS_EXCLUSION_SCHEMA_VERSION,
     HISTORICAL_V2_SOURCE_CENSUS_EXCLUSION_SCHEMA_VERSION,
     HISTORICAL_V2_TEST_MATERIALIZATION_EXCLUSION_SCHEMA_VERSION,
     HISTORICAL_V2_TEST_RECIPE_SCHEMA_VERSION, HistoricalV2ExecutionSide,
     HistoricalV2IdenticalTestExclusionReason, HistoricalV2MaterializationExclusion,
     HistoricalV2MaterializationExclusionEvidence, HistoricalV2MaterializationExclusionReason,
     HistoricalV2PublicSurfaceDelta, HistoricalV2QualificationExclusionReason,
-    HistoricalV2SelectedPayload, HistoricalV2SourceCensusExclusion,
+    HistoricalV2SelectedPayload, HistoricalV2SemanticCensusExclusion,
+    HistoricalV2SemanticCensusExclusionReason, HistoricalV2SourceCensusExclusion,
     HistoricalV2SourceCensusExclusionReason, HistoricalV2TestMaterializationExclusion,
     HistoricalV2TestMaterializationExclusionEvidence,
     HistoricalV2TestMaterializationExclusionReason, HistoricalV2TestMaterializationSide,
@@ -134,6 +136,30 @@ fn source_census_exclusion_keeps_all_typed_reasons_and_its_evidence_commitment()
             reason: HistoricalV2TerminalExclusionReason::SourceCensus(exclusion.reasons.clone()),
             artifact_kind: HistoricalV2StageArtifactKind::SourceCensusExclusion,
             artifact_sha256: digest('7'),
+        }
+    );
+}
+
+#[test]
+fn semantic_census_exclusion_keeps_all_typed_reasons_and_its_evidence_commitment() {
+    let exclusion = HistoricalV2SemanticCensusExclusion {
+        schema_version: HISTORICAL_V2_SEMANTIC_CENSUS_EXCLUSION_SCHEMA_VERSION,
+        exclusion_contract: "fixture".to_string(),
+        materialization_sha256: digest('1'),
+        source_census_sha256: digest('2'),
+        reasons: vec![
+            HistoricalV2SemanticCensusExclusionReason::UnsupportedProjectShape,
+            HistoricalV2SemanticCensusExclusionReason::CompilerCensusIncomplete,
+        ],
+        failures: Vec::new(),
+        exclusion_sha256: digest('6'),
+    };
+    assert_eq!(
+        semantic_census_exclusion_outcome(&exclusion),
+        HistoricalV2SlotStageOutcome::Excluded {
+            reason: HistoricalV2TerminalExclusionReason::SemanticCensus(exclusion.reasons.clone(),),
+            artifact_kind: HistoricalV2StageArtifactKind::SemanticCensusExclusion,
+            artifact_sha256: digest('6'),
         }
     );
 }

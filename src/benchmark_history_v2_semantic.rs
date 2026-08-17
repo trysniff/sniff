@@ -1,14 +1,25 @@
+use super::history_v2_semantic_exclusion::{
+    RETAINED_EVIDENCE_LIMIT, seal_semantic_census_exclusion,
+};
 use super::intentional_boundary_inventory::read_intentional_boundary_git_blob;
 use super::intentional_boundary_semantic::{flatten_method, flatten_symbol, summarize_index};
 use super::{
     HISTORICAL_V2_SEMANTIC_CENSUS_SCHEMA_VERSION, HistoricalV2Materialization,
     HistoricalV2MaterializedRoots, HistoricalV2PublicSymbol, HistoricalV2SemanticCensus,
-    HistoricalV2SemanticSnapshotCensus, HistoricalV2SourceCensus, HistoricalV2SourceSnapshotCensus,
-    IntentionalBoundaryIndexerKind, IntentionalBoundaryMethodCensusEntry,
+    HistoricalV2SemanticCensusExclusion, HistoricalV2SemanticCensusExclusionReason,
+    HistoricalV2SemanticCensusFailureEvidence, HistoricalV2SemanticCensusFailurePhase,
+    HistoricalV2SemanticProcessEvidence, HistoricalV2SemanticSnapshotCensus,
+    HistoricalV2SemanticSnapshotSide, HistoricalV2SlotStage, HistoricalV2SlotStageError,
+    HistoricalV2SlotStageErrorKind, HistoricalV2SourceCensus, HistoricalV2SourceSnapshotCensus,
+    HistoricalV2StageResult, IntentionalBoundaryIndexerKind, IntentionalBoundaryMethodCensusEntry,
     IntentionalBoundarySemanticMethod, validate_historical_v2_source_census,
 };
 use crate::semantic_index::{SemanticIndex, SemanticSymbolOrigin, SemanticVisibility};
 use crate::semantic_indexer_manifest::SemanticIndexerKind;
+use crate::semantic_indexer_runner::{
+    SemanticIndexerBatchOutcome, SemanticIndexerProcessEvidence, SemanticIndexerRunFailure,
+    SemanticIndexerRunFailureKind, SemanticIndexerRunPhase,
+};
 use crate::semantic_method_join::join_methods;
 use crate::types::FileRecord;
 use serde::Serialize;
@@ -18,9 +29,16 @@ use std::path::Path;
 
 const SEMANTIC_CENSUS_CONTRACT: &str = "sniffbench-historical-v2-compiler-semantic-census-v1";
 type MethodKey = (String, String, u32, u32);
+type SemanticCensusStageResult =
+    HistoricalV2StageResult<HistoricalV2SemanticCensus, HistoricalV2SemanticCensusExclusion>;
 
 #[path = "benchmark_history_v2_semantic_validation.rs"]
 mod validation;
+
+#[path = "benchmark_history_v2_semantic_stage_support.rs"]
+mod stage_support;
+
+use stage_support::*;
 
 pub use validation::validate_historical_v2_semantic_census_commitment;
 
@@ -29,37 +47,109 @@ pub async fn census_historical_v2_semantics(
     roots: &HistoricalV2MaterializedRoots,
     source_census: &HistoricalV2SourceCensus,
 ) -> Result<HistoricalV2SemanticCensus, String> {
-    validate_historical_v2_source_census(materialization, roots, source_census)?;
-    census_validated_semantics(materialization, roots, source_census).await
+    match census_historical_v2_semantics_typed(materialization, roots, source_census)
+        .await
+        .map_err(|error| error.detail)?
+    {
+        HistoricalV2StageResult::Completed(census) => Ok(census),
+        HistoricalV2StageResult::Excluded(exclusion) => Err(format!(
+            "historical-v2 semantic census excluded: {:?}",
+            exclusion.reasons
+        )),
+    }
 }
 
-async fn census_validated_semantics(
+pub async fn census_historical_v2_semantics_typed(
     materialization: &HistoricalV2Materialization,
     roots: &HistoricalV2MaterializedRoots,
     source_census: &HistoricalV2SourceCensus,
-) -> Result<HistoricalV2SemanticCensus, String> {
-    let base_files = snapshot_file_records(&roots.base_root, &source_census.base)?;
-    let base_indexes =
-        crate::semantic_indexer_runner::run_required_indexers(&roots.base_root, &base_files)
-            .await?;
-    let patched_files = snapshot_file_records(&roots.patched_root, &source_census.patched)?;
-    let patched_indexes =
-        crate::semantic_indexer_runner::run_required_indexers(&roots.patched_root, &patched_files)
-            .await?;
-    build_semantic_census(
-        materialization,
-        source_census,
-        SnapshotBuildInput {
-            root: &roots.base_root,
-            files: &base_files,
-            indexes: &base_indexes,
-        },
-        SnapshotBuildInput {
-            root: &roots.patched_root,
-            files: &patched_files,
-            indexes: &patched_indexes,
-        },
+) -> Result<SemanticCensusStageResult, HistoricalV2SlotStageError> {
+    validate_historical_v2_source_census(materialization, roots, source_census).map_err(invalid)?;
+    let base_files =
+        snapshot_file_records(&roots.base_root, &source_census.base).map_err(infrastructure)?;
+    let patched_files = snapshot_file_records(&roots.patched_root, &source_census.patched)
+        .map_err(infrastructure)?;
+    let base_run = crate::semantic_indexer_runner::run_required_indexers_exhaustive_typed(
+        &roots.base_root,
+        &base_files,
     )
+    .await;
+    let patched_run = crate::semantic_indexer_runner::run_required_indexers_exhaustive_typed(
+        &roots.patched_root,
+        &patched_files,
+    )
+    .await;
+    let mut failures = Vec::new();
+    let mut stage_errors = Vec::new();
+    let base_indexes = resolve_indexer_run(
+        HistoricalV2SemanticSnapshotSide::Base,
+        &source_census.base.revision,
+        base_run,
+        &mut failures,
+        &mut stage_errors,
+    );
+    let patched_indexes = resolve_indexer_run(
+        HistoricalV2SemanticSnapshotSide::Patched,
+        &source_census.patched.revision,
+        patched_run,
+        &mut failures,
+        &mut stage_errors,
+    );
+    if !stage_errors.is_empty() {
+        return Err(combine_stage_errors(stage_errors));
+    }
+    if !failures.is_empty() {
+        return terminal_exclusion(materialization, source_census, failures);
+    }
+    let base_indexes = base_indexes.ok_or_else(|| {
+        infrastructure("historical-v2 completed base indexer result lost its indexes")
+    })?;
+    let patched_indexes = patched_indexes.ok_or_else(|| {
+        infrastructure("historical-v2 completed patched indexer result lost its indexes")
+    })?;
+    let base = build_semantic_snapshot(
+        &roots.base_root,
+        &source_census.base,
+        &base_files,
+        &base_indexes,
+    );
+    let patched = build_semantic_snapshot(
+        &roots.patched_root,
+        &source_census.patched,
+        &patched_files,
+        &patched_indexes,
+    );
+    let base = resolve_snapshot_build(
+        HistoricalV2SemanticSnapshotSide::Base,
+        &source_census.base.revision,
+        base,
+        &mut failures,
+    );
+    let patched = resolve_snapshot_build(
+        HistoricalV2SemanticSnapshotSide::Patched,
+        &source_census.patched.revision,
+        patched,
+        &mut failures,
+    );
+    if !failures.is_empty() {
+        return terminal_exclusion(materialization, source_census, failures);
+    }
+    let mut census = HistoricalV2SemanticCensus {
+        schema_version: HISTORICAL_V2_SEMANTIC_CENSUS_SCHEMA_VERSION,
+        semantic_census_contract: SEMANTIC_CENSUS_CONTRACT.to_string(),
+        canonical_repository: materialization.canonical_repository.clone(),
+        materialization_sha256: materialization.materialization_sha256.clone(),
+        source_census_sha256: source_census.source_census_sha256.clone(),
+        base: base.ok_or_else(|| {
+            infrastructure("historical-v2 completed base semantic snapshot was not retained")
+        })?,
+        patched: patched.ok_or_else(|| {
+            infrastructure("historical-v2 completed patched semantic snapshot was not retained")
+        })?,
+        semantic_census_sha256: String::new(),
+    };
+    census.semantic_census_sha256 = semantic_census_sha256(&census).map_err(infrastructure)?;
+    Ok(HistoricalV2StageResult::Completed(census))
 }
 
 pub async fn validate_historical_v2_semantic_census(
@@ -74,42 +164,21 @@ pub async fn validate_historical_v2_semantic_census(
         source_census,
         census,
     )?;
-    let expected = census_validated_semantics(materialization, roots, source_census).await?;
+    let expected = match census_historical_v2_semantics_typed(materialization, roots, source_census)
+        .await
+        .map_err(|error| error.detail)?
+    {
+        HistoricalV2StageResult::Completed(census) => census,
+        HistoricalV2StageResult::Excluded(_) => {
+            return Err(
+                "historical-v2 semantic census claims completion for excluded source".to_string(),
+            );
+        }
+    };
     if census != &expected {
         return Err("historical-v2 compiler semantic replay changed".to_string());
     }
     Ok(())
-}
-
-struct SnapshotBuildInput<'a> {
-    root: &'a Path,
-    files: &'a [FileRecord],
-    indexes: &'a BTreeMap<SemanticIndexerKind, SemanticIndex>,
-}
-
-fn build_semantic_census(
-    materialization: &HistoricalV2Materialization,
-    source_census: &HistoricalV2SourceCensus,
-    base: SnapshotBuildInput<'_>,
-    patched: SnapshotBuildInput<'_>,
-) -> Result<HistoricalV2SemanticCensus, String> {
-    let mut census = HistoricalV2SemanticCensus {
-        schema_version: HISTORICAL_V2_SEMANTIC_CENSUS_SCHEMA_VERSION,
-        semantic_census_contract: SEMANTIC_CENSUS_CONTRACT.to_string(),
-        canonical_repository: materialization.canonical_repository.clone(),
-        materialization_sha256: materialization.materialization_sha256.clone(),
-        source_census_sha256: source_census.source_census_sha256.clone(),
-        base: build_semantic_snapshot(base.root, &source_census.base, base.files, base.indexes)?,
-        patched: build_semantic_snapshot(
-            patched.root,
-            &source_census.patched,
-            patched.files,
-            patched.indexes,
-        )?,
-        semantic_census_sha256: String::new(),
-    };
-    census.semantic_census_sha256 = semantic_census_sha256(&census)?;
-    Ok(census)
 }
 
 fn build_semantic_snapshot(
@@ -364,6 +433,22 @@ fn hash_json(value: &impl Serialize) -> Result<String, String> {
 
 fn sha256(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
+}
+
+fn invalid(detail: impl Into<String>) -> HistoricalV2SlotStageError {
+    HistoricalV2SlotStageError {
+        stage: HistoricalV2SlotStage::SemanticCensus,
+        kind: HistoricalV2SlotStageErrorKind::InvalidInput,
+        detail: detail.into(),
+    }
+}
+
+fn infrastructure(detail: impl Into<String>) -> HistoricalV2SlotStageError {
+    HistoricalV2SlotStageError {
+        stage: HistoricalV2SlotStage::SemanticCensus,
+        kind: HistoricalV2SlotStageErrorKind::InfrastructureFailed,
+        detail: detail.into(),
+    }
 }
 
 #[cfg(test)]

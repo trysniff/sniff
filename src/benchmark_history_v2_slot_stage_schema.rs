@@ -1,7 +1,8 @@
 use super::{
     HistoricalV2IdenticalTestExclusionReason, HistoricalV2MaterializationExclusionReason,
-    HistoricalV2QualificationExclusionReason, HistoricalV2SourceCensusExclusionReason,
-    HistoricalV2TestMaterializationExclusionReason, HistoricalV2TestRecipeExclusionReason,
+    HistoricalV2QualificationExclusionReason, HistoricalV2SemanticCensusExclusionReason,
+    HistoricalV2SourceCensusExclusionReason, HistoricalV2TestMaterializationExclusionReason,
+    HistoricalV2TestRecipeExclusionReason,
 };
 use serde::{Deserialize, Serialize};
 
@@ -41,14 +42,6 @@ pub enum HistoricalV2StageArtifactKind {
     SemanticCensusExclusion,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum HistoricalV2SemanticCensusExclusionReason {
-    UnsupportedProjectShape,
-    CompilerIndexerRejectedRepository,
-    CompilerCensusIncomplete,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(
     tag = "stage",
@@ -60,7 +53,7 @@ pub enum HistoricalV2TerminalExclusionReason {
     Materialization(HistoricalV2MaterializationExclusionReason),
     TestMaterialization(HistoricalV2TestMaterializationExclusionReason),
     SourceCensus(Vec<HistoricalV2SourceCensusExclusionReason>),
-    SemanticCensus(HistoricalV2SemanticCensusExclusionReason),
+    SemanticCensus(Vec<HistoricalV2SemanticCensusExclusionReason>),
     Qualification(Vec<HistoricalV2QualificationExclusionReason>),
     TestRecipe(HistoricalV2TestRecipeExclusionReason),
     IdenticalTests(HistoricalV2IdenticalTestExclusionReason),

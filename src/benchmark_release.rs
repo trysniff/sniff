@@ -183,6 +183,16 @@ mod history_v2_semantic_schema;
 
 pub use history_v2_semantic_schema::*;
 
+#[path = "benchmark_history_v2_semantic_stage_schema.rs"]
+mod history_v2_semantic_stage_schema;
+
+pub use history_v2_semantic_stage_schema::*;
+
+#[path = "benchmark_history_v2_semantic_exclusion.rs"]
+mod history_v2_semantic_exclusion;
+
+pub use history_v2_semantic_exclusion::*;
+
 #[path = "benchmark_history_v2_semantic.rs"]
 mod history_v2_semantic;
 

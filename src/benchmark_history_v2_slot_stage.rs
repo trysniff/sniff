@@ -186,6 +186,11 @@ fn validate_outcome(
             {
                 return Err("historical-v2 source exclusions are not canonical".to_string());
             }
+            if let HistoricalV2TerminalExclusionReason::SemanticCensus(reasons) = reason
+                && (reasons.is_empty() || !strictly_sorted_unique(reasons))
+            {
+                return Err("historical-v2 semantic exclusions are not canonical".to_string());
+            }
         }
         HistoricalV2SlotStageOutcome::ReadyForReview => {
             if stage != HistoricalV2SlotStage::ReadyForReview {
