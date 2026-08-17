@@ -175,7 +175,14 @@ fn exactly_forty_accepted_cases_per_language_passes_the_gate_math() {
             },
         })
         .collect();
-    let evidence = summarize_historical_v2_release(&protocol, &selection, slots).unwrap();
+    let evidence = summarize_historical_v2_release(
+        &protocol,
+        &selection.selection_sha256,
+        selection.selected_count,
+        selection.unfilled_slot_count,
+        slots,
+    )
+    .unwrap();
     assert_eq!(evidence.accepted_count, 240);
     assert_eq!(evidence.status, HistoricalV2ReleaseGateStatus::Passed);
     assert!(evidence.languages.iter().all(|language| language.passes));
@@ -338,7 +345,7 @@ fn append<T: serde::Serialize>(
         .unwrap();
 }
 
-struct GateFixture {
+pub(crate) struct GateFixture {
     artifacts: TempDir,
     state: TempDir,
     frame: HistoricalV2Frame,
@@ -347,7 +354,7 @@ struct GateFixture {
 }
 
 impl GateFixture {
-    fn new(records: Vec<HistoricalV2FrameRecord>) -> Self {
+    pub(crate) fn new(records: Vec<HistoricalV2FrameRecord>) -> Self {
         let artifacts = tempfile::tempdir().unwrap();
         let manifest = exclusion_manifest(artifacts.path());
         let frame = committed_frame(records);
@@ -362,7 +369,7 @@ impl GateFixture {
         }
     }
 
-    fn inputs<'a>(
+    pub(crate) fn inputs<'a>(
         &'a self,
         reviewed_slots: &'a [HistoricalV2ReviewedSlotArtifacts<'a>],
     ) -> HistoricalV2ReleaseGateInputs<'a> {
@@ -377,7 +384,7 @@ impl GateFixture {
         }
     }
 
-    fn build(
+    pub(crate) fn build(
         &self,
         reviewed_slots: &[HistoricalV2ReviewedSlotArtifacts<'_>],
     ) -> Result<HistoricalV2ReleaseEvidence, String> {

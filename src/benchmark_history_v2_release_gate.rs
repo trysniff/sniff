@@ -6,6 +6,10 @@ use std::path::Path;
 mod review;
 use review::*;
 
+#[path = "benchmark_history_v2_release_gate_persistence.rs"]
+mod persistence;
+pub use persistence::*;
+
 #[path = "benchmark_history_v2_release_gate_state.rs"]
 mod state;
 use state::*;
@@ -112,7 +116,13 @@ pub fn build_historical_v2_release_evidence(
         return Err("historical-v2 review does not belong to a frozen ready slot".into());
     }
     validate_historical_v2_state_inventory(inputs.state_root, inputs.selection)?;
-    summarize_historical_v2_release(&protocol, inputs.selection, slots)
+    summarize_historical_v2_release(
+        &protocol,
+        &inputs.selection.selection_sha256,
+        inputs.selection.selected_count,
+        inputs.selection.unfilled_slot_count,
+        slots,
+    )
 }
 
 pub fn validate_historical_v2_release_evidence(
@@ -167,4 +177,4 @@ fn validate_release_protocol(protocol: &ValidatedHistoricalV2Protocol) -> Result
 
 #[cfg(test)]
 #[path = "benchmark_history_v2_release_gate_tests.rs"]
-mod tests;
+pub(super) mod tests;

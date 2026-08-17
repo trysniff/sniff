@@ -300,8 +300,9 @@ pub use release::{
     HistoricalV2ReleaseGateInputs, HistoricalV2ReleaseGateStatus,
     HistoricalV2ReleaseLanguageEvidence, HistoricalV2ReleaseSlotEvidence,
     HistoricalV2ReleaseSlotOutcome, HistoricalV2ReviewedSlotArtifacts,
-    build_historical_v2_release_evidence, require_historical_v2_release_gate,
-    validate_historical_v2_release_evidence,
+    build_historical_v2_release_evidence, load_historical_v2_release_evidence,
+    require_historical_v2_release_gate, validate_historical_v2_release_evidence,
+    validate_historical_v2_release_evidence_commitment, write_historical_v2_release_evidence,
 };
 
 #[cfg(feature = "sniffbench-frame")]
