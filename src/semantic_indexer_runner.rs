@@ -22,6 +22,11 @@ mod outcome;
 
 pub(crate) use outcome::*;
 
+#[path = "semantic_indexer_recovery.rs"]
+mod recovery;
+
+pub(crate) use recovery::recover_interrupted_semantic_indexing;
+
 #[path = "semantic_indexer_gradle_preparation.rs"]
 mod gradle_preparation;
 #[cfg(windows)]
@@ -163,6 +168,14 @@ pub(crate) async fn run_required_indexers_exhaustive_typed(
             detail,
         )
     })?;
+    let recovery = recovery::SemanticIndexerRecoveryGuard::begin(&root).map_err(|detail| {
+        failure(
+            SemanticIndexerRunFailureKind::InfrastructureFailed,
+            SemanticIndexerRunPhase::Preparation,
+            None,
+            detail,
+        )
+    })?;
     let mut indexes = BTreeMap::new();
     let mut failures = Vec::new();
     for kind in required_indexers(files) {
@@ -173,6 +186,14 @@ pub(crate) async fn run_required_indexers_exhaustive_typed(
             Err(failure) => failures.push(failure),
         }
     }
+    recovery.finish().map_err(|detail| {
+        failure(
+            SemanticIndexerRunFailureKind::InfrastructureFailed,
+            SemanticIndexerRunPhase::Cleanup,
+            None,
+            detail,
+        )
+    })?;
     Ok(SemanticIndexerBatchOutcome { indexes, failures })
 }
 
@@ -2126,7 +2147,10 @@ fn prepare_windows_kotlin_workspace(
                 (
                     system_gradle_launcher_jar(&system_gradle)?,
                     "org.gradle.launcher.GradleMain",
-                    Some(create_temporary_workspace(gradle_windows::OVERLAY_DIR)?),
+                    Some(create_temporary_workspace_in(
+                        &root.join(INDEXER_TEMP_DIR),
+                        gradle_windows::OVERLAY_DIR,
+                    )?),
                 )
             };
         Ok(TemporaryIndexerWorkspace {
@@ -2212,11 +2236,6 @@ fn system_gradle_launcher_jar(gradle: &Path) -> Result<PathBuf, String> {
 }
 
 #[cfg(windows)]
-fn create_temporary_workspace(prefix: &str) -> Result<PathBuf, String> {
-    create_temporary_workspace_in(&std::env::temp_dir(), prefix)
-}
-
-#[cfg(windows)]
 fn create_temporary_workspace_in(base: &Path, prefix: &str) -> Result<PathBuf, String> {
     static NEXT_WORKSPACE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
@@ -2265,7 +2284,7 @@ fn prepare_mixed_typescript_javascript_project(
         return Ok(None);
     }
 
-    let path = root.join(format!(".sniff-jsconfig-{}.json", std::process::id()));
+    let path = root.join(".sniff-jsconfig.json");
     let file_list = javascript_files
         .into_iter()
         .map(|path| path.0)

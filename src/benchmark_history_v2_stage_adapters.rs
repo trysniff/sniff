@@ -40,6 +40,16 @@ pub struct HistoricalV2PayloadStageInputs<'a> {
     pub slot_number: usize,
 }
 
+pub(crate) fn prepare_historical_v2_selected_slot_payload(
+    inputs: &HistoricalV2PayloadStageInputs<'_>,
+) -> Result<HistoricalV2SelectedSlotPayloadArtifact, HistoricalV2SlotStageError> {
+    selected_slot_payload(inputs)
+        .and_then(seal_selected_slot_payload)
+        .map_err(|detail| {
+            HistoricalV2SlotStageError::invalid(HistoricalV2SlotStage::Payload, detail)
+        })
+}
+
 pub fn checkpoint_historical_v2_payload(
     journal: &mut HistoricalV2SlotStageJournal,
     inputs: &HistoricalV2PayloadStageInputs<'_>,
@@ -63,9 +73,7 @@ pub fn checkpoint_historical_v2_payload(
         inputs.payloads,
     )
     .map_err(|detail| HistoricalV2SlotStageError::invalid(stage, detail))?;
-    let artifact = selected_slot_payload(inputs)
-        .and_then(seal_selected_slot_payload)
-        .map_err(|detail| HistoricalV2SlotStageError::invalid(stage, detail))?;
+    let artifact = prepare_historical_v2_selected_slot_payload(inputs)?;
     journal.append(
         HistoricalV2SlotStageCheckpointInput {
             selection_sha256: &artifact.selection_sha256,
@@ -80,6 +88,25 @@ pub fn checkpoint_historical_v2_payload(
         },
         Some(&artifact),
     )
+}
+
+pub(crate) fn prepare_historical_v2_no_test_patch(
+    payload: &HistoricalV2SelectedSlotPayloadArtifact,
+    materialization: &HistoricalV2Materialization,
+) -> Result<HistoricalV2NoTestPatchArtifact, HistoricalV2SlotStageError> {
+    seal_no_test_patch(HistoricalV2NoTestPatchArtifact {
+        schema_version: HISTORICAL_V2_STAGE_ARTIFACT_SCHEMA_VERSION,
+        artifact_contract: NO_TEST_PATCH_CONTRACT.to_string(),
+        selected_slot_payload_sha256: payload.artifact_sha256.clone(),
+        materialization_sha256: materialization.materialization_sha256.clone(),
+        language: payload.language.clone(),
+        slot_number: payload.slot_number,
+        canonical_repository: payload.canonical_repository.clone(),
+        artifact_sha256: String::new(),
+    })
+    .map_err(|detail| {
+        HistoricalV2SlotStageError::invalid(HistoricalV2SlotStage::TestMaterialization, detail)
+    })
 }
 
 pub fn checkpoint_historical_v2_materialization(
@@ -180,17 +207,7 @@ pub fn checkpoint_historical_v2_test_materialization(
             )
         }
         (None, None) => {
-            let artifact = seal_no_test_patch(HistoricalV2NoTestPatchArtifact {
-                schema_version: HISTORICAL_V2_STAGE_ARTIFACT_SCHEMA_VERSION,
-                artifact_contract: NO_TEST_PATCH_CONTRACT.to_string(),
-                selected_slot_payload_sha256: payload.artifact_sha256,
-                materialization_sha256: materialization.materialization_sha256.clone(),
-                language: payload.language,
-                slot_number: payload.slot_number,
-                canonical_repository: payload.canonical_repository,
-                artifact_sha256: String::new(),
-            })
-            .map_err(|detail| HistoricalV2SlotStageError::invalid(stage, detail))?;
+            let artifact = prepare_historical_v2_no_test_patch(&payload, materialization)?;
             append_same_slot(
                 journal,
                 stage,
