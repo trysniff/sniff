@@ -323,6 +323,16 @@ mod history_v2_stage_adapters_schema;
 
 pub use history_v2_stage_adapters_schema::*;
 
+#[path = "benchmark_history_v2_source_review_schema.rs"]
+mod history_v2_source_review_schema;
+
+pub use history_v2_source_review_schema::*;
+
+#[path = "benchmark_history_v2_source_review.rs"]
+mod history_v2_source_review;
+
+pub use history_v2_source_review::*;
+
 #[path = "benchmark_intentional_boundary_frame_task.rs"]
 mod intentional_boundary_frame_task;
 
