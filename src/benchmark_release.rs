@@ -333,6 +333,16 @@ mod history_v2_source_review;
 
 pub use history_v2_source_review::*;
 
+#[path = "benchmark_history_v2_label_schema.rs"]
+mod history_v2_label_schema;
+
+pub use history_v2_label_schema::*;
+
+#[path = "benchmark_history_v2_label_review.rs"]
+mod history_v2_label_review;
+
+pub use history_v2_label_review::*;
+
 #[path = "benchmark_intentional_boundary_frame_task.rs"]
 mod intentional_boundary_frame_task;
 
