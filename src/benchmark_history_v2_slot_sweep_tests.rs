@@ -50,8 +50,9 @@ async fn one_stage_sweep_persists_every_selected_payload_without_external_execut
             work_root: &work_root,
             harness_repository_root: harness.path(),
             test_executor: &executor,
+            through_stage: Some(HistoricalV2SlotStage::Payload),
         },
-        NonZeroUsize::new(1),
+        None,
     )
     .await
     .unwrap();
@@ -73,6 +74,30 @@ async fn one_stage_sweep_persists_every_selected_payload_without_external_execut
         journal.history()[0].checkpoint.stage,
         HistoricalV2SlotStage::Payload
     );
+    drop(journal);
+
+    let resumed = run_historical_v2_selected_slots(
+        HistoricalV2SelectedSlotSweepInputs {
+            client: &client,
+            protocol_bytes: PROTOCOL,
+            artifact_root: fixture.artifacts.path(),
+            frame: &fixture.frame,
+            exclusions: &fixture.exclusions,
+            selection: &fixture.selection,
+            payloads: &fixture.payloads,
+            state_root: &state_root,
+            work_root: &work_root,
+            harness_repository_root: harness.path(),
+            test_executor: &executor,
+            through_stage: Some(HistoricalV2SlotStage::Payload),
+        },
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(resumed.paused_count, 1);
+    assert_eq!(resumed.slots[0].run.resumed_after_sequence, 1);
+    assert!(resumed.slots[0].run.executed_stages.is_empty());
 }
 
 #[test]

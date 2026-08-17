@@ -115,6 +115,43 @@ async fn restart_begins_at_the_first_uncommitted_stage() {
 }
 
 #[tokio::test]
+async fn stage_ceiling_is_stable_across_restarts() {
+    let root = tempfile::tempdir().unwrap();
+    let mut first = RecordingExecutor::clean();
+    let partial = run_historical_v2_slot_slice_through(
+        root.path(),
+        identity(),
+        &mut first,
+        None,
+        Some(HistoricalV2SlotStage::SourceCensus),
+    )
+    .await
+    .unwrap();
+    assert_eq!(partial.executed_stages, stages()[..4]);
+    assert_eq!(
+        partial.disposition,
+        HistoricalV2SlotRunDisposition::Paused {
+            next_stage: HistoricalV2SlotStage::SemanticCensus,
+        }
+    );
+
+    let mut resumed = RecordingExecutor::clean();
+    let replay = run_historical_v2_slot_slice_through(
+        root.path(),
+        identity(),
+        &mut resumed,
+        None,
+        Some(HistoricalV2SlotStage::SourceCensus),
+    )
+    .await
+    .unwrap();
+    assert_eq!(replay.resumed_after_sequence, 4);
+    assert!(replay.executed_stages.is_empty());
+    assert!(resumed.recovered.borrow().is_empty());
+    assert!(resumed.executed.borrow().is_empty());
+}
+
+#[tokio::test]
 async fn infrastructure_failure_is_not_checkpointed_or_reclassified() {
     let root = tempfile::tempdir().unwrap();
     let mut failing = RecordingExecutor {

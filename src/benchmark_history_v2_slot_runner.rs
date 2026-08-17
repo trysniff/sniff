@@ -21,6 +21,17 @@ pub async fn run_historical_v2_slot_slice<E: HistoricalV2SlotStageExecutor>(
     executor: &mut E,
     maximum_new_stages: Option<NonZeroUsize>,
 ) -> Result<HistoricalV2SlotRunSummary, HistoricalV2SlotStageError> {
+    run_historical_v2_slot_slice_through(state_root, identity, executor, maximum_new_stages, None)
+        .await
+}
+
+pub async fn run_historical_v2_slot_slice_through<E: HistoricalV2SlotStageExecutor>(
+    state_root: &Path,
+    identity: HistoricalV2SlotRunIdentity<'_>,
+    executor: &mut E,
+    maximum_new_stages: Option<NonZeroUsize>,
+    through_stage: Option<HistoricalV2SlotStage>,
+) -> Result<HistoricalV2SlotRunSummary, HistoricalV2SlotStageError> {
     let mut journal =
         HistoricalV2SlotStageJournal::open(state_root, identity.language, identity.slot_number)?;
     validate_existing_identity(&journal, identity)?;
@@ -34,6 +45,14 @@ pub async fn run_historical_v2_slot_slice<E: HistoricalV2SlotStageExecutor>(
             return Ok(summary);
         }
         let stage = next_stage(&journal)?;
+        if through_stage.is_some_and(|last_stage| stage > last_stage) {
+            return Ok(HistoricalV2SlotRunSummary {
+                resumed_after_sequence,
+                executed_stages,
+                terminal_checkpoint_sha256: None,
+                disposition: HistoricalV2SlotRunDisposition::Paused { next_stage: stage },
+            });
+        }
         if maximum_new_stages.is_some_and(|limit| executed_stages.len() >= limit.get()) {
             return Ok(HistoricalV2SlotRunSummary {
                 resumed_after_sequence,

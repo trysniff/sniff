@@ -32,6 +32,18 @@ fn run_slots_rejects_a_zero_stage_slice() {
     assert!(Args::try_parse_from(arguments).is_err());
 }
 
+#[test]
+fn run_slots_rejects_an_unknown_stage_ceiling() {
+    let mut arguments = run_slots_arguments();
+    let index = arguments
+        .iter()
+        .position(|value| *value == "--through-stage")
+        .unwrap();
+    arguments[index + 1] = "not-a-stage";
+
+    assert!(Args::try_parse_from(arguments).is_err());
+}
+
 fn run_slots_arguments() -> Vec<&'static str> {
     vec![
         "sniffbench-frame",
@@ -58,5 +70,7 @@ fn run_slots_arguments() -> Vec<&'static str> {
         "docker-test",
         "--max-new-stages-per-slot",
         "1",
+        "--through-stage",
+        "payload",
     ]
 }

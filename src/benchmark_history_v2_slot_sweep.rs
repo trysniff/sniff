@@ -3,8 +3,9 @@ use super::{
     HistoricalV2SelectedSlotRunSummary, HistoricalV2SelectedSlotSweepInputs,
     HistoricalV2SelectedSlotSweepSummary, HistoricalV2SlotOperations, HistoricalV2SlotOutcome,
     HistoricalV2SlotRunDisposition, HistoricalV2SlotRunIdentity, HistoricalV2SlotStage,
-    HistoricalV2SlotStageError, run_historical_v2_slot_slice, validate_historical_v2_protocol,
-    validate_historical_v2_selected_payloads_commitment, validate_historical_v2_slot_selection,
+    HistoricalV2SlotStageError, run_historical_v2_slot_slice_through,
+    validate_historical_v2_protocol, validate_historical_v2_selected_payloads_commitment,
+    validate_historical_v2_slot_selection,
 };
 use std::ffi::OsString;
 use std::fs;
@@ -66,11 +67,12 @@ where
             &roots.harness,
             inputs.test_executor,
         )?;
-        let run = run_historical_v2_slot_slice(
+        let run = run_historical_v2_slot_slice_through(
             &roots.state,
             identity,
             &mut operations,
             maximum_new_stages_per_slot,
+            inputs.through_stage,
         )
         .await?;
         slots.push(HistoricalV2SelectedSlotRunSummary {

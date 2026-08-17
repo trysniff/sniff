@@ -1,6 +1,7 @@
 use super::{
     HistoricalV2ExclusionManifest, HistoricalV2Frame, HistoricalV2RecoverableTestExecutor,
     HistoricalV2SelectedPayloads, HistoricalV2SlotRunSummary, HistoricalV2SlotSelection,
+    HistoricalV2SlotStage,
 };
 use reqwest::Client;
 use std::path::Path;
@@ -17,6 +18,7 @@ pub struct HistoricalV2SelectedSlotSweepInputs<'a, E: HistoricalV2RecoverableTes
     pub work_root: &'a Path,
     pub harness_repository_root: &'a Path,
     pub test_executor: &'a E,
+    pub through_stage: Option<HistoricalV2SlotStage>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

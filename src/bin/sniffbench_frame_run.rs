@@ -1,4 +1,4 @@
-use clap::Args;
+use clap::{Args, ValueEnum};
 use serde::de::DeserializeOwned;
 use sniff::benchmark::{
     DockerHistoricalV2TestExecutor, HistoricalV2ExclusionManifest, HistoricalV2Frame,
@@ -38,6 +38,22 @@ pub(super) struct RunSlotsArgs {
     docker_executable: PathBuf,
     #[arg(long)]
     max_new_stages_per_slot: Option<NonZeroUsize>,
+    #[arg(long)]
+    through_stage: Option<RunThroughStage>,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum RunThroughStage {
+    Payload,
+    Materialization,
+    TestMaterialization,
+    SourceCensus,
+    SemanticCensus,
+    AssessmentIdentity,
+    Qualification,
+    TestRecipe,
+    IdenticalTests,
+    ReadyForReview,
 }
 
 pub(super) async fn run(args: RunSlotsArgs) -> Result<(), Box<dyn std::error::Error>> {
@@ -64,6 +80,7 @@ pub(super) async fn run(args: RunSlotsArgs) -> Result<(), Box<dyn std::error::Er
             work_root: &args.work_root,
             harness_repository_root: &args.harness_repository_root,
             test_executor: &executor,
+            through_stage: args.through_stage.map(Into::into),
         },
         args.max_new_stages_per_slot,
     )
@@ -94,6 +111,23 @@ pub(super) async fn run(args: RunSlotsArgs) -> Result<(), Box<dyn std::error::Er
         summary.paused_count
     );
     Ok(())
+}
+
+impl From<RunThroughStage> for sniff::benchmark::HistoricalV2SlotStage {
+    fn from(value: RunThroughStage) -> Self {
+        match value {
+            RunThroughStage::Payload => Self::Payload,
+            RunThroughStage::Materialization => Self::Materialization,
+            RunThroughStage::TestMaterialization => Self::TestMaterialization,
+            RunThroughStage::SourceCensus => Self::SourceCensus,
+            RunThroughStage::SemanticCensus => Self::SemanticCensus,
+            RunThroughStage::AssessmentIdentity => Self::AssessmentIdentity,
+            RunThroughStage::Qualification => Self::Qualification,
+            RunThroughStage::TestRecipe => Self::TestRecipe,
+            RunThroughStage::IdenticalTests => Self::IdenticalTests,
+            RunThroughStage::ReadyForReview => Self::ReadyForReview,
+        }
+    }
 }
 
 fn disposition(value: &HistoricalV2SlotRunDisposition) -> String {
