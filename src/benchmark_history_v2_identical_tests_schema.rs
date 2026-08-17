@@ -154,3 +154,10 @@ pub trait HistoricalV2IdenticalTestExecutor {
         request: &HistoricalV2IdenticalTestExecutionRequest<'_>,
     ) -> Result<HistoricalV2RawIdenticalTestExecution, HistoricalV2ExecutionError>;
 }
+
+pub trait HistoricalV2RecoverableTestExecutor: HistoricalV2IdenticalTestExecutor {
+    fn recover(
+        &self,
+        plan: &HistoricalV2IdenticalTestPlan,
+    ) -> Result<(), HistoricalV2ExecutionError>;
+}

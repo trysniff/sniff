@@ -33,6 +33,40 @@ fn container_creation_enforces_every_frozen_boundary() {
     assert!(args.contains(&"--tmpfs".to_string()));
     assert!(!args.contains(&"--privileged".to_string()));
     assert!(!args.iter().any(|argument| argument.contains("type=bind")));
+    assert!(args.contains(&plan_label(&plan.plan_sha256)));
+}
+
+#[test]
+fn resource_names_are_stable_across_process_restarts() {
+    let plan = fixture_plan();
+    let first = ResourceNames::new(&plan.plan_sha256);
+    let second = ResourceNames::new(&plan.plan_sha256);
+
+    assert_eq!(first.network, second.network);
+    assert_eq!(first.base_container, second.base_container);
+    assert_eq!(first.patched_container, second.patched_container);
+    assert_eq!(first.base_volume, second.base_volume);
+    assert_eq!(first.patched_volume, second.patched_volume);
+}
+
+#[test]
+fn recovery_rejects_unexpected_plan_labelled_resources() {
+    let plan = fixture_plan();
+    let names = ResourceNames::new(&plan.plan_sha256);
+    require_expected_resources(
+        std::slice::from_ref(&names.base_container),
+        [&names.base_container, &names.patched_container],
+        "container",
+    )
+    .unwrap();
+
+    let error = require_expected_resources(
+        &["unrelated-container".to_string()],
+        [&names.base_container, &names.patched_container],
+        "container",
+    )
+    .unwrap_err();
+    assert!(error.detail.contains("unexpected"));
 }
 
 #[test]

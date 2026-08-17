@@ -3,9 +3,10 @@ use super::{
     HistoricalV2ExecutionSide, HistoricalV2IdenticalTestExclusionReason,
     HistoricalV2IdenticalTestExecutionRequest, HistoricalV2IdenticalTestExecutor,
     HistoricalV2IdenticalTestOutcome, HistoricalV2RawIdenticalTestExecution,
+    HistoricalV2RecoverableTestExecutor,
 };
 use crate::bounded_process::BoundedOutput;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::process::Command;
@@ -31,6 +32,129 @@ impl DockerHistoricalV2TestExecutor {
         Self::new("docker")
     }
 
+    pub fn recover_plan_resources(
+        &self,
+        plan: &super::HistoricalV2IdenticalTestPlan,
+    ) -> Result<(), HistoricalV2ExecutionError> {
+        if plan.plan_sha256.len() != 64
+            || !plan
+                .plan_sha256
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit())
+        {
+            return Err(HistoricalV2ExecutionError::infrastructure(
+                "cannot recover Docker resources for an invalid historical-v2 plan identity",
+            ));
+        }
+        self.require_daemon()?;
+        let names = ResourceNames::new(&plan.plan_sha256);
+        let label_filter = format!("label={}", plan_label(&plan.plan_sha256));
+        let containers = self.list_named_resources(
+            [
+                "ps",
+                "--all",
+                "--format",
+                "{{.Names}}",
+                "--filter",
+                label_filter.as_str(),
+            ],
+            "containers",
+        )?;
+        let volumes = self.list_named_resources(
+            [
+                "volume",
+                "ls",
+                "--format",
+                "{{.Name}}",
+                "--filter",
+                label_filter.as_str(),
+            ],
+            "volumes",
+        )?;
+        let networks = self.list_named_resources(
+            [
+                "network",
+                "ls",
+                "--format",
+                "{{.Name}}",
+                "--filter",
+                label_filter.as_str(),
+            ],
+            "networks",
+        )?;
+        require_expected_resources(
+            &containers,
+            [&names.base_container, &names.patched_container],
+            "container",
+        )?;
+        require_expected_resources(
+            &volumes,
+            [&names.base_volume, &names.patched_volume],
+            "volume",
+        )?;
+        require_expected_resources(&networks, [&names.network], "network")?;
+
+        let mut failures = Vec::new();
+        for container in containers.iter().rev() {
+            cleanup_resource(
+                self,
+                ["rm", "--force", container.as_str()],
+                "container",
+                container,
+                &mut failures,
+            );
+        }
+        for volume in volumes.iter().rev() {
+            cleanup_resource(
+                self,
+                ["volume", "rm", "--force", volume.as_str()],
+                "volume",
+                volume,
+                &mut failures,
+            );
+        }
+        for network in networks.iter().rev() {
+            cleanup_resource(
+                self,
+                ["network", "rm", network.as_str()],
+                "network",
+                network,
+                &mut failures,
+            );
+        }
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            Err(HistoricalV2ExecutionError::infrastructure(format!(
+                "historical-v2 Docker recovery failed: {}",
+                failures.join("; ")
+            )))
+        }
+    }
+
+    fn list_named_resources<'a>(
+        &self,
+        args: impl IntoIterator<Item = &'a str>,
+        kind: &str,
+    ) -> Result<Vec<String>, HistoricalV2ExecutionError> {
+        let output = self.run_control(args, CONTROL_TIMEOUT)?;
+        require_control_success(&output, &format!("list historical-v2 {kind}"))?;
+        let text = std::str::from_utf8(&output.stdout).map_err(|_| {
+            HistoricalV2ExecutionError::infrastructure(format!(
+                "Docker returned non-UTF-8 historical-v2 {kind}"
+            ))
+        })?;
+        let mut names = text
+            .lines()
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        names.sort();
+        names.dedup();
+        Ok(names)
+    }
+
     fn execute_inner(
         &self,
         request: &HistoricalV2IdenticalTestExecutionRequest<'_>,
@@ -39,7 +163,7 @@ impl DockerHistoricalV2TestExecutor {
         self.require_daemon()?;
         let image_id = self.build_image(request)?;
         let names = ResourceNames::new(&request.plan.plan_sha256);
-        resources.create_network(&names.network)?;
+        resources.create_network(&names.network, &request.plan.plan_sha256)?;
         let mut events = Vec::new();
         for (side, commit_oid, container, volume) in [
             (
@@ -55,7 +179,7 @@ impl DockerHistoricalV2TestExecutor {
                 names.patched_volume.as_str(),
             ),
         ] {
-            resources.create_volume(volume)?;
+            resources.create_volume(volume, &request.plan.plan_sha256)?;
             self.create_container(request, &image_id, &names.network, container, volume)?;
             resources.track_container(container);
             self.start_and_stage_repository(request, container, commit_oid)?;
@@ -385,6 +509,30 @@ impl DockerHistoricalV2TestExecutor {
     }
 }
 
+fn require_expected_resources<const N: usize>(
+    actual: &[String],
+    expected: [&String; N],
+    kind: &str,
+) -> Result<(), HistoricalV2ExecutionError> {
+    let expected = expected
+        .into_iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    let unexpected = actual
+        .iter()
+        .map(String::as_str)
+        .filter(|name| !expected.contains(name))
+        .collect::<Vec<_>>();
+    if unexpected.is_empty() {
+        Ok(())
+    } else {
+        Err(HistoricalV2ExecutionError::infrastructure(format!(
+            "refusing to remove unexpected historical-v2 Docker {kind} resources: {}",
+            unexpected.join(", ")
+        )))
+    }
+}
+
 impl Default for DockerHistoricalV2TestExecutor {
     fn default() -> Self {
         Self::from_path()
@@ -407,6 +555,15 @@ impl HistoricalV2IdenticalTestExecutor for DockerHistoricalV2TestExecutor {
                 "{error}; additionally, {cleanup}"
             ))),
         }
+    }
+}
+
+impl HistoricalV2RecoverableTestExecutor for DockerHistoricalV2TestExecutor {
+    fn recover(
+        &self,
+        plan: &super::HistoricalV2IdenticalTestPlan,
+    ) -> Result<(), HistoricalV2ExecutionError> {
+        self.recover_plan_resources(plan)
     }
 }
 
