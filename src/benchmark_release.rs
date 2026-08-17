@@ -343,6 +343,16 @@ mod history_v2_label_review;
 
 pub use history_v2_label_review::*;
 
+#[path = "benchmark_history_v2_label_resolution_schema.rs"]
+mod history_v2_label_resolution_schema;
+
+pub use history_v2_label_resolution_schema::*;
+
+#[path = "benchmark_history_v2_label_resolution.rs"]
+mod history_v2_label_resolution;
+
+pub use history_v2_label_resolution::*;
+
 #[path = "benchmark_intentional_boundary_frame_task.rs"]
 mod intentional_boundary_frame_task;
 

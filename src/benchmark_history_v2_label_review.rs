@@ -81,8 +81,10 @@ pub fn audit_historical_v2_label_reviews(
             ))
         })
         .collect::<Result<Vec<_>, String>>()?;
-    committed.sort_by(|left, right| left.0.reviewer_id.cmp(&right.0.reviewer_id));
-    if committed[0].0.reviewer_id == committed[1].0.reviewer_id {
+    committed.sort_by_key(|entry| normalized_historical_v2_reviewer_id(&entry.0.reviewer_id));
+    if normalized_historical_v2_reviewer_id(&committed[0].0.reviewer_id)
+        == normalized_historical_v2_reviewer_id(&committed[1].0.reviewer_id)
+    {
         return Err("historical-v2 label audit repeats a reviewer".into());
     }
     let status = label_status(&committed[0].2.decision, &committed[1].2.decision);
@@ -149,7 +151,7 @@ fn validate_completed_worksheet(
         .as_ref()
         .ok_or_else(|| "historical-v2 label worksheet has no reviewer".to_string())?;
     validate_reviewer(reviewer)?;
-    validate_decision(bundle_root, bundle, &worksheet.task.decision)
+    validate_historical_v2_review_decision(bundle_root, bundle, &worksheet.task.decision)
 }
 
 fn validate_reviewer(reviewer: &HistoricalV2Reviewer) -> Result<(), String> {
@@ -173,7 +175,7 @@ fn validate_reviewer(reviewer: &HistoricalV2Reviewer) -> Result<(), String> {
     Ok(())
 }
 
-fn validate_decision(
+pub(super) fn validate_historical_v2_review_decision(
     bundle_root: &Path,
     bundle: &HistoricalV2SourceReviewBundle,
     decision: &HistoricalV2ReviewDecision,
@@ -424,6 +426,14 @@ fn require_text(label: &str, value: &str) -> Result<(), String> {
     }
 }
 
+pub(super) fn normalized_historical_v2_reviewer_id(value: &str) -> String {
+    value
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
 fn hash_json(value: &impl Serialize) -> Result<String, String> {
     serde_json::to_vec(value)
         .map(|bytes| sha256(&bytes))
@@ -436,4 +446,4 @@ fn sha256(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 #[path = "benchmark_history_v2_label_review_tests.rs"]
-mod tests;
+pub(super) mod tests;
