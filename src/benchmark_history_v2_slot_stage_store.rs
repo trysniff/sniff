@@ -57,6 +57,75 @@ pub struct HistoricalV2SlotStageJournal {
 }
 
 impl HistoricalV2SlotStageJournal {
+    pub fn open_existing(
+        root: &Path,
+        language: &str,
+        slot_number: usize,
+    ) -> Result<Self, HistoricalV2SlotStageError> {
+        let stage = HistoricalV2SlotStage::Payload;
+        validate_slot_path(language, slot_number)
+            .map_err(|detail| HistoricalV2SlotStageError::invalid(stage, detail))?;
+        require_plain_directory(root, "historical-v2 state root")
+            .map_err(|detail| HistoricalV2SlotStageError::invalid(stage, detail))?;
+        let root = canonical_directory(root, "historical-v2 state root")
+            .map_err(|detail| HistoricalV2SlotStageError::infrastructure(stage, detail))?;
+        let language_root = root.join(language);
+        require_plain_directory(&language_root, "historical-v2 language state")
+            .map_err(|detail| HistoricalV2SlotStageError::invalid(stage, detail))?;
+        let language_root = canonical_directory(&language_root, "historical-v2 language state")
+            .map_err(|detail| HistoricalV2SlotStageError::infrastructure(stage, detail))?;
+        if language_root.parent() != Some(root.as_path()) {
+            return Err(HistoricalV2SlotStageError::invalid(
+                stage,
+                "historical-v2 language state escaped its root",
+            ));
+        }
+        let slot_name = format!("slot-{slot_number:04}");
+        let lock_path = language_root.join(format!("{slot_name}.lock"));
+        let lock_metadata = fs::symlink_metadata(&lock_path).map_err(|error| {
+            HistoricalV2SlotStageError::invalid(
+                stage,
+                format!("historical-v2 existing slot lock is missing: {error}"),
+            )
+        })?;
+        if !lock_metadata.is_file() || lock_metadata.file_type().is_symlink() {
+            return Err(HistoricalV2SlotStageError::invalid(
+                stage,
+                "historical-v2 existing slot lock is not a plain file",
+            ));
+        }
+        let lock = SlotFileLock::acquire(&lock_path)
+            .map_err(|detail| HistoricalV2SlotStageError::infrastructure(stage, detail))?;
+        let slot_root = language_root.join(&slot_name);
+        require_plain_directory(&slot_root, "historical-v2 slot journal")
+            .map_err(|detail| HistoricalV2SlotStageError::invalid(stage, detail))?;
+        let slot_root = canonical_directory(&slot_root, "historical-v2 slot journal")
+            .map_err(|detail| HistoricalV2SlotStageError::infrastructure(stage, detail))?;
+        if slot_root.parent() != Some(language_root.as_path()) {
+            return Err(HistoricalV2SlotStageError::invalid(
+                stage,
+                "historical-v2 slot journal escaped its language root",
+            ));
+        }
+        let staging_root = language_root.join(format!(".{slot_name}.incomplete"));
+        if staging_root.exists() {
+            return Err(HistoricalV2SlotStageError::invalid(
+                stage,
+                "historical-v2 existing slot has an incomplete transaction",
+            ));
+        }
+        let history = load_history(&slot_root)
+            .map_err(|detail| HistoricalV2SlotStageError::invalid(stage, detail))?;
+        Ok(Self {
+            language: language.to_string(),
+            slot_number,
+            slot_root,
+            staging_root,
+            history,
+            _lock: lock,
+        })
+    }
+
     pub fn open(
         root: &Path,
         language: &str,
