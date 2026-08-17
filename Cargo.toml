@@ -47,6 +47,11 @@ name = "sniffbench-frame"
 path = "src/bin/sniffbench_frame.rs"
 required-features = ["sniffbench-frame"]
 
+[[test]]
+name = "historical_v2_command_recovery"
+path = "tests/historical_v2_command_recovery.rs"
+required-features = ["sniffbench-frame"]
+
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 colored = "2"
