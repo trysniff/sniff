@@ -353,6 +353,16 @@ mod history_v2_label_resolution;
 
 pub use history_v2_label_resolution::*;
 
+#[path = "benchmark_history_v2_release_gate_schema.rs"]
+mod history_v2_release_gate_schema;
+
+pub use history_v2_release_gate_schema::*;
+
+#[path = "benchmark_history_v2_release_gate.rs"]
+mod history_v2_release_gate;
+
+pub use history_v2_release_gate::*;
+
 #[path = "benchmark_intentional_boundary_frame_task.rs"]
 mod intentional_boundary_frame_task;
 

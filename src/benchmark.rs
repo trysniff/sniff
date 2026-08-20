@@ -295,6 +295,15 @@ pub use release::{
     write_non_blind_history_checkpoint,
 };
 
+pub use release::{
+    HISTORICAL_V2_RELEASE_EVIDENCE_SCHEMA_VERSION, HistoricalV2ReleaseEvidence,
+    HistoricalV2ReleaseGateInputs, HistoricalV2ReleaseGateStatus,
+    HistoricalV2ReleaseLanguageEvidence, HistoricalV2ReleaseSlotEvidence,
+    HistoricalV2ReleaseSlotOutcome, HistoricalV2ReviewedSlotArtifacts,
+    build_historical_v2_release_evidence, require_historical_v2_release_gate,
+    validate_historical_v2_release_evidence,
+};
+
 #[cfg(feature = "sniffbench-frame")]
 pub use release::{
     build_historical_v2_frame, extract_historical_v2_selected_payloads,
