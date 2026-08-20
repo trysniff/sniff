@@ -241,6 +241,19 @@ fn nested_loop_continue_does_not_count_for_the_outer_match() {
 }
 
 #[test]
+fn retry_and_terminal_flow_in_one_match_arm_is_not_distinct() {
+    let source = concat!(
+        "pub fn process() -> Result<i32, ()> { loop { match target() { ",
+        "Ok(_) => {}, Err(_) => { if should_retry() { continue; } return Err(()) } } } }",
+    );
+    let (source_census, semantic_census, files) = fixture(source, Vec::new(), None);
+
+    let census = derive_rust_ast_census(&source_census, &semantic_census, &files).unwrap();
+
+    assert_eq!(census.fact_count, 0);
+}
+
+#[test]
 fn rejects_nested_calls_even_when_outer_body_is_one_expression() {
     let source = "pub fn process(value: i32) -> i32 { target(normalize(value)) }";
     let calls = vec![

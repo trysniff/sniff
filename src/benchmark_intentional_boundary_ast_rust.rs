@@ -201,9 +201,9 @@ impl<'ast> Visit<'ast> for LoopMatchVisitor<'_> {
         if self.outcomes.is_some() {
             return;
         }
-        let mut retryable = None;
-        let mut terminal = None;
-        for arm in &node.arms {
+        let mut retryable = Vec::new();
+        let mut terminal = Vec::new();
+        for (arm_index, arm) in node.arms.iter().enumerate() {
             let mut flow = BranchFlowVisitor {
                 loop_label: self.loop_label,
                 retryable: false,
@@ -211,13 +211,20 @@ impl<'ast> Visit<'ast> for LoopMatchVisitor<'_> {
             };
             flow.visit_expr(&arm.body);
             if flow.retryable {
-                retryable.get_or_insert(arm.body.span());
+                retryable.push((arm_index, arm.body.span()));
             }
             if flow.terminal {
-                terminal.get_or_insert(arm.body.span());
+                terminal.push((arm_index, arm.body.span()));
             }
         }
-        if let (Some(retryable), Some(terminal)) = (retryable, terminal) {
+        if let Some((retryable, terminal)) =
+            retryable.iter().find_map(|(retry_index, retry_span)| {
+                terminal
+                    .iter()
+                    .find(|(terminal_index, _)| terminal_index != retry_index)
+                    .map(|(_, terminal_span)| (retry_span.clone(), terminal_span.clone()))
+            })
+        {
             self.outcomes = Some((retryable, terminal));
             return;
         }
