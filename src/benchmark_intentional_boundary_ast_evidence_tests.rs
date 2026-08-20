@@ -318,6 +318,39 @@ fn retry_outcome_ast_proof_alone_does_not_qualify_without_behavior() {
 }
 
 #[test]
+fn generator_marker_alone_does_not_qualify_a_generated_surface() {
+    let source_text = "// @generated\npub fn process(value: i32) -> i32 { value }";
+    let (source, semantic, ast) = fixture_with(source_text, Vec::new());
+    let asts = BTreeMap::from([("rust", &ast)]);
+
+    let evidence = derive_compiler_and_ast_evidence(&source, &semantic, &asts).unwrap();
+
+    assert!(evidence.atoms.iter().any(|atom| {
+        atom.evidence_kind == BoundaryEvidenceKind::GeneratorIdentity
+            && matches!(
+                atom.proof,
+                IntentionalBoundaryEvidenceProof::SourceAst(
+                    IntentionalBoundaryAstProofKind::GeneratorMarker
+                )
+            )
+    }));
+    let protocol = super::super::validate_intentional_boundary_protocol(
+        include_bytes!("../sniffbench/non-blind-v1-selection-policy.json"),
+        include_bytes!("../sniffbench/non-blind-v1-history-worksheet.json"),
+        include_bytes!("../sniffbench/blind-oss-v1-source-seal.json"),
+        include_bytes!("../sniffbench/non-blind-v1-intentional-boundary-protocol.json"),
+    )
+    .unwrap();
+    let candidates = super::super::qualify_intentional_boundary_candidates(
+        &protocol, &source, &semantic, &evidence,
+    )
+    .unwrap();
+    assert!(!candidates.candidates.iter().any(|candidate| {
+        candidate.category == super::super::IntentionalBoundaryCategory::GeneratedSurface
+    }));
+}
+
+#[test]
 fn rejects_ast_evidence_attached_to_a_different_symbol() {
     let (source, semantic, mut ast) = fixture();
     let IntentionalBoundaryAstMethodStatus::Resolved {

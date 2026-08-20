@@ -13,7 +13,7 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-const AST_CONTRACT: &str = "sniffbench-intentional-boundary-source-ast-v3";
+const AST_CONTRACT: &str = "sniffbench-intentional-boundary-source-ast-v4";
 pub(super) type AstMethodKey = (String, usize);
 
 pub(super) struct AstMethodSyntaxFact {
@@ -23,6 +23,7 @@ pub(super) struct AstMethodSyntaxFact {
         IntentionalBoundarySemanticRange,
         IntentionalBoundarySemanticRange,
     )>,
+    pub generator_marker: Option<IntentionalBoundarySemanticRange>,
     pub versioned_compatibility_annotation: Option<IntentionalBoundarySemanticRange>,
 }
 
@@ -37,6 +38,7 @@ pub(super) struct AstCallableCandidate {
         IntentionalBoundarySemanticRange,
         IntentionalBoundarySemanticRange,
     )>,
+    pub generator_marker: Option<IntentionalBoundarySemanticRange>,
     pub versioned_compatibility_annotation: Option<IntentionalBoundarySemanticRange>,
 }
 
@@ -91,6 +93,7 @@ pub(super) fn align_callable_candidates(
                     end_line: candidate.end_line,
                     thin_delegation: candidate.thin_delegation.clone(),
                     distinct_retry_outcomes: candidate.distinct_retry_outcomes.clone(),
+                    generator_marker: candidate.generator_marker.clone(),
                     versioned_compatibility_annotation: candidate
                         .versioned_compatibility_annotation
                         .clone(),
@@ -186,7 +189,12 @@ pub(super) fn derive_language_ast_census(
         if source_file.language != language {
             continue;
         }
-        let syntax = extractor(&source_file.repository_path, file)?;
+        let mut syntax = extractor(&source_file.repository_path, file)?;
+        if let Some(marker) = exact_generator_marker(&source_file.repository_path, &file.source) {
+            for fact in syntax.values_mut() {
+                fact.generator_marker = Some(marker.clone());
+            }
+        }
         for source_method in &source_file.methods {
             let semantic_method = semantic_methods
                 .get(source_method.parser_unit_id.as_str())
@@ -287,6 +295,11 @@ fn derive_method(
                     terminal_outcome: terminal_outcome.clone(),
                 });
             }
+            if let Some(marker) = &syntax_method.generator_marker {
+                facts.push(IntentionalBoundaryAstFact::GeneratorMarker {
+                    marker: marker.clone(),
+                });
+            }
             if let Some(annotation) = &syntax_method.versioned_compatibility_annotation {
                 facts.push(
                     IntentionalBoundaryAstFact::VersionedCompatibilityAnnotation {
@@ -323,6 +336,39 @@ fn derive_method(
         end_line: source_method.end_line,
         status,
     })
+}
+
+fn exact_generator_marker(
+    repository_path: &str,
+    source: &str,
+) -> Option<IntentionalBoundarySemanticRange> {
+    source
+        .lines()
+        .take(20)
+        .enumerate()
+        .find_map(|(line, text)| {
+            let leading = text.len().saturating_sub(text.trim_start().len());
+            let trimmed = text.trim();
+            let payload = trimmed
+                .strip_prefix("//")
+                .or_else(|| trimmed.strip_prefix('#'))
+                .map(str::trim)
+                .or_else(|| {
+                    trimmed
+                        .strip_prefix("/*")
+                        .and_then(|value| value.strip_suffix("*/"))
+                        .map(str::trim)
+                })?;
+            let exact_marker = payload == "@generated"
+                || (payload.starts_with("Code generated ") && payload.ends_with(" DO NOT EDIT."));
+            exact_marker.then(|| IntentionalBoundarySemanticRange {
+                repository_path: repository_path.to_string(),
+                start_line_zero_based: line as u32,
+                start_character_zero_based: leading as u32,
+                end_line_zero_based: line as u32,
+                end_character_zero_based: text.len() as u32,
+            })
+        })
 }
 
 fn range_contains(
