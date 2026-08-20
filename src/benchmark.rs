@@ -7,6 +7,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 mod release;
 
 #[cfg(test)]
+pub(crate) use release::install_test_historical_v2_corpus;
+#[cfg(test)]
 pub(crate) use release::write_test_non_blind_source_seal;
 #[cfg(test)]
 pub(crate) use release::write_test_source_seal;
@@ -47,15 +49,15 @@ pub use release::{
     HistoricalV2AssessmentIdentityInputs, HistoricalV2CandidateDecision,
     HistoricalV2CandidateOutcome, HistoricalV2ChangedMethod,
     HistoricalV2ChangedMethodResolutionFailure, HistoricalV2CheckpointedExecution,
-    HistoricalV2DatasetContract, HistoricalV2DatasetShard, HistoricalV2ExclusionArtifact,
-    HistoricalV2ExclusionManifest, HistoricalV2ExecutionBaseImage, HistoricalV2ExecutionCheckpoint,
-    HistoricalV2ExecutionCheckpointDisposition, HistoricalV2ExecutionCheckpointInputs,
-    HistoricalV2ExecutionCommandEvidence, HistoricalV2ExecutionError,
-    HistoricalV2ExecutionErrorKind, HistoricalV2ExecutionHarness, HistoricalV2ExecutionPhase,
-    HistoricalV2ExecutionPolicy, HistoricalV2ExecutionSide, HistoricalV2FinalLabel,
-    HistoricalV2FinalLabelBasis, HistoricalV2FinalLabelOutcome, HistoricalV2Frame,
-    HistoricalV2FrameDisposition, HistoricalV2FrameExclusionReason, HistoricalV2FrameRecord,
-    HistoricalV2FrameShard, HistoricalV2GitCommandRejectionEvidence,
+    HistoricalV2CorpusArtifactBinding, HistoricalV2DatasetContract, HistoricalV2DatasetShard,
+    HistoricalV2ExclusionArtifact, HistoricalV2ExclusionManifest, HistoricalV2ExecutionBaseImage,
+    HistoricalV2ExecutionCheckpoint, HistoricalV2ExecutionCheckpointDisposition,
+    HistoricalV2ExecutionCheckpointInputs, HistoricalV2ExecutionCommandEvidence,
+    HistoricalV2ExecutionError, HistoricalV2ExecutionErrorKind, HistoricalV2ExecutionHarness,
+    HistoricalV2ExecutionPhase, HistoricalV2ExecutionPolicy, HistoricalV2ExecutionSide,
+    HistoricalV2FinalLabel, HistoricalV2FinalLabelBasis, HistoricalV2FinalLabelOutcome,
+    HistoricalV2Frame, HistoricalV2FrameDisposition, HistoricalV2FrameExclusionReason,
+    HistoricalV2FrameRecord, HistoricalV2FrameShard, HistoricalV2GitCommandRejectionEvidence,
     HistoricalV2IdenticalTestExclusionReason, HistoricalV2IdenticalTestExecution,
     HistoricalV2IdenticalTestExecutionRequest, HistoricalV2IdenticalTestExecutor,
     HistoricalV2IdenticalTestOutcome, HistoricalV2IdenticalTestPlan, HistoricalV2LabelAudit,

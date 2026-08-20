@@ -242,6 +242,9 @@ fn corpus() -> (TempDir, BenchmarkCorpus) {
     );
     let (non_blind_source_seal_artifact_path, non_blind_source_seal_sha256) =
         super::write_test_non_blind_source_seal(root.path(), &mut cases);
+    let (historical_v2, mut historical_v2_cases, _) =
+        super::install_test_historical_v2_corpus(root.path());
+    cases.append(&mut historical_v2_cases);
     let mut corpus = BenchmarkCorpus {
         schema_version: RELEASE_SCHEMA_VERSION,
         corpus_id: "frozen-corpus-v1".to_string(),
@@ -254,6 +257,7 @@ fn corpus() -> (TempDir, BenchmarkCorpus) {
         blind_case_bundle_sha256,
         non_blind_source_seal_artifact_path,
         non_blind_source_seal_sha256,
+        historical_v2,
         analysis_sources: cases.iter().flat_map(|case| case.before.clone()).collect(),
         cases,
     };
@@ -324,7 +328,7 @@ fn submission(corpus: &BenchmarkCorpus, root: &std::path::Path) -> BenchmarkSubm
                 } else {
                     Vec::new()
                 },
-                proof_level: if finding { 1 } else { 0 },
+                proof_level: case.expected_proof_level,
                 reviewer_disposition: if finding {
                     ReviewerDisposition::Accepted
                 } else {
@@ -419,12 +423,16 @@ fn complete_release_submission_passes_every_offline_gate() {
 
     let metrics = evaluate_release(&corpus, &submission, root.path()).expect("evaluate");
 
-    assert!(metrics.release_gate_errors.is_empty());
+    assert!(
+        metrics.release_gate_errors.is_empty(),
+        "release gate errors: {:#?}",
+        metrics.release_gate_errors
+    );
     assert_eq!(metrics.run_count, 3);
     assert_eq!(metrics.verdict_repeatability, 1.0);
     assert_eq!(metrics.overall_evidence_validity, 1.0);
     assert_eq!(metrics.cost_usd_per_1000_methods, 0.5);
-    assert_eq!(metrics.by_partition.len(), 5);
+    assert_eq!(metrics.by_partition.len(), 6);
 }
 
 #[test]
@@ -452,6 +460,64 @@ fn blind_corpus_rejects_tampered_or_retrofitted_case_bundles() {
     let error = validate_frozen_corpus(&retrofitted, root.path()).unwrap_err();
 
     assert!(error.contains("differ from the independently resolved blind-case bundle"));
+}
+
+#[test]
+fn historical_v2_corpus_rejects_tampered_bound_artifacts() {
+    let (root, corpus) = corpus();
+    let protocol_path = root
+        .path()
+        .join(&corpus.historical_v2.protocol_artifact_path);
+    let protocol = fs::read(&protocol_path).unwrap();
+    fs::write(&protocol_path, b"tampered protocol\n").unwrap();
+
+    let error = validate_frozen_corpus(&corpus, root.path()).unwrap_err();
+
+    assert!(error.contains("historical-v2 protocol artifact hash mismatch"));
+    fs::write(&protocol_path, protocol).unwrap();
+
+    let bundle_path = root
+        .path()
+        .join(&corpus.historical_v2.corpus_bundle_artifact_path);
+    fs::write(&bundle_path, b"tampered bundle\n").unwrap();
+
+    let error = validate_frozen_corpus(&corpus, root.path()).unwrap_err();
+
+    assert!(error.contains("historical-v2 corpus bundle artifact hash mismatch"));
+}
+
+#[test]
+fn historical_v2_corpus_rejects_omitted_cases_after_recommitment() {
+    let (root, corpus) = corpus();
+    let mut omitted = corpus.clone();
+    let index = omitted
+        .cases
+        .iter()
+        .position(|case| case.partition == BenchmarkPartition::HistoricalSimplificationV2)
+        .unwrap();
+    omitted.cases.remove(index);
+    omitted.source_commitment_sha256 = omitted.computed_source_commitment_sha256().unwrap();
+    omitted.label_commitment_sha256 = omitted.computed_label_commitment_sha256().unwrap();
+
+    let error = validate_frozen_corpus(&omitted, root.path()).unwrap_err();
+
+    assert!(error.contains("historical-v2 release cases differ from the accepted corpus bundle"));
+}
+
+#[test]
+fn historical_v2_artifacts_are_bound_into_source_and_label_commitments() {
+    let (_, corpus) = corpus();
+    let mut changed = corpus.clone();
+    changed.historical_v2.corpus_bundle_artifact_sha256 = "d".repeat(64);
+
+    assert_ne!(
+        corpus.computed_source_commitment_sha256().unwrap(),
+        changed.computed_source_commitment_sha256().unwrap()
+    );
+    assert_ne!(
+        corpus.computed_label_commitment_sha256().unwrap(),
+        changed.computed_label_commitment_sha256().unwrap()
+    );
 }
 
 #[test]
@@ -691,7 +757,8 @@ fn repeatability_includes_unmatched_findings() {
     let (root, corpus) = corpus();
     let mut submission = submission(&corpus, root.path());
     let snapshot = &corpus.cases[0].before[0];
-    for index in 0..2 {
+    let unstable_count = corpus.cases.len() / 9 + 1;
+    for index in 0..unstable_count {
         submission.runs[0].predictions.push(BenchmarkRunPrediction {
             prediction_id: format!("unstable-extra-{index}"),
             finding_fingerprint: Some(format!("unstable-fingerprint-{index}")),

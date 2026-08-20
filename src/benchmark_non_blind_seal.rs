@@ -392,7 +392,9 @@ pub(crate) fn write_test_non_blind_source_seal(
                 }
             }
             BenchmarkPartition::IntentionalBoundary => NonBlindSourceKind::IntentionalBoundary,
-            BenchmarkPartition::SyntheticGold | BenchmarkPartition::BlindOss => unreachable!(),
+            BenchmarkPartition::HistoricalSimplificationV2
+            | BenchmarkPartition::SyntheticGold
+            | BenchmarkPartition::BlindOss => unreachable!(),
         };
         let after = if case.partition == BenchmarkPartition::IntentionalBoundary {
             Vec::new()

@@ -176,5 +176,28 @@ fn validate_release_protocol(protocol: &ValidatedHistoricalV2Protocol) -> Result
 }
 
 #[cfg(test)]
+pub(crate) fn build_test_historical_v2_release_evidence(
+    selection_sha256: &str,
+    slots: Vec<HistoricalV2ReleaseSlotEvidence>,
+) -> HistoricalV2ReleaseEvidence {
+    let protocol = validate_historical_v2_protocol(include_bytes!(
+        "../sniffbench/historical-v2-protocol.json"
+    ))
+    .expect("validate historical-v2 test protocol");
+    let unfilled = slots
+        .iter()
+        .filter(|slot| matches!(slot.outcome, HistoricalV2ReleaseSlotOutcome::Unfilled))
+        .count();
+    summarize_historical_v2_release(
+        &protocol,
+        selection_sha256,
+        slots.len() - unfilled,
+        unfilled,
+        slots,
+    )
+    .expect("build historical-v2 test release evidence")
+}
+
+#[cfg(test)]
 #[path = "benchmark_history_v2_release_gate_tests.rs"]
 pub(super) mod tests;

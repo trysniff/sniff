@@ -16,7 +16,9 @@ use crate::report_types::{LLMVerdict, MethodReviewRecord, RunReport, RunStats};
 use crate::slop_cases::{CaseEvidence, ProofLevel, SlopCase};
 use crate::types::FindingTier;
 use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 use std::fs;
+use std::path::{Path, PathBuf};
 
 fn digest(bytes: impl AsRef<[u8]>) -> String {
     format!("{:x}", Sha256::digest(bytes.as_ref()))
@@ -127,7 +129,7 @@ fn frozen_corpus(root: &std::path::Path) -> BenchmarkCorpus {
         ),
         ("kotlin", "blind/Demo.kt", "fun blindDemo(): Int = 1\n"),
     ];
-    let sources = definitions
+    let mut sources = definitions
         .iter()
         .map(|(language, path, text)| snapshot(root, language, path, text))
         .collect::<Vec<_>>();
@@ -230,9 +232,13 @@ fn frozen_corpus(root: &std::path::Path) -> BenchmarkCorpus {
     );
     let (non_blind_source_seal_artifact_path, non_blind_source_seal_sha256) =
         crate::benchmark::write_test_non_blind_source_seal(root, &mut cases);
+    let (historical_v2, mut historical_v2_cases, historical_v2_sources) =
+        crate::benchmark::install_test_historical_v2_corpus(root);
+    cases.append(&mut historical_v2_cases);
+    sources.extend(historical_v2_sources);
     freeze_corpus(
         BenchmarkCorpus {
-            schema_version: 6,
+            schema_version: 7,
             corpus_id: "import-corpus".to_string(),
             frozen_at: "2026-08-12T00:00:00Z".to_string(),
             source_commitment_sha256: String::new(),
@@ -243,6 +249,7 @@ fn frozen_corpus(root: &std::path::Path) -> BenchmarkCorpus {
             blind_case_bundle_sha256,
             non_blind_source_seal_artifact_path,
             non_blind_source_seal_sha256,
+            historical_v2,
             analysis_sources: sources,
             cases,
         },
@@ -251,16 +258,18 @@ fn frozen_corpus(root: &std::path::Path) -> BenchmarkCorpus {
     .unwrap()
 }
 
-fn completed_artifact(corpus: &BenchmarkCorpus) -> CompletedRunArtifact {
-    let source_files = corpus
-        .analysis_sources
-        .iter()
-        .map(|source| CompletedRunSourceFile {
-            repository_path: source.repository_path.clone(),
-            sha256: source.sha256.clone(),
-        })
-        .collect::<Vec<_>>();
+fn completed_artifact(
+    source_files: Vec<CompletedRunSourceFile>,
+    artifact_index: usize,
+) -> CompletedRunArtifact {
     let file_count = source_files.len();
+    let has_finding = source_files
+        .iter()
+        .any(|source| source.repository_path == "src/demo.py");
+    let method_count = usize::from(has_finding);
+    let input_tokens = if has_finding { 100 } else { 0 };
+    let cached_input_tokens = if has_finding { 20 } else { 0 };
+    let output_tokens = if has_finding { 10 } else { 0 };
     let verdict = LLMVerdict {
         verdict_type: "method".to_string(),
         file_path: "src/demo.py".to_string(),
@@ -331,17 +340,17 @@ fn completed_artifact(corpus: &BenchmarkCorpus) -> CompletedRunArtifact {
     };
     let stats = RunStats {
         files_scanned: file_count,
-        methods_analyzed: 1,
-        ai_reviews: 1,
-        ai_expected_reviews: 1,
-        method_reviews_completed: 1,
-        method_reviews_expected: 1,
-        compiler_methods_covered: 1,
-        compiler_methods_expected: 1,
-        input_tokens: 100,
-        cached_input_tokens: 20,
-        output_tokens: 10,
-        estimated_cost_usd: rates.cost(100, 20, 10),
+        methods_analyzed: method_count,
+        ai_reviews: method_count,
+        ai_expected_reviews: method_count,
+        method_reviews_completed: method_count,
+        method_reviews_expected: method_count,
+        compiler_methods_covered: method_count,
+        compiler_methods_expected: method_count,
+        input_tokens,
+        cached_input_tokens,
+        output_tokens,
+        estimated_cost_usd: rates.cost(input_tokens, cached_input_tokens, output_tokens),
         pricing_snapshots: vec![rates],
         pricing_provenance_complete: true,
         ..RunStats::default()
@@ -349,9 +358,9 @@ fn completed_artifact(corpus: &BenchmarkCorpus) -> CompletedRunArtifact {
     let report = RunReport {
         file_verdicts: Vec::new(),
         static_flags: Vec::new(),
-        llm_verdicts: vec![verdict],
-        method_review_records: vec![record],
-        slop_cases: vec![case],
+        llm_verdicts: has_finding.then_some(verdict).into_iter().collect(),
+        method_review_records: has_finding.then_some(record).into_iter().collect(),
+        slop_cases: has_finding.then_some(case).into_iter().collect(),
         stats,
     };
     let source_commitment = {
@@ -363,8 +372,8 @@ fn completed_artifact(corpus: &BenchmarkCorpus) -> CompletedRunArtifact {
         digest(serde_json::to_vec(&inventory).unwrap())
     };
     let report_commitment = digest(serde_json::to_vec(&report).unwrap());
-    let execution = digest("execution-one");
-    let scan = digest("scan-one");
+    let execution = digest(format!("execution-{artifact_index}"));
+    let scan = digest(format!("scan-{artifact_index}"));
     let run_id = digest(format!(
         "schema={COMPLETED_RUN_SCHEMA_VERSION}\nscan={scan}\nexecution={execution}\nsource={source_commitment}\nreport={report_commitment}\nsniff={}\n",
         env!("CARGO_PKG_VERSION")
@@ -387,10 +396,10 @@ fn completed_artifact(corpus: &BenchmarkCorpus) -> CompletedRunArtifact {
         coverage: CompletedRunCoverage {
             files_scanned: file_count,
             source_files_committed: file_count,
-            methods_expected: 1,
-            methods_completed: 1,
-            compiler_methods_expected: 1,
-            compiler_methods_covered: 1,
+            methods_expected: method_count,
+            methods_completed: method_count,
+            compiler_methods_expected: method_count,
+            compiler_methods_covered: method_count,
             role_units_expected: 0,
             role_units_completed: 0,
             synthesis_units_expected: 0,
@@ -402,10 +411,10 @@ fn completed_artifact(corpus: &BenchmarkCorpus) -> CompletedRunArtifact {
             cross_scan_reused_units: 0,
         },
         usage: CompletedRunUsage {
-            input_tokens: 100,
-            cached_input_tokens: 20,
-            output_tokens: 10,
-            estimated_cost_usd: rates.cost(100, 20, 10),
+            input_tokens,
+            cached_input_tokens,
+            output_tokens,
+            estimated_cost_usd: rates.cost(input_tokens, cached_input_tokens, output_tokens),
             pricing_snapshots: vec![rates],
             pricing_provenance_complete: true,
         },
@@ -413,20 +422,61 @@ fn completed_artifact(corpus: &BenchmarkCorpus) -> CompletedRunArtifact {
     }
 }
 
+fn completed_artifacts(corpus: &BenchmarkCorpus) -> Vec<CompletedRunArtifact> {
+    let mut groups = BTreeMap::<(String, String), BTreeMap<String, String>>::new();
+    for source in &corpus.analysis_sources {
+        let files = groups
+            .entry((source.repository.clone(), source.revision.clone()))
+            .or_default();
+        if let Some(existing) = files.insert(source.repository_path.clone(), source.sha256.clone())
+        {
+            assert_eq!(
+                existing, source.sha256,
+                "fixture path {} has conflicting source hashes",
+                source.repository_path
+            );
+        }
+    }
+    groups
+        .into_values()
+        .enumerate()
+        .map(|(index, files)| {
+            completed_artifact(
+                files
+                    .into_iter()
+                    .map(|(repository_path, sha256)| CompletedRunSourceFile {
+                        repository_path,
+                        sha256,
+                    })
+                    .collect(),
+                index,
+            )
+        })
+        .collect()
+}
+
+fn write_completed_artifacts(corpus: &BenchmarkCorpus, root: &Path) -> Vec<PathBuf> {
+    let directory = root.join("completed");
+    fs::create_dir(&directory).unwrap();
+    completed_artifacts(corpus)
+        .into_iter()
+        .enumerate()
+        .map(|(index, artifact)| {
+            artifact.verify().unwrap();
+            let path = directory.join(format!("{index:03}.json"));
+            fs::write(&path, serde_json::to_vec_pretty(&artifact).unwrap()).unwrap();
+            path
+        })
+        .collect()
+}
+
 #[test]
 fn completed_artifacts_prepare_and_import_without_exposing_labels() {
     let root = tempfile::tempdir().unwrap();
     let corpus = frozen_corpus(root.path());
-    let artifact = completed_artifact(&corpus);
-    artifact.verify().unwrap();
-    let artifact_path = root.path().join("completed.json");
-    fs::write(
-        &artifact_path,
-        serde_json::to_vec_pretty(&artifact).unwrap(),
-    )
-    .unwrap();
+    let artifact_paths = write_completed_artifacts(&corpus, root.path());
 
-    let mut review = prepare_run_review(&corpus, root.path(), &[artifact_path]).unwrap();
+    let mut review = prepare_run_review(&corpus, root.path(), &artifact_paths).unwrap();
 
     let prepared_json = serde_json::to_string(&review).unwrap();
     assert!(!prepared_json.contains("expected_tier"));
@@ -482,14 +532,8 @@ fn completed_artifacts_prepare_and_import_without_exposing_labels() {
 fn import_rejects_cost_claim_that_differs_from_receipt() {
     let root = tempfile::tempdir().unwrap();
     let corpus = frozen_corpus(root.path());
-    let artifact = completed_artifact(&corpus);
-    let artifact_path = root.path().join("completed.json");
-    fs::write(
-        &artifact_path,
-        serde_json::to_vec_pretty(&artifact).unwrap(),
-    )
-    .unwrap();
-    let mut review = prepare_run_review(&corpus, root.path(), &[artifact_path]).unwrap();
+    let artifact_paths = write_completed_artifacts(&corpus, root.path());
+    let mut review = prepare_run_review(&corpus, root.path(), &artifact_paths).unwrap();
     review.reviews[0].reviewer_disposition = ReviewerDisposition::Rejected;
     review.reviews[0].reviewer_minutes = 1.0;
     review.actual_cost_microusd = Some(60_000);
@@ -529,14 +573,8 @@ fn import_rejects_cost_claim_that_differs_from_receipt() {
 fn import_rejects_non_independent_or_unblinded_reviewer() {
     let root = tempfile::tempdir().unwrap();
     let corpus = frozen_corpus(root.path());
-    let artifact = completed_artifact(&corpus);
-    let artifact_path = root.path().join("completed.json");
-    fs::write(
-        &artifact_path,
-        serde_json::to_vec_pretty(&artifact).unwrap(),
-    )
-    .unwrap();
-    let mut review = prepare_run_review(&corpus, root.path(), &[artifact_path]).unwrap();
+    let artifact_paths = write_completed_artifacts(&corpus, root.path());
+    let mut review = prepare_run_review(&corpus, root.path(), &artifact_paths).unwrap();
     review.blind_reviewer = Some(crate::benchmark::BlindReviewer {
         reviewer_id: "reviewer-001".to_string(),
         years_experience: 8,
@@ -555,14 +593,8 @@ fn import_rejects_non_independent_or_unblinded_reviewer() {
 fn import_rejects_a_blind_reviewer_who_adjudicated_corpus_labels() {
     let root = tempfile::tempdir().unwrap();
     let corpus = frozen_corpus(root.path());
-    let artifact = completed_artifact(&corpus);
-    let artifact_path = root.path().join("completed.json");
-    fs::write(
-        &artifact_path,
-        serde_json::to_vec_pretty(&artifact).unwrap(),
-    )
-    .unwrap();
-    let mut review = prepare_run_review(&corpus, root.path(), &[artifact_path]).unwrap();
+    let artifact_paths = write_completed_artifacts(&corpus, root.path());
+    let mut review = prepare_run_review(&corpus, root.path(), &artifact_paths).unwrap();
     review.blind_reviewer = Some(crate::benchmark::BlindReviewer {
         reviewer_id: "reviewer-1".to_string(),
         years_experience: 8,
@@ -581,14 +613,8 @@ fn import_rejects_a_blind_reviewer_who_adjudicated_corpus_labels() {
 fn import_rejects_tampered_prepared_outcomes() {
     let root = tempfile::tempdir().unwrap();
     let corpus = frozen_corpus(root.path());
-    let artifact = completed_artifact(&corpus);
-    let artifact_path = root.path().join("completed.json");
-    fs::write(
-        &artifact_path,
-        serde_json::to_vec_pretty(&artifact).unwrap(),
-    )
-    .unwrap();
-    let mut review = prepare_run_review(&corpus, root.path(), &[artifact_path]).unwrap();
+    let artifact_paths = write_completed_artifacts(&corpus, root.path());
+    let mut review = prepare_run_review(&corpus, root.path(), &artifact_paths).unwrap();
     review.outcomes[0].tier = FindingTier::Clean;
 
     let error = import_reviewed_run(&corpus, root.path(), &review).unwrap_err();
@@ -615,18 +641,10 @@ fn unmatched_unresolved_outcome_is_preserved_in_run_ledger() {
         reviewer_disposition: ReviewerDisposition::Unreviewed,
         reviewer_minutes: 0.0,
     };
-    let blind_cases = prepare_run_review(
-        &corpus,
-        root.path(),
-        &[{
-            let artifact = completed_artifact(&corpus);
-            let path = root.path().join("completed.json");
-            fs::write(&path, serde_json::to_vec_pretty(&artifact).unwrap()).unwrap();
-            path
-        }],
-    )
-    .unwrap()
-    .blind_cases;
+    let artifact_paths = write_completed_artifacts(&corpus, root.path());
+    let blind_cases = prepare_run_review(&corpus, root.path(), &artifact_paths)
+        .unwrap()
+        .blind_cases;
     let outcomes = vec![prepared];
     let reviews = std::collections::HashMap::from([(outcomes[0].outcome_id.as_str(), &review)]);
 
@@ -644,7 +662,7 @@ fn preparation_rejects_completed_artifact_outside_corpus_bundle() {
     let root = tempfile::tempdir().unwrap();
     let external = tempfile::tempdir().unwrap();
     let corpus = frozen_corpus(root.path());
-    let artifact = completed_artifact(&corpus);
+    let artifact = completed_artifacts(&corpus).into_iter().next().unwrap();
     let artifact_path = external.path().join("completed.json");
     fs::write(
         &artifact_path,

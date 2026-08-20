@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::path::{Component, Path};
 
-pub(crate) const RELEASE_SCHEMA_VERSION: u32 = 6;
+pub(crate) const RELEASE_SCHEMA_VERSION: u32 = 7;
 const REQUIRED_LANGUAGES: [&str; 6] =
     ["go", "javascript", "kotlin", "python", "rust", "typescript"];
 const REQUIRED_BASELINES: [&str; 7] = [
@@ -373,6 +373,10 @@ mod history_v2_corpus;
 
 pub use history_v2_corpus::*;
 
+#[path = "benchmark_history_v2_release_partition.rs"]
+mod history_v2_release_partition;
+use history_v2_release_partition::*;
+
 #[path = "benchmark_intentional_boundary_frame_task.rs"]
 mod intentional_boundary_frame_task;
 
@@ -679,10 +683,11 @@ mod cost_receipt;
 pub use cost_receipt::validate_actual_cost_receipt;
 
 impl BenchmarkPartition {
-    fn all() -> [Self; 5] {
+    fn all() -> [Self; 6] {
         [
             Self::SyntheticGold,
             Self::HistoricalSimplification,
+            Self::HistoricalSimplificationV2,
             Self::ResearchTrajectory,
             Self::IntentionalBoundary,
             Self::BlindOss,
@@ -715,6 +720,7 @@ impl BenchmarkCorpus {
         struct CommittedLabels<'a> {
             blind_case_bundle_artifact_path: &'a str,
             blind_case_bundle_sha256: &'a str,
+            historical_v2: &'a HistoricalV2CorpusArtifactBinding,
             labels: Vec<CommittedLabel<'a>>,
         }
 
@@ -743,6 +749,7 @@ impl BenchmarkCorpus {
         let bytes = serde_json::to_vec(&CommittedLabels {
             blind_case_bundle_artifact_path: &self.blind_case_bundle_artifact_path,
             blind_case_bundle_sha256: &self.blind_case_bundle_sha256,
+            historical_v2: &self.historical_v2,
             labels,
         })
         .map_err(|error| format!("failed to serialize benchmark label commitment: {error}"))?;
@@ -765,6 +772,7 @@ impl BenchmarkCorpus {
             source_seal_sha256: &'a str,
             non_blind_source_seal_artifact_path: &'a str,
             non_blind_source_seal_sha256: &'a str,
+            historical_v2: &'a HistoricalV2CorpusArtifactBinding,
             sources: Vec<&'a SourceSnapshot>,
             case_sources: Vec<CommittedCaseSource<'a>>,
         }
@@ -790,6 +798,7 @@ impl BenchmarkCorpus {
             source_seal_sha256: &self.source_seal_sha256,
             non_blind_source_seal_artifact_path: &self.non_blind_source_seal_artifact_path,
             non_blind_source_seal_sha256: &self.non_blind_source_seal_sha256,
+            historical_v2: &self.historical_v2,
             sources,
             case_sources: {
                 let mut cases = self
@@ -1036,6 +1045,16 @@ fn validate_corpus(
         "non_blind_source_seal_sha256",
         &corpus.non_blind_source_seal_sha256,
     )?;
+    require_safe_artifact_path(&corpus.historical_v2.protocol_artifact_path)?;
+    require_sha256(
+        "historical_v2.protocol_artifact_sha256",
+        &corpus.historical_v2.protocol_artifact_sha256,
+    )?;
+    require_safe_artifact_path(&corpus.historical_v2.corpus_bundle_artifact_path)?;
+    require_sha256(
+        "historical_v2.corpus_bundle_artifact_sha256",
+        &corpus.historical_v2.corpus_bundle_artifact_sha256,
+    )?;
     if corpus.cases.is_empty() {
         return Err("release benchmark corpus cannot be empty".to_string());
     }
@@ -1089,6 +1108,7 @@ fn validate_corpus(
     let source_texts = validate_source_snapshots(corpus, corpus_root)?;
     validate_case_source_membership(corpus)?;
     validate_corpus_non_blind_source_seal(corpus, corpus_root)?;
+    validate_historical_v2_release_partition(corpus, corpus_root)?;
     validate_blind_source_seal(corpus, corpus_root)?;
     Ok(source_texts)
 }
@@ -1149,6 +1169,14 @@ fn validate_corpus_non_blind_source_seal(
                     ));
                 }
                 used.insert(provenance_id);
+            }
+            BenchmarkPartition::HistoricalSimplificationV2 => {
+                if case.provenance_id.is_none() {
+                    return Err(format!(
+                        "historical-v2 case {} requires its review provenance",
+                        case.label.case_id
+                    ));
+                }
             }
             BenchmarkPartition::SyntheticGold | BenchmarkPartition::BlindOss => {
                 if case.provenance_id.is_some() {
