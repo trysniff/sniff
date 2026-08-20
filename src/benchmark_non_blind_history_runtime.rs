@@ -142,6 +142,9 @@ pub(crate) fn prepare_historical_runtime(
         }
     }
     for runtime_file in &launch.runtime_files {
+        if is_system_runtime(runtime_file) {
+            continue;
+        }
         push_external(&root, &mut read_only_paths, runtime_file.clone());
         #[cfg(windows)]
         if runtime_file
