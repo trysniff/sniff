@@ -8,11 +8,9 @@ use super::{
     IntentionalBoundaryGeneratorReplay, IntentionalBoundaryGeneratorReplayOutcome,
     IntentionalBoundaryGeneratorSubject, IntentionalBoundaryGeneratorUnresolvedReason,
     IntentionalBoundaryManifestBindingCensus, IntentionalBoundaryManifestCensus,
-    IntentionalBoundaryManifestDeclaration, IntentionalBoundaryManifestDeclarationKind,
-    IntentionalBoundaryManifestProvider, IntentionalBoundaryManifestTarget,
-    IntentionalBoundaryRepositoryInventory, IntentionalBoundarySemanticCensus,
-    IntentionalBoundarySemanticMethodStatus, IntentionalBoundarySourceCensus,
-    validate_intentional_boundary_manifest_bindings,
+    IntentionalBoundaryManifestDeclaration, IntentionalBoundaryRepositoryInventory,
+    IntentionalBoundarySemanticCensus, IntentionalBoundarySemanticMethodStatus,
+    IntentionalBoundarySourceCensus, validate_intentional_boundary_manifest_bindings,
     validate_intentional_boundary_repository_inventory,
     validate_intentional_boundary_semantic_census, validate_intentional_boundary_source_census,
 };
@@ -21,14 +19,21 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-pub(super) const GENERATOR_CONTRACT: &str = "sniffbench-intentional-boundary-generator-replay-v3";
+pub(super) const GENERATOR_CONTRACT: &str = "sniffbench-intentional-boundary-generator-replay-v4";
 
+#[path = "benchmark_intentional_boundary_generator_command.rs"]
+mod command;
 #[path = "benchmark_intentional_boundary_generator_node.rs"]
 mod node;
+#[path = "benchmark_intentional_boundary_generator_python.rs"]
+mod python;
 #[path = "benchmark_intentional_boundary_generator_runtime.rs"]
 mod runtime;
+#[cfg(test)]
+use command::{cargo_generator_command, generator_command};
+pub(super) use command::{generator_command_with_context, is_generator_declaration};
+pub(super) use node::GeneratorCommand;
 use node::generator_candidate_key;
-pub(super) use node::{GeneratorCommand, generator_command};
 
 #[derive(Clone)]
 struct ExpectedOutput {
@@ -112,13 +117,7 @@ where
     let declarations = manifest_census
         .declarations
         .iter()
-        .filter(|declaration| {
-            matches!(
-                declaration.declaration_kind,
-                IntentionalBoundaryManifestDeclarationKind::BuildScript
-                    | IntentionalBoundaryManifestDeclarationKind::PackageScript
-            )
-        })
+        .filter(|declaration| is_generator_declaration(declaration))
         .collect::<Vec<_>>();
     let mut grouped = BTreeMap::<Vec<String>, Vec<IntentionalBoundaryGeneratorSubject>>::new();
     let declaration_by_id = declarations
@@ -155,6 +154,8 @@ where
             replay_outcome(
                 inventory,
                 source_census,
+                semantic_census,
+                binding_census,
                 &manifest_census.declarations,
                 &candidates,
                 &subjects,
@@ -181,6 +182,7 @@ where
         source_census,
         semantic_census,
         manifest_census,
+        binding_census,
         base_evidence,
         replays,
     )
@@ -325,6 +327,8 @@ fn path_is_under(path: &str, directory: &str) -> bool {
 fn replay_outcome<F>(
     inventory: &IntentionalBoundaryRepositoryInventory,
     source_census: &IntentionalBoundarySourceCensus,
+    semantic_census: &IntentionalBoundarySemanticCensus,
+    binding_census: &IntentionalBoundaryManifestBindingCensus,
     all_declarations: &[IntentionalBoundaryManifestDeclaration],
     declarations: &[&IntentionalBoundaryManifestDeclaration],
     subjects: &[IntentionalBoundaryGeneratorSubject],
@@ -350,7 +354,13 @@ where
     let mut failures = Vec::new();
     let mut supported = 0usize;
     for declaration in candidates {
-        let Some(command) = generator_command(inventory, all_declarations, declaration) else {
+        let Some(command) = generator_command_with_context(
+            inventory,
+            all_declarations,
+            semantic_census,
+            binding_census,
+            declaration,
+        ) else {
             continue;
         };
         supported += 1;
@@ -450,25 +460,6 @@ fn validate_replay_success(
     Ok(())
 }
 
-pub(super) fn cargo_generator_command(
-    declaration: &IntentionalBoundaryManifestDeclaration,
-) -> Option<Vec<String>> {
-    if declaration.provider != IntentionalBoundaryManifestProvider::CargoManifest {
-        return None;
-    }
-    let IntentionalBoundaryManifestTarget::RepositoryPath { .. } = &declaration.target else {
-        return None;
-    };
-    Some(vec![
-        "cargo".to_string(),
-        "check".to_string(),
-        "--offline".to_string(),
-        "--locked".to_string(),
-        "--manifest-path".to_string(),
-        declaration.manifest_repository_path.clone(),
-    ])
-}
-
 fn expected_output(
     inventory: &IntentionalBoundaryRepositoryInventory,
     source_census: &IntentionalBoundarySourceCensus,
@@ -503,6 +494,7 @@ fn finish_census(
     source: &IntentionalBoundarySourceCensus,
     semantic: &IntentionalBoundarySemanticCensus,
     manifests: &IntentionalBoundaryManifestCensus,
+    bindings: &IntentionalBoundaryManifestBindingCensus,
     evidence: &IntentionalBoundaryEvidenceCensus,
     mut replays: Vec<IntentionalBoundaryGeneratorReplay>,
 ) -> Result<IntentionalBoundaryGeneratorCensus, String> {
@@ -524,6 +516,7 @@ fn finish_census(
         source_census_sha256: source.census_sha256.clone(),
         semantic_census_sha256: semantic.semantic_census_sha256.clone(),
         manifest_census_sha256: manifests.manifest_census_sha256.clone(),
+        manifest_binding_census_sha256: bindings.binding_census_sha256.clone(),
         base_evidence_census_sha256: evidence.evidence_census_sha256.clone(),
         replays,
         replay_count_by_status,
@@ -563,6 +556,7 @@ pub(super) fn generator_census_sha256(
         &census.source_census_sha256,
         &census.semantic_census_sha256,
         &census.manifest_census_sha256,
+        &census.manifest_binding_census_sha256,
         &census.base_evidence_census_sha256,
         &census.replays,
         &census.replay_count_by_status,

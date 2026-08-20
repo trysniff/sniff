@@ -1,12 +1,14 @@
 use super::*;
 use crate::benchmark::release::{
-    IntentionalBoundaryIndexerKind, IntentionalBoundarySemanticCensus,
-    IntentionalBoundarySemanticIndexerCensus, IntentionalBoundarySemanticMethod,
-    IntentionalBoundarySemanticMethodStatus, IntentionalBoundarySemanticOrigin,
-    IntentionalBoundarySemanticRange, IntentionalBoundarySemanticSymbolCategory,
-    IntentionalBoundarySemanticSymbolFacts, IntentionalBoundarySemanticVisibility,
-    bind_intentional_boundary_manifests, census_intentional_boundary_javascript_ast,
-    census_intentional_boundary_manifests, census_intentional_boundary_repository,
+    IntentionalBoundaryIndexerKind, IntentionalBoundaryManifestDeclarationKind,
+    IntentionalBoundaryManifestProvider, IntentionalBoundaryManifestTarget,
+    IntentionalBoundarySemanticCensus, IntentionalBoundarySemanticIndexerCensus,
+    IntentionalBoundarySemanticMethod, IntentionalBoundarySemanticMethodStatus,
+    IntentionalBoundarySemanticOrigin, IntentionalBoundarySemanticRange,
+    IntentionalBoundarySemanticSymbolCategory, IntentionalBoundarySemanticSymbolFacts,
+    IntentionalBoundarySemanticVisibility, bind_intentional_boundary_manifests,
+    census_intentional_boundary_javascript_ast, census_intentional_boundary_manifests,
+    census_intentional_boundary_python_ast, census_intentional_boundary_repository,
     census_intentional_boundary_rust_ast, extract_intentional_boundary_compiler_and_ast_evidence,
     inventory_intentional_boundary_repository,
 };
@@ -364,6 +366,114 @@ fn node_fixture() -> Fixture {
     }
 }
 
+fn python_fixture() -> Fixture {
+    let root = tempfile::tempdir().unwrap();
+    git(root.path(), &["init", "--quiet"]);
+    git(root.path(), &["config", "user.name", "SniffBench"]);
+    git(
+        root.path(),
+        &["config", "user.email", "bench@example.invalid"],
+    );
+    git(
+        root.path(),
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/example/python-generator-fixture.git",
+        ],
+    );
+    fs::write(
+        root.path().join("pyproject.toml"),
+        concat!(
+            "[project]\n",
+            "name = \"python-generator-fixture\"\n",
+            "version = \"0.1.0\"\n",
+            "requires-python = \">=3.9\"\n",
+            "dependencies = []\n\n",
+            "[project.scripts]\n",
+            "generate = \"generator:generate\"\n",
+        ),
+    )
+    .unwrap();
+    fs::write(
+        root.path().join("uv.lock"),
+        concat!(
+            "version = 1\n",
+            "revision = 3\n",
+            "requires-python = \">=3.9\"\n\n",
+            "[[package]]\n",
+            "name = \"python-generator-fixture\"\n",
+            "version = \"0.1.0\"\n",
+            "source = { virtual = \".\" }\n",
+        ),
+    )
+    .unwrap();
+    fs::write(
+        root.path().join("generator.py"),
+        concat!(
+            "from pathlib import Path\n\n",
+            "def generate():\n",
+            "    Path(\"generated.py\").write_bytes(",
+            "b\"# @generated\\ndef generated_value():\\n    return 7\\n\")\n",
+        ),
+    )
+    .unwrap();
+    fs::write(
+        root.path().join("generated.py"),
+        "# @generated\ndef generated_value():\n    return 7\n",
+    )
+    .unwrap();
+    git(root.path(), &["add", "."]);
+    git(root.path(), &["commit", "--quiet", "-m", "fixture"]);
+    let revision = git(root.path(), &["rev-parse", "HEAD"]);
+    let repository = "github.com/example/python-generator-fixture".to_string();
+    let inventory =
+        inventory_intentional_boundary_repository(&repository, &revision, root.path()).unwrap();
+    let source =
+        census_intentional_boundary_repository(&repository, &revision, root.path(), &inventory)
+            .unwrap();
+    let semantic = semantic_fixture(
+        &source,
+        IntentionalBoundaryIndexerKind::Python,
+        "scip-python",
+    );
+    let ast = census_intentional_boundary_python_ast(
+        &repository,
+        &revision,
+        root.path(),
+        &inventory,
+        &source,
+        &semantic,
+    )
+    .unwrap();
+    let evidence = extract_intentional_boundary_compiler_and_ast_evidence(
+        &repository,
+        &revision,
+        root.path(),
+        &inventory,
+        &source,
+        &semantic,
+        &[ast],
+    )
+    .unwrap();
+    let manifests =
+        census_intentional_boundary_manifests(&repository, &revision, root.path(), &inventory)
+            .unwrap();
+    let bindings = bind_intentional_boundary_manifests(&source, &semantic, &manifests).unwrap();
+    Fixture {
+        root,
+        repository,
+        revision,
+        inventory,
+        source,
+        semantic,
+        manifests,
+        bindings,
+        evidence,
+    }
+}
+
 fn semantic_fixture(
     source: &IntentionalBoundarySourceCensus,
     indexer: IntentionalBoundaryIndexerKind,
@@ -520,6 +630,7 @@ fn reproduced_generator_qualifies_only_after_all_three_evidence_groups() {
         &fixture.source,
         &fixture.semantic,
         &fixture.manifests,
+        &fixture.bindings,
         &fixture.evidence,
         &census,
     )
@@ -529,6 +640,7 @@ fn reproduced_generator_qualifies_only_after_all_three_evidence_groups() {
         &fixture.source,
         &fixture.semantic,
         &fixture.manifests,
+        &fixture.bindings,
         &fixture.evidence,
         &census,
     )
@@ -583,6 +695,7 @@ fn recommitted_tampered_replay_output_is_rejected() {
             &fixture.source,
             &fixture.semantic,
             &fixture.manifests,
+            &fixture.bindings,
             &fixture.evidence,
             &census,
         )
@@ -629,6 +742,187 @@ fn real_cargo_generator_reproduces_committed_output_twice_offline() {
         } if cfg!(windows) => {}
         _ => panic!("real Cargo generator did not reproduce its committed output: {outcome:#?}"),
     }
+}
+
+#[test]
+fn python_entrypoint_command_is_bound_locked_and_project_install_free() {
+    let fixture = python_fixture();
+    let declaration = fixture
+        .manifests
+        .declarations
+        .iter()
+        .find(|declaration| {
+            declaration.provider == IntentionalBoundaryManifestProvider::PythonProjectManifest
+        })
+        .unwrap();
+
+    let command = generator_command_with_context(
+        &fixture.inventory,
+        &fixture.manifests.declarations,
+        &fixture.semantic,
+        &fixture.bindings,
+        declaration,
+    )
+    .unwrap();
+
+    assert_eq!(
+        command.preparation.unwrap(),
+        [
+            "uv",
+            "sync",
+            "--project",
+            ".",
+            "--locked",
+            "--no-install-project",
+            "--no-install-workspace",
+            "--no-dev",
+            "--no-default-groups",
+            "--no-progress",
+            "--no-python-downloads",
+        ]
+    );
+    assert_eq!(command.execution.first().map(String::as_str), Some("uv"));
+    assert!(
+        command
+            .execution
+            .iter()
+            .any(|argument| argument == "--no-sync")
+    );
+    assert!(command.execution.iter().any(|argument| argument == "-I"));
+    assert_eq!(
+        &command.execution[command.execution.len() - 3..],
+        [".", "generator", "generate"]
+    );
+}
+
+#[test]
+fn python_entrypoint_rejects_ambiguous_lock_families() {
+    let fixture = python_fixture();
+    let declaration = fixture.manifests.declarations.first().unwrap();
+    let mut inventory = fixture.inventory.clone();
+    let mut second_lock = inventory
+        .tracked_entries
+        .iter()
+        .find(|entry| entry.repository_path == "uv.lock")
+        .unwrap()
+        .clone();
+    second_lock.repository_path = "poetry.lock".to_string();
+    inventory.tracked_entries.push(second_lock);
+
+    assert!(
+        generator_command_with_context(
+            &inventory,
+            &fixture.manifests.declarations,
+            &fixture.semantic,
+            &fixture.bindings,
+            declaration,
+        )
+        .is_none()
+    );
+}
+
+#[test]
+fn real_uv_entrypoint_reproduces_committed_output_twice_offline() {
+    let fixture = python_fixture();
+
+    let census = census_intentional_boundary_generators(
+        &fixture.repository,
+        &fixture.revision,
+        fixture.root.path(),
+        &fixture.inventory,
+        &fixture.source,
+        &fixture.semantic,
+        &fixture.manifests,
+        &fixture.bindings,
+        &fixture.evidence,
+    )
+    .unwrap();
+
+    let outcome = &census.replays[0].outcome;
+    match outcome {
+        IntentionalBoundaryGeneratorReplayOutcome::Reproduced {
+            preparations,
+            outputs,
+            executions,
+            ..
+        } => {
+            assert_eq!(preparations.len(), 2);
+            assert!(
+                preparations
+                    .iter()
+                    .all(|preparation| preparation.network_enabled)
+            );
+            assert_eq!(outputs.len(), 1);
+            assert_eq!(executions.len(), 2);
+            assert!(
+                executions
+                    .iter()
+                    .all(|execution| !execution.network_enabled)
+            );
+        }
+        IntentionalBoundaryGeneratorReplayOutcome::Unresolved {
+            reason: IntentionalBoundaryGeneratorUnresolvedReason::SandboxUnavailable,
+            ..
+        } if cfg!(windows) => {}
+        _ => panic!("real uv generator did not reproduce its committed output: {outcome:#?}"),
+    }
+}
+
+#[test]
+fn dependency_preparation_cannot_take_credit_for_generated_output() {
+    let fixture = fixture();
+    let declaration = fixture
+        .manifests
+        .declarations
+        .iter()
+        .find(|declaration| {
+            declaration.declaration_kind == IntentionalBoundaryManifestDeclarationKind::BuildScript
+        })
+        .unwrap();
+    let python = if cfg!(windows) { "python" } else { "python3" };
+    let command = GeneratorCommand {
+        preparation: Some(vec![
+            python.to_string(),
+            "-I".to_string(),
+            "-c".to_string(),
+            concat!(
+                "from pathlib import Path;",
+                "Path('src/generated.rs').write_text(",
+                "'// @generated\\npub fn generated_value() -> u8 { 7 }\\n')"
+            )
+            .to_string(),
+        ]),
+        execution: vec![
+            python.to_string(),
+            "-I".to_string(),
+            "-c".to_string(),
+            "pass".to_string(),
+        ],
+        cleanup_paths: Vec::new(),
+    };
+    let outputs =
+        vec![expected_output(&fixture.inventory, &fixture.source, "src/generated.rs").unwrap()];
+
+    let failure = match runtime::execute_generator_replay(
+        fixture.root.path(),
+        &fixture.revision,
+        declaration,
+        &command,
+        &outputs,
+    ) {
+        Ok(_) => panic!("preparation output was misattributed to the generator command"),
+        Err(failure) => failure,
+    };
+
+    assert_eq!(
+        failure.reason,
+        IntentionalBoundaryGeneratorUnresolvedReason::OutputMissing
+    );
+    assert!(
+        failure.detail.contains("generator did not recreate"),
+        "{}",
+        failure.detail
+    );
 }
 
 #[test]
@@ -984,6 +1278,7 @@ fn recommitted_network_disabled_npm_preparation_is_rejected() {
             &fixture.source,
             &fixture.semantic,
             &fixture.manifests,
+            &fixture.bindings,
             &fixture.evidence,
             &census,
         )
@@ -1041,6 +1336,7 @@ fn recommitted_omitted_package_script_candidate_is_rejected() {
             &fixture.source,
             &fixture.semantic,
             &fixture.manifests,
+            &fixture.bindings,
             &fixture.evidence,
             &census,
         )
