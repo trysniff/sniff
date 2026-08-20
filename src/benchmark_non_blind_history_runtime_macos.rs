@@ -48,13 +48,17 @@ pub(super) fn resolve_runtime_closure(
         }
         for dependency in inspect_dependencies(otool, &image)? {
             let lexical = resolve_dependency(&dependency, &image, &executable, runtime_roots)?;
+            if is_system_runtime(&lexical) {
+                continue;
+            }
             let canonical = canonical_file(&lexical, "macOS runtime dependency")?;
             reject_repository_overlap(repository_root, &canonical)?;
-            if !is_system_runtime(&canonical) {
-                identity_files.insert(canonical.clone());
-                add_read_directory(repository_root, &lexical, &mut read_only_paths)?;
-                add_read_directory(repository_root, &canonical, &mut read_only_paths)?;
+            if is_system_runtime(&canonical) {
+                continue;
             }
+            identity_files.insert(canonical.clone());
+            add_read_directory(repository_root, &lexical, &mut read_only_paths)?;
+            add_read_directory(repository_root, &canonical, &mut read_only_paths)?;
             pending.push_back(canonical);
         }
     }
