@@ -85,9 +85,13 @@ pub(super) fn python_launch(
         &["-c", "import sys; print(sys.prefix)"],
         "Python prefix",
     )?;
-    let mut runtime_files = vec![python.clone()];
+    let runtime_files = vec![python.clone()];
     #[cfg(windows)]
-    extend_windows_python_images(&prefix, &mut runtime_files)?;
+    let runtime_files = {
+        let mut runtime_files = runtime_files;
+        extend_windows_python_images(&prefix, &mut runtime_files)?;
+        runtime_files
+    };
     Ok(Launch {
         target: python.clone(),
         args: args.to_vec(),
@@ -115,9 +119,13 @@ pub(super) fn uv_launch(args: &[String]) -> Result<Launch, HistoricalRuntimePlan
     let uv_root = executable_installation_root(&uv, "uv runtime")?;
     reject_broad_user_root(&uv_root)?;
     reject_broad_user_root(&python_prefix)?;
-    let mut runtime_files = vec![uv.clone(), python.clone()];
+    let runtime_files = vec![uv.clone(), python.clone()];
     #[cfg(windows)]
-    extend_windows_python_images(&python_prefix, &mut runtime_files)?;
+    let runtime_files = {
+        let mut runtime_files = runtime_files;
+        extend_windows_python_images(&python_prefix, &mut runtime_files)?;
+        runtime_files
+    };
     Ok(Launch {
         target: uv.clone(),
         args: args.to_vec(),
@@ -148,9 +156,13 @@ pub(super) fn private_python_launch(
     #[cfg(not(windows))]
     let private = cache_root.join("python-env").join("bin").join("python");
     let private = canonical_file(&private, "private historical Python runtime")?;
-    let mut runtime_files = vec![host];
+    let runtime_files = vec![host];
     #[cfg(windows)]
-    extend_windows_python_images(&prefix, &mut runtime_files)?;
+    let runtime_files = {
+        let mut runtime_files = runtime_files;
+        extend_windows_python_images(&prefix, &mut runtime_files)?;
+        runtime_files
+    };
     Ok(Launch {
         target: private,
         args: args.to_vec(),
