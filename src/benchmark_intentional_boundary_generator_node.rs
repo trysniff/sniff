@@ -134,7 +134,7 @@ fn node_generator_command(
     Some(GeneratorCommand {
         preparation: Some(preparation.into_iter().map(str::to_string).collect()),
         execution: execution.into_iter().map(str::to_string).collect(),
-        cleanup_paths: cleanup_paths.into_iter().map(|name| path(name)).collect(),
+        cleanup_paths: cleanup_paths.into_iter().map(path).collect(),
     })
 }
 
