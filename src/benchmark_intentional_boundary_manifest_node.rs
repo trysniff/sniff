@@ -85,14 +85,19 @@ pub(super) fn parse_package_json(
             )?);
         }
     }
+    let package_manager = find_property(object, "packageManager", manifest_path)?
+        .map(|property| required_string(&property.value, "package manager"))
+        .transpose()?
+        .map(|(value, _)| value);
     if let Some(property) = find_property(object, "scripts", manifest_path)? {
-        collect_package_scripts(&property.value, &mut declarations)?;
+        collect_package_scripts(&property.value, package_manager, &mut declarations)?;
     }
     Ok(declarations)
 }
 
 fn collect_package_scripts(
     expression: &Expression<'_>,
+    package_manager: Option<&str>,
     declarations: &mut Vec<ParsedManifestDeclaration>,
 ) -> Result<(), String> {
     let Expression::ObjectExpression(scripts) = expression else {
@@ -118,6 +123,7 @@ fn collect_package_scripts(
             target: Target::PackageScript {
                 script_name: script_name.to_string(),
                 command: command.to_string(),
+                package_manager: package_manager.map(str::to_string),
             },
         });
     }

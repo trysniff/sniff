@@ -709,7 +709,12 @@ fn npm_generator_command_is_exact_locked_and_lifecycle_disabled() {
         })
         .unwrap();
 
-    let command = generator_command(&fixture.inventory, declaration).unwrap();
+    let command = generator_command(
+        &fixture.inventory,
+        &fixture.manifests.declarations,
+        declaration,
+    )
+    .unwrap();
 
     assert_eq!(
         command.preparation.unwrap(),
@@ -740,7 +745,213 @@ fn npm_generator_command_is_exact_locked_and_lifecycle_disabled() {
     unlocked
         .tracked_entries
         .retain(|entry| entry.repository_path != "package-lock.json");
-    assert!(generator_command(&unlocked, declaration).is_none());
+    assert!(generator_command(&unlocked, &fixture.manifests.declarations, declaration).is_none());
+}
+
+fn node_manager_command(
+    fixture: &Fixture,
+    lockfile: &str,
+    package_manager: Option<&str>,
+) -> Option<GeneratorCommand> {
+    let mut inventory = fixture.inventory.clone();
+    let mut lock_entry = inventory
+        .tracked_entries
+        .iter()
+        .find(|entry| entry.repository_path == "package-lock.json")
+        .unwrap()
+        .clone();
+    inventory.tracked_entries.retain(|entry| {
+        ![
+            "package-lock.json",
+            "npm-shrinkwrap.json",
+            "pnpm-lock.yaml",
+            "yarn.lock",
+            "bun.lock",
+            "bun.lockb",
+        ]
+        .contains(&entry.repository_path.as_str())
+    });
+    lock_entry.repository_path = lockfile.to_string();
+    inventory.tracked_entries.push(lock_entry);
+    inventory
+        .tracked_entries
+        .sort_by(|left, right| left.repository_path.cmp(&right.repository_path));
+
+    let mut declarations = fixture.manifests.declarations.clone();
+    for declaration in &mut declarations {
+        if let IntentionalBoundaryManifestTarget::PackageScript {
+            package_manager: value,
+            ..
+        } = &mut declaration.target
+        {
+            *value = package_manager.map(str::to_string);
+        }
+    }
+    let declaration = declarations.iter().find(|declaration| {
+        matches!(
+            &declaration.target,
+            IntentionalBoundaryManifestTarget::PackageScript { script_name, .. }
+                if script_name == "generate"
+        )
+    })?;
+    generator_command(&inventory, &declarations, declaration)
+}
+
+#[test]
+fn pnpm_generator_command_is_exact_frozen_and_lifecycle_disabled() {
+    let fixture = node_fixture();
+    let command = node_manager_command(&fixture, "pnpm-lock.yaml", Some("pnpm@10.15.0"))
+        .expect("pinned pnpm lock should be supported");
+
+    assert_eq!(
+        command.preparation.unwrap(),
+        [
+            "pnpm",
+            "--dir",
+            ".",
+            "install",
+            "--frozen-lockfile",
+            "--ignore-scripts",
+            "--reporter=silent",
+        ]
+    );
+    assert_eq!(command.execution, ["pnpm", "--dir", ".", "run", "generate"]);
+    assert_eq!(command.cleanup_paths, ["node_modules"]);
+}
+
+#[test]
+fn yarn_generator_commands_require_a_pinned_major_and_disable_install_builds() {
+    let fixture = node_fixture();
+    assert!(node_manager_command(&fixture, "yarn.lock", None).is_none());
+
+    let classic = node_manager_command(&fixture, "yarn.lock", Some("yarn@1.22.22")).unwrap();
+    assert_eq!(
+        classic.preparation.unwrap(),
+        [
+            "yarn",
+            "--cwd",
+            ".",
+            "install",
+            "--frozen-lockfile",
+            "--ignore-scripts",
+            "--non-interactive",
+        ]
+    );
+    assert_eq!(classic.execution, ["yarn", "--cwd", ".", "run", "generate"]);
+
+    let modern =
+        node_manager_command(&fixture, "yarn.lock", Some("yarn@4.9.2+sha512.deadbeef")).unwrap();
+    assert_eq!(
+        modern.preparation.unwrap(),
+        [
+            "yarn",
+            "--cwd",
+            ".",
+            "install",
+            "--immutable",
+            "--mode=skip-build",
+        ]
+    );
+    assert_eq!(
+        modern.cleanup_paths,
+        [
+            "node_modules",
+            ".pnp.cjs",
+            ".pnp.loader.mjs",
+            ".yarn/install-state.gz",
+            ".yarn/unplugged",
+        ]
+    );
+}
+
+#[test]
+fn bun_generator_command_is_frozen_and_install_scripts_are_disabled() {
+    let fixture = node_fixture();
+    let command = node_manager_command(&fixture, "bun.lock", Some("bun@1.2.20")).unwrap();
+
+    assert_eq!(
+        command.preparation.unwrap(),
+        [
+            "bun",
+            "install",
+            "--cwd",
+            ".",
+            "--frozen-lockfile",
+            "--ignore-scripts",
+        ]
+    );
+    assert_eq!(command.execution, ["bun", "--cwd", ".", "run", "generate"]);
+}
+
+#[test]
+fn node_manager_selection_rejects_ambiguity_mismatch_and_unpinned_versions() {
+    let fixture = node_fixture();
+    assert!(node_manager_command(&fixture, "pnpm-lock.yaml", Some("npm@10.8.0")).is_none());
+    assert!(node_manager_command(&fixture, "pnpm-lock.yaml", Some("pnpm@latest")).is_none());
+
+    let declaration = fixture
+        .manifests
+        .declarations
+        .iter()
+        .find(|declaration| {
+            matches!(
+                &declaration.target,
+                IntentionalBoundaryManifestTarget::PackageScript { script_name, .. }
+                    if script_name == "generate"
+            )
+        })
+        .unwrap();
+    let mut ambiguous = fixture.inventory.clone();
+    let mut second_lock = ambiguous
+        .tracked_entries
+        .iter()
+        .find(|entry| entry.repository_path == "package-lock.json")
+        .unwrap()
+        .clone();
+    second_lock.repository_path = "pnpm-lock.yaml".to_string();
+    ambiguous.tracked_entries.push(second_lock);
+    assert!(generator_command(&ambiguous, &fixture.manifests.declarations, declaration).is_none());
+}
+
+#[test]
+fn managers_with_implicit_hooks_do_not_misattribute_generated_output() {
+    let fixture = node_fixture();
+    let mut inventory = fixture.inventory.clone();
+    let lock = inventory
+        .tracked_entries
+        .iter_mut()
+        .find(|entry| entry.repository_path == "package-lock.json")
+        .unwrap();
+    lock.repository_path = "bun.lock".to_string();
+    let mut declarations = fixture.manifests.declarations.clone();
+    for declaration in &mut declarations {
+        if let IntentionalBoundaryManifestTarget::PackageScript {
+            package_manager, ..
+        } = &mut declaration.target
+        {
+            *package_manager = Some("bun@1.2.20".to_string());
+        }
+    }
+    let selected = declarations
+        .iter()
+        .find(|declaration| {
+            matches!(
+                &declaration.target,
+                IntentionalBoundaryManifestTarget::PackageScript { script_name, .. }
+                    if script_name == "generate"
+            )
+        })
+        .unwrap()
+        .clone();
+    let mut hook = selected.clone();
+    let IntentionalBoundaryManifestTarget::PackageScript { script_name, .. } = &mut hook.target
+    else {
+        unreachable!()
+    };
+    *script_name = "pregenerate".to_string();
+    declarations.push(hook);
+
+    assert!(generator_command(&inventory, &declarations, &selected).is_none());
 }
 
 #[test]
