@@ -222,7 +222,7 @@ impl<'ast> Visit<'ast> for LoopMatchVisitor<'_> {
                 terminal
                     .iter()
                     .find(|(terminal_index, _)| terminal_index != retry_index)
-                    .map(|(_, terminal_span)| (retry_span.clone(), terminal_span.clone()))
+                    .map(|(_, terminal_span)| (*retry_span, *terminal_span))
             })
         {
             self.outcomes = Some((retryable, terminal));
