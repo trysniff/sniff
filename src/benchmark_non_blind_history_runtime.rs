@@ -1,6 +1,6 @@
 use super::non_blind_history_runtime_adapters::{
     bun_launch, cargo_launch, generic_launch, go_launch, gradle_launch, gradle_tooling_launch,
-    node_launch, node_manager_launch, private_python_launch, python_launch,
+    node_launch, node_manager_launch, private_python_launch, python_launch, uv_launch,
 };
 #[cfg(windows)]
 use super::non_blind_history_runtime_support::{
@@ -39,9 +39,11 @@ const PRIVATE_ENVIRONMENT_DIRECTORIES: &[&str] = &[
     "gradle",
     "npm",
     "pip",
+    "python-env",
     "pycache",
     "tmp",
     "xdg-cache",
+    "uv",
 ];
 
 pub(crate) struct HistoricalRuntimePlan {
@@ -91,6 +93,7 @@ pub(crate) fn prepare_historical_runtime(
         "cargo" => cargo_launch(&expanded_args)?,
         "go" => go_launch(&expanded_args)?,
         "python" | "python3" => python_launch(program, &expanded_args)?,
+        "uv" => uv_launch(&expanded_args)?,
         "{sniff_private_python}" => private_python_launch(&cache_root, &expanded_args)?,
         "node" => node_launch(&expanded_args)?,
         "npm" | "pnpm" | "yarn" => node_manager_launch(program, &expanded_args)?,
@@ -134,7 +137,24 @@ pub(crate) fn prepare_historical_runtime(
     for runtime_root in &runtime_roots {
         read_only_paths.push(runtime_root.clone());
         #[cfg(windows)]
-        collect_windows_runtime_images(runtime_root, &mut executable_paths)?;
+        if launch.collect_runtime_images {
+            collect_windows_runtime_images(runtime_root, &mut executable_paths)?;
+        }
+    }
+    for runtime_file in &launch.runtime_files {
+        push_external(&root, &mut read_only_paths, runtime_file.clone());
+        #[cfg(windows)]
+        if runtime_file
+            .extension()
+            .and_then(|value| value.to_str())
+            .is_some_and(|value| {
+                value.eq_ignore_ascii_case("exe")
+                    || value.eq_ignore_ascii_case("dll")
+                    || value.eq_ignore_ascii_case("pyd")
+            })
+        {
+            push_external(&root, &mut executable_paths, runtime_file.clone());
+        }
     }
     #[cfg(target_os = "macos")]
     read_only_paths.extend(macos_closure.read_only_paths);
@@ -274,6 +294,12 @@ fn private_environment(root: &Path, cache: &Path) -> Vec<(String, String)> {
         ("TMP".to_string(), temp.clone()),
         ("TMPDIR".to_string(), temp),
         ("USERPROFILE".to_string(), home),
+        ("UV_CACHE_DIR".to_string(), path("uv")),
+        ("UV_NO_ENV_FILE".to_string(), "1".to_string()),
+        ("UV_NO_MANAGED_PYTHON".to_string(), "1".to_string()),
+        ("UV_NO_PROGRESS".to_string(), "1".to_string()),
+        ("UV_PROJECT_ENVIRONMENT".to_string(), path("python-env")),
+        ("UV_PYTHON_DOWNLOADS".to_string(), "never".to_string()),
         ("XDG_CACHE_HOME".to_string(), path("xdg-cache")),
         ("npm_config_cache".to_string(), path("npm")),
         ("npm_config_userconfig".to_string(), path("npmrc")),
@@ -375,5 +401,25 @@ mod tests {
         let second = runtime_identity(&[script], root.path(), "direct").unwrap();
 
         assert_eq!(first, second);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_runtime_launches_an_explicit_python_interpreter() {
+        let root = tempfile::tempdir().unwrap();
+        let cache = root.path().join("cache");
+        fs::create_dir(&cache).unwrap();
+        let command = vec![
+            "python".to_string(),
+            "-I".to_string(),
+            "-c".to_string(),
+            "print('sniff-python-runtime')".to_string(),
+        ];
+
+        let plan = prepare_historical_runtime(root.path(), &cache, &command).unwrap();
+        let output = crate::sandbox::run(&plan.command).unwrap();
+
+        assert_eq!(output.status_code, Some(0), "stderr={}", output.stderr);
+        assert_eq!(output.stdout.trim(), "sniff-python-runtime");
     }
 }
