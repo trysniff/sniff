@@ -118,10 +118,13 @@ fn parse_log_records(bytes: &[u8]) -> Result<Vec<(String, Vec<String>, String)>,
         return Err("historical Git log has an invalid field count".to_string());
     }
     let mut records = Vec::new();
-    for fields in fields.chunks_exact(3) {
-        let commit = utf8(fields[0], "commit SHA")?.to_ascii_lowercase();
+    for fields in fields.chunks(3) {
+        let [commit_field, parents_field, subject_field] = fields else {
+            return Err("historical Git log has an invalid field count".to_string());
+        };
+        let commit = utf8(commit_field, "commit SHA")?.to_ascii_lowercase();
         require_git_revision("historical commit SHA", &commit)?;
-        let parents = utf8(fields[1], "parent SHAs")?
+        let parents = utf8(parents_field, "parent SHAs")?
             .split_ascii_whitespace()
             .map(|parent| {
                 let parent = parent.to_ascii_lowercase();
@@ -129,7 +132,7 @@ fn parse_log_records(bytes: &[u8]) -> Result<Vec<(String, Vec<String>, String)>,
                 Ok(parent)
             })
             .collect::<Result<Vec<_>, String>>()?;
-        let subject = utf8(fields[2], "commit subject")?.to_string();
+        let subject = utf8(subject_field, "commit subject")?.to_string();
         if subject.contains('\n') || subject.contains('\r') || subject.contains('\0') {
             return Err("historical commit subject contains a record delimiter".to_string());
         }
