@@ -2,7 +2,7 @@ use super::IntentionalBoundarySemanticRange;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-pub const INTENTIONAL_BOUNDARY_GENERATOR_CENSUS_SCHEMA_VERSION: u32 = 1;
+pub const INTENTIONAL_BOUNDARY_GENERATOR_CENSUS_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -57,6 +57,7 @@ pub enum IntentionalBoundaryGeneratorReplayOutcome {
     Reproduced {
         declaration_id: String,
         declaration_location: IntentionalBoundarySemanticRange,
+        preparations: Vec<IntentionalBoundaryGeneratorExecution>,
         command: Vec<String>,
         outputs: Vec<IntentionalBoundaryGeneratorOutput>,
         executions: Vec<IntentionalBoundaryGeneratorExecution>,
@@ -72,6 +73,7 @@ pub enum IntentionalBoundaryGeneratorReplayOutcome {
 pub struct IntentionalBoundaryGeneratorReplay {
     pub replay_id: String,
     pub configuration_declaration_id: Option<String>,
+    pub candidate_declaration_ids: Vec<String>,
     pub subjects: Vec<IntentionalBoundaryGeneratorSubject>,
     pub outcome: IntentionalBoundaryGeneratorReplayOutcome,
 }

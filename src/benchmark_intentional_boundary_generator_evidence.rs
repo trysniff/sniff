@@ -2,8 +2,8 @@ use super::intentional_boundary_compiler_evidence::{
     finish_evidence_census, push_typed_atom, validate_evidence_census_commitment,
 };
 use super::intentional_boundary_generator::{
-    GENERATOR_CONTRACT, cargo_generator_command, generator_census_sha256, generator_subjects,
-    is_sha256, nearest_declaration, replay_id,
+    GENERATOR_CONTRACT, generator_census_sha256, generator_command, generator_subjects, is_sha256,
+    nearest_declarations, replay_id,
 };
 use super::intentional_boundary_manifest::validate_manifest_census_commitment;
 use super::{
@@ -12,14 +12,15 @@ use super::{
     IntentionalBoundaryGeneratorCensus, IntentionalBoundaryGeneratorProofKind,
     IntentionalBoundaryGeneratorReplayOutcome, IntentionalBoundaryManifestCensus,
     IntentionalBoundaryManifestDeclarationKind, IntentionalBoundaryManifestProofKind,
-    IntentionalBoundarySemanticCensus, IntentionalBoundarySourceCensus,
-    validate_intentional_boundary_semantic_census,
+    IntentionalBoundaryRepositoryInventory, IntentionalBoundarySemanticCensus,
+    IntentionalBoundarySourceCensus, validate_intentional_boundary_semantic_census,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
 const GENERATOR_INPUT: &str = "generator_replay";
 
 pub fn compose_intentional_boundary_generator_evidence(
+    inventory: &IntentionalBoundaryRepositoryInventory,
     source_census: &IntentionalBoundarySourceCensus,
     semantic_census: &IntentionalBoundarySemanticCensus,
     manifest_census: &IntentionalBoundaryManifestCensus,
@@ -27,6 +28,7 @@ pub fn compose_intentional_boundary_generator_evidence(
     generator_census: &IntentionalBoundaryGeneratorCensus,
 ) -> Result<IntentionalBoundaryEvidenceCensus, String> {
     validate_intentional_boundary_generator_census_commitment(
+        inventory,
         source_census,
         semantic_census,
         manifest_census,
@@ -93,6 +95,7 @@ pub fn compose_intentional_boundary_generator_evidence(
 }
 
 pub fn validate_intentional_boundary_generator_evidence(
+    inventory: &IntentionalBoundaryRepositoryInventory,
     source_census: &IntentionalBoundarySourceCensus,
     semantic_census: &IntentionalBoundarySemanticCensus,
     manifest_census: &IntentionalBoundaryManifestCensus,
@@ -101,6 +104,7 @@ pub fn validate_intentional_boundary_generator_evidence(
     evidence_census: &IntentionalBoundaryEvidenceCensus,
 ) -> Result<(), String> {
     let expected = compose_intentional_boundary_generator_evidence(
+        inventory,
         source_census,
         semantic_census,
         manifest_census,
@@ -114,12 +118,19 @@ pub fn validate_intentional_boundary_generator_evidence(
 }
 
 pub fn validate_intentional_boundary_generator_census_commitment(
+    inventory: &IntentionalBoundaryRepositoryInventory,
     source_census: &IntentionalBoundarySourceCensus,
     semantic_census: &IntentionalBoundarySemanticCensus,
     manifest_census: &IntentionalBoundaryManifestCensus,
     base_evidence: &IntentionalBoundaryEvidenceCensus,
     census: &IntentionalBoundaryGeneratorCensus,
 ) -> Result<(), String> {
+    if inventory.inventory_sha256 != source_census.inventory_sha256
+        || inventory.repository != source_census.repository
+        || inventory.revision != source_census.revision
+    {
+        return Err("intentional-boundary generator inventory identity changed".to_string());
+    }
     validate_intentional_boundary_semantic_census(source_census, semantic_census)?;
     validate_manifest_census_commitment(&source_census.inventory_sha256, manifest_census)?;
     validate_evidence_census_commitment(source_census, semantic_census, base_evidence)?;
@@ -137,11 +148,15 @@ pub fn validate_intentional_boundary_generator_census_commitment(
         return Err("intentional-boundary generator census identity changed".to_string());
     }
     let expected_subjects = generator_subjects(source_census, semantic_census, base_evidence)?;
-    let build_declarations = manifest_census
+    let generator_declarations = manifest_census
         .declarations
         .iter()
         .filter(|declaration| {
-            declaration.declaration_kind == IntentionalBoundaryManifestDeclarationKind::BuildScript
+            matches!(
+                declaration.declaration_kind,
+                IntentionalBoundaryManifestDeclarationKind::BuildScript
+                    | IntentionalBoundaryManifestDeclarationKind::PackageScript
+            )
         })
         .collect::<Vec<_>>();
     let mut actual_subjects = Vec::new();
@@ -152,10 +167,10 @@ pub fn validate_intentional_boundary_generator_census_commitment(
         let expected_configurations = replay
             .subjects
             .iter()
-            .map(|subject| nearest_declaration(&subject.repository_path, &build_declarations))
+            .map(|subject| nearest_declarations(&subject.repository_path, &generator_declarations))
             .collect::<BTreeSet<_>>();
         if expected_configurations.len() != 1
-            || expected_configurations.first() != Some(&replay.configuration_declaration_id)
+            || expected_configurations.first() != Some(&replay.candidate_declaration_ids)
         {
             return Err("generator replay configuration assignment changed".to_string());
         }
@@ -163,26 +178,34 @@ pub fn validate_intentional_boundary_generator_census_commitment(
             IntentionalBoundaryGeneratorReplayOutcome::Reproduced {
                 declaration_id,
                 declaration_location,
+                preparations,
                 command,
                 outputs,
                 executions,
             } => {
                 validate_reproduced(
+                    inventory,
                     source_census,
                     manifest_census,
                     replay,
                     declaration_id,
                     declaration_location,
+                    preparations,
                     command,
                     outputs,
                     executions,
                 )?;
-                if replay.configuration_declaration_id.as_deref() != Some(declaration_id) {
+                if replay.configuration_declaration_id.as_deref() != Some(declaration_id)
+                    || !replay
+                        .candidate_declaration_ids
+                        .iter()
+                        .any(|candidate| candidate == declaration_id)
+                {
                     return Err("generator replay configuration changed".to_string());
                 }
             }
             IntentionalBoundaryGeneratorReplayOutcome::Unresolved { detail, .. } => {
-                if detail.trim().is_empty() {
+                if detail.trim().is_empty() || replay.configuration_declaration_id.is_some() {
                     return Err("generator unresolved outcome has no detail".to_string());
                 }
             }
@@ -191,7 +214,7 @@ pub fn validate_intentional_boundary_generator_census_commitment(
             != replay_id(
                 &census.repository,
                 &census.revision,
-                replay.configuration_declaration_id.as_deref(),
+                &replay.candidate_declaration_ids,
                 &replay.subjects,
             )?
         {
@@ -224,11 +247,13 @@ pub fn validate_intentional_boundary_generator_census_commitment(
 
 #[allow(clippy::too_many_arguments)]
 fn validate_reproduced(
+    inventory: &IntentionalBoundaryRepositoryInventory,
     source: &IntentionalBoundarySourceCensus,
     manifests: &IntentionalBoundaryManifestCensus,
     replay: &super::IntentionalBoundaryGeneratorReplay,
     declaration_id: &str,
     declaration_location: &super::IntentionalBoundarySemanticRange,
+    preparations: &[super::IntentionalBoundaryGeneratorExecution],
     command: &[String],
     outputs: &[super::IntentionalBoundaryGeneratorOutput],
     executions: &[super::IntentionalBoundaryGeneratorExecution],
@@ -238,9 +263,31 @@ fn validate_reproduced(
         .iter()
         .find(|declaration| declaration.declaration_id == declaration_id)
         .ok_or_else(|| "generator replay declaration is missing".to_string())?;
-    if declaration.declaration_kind != IntentionalBoundaryManifestDeclarationKind::BuildScript
-        || &declaration.declaration_location != declaration_location
-        || cargo_generator_command(declaration).as_deref() != Some(command)
+    let planned = generator_command(inventory, declaration)
+        .ok_or_else(|| "generator replay declaration is unsupported".to_string())?;
+    let preparations_valid = match &planned.preparation {
+        None => preparations.is_empty(),
+        Some(preparation) => {
+            preparations.len() == 2
+                && preparations.iter().enumerate().all(|(index, execution)| {
+                    execution.run_number == (index + 1) as u8
+                        && execution.command == *preparation
+                        && execution.status_code == 0
+                        && !execution.timed_out
+                        && execution.network_enabled
+                        && is_sha256(&execution.runtime_identity_sha256)
+                        && is_sha256(&execution.stdout_sha256)
+                        && is_sha256(&execution.stderr_sha256)
+                })
+        }
+    };
+    if !matches!(
+        declaration.declaration_kind,
+        IntentionalBoundaryManifestDeclarationKind::BuildScript
+            | IntentionalBoundaryManifestDeclarationKind::PackageScript
+    ) || &declaration.declaration_location != declaration_location
+        || planned.execution != command
+        || !preparations_valid
         || executions.len() != 2
         || executions.iter().enumerate().any(|(index, execution)| {
             execution.run_number != (index + 1) as u8
