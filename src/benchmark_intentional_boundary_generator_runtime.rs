@@ -53,9 +53,12 @@ pub(super) fn execute_generator_replay(
             plan.command.timeout = PREPARATION_TIMEOUT;
             let output = crate::sandbox::run(&plan.command).map_err(sandbox_failure)?;
             if output.timed_out || output.status_code != Some(0) {
+                let stderr = sanitized_runtime_stderr(&output.stderr, snapshot.path(), &cache);
                 return Err(failed(format!(
-                    "generator dependency preparation failed: status={:?}, timed_out={}",
-                    output.status_code, output.timed_out
+                    "generator dependency preparation failed: status={:?}, timed_out={}: {}",
+                    output.status_code,
+                    output.timed_out,
+                    stderr.trim()
                 )));
             }
             preparations.push(IntentionalBoundaryGeneratorExecution {
@@ -90,13 +93,7 @@ pub(super) fn execute_generator_replay(
             });
         }
         if output.timed_out || output.status_code != Some(0) {
-            let stderr = output
-                .stderr
-                .replace(
-                    &snapshot.path().to_string_lossy().to_string(),
-                    "<repository>",
-                )
-                .replace(&cache.to_string_lossy().to_string(), "<cache>");
+            let stderr = sanitized_runtime_stderr(&output.stderr, snapshot.path(), &cache);
             return Err(ReplayFailure {
                 reason: IntentionalBoundaryGeneratorUnresolvedReason::ExecutionFailed,
                 detail: format!(
@@ -138,6 +135,12 @@ pub(super) fn execute_generator_replay(
         preparations,
         executions,
     })
+}
+
+fn sanitized_runtime_stderr(stderr: &str, repository: &Path, cache: &Path) -> String {
+    stderr
+        .replace(&cache.to_string_lossy().to_string(), "<cache>")
+        .replace(&repository.to_string_lossy().to_string(), "<repository>")
 }
 
 fn cleanup_runtime_paths(
@@ -279,7 +282,7 @@ fn failed(detail: impl Into<String>) -> ReplayFailure {
 
 #[cfg(test)]
 mod tests {
-    use super::bounded_status_summary;
+    use super::{bounded_status_summary, sanitized_runtime_stderr};
 
     #[test]
     fn repository_mutation_summary_is_bounded_and_escaped() {
@@ -293,5 +296,17 @@ mod tests {
         assert_eq!(summary.matches("?? path-").count(), 8);
         assert!(summary.contains("path-0\\\\t.rs"));
         assert!(!summary.contains("path-8"));
+    }
+
+    #[test]
+    fn runtime_failure_stderr_redacts_snapshot_and_cache_paths() {
+        let root = std::path::Path::new("/private/sniff/repository");
+        let cache = root.join(".sniff-boundary-generator-runtime");
+        let stderr = format!("failed in {} using {}", root.display(), cache.display());
+
+        let sanitized = sanitized_runtime_stderr(&stderr, root, &cache);
+
+        assert_eq!(sanitized, "failed in <repository> using <cache>");
+        assert!(!sanitized.contains("/private/sniff"));
     }
 }
