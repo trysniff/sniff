@@ -85,7 +85,43 @@ pub(super) fn parse_package_json(
             )?);
         }
     }
+    if let Some(property) = find_property(object, "scripts", manifest_path)? {
+        collect_package_scripts(&property.value, &mut declarations)?;
+    }
     Ok(declarations)
+}
+
+fn collect_package_scripts(
+    expression: &Expression<'_>,
+    declarations: &mut Vec<ParsedManifestDeclaration>,
+) -> Result<(), String> {
+    let Expression::ObjectExpression(scripts) = expression else {
+        return Err("package scripts must be an object of strings".to_string());
+    };
+    for property in &scripts.properties {
+        let ObjectPropertyKind::ObjectProperty(property) = property else {
+            return Err("package scripts contains a spread property".to_string());
+        };
+        let script_name = property
+            .key
+            .static_name()
+            .ok_or_else(|| "package scripts contains a dynamic name".to_string())?;
+        let (command, span) = required_string(&property.value, "package script")?;
+        let start = span.start as usize;
+        let end = span.end as usize;
+        if start < WRAPPER_PREFIX_BYTES || end < WRAPPER_PREFIX_BYTES {
+            return Err("package script AST span escaped its wrapper".to_string());
+        }
+        declarations.push(ParsedManifestDeclaration {
+            declaration_kind: DeclarationKind::PackageScript,
+            span: start - WRAPPER_PREFIX_BYTES..end - WRAPPER_PREFIX_BYTES,
+            target: Target::PackageScript {
+                script_name: script_name.to_string(),
+                command: command.to_string(),
+            },
+        });
+    }
+    Ok(())
 }
 
 fn validate_json_shape(expression: &Expression<'_>, manifest_path: &str) -> Result<(), String> {

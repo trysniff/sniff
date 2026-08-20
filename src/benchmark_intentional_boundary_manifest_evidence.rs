@@ -232,8 +232,9 @@ fn append_declaration_evidence(
             vec![declaration.declaration_location.clone()],
             Vec::new(),
         ),
-        IntentionalBoundaryManifestDeclarationKind::BuildScript => Err(
-            "build-script declarations require generator replay before method evidence".to_string(),
-        ),
+        IntentionalBoundaryManifestDeclarationKind::BuildScript
+        | IntentionalBoundaryManifestDeclarationKind::PackageScript => {
+            Err("generator-command declarations require replay before method evidence".to_string())
+        }
     }
 }

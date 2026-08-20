@@ -11,7 +11,7 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::path::Path;
 
-const MANIFEST_CONTRACT: &str = "sniffbench-intentional-boundary-manifest-declarations-v2";
+const MANIFEST_CONTRACT: &str = "sniffbench-intentional-boundary-manifest-declarations-v3";
 
 #[path = "benchmark_intentional_boundary_manifest_node.rs"]
 mod node;

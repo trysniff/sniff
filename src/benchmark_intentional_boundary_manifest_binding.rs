@@ -64,7 +64,11 @@ fn bind_declaration(
     semantic_methods: &BTreeMap<&str, &IntentionalBoundarySemanticMethod>,
     declaration: &IntentionalBoundaryManifestDeclaration,
 ) -> Result<Outcome, String> {
-    if declaration.declaration_kind == IntentionalBoundaryManifestDeclarationKind::BuildScript {
+    if matches!(
+        declaration.declaration_kind,
+        IntentionalBoundaryManifestDeclarationKind::BuildScript
+            | IntentionalBoundaryManifestDeclarationKind::PackageScript
+    ) {
         return Ok(Outcome::AwaitingGeneratorReplay);
     }
     match &declaration.target {
@@ -91,6 +95,9 @@ fn bind_declaration(
             module,
             qualname,
         ),
+        IntentionalBoundaryManifestTarget::PackageScript { .. } => {
+            Err("package-script manifest target escaped generator replay".to_string())
+        }
     }
 }
 
@@ -168,6 +175,9 @@ fn bind_repository_paths(
             })
         }
         IntentionalBoundaryManifestDeclarationKind::BuildScript => {
+            Ok(Outcome::AwaitingGeneratorReplay)
+        }
+        IntentionalBoundaryManifestDeclarationKind::PackageScript => {
             Ok(Outcome::AwaitingGeneratorReplay)
         }
     }
