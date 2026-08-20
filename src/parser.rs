@@ -2,6 +2,15 @@
 mod parser_impl;
 
 use crate::types::{FileRecord, LocalFileSymbols};
+use std::path::Path;
+
+pub fn supports_source_path(file_path: &str) -> bool {
+    Path::new(file_path)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .and_then(crate::languages::get_adapter)
+        .is_some()
+}
 
 pub fn parse_file(file_path: &str) -> FileRecord {
     parser_impl::parse_file(file_path)

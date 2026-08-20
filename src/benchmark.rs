@@ -305,6 +305,13 @@ pub use release::{
     validate_historical_v2_release_evidence_commitment, write_historical_v2_release_evidence,
 };
 
+pub use release::{
+    HISTORICAL_V2_CORPUS_BUNDLE_SCHEMA_VERSION, HistoricalV2CorpusBundle,
+    HistoricalV2CorpusBundleInputs, HistoricalV2CorpusCase, HistoricalV2CorpusCaseBinding,
+    create_historical_v2_corpus_bundle, load_historical_v2_corpus_bundle,
+    validate_historical_v2_corpus_bundle,
+};
+
 #[cfg(feature = "sniffbench-frame")]
 pub use release::{
     build_historical_v2_frame, extract_historical_v2_selected_payloads,
