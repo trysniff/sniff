@@ -56,7 +56,7 @@ fn prerequisite_artifacts_fail_closed_when_missing_or_malformed() {
         selection_sha256: &"a".repeat(64),
         language: "rust",
         slot_number: 1,
-        canonical_repository: "github.com/example/repository",
+        canonical_repository: "example/repository",
     };
     let empty = HistoricalV2SlotStageContext {
         identity,
@@ -114,20 +114,15 @@ fn operation_identity_rejects_the_wrong_canonical_repository() {
             selection_sha256: &selection_sha256,
             language: "rust",
             slot_number: 1,
-            canonical_repository: "github.com/wrong/repository",
+            canonical_repository: "wrong/repository",
         },
         stage: HistoricalV2SlotStage::Payload,
         history: &[],
     };
 
-    let error = require_operation_identity(
-        context,
-        &selection_sha256,
-        "rust",
-        1,
-        "github.com/example/repository",
-    )
-    .unwrap_err();
+    let error =
+        require_operation_identity(context, &selection_sha256, "rust", 1, "example/repository")
+            .unwrap_err();
 
     assert_eq!(error.kind, HistoricalV2SlotStageErrorKind::InvalidInput);
     assert!(error.detail.contains("crossed the runner identity"));
@@ -168,7 +163,7 @@ fn stored(artifact: serde_json::Value) -> HistoricalV2StoredSlotStage {
             selection_sha256: "a".repeat(64),
             language: "rust".to_string(),
             slot_number: 1,
-            canonical_repository: "github.com/example/repository".to_string(),
+            canonical_repository: "example/repository".to_string(),
             sequence: 1,
             previous_checkpoint_sha256: None,
             stage: HistoricalV2SlotStage::Payload,

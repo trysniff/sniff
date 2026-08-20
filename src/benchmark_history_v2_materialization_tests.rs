@@ -17,7 +17,7 @@ fn materializes_exact_base_and_deterministic_patched_tree() {
     let parent = tempfile::tempdir().unwrap();
     let expected_patch_sha256 = sha256(patch.as_bytes());
     let first = materialize_from_url(
-        "github.com/example/repo",
+        "example/repo",
         &source.path().to_string_lossy(),
         &base,
         &patch,
@@ -26,7 +26,7 @@ fn materializes_exact_base_and_deterministic_patched_tree() {
     )
     .unwrap();
     let second = materialize_from_url(
-        "github.com/example/repo",
+        "example/repo",
         &source.path().to_string_lossy(),
         &base,
         &patch,
@@ -57,7 +57,7 @@ fn rejects_changed_patch_before_creating_work() {
     let parent = tempfile::tempdir().unwrap();
     let root = parent.path().join("slot");
     let error = materialize_from_url(
-        "github.com/example/repo",
+        "example/repo",
         "unused",
         &"1".repeat(40),
         "patch",
@@ -81,7 +81,7 @@ fn unavailable_base_is_a_sealed_terminal_exclusion() {
     let parent = tempfile::tempdir().unwrap();
     let root = parent.path().join("slot");
     let outcome = materialize_from_url_typed(
-        "github.com/example/repo",
+        "example/repo",
         &source.path().to_string_lossy(),
         &"f".repeat(40),
         patch,
@@ -118,7 +118,7 @@ fn rejected_patch_is_not_misclassified_as_infrastructure() {
     let parent = tempfile::tempdir().unwrap();
     let root = parent.path().join("slot");
     let outcome = materialize_from_url_typed(
-        "github.com/example/repo",
+        "example/repo",
         &source.path().to_string_lossy(),
         &base,
         patch,
@@ -156,7 +156,7 @@ fn exclusion_commitment_rejects_tampering() {
     let revision = "1".repeat(40);
     let patch_sha256 = "2".repeat(64);
     let mut exclusion = seal_materialization_exclusion(
-        "github.com/example/repo",
+        "example/repo",
         &revision,
         &patch_sha256,
         HistoricalV2MaterializationExclusionReason::RepositoryUnavailable,
@@ -178,7 +178,7 @@ fn changed_patch_is_typed_invalid_input() {
     let parent = tempfile::tempdir().unwrap();
     let root = parent.path().join("slot");
     let error = materialize_from_url_typed(
-        "github.com/example/repo",
+        "example/repo",
         "unused",
         &"1".repeat(40),
         "patch",
@@ -189,6 +189,27 @@ fn changed_patch_is_typed_invalid_input() {
 
     assert_eq!(error.stage, HistoricalV2SlotStage::Materialization);
     assert_eq!(error.kind, HistoricalV2SlotStageErrorKind::InvalidInput);
+    assert!(!root.exists());
+}
+
+#[test]
+fn host_prefixed_repository_identity_is_not_a_supported_fallback() {
+    let parent = tempfile::tempdir().unwrap();
+    let root = parent.path().join("slot");
+    let patch = "patch\n";
+    let error = materialize_from_url_typed(
+        "github.com/example/repo",
+        "unused",
+        &"1".repeat(40),
+        patch,
+        &sha256(patch.as_bytes()),
+        &root,
+    )
+    .unwrap_err();
+
+    assert_eq!(error.stage, HistoricalV2SlotStage::Materialization);
+    assert_eq!(error.kind, HistoricalV2SlotStageErrorKind::InvalidInput);
+    assert!(error.detail.contains("canonical owner/repository"));
     assert!(!root.exists());
 }
 

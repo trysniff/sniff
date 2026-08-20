@@ -283,7 +283,7 @@ fn durable_journal_rejects_a_checkpoint_for_another_slot_path() {
                 selection_sha256: HASH_A,
                 language: "python",
                 slot_number: 2,
-                canonical_repository: "github.com/example/repository",
+                canonical_repository: "example/repository",
                 stage: HistoricalV2SlotStage::Payload,
                 outcome: completed(HistoricalV2StageArtifactKind::SelectedPayload),
             },
@@ -420,7 +420,7 @@ fn checkpoint_input(
         selection_sha256: HASH_A,
         language: "rust",
         slot_number: 1,
-        canonical_repository: "github.com/example/repository",
+        canonical_repository: "example/repository",
         stage,
         outcome,
     }

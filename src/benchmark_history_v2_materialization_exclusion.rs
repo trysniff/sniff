@@ -87,7 +87,7 @@ fn validate_exclusion_evidence(
     match &exclusion.evidence {
         Evidence::RepositoryProbe { url, status } => {
             let expected = format!(
-                "https://{}.git/info/refs?service=git-upload-pack",
+                "https://github.com/{}.git/info/refs?service=git-upload-pack",
                 exclusion.canonical_repository
             );
             if url != &expected || !matches!(*status, 401 | 404 | 410) {

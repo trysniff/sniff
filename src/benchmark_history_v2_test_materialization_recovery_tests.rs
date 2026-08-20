@@ -86,7 +86,7 @@ impl Fixture {
 
     fn materialize(&self) -> (HistoricalV2Materialization, HistoricalV2MaterializedRoots) {
         super::super::history_v2_materialization::materialize_from_url(
-            "github.com/example/recovery-fixture",
+            "example/recovery-fixture",
             &self.source.path().to_string_lossy(),
             &self.base_revision,
             &self.historical_patch,

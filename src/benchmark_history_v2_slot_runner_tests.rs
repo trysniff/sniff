@@ -202,7 +202,7 @@ async fn resume_rejects_a_different_slot_identity() {
 
     let mut resumed = RecordingExecutor::clean();
     let mut changed = identity();
-    changed.canonical_repository = "github.com/example/changed";
+    changed.canonical_repository = "example/changed";
     let error = run_historical_v2_slot(root.path(), changed, &mut resumed)
         .await
         .unwrap_err();
@@ -215,7 +215,7 @@ fn identity() -> HistoricalV2SlotRunIdentity<'static> {
         selection_sha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         language: "rust",
         slot_number: 1,
-        canonical_repository: "github.com/example/repository",
+        canonical_repository: "example/repository",
     }
 }
 

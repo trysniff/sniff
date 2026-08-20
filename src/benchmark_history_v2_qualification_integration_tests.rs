@@ -105,7 +105,7 @@ impl Fixture {
         HistoricalV2MaterializedRoots,
     ) {
         let materialized = super::super::history_v2_materialization::materialize_from_url(
-            "github.com/example/qualification-fixture",
+            "example/qualification-fixture",
             &self.source.path().to_string_lossy(),
             &self.base_revision,
             &self.historical_patch,

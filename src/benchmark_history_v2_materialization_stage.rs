@@ -36,7 +36,7 @@ pub async fn materialize_historical_v2_repository_typed(
         expected_patch_sha256,
         slot_root,
     )?;
-    let repository_url = format!("https://{canonical_repository}.git");
+    let repository_url = format!("https://github.com/{canonical_repository}.git");
     let probe_url = repository_probe_url(canonical_repository);
     match probe_repository(client, &probe_url).await? {
         RepositoryProbeOutcome::Available => materialize_from_url_typed(
@@ -117,7 +117,7 @@ async fn probe_repository(
 }
 
 fn repository_probe_url(canonical_repository: &str) -> String {
-    format!("https://{canonical_repository}.git/info/refs?service=git-upload-pack")
+    format!("https://github.com/{canonical_repository}.git/info/refs?service=git-upload-pack")
 }
 
 fn classify_probe_status(status: StatusCode) -> RepositoryProbeResponse {
@@ -178,7 +178,7 @@ mod tests {
     #[test]
     fn probe_targets_the_exact_selected_repository() {
         assert_eq!(
-            repository_probe_url("github.com/trysniff/sniff"),
+            repository_probe_url("trysniff/sniff"),
             "https://github.com/trysniff/sniff.git/info/refs?service=git-upload-pack"
         );
     }
@@ -216,7 +216,7 @@ mod tests {
         let patch = "patch\n";
         let error = materialize_historical_v2_repository_typed(
             &client,
-            "github.com/example/repo",
+            "example/repo",
             &"1".repeat(40),
             patch,
             &format!("{:x}", Sha256::digest(patch.as_bytes())),
