@@ -1,6 +1,6 @@
-use super::HistoricalRuntimePlanError;
-use super::non_blind_history_runtime_support::{
-    canonical_file, is_system_runtime, reject_broad_user_root, unavailable,
+use super::{
+    HistoricalRuntimePlanError, canonical_file, is_system_runtime, reject_broad_user_root,
+    unavailable,
 };
 use std::collections::{BTreeSet, VecDeque};
 use std::fs;
