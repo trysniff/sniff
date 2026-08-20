@@ -107,6 +107,20 @@ pub(super) fn rust_toolchain_root(path: &Path) -> Result<PathBuf, HistoricalRunt
     Ok(parent.to_path_buf())
 }
 
+pub(super) fn executable_installation_root(
+    path: &Path,
+    label: &str,
+) -> Result<PathBuf, HistoricalRuntimePlanError> {
+    let parent = parent_directory(path, label)?;
+    if parent.file_name().is_some_and(|value| value == "bin") {
+        return parent
+            .parent()
+            .map(Path::to_path_buf)
+            .ok_or_else(|| unavailable(format!("{label} bin has no installation root")));
+    }
+    Ok(parent)
+}
+
 pub(super) fn reject_broad_user_root(path: &Path) -> Result<(), HistoricalRuntimePlanError> {
     let Some(home) = std::env::var_os("USERPROFILE")
         .or_else(|| std::env::var_os("HOME"))
@@ -116,7 +130,7 @@ pub(super) fn reject_broad_user_root(path: &Path) -> Result<(), HistoricalRuntim
     };
     if canonical_directory(&home, "user home").is_ok_and(|home| home == path) {
         return Err(unavailable(
-            "Rust runtime resolution would expose the complete user home; install rustup so Sniff can resolve the active toolchain exactly",
+            "runtime resolution would expose the complete user home; install the runtime under a dedicated versioned prefix",
         ));
     }
     Ok(())
@@ -460,4 +474,30 @@ fn normalize_path(path: PathBuf) -> PathBuf {
 #[cfg(not(windows))]
 fn normalize_path(path: PathBuf) -> PathBuf {
     path
+}
+
+#[cfg(test)]
+mod tests {
+    use super::executable_installation_root;
+
+    #[test]
+    fn executable_in_bin_uses_its_installation_prefix() {
+        let root = tempfile::tempdir().unwrap();
+        let bin = root.path().join("bin");
+        std::fs::create_dir(&bin).unwrap();
+
+        let resolved = executable_installation_root(&bin.join("node"), "Node runtime").unwrap();
+
+        assert_eq!(resolved, root.path());
+    }
+
+    #[test]
+    fn executable_without_bin_uses_its_containing_directory() {
+        let root = tempfile::tempdir().unwrap();
+
+        let resolved =
+            executable_installation_root(&root.path().join("node.exe"), "Node runtime").unwrap();
+
+        assert_eq!(resolved, root.path());
+    }
 }

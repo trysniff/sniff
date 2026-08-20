@@ -1,8 +1,8 @@
 use super::non_blind_history_runtime::HistoricalRuntimePlanError;
 use super::non_blind_history_runtime_support::{
-    canonical_file, is_system_runtime, looks_repository_relative, parent_directory, path_value,
-    query_path, reject_broad_user_root, repository_program, resolve_on_path, resolve_rust_tool,
-    rust_toolchain_root, sandbox_repository_path, unavailable,
+    canonical_file, executable_installation_root, is_system_runtime, looks_repository_relative,
+    parent_directory, path_value, query_path, reject_broad_user_root, repository_program,
+    resolve_on_path, resolve_rust_tool, rust_toolchain_root, sandbox_repository_path, unavailable,
 };
 use std::path::{Path, PathBuf};
 
@@ -117,7 +117,8 @@ pub(super) fn private_python_launch(
 
 pub(super) fn node_launch(args: &[String]) -> Result<Launch, HistoricalRuntimePlanError> {
     let node = resolve_on_path("node")?;
-    let root = parent_directory(&node, "Node runtime")?;
+    let root = executable_installation_root(&node, "Node runtime")?;
+    reject_broad_user_root(&root)?;
     Ok(Launch {
         target: node.clone(),
         args: args.to_vec(),
@@ -134,13 +135,15 @@ pub(super) fn node_manager_launch(
 ) -> Result<Launch, HistoricalRuntimePlanError> {
     let manager_path = resolve_on_path(manager)?;
     let node = resolve_on_path("node")?;
+    let node_root = executable_installation_root(&node, "Node runtime")?;
+    reject_broad_user_root(&node_root)?;
     Ok(Launch {
         target: manager_path.clone(),
         args: args.to_vec(),
         runtime_files: vec![manager_path.clone(), node.clone()],
         runtime_roots: vec![
             parent_directory(&manager_path, "package-manager runtime")?,
-            parent_directory(&node, "Node runtime")?,
+            node_root,
         ],
         env: Vec::new(),
         repository_target: false,
