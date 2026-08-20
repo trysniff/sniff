@@ -192,6 +192,7 @@ impl JsTsBodyVisitor<'_> {
             end_line,
             thin_delegation,
             distinct_retry_outcomes: None,
+            generator_marker: None,
             versioned_compatibility_annotation: None,
         });
     }

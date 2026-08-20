@@ -244,6 +244,7 @@ fn candidate(
         end_line: declaration.end_position().row + 1,
         thin_delegation,
         distinct_retry_outcomes: None,
+        generator_marker: None,
         versioned_compatibility_annotation: None,
     }
 }

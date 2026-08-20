@@ -114,6 +114,7 @@ impl RustBodyVisitor<'_> {
                     )
                 },
             ),
+            generator_marker: None,
             versioned_compatibility_annotation: versioned_compatibility_annotation(attrs)
                 .map(|attribute| span_range(self.repository_path, attribute.span())),
         };

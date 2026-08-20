@@ -463,6 +463,21 @@ mod intentional_boundary_behavior;
 
 pub use intentional_boundary_behavior::*;
 
+#[path = "benchmark_intentional_boundary_generator_schema.rs"]
+mod intentional_boundary_generator_schema;
+
+pub use intentional_boundary_generator_schema::*;
+
+#[path = "benchmark_intentional_boundary_generator.rs"]
+mod intentional_boundary_generator;
+
+pub use intentional_boundary_generator::*;
+
+#[path = "benchmark_intentional_boundary_generator_evidence.rs"]
+mod intentional_boundary_generator_evidence;
+
+pub use intentional_boundary_generator_evidence::*;
+
 #[path = "benchmark_intentional_boundary_project_model.rs"]
 mod intentional_boundary_project_model;
 

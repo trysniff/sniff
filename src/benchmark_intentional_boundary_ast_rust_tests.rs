@@ -254,6 +254,34 @@ fn retry_and_terminal_flow_in_one_match_arm_is_not_distinct() {
 }
 
 #[test]
+fn records_an_exact_header_generator_marker() {
+    let source = "// @generated\npub fn process(value: i32) -> i32 { value }";
+    let (source_census, semantic_census, files) = fixture(source, Vec::new(), None);
+
+    let census = derive_rust_ast_census(&source_census, &semantic_census, &files).unwrap();
+
+    assert_eq!(census.fact_count, 1);
+    let IntentionalBoundaryAstMethodStatus::Resolved { facts, .. } = &census.methods[0].status
+    else {
+        panic!("expected resolved AST method");
+    };
+    let [IntentionalBoundaryAstFact::GeneratorMarker { marker }] = facts.as_slice() else {
+        panic!("expected one generator marker");
+    };
+    assert_eq!(marker.start_line_zero_based, 0);
+}
+
+#[test]
+fn generated_text_inside_code_is_not_a_generator_marker() {
+    let source = "pub fn process() -> &'static str { \"// @generated\" }";
+    let (source_census, semantic_census, files) = fixture(source, Vec::new(), None);
+
+    let census = derive_rust_ast_census(&source_census, &semantic_census, &files).unwrap();
+
+    assert_eq!(census.fact_count, 0);
+}
+
+#[test]
 fn rejects_nested_calls_even_when_outer_body_is_one_expression() {
     let source = "pub fn process(value: i32) -> i32 { target(normalize(value)) }";
     let calls = vec![

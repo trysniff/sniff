@@ -260,6 +260,17 @@ fn append_method_ast_evidence(
                 vec![retryable_outcome.clone(), terminal_outcome.clone()],
                 Vec::new(),
             )?,
+            IntentionalBoundaryAstFact::GeneratorMarker { marker } => push_typed_atom(
+                atoms,
+                semantic_method,
+                subject_symbol_id,
+                BoundaryEvidenceKind::GeneratorIdentity,
+                IntentionalBoundaryEvidenceProof::SourceAst(
+                    IntentionalBoundaryAstProofKind::GeneratorMarker,
+                ),
+                vec![marker.clone()],
+                Vec::new(),
+            )?,
             IntentionalBoundaryAstFact::VersionedCompatibilityAnnotation { annotation } => {
                 append_versioned_compatibility_evidence(
                     atoms,

@@ -1,0 +1,518 @@
+use super::intentional_boundary_compiler_evidence::validate_evidence_census_commitment;
+use super::intentional_boundary_manifest::validate_manifest_census_commitment;
+use super::{
+    BoundaryEvidenceKind, BoundaryGitEntryKind,
+    INTENTIONAL_BOUNDARY_GENERATOR_CENSUS_SCHEMA_VERSION, IntentionalBoundaryEvidenceCensus,
+    IntentionalBoundaryEvidenceProof, IntentionalBoundaryGeneratorCensus,
+    IntentionalBoundaryGeneratorExecution, IntentionalBoundaryGeneratorOutput,
+    IntentionalBoundaryGeneratorReplay, IntentionalBoundaryGeneratorReplayOutcome,
+    IntentionalBoundaryGeneratorSubject, IntentionalBoundaryGeneratorUnresolvedReason,
+    IntentionalBoundaryManifestBindingCensus, IntentionalBoundaryManifestCensus,
+    IntentionalBoundaryManifestDeclaration, IntentionalBoundaryManifestDeclarationKind,
+    IntentionalBoundaryManifestProvider, IntentionalBoundaryManifestTarget,
+    IntentionalBoundaryRepositoryInventory, IntentionalBoundarySemanticCensus,
+    IntentionalBoundarySemanticMethodStatus, IntentionalBoundarySourceCensus,
+    validate_intentional_boundary_manifest_bindings,
+    validate_intentional_boundary_repository_inventory,
+    validate_intentional_boundary_semantic_census, validate_intentional_boundary_source_census,
+};
+use serde::Serialize;
+use sha2::{Digest, Sha256};
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
+
+pub(super) const GENERATOR_CONTRACT: &str = "sniffbench-intentional-boundary-generator-replay-v1";
+
+#[path = "benchmark_intentional_boundary_generator_runtime.rs"]
+mod runtime;
+
+#[derive(Clone)]
+struct ExpectedOutput {
+    repository_path: String,
+    object_id: String,
+    byte_length: u64,
+    committed_sha256: String,
+}
+
+struct ReplaySuccess {
+    outputs: Vec<IntentionalBoundaryGeneratorOutput>,
+    executions: Vec<IntentionalBoundaryGeneratorExecution>,
+}
+
+struct ReplayFailure {
+    reason: IntentionalBoundaryGeneratorUnresolvedReason,
+    detail: String,
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn census_intentional_boundary_generators(
+    repository: &str,
+    revision: &str,
+    root: &Path,
+    inventory: &IntentionalBoundaryRepositoryInventory,
+    source_census: &IntentionalBoundarySourceCensus,
+    semantic_census: &IntentionalBoundarySemanticCensus,
+    manifest_census: &IntentionalBoundaryManifestCensus,
+    binding_census: &IntentionalBoundaryManifestBindingCensus,
+    base_evidence: &IntentionalBoundaryEvidenceCensus,
+) -> Result<IntentionalBoundaryGeneratorCensus, String> {
+    census_generators_with_executor(
+        repository,
+        revision,
+        root,
+        inventory,
+        source_census,
+        semantic_census,
+        manifest_census,
+        binding_census,
+        base_evidence,
+        |declaration, command, outputs| {
+            runtime::execute_generator_replay(root, revision, declaration, command, outputs)
+        },
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn census_generators_with_executor<F>(
+    repository: &str,
+    revision: &str,
+    root: &Path,
+    inventory: &IntentionalBoundaryRepositoryInventory,
+    source_census: &IntentionalBoundarySourceCensus,
+    semantic_census: &IntentionalBoundarySemanticCensus,
+    manifest_census: &IntentionalBoundaryManifestCensus,
+    binding_census: &IntentionalBoundaryManifestBindingCensus,
+    base_evidence: &IntentionalBoundaryEvidenceCensus,
+    mut executor: F,
+) -> Result<IntentionalBoundaryGeneratorCensus, String>
+where
+    F: FnMut(
+        &IntentionalBoundaryManifestDeclaration,
+        &[String],
+        &[ExpectedOutput],
+    ) -> Result<ReplaySuccess, ReplayFailure>,
+{
+    validate_inputs(
+        repository,
+        revision,
+        root,
+        inventory,
+        source_census,
+        semantic_census,
+        manifest_census,
+        binding_census,
+        base_evidence,
+    )?;
+    let subjects = generator_subjects(source_census, semantic_census, base_evidence)?;
+    let declarations = manifest_census
+        .declarations
+        .iter()
+        .filter(|declaration| {
+            declaration.declaration_kind == IntentionalBoundaryManifestDeclarationKind::BuildScript
+        })
+        .collect::<Vec<_>>();
+    let mut grouped = BTreeMap::<Option<String>, Vec<IntentionalBoundaryGeneratorSubject>>::new();
+    let declaration_by_id = declarations
+        .iter()
+        .map(|declaration| (declaration.declaration_id.as_str(), *declaration))
+        .collect::<BTreeMap<_, _>>();
+    for subject in subjects {
+        grouped
+            .entry(nearest_declaration(&subject.repository_path, &declarations))
+            .or_default()
+            .push(subject);
+    }
+    let mut replays = Vec::new();
+    for (declaration_id, mut subjects) in grouped {
+        subjects.sort();
+        let outcome = match declaration_id.as_deref() {
+            None => unresolved(
+                IntentionalBoundaryGeneratorUnresolvedReason::MissingConfiguration,
+                "generated subjects have no enclosing declared build script",
+            ),
+            Some(id) => {
+                let declaration = declaration_by_id
+                    .get(id)
+                    .copied()
+                    .ok_or_else(|| "generator grouping invented a declaration".to_string())?;
+                replay_outcome(
+                    inventory,
+                    source_census,
+                    declaration,
+                    &subjects,
+                    &mut executor,
+                )?
+            }
+        };
+        let replay_id = replay_id(repository, revision, declaration_id.as_deref(), &subjects)?;
+        replays.push(IntentionalBoundaryGeneratorReplay {
+            replay_id,
+            configuration_declaration_id: declaration_id,
+            subjects,
+            outcome,
+        });
+    }
+    finish_census(
+        inventory,
+        source_census,
+        semantic_census,
+        manifest_census,
+        base_evidence,
+        replays,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn validate_inputs(
+    repository: &str,
+    revision: &str,
+    root: &Path,
+    inventory: &IntentionalBoundaryRepositoryInventory,
+    source_census: &IntentionalBoundarySourceCensus,
+    semantic_census: &IntentionalBoundarySemanticCensus,
+    manifest_census: &IntentionalBoundaryManifestCensus,
+    binding_census: &IntentionalBoundaryManifestBindingCensus,
+    base_evidence: &IntentionalBoundaryEvidenceCensus,
+) -> Result<(), String> {
+    validate_intentional_boundary_repository_inventory(repository, revision, root, inventory)?;
+    validate_intentional_boundary_source_census(
+        repository,
+        revision,
+        root,
+        inventory,
+        source_census,
+    )?;
+    validate_intentional_boundary_semantic_census(source_census, semantic_census)?;
+    validate_manifest_census_commitment(&inventory.inventory_sha256, manifest_census)?;
+    validate_intentional_boundary_manifest_bindings(
+        source_census,
+        semantic_census,
+        manifest_census,
+        binding_census,
+    )?;
+    validate_evidence_census_commitment(source_census, semantic_census, base_evidence)?;
+    if manifest_census.repository != repository
+        || manifest_census.revision != revision
+        || base_evidence.repository != repository
+        || base_evidence.revision != revision
+    {
+        return Err("intentional-boundary generator input identity changed".to_string());
+    }
+    Ok(())
+}
+
+pub(super) fn generator_subjects(
+    source_census: &IntentionalBoundarySourceCensus,
+    semantic_census: &IntentionalBoundarySemanticCensus,
+    evidence: &IntentionalBoundaryEvidenceCensus,
+) -> Result<Vec<IntentionalBoundaryGeneratorSubject>, String> {
+    let methods = semantic_census
+        .methods
+        .iter()
+        .map(|method| (method.parser_unit_id.as_str(), method))
+        .collect::<BTreeMap<_, _>>();
+    let source_paths = source_census
+        .source_files
+        .iter()
+        .map(|file| file.repository_path.as_str())
+        .collect::<BTreeSet<_>>();
+    let mut subjects = Vec::new();
+    for atom in &evidence.atoms {
+        if atom.evidence_kind != BoundaryEvidenceKind::GeneratorIdentity {
+            continue;
+        }
+        if !matches!(
+            atom.proof,
+            IntentionalBoundaryEvidenceProof::SourceAst(
+                super::IntentionalBoundaryAstProofKind::GeneratorMarker
+            )
+        ) {
+            return Err("generator identity lacks an exact AST marker proof".to_string());
+        }
+        let method = methods
+            .get(atom.subject_parser_unit_id.as_str())
+            .copied()
+            .ok_or_else(|| "generator identity invented a method".to_string())?;
+        if !matches!(
+            &method.status,
+            IntentionalBoundarySemanticMethodStatus::Resolved { symbol, .. }
+                if symbol.symbol_id == atom.subject_symbol_id
+        ) || !source_paths.contains(method.repository_path.as_str())
+        {
+            return Err("generator identity changed the compiler subject".to_string());
+        }
+        let [marker] = atom.locations.as_slice() else {
+            return Err("generator identity requires one exact marker location".to_string());
+        };
+        if marker.repository_path != method.repository_path {
+            return Err("generator marker changed the subject file".to_string());
+        }
+        subjects.push(IntentionalBoundaryGeneratorSubject {
+            parser_unit_id: method.parser_unit_id.clone(),
+            subject_symbol_id: atom.subject_symbol_id.clone(),
+            repository_path: method.repository_path.clone(),
+            marker_location: marker.clone(),
+        });
+    }
+    subjects.sort();
+    if subjects.windows(2).any(|pair| pair[0] >= pair[1]) {
+        return Err("generator subjects are duplicated".to_string());
+    }
+    Ok(subjects)
+}
+
+pub(super) fn nearest_declaration(
+    repository_path: &str,
+    declarations: &[&IntentionalBoundaryManifestDeclaration],
+) -> Option<String> {
+    declarations
+        .iter()
+        .filter(|declaration| path_is_under(repository_path, manifest_directory(declaration)))
+        .max_by_key(|declaration| manifest_directory(declaration).len())
+        .map(|declaration| declaration.declaration_id.clone())
+}
+
+fn manifest_directory(declaration: &IntentionalBoundaryManifestDeclaration) -> &str {
+    declaration
+        .manifest_repository_path
+        .rsplit_once('/')
+        .map_or("", |(directory, _)| directory)
+}
+
+fn path_is_under(path: &str, directory: &str) -> bool {
+    directory.is_empty()
+        || path
+            .strip_prefix(directory)
+            .is_some_and(|suffix| suffix.starts_with('/'))
+}
+
+fn replay_outcome<F>(
+    inventory: &IntentionalBoundaryRepositoryInventory,
+    source_census: &IntentionalBoundarySourceCensus,
+    declaration: &IntentionalBoundaryManifestDeclaration,
+    subjects: &[IntentionalBoundaryGeneratorSubject],
+    executor: &mut F,
+) -> Result<IntentionalBoundaryGeneratorReplayOutcome, String>
+where
+    F: FnMut(
+        &IntentionalBoundaryManifestDeclaration,
+        &[String],
+        &[ExpectedOutput],
+    ) -> Result<ReplaySuccess, ReplayFailure>,
+{
+    let Some(command) = cargo_generator_command(declaration) else {
+        return Ok(unresolved(
+            IntentionalBoundaryGeneratorUnresolvedReason::UnsupportedConfiguration,
+            "generator replay currently requires an exact Cargo build-script declaration",
+        ));
+    };
+    let paths = subjects
+        .iter()
+        .map(|subject| subject.repository_path.as_str())
+        .collect::<BTreeSet<_>>();
+    let outputs = paths
+        .into_iter()
+        .map(|path| expected_output(inventory, source_census, path))
+        .collect::<Result<Vec<_>, _>>()?;
+    match executor(declaration, &command, &outputs) {
+        Ok(success) => {
+            validate_replay_success(&success, &command, &outputs)?;
+            Ok(IntentionalBoundaryGeneratorReplayOutcome::Reproduced {
+                declaration_id: declaration.declaration_id.clone(),
+                declaration_location: declaration.declaration_location.clone(),
+                command,
+                outputs: success.outputs,
+                executions: success.executions,
+            })
+        }
+        Err(failure) => Ok(IntentionalBoundaryGeneratorReplayOutcome::Unresolved {
+            reason: failure.reason,
+            detail: failure.detail,
+        }),
+    }
+}
+
+fn validate_replay_success(
+    success: &ReplaySuccess,
+    command: &[String],
+    expected: &[ExpectedOutput],
+) -> Result<(), String> {
+    if success.executions.len() != 2
+        || success
+            .executions
+            .iter()
+            .enumerate()
+            .any(|(index, execution)| {
+                execution.run_number != (index + 1) as u8
+                    || execution.command != command
+                    || execution.status_code != 0
+                    || execution.timed_out
+                    || execution.network_enabled
+                    || !is_sha256(&execution.runtime_identity_sha256)
+                    || !is_sha256(&execution.stdout_sha256)
+                    || !is_sha256(&execution.stderr_sha256)
+            })
+        || success.outputs.len() != expected.len()
+    {
+        return Err("generator replay executor violated its receipt contract".to_string());
+    }
+    for (actual, expected) in success.outputs.iter().zip(expected) {
+        if actual.repository_path != expected.repository_path
+            || actual.object_id != expected.object_id
+            || actual.byte_length != expected.byte_length
+            || actual.committed_sha256 != expected.committed_sha256
+            || actual.first_run_sha256 != expected.committed_sha256
+            || actual.second_run_sha256 != expected.committed_sha256
+        {
+            return Err("generator replay executor changed reproduced output identity".to_string());
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn cargo_generator_command(
+    declaration: &IntentionalBoundaryManifestDeclaration,
+) -> Option<Vec<String>> {
+    if declaration.provider != IntentionalBoundaryManifestProvider::CargoManifest {
+        return None;
+    }
+    let IntentionalBoundaryManifestTarget::RepositoryPath { .. } = &declaration.target else {
+        return None;
+    };
+    Some(vec![
+        "cargo".to_string(),
+        "check".to_string(),
+        "--offline".to_string(),
+        "--locked".to_string(),
+        "--manifest-path".to_string(),
+        declaration.manifest_repository_path.clone(),
+    ])
+}
+
+fn expected_output(
+    inventory: &IntentionalBoundaryRepositoryInventory,
+    source_census: &IntentionalBoundarySourceCensus,
+    path: &str,
+) -> Result<ExpectedOutput, String> {
+    let entry = inventory
+        .tracked_entries
+        .iter()
+        .find(|entry| entry.repository_path == path)
+        .ok_or_else(|| format!("generated output is not tracked: {path}"))?;
+    let source = source_census
+        .source_files
+        .iter()
+        .find(|file| file.repository_path == path)
+        .ok_or_else(|| format!("generated output is not in the source census: {path}"))?;
+    if entry.kind != BoundaryGitEntryKind::RegularBlob
+        || entry.byte_length != Some(source.byte_length)
+        || entry.object_id != source.object_id
+    {
+        return Err(format!("generated output identity changed: {path}"));
+    }
+    Ok(ExpectedOutput {
+        repository_path: path.to_string(),
+        object_id: entry.object_id.clone(),
+        byte_length: source.byte_length,
+        committed_sha256: source.source_sha256.clone(),
+    })
+}
+
+fn finish_census(
+    inventory: &IntentionalBoundaryRepositoryInventory,
+    source: &IntentionalBoundarySourceCensus,
+    semantic: &IntentionalBoundarySemanticCensus,
+    manifests: &IntentionalBoundaryManifestCensus,
+    evidence: &IntentionalBoundaryEvidenceCensus,
+    mut replays: Vec<IntentionalBoundaryGeneratorReplay>,
+) -> Result<IntentionalBoundaryGeneratorCensus, String> {
+    replays.sort();
+    let replay_count_by_status = replays.iter().fold(BTreeMap::new(), |mut counts, replay| {
+        let status = match replay.outcome {
+            IntentionalBoundaryGeneratorReplayOutcome::Reproduced { .. } => "reproduced",
+            IntentionalBoundaryGeneratorReplayOutcome::Unresolved { .. } => "unresolved",
+        };
+        *counts.entry(status.to_string()).or_default() += 1;
+        counts
+    });
+    let mut census = IntentionalBoundaryGeneratorCensus {
+        schema_version: INTENTIONAL_BOUNDARY_GENERATOR_CENSUS_SCHEMA_VERSION,
+        generator_contract: GENERATOR_CONTRACT.to_string(),
+        repository: source.repository.clone(),
+        revision: source.revision.clone(),
+        inventory_sha256: inventory.inventory_sha256.clone(),
+        source_census_sha256: source.census_sha256.clone(),
+        semantic_census_sha256: semantic.semantic_census_sha256.clone(),
+        manifest_census_sha256: manifests.manifest_census_sha256.clone(),
+        base_evidence_census_sha256: evidence.evidence_census_sha256.clone(),
+        replays,
+        replay_count_by_status,
+        generator_census_sha256: String::new(),
+    };
+    census.generator_census_sha256 = generator_census_sha256(&census)?;
+    Ok(census)
+}
+
+pub(super) fn replay_id(
+    repository: &str,
+    revision: &str,
+    declaration_id: Option<&str>,
+    subjects: &[IntentionalBoundaryGeneratorSubject],
+) -> Result<String, String> {
+    Ok(format!(
+        "ibgr-v1:{}",
+        hash_json(&(
+            GENERATOR_CONTRACT,
+            repository,
+            revision,
+            declaration_id,
+            subjects
+        ))?
+    ))
+}
+
+pub(super) fn generator_census_sha256(
+    census: &IntentionalBoundaryGeneratorCensus,
+) -> Result<String, String> {
+    hash_json(&(
+        census.schema_version,
+        &census.generator_contract,
+        &census.repository,
+        &census.revision,
+        &census.inventory_sha256,
+        &census.source_census_sha256,
+        &census.semantic_census_sha256,
+        &census.manifest_census_sha256,
+        &census.base_evidence_census_sha256,
+        &census.replays,
+        &census.replay_count_by_status,
+    ))
+}
+
+fn unresolved(
+    reason: IntentionalBoundaryGeneratorUnresolvedReason,
+    detail: impl Into<String>,
+) -> IntentionalBoundaryGeneratorReplayOutcome {
+    IntentionalBoundaryGeneratorReplayOutcome::Unresolved {
+        reason,
+        detail: detail.into(),
+    }
+}
+
+fn hash_json(value: &impl Serialize) -> Result<String, String> {
+    serde_json::to_vec(value)
+        .map(|bytes| sha256(&bytes))
+        .map_err(|error| format!("failed to commit generator replay: {error}"))
+}
+
+fn sha256(bytes: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(bytes))
+}
+
+pub(super) fn is_sha256(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+#[cfg(test)]
+#[path = "benchmark_intentional_boundary_generator_tests.rs"]
+mod tests;
