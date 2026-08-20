@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 pub enum BenchmarkPartition {
     SyntheticGold,
     HistoricalSimplification,
+    HistoricalSimplificationV2,
     ResearchTrajectory,
     IntentionalBoundary,
     BlindOss,
@@ -87,8 +88,18 @@ pub struct BenchmarkCorpus {
     pub blind_case_bundle_sha256: String,
     pub non_blind_source_seal_artifact_path: String,
     pub non_blind_source_seal_sha256: String,
+    pub historical_v2: HistoricalV2CorpusArtifactBinding,
     pub analysis_sources: Vec<SourceSnapshot>,
     pub cases: Vec<ReleaseBenchmarkCase>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HistoricalV2CorpusArtifactBinding {
+    pub protocol_artifact_path: String,
+    pub protocol_artifact_sha256: String,
+    pub corpus_bundle_artifact_path: String,
+    pub corpus_bundle_artifact_sha256: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

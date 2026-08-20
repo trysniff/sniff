@@ -76,6 +76,13 @@ pub fn validate_historical_v2_source_review_bundle(
     validate_persisted_bundle(bundle_root, bundle)
 }
 
+#[cfg(test)]
+pub(crate) fn test_historical_v2_source_bundle_sha256(
+    bundle: &HistoricalV2SourceReviewBundle,
+) -> String {
+    bundle_sha256(bundle).expect("hash historical-v2 test source bundle")
+}
+
 pub(super) struct PreparedReviewSlot<'a> {
     pub(super) protocol: ValidatedHistoricalV2Protocol,
     pub(super) selection_sha256: &'a str,

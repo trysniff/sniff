@@ -154,3 +154,10 @@ fn hash_json(value: &impl Serialize) -> Result<String, String> {
 #[cfg(test)]
 #[path = "benchmark_history_v2_corpus_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "benchmark_history_v2_corpus_fixture.rs"]
+mod fixture;
+
+#[cfg(test)]
+pub(crate) use fixture::install_test_historical_v2_corpus;
