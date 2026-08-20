@@ -191,6 +191,7 @@ impl JsTsBodyVisitor<'_> {
             start_line,
             end_line,
             thin_delegation,
+            versioned_compatibility_annotation: None,
         });
     }
 }

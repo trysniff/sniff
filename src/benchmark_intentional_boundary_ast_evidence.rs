@@ -246,7 +246,57 @@ fn append_method_ast_evidence(
                 vec![call_expression.clone(), compiler_callsite.clone()],
                 vec![resolved_callee_symbol_id.clone()],
             )?,
+            IntentionalBoundaryAstFact::VersionedCompatibilityAnnotation { annotation } => {
+                append_versioned_compatibility_evidence(
+                    atoms,
+                    semantic_method,
+                    subject_symbol_id,
+                    annotation,
+                )?;
+            }
         }
+    }
+    Ok(())
+}
+
+fn append_versioned_compatibility_evidence(
+    atoms: &mut Vec<super::IntentionalBoundaryEvidenceAtom>,
+    semantic_method: &IntentionalBoundarySemanticMethod,
+    subject_symbol_id: &str,
+    annotation: &super::IntentionalBoundarySemanticRange,
+) -> Result<(), String> {
+    let retained_consumers = atoms
+        .iter()
+        .filter(|atom| {
+            atom.subject_parser_unit_id == semantic_method.parser_unit_id
+                && atom.subject_symbol_id == subject_symbol_id
+                && atom.evidence_kind == BoundaryEvidenceKind::ResolvedConsumer
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    push_typed_atom(
+        atoms,
+        semantic_method,
+        subject_symbol_id,
+        BoundaryEvidenceKind::VersionedCompatibilityContract,
+        IntentionalBoundaryEvidenceProof::SourceAst(
+            IntentionalBoundaryAstProofKind::VersionedCompatibilityAnnotation,
+        ),
+        vec![annotation.clone()],
+        Vec::new(),
+    )?;
+    for consumer in retained_consumers {
+        let mut locations = consumer.locations;
+        locations.push(annotation.clone());
+        push_typed_atom(
+            atoms,
+            semantic_method,
+            subject_symbol_id,
+            BoundaryEvidenceKind::RetainedCompatibilityConsumer,
+            consumer.proof,
+            locations,
+            consumer.related_symbol_ids,
+        )?;
     }
     Ok(())
 }

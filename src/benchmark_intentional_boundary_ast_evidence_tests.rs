@@ -22,12 +22,14 @@ fn range(start: usize, end: usize) -> IntentionalBoundarySemanticRange {
     }
 }
 
-fn fixture() -> (
+fn fixture_with(
+    source: &str,
+    calls: Vec<IntentionalBoundarySemanticCallFacts>,
+) -> (
     IntentionalBoundarySourceCensus,
     IntentionalBoundarySemanticCensus,
     IntentionalBoundaryAstCensus,
 ) {
-    let source = "pub fn process(value: i32) -> i32 { target(value) }";
     let file = crate::parser::parse_source_checked("src/lib.rs", source.as_bytes()).unwrap();
     let parsed_method = &file.methods[0];
     let parser_unit_id = "ibm-v1:ast-evidence-fixture".to_string();
@@ -57,7 +59,6 @@ fn fixture() -> (
         method_count: 1,
         census_sha256: "f".repeat(64),
     };
-    let call_start = source.find("target").unwrap();
     let definition = range(
         source.find("process").unwrap(),
         source.find("process").unwrap() + 7,
@@ -80,7 +81,7 @@ fn fixture() -> (
             symbol_count: 2,
             relationship_count: 0,
             import_count: 0,
-            call_count: 1,
+            call_count: calls.len(),
             test_relationship_count: 0,
             unresolved_edge_count: 0,
         }],
@@ -111,14 +112,7 @@ fn fixture() -> (
                 joined_definition: Some(definition),
             },
             occurrences: Vec::new(),
-            calls: vec![IntentionalBoundarySemanticCallFacts {
-                caller: SUBJECT.to_string(),
-                callee: IntentionalBoundarySemanticResolution::Resolved {
-                    value: CALLEE.to_string(),
-                },
-                callsite: range(call_start, call_start + "target".len()),
-                dispatch: IntentionalBoundarySemanticDispatch::Static,
-            }],
+            calls,
             relationships: Vec::new(),
             imports: Vec::new(),
             test_relationships: Vec::new(),
@@ -140,6 +134,26 @@ fn fixture() -> (
     )
     .unwrap();
     (source_census, semantic_census, ast)
+}
+
+fn fixture() -> (
+    IntentionalBoundarySourceCensus,
+    IntentionalBoundarySemanticCensus,
+    IntentionalBoundaryAstCensus,
+) {
+    let source = "pub fn process(value: i32) -> i32 { target(value) }";
+    let call_start = source.find("target").unwrap();
+    fixture_with(
+        source,
+        vec![IntentionalBoundarySemanticCallFacts {
+            caller: SUBJECT.to_string(),
+            callee: IntentionalBoundarySemanticResolution::Resolved {
+                value: CALLEE.to_string(),
+            },
+            callsite: range(call_start, call_start + "target".len()),
+            dispatch: IntentionalBoundarySemanticDispatch::Static,
+        }],
+    )
 }
 
 #[test]
@@ -180,6 +194,91 @@ fn composes_hash_bound_compiler_and_ast_delegation_evidence() {
     assert_eq!(atom.subject_symbol_id, SUBJECT);
     assert_eq!(atom.related_symbol_ids, [CALLEE]);
     assert_eq!(atom.locations.len(), 2);
+}
+
+#[test]
+fn qualifies_versioned_rust_api_only_with_a_resolved_retained_consumer() {
+    let source_text = "#[deprecated(since = \"1.2.0\", note = \"use current\")]\npub fn process(value: i32) -> i32 { value }";
+    let callsite_start = source_text.find("process").unwrap();
+    let incoming_call = IntentionalBoundarySemanticCallFacts {
+        caller: CALLEE.to_string(),
+        callee: IntentionalBoundarySemanticResolution::Resolved {
+            value: SUBJECT.to_string(),
+        },
+        callsite: range(callsite_start, callsite_start + "process".len()),
+        dispatch: IntentionalBoundarySemanticDispatch::Static,
+    };
+    let (source, semantic, ast) = fixture_with(source_text, vec![incoming_call]);
+    let asts = BTreeMap::from([("rust", &ast)]);
+
+    let evidence = derive_compiler_and_ast_evidence(&source, &semantic, &asts).unwrap();
+
+    assert!(evidence.atoms.iter().any(|atom| {
+        atom.evidence_kind == BoundaryEvidenceKind::VersionedCompatibilityContract
+            && matches!(
+                atom.proof,
+                IntentionalBoundaryEvidenceProof::SourceAst(
+                    IntentionalBoundaryAstProofKind::VersionedCompatibilityAnnotation
+                )
+            )
+    }));
+    assert!(evidence.atoms.iter().any(|atom| {
+        atom.evidence_kind == BoundaryEvidenceKind::RetainedCompatibilityConsumer
+            && matches!(
+                atom.proof,
+                IntentionalBoundaryEvidenceProof::CompilerSemanticIndex(
+                    super::super::IntentionalBoundaryCompilerProofKind::IncomingCall
+                )
+            )
+    }));
+
+    let protocol = super::super::validate_intentional_boundary_protocol(
+        include_bytes!("../sniffbench/non-blind-v1-selection-policy.json"),
+        include_bytes!("../sniffbench/non-blind-v1-history-worksheet.json"),
+        include_bytes!("../sniffbench/blind-oss-v1-source-seal.json"),
+        include_bytes!("../sniffbench/non-blind-v1-intentional-boundary-protocol.json"),
+    )
+    .unwrap();
+    let candidates = super::super::qualify_intentional_boundary_candidates(
+        &protocol, &source, &semantic, &evidence,
+    )
+    .unwrap();
+    assert!(candidates.candidates.iter().any(|candidate| {
+        candidate.category == super::super::IntentionalBoundaryCategory::CompatibilityApi
+    }));
+}
+
+#[test]
+fn versioned_rust_api_without_a_resolved_consumer_does_not_qualify() {
+    let source_text =
+        "#[deprecated(since = \"1.2.0\")]\npub fn process(value: i32) -> i32 { value }";
+    let (source, semantic, ast) = fixture_with(source_text, Vec::new());
+    let asts = BTreeMap::from([("rust", &ast)]);
+
+    let evidence = derive_compiler_and_ast_evidence(&source, &semantic, &asts).unwrap();
+
+    assert!(evidence.atoms.iter().any(|atom| {
+        atom.evidence_kind == BoundaryEvidenceKind::VersionedCompatibilityContract
+    }));
+    assert!(
+        !evidence.atoms.iter().any(|atom| {
+            atom.evidence_kind == BoundaryEvidenceKind::RetainedCompatibilityConsumer
+        })
+    );
+    let protocol = super::super::validate_intentional_boundary_protocol(
+        include_bytes!("../sniffbench/non-blind-v1-selection-policy.json"),
+        include_bytes!("../sniffbench/non-blind-v1-history-worksheet.json"),
+        include_bytes!("../sniffbench/blind-oss-v1-source-seal.json"),
+        include_bytes!("../sniffbench/non-blind-v1-intentional-boundary-protocol.json"),
+    )
+    .unwrap();
+    let candidates = super::super::qualify_intentional_boundary_candidates(
+        &protocol, &source, &semantic, &evidence,
+    )
+    .unwrap();
+    assert!(!candidates.candidates.iter().any(|candidate| {
+        candidate.category == super::super::IntentionalBoundaryCategory::CompatibilityApi
+    }));
 }
 
 #[test]

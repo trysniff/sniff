@@ -154,6 +154,38 @@ fn records_one_ast_and_compiler_resolved_delegation() {
 }
 
 #[test]
+fn records_exact_versioned_compatibility_annotation() {
+    let source = "#[deprecated(since = \"1.2.0\", note = \"use current\")]\npub fn process(value: i32) -> i32 { value }";
+    let (source_census, semantic_census, files) = fixture(source, Vec::new(), None);
+
+    let census = derive_rust_ast_census(&source_census, &semantic_census, &files).unwrap();
+
+    assert_eq!(census.fact_count, 1);
+    let IntentionalBoundaryAstMethodStatus::Resolved { facts, .. } = &census.methods[0].status
+    else {
+        panic!("expected resolved AST method");
+    };
+    let [IntentionalBoundaryAstFact::VersionedCompatibilityAnnotation { annotation }] =
+        facts.as_slice()
+    else {
+        panic!("expected one versioned compatibility annotation");
+    };
+    assert_eq!(annotation.repository_path, "src/lib.rs");
+    assert_eq!(annotation.start_line_zero_based, 0);
+}
+
+#[test]
+fn unversioned_deprecation_is_not_compatibility_evidence() {
+    let source =
+        "#[deprecated(note = \"use current\")]\npub fn process(value: i32) -> i32 { value }";
+    let (source_census, semantic_census, files) = fixture(source, Vec::new(), None);
+
+    let census = derive_rust_ast_census(&source_census, &semantic_census, &files).unwrap();
+
+    assert_eq!(census.fact_count, 0);
+}
+
+#[test]
 fn rejects_nested_calls_even_when_outer_body_is_one_expression() {
     let source = "pub fn process(value: i32) -> i32 { target(normalize(value)) }";
     let calls = vec![

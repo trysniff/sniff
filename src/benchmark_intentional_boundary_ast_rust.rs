@@ -93,13 +93,21 @@ struct RustBodyVisitor<'a> {
 }
 
 impl RustBodyVisitor<'_> {
-    fn record(&mut self, name: String, span: proc_macro2::Span, block: Option<&syn::Block>) {
+    fn record(
+        &mut self,
+        name: String,
+        span: proc_macro2::Span,
+        attrs: &[syn::Attribute],
+        block: Option<&syn::Block>,
+    ) {
         let key = (name, span.start().line);
         let fact = AstMethodSyntaxFact {
             end_line: span.end().line,
             thin_delegation: block
                 .and_then(thin_delegation_expression)
                 .map(|expression| span_range(self.repository_path, expression.span())),
+            versioned_compatibility_annotation: versioned_compatibility_annotation(attrs)
+                .map(|attribute| span_range(self.repository_path, attribute.span())),
         };
         self.methods.insert(key, fact);
     }
@@ -107,12 +115,22 @@ impl RustBodyVisitor<'_> {
 
 impl<'ast> Visit<'ast> for RustBodyVisitor<'_> {
     fn visit_item_fn(&mut self, node: &'ast syn::ItemFn) {
-        self.record(node.sig.ident.to_string(), node.span(), Some(&node.block));
+        self.record(
+            node.sig.ident.to_string(),
+            node.span(),
+            &node.attrs,
+            Some(&node.block),
+        );
         syn::visit::visit_item_fn(self, node);
     }
 
     fn visit_impl_item_fn(&mut self, node: &'ast syn::ImplItemFn) {
-        self.record(node.sig.ident.to_string(), node.span(), Some(&node.block));
+        self.record(
+            node.sig.ident.to_string(),
+            node.span(),
+            &node.attrs,
+            Some(&node.block),
+        );
         syn::visit::visit_impl_item_fn(self, node);
     }
 
@@ -120,15 +138,41 @@ impl<'ast> Visit<'ast> for RustBodyVisitor<'_> {
         self.record(
             node.sig.ident.to_string(),
             node.span(),
+            &node.attrs,
             node.default.as_ref(),
         );
         syn::visit::visit_trait_item_fn(self, node);
     }
 
     fn visit_foreign_item_fn(&mut self, node: &'ast syn::ForeignItemFn) {
-        self.record(node.sig.ident.to_string(), node.span(), None);
+        self.record(node.sig.ident.to_string(), node.span(), &node.attrs, None);
         syn::visit::visit_foreign_item_fn(self, node);
     }
+}
+
+fn versioned_compatibility_annotation(attrs: &[syn::Attribute]) -> Option<&syn::Attribute> {
+    attrs.iter().find(|attribute| {
+        if !attribute.path().is_ident("deprecated") {
+            return false;
+        }
+        let mut versioned = false;
+        attribute
+            .parse_nested_meta(|meta| {
+                if meta.path.is_ident("since") {
+                    let value = meta.value()?;
+                    let version: syn::LitStr = value.parse()?;
+                    versioned = !version.value().trim().is_empty();
+                } else if meta.path.is_ident("note") {
+                    let value = meta.value()?;
+                    let _: syn::LitStr = value.parse()?;
+                } else {
+                    return Err(meta.error("unsupported deprecated attribute field"));
+                }
+                Ok(())
+            })
+            .is_ok()
+            && versioned
+    })
 }
 
 fn thin_delegation_expression(block: &syn::Block) -> Option<&syn::Expr> {
