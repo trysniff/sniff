@@ -106,6 +106,14 @@ impl RustBodyVisitor<'_> {
             thin_delegation: block
                 .and_then(thin_delegation_expression)
                 .map(|expression| span_range(self.repository_path, expression.span())),
+            distinct_retry_outcomes: block.and_then(distinct_retry_outcomes).map(
+                |(retryable, terminal)| {
+                    (
+                        span_range(self.repository_path, retryable),
+                        span_range(self.repository_path, terminal),
+                    )
+                },
+            ),
             versioned_compatibility_annotation: versioned_compatibility_annotation(attrs)
                 .map(|attribute| span_range(self.repository_path, attribute.span())),
         };
@@ -147,6 +155,124 @@ impl<'ast> Visit<'ast> for RustBodyVisitor<'_> {
     fn visit_foreign_item_fn(&mut self, node: &'ast syn::ForeignItemFn) {
         self.record(node.sig.ident.to_string(), node.span(), &node.attrs, None);
         syn::visit::visit_foreign_item_fn(self, node);
+    }
+}
+
+fn distinct_retry_outcomes(block: &syn::Block) -> Option<(proc_macro2::Span, proc_macro2::Span)> {
+    let mut visitor = RetryLoopVisitor::default();
+    visitor.visit_block(block);
+    visitor.outcomes
+}
+
+#[derive(Default)]
+struct RetryLoopVisitor {
+    outcomes: Option<(proc_macro2::Span, proc_macro2::Span)>,
+}
+
+impl<'ast> Visit<'ast> for RetryLoopVisitor {
+    fn visit_expr_loop(&mut self, node: &'ast syn::ExprLoop) {
+        if self.outcomes.is_some() {
+            return;
+        }
+        let loop_label = node
+            .label
+            .as_ref()
+            .map(|label| label.name.ident.to_string());
+        let mut visitor = LoopMatchVisitor {
+            loop_label: loop_label.as_deref(),
+            outcomes: None,
+        };
+        visitor.visit_block(&node.body);
+        self.outcomes = visitor.outcomes;
+    }
+
+    fn visit_expr_closure(&mut self, _node: &'ast syn::ExprClosure) {}
+
+    fn visit_expr_async(&mut self, _node: &'ast syn::ExprAsync) {}
+}
+
+struct LoopMatchVisitor<'a> {
+    loop_label: Option<&'a str>,
+    outcomes: Option<(proc_macro2::Span, proc_macro2::Span)>,
+}
+
+impl<'ast> Visit<'ast> for LoopMatchVisitor<'_> {
+    fn visit_expr_match(&mut self, node: &'ast syn::ExprMatch) {
+        if self.outcomes.is_some() {
+            return;
+        }
+        let mut retryable = None;
+        let mut terminal = None;
+        for arm in &node.arms {
+            let mut flow = BranchFlowVisitor {
+                loop_label: self.loop_label,
+                retryable: false,
+                terminal: false,
+            };
+            flow.visit_expr(&arm.body);
+            if flow.retryable {
+                retryable.get_or_insert(arm.body.span());
+            }
+            if flow.terminal {
+                terminal.get_or_insert(arm.body.span());
+            }
+        }
+        if let (Some(retryable), Some(terminal)) = (retryable, terminal) {
+            self.outcomes = Some((retryable, terminal));
+            return;
+        }
+        syn::visit::visit_expr_match(self, node);
+    }
+
+    fn visit_expr_loop(&mut self, _node: &'ast syn::ExprLoop) {}
+
+    fn visit_expr_while(&mut self, _node: &'ast syn::ExprWhile) {}
+
+    fn visit_expr_for_loop(&mut self, _node: &'ast syn::ExprForLoop) {}
+
+    fn visit_expr_closure(&mut self, _node: &'ast syn::ExprClosure) {}
+
+    fn visit_expr_async(&mut self, _node: &'ast syn::ExprAsync) {}
+}
+
+struct BranchFlowVisitor<'a> {
+    loop_label: Option<&'a str>,
+    retryable: bool,
+    terminal: bool,
+}
+
+impl Visit<'_> for BranchFlowVisitor<'_> {
+    fn visit_expr_continue(&mut self, node: &syn::ExprContinue) {
+        if flow_targets_loop(node.label.as_ref(), self.loop_label) {
+            self.retryable = true;
+        }
+    }
+
+    fn visit_expr_break(&mut self, node: &syn::ExprBreak) {
+        if flow_targets_loop(node.label.as_ref(), self.loop_label) {
+            self.terminal = true;
+        }
+    }
+
+    fn visit_expr_return(&mut self, _node: &syn::ExprReturn) {
+        self.terminal = true;
+    }
+
+    fn visit_expr_loop(&mut self, _node: &syn::ExprLoop) {}
+
+    fn visit_expr_while(&mut self, _node: &syn::ExprWhile) {}
+
+    fn visit_expr_for_loop(&mut self, _node: &syn::ExprForLoop) {}
+
+    fn visit_expr_closure(&mut self, _node: &syn::ExprClosure) {}
+
+    fn visit_expr_async(&mut self, _node: &syn::ExprAsync) {}
+}
+
+fn flow_targets_loop(label: Option<&syn::Lifetime>, loop_label: Option<&str>) -> bool {
+    match label {
+        None => true,
+        Some(label) => loop_label == Some(label.ident.to_string().as_str()),
     }
 }
 

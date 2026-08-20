@@ -1,7 +1,7 @@
 use super::{IntentionalBoundarySemanticRange, IntentionalBoundarySemanticUnresolvedReason};
 use serde::{Deserialize, Serialize};
 
-pub const INTENTIONAL_BOUNDARY_AST_CENSUS_SCHEMA_VERSION: u32 = 2;
+pub const INTENTIONAL_BOUNDARY_AST_CENSUS_SCHEMA_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -10,6 +10,10 @@ pub enum IntentionalBoundaryAstFact {
         call_expression: IntentionalBoundarySemanticRange,
         compiler_callsite: IntentionalBoundarySemanticRange,
         resolved_callee_symbol_id: String,
+    },
+    DistinctRetryOutcomes {
+        retryable_outcome: IntentionalBoundarySemanticRange,
+        terminal_outcome: IntentionalBoundarySemanticRange,
     },
     VersionedCompatibilityAnnotation {
         annotation: IntentionalBoundarySemanticRange,

@@ -186,6 +186,61 @@ fn unversioned_deprecation_is_not_compatibility_evidence() {
 }
 
 #[test]
+fn records_retry_and_terminal_outcomes_in_the_same_loop_match() {
+    let source = concat!(
+        "pub fn process() -> Result<i32, ()> { loop { match target() { ",
+        "Ok(value) => return Ok(value), Err(_) => continue } } }",
+    );
+    let (source_census, semantic_census, files) = fixture(source, Vec::new(), None);
+
+    let census = derive_rust_ast_census(&source_census, &semantic_census, &files).unwrap();
+
+    assert_eq!(census.fact_count, 1);
+    let IntentionalBoundaryAstMethodStatus::Resolved { facts, .. } = &census.methods[0].status
+    else {
+        panic!("expected resolved AST method");
+    };
+    let [
+        IntentionalBoundaryAstFact::DistinctRetryOutcomes {
+            retryable_outcome,
+            terminal_outcome,
+        },
+    ] = facts.as_slice()
+    else {
+        panic!("expected one distinct retry outcome fact");
+    };
+    assert!(
+        retryable_outcome.start_character_zero_based > terminal_outcome.start_character_zero_based
+    );
+}
+
+#[test]
+fn terminal_match_without_retry_does_not_create_retry_evidence() {
+    let source = concat!(
+        "pub fn process() -> Result<i32, ()> { loop { match target() { ",
+        "Ok(value) => return Ok(value), Err(_) => break Err(()) } } }",
+    );
+    let (source_census, semantic_census, files) = fixture(source, Vec::new(), None);
+
+    let census = derive_rust_ast_census(&source_census, &semantic_census, &files).unwrap();
+
+    assert_eq!(census.fact_count, 0);
+}
+
+#[test]
+fn nested_loop_continue_does_not_count_for_the_outer_match() {
+    let source = concat!(
+        "pub fn process() -> Result<i32, ()> { loop { match target() { ",
+        "Ok(value) => return Ok(value), Err(_) => loop { continue } } } }",
+    );
+    let (source_census, semantic_census, files) = fixture(source, Vec::new(), None);
+
+    let census = derive_rust_ast_census(&source_census, &semantic_census, &files).unwrap();
+
+    assert_eq!(census.fact_count, 0);
+}
+
+#[test]
 fn rejects_nested_calls_even_when_outer_body_is_one_expression() {
     let source = "pub fn process(value: i32) -> i32 { target(normalize(value)) }";
     let calls = vec![

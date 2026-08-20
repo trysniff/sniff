@@ -174,7 +174,11 @@ where
         .atoms
         .iter()
         .filter(|atom| {
-            atom.evidence_kind == BoundaryEvidenceKind::CompilerResolvedImplementationOrDelegation
+            matches!(
+                atom.evidence_kind,
+                BoundaryEvidenceKind::CompilerResolvedImplementationOrDelegation
+                    | BoundaryEvidenceKind::DistinctRetryableAndTerminalOutcomes
+            )
         })
         .map(|atom| atom.subject_parser_unit_id.as_str())
         .collect::<BTreeSet<_>>();
@@ -194,8 +198,11 @@ where
         })?;
         if base_evidence.atoms.iter().any(|atom| {
             atom.subject_parser_unit_id == parser_unit_id
-                && atom.evidence_kind
-                    == BoundaryEvidenceKind::CompilerResolvedImplementationOrDelegation
+                && matches!(
+                    atom.evidence_kind,
+                    BoundaryEvidenceKind::CompilerResolvedImplementationOrDelegation
+                        | BoundaryEvidenceKind::DistinctRetryableAndTerminalOutcomes
+                )
                 && atom.subject_symbol_id != production_symbol_id
         }) {
             return Err(format!(

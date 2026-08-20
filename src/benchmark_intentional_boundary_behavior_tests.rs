@@ -1,11 +1,12 @@
 use super::*;
 use crate::benchmark::release::{
-    HistoricalTestRecipeDiscovery, HistoricalTestRecipeStatus,
-    IntentionalBoundarySemanticIndexerCensus, IntentionalBoundarySemanticOrigin,
-    IntentionalBoundarySemanticRange, IntentionalBoundarySemanticRelationshipFacts,
-    IntentionalBoundarySemanticRelationshipKind, IntentionalBoundarySemanticSymbolFacts,
-    IntentionalBoundarySemanticVisibility, census_intentional_boundary_repository,
-    extract_intentional_boundary_compiler_evidence, inventory_intentional_boundary_repository,
+    HistoricalTestRecipeDiscovery, HistoricalTestRecipeStatus, IntentionalBoundaryAstProofKind,
+    IntentionalBoundaryEvidenceProof, IntentionalBoundarySemanticIndexerCensus,
+    IntentionalBoundarySemanticOrigin, IntentionalBoundarySemanticRange,
+    IntentionalBoundarySemanticRelationshipFacts, IntentionalBoundarySemanticRelationshipKind,
+    IntentionalBoundarySemanticSymbolFacts, IntentionalBoundarySemanticVisibility,
+    census_intentional_boundary_repository, extract_intentional_boundary_compiler_evidence,
+    inventory_intentional_boundary_repository,
 };
 use std::fs;
 use std::process::Command;
@@ -110,6 +111,23 @@ fn exact_behavior_proof_survives_full_commitment_replay() {
         &evidence,
     )
     .unwrap();
+    let protocol = super::super::validate_intentional_boundary_protocol(
+        include_bytes!("../sniffbench/non-blind-v1-selection-policy.json"),
+        include_bytes!("../sniffbench/non-blind-v1-history-worksheet.json"),
+        include_bytes!("../sniffbench/blind-oss-v1-source-seal.json"),
+        include_bytes!("../sniffbench/non-blind-v1-intentional-boundary-protocol.json"),
+    )
+    .unwrap();
+    let candidates = super::super::qualify_intentional_boundary_candidates(
+        &protocol,
+        &fixture.source,
+        &fixture.semantic,
+        &evidence,
+    )
+    .unwrap();
+    assert!(candidates.candidates.iter().any(|candidate| {
+        candidate.category == super::super::IntentionalBoundaryCategory::RetryBoundary
+    }));
 
     let mut tampered = census;
     tampered.executions[0].network_enabled = true;
@@ -291,7 +309,34 @@ fn fixture() -> Fixture {
         census_intentional_boundary_repository(&repository, &revision, root.path(), &inventory)
             .unwrap();
     let semantic = semantic_fixture(&source);
-    let evidence = extract_intentional_boundary_compiler_evidence(&source, &semantic).unwrap();
+    let compiler_evidence =
+        extract_intentional_boundary_compiler_evidence(&source, &semantic).unwrap();
+    let production = semantic
+        .methods
+        .iter()
+        .find(|method| method.symbol_name == "adapter")
+        .unwrap();
+    let production_symbol_id = resolved_symbol_id(production).unwrap();
+    let mut atoms = compiler_evidence.atoms;
+    super::super::intentional_boundary_compiler_evidence::push_typed_atom(
+        &mut atoms,
+        production,
+        production_symbol_id,
+        BoundaryEvidenceKind::DistinctRetryableAndTerminalOutcomes,
+        IntentionalBoundaryEvidenceProof::SourceAst(
+            IntentionalBoundaryAstProofKind::DistinctOutcomeBranches,
+        ),
+        definition_locations(production).into_iter().collect(),
+        Vec::new(),
+    )
+    .unwrap();
+    let evidence = super::super::intentional_boundary_compiler_evidence::finish_evidence_census(
+        &source,
+        &semantic,
+        compiler_evidence.input_census_sha256,
+        atoms,
+    )
+    .unwrap();
     Fixture {
         root,
         repository,

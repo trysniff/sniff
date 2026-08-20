@@ -246,6 +246,20 @@ fn append_method_ast_evidence(
                 vec![call_expression.clone(), compiler_callsite.clone()],
                 vec![resolved_callee_symbol_id.clone()],
             )?,
+            IntentionalBoundaryAstFact::DistinctRetryOutcomes {
+                retryable_outcome,
+                terminal_outcome,
+            } => push_typed_atom(
+                atoms,
+                semantic_method,
+                subject_symbol_id,
+                BoundaryEvidenceKind::DistinctRetryableAndTerminalOutcomes,
+                IntentionalBoundaryEvidenceProof::SourceAst(
+                    IntentionalBoundaryAstProofKind::DistinctOutcomeBranches,
+                ),
+                vec![retryable_outcome.clone(), terminal_outcome.clone()],
+                Vec::new(),
+            )?,
             IntentionalBoundaryAstFact::VersionedCompatibilityAnnotation { annotation } => {
                 append_versioned_compatibility_evidence(
                     atoms,

@@ -13,12 +13,16 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-const AST_CONTRACT: &str = "sniffbench-intentional-boundary-source-ast-v2";
+const AST_CONTRACT: &str = "sniffbench-intentional-boundary-source-ast-v3";
 pub(super) type AstMethodKey = (String, usize);
 
 pub(super) struct AstMethodSyntaxFact {
     pub end_line: usize,
     pub thin_delegation: Option<IntentionalBoundarySemanticRange>,
+    pub distinct_retry_outcomes: Option<(
+        IntentionalBoundarySemanticRange,
+        IntentionalBoundarySemanticRange,
+    )>,
     pub versioned_compatibility_annotation: Option<IntentionalBoundarySemanticRange>,
 }
 
@@ -29,6 +33,10 @@ pub(super) struct AstCallableCandidate {
     pub start_line: usize,
     pub end_line: usize,
     pub thin_delegation: Option<IntentionalBoundarySemanticRange>,
+    pub distinct_retry_outcomes: Option<(
+        IntentionalBoundarySemanticRange,
+        IntentionalBoundarySemanticRange,
+    )>,
     pub versioned_compatibility_annotation: Option<IntentionalBoundarySemanticRange>,
 }
 
@@ -82,6 +90,7 @@ pub(super) fn align_callable_candidates(
                 AstMethodSyntaxFact {
                     end_line: candidate.end_line,
                     thin_delegation: candidate.thin_delegation.clone(),
+                    distinct_retry_outcomes: candidate.distinct_retry_outcomes.clone(),
                     versioned_compatibility_annotation: candidate
                         .versioned_compatibility_annotation
                         .clone(),
@@ -269,6 +278,14 @@ fn derive_method(
                         resolved_callee_symbol_id: callee.clone(),
                     });
                 }
+            }
+            if let Some((retryable_outcome, terminal_outcome)) =
+                &syntax_method.distinct_retry_outcomes
+            {
+                facts.push(IntentionalBoundaryAstFact::DistinctRetryOutcomes {
+                    retryable_outcome: retryable_outcome.clone(),
+                    terminal_outcome: terminal_outcome.clone(),
+                });
             }
             if let Some(annotation) = &syntax_method.versioned_compatibility_annotation {
                 facts.push(

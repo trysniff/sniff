@@ -108,6 +108,7 @@ impl PythonBodyVisitor<'_> {
             end_line,
             thin_delegation: thin_delegation_expression(body)
                 .map(|expression| text_range(self.repository_path, expression, &self.line_starts)),
+            distinct_retry_outcomes: None,
             versioned_compatibility_annotation: None,
         };
         self.methods.insert((name, start_line), fact);

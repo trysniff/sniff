@@ -243,6 +243,7 @@ fn candidate(
         start_line: declaration.start_position().row + 1,
         end_line: declaration.end_position().row + 1,
         thin_delegation,
+        distinct_retry_outcomes: None,
         versioned_compatibility_annotation: None,
     }
 }
