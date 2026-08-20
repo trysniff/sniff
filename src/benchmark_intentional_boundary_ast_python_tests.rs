@@ -205,3 +205,91 @@ fn rejects_docstring_and_unresolved_call() {
 
     assert_eq!(census.fact_count, 0);
 }
+
+#[test]
+fn records_retry_and_terminal_python_match_cases() {
+    let source = concat!(
+        "def process():\n",
+        "    while True:\n",
+        "        match target():\n",
+        "            case (\"retry\", _):\n",
+        "                continue\n",
+        "            case (\"done\", value):\n",
+        "                return value\n",
+    );
+    let (source_census, semantic_census, files) = fixture(source, Vec::new());
+
+    let census = derive_python_ast_census(&source_census, &semantic_census, &files).unwrap();
+
+    let IntentionalBoundaryAstMethodStatus::Resolved { facts, .. } = &census.methods[0].status
+    else {
+        panic!("expected resolved AST method");
+    };
+    let [
+        IntentionalBoundaryAstFact::DistinctRetryOutcomes {
+            retryable_outcome,
+            terminal_outcome,
+        },
+    ] = facts.as_slice()
+    else {
+        panic!("expected one distinct retry outcome fact");
+    };
+    assert_eq!(retryable_outcome.start_line_zero_based, 4);
+    assert_eq!(terminal_outcome.start_line_zero_based, 6);
+}
+
+#[test]
+fn records_retrying_python_exception_boundary() {
+    let source = concat!(
+        "def process():\n",
+        "    while True:\n",
+        "        try:\n",
+        "            return target()\n",
+        "        except Retryable:\n",
+        "            continue\n",
+    );
+    let (source_census, semantic_census, files) = fixture(source, Vec::new());
+
+    let census = derive_python_ast_census(&source_census, &semantic_census, &files).unwrap();
+
+    assert_eq!(census.fact_count, 1);
+}
+
+#[test]
+fn retry_and_terminal_flow_in_one_python_case_is_not_distinct() {
+    let source = concat!(
+        "def process():\n",
+        "    while True:\n",
+        "        match target():\n",
+        "            case \"idle\":\n",
+        "                pass\n",
+        "            case \"retry\":\n",
+        "                if should_retry():\n",
+        "                    continue\n",
+        "                raise Fatal()\n",
+    );
+    let (source_census, semantic_census, files) = fixture(source, Vec::new());
+
+    let census = derive_python_ast_census(&source_census, &semantic_census, &files).unwrap();
+
+    assert_eq!(census.fact_count, 0);
+}
+
+#[test]
+fn nested_python_loop_continue_does_not_count_for_outer_match() {
+    let source = concat!(
+        "def process():\n",
+        "    while True:\n",
+        "        match target():\n",
+        "            case \"done\":\n",
+        "                return 1\n",
+        "            case \"retry\":\n",
+        "                while True:\n",
+        "                    continue\n",
+    );
+    let (source_census, semantic_census, files) = fixture(source, Vec::new());
+
+    let census = derive_python_ast_census(&source_census, &semantic_census, &files).unwrap();
+
+    assert_eq!(census.fact_count, 0);
+}

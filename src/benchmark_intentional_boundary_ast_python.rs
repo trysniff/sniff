@@ -3,7 +3,7 @@ use super::{
     IntentionalBoundarySemanticCensus, IntentionalBoundarySemanticRange,
     IntentionalBoundarySourceCensus,
 };
-use rustpython_ast::{Expr, Stmt, Visitor, text_size::TextRange};
+use rustpython_ast::{ExceptHandler, Expr, Ranged, Stmt, Visitor, text_size::TextRange};
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -108,7 +108,12 @@ impl PythonBodyVisitor<'_> {
             end_line,
             thin_delegation: thin_delegation_expression(body)
                 .map(|expression| text_range(self.repository_path, expression, &self.line_starts)),
-            distinct_retry_outcomes: None,
+            distinct_retry_outcomes: distinct_retry_outcomes(body).map(|(retryable, terminal)| {
+                (
+                    text_range(self.repository_path, retryable, &self.line_starts),
+                    text_range(self.repository_path, terminal, &self.line_starts),
+                )
+            }),
             generator_marker: None,
             versioned_compatibility_annotation: None,
         };
@@ -145,6 +150,226 @@ fn forwarding_call(expression: &Expr) -> Option<TextRange> {
         Expr::Await(value) => forwarding_call(&value.value),
         _ => None,
     }
+}
+
+fn distinct_retry_outcomes(body: &[Stmt]) -> Option<(TextRange, TextRange)> {
+    find_retry_loop(body)
+}
+
+fn find_retry_loop(statements: &[Stmt]) -> Option<(TextRange, TextRange)> {
+    for statement in statements {
+        let outcome = match statement {
+            Stmt::For(node) => outcomes_in_loop(&node.body)
+                .or_else(|| find_retry_loop(&node.body))
+                .or_else(|| find_retry_loop(&node.orelse)),
+            Stmt::AsyncFor(node) => outcomes_in_loop(&node.body)
+                .or_else(|| find_retry_loop(&node.body))
+                .or_else(|| find_retry_loop(&node.orelse)),
+            Stmt::While(node) => outcomes_in_loop(&node.body)
+                .or_else(|| find_retry_loop(&node.body))
+                .or_else(|| find_retry_loop(&node.orelse)),
+            Stmt::If(node) => find_retry_loop(&node.body).or_else(|| find_retry_loop(&node.orelse)),
+            Stmt::With(node) => find_retry_loop(&node.body),
+            Stmt::AsyncWith(node) => find_retry_loop(&node.body),
+            Stmt::Match(node) => node
+                .cases
+                .iter()
+                .find_map(|case| find_retry_loop(&case.body)),
+            Stmt::Try(node) => find_retry_loop(&node.body)
+                .or_else(|| {
+                    node.handlers
+                        .iter()
+                        .find_map(|handler| find_retry_loop(except_body(handler)))
+                })
+                .or_else(|| find_retry_loop(&node.orelse))
+                .or_else(|| find_retry_loop(&node.finalbody)),
+            Stmt::TryStar(node) => find_retry_loop(&node.body)
+                .or_else(|| {
+                    node.handlers
+                        .iter()
+                        .find_map(|handler| find_retry_loop(except_body(handler)))
+                })
+                .or_else(|| find_retry_loop(&node.orelse))
+                .or_else(|| find_retry_loop(&node.finalbody)),
+            Stmt::FunctionDef(_) | Stmt::AsyncFunctionDef(_) | Stmt::ClassDef(_) => None,
+            _ => None,
+        };
+        if outcome.is_some() {
+            return outcome;
+        }
+    }
+    None
+}
+
+fn outcomes_in_loop(statements: &[Stmt]) -> Option<(TextRange, TextRange)> {
+    for statement in statements {
+        let outcomes = match statement {
+            Stmt::If(node) if !node.orelse.is_empty() => {
+                distinct_branch_outcomes([branch_flow(&node.body), branch_flow(&node.orelse)])
+            }
+            Stmt::Match(node) => distinct_branch_outcomes(
+                node.cases
+                    .iter()
+                    .map(|case| branch_flow(&case.body))
+                    .collect::<Vec<_>>(),
+            ),
+            Stmt::Try(node) if node.finalbody.is_empty() => {
+                distinct_try_outcomes(&node.body, &node.orelse, &node.handlers)
+            }
+            Stmt::TryStar(node) if node.finalbody.is_empty() => {
+                distinct_try_outcomes(&node.body, &node.orelse, &node.handlers)
+            }
+            _ => None,
+        };
+        if outcomes.is_some() {
+            return outcomes;
+        }
+        let nested = match statement {
+            Stmt::If(node) => {
+                outcomes_in_loop(&node.body).or_else(|| outcomes_in_loop(&node.orelse))
+            }
+            Stmt::With(node) => outcomes_in_loop(&node.body),
+            Stmt::AsyncWith(node) => outcomes_in_loop(&node.body),
+            Stmt::Match(node) => node
+                .cases
+                .iter()
+                .find_map(|case| outcomes_in_loop(&case.body)),
+            Stmt::Try(node) => outcomes_in_loop(&node.body)
+                .or_else(|| {
+                    node.handlers
+                        .iter()
+                        .find_map(|handler| outcomes_in_loop(except_body(handler)))
+                })
+                .or_else(|| outcomes_in_loop(&node.orelse))
+                .or_else(|| outcomes_in_loop(&node.finalbody)),
+            Stmt::TryStar(node) => outcomes_in_loop(&node.body)
+                .or_else(|| {
+                    node.handlers
+                        .iter()
+                        .find_map(|handler| outcomes_in_loop(except_body(handler)))
+                })
+                .or_else(|| outcomes_in_loop(&node.orelse))
+                .or_else(|| outcomes_in_loop(&node.finalbody)),
+            Stmt::For(_)
+            | Stmt::AsyncFor(_)
+            | Stmt::While(_)
+            | Stmt::FunctionDef(_)
+            | Stmt::AsyncFunctionDef(_)
+            | Stmt::ClassDef(_) => None,
+            _ => None,
+        };
+        if nested.is_some() {
+            return nested;
+        }
+    }
+    None
+}
+
+#[derive(Clone, Copy, Default)]
+struct BranchFlow {
+    retryable: Option<TextRange>,
+    terminal: Option<TextRange>,
+}
+
+fn distinct_try_outcomes(
+    body: &[Stmt],
+    orelse: &[Stmt],
+    handlers: &[ExceptHandler],
+) -> Option<(TextRange, TextRange)> {
+    let mut success = branch_flow(body);
+    merge_flow(&mut success, branch_flow(orelse));
+    let mut branches = vec![success];
+    branches.extend(
+        handlers
+            .iter()
+            .map(|handler| branch_flow(except_body(handler))),
+    );
+    distinct_branch_outcomes(branches)
+}
+
+fn distinct_branch_outcomes(
+    branches: impl IntoIterator<Item = BranchFlow>,
+) -> Option<(TextRange, TextRange)> {
+    let branches = branches.into_iter().collect::<Vec<_>>();
+    for (retry_index, retry_branch) in branches.iter().enumerate() {
+        let Some(retryable) = retry_branch.retryable else {
+            continue;
+        };
+        if let Some(terminal) = branches
+            .iter()
+            .enumerate()
+            .find(|(terminal_index, branch)| {
+                *terminal_index != retry_index && branch.terminal.is_some()
+            })
+            .and_then(|(_, branch)| branch.terminal)
+        {
+            return Some((retryable, terminal));
+        }
+    }
+    None
+}
+
+fn branch_flow(statements: &[Stmt]) -> BranchFlow {
+    let mut flow = BranchFlow::default();
+    for statement in statements {
+        match statement {
+            Stmt::Continue(_) => {
+                flow.retryable.get_or_insert(statement.range());
+            }
+            Stmt::Return(_) | Stmt::Raise(_) | Stmt::Break(_) => {
+                flow.terminal.get_or_insert(statement.range());
+            }
+            Stmt::If(node) => {
+                merge_flow(&mut flow, branch_flow(&node.body));
+                merge_flow(&mut flow, branch_flow(&node.orelse));
+            }
+            Stmt::With(node) => merge_flow(&mut flow, branch_flow(&node.body)),
+            Stmt::AsyncWith(node) => merge_flow(&mut flow, branch_flow(&node.body)),
+            Stmt::Match(node) => {
+                for case in &node.cases {
+                    merge_flow(&mut flow, branch_flow(&case.body));
+                }
+            }
+            Stmt::Try(node) => {
+                merge_flow(&mut flow, branch_flow(&node.body));
+                for handler in &node.handlers {
+                    merge_flow(&mut flow, branch_flow(except_body(handler)));
+                }
+                merge_flow(&mut flow, branch_flow(&node.orelse));
+                merge_flow(&mut flow, branch_flow(&node.finalbody));
+            }
+            Stmt::TryStar(node) => {
+                merge_flow(&mut flow, branch_flow(&node.body));
+                for handler in &node.handlers {
+                    merge_flow(&mut flow, branch_flow(except_body(handler)));
+                }
+                merge_flow(&mut flow, branch_flow(&node.orelse));
+                merge_flow(&mut flow, branch_flow(&node.finalbody));
+            }
+            Stmt::For(_)
+            | Stmt::AsyncFor(_)
+            | Stmt::While(_)
+            | Stmt::FunctionDef(_)
+            | Stmt::AsyncFunctionDef(_)
+            | Stmt::ClassDef(_) => {}
+            _ => {}
+        }
+    }
+    flow
+}
+
+fn merge_flow(flow: &mut BranchFlow, nested: BranchFlow) {
+    if flow.retryable.is_none() {
+        flow.retryable = nested.retryable;
+    }
+    if flow.terminal.is_none() {
+        flow.terminal = nested.terminal;
+    }
+}
+
+fn except_body(handler: &ExceptHandler) -> &[Stmt] {
+    let ExceptHandler::ExceptHandler(handler) = handler;
+    &handler.body
 }
 
 fn line_starts(source: &str) -> Vec<usize> {
