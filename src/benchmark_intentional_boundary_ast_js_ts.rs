@@ -18,6 +18,10 @@ use super::intentional_boundary_ast::{
     validate_language_ast,
 };
 
+#[path = "benchmark_intentional_boundary_ast_js_ts_retry.rs"]
+mod retry;
+use retry::find_retry_loop;
+
 pub fn census_intentional_boundary_javascript_ast(
     repository: &str,
     revision: &str,
@@ -185,13 +189,21 @@ impl JsTsBodyVisitor<'_> {
         let thin_delegation = body
             .and_then(thin_delegation_expression)
             .map(|call| offset_range(self.repository_path, call, &self.line_starts));
+        let distinct_retry_outcomes =
+            body.and_then(|body| find_retry_loop(&body.statements))
+                .map(|(retryable, terminal)| {
+                    (
+                        offset_range(self.repository_path, retryable, &self.line_starts),
+                        offset_range(self.repository_path, terminal, &self.line_starts),
+                    )
+                });
         self.candidates.push(AstCallableCandidate {
             byte_start: span.start as usize,
             byte_end: span.end as usize,
             start_line,
             end_line,
             thin_delegation,
-            distinct_retry_outcomes: None,
+            distinct_retry_outcomes,
             generator_marker: None,
             versioned_compatibility_annotation: None,
         });
