@@ -636,13 +636,15 @@ fn reproduced_generator_qualifies_only_after_all_three_evidence_groups() {
     )
     .unwrap();
     let evidence = super::super::compose_intentional_boundary_generator_evidence(
-        &fixture.inventory,
-        &fixture.source,
-        &fixture.semantic,
-        &fixture.manifests,
-        &fixture.bindings,
-        &fixture.evidence,
-        &census,
+        super::super::IntentionalBoundaryGeneratorEvidenceInputs {
+            inventory: &fixture.inventory,
+            source_census: &fixture.source,
+            semantic_census: &fixture.semantic,
+            manifest_census: &fixture.manifests,
+            binding_census: &fixture.bindings,
+            base_evidence: &fixture.evidence,
+            generator_census: &census,
+        },
     )
     .unwrap();
     let protocol = super::super::validate_intentional_boundary_protocol(

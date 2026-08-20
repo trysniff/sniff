@@ -54,6 +54,14 @@ struct ReplayFailure {
     detail: String,
 }
 
+struct ReplayContext<'a> {
+    inventory: &'a IntentionalBoundaryRepositoryInventory,
+    source_census: &'a IntentionalBoundarySourceCensus,
+    semantic_census: &'a IntentionalBoundarySemanticCensus,
+    binding_census: &'a IntentionalBoundaryManifestBindingCensus,
+    declarations: &'a [IntentionalBoundaryManifestDeclaration],
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn census_intentional_boundary_generators(
     repository: &str,
@@ -124,6 +132,13 @@ where
         .iter()
         .map(|declaration| (declaration.declaration_id.as_str(), *declaration))
         .collect::<BTreeMap<_, _>>();
+    let replay_context = ReplayContext {
+        inventory,
+        source_census,
+        semantic_census,
+        binding_census,
+        declarations: &manifest_census.declarations,
+    };
     for subject in subjects {
         grouped
             .entry(nearest_declarations(
@@ -151,16 +166,7 @@ where
                         .ok_or_else(|| "generator grouping invented a declaration".to_string())
                 })
                 .collect::<Result<Vec<_>, _>>()?;
-            replay_outcome(
-                inventory,
-                source_census,
-                semantic_census,
-                binding_census,
-                &manifest_census.declarations,
-                &candidates,
-                &subjects,
-                &mut executor,
-            )?
+            replay_outcome(&replay_context, &candidates, &subjects, &mut executor)?
         };
         let configuration_declaration_id = match &outcome {
             IntentionalBoundaryGeneratorReplayOutcome::Reproduced { declaration_id, .. } => {
@@ -325,11 +331,7 @@ fn path_is_under(path: &str, directory: &str) -> bool {
 }
 
 fn replay_outcome<F>(
-    inventory: &IntentionalBoundaryRepositoryInventory,
-    source_census: &IntentionalBoundarySourceCensus,
-    semantic_census: &IntentionalBoundarySemanticCensus,
-    binding_census: &IntentionalBoundaryManifestBindingCensus,
-    all_declarations: &[IntentionalBoundaryManifestDeclaration],
+    context: &ReplayContext<'_>,
     declarations: &[&IntentionalBoundaryManifestDeclaration],
     subjects: &[IntentionalBoundaryGeneratorSubject],
     executor: &mut F,
@@ -347,7 +349,7 @@ where
         .collect::<BTreeSet<_>>();
     let outputs = paths
         .into_iter()
-        .map(|path| expected_output(inventory, source_census, path))
+        .map(|path| expected_output(context.inventory, context.source_census, path))
         .collect::<Result<Vec<_>, _>>()?;
     let mut candidates = declarations.to_vec();
     candidates.sort_by_key(|declaration| generator_candidate_key(declaration));
@@ -355,10 +357,10 @@ where
     let mut supported = 0usize;
     for declaration in candidates {
         let Some(command) = generator_command_with_context(
-            inventory,
-            all_declarations,
-            semantic_census,
-            binding_census,
+            context.inventory,
+            context.declarations,
+            context.semantic_census,
+            context.binding_census,
             declaration,
         ) else {
             continue;

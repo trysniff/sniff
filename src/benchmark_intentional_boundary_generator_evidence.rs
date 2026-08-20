@@ -20,15 +20,29 @@ use std::collections::{BTreeMap, BTreeSet};
 
 const GENERATOR_INPUT: &str = "generator_replay";
 
+#[derive(Clone, Copy)]
+pub struct IntentionalBoundaryGeneratorEvidenceInputs<'a> {
+    pub inventory: &'a IntentionalBoundaryRepositoryInventory,
+    pub source_census: &'a IntentionalBoundarySourceCensus,
+    pub semantic_census: &'a IntentionalBoundarySemanticCensus,
+    pub manifest_census: &'a IntentionalBoundaryManifestCensus,
+    pub binding_census: &'a IntentionalBoundaryManifestBindingCensus,
+    pub base_evidence: &'a IntentionalBoundaryEvidenceCensus,
+    pub generator_census: &'a IntentionalBoundaryGeneratorCensus,
+}
+
 pub fn compose_intentional_boundary_generator_evidence(
-    inventory: &IntentionalBoundaryRepositoryInventory,
-    source_census: &IntentionalBoundarySourceCensus,
-    semantic_census: &IntentionalBoundarySemanticCensus,
-    manifest_census: &IntentionalBoundaryManifestCensus,
-    binding_census: &IntentionalBoundaryManifestBindingCensus,
-    base_evidence: &IntentionalBoundaryEvidenceCensus,
-    generator_census: &IntentionalBoundaryGeneratorCensus,
+    inputs: IntentionalBoundaryGeneratorEvidenceInputs<'_>,
 ) -> Result<IntentionalBoundaryEvidenceCensus, String> {
+    let IntentionalBoundaryGeneratorEvidenceInputs {
+        inventory,
+        source_census,
+        semantic_census,
+        manifest_census,
+        binding_census,
+        base_evidence,
+        generator_census,
+    } = inputs;
     validate_intentional_boundary_generator_census_commitment(
         inventory,
         source_census,
@@ -98,24 +112,10 @@ pub fn compose_intentional_boundary_generator_evidence(
 }
 
 pub fn validate_intentional_boundary_generator_evidence(
-    inventory: &IntentionalBoundaryRepositoryInventory,
-    source_census: &IntentionalBoundarySourceCensus,
-    semantic_census: &IntentionalBoundarySemanticCensus,
-    manifest_census: &IntentionalBoundaryManifestCensus,
-    binding_census: &IntentionalBoundaryManifestBindingCensus,
-    base_evidence: &IntentionalBoundaryEvidenceCensus,
-    generator_census: &IntentionalBoundaryGeneratorCensus,
+    inputs: IntentionalBoundaryGeneratorEvidenceInputs<'_>,
     evidence_census: &IntentionalBoundaryEvidenceCensus,
 ) -> Result<(), String> {
-    let expected = compose_intentional_boundary_generator_evidence(
-        inventory,
-        source_census,
-        semantic_census,
-        manifest_census,
-        binding_census,
-        base_evidence,
-        generator_census,
-    )?;
+    let expected = compose_intentional_boundary_generator_evidence(inputs)?;
     if evidence_census != &expected {
         return Err("intentional-boundary generator evidence changed".to_string());
     }
