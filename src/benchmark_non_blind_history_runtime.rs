@@ -16,6 +16,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+#[cfg(target_os = "macos")]
+#[path = "benchmark_non_blind_history_runtime_macos.rs"]
+mod macos;
+
 const TEST_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 const TEST_OUTPUT_LIMIT: usize = 1024 * 1024;
 const TEST_MEMORY_LIMIT: u64 = 4 * 1024 * 1024 * 1024;
@@ -109,6 +113,17 @@ pub(crate) fn prepare_historical_runtime(
         launcher_kind = "windows_cmd_batch";
     }
 
+    #[cfg(target_os = "macos")]
+    let macos_closure = macos::resolve_runtime_closure(
+        &root,
+        &launch.target,
+        &launch.runtime_files,
+        &launch.runtime_roots,
+    )?;
+    #[cfg(target_os = "macos")]
+    launch
+        .runtime_files
+        .extend(macos_closure.identity_files.iter().cloned());
     let runtime_identity = runtime_identity(&launch.runtime_files, &root, launcher_kind)?;
     let mut read_only_paths = Vec::new();
     let mut executable_paths = Vec::new();
@@ -118,6 +133,8 @@ pub(crate) fn prepare_historical_runtime(
         #[cfg(windows)]
         collect_windows_runtime_images(runtime_root, &mut executable_paths)?;
     }
+    #[cfg(target_os = "macos")]
+    read_only_paths.extend(macos_closure.read_only_paths);
     if !launch.repository_target && !is_system_runtime(&launch.target) {
         push_external(&root, &mut read_only_paths, launch.target.clone());
         #[cfg(windows)]
