@@ -126,16 +126,33 @@ fn other_pattern_consensus_uses_a_normalized_explicit_mechanism() {
     assert_eq!(audit.status, HistoricalV2LabelStatus::Accepted);
 }
 
-struct ReviewFixture {
-    root: tempfile::TempDir,
-    protocol: ValidatedHistoricalV2Protocol,
-    bundle: HistoricalV2SourceReviewBundle,
+#[test]
+fn reviewer_identity_aliases_are_not_independent() {
+    let fixture = ReviewFixture::new();
+    let worksheets = vec![
+        fixture.accepted("Reviewer A", SlopPattern::NeedlessIndirection, ""),
+        fixture.accepted("  reviewer   a  ", SlopPattern::NeedlessIndirection, ""),
+    ];
+    let error = audit_historical_v2_label_reviews(
+        &fixture.protocol,
+        fixture.root.path(),
+        &fixture.bundle,
+        &worksheets,
+    )
+    .unwrap_err();
+    assert!(error.contains("repeats a reviewer"), "{error}");
+}
+
+pub(crate) struct ReviewFixture {
+    pub(crate) root: tempfile::TempDir,
+    pub(crate) protocol: ValidatedHistoricalV2Protocol,
+    pub(crate) bundle: HistoricalV2SourceReviewBundle,
     before_line: String,
     after_line: String,
 }
 
 impl ReviewFixture {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         let protocol = validate_historical_v2_protocol(include_bytes!(
             "../sniffbench/historical-v2-protocol.json"
         ))
@@ -208,7 +225,7 @@ impl ReviewFixture {
         prepare_historical_v2_label_review(&self.protocol, self.root.path(), &self.bundle).unwrap()
     }
 
-    fn accepted(
+    pub(crate) fn accepted(
         &self,
         reviewer_id: &str,
         pattern: SlopPattern,
@@ -233,7 +250,7 @@ impl ReviewFixture {
         worksheet
     }
 
-    fn rejected(&self, reviewer_id: &str) -> HistoricalV2LabelWorksheet {
+    pub(crate) fn rejected(&self, reviewer_id: &str) -> HistoricalV2LabelWorksheet {
         let mut worksheet = self.blank();
         worksheet.reviewer = Some(reviewer(reviewer_id));
         worksheet.task.decision = HistoricalV2ReviewDecision {
@@ -282,7 +299,10 @@ impl ReviewFixture {
         )
     }
 
-    fn audit(&self, worksheets: &[HistoricalV2LabelWorksheet]) -> HistoricalV2LabelAudit {
+    pub(crate) fn audit(
+        &self,
+        worksheets: &[HistoricalV2LabelWorksheet],
+    ) -> HistoricalV2LabelAudit {
         audit_historical_v2_label_reviews(
             &self.protocol,
             self.root.path(),
