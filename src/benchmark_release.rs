@@ -295,6 +295,16 @@ mod history_v2_slot_runner;
 
 pub use history_v2_slot_runner::*;
 
+#[path = "benchmark_history_v2_slot_sweep_schema.rs"]
+mod history_v2_slot_sweep_schema;
+
+pub use history_v2_slot_sweep_schema::*;
+
+#[path = "benchmark_history_v2_slot_sweep.rs"]
+mod history_v2_slot_sweep;
+
+pub use history_v2_slot_sweep::*;
+
 #[path = "benchmark_history_v2_slot_operations_support.rs"]
 mod history_v2_slot_operations_support;
 
