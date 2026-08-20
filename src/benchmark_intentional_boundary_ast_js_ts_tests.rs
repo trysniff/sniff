@@ -92,3 +92,99 @@ fn unwraps_typescript_assertion_around_call() {
             .is_some()
     );
 }
+
+#[test]
+fn records_distinct_switch_retry_and_terminal_outcomes() {
+    let source = concat!(
+        "export function process() { while (true) { switch (target()) { ",
+        "case 'retry': continue; default: return 1; } } }",
+    );
+    let (record, facts) = facts("src/example.js", source);
+
+    let method = &record.methods[0];
+    assert!(
+        facts[&(method.name.clone(), method.start_line)]
+            .distinct_retry_outcomes
+            .is_some()
+    );
+}
+
+#[test]
+fn records_typescript_if_retry_and_throw_outcomes() {
+    let source = concat!(
+        "export async function process(): Promise<void> { for (;;) { ",
+        "if (await retryable()) { continue; } else { throw new Error('terminal'); } } }",
+    );
+    let (record, facts) = facts("src/example.ts", source);
+
+    let method = &record.methods[0];
+    assert!(
+        facts[&(method.name.clone(), method.start_line)]
+            .distinct_retry_outcomes
+            .is_some()
+    );
+}
+
+#[test]
+fn retry_and_terminal_in_one_if_branch_are_not_distinct() {
+    let source = concat!(
+        "export function process() { while (true) { if (retryable()) { ",
+        "continue; return 1; } else { work(); } } }",
+    );
+    let (record, facts) = facts("src/example.js", source);
+
+    let method = &record.methods[0];
+    assert!(
+        facts[&(method.name.clone(), method.start_line)]
+            .distinct_retry_outcomes
+            .is_none()
+    );
+}
+
+#[test]
+fn nested_loop_continue_does_not_count_for_outer_branches() {
+    let source = concat!(
+        "export function process() { while (true) { if (retryable()) { ",
+        "while (nested()) { continue; } } else { return 1; } } }",
+    );
+    let (record, facts) = facts("src/example.js", source);
+
+    let method = &record.methods[0];
+    assert!(
+        facts[&(method.name.clone(), method.start_line)]
+            .distinct_retry_outcomes
+            .is_none()
+    );
+}
+
+#[test]
+fn switch_break_does_not_count_as_loop_terminal() {
+    let source = concat!(
+        "export function process() { while (true) { switch (target()) { ",
+        "case 'retry': continue; default: break; } } }",
+    );
+    let (record, facts) = facts("src/example.js", source);
+
+    let method = &record.methods[0];
+    assert!(
+        facts[&(method.name.clone(), method.start_line)]
+            .distinct_retry_outcomes
+            .is_none()
+    );
+}
+
+#[test]
+fn labeled_break_can_be_a_terminal_loop_outcome() {
+    let source = concat!(
+        "export function process() { attempts: while (true) { switch (target()) { ",
+        "case 'retry': continue attempts; default: break attempts; } } }",
+    );
+    let (record, facts) = facts("src/example.js", source);
+
+    let method = &record.methods[0];
+    assert!(
+        facts[&(method.name.clone(), method.start_line)]
+            .distinct_retry_outcomes
+            .is_some()
+    );
+}
