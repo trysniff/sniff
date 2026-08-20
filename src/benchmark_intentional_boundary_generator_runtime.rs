@@ -167,10 +167,31 @@ fn verify_clean_snapshot(root: &Path) -> Result<(), ReplayFailure> {
     if !output.stdout.is_empty() {
         return Err(ReplayFailure {
             reason: IntentionalBoundaryGeneratorUnresolvedReason::RepositoryMutation,
-            detail: "generator changed files outside its exact reproduced outputs".to_string(),
+            detail: format!(
+                "generator changed repository paths after replay: {}",
+                bounded_status_summary(&output.stdout)
+            ),
         });
     }
     Ok(())
+}
+
+fn bounded_status_summary(status: &[u8]) -> String {
+    let status = String::from_utf8_lossy(status);
+    let entries = status
+        .lines()
+        .take(8)
+        .map(|line| {
+            line.chars()
+                .flat_map(char::escape_default)
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>();
+    if entries.is_empty() {
+        "<non-text status output>".to_string()
+    } else {
+        entries.join("; ")
+    }
 }
 
 fn runtime_plan_failure(error: HistoricalRuntimePlanError) -> ReplayFailure {
@@ -197,5 +218,24 @@ fn failed(detail: impl Into<String>) -> ReplayFailure {
     ReplayFailure {
         reason: IntentionalBoundaryGeneratorUnresolvedReason::ExecutionFailed,
         detail: detail.into(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::bounded_status_summary;
+
+    #[test]
+    fn repository_mutation_summary_is_bounded_and_escaped() {
+        let status = (0..10)
+            .map(|index| format!("?? path-{index}\\t.rs"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let summary = bounded_status_summary(status.as_bytes());
+
+        assert_eq!(summary.matches("?? path-").count(), 8);
+        assert!(summary.contains("path-0\\\\t.rs"));
+        assert!(!summary.contains("path-8"));
     }
 }
