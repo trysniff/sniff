@@ -363,6 +363,16 @@ mod history_v2_release_gate;
 
 pub use history_v2_release_gate::*;
 
+#[path = "benchmark_history_v2_corpus_schema.rs"]
+mod history_v2_corpus_schema;
+
+pub use history_v2_corpus_schema::*;
+
+#[path = "benchmark_history_v2_corpus.rs"]
+mod history_v2_corpus;
+
+pub use history_v2_corpus::*;
+
 #[path = "benchmark_intentional_boundary_frame_task.rs"]
 mod intentional_boundary_frame_task;
 
