@@ -95,6 +95,14 @@ pub(super) fn execute_generator_replay(
                 reason: IntentionalBoundaryGeneratorUnresolvedReason::SandboxUnavailable,
                 detail: "Windows AppContainer denied Cargo's compiler child; generator replay requires a supported Linux proof host"
                     .to_string(),
+                });
+        }
+        #[cfg(windows)]
+        if windows_go_child_launch_denied(&command.execution, &output.stderr) {
+            return Err(ReplayFailure {
+                reason: IntentionalBoundaryGeneratorUnresolvedReason::SandboxUnavailable,
+                detail: "Windows AppContainer denied a Go toolchain child; generator replay requires a supported Linux or macOS proof host"
+                    .to_string(),
             });
         }
         if output.timed_out || output.status_code != Some(0) {
@@ -229,6 +237,15 @@ fn windows_python_child_launch_denied(command: &[String], stderr: &str) -> bool 
     command.first().is_some_and(|program| program == "uv")
         && stderr.contains("Failed to query Python interpreter")
         && stderr.contains("Access is denied. (os error 5)")
+}
+
+#[cfg(windows)]
+fn windows_go_child_launch_denied(command: &[String], stderr: &str) -> bool {
+    command.first().is_some_and(|program| program == "go")
+        && stderr.contains("Access is denied")
+        && (stderr.contains("fork/exec")
+            || stderr.contains("CreateProcess")
+            || stderr.contains("could not execute"))
 }
 
 fn verify_outputs(root: &Path, expected: &[ExpectedOutput]) -> Result<Vec<String>, ReplayFailure> {

@@ -1,8 +1,19 @@
 use super::*;
 use crate::benchmark::release::{
-    IntentionalBoundaryProjectModelCensus, IntentionalBoundaryProjectModelExecution,
-    IntentionalBoundaryProjectModelTarget, IntentionalBoundarySemanticRange,
+    IntentionalBoundaryIndexerKind, IntentionalBoundaryProjectModelCensus,
+    IntentionalBoundaryProjectModelExecution, IntentionalBoundaryProjectModelTarget,
+    IntentionalBoundarySemanticCensus, IntentionalBoundarySemanticIndexerCensus,
+    IntentionalBoundarySemanticMethod, IntentionalBoundarySemanticMethodStatus,
+    IntentionalBoundarySemanticOrigin, IntentionalBoundarySemanticRange,
+    IntentionalBoundarySemanticSymbolCategory, IntentionalBoundarySemanticSymbolFacts,
+    IntentionalBoundarySemanticVisibility, bind_intentional_boundary_manifests,
+    census_intentional_boundary_go_ast, census_intentional_boundary_manifests,
+    census_intentional_boundary_repository, extract_intentional_boundary_compiler_and_ast_evidence,
+    inventory_intentional_boundary_repository, parse_intentional_boundary_go_list,
 };
+use std::fs;
+use std::path::Path;
+use std::process::Command;
 
 fn directive(path: &str, line: u32, source_text: &str) -> IntentionalBoundaryGoGenerateDirective {
     IntentionalBoundaryGoGenerateDirective {
@@ -308,4 +319,308 @@ fn alias_declarations_without_an_executable_directive_are_not_replayed() {
     let models = project_models("go.mod", &["tools/gen.go"]);
 
     assert!(go_generator_command(&models, &declaration).is_none());
+}
+
+#[test]
+fn real_go_generator_reproduces_compiler_owned_output_twice_offline() {
+    let fixture = real_fixture();
+    let go_available = Command::new("go")
+        .arg("version")
+        .output()
+        .is_ok_and(|output| output.status.success());
+
+    let census = super::super::census_intentional_boundary_generators(
+        &fixture.repository,
+        &fixture.revision,
+        fixture.root.path(),
+        &fixture.inventory,
+        &fixture.source,
+        &fixture.semantic,
+        &fixture.project_models,
+        &fixture.manifests,
+        &fixture.bindings,
+        &fixture.evidence,
+    )
+    .unwrap();
+
+    let outcome = &census.replays[0].outcome;
+    match outcome {
+        crate::benchmark::release::IntentionalBoundaryGeneratorReplayOutcome::Reproduced {
+            preparations,
+            outputs,
+            executions,
+            ..
+        } => {
+            assert!(go_available, "Go replay succeeded without a visible Go runtime");
+            assert_eq!(preparations.len(), 2);
+            assert_eq!(outputs.len(), 1);
+            assert_eq!(executions.len(), 2);
+            assert!(preparations.iter().all(|execution| execution.network_enabled));
+            assert!(executions.iter().all(|execution| {
+                !execution.network_enabled
+                    && execution.environment.get("GOPROXY").map(String::as_str) == Some("off")
+            }));
+        }
+        crate::benchmark::release::IntentionalBoundaryGeneratorReplayOutcome::Unresolved {
+            reason:
+                crate::benchmark::release::IntentionalBoundaryGeneratorUnresolvedReason::RuntimeUnavailable,
+            ..
+        } if !go_available => {}
+        crate::benchmark::release::IntentionalBoundaryGeneratorReplayOutcome::Unresolved {
+            reason:
+                crate::benchmark::release::IntentionalBoundaryGeneratorUnresolvedReason::SandboxUnavailable,
+            ..
+        } if cfg!(windows) => {}
+        _ => panic!("real Go generator did not reproduce its committed output: {outcome:#?}"),
+    }
+}
+
+struct RealFixture {
+    root: tempfile::TempDir,
+    repository: String,
+    revision: String,
+    inventory: crate::benchmark::release::IntentionalBoundaryRepositoryInventory,
+    source: crate::benchmark::release::IntentionalBoundarySourceCensus,
+    semantic: IntentionalBoundarySemanticCensus,
+    project_models: IntentionalBoundaryProjectModelCensus,
+    manifests: crate::benchmark::release::IntentionalBoundaryManifestCensus,
+    bindings: crate::benchmark::release::IntentionalBoundaryManifestBindingCensus,
+    evidence: crate::benchmark::release::IntentionalBoundaryEvidenceCensus,
+}
+
+fn real_fixture() -> RealFixture {
+    let root = tempfile::tempdir().unwrap();
+    git(root.path(), &["init", "--quiet"]);
+    git(root.path(), &["config", "user.name", "SniffBench"]);
+    git(
+        root.path(),
+        &["config", "user.email", "bench@example.invalid"],
+    );
+    git(
+        root.path(),
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/example/go-generator-fixture.git",
+        ],
+    );
+    fs::create_dir_all(root.path().join("tools/cmd/generate")).unwrap();
+    fs::write(
+        root.path().join("go.mod"),
+        "module example.com/sniff-go-generator\n\ngo 1.22\n",
+    )
+    .unwrap();
+    fs::write(
+        root.path().join("tools/gen.go"),
+        concat!(
+            "package tools\n\n",
+            "//go:generate go run ./cmd/generate\n",
+            "func Keep() int { return 1 }\n",
+        ),
+    )
+    .unwrap();
+    let generated = concat!(
+        "// Code generated by go generate; DO NOT EDIT.\n\n",
+        "package tools\n\n",
+        "func GeneratedValue() int { return 7 }\n",
+    );
+    fs::write(root.path().join("tools/generated.go"), generated).unwrap();
+    fs::write(
+        root.path().join("tools/cmd/generate/main.go"),
+        format!(
+            "package main\n\nimport \"os\"\n\nfunc main() {{\n\tif err := os.WriteFile(\"generated.go\", []byte({generated:?}), 0o644); err != nil {{\n\t\tpanic(err)\n\t}}\n}}\n"
+        ),
+    )
+    .unwrap();
+    git(root.path(), &["add", "."]);
+    git(root.path(), &["commit", "--quiet", "-m", "fixture"]);
+    let revision = git(root.path(), &["rev-parse", "HEAD"]);
+    let repository = "github.com/example/go-generator-fixture".to_string();
+    let inventory =
+        inventory_intentional_boundary_repository(&repository, &revision, root.path()).unwrap();
+    let source =
+        census_intentional_boundary_repository(&repository, &revision, root.path(), &inventory)
+            .unwrap();
+    let semantic = semantic_fixture(&source);
+    let ast = census_intentional_boundary_go_ast(
+        &repository,
+        &revision,
+        root.path(),
+        &inventory,
+        &source,
+        &semantic,
+    )
+    .unwrap();
+    let evidence = extract_intentional_boundary_compiler_and_ast_evidence(
+        &repository,
+        &revision,
+        root.path(),
+        &inventory,
+        &source,
+        &semantic,
+        &[ast],
+    )
+    .unwrap();
+    let manifests =
+        census_intentional_boundary_manifests(&repository, &revision, root.path(), &inventory)
+            .unwrap();
+    let bindings = bind_intentional_boundary_manifests(&source, &semantic, &manifests).unwrap();
+    let project_models = parse_intentional_boundary_go_list(
+        root.path(),
+        &inventory,
+        "go.mod",
+        &"7".repeat(64),
+        go_list_output(root.path()).as_bytes(),
+    )
+    .unwrap();
+    RealFixture {
+        root,
+        repository,
+        revision,
+        inventory,
+        source,
+        semantic,
+        project_models,
+        manifests,
+        bindings,
+        evidence,
+    }
+}
+
+fn go_list_output(root: &Path) -> String {
+    let root = fs::canonicalize(root).unwrap();
+    let module = serde_json::json!({
+        "Path": "example.com/sniff-go-generator",
+        "Version": "",
+        "Dir": root,
+        "GoMod": root.join("go.mod"),
+        "Main": true,
+    });
+    [
+        serde_json::json!({
+            "Dir": root.join("tools"),
+            "ImportPath": "example.com/sniff-go-generator/tools",
+            "Name": "tools",
+            "GoFiles": ["gen.go", "generated.go"],
+            "Module": module,
+        }),
+        serde_json::json!({
+            "Dir": root.join("tools/cmd/generate"),
+            "ImportPath": "example.com/sniff-go-generator/tools/cmd/generate",
+            "Name": "main",
+            "GoFiles": ["main.go"],
+            "Module": module,
+        }),
+    ]
+    .into_iter()
+    .map(|value| serde_json::to_string(&value).unwrap())
+    .collect()
+}
+
+fn semantic_fixture(
+    source: &crate::benchmark::release::IntentionalBoundarySourceCensus,
+) -> IntentionalBoundarySemanticCensus {
+    let methods = source
+        .source_files
+        .iter()
+        .flat_map(|file| {
+            file.methods.iter().map(move |method| {
+                let symbol_id = format!(
+                    "scip-go generator-fixture {}/{}().",
+                    file.repository_path, method.symbol_name
+                );
+                let definition = IntentionalBoundarySemanticRange {
+                    repository_path: file.repository_path.clone(),
+                    start_line_zero_based: method.start_line.saturating_sub(1) as u32,
+                    start_character_zero_based: 0,
+                    end_line_zero_based: method.end_line.saturating_sub(1) as u32,
+                    end_character_zero_based: 1,
+                };
+                IntentionalBoundarySemanticMethod {
+                    parser_unit_id: method.parser_unit_id.clone(),
+                    repository_path: file.repository_path.clone(),
+                    symbol_name: method.symbol_name.clone(),
+                    start_line: method.start_line,
+                    end_line: method.end_line,
+                    indexer: IntentionalBoundaryIndexerKind::Go,
+                    status: IntentionalBoundarySemanticMethodStatus::Resolved {
+                        symbol: Box::new(IntentionalBoundarySemanticSymbolFacts {
+                            symbol_id: symbol_id.clone(),
+                            provider_identity: symbol_id,
+                            display_name: Some(method.symbol_name.clone()),
+                            category: IntentionalBoundarySemanticSymbolCategory::Callable,
+                            provider_kind: "function".to_string(),
+                            documentation: Vec::new(),
+                            signature: None,
+                            signature_referenced_symbols: Vec::new(),
+                            owner: None,
+                            definitions: vec![definition.clone()],
+                            visibility: IntentionalBoundarySemanticVisibility::Public,
+                            surfaces: Vec::new(),
+                            origin: IntentionalBoundarySemanticOrigin::Repository,
+                            ambiguity_notes: Vec::new(),
+                        }),
+                        joined_definition: Some(definition),
+                    },
+                    occurrences: Vec::new(),
+                    calls: Vec::new(),
+                    relationships: Vec::new(),
+                    imports: Vec::new(),
+                    test_relationships: Vec::new(),
+                }
+            })
+        })
+        .collect::<Vec<_>>();
+    let mut semantic = IntentionalBoundarySemanticCensus {
+        schema_version:
+            crate::benchmark::release::INTENTIONAL_BOUNDARY_SEMANTIC_CENSUS_SCHEMA_VERSION,
+        semantic_contract:
+            crate::benchmark::release::intentional_boundary_semantic::SEMANTIC_CENSUS_CONTRACT
+                .to_string(),
+        repository: source.repository.clone(),
+        revision: source.revision.clone(),
+        source_census_sha256: source.census_sha256.clone(),
+        indexers: vec![IntentionalBoundarySemanticIndexerCensus {
+            indexer: IntentionalBoundaryIndexerKind::Go,
+            tool_name: "scip-go".to_string(),
+            tool_version: Some("fixture".to_string()),
+            semantic_facts_sha256: "8".repeat(64),
+            diagnostic_count: 0,
+            diagnostics_sha256: "9".repeat(64),
+            document_count: source.source_files.len(),
+            symbol_count: methods.len(),
+            relationship_count: 0,
+            import_count: 0,
+            call_count: 0,
+            test_relationship_count: 0,
+            unresolved_edge_count: 0,
+        }],
+        resolved_method_count: methods.len(),
+        compiler_excluded_method_count: 0,
+        unresolved_method_count: 0,
+        methods,
+        semantic_census_sha256: String::new(),
+    };
+    semantic.semantic_census_sha256 =
+        crate::benchmark::release::intentional_boundary_semantic::compute_semantic_census_sha256(
+            &semantic,
+        )
+        .unwrap();
+    semantic
+}
+
+fn git(root: &Path, args: &[&str]) -> String {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).unwrap().trim().to_string()
 }
