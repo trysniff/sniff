@@ -4,24 +4,26 @@ use super::intentional_boundary_project_model::{
     compute_execution_id, compute_normalized_model_sha256, compute_target_id,
     finish_project_model_census, is_sha256, regular_inventory_entry,
 };
+#[cfg(test)]
 use super::{
-    BoundaryGitEntryKind, IntentionalBoundaryManifestDeclarationKind,
-    IntentionalBoundaryManifestTarget, IntentionalBoundaryProjectModelCensus,
-    IntentionalBoundaryProjectModelExecution, IntentionalBoundaryProjectModelProvider as Provider,
-    IntentionalBoundaryProjectModelTarget,
+    IntentionalBoundaryManifestDeclarationKind,
     IntentionalBoundaryProjectModelTargetStatus as TargetStatus,
     IntentionalBoundaryProjectModelUnresolvedReason as UnresolvedReason,
+};
+use super::{
+    IntentionalBoundaryProjectModelCensus, IntentionalBoundaryProjectModelExecution,
+    IntentionalBoundaryProjectModelProducerTask,
+    IntentionalBoundaryProjectModelProvider as Provider, IntentionalBoundaryProjectModelTarget,
     IntentionalBoundaryRepositoryInventory,
 };
 use serde::Deserialize;
 use std::collections::BTreeSet;
-use std::fs;
-use std::path::{Component, Path, PathBuf};
+use std::path::Path;
 
-const GRADLE_MODEL_CONTRACT: &str = "sniff-gradle-tooling-project-model-v2";
+const GRADLE_MODEL_CONTRACT: &str = "sniff-gradle-tooling-project-model-v4";
 const GRADLE_TOOLING_API_VERSION: &str = "8.8";
 pub(super) const GRADLE_TOOLING_COMMAND_CONTRACT: &str =
-    "gradle-tooling-api-8.8-custom-model-offline-v2";
+    "gradle-tooling-api-8.8-custom-model-offline-v4";
 
 #[path = "benchmark_intentional_boundary_project_model_gradle_runtime.rs"]
 mod runtime;
@@ -32,6 +34,19 @@ use runtime::{GradleToolingExecutionOutput, census_gradle_project_models_with_ex
 #[path = "benchmark_intentional_boundary_project_model_gradle_validation.rs"]
 mod validation;
 pub use validation::validate_intentional_boundary_gradle_tooling_model;
+
+#[path = "benchmark_intentional_boundary_project_model_gradle_producers.rs"]
+mod producers;
+use producers::normalize_producer_tasks;
+
+#[path = "benchmark_intentional_boundary_project_model_gradle_classification.rs"]
+mod classification;
+pub(super) use classification::validate_gradle_target_classification;
+use classification::{classify_target, output_types};
+
+#[path = "benchmark_intentional_boundary_project_model_gradle_paths.rs"]
+mod paths;
+use paths::*;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -54,6 +69,16 @@ struct GradleToolingProject {
     build_file: String,
     build_file_exists: bool,
     provider_kinds: Vec<String>,
+    production_source_files: Vec<String>,
+    producer_tasks: Vec<GradleToolingProducerTask>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GradleToolingProducerTask {
+    task_path: String,
+    task_type: String,
+    output_files: Vec<String>,
     production_source_files: Vec<String>,
 }
 
@@ -222,6 +247,12 @@ fn normalize_project(
     let provider_output_types = output_types(&provider_kinds);
     let target_status =
         classify_target(context.inventory, &provider_kinds, &source_repository_paths);
+    let producer_tasks = normalize_producer_tasks(
+        context,
+        &project_directory,
+        &source_repository_paths,
+        project.producer_tasks,
+    )?;
     let group = project.group_name.trim();
     let package_name = if group.is_empty() || group == "unspecified" {
         format!("gradle:{}", project.project_path)
@@ -248,272 +279,11 @@ fn normalize_project(
             provider_kinds,
             provider_output_types,
             source_repository_paths,
+            producer_tasks,
             required_features: Vec::new(),
             target_status,
         }),
     ))
-}
-
-fn classify_target(
-    inventory: &IntentionalBoundaryRepositoryInventory,
-    provider_kinds: &[String],
-    source_repository_paths: &[String],
-) -> TargetStatus {
-    if source_repository_paths.is_empty() {
-        return unresolved(
-            UnresolvedReason::SourceSetEmpty,
-            "Gradle project has no Tooling API production source files".to_string(),
-        );
-    }
-    for repository_path in source_repository_paths {
-        let Some(entry) = inventory
-            .tracked_entries
-            .iter()
-            .find(|entry| entry.repository_path == *repository_path)
-        else {
-            return unresolved(
-                UnresolvedReason::SourceNotTracked,
-                "Gradle production source is not present in the immutable Git inventory"
-                    .to_string(),
-            );
-        };
-        if entry.kind != BoundaryGitEntryKind::RegularBlob {
-            return unresolved(
-                UnresolvedReason::SourceNotRegularBlob,
-                "Gradle production source is not a regular Git blob".to_string(),
-            );
-        }
-    }
-    let has_application = provider_kinds.iter().any(|kind| kind == "application");
-    let has_library = provider_kinds.iter().any(|kind| {
-        matches!(
-            kind.as_str(),
-            "gradle_plugin" | "java_library" | "publication"
-        )
-    });
-    let has_unknown = provider_kinds.iter().any(|kind| {
-        !matches!(
-            kind.as_str(),
-            "application" | "gradle_plugin" | "java_library" | "publication" | "unclassified"
-        )
-    });
-    if has_unknown || provider_kinds == ["unclassified"] {
-        return unresolved(
-            UnresolvedReason::UnknownTargetKind,
-            "Gradle project has no explicit application, library, plugin, or publication contract"
-                .to_string(),
-        );
-    }
-    if has_application == has_library {
-        return unresolved(
-            UnresolvedReason::ConflictingTargetKinds,
-            "Gradle project has conflicting or missing boundary plugin roles".to_string(),
-        );
-    }
-    boundary(
-        if has_application {
-            IntentionalBoundaryManifestDeclarationKind::RuntimeEntrypoint
-        } else {
-            IntentionalBoundaryManifestDeclarationKind::PublishedModule
-        },
-        source_repository_paths,
-    )
-}
-
-fn output_types(provider_kinds: &[String]) -> Vec<String> {
-    let mut values = Vec::new();
-    if provider_kinds.iter().any(|kind| kind == "application") {
-        values.push("jvm_application".to_string());
-    }
-    if provider_kinds.iter().any(|kind| {
-        matches!(
-            kind.as_str(),
-            "gradle_plugin" | "java_library" | "publication"
-        )
-    }) {
-        values.push("jvm_library".to_string());
-    }
-    if values.is_empty() {
-        values.push("jvm_classes".to_string());
-    }
-    values
-}
-
-pub(super) fn validate_gradle_target_classification(
-    inventory: &IntentionalBoundaryRepositoryInventory,
-    target: &IntentionalBoundaryProjectModelTarget,
-) -> bool {
-    target.provider == Provider::GradleToolingApi
-        && target.required_features.is_empty()
-        && target.provider_output_types == output_types(&target.provider_kinds)
-        && target.target_status
-            == classify_target(
-                inventory,
-                &target.provider_kinds,
-                &target.source_repository_paths,
-            )
-}
-
-fn boundary(
-    declaration_kind: IntentionalBoundaryManifestDeclarationKind,
-    repository_paths: &[String],
-) -> TargetStatus {
-    TargetStatus::Boundary {
-        declaration_kind,
-        target: IntentionalBoundaryManifestTarget::RepositoryPaths {
-            repository_paths: repository_paths.to_vec(),
-        },
-    }
-}
-
-fn unresolved(reason: UnresolvedReason, detail: String) -> TargetStatus {
-    TargetStatus::Unresolved { reason, detail }
-}
-
-fn valid_gradle_project_path(path: &str) -> bool {
-    path == ":"
-        || path
-            .strip_prefix(':')
-            .is_some_and(|value| !value.is_empty() && value.split(':').all(valid_gradle_name))
-}
-
-fn valid_gradle_name(name: &str) -> bool {
-    !name.is_empty()
-        && name
-            .chars()
-            .all(|character| !character.is_control() && !matches!(character, ':' | '/' | '\\'))
-}
-
-fn canonical_path(path: &Path, label: &str) -> Result<PathBuf, String> {
-    fs::canonicalize(path)
-        .map(strip_windows_verbatim_prefix)
-        .map_err(|error| format!("failed to resolve {label}: {error}"))
-}
-
-fn emitted_repository_root(
-    settings_directory: &str,
-    invocation_settings_repository_path: &str,
-) -> Result<String, String> {
-    let settings_directory = settings_directory.replace('\\', "/");
-    let invocation_directory = invocation_settings_repository_path
-        .rsplit_once('/')
-        .map_or("", |(directory, _)| directory);
-    if invocation_directory.is_empty() {
-        let root = settings_directory.trim_end_matches('/');
-        return (!root.is_empty())
-            .then(|| root.to_string())
-            .ok_or_else(|| "Gradle Tooling API emitted an invalid repository root".to_string());
-    }
-    let suffix = format!("/{invocation_directory}");
-    if !path_ends_with(&settings_directory, &suffix) {
-        return Err(
-            "Gradle settings directory does not match the invocation settings file".to_string(),
-        );
-    }
-    let root = settings_directory[..settings_directory.len() - suffix.len()].trim_end_matches('/');
-    if root.is_empty() {
-        return Err("Gradle Tooling API emitted an invalid repository root".to_string());
-    }
-    Ok(root.to_string())
-}
-
-fn emitted_host_path(
-    root: &Path,
-    emitted_root: &str,
-    raw: &str,
-    label: &str,
-    allow_root: bool,
-) -> Result<PathBuf, String> {
-    let raw = raw.replace('\\', "/");
-    let emitted_root = emitted_root.trim_end_matches('/');
-    let relative = if path_eq(&raw, emitted_root) {
-        ""
-    } else {
-        let prefix = format!("{emitted_root}/");
-        if !path_starts_with(&raw, &prefix) {
-            return Err(format!("{label} is outside the emitted repository"));
-        }
-        &raw[prefix.len()..]
-    };
-    let relative_path = Path::new(relative);
-    if (!allow_root && relative.is_empty())
-        || relative_path
-            .components()
-            .any(|component| !matches!(component, Component::Normal(_)))
-    {
-        return Err(format!("{label} is not safely repository-relative"));
-    }
-    let path = canonical_path(&root.join(relative_path), label)?;
-    if !path.starts_with(root) {
-        return Err(format!("{label} escaped the immutable repository"));
-    }
-    Ok(path)
-}
-
-fn path_eq(left: &str, right: &str) -> bool {
-    if cfg!(windows) {
-        left.eq_ignore_ascii_case(right)
-    } else {
-        left == right
-    }
-}
-
-fn path_starts_with(path: &str, prefix: &str) -> bool {
-    if cfg!(windows) {
-        path.get(..prefix.len())
-            .is_some_and(|value| value.eq_ignore_ascii_case(prefix))
-    } else {
-        path.starts_with(prefix)
-    }
-}
-
-fn path_ends_with(path: &str, suffix: &str) -> bool {
-    if cfg!(windows) {
-        path.to_ascii_lowercase()
-            .ends_with(&suffix.to_ascii_lowercase())
-    } else {
-        path.ends_with(suffix)
-    }
-}
-
-fn repository_path(root: &Path, raw: &Path) -> Result<String, String> {
-    let path = canonical_path(raw, "Gradle project-model path")?;
-    let relative = path
-        .strip_prefix(root)
-        .map_err(|_| "Gradle project-model path is outside repository".to_string())?;
-    if relative.as_os_str().is_empty()
-        || relative
-            .components()
-            .any(|component| !matches!(component, Component::Normal(_)))
-    {
-        return Err("Gradle project-model path is not safely repository-relative".to_string());
-    }
-    Ok(relative.to_string_lossy().replace('\\', "/"))
-}
-
-fn strip_windows_verbatim_prefix(path: PathBuf) -> PathBuf {
-    #[cfg(windows)]
-    {
-        use std::path::Prefix;
-        let mut components = path.components();
-        let Some(Component::Prefix(prefix)) = components.next() else {
-            return path;
-        };
-        match prefix.kind() {
-            Prefix::VerbatimDisk(letter) => {
-                let mut normalized = PathBuf::from(format!("{}:\\", letter as char));
-                normalized.extend(
-                    components.filter(|component| !matches!(component, Component::RootDir)),
-                );
-                normalized
-            }
-            _ => path,
-        }
-    }
-    #[cfg(not(windows))]
-    {
-        path
-    }
 }
 
 #[cfg(test)]

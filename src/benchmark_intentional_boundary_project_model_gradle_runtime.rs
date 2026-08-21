@@ -6,6 +6,7 @@ use super::super::non_blind_history_runtime::{
     HistoricalRuntimePlanError, prepare_historical_runtime,
 };
 use super::*;
+use crate::benchmark::release::BoundaryGitEntryKind;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -219,7 +220,7 @@ fn run_gradle_tooling_model(
     plan.command.timeout = GRADLE_TOOLING_TIMEOUT;
     plan.command.output_limit = GRADLE_TOOLING_OUTPUT_LIMIT;
     let toolchain_identity_sha256 = hash_json(&(
-        "sniffbench-gradle-tooling-runtime-v3",
+        "sniffbench-gradle-tooling-runtime-v4",
         &plan.runtime_identity,
         GRADLE_MACOS_JAVA_TOOL_OPTIONS,
         GRADLE_CLIENT_SOURCE,

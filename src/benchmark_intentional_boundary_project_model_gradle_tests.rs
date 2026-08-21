@@ -184,7 +184,8 @@ fn project_json(
         "production_source_files": sources
             .iter()
             .map(|source| model_path(root, emitted_root, source))
-            .collect::<Vec<_>>()
+            .collect::<Vec<_>>(),
+        "producer_tasks": []
     })
 }
 
@@ -194,7 +195,7 @@ fn tooling_output(root: &Path) -> Vec<u8> {
 
 fn tooling_output_at(root: &Path, emitted_root: Option<&str>) -> Vec<u8> {
     serde_json::to_vec(&serde_json::json!({
-        "contract": "sniff-gradle-tooling-project-model-v2",
+        "contract": "sniff-gradle-tooling-project-model-v4",
         "tooling_api_version": "8.8",
         "gradle_version": "8.8",
         "settings_directory": model_path(root, emitted_root, ""),
@@ -233,6 +234,26 @@ fn tooling_output_at(root: &Path, emitted_root: Option<&str>) -> Vec<u8> {
         ]
     }))
     .unwrap()
+}
+
+fn library_producer(root: &Path, emitted_root: Option<&str>) -> serde_json::Value {
+    serde_json::json!({
+        "task_path": ":library:writeGenerated",
+        "task_type": "org.gradle.api.DefaultTask",
+        "output_files": [model_path(root, emitted_root, "library/src/main/kotlin")],
+        "production_source_files": [
+            model_path(root, emitted_root, "library/src/main/kotlin/Api.kt"),
+            model_path(root, emitted_root, "library/src/main/kotlin/More.kt"),
+        ]
+    })
+}
+
+fn tooling_output_with_library_producer(root: &Path, emitted_root: Option<&str>) -> Vec<u8> {
+    let mut model: serde_json::Value =
+        serde_json::from_slice(&tooling_output_at(root, emitted_root)).unwrap();
+    model["projects"][2]["producer_tasks"] =
+        serde_json::Value::Array(vec![library_producer(root, emitted_root)]);
+    serde_json::to_vec(&model).unwrap()
 }
 
 fn semantic_censuses(
@@ -390,6 +411,199 @@ fn normalizes_gradle_roles_and_exact_production_source_sets() {
     )
     .unwrap();
     validate_intentional_boundary_project_model_census_commitment(&inventory, &census).unwrap();
+}
+
+#[test]
+fn normalizes_exact_gradle_producer_tasks_from_the_tooling_model() {
+    let (root, inventory) = repository();
+    let census = parse_intentional_boundary_gradle_tooling_model(
+        root.path(),
+        &inventory,
+        "settings.gradle.kts",
+        &"a".repeat(64),
+        &tooling_output_with_library_producer(root.path(), None),
+    )
+    .unwrap();
+
+    let library = census
+        .targets
+        .iter()
+        .find(|target| target.target_name == ":library")
+        .unwrap();
+    assert_eq!(library.producer_tasks.len(), 1);
+    assert_eq!(
+        library.producer_tasks[0].task_path,
+        ":library:writeGenerated"
+    );
+    assert_eq!(
+        library.producer_tasks[0].source_repository_paths,
+        [
+            "library/src/main/kotlin/Api.kt",
+            "library/src/main/kotlin/More.kt"
+        ]
+    );
+    validate_intentional_boundary_project_model_census_commitment(&inventory, &census).unwrap();
+}
+
+#[test]
+fn normalizes_declared_gradle_outputs_that_do_not_exist_until_execution() {
+    let (root, inventory) = repository();
+    let mut model: serde_json::Value =
+        serde_json::from_slice(&tooling_output_with_library_producer(root.path(), None)).unwrap();
+    model["projects"][2]["producer_tasks"][0]["output_files"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::Value::String(format!(
+            "{}/library/build/generated/prepared.txt",
+            emitted_path(root.path(), "")
+                .trim_end_matches('/')
+                .trim_end_matches('\\')
+        )));
+    let census = parse_intentional_boundary_gradle_tooling_model(
+        root.path(),
+        &inventory,
+        "settings.gradle.kts",
+        &"a".repeat(64),
+        serde_json::to_string(&model).unwrap().as_bytes(),
+    )
+    .unwrap();
+    let library = census
+        .targets
+        .iter()
+        .find(|target| target.target_name == ":library")
+        .unwrap();
+
+    assert!(
+        library.producer_tasks[0]
+            .output_repository_paths
+            .contains(&"library/build/generated/prepared.txt".to_string())
+    );
+}
+
+#[test]
+fn rejects_gradle_producer_outputs_outside_the_repository_or_at_project_root() {
+    let (root, inventory) = repository();
+    let mut escaped: serde_json::Value = serde_json::from_slice(
+        &tooling_output_with_library_producer(root.path(), Some("/workspace")),
+    )
+    .unwrap();
+    escaped["projects"][2]["producer_tasks"][0]["output_files"][0] =
+        serde_json::Value::String("/outside/generated".to_string());
+    let error = parse_intentional_boundary_gradle_tooling_model(
+        root.path(),
+        &inventory,
+        "settings.gradle.kts",
+        &"a".repeat(64),
+        serde_json::to_string(&escaped).unwrap().as_bytes(),
+    )
+    .unwrap_err();
+    assert!(error.contains("outside the emitted repository"));
+
+    let mut broad: serde_json::Value =
+        serde_json::from_slice(&tooling_output_with_library_producer(root.path(), None)).unwrap();
+    broad["projects"][2]["producer_tasks"][0]["output_files"][0] =
+        serde_json::Value::String(emitted_path(root.path(), "library"));
+    let error = parse_intentional_boundary_gradle_tooling_model(
+        root.path(),
+        &inventory,
+        "settings.gradle.kts",
+        &"a".repeat(64),
+        serde_json::to_string(&broad).unwrap().as_bytes(),
+    )
+    .unwrap_err();
+    assert!(error.contains("entire project"));
+}
+
+#[test]
+fn rejects_gradle_producer_sources_not_owned_by_the_compiler_target() {
+    let (root, inventory) = repository();
+    let mut model: serde_json::Value =
+        serde_json::from_slice(&tooling_output_with_library_producer(root.path(), None)).unwrap();
+    model["projects"][2]["producer_tasks"][0]["production_source_files"][0] =
+        serde_json::Value::String(emitted_path(root.path(), "app/src/main/kotlin/App.kt"));
+    let error = parse_intentional_boundary_gradle_tooling_model(
+        root.path(),
+        &inventory,
+        "settings.gradle.kts",
+        &"a".repeat(64),
+        serde_json::to_string(&model).unwrap().as_bytes(),
+    )
+    .unwrap_err();
+
+    assert!(error.contains("changed ownership"));
+}
+
+#[test]
+fn rejects_duplicate_gradle_producer_tasks_without_collapsing_them() {
+    let (root, inventory) = repository();
+    let mut model: serde_json::Value =
+        serde_json::from_slice(&tooling_output_with_library_producer(root.path(), None)).unwrap();
+    let producer = model["projects"][2]["producer_tasks"][0].clone();
+    model["projects"][2]["producer_tasks"]
+        .as_array_mut()
+        .unwrap()
+        .push(producer);
+    let error = parse_intentional_boundary_gradle_tooling_model(
+        root.path(),
+        &inventory,
+        "settings.gradle.kts",
+        &"a".repeat(64),
+        serde_json::to_string(&model).unwrap().as_bytes(),
+    )
+    .unwrap_err();
+
+    assert!(error.contains("repeated a producer task"));
+}
+
+#[test]
+fn recommitted_tampered_gradle_producer_changes_the_model_commitment() {
+    let (root, inventory) = repository();
+    let mut census = parse_intentional_boundary_gradle_tooling_model(
+        root.path(),
+        &inventory,
+        "settings.gradle.kts",
+        &"a".repeat(64),
+        &tooling_output_with_library_producer(root.path(), None),
+    )
+    .unwrap();
+    let library = census
+        .targets
+        .iter_mut()
+        .find(|target| target.target_name == ":library")
+        .unwrap();
+    library.producer_tasks[0].task_path = ":library:invented".to_string();
+
+    assert!(
+        validate_intentional_boundary_project_model_census_commitment(&inventory, &census)
+            .unwrap_err()
+            .contains("changed")
+    );
+}
+
+#[test]
+fn gradle_producer_identity_ignores_checkout_location() {
+    let (root, inventory) = repository();
+    let clone = tempfile::tempdir().unwrap();
+    let output = Command::new("git")
+        .arg("clone")
+        .arg("--quiet")
+        .arg(root.path())
+        .arg(clone.path())
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let parse = |checkout: &Path| {
+        parse_intentional_boundary_gradle_tooling_model(
+            checkout,
+            &inventory,
+            "settings.gradle.kts",
+            &"b".repeat(64),
+            &tooling_output_with_library_producer(checkout, None),
+        )
+        .unwrap()
+    };
+
+    assert_eq!(parse(root.path()), parse(clone.path()));
 }
 
 #[test]

@@ -7,6 +7,14 @@ import org.gradle.tooling.provider.model.ToolingModelBuilder
 import org.gradle.tooling.provider.model.ToolingModelBuilderRegistry
 
 import javax.inject.Inject
+import java.nio.file.Files
+
+class SniffGradleProducerTaskData implements Serializable {
+    String taskPath
+    String taskType
+    List<String> outputFiles
+    List<String> productionSourceFiles
+}
 
 class SniffGradleProjectModelData implements Serializable {
     String projectPath
@@ -18,6 +26,7 @@ class SniffGradleProjectModelData implements Serializable {
     boolean buildFileExists
     List<String> providerKinds
     List<String> productionSourceFiles
+    List<SniffGradleProducerTaskData> producerTasks
 }
 
 class SniffGradleBuildModelData implements Serializable {
@@ -38,12 +47,13 @@ class SniffGradleModelBuilder implements ToolingModelBuilder {
     @Override
     Object buildAll(String modelName, Project requestedProject) {
         Project root = requestedProject.rootProject
-        List<SniffGradleProjectModelData> projects = root.allprojects
+        List<Project> gradleProjects = root.allprojects
             .toList()
             .sort { left, right -> left.path <=> right.path }
-            .collect { project -> projectModel(project) }
+        List<SniffGradleProjectModelData> projects = gradleProjects.collect { project -> projectModel(project) }
+        attachProducerTasks(gradleProjects, projects)
         new SniffGradleBuildModelData(
-            contract: "sniff-gradle-tooling-project-model-v2",
+            contract: "sniff-gradle-tooling-project-model-v4",
             gradleVersion: root.gradle.gradleVersion,
             settingsDirectory: root.gradle.startParameter.currentDir.canonicalPath,
             projects: projects,
@@ -89,7 +99,60 @@ class SniffGradleModelBuilder implements ToolingModelBuilder {
             buildFileExists: project.buildFile.isFile(),
             providerKinds: kinds.toList(),
             productionSourceFiles: sourceFiles.toList(),
+            producerTasks: [],
         )
+    }
+
+    private static void attachProducerTasks(
+        List<Project> gradleProjects,
+        List<SniffGradleProjectModelData> models
+    ) {
+        gradleProjects.each { producerProject ->
+            producerProject.tasks.toList().sort { left, right -> left.path <=> right.path }.each { task ->
+                if (!task.enabled || !task.outputs.hasOutput) {
+                    return
+                }
+                List<File> outputs = task.outputs.files.files
+                    .collect { file -> file.absoluteFile.toPath().normalize().toFile() }
+                    .sort { left, right -> left.path <=> right.path }
+                models.each { model ->
+                    List<File> sources = model.productionSourceFiles.collect { path -> new File(path) }
+                    List<File> matchingOutputs = outputs.findAll { output ->
+                        sources.any { source -> output == source || (Files.isDirectory(output.toPath()) && source.toPath().startsWith(output.toPath())) }
+                    }
+                    List<File> matchingSources = sources.findAll { source ->
+                        matchingOutputs.any { output -> output == source || source.toPath().startsWith(output.toPath()) }
+                    }
+                    if (!matchingSources.empty) {
+                        Set<org.gradle.api.Task> closure = new LinkedHashSet<>()
+                        List<org.gradle.api.Task> pending = [task]
+                        while (!pending.empty) {
+                            org.gradle.api.Task current = pending.remove(0)
+                            if (closure.add(current)) {
+                                pending.addAll(current.taskDependencies.getDependencies(current))
+                            }
+                        }
+                        List<File> replayOutputs = closure
+                            .collectMany { dependency -> dependency.outputs.files.files as List<File> }
+                            .collect { file -> file.absoluteFile.toPath().normalize().toFile() }
+                            .unique { file -> file.path }
+                            .sort { left, right -> left.path <=> right.path }
+                        model.producerTasks.add(new SniffGradleProducerTaskData(
+                            taskPath: task.path,
+                            taskType: task.class.name.replaceFirst(/_Decorated$/, ""),
+                            outputFiles: replayOutputs.collect { file -> file.path },
+                            productionSourceFiles: matchingSources.collect { file -> file.path },
+                        ))
+                    }
+                }
+            }
+        }
+        models.each { model ->
+            model.producerTasks.sort { left, right ->
+                [left.taskPath, left.taskType, left.outputFiles, left.productionSourceFiles] <=>
+                    [right.taskPath, right.taskType, right.outputFiles, right.productionSourceFiles]
+            }
+        }
     }
 }
 
