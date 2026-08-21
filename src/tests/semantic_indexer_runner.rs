@@ -11,8 +11,8 @@ use super::{
     compact_process_output, files_for_indexer, format_timeout, go_sandbox_environment,
     gradle_indexer_jvm_args, gradle_script_uses_android, indexer_arguments_with_project,
     missing_position_encoding, project_name, reject_unsupported_android_gradle,
-    runtime_file_identities, sandbox_repository_argument, source_integrity_digest,
-    verify_runtime_identities_unchanged, write_private_gradle_properties,
+    resolve_java_home_runtime, runtime_file_identities, sandbox_repository_argument,
+    source_integrity_digest, verify_runtime_identities_unchanged, write_private_gradle_properties,
 };
 #[cfg(windows)]
 use super::{
@@ -492,6 +492,23 @@ fn runtime_identity_detects_same_length_replacement() {
 }
 
 #[test]
+fn explicit_java_home_resolves_exactly_and_never_uses_path_as_a_fallback() {
+    let root = tempfile::tempdir().unwrap();
+    let bin = root.path().join("bin");
+    std::fs::create_dir(&bin).unwrap();
+    let java = bin.join(if cfg!(windows) { "java.exe" } else { "java" });
+    std::fs::write(&java, b"runtime").unwrap();
+
+    assert_eq!(
+        resolve_java_home_runtime(root.path().as_os_str()).unwrap(),
+        std::fs::canonicalize(&java).unwrap()
+    );
+    let missing = root.path().join("missing");
+    let error = resolve_java_home_runtime(missing.as_os_str()).unwrap_err();
+    assert!(error.contains("refusing PATH-based Java resolution"));
+}
+
+#[test]
 fn runtime_integrity_error_does_not_hide_execution_error() {
     let error = combine_run_and_integrity::<()>(
         Err("indexer process failed".to_string()),
@@ -600,6 +617,19 @@ fn windows_kotlin_workspace_launches_the_project_wrapper_jar_directly() {
 #[cfg(windows)]
 #[test]
 fn windows_system_gradle_requires_one_known_launcher_jar() {
+    use zip::write::SimpleFileOptions;
+
+    fn write_runtime_jar(path: &Path, entries: &[&str]) {
+        let mut writer = zip::ZipWriter::new(std::fs::File::create(path).unwrap());
+        for entry in entries {
+            writer
+                .start_file(*entry, SimpleFileOptions::default())
+                .unwrap();
+            writer.write_all(b"fixture").unwrap();
+        }
+        writer.finish().unwrap();
+    }
+
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path().join("gradle");
     let bin = home.join("bin");
@@ -610,16 +640,14 @@ fn windows_system_gradle_requires_one_known_launcher_jar() {
     std::fs::write(&command, "@echo off\r\n").unwrap();
 
     let launcher = lib.join("gradle-launcher-8.14.jar");
-    std::fs::write(&launcher, b"launcher fixture").unwrap();
-    assert_eq!(system_gradle_launcher_jar(&command).unwrap(), launcher);
+    write_runtime_jar(&launcher, &["org/gradle/launcher/bootstrap.class"]);
+    let bootstrap = lib.join("gradle-bootstrap-8.14.jar");
+    write_runtime_jar(&bootstrap, &["org/gradle/launcher/GradleMain.class"]);
+    assert_eq!(system_gradle_launcher_jar(&command).unwrap(), bootstrap);
 
-    std::fs::write(
-        lib.join("gradle-gradle-cli-main-9.0.jar"),
-        b"ambiguous fixture",
-    )
-    .unwrap();
+    write_runtime_jar(&launcher, &["org/gradle/launcher/GradleMain.class"]);
     let error = system_gradle_launcher_jar(&command).unwrap_err();
-    assert!(error.contains("multiple launcher jars"));
+    assert!(error.contains("multiple runtime jars providing org.gradle.launcher.GradleMain"));
 }
 
 #[cfg(windows)]

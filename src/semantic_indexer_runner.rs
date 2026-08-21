@@ -32,6 +32,13 @@ mod gradle_preparation;
 #[cfg(windows)]
 #[path = "semantic_indexer_gradle_windows.rs"]
 mod gradle_windows;
+#[path = "semantic_indexer_java_runtime.rs"]
+mod java_runtime;
+#[cfg(test)]
+use java_runtime::resolve_java_home_runtime;
+use java_runtime::resolve_java_runtime;
+#[cfg(windows)]
+use java_runtime::system_gradle_launcher_jar;
 
 const INDEX_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 #[cfg(debug_assertions)]
@@ -941,7 +948,7 @@ fn build_indexer_sandbox_command(
             entrypoint.clone(),
         ),
         IndexerRuntime::JavaJar => {
-            let java = resolve_runtime("java")?;
+            let java = resolve_java_runtime()?;
             let mut args = Vec::new();
             args.push(format!(
                 "-Duser.home={}",
@@ -2189,50 +2196,6 @@ fn find_system_gradle() -> Result<PathBuf, String> {
         .find(|line| !line.is_empty())
         .map(PathBuf::from)
         .ok_or_else(|| "where.exe reported no usable system Gradle executable".to_string())
-}
-
-#[cfg(windows)]
-fn system_gradle_launcher_jar(gradle: &Path) -> Result<PathBuf, String> {
-    let home = gradle.parent().and_then(Path::parent).ok_or_else(|| {
-        format!(
-            "system Gradle has no installation root: {}",
-            gradle.display()
-        )
-    })?;
-    let lib = home.join("lib");
-    let mut candidates = fs::read_dir(&lib)
-        .map_err(|error| {
-            format!(
-                "failed to inspect system Gradle libraries at {}: {error}",
-                lib.display()
-            )
-        })?
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .filter(|path| {
-            let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
-                return false;
-            };
-            path.is_file()
-                && name.ends_with(".jar")
-                && (name.starts_with("gradle-gradle-cli-main-")
-                    || name.starts_with("gradle-launcher-"))
-        })
-        .collect::<Vec<_>>();
-    candidates.sort();
-    match candidates.as_slice() {
-        [launcher] => Ok(launcher.clone()),
-        [] => Err(format!(
-            "system Gradle at {} has no supported launcher jar in {}; reinstall Gradle",
-            gradle.display(),
-            lib.display()
-        )),
-        _ => Err(format!(
-            "system Gradle at {} has multiple launcher jars in {}; refusing an ambiguous runtime",
-            gradle.display(),
-            lib.display()
-        )),
-    }
 }
 
 #[cfg(windows)]

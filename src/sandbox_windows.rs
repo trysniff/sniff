@@ -50,11 +50,15 @@ use drive::SandboxDriveMapping;
 #[path = "sandbox_windows_recovery.rs"]
 mod recovery;
 use recovery::RecoveryLedger;
+#[path = "sandbox_windows_global_access.rs"]
+mod global_access;
+use global_access::{all_application_packages_access, all_application_packages_tree_access};
 
 const INTERNET_CLIENT_SID: &str = "S-1-15-3-1";
 const PERSISTENT_READ_CAPABILITY: &str = "trysniff.semantic-indexer-read.v1";
 const SE_GROUP_ENABLED: u32 = 0x00000004;
 const FILE_GENERIC_READ_ACCESS: u32 = 0x0012_0089;
+const FILE_GENERIC_EXECUTE_ACCESS: u32 = 0x0012_00A0;
 const DIRECTORY_TRAVERSE_ACCESS: u32 = 0x0012_00A0;
 const PROCESS_CREATION_CHILD_PROCESS_OVERRIDE: u32 = 0x02;
 const ACL_COMMAND_TIMEOUT: Duration = Duration::from_secs(5 * 60);
@@ -166,7 +170,11 @@ pub(super) fn run(spec: &SandboxCommand) -> Result<SandboxOutput, SandboxError> 
         acl_guard.grant_once(&program, "RX", false, &recovery_ledger)?;
     }
     for path in &effective_spec.executable_paths {
-        acl_guard.grant_external_executable(path, &recovery_ledger)?;
+        acl_guard.grant_external_executable(
+            path,
+            &effective_spec.persistent_read_only_paths,
+            &recovery_ledger,
+        )?;
     }
     trace_phase(started, "program execution granted");
     let canonical_root = normalize_windows_path(
@@ -890,6 +898,9 @@ fn ensure_persistent_read_acl(
     if persistent_read_acl_exists(path, capability_sid)? {
         return Ok(());
     }
+    if all_application_packages_tree_access(path, FILE_GENERIC_READ_ACCESS)? {
+        return Ok(());
+    }
     grant_acl(path, capability_sid_text, "R")
 }
 
@@ -1206,6 +1217,7 @@ impl AclGuard {
     fn grant_external_executable(
         &mut self,
         path: &Path,
+        persistent_read_only_paths: &[PathBuf],
         recovery: &RecoveryLedger,
     ) -> Result<(), SandboxError> {
         let path = normalize_windows_path(std::fs::canonicalize(path).map_err(|error| {
@@ -1214,6 +1226,9 @@ impl AclGuard {
                 path.display()
             ))
         })?);
+        if globally_accessible_persistent_executable(&path, persistent_read_only_paths)? {
+            return Ok(());
+        }
         if path.is_dir() {
             return self.grant_once(&path, "RX", true, recovery);
         }
@@ -1284,6 +1299,44 @@ impl AclGuard {
             Err(SandboxError::Failed(failures.join("; ")))
         }
     }
+}
+
+fn globally_accessible_persistent_executable(
+    executable: &Path,
+    persistent_read_only_paths: &[PathBuf],
+) -> Result<bool, SandboxError> {
+    let mut covered = false;
+    for root in persistent_read_only_paths {
+        let root = normalize_windows_path(std::fs::canonicalize(root).map_err(|error| {
+            SandboxError::Invalid(format!(
+                "persistent sandbox path could not be canonicalized: {} ({error})",
+                root.display()
+            ))
+        })?);
+        if executable.starts_with(root) {
+            covered = true;
+            break;
+        }
+    }
+    if !covered {
+        return Ok(false);
+    }
+    if executable.is_dir() {
+        return all_application_packages_tree_access(
+            executable,
+            FILE_GENERIC_READ_ACCESS | FILE_GENERIC_EXECUTE_ACCESS,
+        );
+    }
+    let Some(parent) = executable.parent() else {
+        return Ok(false);
+    };
+    Ok(
+        all_application_packages_access(parent, DIRECTORY_TRAVERSE_ACCESS)?
+            && all_application_packages_access(
+                executable,
+                FILE_GENERIC_READ_ACCESS | FILE_GENERIC_EXECUTE_ACCESS,
+            )?,
+    )
 }
 
 fn explicit_acl_paths(
