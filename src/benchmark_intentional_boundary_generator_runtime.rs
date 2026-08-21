@@ -73,7 +73,7 @@ pub(super) fn execute_generator_replay(
                 stdout_sha256: output.stdout_sha256,
                 stderr_sha256: output.stderr_sha256,
             });
-            if command.execution.first().map(String::as_str) == Some("{sniff_gradle}") {
+            if is_gradle_execution(&command.execution) {
                 cleanup_declared_paths(snapshot.path(), &command.cleanup_paths)?;
             }
             invalidate_expected_outputs(snapshot.path(), expected)?;
@@ -85,7 +85,9 @@ pub(super) fn execute_generator_replay(
         plan.command.timeout = GENERATOR_TIMEOUT;
         #[cfg(target_os = "macos")]
         {
-            plan.command.allow_local_network = false;
+            // Gradle's mandatory single-use daemon uses loopback IPC even with
+            // --no-daemon. Seatbelt still denies every non-loopback endpoint.
+            plan.command.allow_local_network = is_gradle_execution(&command.execution);
         }
         let output = crate::sandbox::run(&plan.command).map_err(sandbox_failure);
         let cleanup = cleanup_runtime_paths(snapshot.path(), &cache, &command.cleanup_paths);
@@ -151,6 +153,10 @@ pub(super) fn execute_generator_replay(
         preparations,
         executions,
     })
+}
+
+fn is_gradle_execution(command: &[String]) -> bool {
+    command.first().map(String::as_str) == Some("{sniff_gradle}")
 }
 
 fn extend_environment(
@@ -390,7 +396,15 @@ fn failed(detail: impl Into<String>) -> ReplayFailure {
 
 #[cfg(test)]
 mod tests {
-    use super::{bounded_status_summary, sanitized_runtime_stderr};
+    use super::{bounded_status_summary, is_gradle_execution, sanitized_runtime_stderr};
+
+    #[test]
+    fn loopback_exception_is_identified_only_for_the_pinned_gradle_adapter() {
+        assert!(is_gradle_execution(&["{sniff_gradle}".to_string()]));
+        assert!(!is_gradle_execution(&["gradle".to_string()]));
+        assert!(!is_gradle_execution(&["cargo".to_string()]));
+        assert!(!is_gradle_execution(&[]));
+    }
 
     #[test]
     fn repository_mutation_summary_is_bounded_and_escaped() {

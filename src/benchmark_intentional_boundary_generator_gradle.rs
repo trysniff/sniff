@@ -7,6 +7,8 @@ use crate::benchmark::release::{
 };
 use std::collections::BTreeMap;
 
+const GRADLE_JAVA_TOOL_OPTIONS: &str = "-Djava.net.preferIPv4Stack=true";
+
 pub(super) enum GradleGeneratorCommandPlan {
     Planned(GeneratorCommand),
     Unresolved {
@@ -102,11 +104,15 @@ pub(super) fn gradle_generator_command_plan(
         })
         .cloned()
         .collect();
+    let environment = BTreeMap::from([(
+        "JAVA_TOOL_OPTIONS".to_string(),
+        GRADLE_JAVA_TOOL_OPTIONS.to_string(),
+    )]);
     GradleGeneratorCommandPlan::Planned(GeneratorCommand {
         preparation: Some(preparation),
-        preparation_environment: BTreeMap::new(),
+        preparation_environment: environment.clone(),
         execution: common,
-        execution_environment: BTreeMap::new(),
+        execution_environment: environment,
         cleanup_paths,
     })
 }

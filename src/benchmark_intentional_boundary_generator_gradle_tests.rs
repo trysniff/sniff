@@ -162,6 +162,12 @@ fn plans_only_the_exact_committed_gradle_producer() {
             .iter()
             .any(|argument| argument == "--rerun-tasks")
     );
+    let expected_environment = BTreeMap::from([(
+        "JAVA_TOOL_OPTIONS".to_string(),
+        "-Djava.net.preferIPv4Stack=true".to_string(),
+    )]);
+    assert_eq!(command.preparation_environment, expected_environment);
+    assert_eq!(command.execution_environment, expected_environment);
     assert_eq!(command.cleanup_paths, ["build/generator-state"]);
 }
 
