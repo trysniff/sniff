@@ -13,7 +13,7 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-const AST_CONTRACT: &str = "sniffbench-intentional-boundary-source-ast-v9";
+const AST_CONTRACT: &str = "sniffbench-intentional-boundary-source-ast-v10";
 pub(super) type AstMethodKey = (String, usize);
 
 pub(super) struct AstMethodSyntaxFact {
@@ -24,7 +24,7 @@ pub(super) struct AstMethodSyntaxFact {
         IntentionalBoundarySemanticRange,
     )>,
     pub generator_marker: Option<IntentionalBoundarySemanticRange>,
-    pub versioned_compatibility_annotation: Option<IntentionalBoundarySemanticRange>,
+    pub versioned_compatibility_source_contract: Option<IntentionalBoundarySemanticRange>,
 }
 
 #[derive(Clone)]
@@ -39,7 +39,7 @@ pub(super) struct AstCallableCandidate {
         IntentionalBoundarySemanticRange,
     )>,
     pub generator_marker: Option<IntentionalBoundarySemanticRange>,
-    pub versioned_compatibility_annotation: Option<IntentionalBoundarySemanticRange>,
+    pub versioned_compatibility_source_contract: Option<IntentionalBoundarySemanticRange>,
 }
 
 pub(super) type AstMethodSyntaxFacts = BTreeMap<AstMethodKey, AstMethodSyntaxFact>;
@@ -94,8 +94,8 @@ pub(super) fn align_callable_candidates(
                     thin_delegation: candidate.thin_delegation.clone(),
                     distinct_retry_outcomes: candidate.distinct_retry_outcomes.clone(),
                     generator_marker: candidate.generator_marker.clone(),
-                    versioned_compatibility_annotation: candidate
-                        .versioned_compatibility_annotation
+                    versioned_compatibility_source_contract: candidate
+                        .versioned_compatibility_source_contract
                         .clone(),
                 },
             );
@@ -300,10 +300,10 @@ fn derive_method(
                     marker: marker.clone(),
                 });
             }
-            if let Some(annotation) = &syntax_method.versioned_compatibility_annotation {
+            if let Some(contract) = &syntax_method.versioned_compatibility_source_contract {
                 facts.push(
-                    IntentionalBoundaryAstFact::VersionedCompatibilityAnnotation {
-                        annotation: annotation.clone(),
+                    IntentionalBoundaryAstFact::VersionedCompatibilitySourceContract {
+                        contract: contract.clone(),
                     },
                 );
             }

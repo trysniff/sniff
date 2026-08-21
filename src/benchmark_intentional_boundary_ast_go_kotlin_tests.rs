@@ -96,6 +96,108 @@ fn rejects_go_body_with_extra_statement() {
 }
 
 #[test]
+fn records_attached_versioned_go_deprecation_contract() {
+    let source = concat!(
+        "package sample\n",
+        "// Process preserves callers compiled against v1.\n",
+        "//\n",
+        "// Deprecated: use ProcessV2; remove in v3.\n",
+        "func Process(value int) int { return value }",
+    );
+    let (record, facts) = go_facts(source);
+
+    let contract = fact_for(&record, &facts, "Process")
+        .versioned_compatibility_source_contract
+        .as_ref()
+        .expect("versioned compatibility contract");
+    assert_eq!(
+        range_text(source, contract),
+        concat!(
+            "// Process preserves callers compiled against v1.\n",
+            "//\n",
+            "// Deprecated: use ProcessV2; remove in v3."
+        )
+    );
+}
+
+#[test]
+fn rejects_unversioned_or_detached_go_deprecation_comments() {
+    for source in [
+        concat!(
+            "package sample\n",
+            "// Deprecated: use ProcessV2.\n",
+            "func Process(value int) int { return value }",
+        ),
+        concat!(
+            "package sample\n",
+            "// Deprecated: remove in v3.\n\n",
+            "func Process(value int) int { return value }",
+        ),
+    ] {
+        let (record, facts) = go_facts(source);
+        assert!(
+            fact_for(&record, &facts, "Process")
+                .versioned_compatibility_source_contract
+                .is_none()
+        );
+    }
+}
+
+#[test]
+fn rejects_version_outside_the_go_deprecation_paragraph() {
+    let source = concat!(
+        "package sample\n",
+        "// Process preserves v1 callers.\n",
+        "//\n",
+        "// Deprecated: use Current.\n",
+        "func Process(value int) int { return value }",
+    );
+    let (record, facts) = go_facts(source);
+
+    assert!(
+        fact_for(&record, &facts, "Process")
+            .versioned_compatibility_source_contract
+            .is_none()
+    );
+}
+
+#[test]
+fn rejects_deprecation_text_inside_a_go_method_body() {
+    let source = concat!(
+        "package sample\n",
+        "func Process(value int) int {\n",
+        "// Deprecated: remove in v3.\n",
+        "return value\n",
+        "}",
+    );
+    let (record, facts) = go_facts(source);
+
+    assert!(
+        fact_for(&record, &facts, "Process")
+            .versioned_compatibility_source_contract
+            .is_none()
+    );
+}
+
+#[test]
+fn records_versioned_go_block_doc_contract() {
+    let source = concat!(
+        "package sample\n",
+        "/*\n",
+        " * Deprecated: retained until version 3.\n",
+        " */\n",
+        "func Process(value int) int { return value }",
+    );
+    let (record, facts) = go_facts(source);
+
+    assert!(
+        fact_for(&record, &facts, "Process")
+            .versioned_compatibility_source_contract
+            .is_some()
+    );
+}
+
+#[test]
 fn records_kotlin_expression_body_call() {
     let source = "fun process(value: Int): Int = target(value)";
     let (record, facts) = kotlin_facts(source);

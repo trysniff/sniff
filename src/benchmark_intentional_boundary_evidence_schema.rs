@@ -2,7 +2,7 @@ use super::{BoundaryEvidenceKind, IntentionalBoundarySemanticRange};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-pub const INTENTIONAL_BOUNDARY_EVIDENCE_CENSUS_SCHEMA_VERSION: u32 = 3;
+pub const INTENTIONAL_BOUNDARY_EVIDENCE_CENSUS_SCHEMA_VERSION: u32 = 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -25,7 +25,7 @@ pub enum IntentionalBoundaryAstProofKind {
     TestInjectionOrReplacement,
     FrameworkRegistration,
     GeneratorMarker,
-    VersionedCompatibilityAnnotation,
+    VersionedCompatibilitySourceContract,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]

@@ -165,13 +165,13 @@ fn records_exact_versioned_compatibility_annotation() {
     else {
         panic!("expected resolved AST method");
     };
-    let [IntentionalBoundaryAstFact::VersionedCompatibilityAnnotation { annotation }] =
+    let [IntentionalBoundaryAstFact::VersionedCompatibilitySourceContract { contract }] =
         facts.as_slice()
     else {
         panic!("expected one versioned compatibility annotation");
     };
-    assert_eq!(annotation.repository_path, "src/lib.rs");
-    assert_eq!(annotation.start_line_zero_based, 0);
+    assert_eq!(contract.repository_path, "src/lib.rs");
+    assert_eq!(contract.start_line_zero_based, 0);
 }
 
 #[test]

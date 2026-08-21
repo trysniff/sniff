@@ -22,6 +22,26 @@ fn range(start: usize, end: usize) -> IntentionalBoundarySemanticRange {
     }
 }
 
+fn source_range(
+    repository_path: &str,
+    source: &str,
+    needle: &str,
+) -> IntentionalBoundarySemanticRange {
+    let start = source.find(needle).expect("fixture source range");
+    let prefix = &source[..start];
+    let line = prefix.bytes().filter(|byte| *byte == b'\n').count() as u32;
+    let character = prefix
+        .rfind('\n')
+        .map_or(start, |line_start| start - line_start - 1) as u32;
+    IntentionalBoundarySemanticRange {
+        repository_path: repository_path.to_string(),
+        start_line_zero_based: line,
+        start_character_zero_based: character,
+        end_line_zero_based: line,
+        end_character_zero_based: character + needle.len() as u32,
+    }
+}
+
 fn fixture_with(
     source: &str,
     calls: Vec<IntentionalBoundarySemanticCallFacts>,
@@ -30,7 +50,27 @@ fn fixture_with(
     IntentionalBoundarySemanticCensus,
     IntentionalBoundaryAstCensus,
 ) {
-    let file = crate::parser::parse_source_checked("src/lib.rs", source.as_bytes()).unwrap();
+    fixture_with_language(
+        "src/lib.rs",
+        "rust",
+        IntentionalBoundaryIndexerKind::Rust,
+        source,
+        calls,
+    )
+}
+
+fn fixture_with_language(
+    repository_path: &str,
+    language: &str,
+    indexer: IntentionalBoundaryIndexerKind,
+    source: &str,
+    calls: Vec<IntentionalBoundarySemanticCallFacts>,
+) -> (
+    IntentionalBoundarySourceCensus,
+    IntentionalBoundarySemanticCensus,
+    IntentionalBoundaryAstCensus,
+) {
+    let file = crate::parser::parse_source_checked(repository_path, source.as_bytes()).unwrap();
     let parsed_method = &file.methods[0];
     let parser_unit_id = "ibm-v1:ast-evidence-fixture".to_string();
     let source_census = IntentionalBoundarySourceCensus {
@@ -41,11 +81,11 @@ fn fixture_with(
         inventory_sha256: "b".repeat(64),
         tracked_entry_count: 1,
         source_files: vec![IntentionalBoundarySourceFile {
-            repository_path: "src/lib.rs".to_string(),
+            repository_path: repository_path.to_string(),
             object_id: "c".repeat(40),
             byte_length: source.len() as u64,
             source_sha256: "d".repeat(64),
-            language: "rust".to_string(),
+            language: language.to_string(),
             methods: vec![IntentionalBoundaryMethodCensusEntry {
                 parser_unit_id: parser_unit_id.clone(),
                 symbol_name: parsed_method.name.clone(),
@@ -59,10 +99,7 @@ fn fixture_with(
         method_count: 1,
         census_sha256: "f".repeat(64),
     };
-    let definition = range(
-        source.find("process").unwrap(),
-        source.find("process").unwrap() + 7,
-    );
+    let definition = source_range(repository_path, source, &parsed_method.name);
     let mut semantic_census = IntentionalBoundarySemanticCensus {
         schema_version: super::super::INTENTIONAL_BOUNDARY_SEMANTIC_CENSUS_SCHEMA_VERSION,
         semantic_contract: super::super::intentional_boundary_semantic::SEMANTIC_CENSUS_CONTRACT
@@ -71,7 +108,7 @@ fn fixture_with(
         revision: source_census.revision.clone(),
         source_census_sha256: source_census.census_sha256.clone(),
         indexers: vec![IntentionalBoundarySemanticIndexerCensus {
-            indexer: IntentionalBoundaryIndexerKind::Rust,
+            indexer,
             tool_name: "fixture-indexer".to_string(),
             tool_version: Some("1.0.0".to_string()),
             semantic_facts_sha256: "1".repeat(64),
@@ -87,16 +124,16 @@ fn fixture_with(
         }],
         methods: vec![IntentionalBoundarySemanticMethod {
             parser_unit_id,
-            repository_path: "src/lib.rs".to_string(),
+            repository_path: repository_path.to_string(),
             symbol_name: parsed_method.name.clone(),
             start_line: parsed_method.start_line,
             end_line: parsed_method.end_line,
-            indexer: IntentionalBoundaryIndexerKind::Rust,
+            indexer,
             status: IntentionalBoundarySemanticMethodStatus::Resolved {
                 symbol: Box::new(IntentionalBoundarySemanticSymbolFacts {
                     symbol_id: SUBJECT.to_string(),
                     provider_identity: SUBJECT.to_string(),
-                    display_name: Some("process".to_string()),
+                    display_name: Some(parsed_method.name.clone()),
                     category: IntentionalBoundarySemanticSymbolCategory::Callable,
                     provider_kind: "function".to_string(),
                     documentation: Vec::new(),
@@ -127,11 +164,19 @@ fn fixture_with(
             &semantic_census,
         )
         .unwrap();
-    let ast = super::super::intentional_boundary_ast_rust::derive_rust_ast_census(
-        &source_census,
-        &semantic_census,
-        &[file],
-    )
+    let ast = match language {
+        "rust" => super::super::intentional_boundary_ast_rust::derive_rust_ast_census(
+            &source_census,
+            &semantic_census,
+            &[file],
+        ),
+        "go" => super::super::intentional_boundary_ast_go_kotlin::derive_go_ast_census(
+            &source_census,
+            &semantic_census,
+            &[file],
+        ),
+        _ => panic!("unsupported AST evidence fixture language: {language}"),
+    }
     .unwrap();
     (source_census, semantic_census, ast)
 }
@@ -163,7 +208,7 @@ fn composes_hash_bound_compiler_and_ast_delegation_evidence() {
 
     let evidence = derive_compiler_and_ast_evidence(&source, &semantic, &asts).unwrap();
 
-    assert_eq!(evidence.schema_version, 3);
+    assert_eq!(evidence.schema_version, 4);
     assert_eq!(evidence.atoms.len(), 2);
     assert_eq!(
         evidence.input_census_sha256.get("source_ast:rust"),
@@ -218,7 +263,7 @@ fn qualifies_versioned_rust_api_only_with_a_resolved_retained_consumer() {
             && matches!(
                 atom.proof,
                 IntentionalBoundaryEvidenceProof::SourceAst(
-                    IntentionalBoundaryAstProofKind::VersionedCompatibilityAnnotation
+                    IntentionalBoundaryAstProofKind::VersionedCompatibilitySourceContract
                 )
             )
     }));
@@ -231,6 +276,64 @@ fn qualifies_versioned_rust_api_only_with_a_resolved_retained_consumer() {
                 )
             )
     }));
+
+    let protocol = super::super::validate_intentional_boundary_protocol(
+        include_bytes!("../sniffbench/non-blind-v1-selection-policy.json"),
+        include_bytes!("../sniffbench/non-blind-v1-history-worksheet.json"),
+        include_bytes!("../sniffbench/blind-oss-v1-source-seal.json"),
+        include_bytes!("../sniffbench/non-blind-v1-intentional-boundary-protocol.json"),
+    )
+    .unwrap();
+    let candidates = super::super::qualify_intentional_boundary_candidates(
+        &protocol, &source, &semantic, &evidence,
+    )
+    .unwrap();
+    assert!(candidates.candidates.iter().any(|candidate| {
+        candidate.category == super::super::IntentionalBoundaryCategory::CompatibilityApi
+    }));
+}
+
+#[test]
+fn qualifies_versioned_go_api_only_with_a_resolved_retained_consumer() {
+    let repository_path = "src/lib.go";
+    let source_text = concat!(
+        "package sample\n",
+        "// Deprecated: retained for callers until v2.\n",
+        "func Process(value int) int { return value }",
+    );
+    let incoming_call = IntentionalBoundarySemanticCallFacts {
+        caller: CALLEE.to_string(),
+        callee: IntentionalBoundarySemanticResolution::Resolved {
+            value: SUBJECT.to_string(),
+        },
+        callsite: source_range(repository_path, source_text, "Process"),
+        dispatch: IntentionalBoundarySemanticDispatch::Static,
+    };
+    let (source, semantic, ast) = fixture_with_language(
+        repository_path,
+        "go",
+        IntentionalBoundaryIndexerKind::Go,
+        source_text,
+        vec![incoming_call],
+    );
+    let asts = BTreeMap::from([("go", &ast)]);
+
+    let evidence = derive_compiler_and_ast_evidence(&source, &semantic, &asts).unwrap();
+
+    assert!(evidence.atoms.iter().any(|atom| {
+        atom.evidence_kind == BoundaryEvidenceKind::VersionedCompatibilityContract
+            && matches!(
+                atom.proof,
+                IntentionalBoundaryEvidenceProof::SourceAst(
+                    IntentionalBoundaryAstProofKind::VersionedCompatibilitySourceContract
+                )
+            )
+    }));
+    assert!(
+        evidence.atoms.iter().any(|atom| {
+            atom.evidence_kind == BoundaryEvidenceKind::RetainedCompatibilityConsumer
+        })
+    );
 
     let protocol = super::super::validate_intentional_boundary_protocol(
         include_bytes!("../sniffbench/non-blind-v1-selection-policy.json"),

@@ -1,3 +1,5 @@
+#[cfg(test)]
+use super::intentional_boundary_ast::derive_language_ast_census;
 use super::intentional_boundary_ast::{
     AstCallableCandidate, AstMethodSyntaxFacts, align_callable_candidates, census_language_ast,
     validate_language_ast,
@@ -12,6 +14,9 @@ use tree_sitter::Node;
 
 #[path = "benchmark_intentional_boundary_ast_go_retry.rs"]
 mod go_retry;
+
+#[path = "benchmark_intentional_boundary_ast_go_compatibility.rs"]
+mod go_compatibility;
 
 #[path = "benchmark_intentional_boundary_ast_kotlin_retry.rs"]
 mod kotlin_retry;
@@ -101,6 +106,15 @@ pub fn validate_intentional_boundary_kotlin_ast_census(
         KOTLIN,
         kotlin_syntax_facts,
     )
+}
+
+#[cfg(test)]
+pub(super) fn derive_go_ast_census(
+    source_census: &IntentionalBoundarySourceCensus,
+    semantic_census: &IntentionalBoundarySemanticCensus,
+    files: &[crate::types::FileRecord],
+) -> Result<IntentionalBoundaryAstCensus, String> {
+    derive_language_ast_census(source_census, semantic_census, files, GO, go_syntax_facts)
 }
 
 fn go_syntax_facts(
@@ -193,6 +207,8 @@ fn go_candidate(
                 node_range(repository_path, terminal),
             )
         });
+    result.versioned_compatibility_source_contract =
+        go_compatibility::versioned_compatibility_contract(repository_path, source, declaration);
     Some(result)
 }
 
@@ -286,7 +302,7 @@ fn candidate(
         thin_delegation,
         distinct_retry_outcomes: None,
         generator_marker: None,
-        versioned_compatibility_annotation: None,
+        versioned_compatibility_source_contract: None,
     }
 }
 
