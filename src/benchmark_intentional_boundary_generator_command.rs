@@ -1,3 +1,4 @@
+use super::go;
 use super::node::{self, GeneratorCommand};
 use super::python;
 use crate::benchmark::release::{
@@ -61,11 +62,18 @@ pub(in crate::benchmark::release) fn generator_command_with_context(
     inventory: &IntentionalBoundaryRepositoryInventory,
     declarations: &[IntentionalBoundaryManifestDeclaration],
     semantic_census: &IntentionalBoundarySemanticCensus,
-    _project_model_census: &IntentionalBoundaryProjectModelCensus,
+    project_model_census: &IntentionalBoundaryProjectModelCensus,
     binding_census: &IntentionalBoundaryManifestBindingCensus,
     declaration: &IntentionalBoundaryManifestDeclaration,
 ) -> Option<GeneratorCommand> {
-    generator_command(inventory, declarations, declaration).or_else(|| {
-        python::python_generator_command(inventory, semantic_census, binding_census, declaration)
-    })
+    generator_command(inventory, declarations, declaration)
+        .or_else(|| {
+            python::python_generator_command(
+                inventory,
+                semantic_census,
+                binding_census,
+                declaration,
+            )
+        })
+        .or_else(|| go::go_generator_command(project_model_census, declaration))
 }

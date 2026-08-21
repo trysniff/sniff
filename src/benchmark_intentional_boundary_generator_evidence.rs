@@ -127,6 +127,7 @@ pub fn validate_intentional_boundary_generator_evidence(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn validate_intentional_boundary_generator_census_commitment(
     inventory: &IntentionalBoundaryRepositoryInventory,
     source_census: &IntentionalBoundarySourceCensus,

@@ -25,6 +25,8 @@ pub(super) const GENERATOR_CONTRACT: &str = "sniffbench-intentional-boundary-gen
 
 #[path = "benchmark_intentional_boundary_generator_command.rs"]
 mod command;
+#[path = "benchmark_intentional_boundary_generator_go.rs"]
+mod go;
 #[path = "benchmark_intentional_boundary_generator_node.rs"]
 mod node;
 #[path = "benchmark_intentional_boundary_generator_python.rs"]
@@ -505,6 +507,7 @@ fn expected_output(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn finish_census(
     inventory: &IntentionalBoundaryRepositoryInventory,
     source: &IntentionalBoundarySourceCensus,
