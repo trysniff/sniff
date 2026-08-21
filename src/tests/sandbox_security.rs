@@ -3,12 +3,20 @@ use crate::repository_proof::run_proof_command;
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 
 const HOST_SECRET_ENV: &str = "SNIFF_TEST_HOST_SECRET_DO_NOT_EXPOSE";
 const HOST_SECRET_VALUE: &str = "sniff-host-secret-evidence";
 static HOST_SECRET_ENV_LOCK: Mutex<()> = Mutex::new(());
+static SANDBOX_RESOURCE_LOCK: Mutex<()> = Mutex::new(());
+
+fn sandbox_resource_guard() -> MutexGuard<'static, ()> {
+    // Hosted kernels account namespace and process limits across the whole test process.
+    SANDBOX_RESOURCE_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 #[cfg(windows)]
 const JAVA_REAL_PATH_PROBE: &str = r#"
@@ -253,6 +261,7 @@ fn windows_runtime_images(java_home: &Path) -> Vec<PathBuf> {
 #[cfg(windows)]
 #[test]
 fn windows_java_can_resolve_a_moved_sandbox_artifact() {
+    let _sandbox_guard = sandbox_resource_guard();
     let repository = tempfile::tempdir().expect("create Java path-probe repository");
     let toolchain = tempfile::tempdir().expect("create external Java path-probe toolchain");
     let (java, java_runtime) = compile_java_real_path_probe(repository.path(), toolchain.path());
@@ -310,6 +319,7 @@ fn windows_java_can_resolve_a_moved_sandbox_artifact() {
 #[cfg(windows)]
 #[test]
 fn windows_mapped_external_child_can_start() {
+    let _sandbox_guard = sandbox_resource_guard();
     let repository = tempfile::tempdir().expect("create Java child-probe repository");
     let toolchain = tempfile::tempdir().expect("create external Java child-probe toolchain");
     let worker = compile_worker(repository.path());
@@ -351,6 +361,7 @@ fn windows_mapped_external_child_can_start() {
 #[cfg(windows)]
 #[test]
 fn windows_mapped_rust_toolchain_child_can_start() {
+    let _sandbox_guard = sandbox_resource_guard();
     let repository = tempfile::tempdir().expect("create Rust child-probe repository");
     let worker = compile_worker(repository.path());
     let cargo_output = Command::new("rustup")
@@ -395,6 +406,7 @@ fn windows_mapped_rust_toolchain_child_can_start() {
 
 #[test]
 fn malicious_worker_cannot_reach_host_secrets_filesystem_or_network() {
+    let _sandbox_guard = sandbox_resource_guard();
     let _environment_guard = HOST_SECRET_ENV_LOCK.lock().unwrap();
     let repository = tempfile::tempdir().expect("create malicious repository");
     let host = tempfile::tempdir().expect("create host-only directory");
@@ -446,6 +458,7 @@ fn malicious_worker_cannot_reach_host_secrets_filesystem_or_network() {
 
 #[test]
 fn repository_proof_command_cannot_reach_host_secrets_filesystem_or_network() {
+    let _sandbox_guard = sandbox_resource_guard();
     let _environment_guard = HOST_SECRET_ENV_LOCK.lock().unwrap();
     let repository = tempfile::tempdir().expect("create malicious proof repository");
     let host = tempfile::tempdir().expect("create proof host-only directory");
@@ -494,6 +507,8 @@ fn repository_proof_command_cannot_reach_host_secrets_filesystem_or_network() {
 
 #[test]
 fn network_enabled_preparation_still_cannot_reach_host_secrets_or_filesystem() {
+    let _sandbox_guard = sandbox_resource_guard();
+    let _environment_guard = HOST_SECRET_ENV_LOCK.lock().unwrap();
     let preparation = tempfile::tempdir().expect("create dependency-preparation root");
     let host = tempfile::tempdir().expect("create host-only directory");
     let secret_path = host.path().join("secret.txt");
@@ -533,6 +548,7 @@ fn network_enabled_preparation_still_cannot_reach_host_secrets_or_filesystem() {
 
 #[test]
 fn malicious_worker_output_is_bounded_on_both_streams() {
+    let _sandbox_guard = sandbox_resource_guard();
     let repository = tempfile::tempdir().expect("create malicious repository");
     let worker = compile_worker(repository.path());
     let mut spec = command(repository.path(), &worker, vec!["flood".to_string()]);
@@ -549,6 +565,7 @@ fn malicious_worker_output_is_bounded_on_both_streams() {
 
 #[test]
 fn malicious_worker_is_terminated_at_the_time_limit() {
+    let _sandbox_guard = sandbox_resource_guard();
     let repository = tempfile::tempdir().expect("create malicious repository");
     let worker = compile_worker(repository.path());
     let mut spec = command(repository.path(), &worker, vec!["sleep".to_string()]);
@@ -562,6 +579,7 @@ fn malicious_worker_is_terminated_at_the_time_limit() {
 
 #[test]
 fn malicious_worker_cannot_exceed_its_memory_limit() {
+    let _sandbox_guard = sandbox_resource_guard();
     let repository = tempfile::tempdir().expect("create malicious repository");
     let worker = compile_worker(repository.path());
     let mut spec = command(repository.path(), &worker, vec!["memory".to_string()]);
@@ -587,6 +605,7 @@ fn malicious_worker_cannot_exceed_its_memory_limit() {
 
 #[test]
 fn malicious_worker_child_fanout_is_bounded() {
+    let _sandbox_guard = sandbox_resource_guard();
     let repository = tempfile::tempdir().expect("create malicious repository");
     let worker = compile_worker(repository.path());
     let mut spec = command(repository.path(), &worker, vec!["fanout".to_string()]);
