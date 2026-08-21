@@ -8,9 +8,11 @@ use super::{
     IntentionalBoundaryGeneratorReplay, IntentionalBoundaryGeneratorReplayOutcome,
     IntentionalBoundaryGeneratorSubject, IntentionalBoundaryGeneratorUnresolvedReason,
     IntentionalBoundaryManifestBindingCensus, IntentionalBoundaryManifestCensus,
-    IntentionalBoundaryManifestDeclaration, IntentionalBoundaryRepositoryInventory,
-    IntentionalBoundarySemanticCensus, IntentionalBoundarySemanticMethodStatus,
-    IntentionalBoundarySourceCensus, validate_intentional_boundary_manifest_bindings,
+    IntentionalBoundaryManifestDeclaration, IntentionalBoundaryProjectModelCensus,
+    IntentionalBoundaryRepositoryInventory, IntentionalBoundarySemanticCensus,
+    IntentionalBoundarySemanticMethodStatus, IntentionalBoundarySourceCensus,
+    validate_intentional_boundary_manifest_bindings,
+    validate_intentional_boundary_project_model_census_commitment,
     validate_intentional_boundary_repository_inventory,
     validate_intentional_boundary_semantic_census, validate_intentional_boundary_source_census,
 };
@@ -19,16 +21,19 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-pub(super) const GENERATOR_CONTRACT: &str = "sniffbench-intentional-boundary-generator-replay-v4";
+pub(super) const GENERATOR_CONTRACT: &str = "sniffbench-intentional-boundary-generator-replay-v6";
 
 #[path = "benchmark_intentional_boundary_generator_command.rs"]
 mod command;
+#[path = "benchmark_intentional_boundary_generator_go.rs"]
+mod go;
 #[path = "benchmark_intentional_boundary_generator_node.rs"]
 mod node;
 #[path = "benchmark_intentional_boundary_generator_python.rs"]
 mod python;
 #[path = "benchmark_intentional_boundary_generator_runtime.rs"]
 mod runtime;
+use command::{GeneratorCommandPlan, generator_command_plan_with_context};
 #[cfg(test)]
 use command::{cargo_generator_command, generator_command};
 pub(super) use command::{generator_command_with_context, is_generator_declaration};
@@ -58,6 +63,7 @@ struct ReplayContext<'a> {
     inventory: &'a IntentionalBoundaryRepositoryInventory,
     source_census: &'a IntentionalBoundarySourceCensus,
     semantic_census: &'a IntentionalBoundarySemanticCensus,
+    project_model_census: &'a IntentionalBoundaryProjectModelCensus,
     binding_census: &'a IntentionalBoundaryManifestBindingCensus,
     declarations: &'a [IntentionalBoundaryManifestDeclaration],
 }
@@ -70,6 +76,7 @@ pub fn census_intentional_boundary_generators(
     inventory: &IntentionalBoundaryRepositoryInventory,
     source_census: &IntentionalBoundarySourceCensus,
     semantic_census: &IntentionalBoundarySemanticCensus,
+    project_model_census: &IntentionalBoundaryProjectModelCensus,
     manifest_census: &IntentionalBoundaryManifestCensus,
     binding_census: &IntentionalBoundaryManifestBindingCensus,
     base_evidence: &IntentionalBoundaryEvidenceCensus,
@@ -81,6 +88,7 @@ pub fn census_intentional_boundary_generators(
         inventory,
         source_census,
         semantic_census,
+        project_model_census,
         manifest_census,
         binding_census,
         base_evidence,
@@ -98,6 +106,7 @@ fn census_generators_with_executor<F>(
     inventory: &IntentionalBoundaryRepositoryInventory,
     source_census: &IntentionalBoundarySourceCensus,
     semantic_census: &IntentionalBoundarySemanticCensus,
+    project_model_census: &IntentionalBoundaryProjectModelCensus,
     manifest_census: &IntentionalBoundaryManifestCensus,
     binding_census: &IntentionalBoundaryManifestBindingCensus,
     base_evidence: &IntentionalBoundaryEvidenceCensus,
@@ -117,6 +126,7 @@ where
         inventory,
         source_census,
         semantic_census,
+        project_model_census,
         manifest_census,
         binding_census,
         base_evidence,
@@ -136,6 +146,7 @@ where
         inventory,
         source_census,
         semantic_census,
+        project_model_census,
         binding_census,
         declarations: &manifest_census.declarations,
     };
@@ -187,6 +198,7 @@ where
         inventory,
         source_census,
         semantic_census,
+        project_model_census,
         manifest_census,
         binding_census,
         base_evidence,
@@ -202,6 +214,7 @@ fn validate_inputs(
     inventory: &IntentionalBoundaryRepositoryInventory,
     source_census: &IntentionalBoundarySourceCensus,
     semantic_census: &IntentionalBoundarySemanticCensus,
+    project_model_census: &IntentionalBoundaryProjectModelCensus,
     manifest_census: &IntentionalBoundaryManifestCensus,
     binding_census: &IntentionalBoundaryManifestBindingCensus,
     base_evidence: &IntentionalBoundaryEvidenceCensus,
@@ -215,6 +228,7 @@ fn validate_inputs(
         source_census,
     )?;
     validate_intentional_boundary_semantic_census(source_census, semantic_census)?;
+    validate_intentional_boundary_project_model_census_commitment(inventory, project_model_census)?;
     validate_manifest_census_commitment(&inventory.inventory_sha256, manifest_census)?;
     validate_intentional_boundary_manifest_bindings(
         source_census,
@@ -354,16 +368,22 @@ where
     let mut candidates = declarations.to_vec();
     candidates.sort_by_key(|declaration| generator_candidate_key(declaration));
     let mut failures = Vec::new();
+    let mut planning_failures = Vec::new();
     let mut supported = 0usize;
     for declaration in candidates {
-        let Some(command) = generator_command_with_context(
+        let command = match generator_command_plan_with_context(
             context.inventory,
             context.declarations,
             context.semantic_census,
+            context.project_model_census,
             context.binding_census,
             declaration,
-        ) else {
-            continue;
+        ) {
+            GeneratorCommandPlan::Planned(command) => command,
+            GeneratorCommandPlan::Unresolved { reason, detail } => {
+                planning_failures.push((declaration.declaration_id.as_str(), reason, detail));
+                continue;
+            }
         };
         supported += 1;
         match executor(declaration, &command, &outputs) {
@@ -382,10 +402,21 @@ where
         }
     }
     if supported == 0 {
-        return Ok(unresolved(
-            IntentionalBoundaryGeneratorUnresolvedReason::UnsupportedConfiguration,
-            "generator replay found no supported locked generator command",
-        ));
+        let (reason, detail) = planning_failures.first().map_or_else(
+            || {
+                (
+                    IntentionalBoundaryGeneratorUnresolvedReason::UnsupportedConfiguration,
+                    "generator replay found no supported locked generator command".to_string(),
+                )
+            },
+            |(id, reason, detail)| {
+                (
+                    *reason,
+                    format!("generator declaration {id} is unresolved: {detail}"),
+                )
+            },
+        );
+        return Ok(unresolved(reason, detail));
     }
     let reason = failures.first().map_or(
         IntentionalBoundaryGeneratorUnresolvedReason::ExecutionFailed,
@@ -419,6 +450,7 @@ fn validate_replay_success(
                     .all(|(index, execution)| {
                         execution.run_number == (index + 1) as u8
                             && execution.command == *preparation
+                            && execution.environment == command.preparation_environment
                             && execution.status_code == 0
                             && !execution.timed_out
                             && execution.network_enabled
@@ -437,6 +469,7 @@ fn validate_replay_success(
             .any(|(index, execution)| {
                 execution.run_number != (index + 1) as u8
                     || execution.command != command.execution
+                    || execution.environment != command.execution_environment
                     || execution.status_code != 0
                     || execution.timed_out
                     || execution.network_enabled
@@ -491,10 +524,12 @@ fn expected_output(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn finish_census(
     inventory: &IntentionalBoundaryRepositoryInventory,
     source: &IntentionalBoundarySourceCensus,
     semantic: &IntentionalBoundarySemanticCensus,
+    project_models: &IntentionalBoundaryProjectModelCensus,
     manifests: &IntentionalBoundaryManifestCensus,
     bindings: &IntentionalBoundaryManifestBindingCensus,
     evidence: &IntentionalBoundaryEvidenceCensus,
@@ -517,6 +552,7 @@ fn finish_census(
         inventory_sha256: inventory.inventory_sha256.clone(),
         source_census_sha256: source.census_sha256.clone(),
         semantic_census_sha256: semantic.semantic_census_sha256.clone(),
+        project_model_census_sha256: project_models.project_model_census_sha256.clone(),
         manifest_census_sha256: manifests.manifest_census_sha256.clone(),
         manifest_binding_census_sha256: bindings.binding_census_sha256.clone(),
         base_evidence_census_sha256: evidence.evidence_census_sha256.clone(),
@@ -557,6 +593,7 @@ pub(super) fn generator_census_sha256(
         &census.inventory_sha256,
         &census.source_census_sha256,
         &census.semantic_census_sha256,
+        &census.project_model_census_sha256,
         &census.manifest_census_sha256,
         &census.manifest_binding_census_sha256,
         &census.base_evidence_census_sha256,

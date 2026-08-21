@@ -117,6 +117,12 @@ fn bind_target(
                     .to_string(),
             ));
         }
+        IntentionalBoundaryManifestTarget::GoGeneratePackage { .. } => {
+            return Ok(binding_unresolved(
+                UnresolvedReason::UnsupportedSelector,
+                "Go generator selectors do not belong to project-model boundaries".to_string(),
+            ));
+        }
     };
     let mut files = Vec::with_capacity(repository_paths.len());
     for repository_path in repository_paths {
@@ -167,6 +173,9 @@ fn bind_target(
             Ok(Outcome::AwaitingGeneratorReplay)
         }
         IntentionalBoundaryManifestDeclarationKind::PackageScript => {
+            Ok(Outcome::AwaitingGeneratorReplay)
+        }
+        IntentionalBoundaryManifestDeclarationKind::GeneratorCommand => {
             Ok(Outcome::AwaitingGeneratorReplay)
         }
     }

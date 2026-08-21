@@ -12,7 +12,10 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 pub(super) const MANIFEST_CONTRACT: &str =
-    "sniffbench-intentional-boundary-manifest-declarations-v4";
+    "sniffbench-intentional-boundary-manifest-declarations-v5";
+
+#[path = "benchmark_intentional_boundary_manifest_go.rs"]
+mod go;
 
 #[path = "benchmark_intentional_boundary_manifest_node.rs"]
 mod node;
@@ -66,7 +69,8 @@ pub fn census_intentional_boundary_manifests(
             IntentionalBoundaryManifestProvider::NodePackageManifest => {
                 node::parse_package_json(&entry.repository_path, source)
             }
-            IntentionalBoundaryManifestProvider::GoPackageMetadata
+            IntentionalBoundaryManifestProvider::GoGenerateSource
+            | IntentionalBoundaryManifestProvider::GoPackageMetadata
             | IntentionalBoundaryManifestProvider::GradleProjectModel => {
                 unreachable!("command-backed providers have no static manifest path")
             }
@@ -92,6 +96,9 @@ pub fn census_intentional_boundary_manifests(
             declarations.push(declaration);
         }
     }
+    let (go_documents, go_declarations) = go::parse_go_generate_sources(root, inventory)?;
+    documents.extend(go_documents);
+    declarations.extend(go_declarations);
     documents.sort_by(|left, right| left.repository_path.cmp(&right.repository_path));
     declarations.sort();
     let document_count_by_provider =

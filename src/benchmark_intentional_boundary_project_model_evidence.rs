@@ -211,7 +211,8 @@ fn append_target_evidence(
             Vec::new(),
         ),
         IntentionalBoundaryManifestDeclarationKind::BuildScript
-        | IntentionalBoundaryManifestDeclarationKind::PackageScript => {
+        | IntentionalBoundaryManifestDeclarationKind::PackageScript
+        | IntentionalBoundaryManifestDeclarationKind::GeneratorCommand => {
             Err("build-script project models require generator replay evidence".to_string())
         }
     }

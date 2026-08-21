@@ -12,8 +12,10 @@ use super::{
     IntentionalBoundaryGeneratorCensus, IntentionalBoundaryGeneratorProofKind,
     IntentionalBoundaryGeneratorReplayOutcome, IntentionalBoundaryManifestBindingCensus,
     IntentionalBoundaryManifestCensus, IntentionalBoundaryManifestProofKind,
-    IntentionalBoundaryRepositoryInventory, IntentionalBoundarySemanticCensus,
-    IntentionalBoundarySourceCensus, validate_intentional_boundary_manifest_bindings,
+    IntentionalBoundaryProjectModelCensus, IntentionalBoundaryRepositoryInventory,
+    IntentionalBoundarySemanticCensus, IntentionalBoundarySourceCensus,
+    validate_intentional_boundary_manifest_bindings,
+    validate_intentional_boundary_project_model_census_commitment,
     validate_intentional_boundary_semantic_census,
 };
 use std::collections::{BTreeMap, BTreeSet};
@@ -25,6 +27,7 @@ pub struct IntentionalBoundaryGeneratorEvidenceInputs<'a> {
     pub inventory: &'a IntentionalBoundaryRepositoryInventory,
     pub source_census: &'a IntentionalBoundarySourceCensus,
     pub semantic_census: &'a IntentionalBoundarySemanticCensus,
+    pub project_model_census: &'a IntentionalBoundaryProjectModelCensus,
     pub manifest_census: &'a IntentionalBoundaryManifestCensus,
     pub binding_census: &'a IntentionalBoundaryManifestBindingCensus,
     pub base_evidence: &'a IntentionalBoundaryEvidenceCensus,
@@ -38,6 +41,7 @@ pub fn compose_intentional_boundary_generator_evidence(
         inventory,
         source_census,
         semantic_census,
+        project_model_census,
         manifest_census,
         binding_census,
         base_evidence,
@@ -47,6 +51,7 @@ pub fn compose_intentional_boundary_generator_evidence(
         inventory,
         source_census,
         semantic_census,
+        project_model_census,
         manifest_census,
         binding_census,
         base_evidence,
@@ -122,10 +127,12 @@ pub fn validate_intentional_boundary_generator_evidence(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn validate_intentional_boundary_generator_census_commitment(
     inventory: &IntentionalBoundaryRepositoryInventory,
     source_census: &IntentionalBoundarySourceCensus,
     semantic_census: &IntentionalBoundarySemanticCensus,
+    project_model_census: &IntentionalBoundaryProjectModelCensus,
     manifest_census: &IntentionalBoundaryManifestCensus,
     binding_census: &IntentionalBoundaryManifestBindingCensus,
     base_evidence: &IntentionalBoundaryEvidenceCensus,
@@ -138,6 +145,7 @@ pub fn validate_intentional_boundary_generator_census_commitment(
         return Err("intentional-boundary generator inventory identity changed".to_string());
     }
     validate_intentional_boundary_semantic_census(source_census, semantic_census)?;
+    validate_intentional_boundary_project_model_census_commitment(inventory, project_model_census)?;
     validate_manifest_census_commitment(&source_census.inventory_sha256, manifest_census)?;
     validate_intentional_boundary_manifest_bindings(
         source_census,
@@ -153,6 +161,7 @@ pub fn validate_intentional_boundary_generator_census_commitment(
         || census.inventory_sha256 != source_census.inventory_sha256
         || census.source_census_sha256 != source_census.census_sha256
         || census.semantic_census_sha256 != semantic_census.semantic_census_sha256
+        || census.project_model_census_sha256 != project_model_census.project_model_census_sha256
         || census.manifest_census_sha256 != manifest_census.manifest_census_sha256
         || census.manifest_binding_census_sha256 != binding_census.binding_census_sha256
         || census.base_evidence_census_sha256 != base_evidence.evidence_census_sha256
@@ -194,6 +203,7 @@ pub fn validate_intentional_boundary_generator_census_commitment(
                     inventory,
                     source_census,
                     semantic_census,
+                    project_model_census,
                     manifest_census,
                     binding_census,
                     replay,
@@ -259,6 +269,7 @@ fn validate_reproduced(
     inventory: &IntentionalBoundaryRepositoryInventory,
     source: &IntentionalBoundarySourceCensus,
     semantic: &IntentionalBoundarySemanticCensus,
+    project_models: &IntentionalBoundaryProjectModelCensus,
     manifests: &IntentionalBoundaryManifestCensus,
     bindings: &IntentionalBoundaryManifestBindingCensus,
     replay: &super::IntentionalBoundaryGeneratorReplay,
@@ -278,6 +289,7 @@ fn validate_reproduced(
         inventory,
         &manifests.declarations,
         semantic,
+        project_models,
         bindings,
         declaration,
     )
@@ -289,6 +301,7 @@ fn validate_reproduced(
                 && preparations.iter().enumerate().all(|(index, execution)| {
                     execution.run_number == (index + 1) as u8
                         && execution.command == *preparation
+                        && execution.environment == planned.preparation_environment
                         && execution.status_code == 0
                         && !execution.timed_out
                         && execution.network_enabled
@@ -306,6 +319,7 @@ fn validate_reproduced(
         || executions.iter().enumerate().any(|(index, execution)| {
             execution.run_number != (index + 1) as u8
                 || execution.command != command
+                || execution.environment != planned.execution_environment
                 || execution.status_code != 0
                 || execution.timed_out
                 || execution.network_enabled

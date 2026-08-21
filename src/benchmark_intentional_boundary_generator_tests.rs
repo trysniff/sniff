@@ -12,6 +12,7 @@ use crate::benchmark::release::{
     census_intentional_boundary_rust_ast, extract_intentional_boundary_compiler_and_ast_evidence,
     inventory_intentional_boundary_repository,
 };
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
@@ -57,6 +58,7 @@ fn success(command: &GeneratorCommand, expected: &ExpectedOutput) -> ReplaySucce
     let execution = |run_number| IntentionalBoundaryGeneratorExecution {
         run_number,
         command: command.execution.clone(),
+        environment: command.execution_environment.clone(),
         runtime_identity_sha256: "d".repeat(64),
         status_code: 0,
         timed_out: false,
@@ -115,18 +117,30 @@ fn replay_receipt_requires_two_exact_non_networked_reproductions() {
     let declaration = declaration("root", "Cargo.toml");
     let command = GeneratorCommand {
         preparation: None,
+        preparation_environment: BTreeMap::new(),
         execution: cargo_generator_command(&declaration).unwrap(),
+        execution_environment: BTreeMap::new(),
         cleanup_paths: Vec::new(),
     };
-    let expected = expected();
-    let valid = success(&command, &expected);
+    let expected_output = expected();
+    let valid = success(&command, &expected_output);
 
-    validate_replay_success(&valid, &command, std::slice::from_ref(&expected)).unwrap();
+    validate_replay_success(&valid, &command, std::slice::from_ref(&expected_output)).unwrap();
 
     let mut networked = valid;
     networked.executions[1].network_enabled = true;
     assert!(
-        validate_replay_success(&networked, &command, &[expected])
+        validate_replay_success(&networked, &command, std::slice::from_ref(&expected_output))
+            .unwrap_err()
+            .contains("receipt contract")
+    );
+
+    let mut changed_environment = success(&command, &expected_output);
+    changed_environment.executions[0]
+        .environment
+        .insert("GOENV".to_string(), "off".to_string());
+    assert!(
+        validate_replay_success(&changed_environment, &command, &[expected_output])
             .unwrap_err()
             .contains("receipt contract")
     );
@@ -139,9 +153,21 @@ struct Fixture {
     inventory: IntentionalBoundaryRepositoryInventory,
     source: IntentionalBoundarySourceCensus,
     semantic: IntentionalBoundarySemanticCensus,
+    project_models: IntentionalBoundaryProjectModelCensus,
     manifests: IntentionalBoundaryManifestCensus,
     bindings: IntentionalBoundaryManifestBindingCensus,
     evidence: IntentionalBoundaryEvidenceCensus,
+}
+
+fn empty_project_models(
+    inventory: &IntentionalBoundaryRepositoryInventory,
+) -> IntentionalBoundaryProjectModelCensus {
+    super::super::intentional_boundary_project_model::finish_project_model_census(
+        inventory,
+        Vec::new(),
+        Vec::new(),
+    )
+    .unwrap()
 }
 
 fn fixture() -> Fixture {
@@ -242,6 +268,7 @@ fn fixture() -> Fixture {
         census_intentional_boundary_manifests(&repository, &revision, root.path(), &inventory)
             .unwrap();
     let bindings = bind_intentional_boundary_manifests(&source, &semantic, &manifests).unwrap();
+    let project_models = empty_project_models(&inventory);
     Fixture {
         root,
         repository,
@@ -249,6 +276,7 @@ fn fixture() -> Fixture {
         inventory,
         source,
         semantic,
+        project_models,
         manifests,
         bindings,
         evidence,
@@ -353,6 +381,7 @@ fn node_fixture() -> Fixture {
         census_intentional_boundary_manifests(&repository, &revision, root.path(), &inventory)
             .unwrap();
     let bindings = bind_intentional_boundary_manifests(&source, &semantic, &manifests).unwrap();
+    let project_models = empty_project_models(&inventory);
     Fixture {
         root,
         repository,
@@ -360,6 +389,7 @@ fn node_fixture() -> Fixture {
         inventory,
         source,
         semantic,
+        project_models,
         manifests,
         bindings,
         evidence,
@@ -461,6 +491,7 @@ fn python_fixture() -> Fixture {
         census_intentional_boundary_manifests(&repository, &revision, root.path(), &inventory)
             .unwrap();
     let bindings = bind_intentional_boundary_manifests(&source, &semantic, &manifests).unwrap();
+    let project_models = empty_project_models(&inventory);
     Fixture {
         root,
         repository,
@@ -468,6 +499,7 @@ fn python_fixture() -> Fixture {
         inventory,
         source,
         semantic,
+        project_models,
         manifests,
         bindings,
         evidence,
@@ -567,6 +599,7 @@ fn fake_replay(command: &GeneratorCommand, outputs: &[ExpectedOutput]) -> Replay
     let execution = |run_number| IntentionalBoundaryGeneratorExecution {
         run_number,
         command: command.execution.clone(),
+        environment: command.execution_environment.clone(),
         runtime_identity_sha256: "1".repeat(64),
         status_code: 0,
         timed_out: false,
@@ -582,6 +615,7 @@ fn fake_replay(command: &GeneratorCommand, outputs: &[ExpectedOutput]) -> Replay
                 .map(|run_number| IntentionalBoundaryGeneratorExecution {
                     run_number,
                     command: preparation.clone(),
+                    environment: command.preparation_environment.clone(),
                     runtime_identity_sha256: "4".repeat(64),
                     status_code: 0,
                     timed_out: false,
@@ -618,6 +652,7 @@ fn reproduced_generator_qualifies_only_after_all_three_evidence_groups() {
         &fixture.inventory,
         &fixture.source,
         &fixture.semantic,
+        &fixture.project_models,
         &fixture.manifests,
         &fixture.bindings,
         &fixture.evidence,
@@ -629,6 +664,7 @@ fn reproduced_generator_qualifies_only_after_all_three_evidence_groups() {
         &fixture.inventory,
         &fixture.source,
         &fixture.semantic,
+        &fixture.project_models,
         &fixture.manifests,
         &fixture.bindings,
         &fixture.evidence,
@@ -640,6 +676,7 @@ fn reproduced_generator_qualifies_only_after_all_three_evidence_groups() {
             inventory: &fixture.inventory,
             source_census: &fixture.source,
             semantic_census: &fixture.semantic,
+            project_model_census: &fixture.project_models,
             manifest_census: &fixture.manifests,
             binding_census: &fixture.bindings,
             base_evidence: &fixture.evidence,
@@ -677,6 +714,7 @@ fn recommitted_tampered_replay_output_is_rejected() {
         &fixture.inventory,
         &fixture.source,
         &fixture.semantic,
+        &fixture.project_models,
         &fixture.manifests,
         &fixture.bindings,
         &fixture.evidence,
@@ -696,6 +734,7 @@ fn recommitted_tampered_replay_output_is_rejected() {
             &fixture.inventory,
             &fixture.source,
             &fixture.semantic,
+            &fixture.project_models,
             &fixture.manifests,
             &fixture.bindings,
             &fixture.evidence,
@@ -703,6 +742,49 @@ fn recommitted_tampered_replay_output_is_rejected() {
         )
         .unwrap_err()
         .contains("output bytes")
+    );
+}
+
+#[test]
+fn recommitted_tampered_replay_environment_is_rejected() {
+    let fixture = fixture();
+    let mut census = census_generators_with_executor(
+        &fixture.repository,
+        &fixture.revision,
+        fixture.root.path(),
+        &fixture.inventory,
+        &fixture.source,
+        &fixture.semantic,
+        &fixture.project_models,
+        &fixture.manifests,
+        &fixture.bindings,
+        &fixture.evidence,
+        |_declaration, command, outputs| Ok(fake_replay(command, outputs)),
+    )
+    .unwrap();
+    let IntentionalBoundaryGeneratorReplayOutcome::Reproduced { executions, .. } =
+        &mut census.replays[0].outcome
+    else {
+        panic!("expected reproduced fixture");
+    };
+    executions[0]
+        .environment
+        .insert("GOENV".to_string(), "changed".to_string());
+    census.generator_census_sha256 = generator_census_sha256(&census).unwrap();
+
+    assert!(
+        super::super::validate_intentional_boundary_generator_census_commitment(
+            &fixture.inventory,
+            &fixture.source,
+            &fixture.semantic,
+            &fixture.project_models,
+            &fixture.manifests,
+            &fixture.bindings,
+            &fixture.evidence,
+            &census,
+        )
+        .unwrap_err()
+        .contains("receipt")
     );
 }
 
@@ -717,6 +799,7 @@ fn real_cargo_generator_reproduces_committed_output_twice_offline() {
         &fixture.inventory,
         &fixture.source,
         &fixture.semantic,
+        &fixture.project_models,
         &fixture.manifests,
         &fixture.bindings,
         &fixture.evidence,
@@ -762,6 +845,7 @@ fn python_entrypoint_command_is_bound_locked_and_project_install_free() {
         &fixture.inventory,
         &fixture.manifests.declarations,
         &fixture.semantic,
+        &fixture.project_models,
         &fixture.bindings,
         declaration,
     )
@@ -821,6 +905,7 @@ fn python_entrypoint_rejects_ambiguous_lock_families() {
             &inventory,
             &fixture.manifests.declarations,
             &fixture.semantic,
+            &fixture.project_models,
             &fixture.bindings,
             declaration,
         )
@@ -839,6 +924,7 @@ fn real_uv_entrypoint_reproduces_committed_output_twice_offline() {
         &fixture.inventory,
         &fixture.source,
         &fixture.semantic,
+        &fixture.project_models,
         &fixture.manifests,
         &fixture.bindings,
         &fixture.evidence,
@@ -899,12 +985,14 @@ fn dependency_preparation_cannot_take_credit_for_generated_output() {
             )
             .to_string(),
         ]),
+        preparation_environment: BTreeMap::new(),
         execution: vec![
             python.to_string(),
             "-I".to_string(),
             "-c".to_string(),
             "pass".to_string(),
         ],
+        execution_environment: BTreeMap::new(),
         cleanup_paths: Vec::new(),
     };
     let outputs =
@@ -933,6 +1021,60 @@ fn dependency_preparation_cannot_take_credit_for_generated_output() {
 }
 
 #[test]
+fn generator_replay_rejects_collateral_repository_mutation() {
+    let fixture = fixture();
+    let declaration = fixture
+        .manifests
+        .declarations
+        .iter()
+        .find(|declaration| {
+            declaration.declaration_kind == IntentionalBoundaryManifestDeclarationKind::BuildScript
+        })
+        .unwrap();
+    let python = if cfg!(windows) { "python" } else { "python3" };
+    let command = GeneratorCommand {
+        preparation: None,
+        preparation_environment: BTreeMap::new(),
+        execution: vec![
+            python.to_string(),
+            "-I".to_string(),
+            "-c".to_string(),
+            concat!(
+                "from pathlib import Path;",
+                "Path('src/generated.rs').write_bytes(",
+                "b'// @generated\\npub fn generated_value() -> u8 { 7 }\\n');",
+                "Path('unexpected.txt').write_bytes(b'mutation')"
+            )
+            .to_string(),
+        ],
+        execution_environment: BTreeMap::new(),
+        cleanup_paths: Vec::new(),
+    };
+    let expected =
+        expected_output(&fixture.inventory, &fixture.source, "src/generated.rs").unwrap();
+
+    let failure = match runtime::execute_generator_replay(
+        fixture.root.path(),
+        &fixture.revision,
+        declaration,
+        &command,
+        &[expected],
+    ) {
+        Ok(_) => panic!("generator mutation was accepted"),
+        Err(failure) => failure,
+    };
+
+    assert!(
+        failure.reason == IntentionalBoundaryGeneratorUnresolvedReason::RepositoryMutation
+            || (cfg!(windows)
+                && failure.reason
+                    == IntentionalBoundaryGeneratorUnresolvedReason::SandboxUnavailable),
+        "unexpected mutation outcome: {}",
+        failure.detail
+    );
+}
+
+#[test]
 fn real_npm_generator_prepares_locked_dependencies_then_reproduces_twice_offline() {
     let fixture = node_fixture();
 
@@ -943,6 +1085,7 @@ fn real_npm_generator_prepares_locked_dependencies_then_reproduces_twice_offline
         &fixture.inventory,
         &fixture.source,
         &fixture.semantic,
+        &fixture.project_models,
         &fixture.manifests,
         &fixture.bindings,
         &fixture.evidence,
@@ -1265,6 +1408,7 @@ fn recommitted_network_disabled_npm_preparation_is_rejected() {
         &fixture.inventory,
         &fixture.source,
         &fixture.semantic,
+        &fixture.project_models,
         &fixture.manifests,
         &fixture.bindings,
         &fixture.evidence,
@@ -1284,6 +1428,7 @@ fn recommitted_network_disabled_npm_preparation_is_rejected() {
             &fixture.inventory,
             &fixture.source,
             &fixture.semantic,
+            &fixture.project_models,
             &fixture.manifests,
             &fixture.bindings,
             &fixture.evidence,
@@ -1304,6 +1449,7 @@ fn recommitted_omitted_package_script_candidate_is_rejected() {
         &fixture.inventory,
         &fixture.source,
         &fixture.semantic,
+        &fixture.project_models,
         &fixture.manifests,
         &fixture.bindings,
         &fixture.evidence,
@@ -1342,6 +1488,7 @@ fn recommitted_omitted_package_script_candidate_is_rejected() {
             &fixture.inventory,
             &fixture.source,
             &fixture.semantic,
+            &fixture.project_models,
             &fixture.manifests,
             &fixture.bindings,
             &fixture.evidence,
