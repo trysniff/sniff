@@ -5,9 +5,9 @@ use crate::benchmark::release::{
     IntentionalBoundarySemanticMethodStatus, IntentionalBoundarySemanticOrigin,
     IntentionalBoundarySemanticRange, IntentionalBoundarySemanticSymbolCategory,
     IntentionalBoundarySemanticSymbolFacts, IntentionalBoundarySemanticVisibility,
-    bind_intentional_boundary_manifests, census_intentional_boundary_manifests,
-    census_intentional_boundary_repository, census_intentional_boundary_rust_ast,
-    extract_intentional_boundary_compiler_and_ast_evidence,
+    bind_intentional_boundary_manifests, census_intentional_boundary_javascript_ast,
+    census_intentional_boundary_manifests, census_intentional_boundary_repository,
+    census_intentional_boundary_rust_ast, extract_intentional_boundary_compiler_and_ast_evidence,
     inventory_intentional_boundary_repository,
 };
 use std::fs;
@@ -51,10 +51,10 @@ fn expected() -> ExpectedOutput {
     }
 }
 
-fn success(command: &[String], expected: &ExpectedOutput) -> ReplaySuccess {
+fn success(command: &GeneratorCommand, expected: &ExpectedOutput) -> ReplaySuccess {
     let execution = |run_number| IntentionalBoundaryGeneratorExecution {
         run_number,
-        command: command.to_vec(),
+        command: command.execution.clone(),
         runtime_identity_sha256: "d".repeat(64),
         status_code: 0,
         timed_out: false,
@@ -71,6 +71,7 @@ fn success(command: &[String], expected: &ExpectedOutput) -> ReplaySuccess {
             first_run_sha256: expected.committed_sha256.clone(),
             second_run_sha256: expected.committed_sha256.clone(),
         }],
+        preparations: Vec::new(),
         executions: vec![execution(1), execution(2)],
     }
 }
@@ -98,19 +99,23 @@ fn nearest_manifest_owns_only_its_descendant_generated_surface() {
     let nested = declaration("nested", "crates/child/Cargo.toml");
 
     assert_eq!(
-        nearest_declaration("crates/child/src/generated.rs", &[&root, &nested]),
-        Some("nested".to_string())
+        nearest_declarations("crates/child/src/generated.rs", &[&root, &nested]),
+        vec!["nested".to_string()]
     );
     assert_eq!(
-        nearest_declaration("src/generated.rs", &[&root, &nested]),
-        Some("root".to_string())
+        nearest_declarations("src/generated.rs", &[&root, &nested]),
+        vec!["root".to_string()]
     );
 }
 
 #[test]
 fn replay_receipt_requires_two_exact_non_networked_reproductions() {
     let declaration = declaration("root", "Cargo.toml");
-    let command = cargo_generator_command(&declaration).unwrap();
+    let command = GeneratorCommand {
+        preparation: None,
+        execution: cargo_generator_command(&declaration).unwrap(),
+        cleanup_paths: Vec::new(),
+    };
     let expected = expected();
     let valid = success(&command, &expected);
 
@@ -207,7 +212,11 @@ fn fixture() -> Fixture {
     let source =
         census_intentional_boundary_repository(&repository, &revision, root.path(), &inventory)
             .unwrap();
-    let semantic = semantic_fixture(&source);
+    let semantic = semantic_fixture(
+        &source,
+        IntentionalBoundaryIndexerKind::Rust,
+        "rust-analyzer",
+    );
     let ast = census_intentional_boundary_rust_ast(
         &repository,
         &revision,
@@ -244,7 +253,122 @@ fn fixture() -> Fixture {
     }
 }
 
-fn semantic_fixture(source: &IntentionalBoundarySourceCensus) -> IntentionalBoundarySemanticCensus {
+fn node_fixture() -> Fixture {
+    let root = tempfile::tempdir().unwrap();
+    git(root.path(), &["init", "--quiet"]);
+    git(root.path(), &["config", "user.name", "SniffBench"]);
+    git(
+        root.path(),
+        &["config", "user.email", "bench@example.invalid"],
+    );
+    git(
+        root.path(),
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/example/node-generator-fixture.git",
+        ],
+    );
+    fs::create_dir(root.path().join("src")).unwrap();
+    fs::create_dir(root.path().join("tools")).unwrap();
+    fs::write(
+        root.path().join("package.json"),
+        concat!(
+            "{\n",
+            "  \"name\": \"node-generator-fixture\",\n",
+            "  \"version\": \"1.0.0\",\n",
+            "  \"scripts\": {\n",
+            "    \"test\": \"node --test\",\n",
+            "    \"generate\": \"node tools/generate.js\"\n",
+            "  }\n",
+            "}\n",
+        ),
+    )
+    .unwrap();
+    fs::write(
+        root.path().join("package-lock.json"),
+        concat!(
+            "{\n",
+            "  \"name\": \"node-generator-fixture\",\n",
+            "  \"version\": \"1.0.0\",\n",
+            "  \"lockfileVersion\": 3,\n",
+            "  \"requires\": true,\n",
+            "  \"packages\": {\"\": {\"name\": \"node-generator-fixture\", ",
+            "\"version\": \"1.0.0\"}}\n",
+            "}\n",
+        ),
+    )
+    .unwrap();
+    fs::write(
+        root.path().join("tools/generate.js"),
+        concat!(
+            "const fs = require('node:fs');\n",
+            "fs.writeFileSync('src/generated.js', ",
+            "'// @generated\\nexport function generatedValue() { return 7; }\\n');\n",
+        ),
+    )
+    .unwrap();
+    fs::write(
+        root.path().join("src/generated.js"),
+        "// @generated\nexport function generatedValue() { return 7; }\n",
+    )
+    .unwrap();
+    git(root.path(), &["add", "."]);
+    git(root.path(), &["commit", "--quiet", "-m", "fixture"]);
+    let revision = git(root.path(), &["rev-parse", "HEAD"]);
+    let repository = "github.com/example/node-generator-fixture".to_string();
+    let inventory =
+        inventory_intentional_boundary_repository(&repository, &revision, root.path()).unwrap();
+    let source =
+        census_intentional_boundary_repository(&repository, &revision, root.path(), &inventory)
+            .unwrap();
+    let semantic = semantic_fixture(
+        &source,
+        IntentionalBoundaryIndexerKind::TypeScriptJavaScript,
+        "scip-typescript",
+    );
+    let ast = census_intentional_boundary_javascript_ast(
+        &repository,
+        &revision,
+        root.path(),
+        &inventory,
+        &source,
+        &semantic,
+    )
+    .unwrap();
+    let evidence = extract_intentional_boundary_compiler_and_ast_evidence(
+        &repository,
+        &revision,
+        root.path(),
+        &inventory,
+        &source,
+        &semantic,
+        &[ast],
+    )
+    .unwrap();
+    let manifests =
+        census_intentional_boundary_manifests(&repository, &revision, root.path(), &inventory)
+            .unwrap();
+    let bindings = bind_intentional_boundary_manifests(&source, &semantic, &manifests).unwrap();
+    Fixture {
+        root,
+        repository,
+        revision,
+        inventory,
+        source,
+        semantic,
+        manifests,
+        bindings,
+        evidence,
+    }
+}
+
+fn semantic_fixture(
+    source: &IntentionalBoundarySourceCensus,
+    indexer: IntentionalBoundaryIndexerKind,
+    tool_name: &str,
+) -> IntentionalBoundarySemanticCensus {
     let mut methods = Vec::new();
     for (path, entry) in source.source_files.iter().flat_map(|file| {
         file.methods
@@ -252,7 +376,7 @@ fn semantic_fixture(source: &IntentionalBoundarySourceCensus) -> IntentionalBoun
             .map(move |method| (file.repository_path.as_str(), method))
     }) {
         let symbol_id = format!(
-            "rust-analyzer cargo generator-fixture 0.1.0 {path}/{}().",
+            "{tool_name} generator-fixture {path}/{}().",
             entry.symbol_name
         );
         let definition = IntentionalBoundarySemanticRange {
@@ -268,7 +392,7 @@ fn semantic_fixture(source: &IntentionalBoundarySourceCensus) -> IntentionalBoun
             symbol_name: entry.symbol_name.clone(),
             start_line: entry.start_line,
             end_line: entry.end_line,
-            indexer: IntentionalBoundaryIndexerKind::Rust,
+            indexer,
             status: IntentionalBoundarySemanticMethodStatus::Resolved {
                 symbol: Box::new(IntentionalBoundarySemanticSymbolFacts {
                     symbol_id: symbol_id.clone(),
@@ -303,8 +427,8 @@ fn semantic_fixture(source: &IntentionalBoundarySourceCensus) -> IntentionalBoun
         revision: source.revision.clone(),
         source_census_sha256: source.census_sha256.clone(),
         indexers: vec![IntentionalBoundarySemanticIndexerCensus {
-            indexer: IntentionalBoundaryIndexerKind::Rust,
-            tool_name: "rust-analyzer".to_string(),
+            indexer,
+            tool_name: tool_name.to_string(),
             tool_version: Some("fixture".to_string()),
             semantic_facts_sha256: "a".repeat(64),
             diagnostic_count: 0,
@@ -329,10 +453,10 @@ fn semantic_fixture(source: &IntentionalBoundarySourceCensus) -> IntentionalBoun
     semantic
 }
 
-fn fake_replay(command: &[String], outputs: &[ExpectedOutput]) -> ReplaySuccess {
+fn fake_replay(command: &GeneratorCommand, outputs: &[ExpectedOutput]) -> ReplaySuccess {
     let execution = |run_number| IntentionalBoundaryGeneratorExecution {
         run_number,
-        command: command.to_vec(),
+        command: command.execution.clone(),
         runtime_identity_sha256: "1".repeat(64),
         status_code: 0,
         timed_out: false,
@@ -340,6 +464,23 @@ fn fake_replay(command: &[String], outputs: &[ExpectedOutput]) -> ReplaySuccess 
         stdout_sha256: "2".repeat(64),
         stderr_sha256: "3".repeat(64),
     };
+    let preparations = command
+        .preparation
+        .as_ref()
+        .map_or_else(Vec::new, |preparation| {
+            (1..=2)
+                .map(|run_number| IntentionalBoundaryGeneratorExecution {
+                    run_number,
+                    command: preparation.clone(),
+                    runtime_identity_sha256: "4".repeat(64),
+                    status_code: 0,
+                    timed_out: false,
+                    network_enabled: true,
+                    stdout_sha256: "5".repeat(64),
+                    stderr_sha256: "6".repeat(64),
+                })
+                .collect()
+        });
     ReplaySuccess {
         outputs: outputs
             .iter()
@@ -352,6 +493,7 @@ fn fake_replay(command: &[String], outputs: &[ExpectedOutput]) -> ReplaySuccess 
                 second_run_sha256: output.committed_sha256.clone(),
             })
             .collect(),
+        preparations,
         executions: vec![execution(1), execution(2)],
     }
 }
@@ -374,6 +516,7 @@ fn reproduced_generator_qualifies_only_after_all_three_evidence_groups() {
     .unwrap();
 
     super::super::validate_intentional_boundary_generator_census_commitment(
+        &fixture.inventory,
         &fixture.source,
         &fixture.semantic,
         &fixture.manifests,
@@ -382,6 +525,7 @@ fn reproduced_generator_qualifies_only_after_all_three_evidence_groups() {
     )
     .unwrap();
     let evidence = super::super::compose_intentional_boundary_generator_evidence(
+        &fixture.inventory,
         &fixture.source,
         &fixture.semantic,
         &fixture.manifests,
@@ -435,6 +579,7 @@ fn recommitted_tampered_replay_output_is_rejected() {
 
     assert!(
         super::super::validate_intentional_boundary_generator_census_commitment(
+            &fixture.inventory,
             &fixture.source,
             &fixture.semantic,
             &fixture.manifests,
@@ -484,6 +629,213 @@ fn real_cargo_generator_reproduces_committed_output_twice_offline() {
         } if cfg!(windows) => {}
         _ => panic!("real Cargo generator did not reproduce its committed output: {outcome:#?}"),
     }
+}
+
+#[test]
+fn real_npm_generator_prepares_locked_dependencies_then_reproduces_twice_offline() {
+    let fixture = node_fixture();
+
+    let census = census_intentional_boundary_generators(
+        &fixture.repository,
+        &fixture.revision,
+        fixture.root.path(),
+        &fixture.inventory,
+        &fixture.source,
+        &fixture.semantic,
+        &fixture.manifests,
+        &fixture.bindings,
+        &fixture.evidence,
+    )
+    .unwrap();
+
+    let outcome = &census.replays[0].outcome;
+    match outcome {
+        IntentionalBoundaryGeneratorReplayOutcome::Reproduced {
+            declaration_id,
+            preparations,
+            command,
+            outputs,
+            executions,
+            ..
+        } => {
+            assert_eq!(census.replays[0].candidate_declaration_ids.len(), 2);
+            let selected = fixture
+                .manifests
+                .declarations
+                .iter()
+                .find(|declaration| declaration.declaration_id == *declaration_id)
+                .unwrap();
+            assert!(matches!(
+                &selected.target,
+                IntentionalBoundaryManifestTarget::PackageScript { script_name, .. }
+                    if script_name == "generate"
+            ));
+            assert_eq!(preparations.len(), 2);
+            assert!(
+                preparations
+                    .iter()
+                    .all(|preparation| preparation.network_enabled)
+            );
+            assert_eq!(command.first().map(String::as_str), Some("npm"));
+            assert_eq!(outputs.len(), 1);
+            assert_eq!(executions.len(), 2);
+            assert!(
+                executions
+                    .iter()
+                    .all(|execution| !execution.network_enabled)
+            );
+        }
+        IntentionalBoundaryGeneratorReplayOutcome::Unresolved {
+            reason: IntentionalBoundaryGeneratorUnresolvedReason::SandboxUnavailable,
+            ..
+        } if cfg!(windows) => {}
+        _ => panic!("real npm generator did not reproduce its committed output: {outcome:#?}"),
+    }
+}
+
+#[test]
+fn npm_generator_command_is_exact_locked_and_lifecycle_disabled() {
+    let fixture = node_fixture();
+    let declaration = fixture
+        .manifests
+        .declarations
+        .iter()
+        .find(|declaration| {
+            matches!(
+                &declaration.target,
+                IntentionalBoundaryManifestTarget::PackageScript { script_name, .. }
+                    if script_name == "generate"
+            )
+        })
+        .unwrap();
+
+    let command = generator_command(&fixture.inventory, declaration).unwrap();
+
+    assert_eq!(
+        command.preparation.unwrap(),
+        [
+            "npm",
+            "--prefix",
+            ".",
+            "ci",
+            "--ignore-scripts",
+            "--no-audit",
+            "--no-fund",
+        ]
+    );
+    assert_eq!(
+        command.execution,
+        [
+            "npm",
+            "--prefix",
+            ".",
+            "run-script",
+            "--ignore-scripts",
+            "generate",
+        ]
+    );
+    assert_eq!(command.cleanup_paths, ["node_modules"]);
+
+    let mut unlocked = fixture.inventory.clone();
+    unlocked
+        .tracked_entries
+        .retain(|entry| entry.repository_path != "package-lock.json");
+    assert!(generator_command(&unlocked, declaration).is_none());
+}
+
+#[test]
+fn recommitted_network_disabled_npm_preparation_is_rejected() {
+    let fixture = node_fixture();
+    let mut census = census_generators_with_executor(
+        &fixture.repository,
+        &fixture.revision,
+        fixture.root.path(),
+        &fixture.inventory,
+        &fixture.source,
+        &fixture.semantic,
+        &fixture.manifests,
+        &fixture.bindings,
+        &fixture.evidence,
+        |_declaration, command, outputs| Ok(fake_replay(command, outputs)),
+    )
+    .unwrap();
+    let IntentionalBoundaryGeneratorReplayOutcome::Reproduced { preparations, .. } =
+        &mut census.replays[0].outcome
+    else {
+        panic!("expected reproduced npm fixture");
+    };
+    preparations[0].network_enabled = false;
+    census.generator_census_sha256 = generator_census_sha256(&census).unwrap();
+
+    assert!(
+        super::super::validate_intentional_boundary_generator_census_commitment(
+            &fixture.inventory,
+            &fixture.source,
+            &fixture.semantic,
+            &fixture.manifests,
+            &fixture.evidence,
+            &census,
+        )
+        .unwrap_err()
+        .contains("receipt")
+    );
+}
+
+#[test]
+fn recommitted_omitted_package_script_candidate_is_rejected() {
+    let fixture = node_fixture();
+    let mut census = census_generators_with_executor(
+        &fixture.repository,
+        &fixture.revision,
+        fixture.root.path(),
+        &fixture.inventory,
+        &fixture.source,
+        &fixture.semantic,
+        &fixture.manifests,
+        &fixture.bindings,
+        &fixture.evidence,
+        |_declaration, command, outputs| Ok(fake_replay(command, outputs)),
+    )
+    .unwrap();
+    assert_eq!(census.replays[0].candidate_declaration_ids.len(), 2);
+    let IntentionalBoundaryGeneratorReplayOutcome::Reproduced { declaration_id, .. } =
+        &census.replays[0].outcome
+    else {
+        panic!("expected reproduced npm fixture");
+    };
+    let selected = fixture
+        .manifests
+        .declarations
+        .iter()
+        .find(|declaration| declaration.declaration_id == *declaration_id)
+        .unwrap();
+    assert!(matches!(
+        &selected.target,
+        IntentionalBoundaryManifestTarget::PackageScript { script_name, .. }
+            if script_name == "generate"
+    ));
+    census.replays[0].candidate_declaration_ids.pop();
+    census.replays[0].replay_id = replay_id(
+        &census.repository,
+        &census.revision,
+        &census.replays[0].candidate_declaration_ids,
+        &census.replays[0].subjects,
+    )
+    .unwrap();
+    census.generator_census_sha256 = generator_census_sha256(&census).unwrap();
+
+    assert!(
+        super::super::validate_intentional_boundary_generator_census_commitment(
+            &fixture.inventory,
+            &fixture.source,
+            &fixture.semantic,
+            &fixture.manifests,
+            &fixture.evidence,
+            &census,
+        )
+        .unwrap_err()
+        .contains("configuration assignment")
+    );
 }
 
 fn git(root: &Path, args: &[&str]) -> String {

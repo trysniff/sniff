@@ -13,13 +13,20 @@ use super::non_blind_history_runtime_support::{
 };
 use crate::sandbox::{SandboxCommand, sandbox_path};
 use std::fs;
+use std::fs::OpenOptions;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
+
+#[cfg(target_os = "macos")]
+#[path = "benchmark_non_blind_history_runtime_macos.rs"]
+mod macos;
 
 const TEST_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 const TEST_OUTPUT_LIMIT: usize = 1024 * 1024;
 const TEST_MEMORY_LIMIT: u64 = 4 * 1024 * 1024 * 1024;
 const TEST_PROCESS_LIMIT: u32 = 256;
+const PRIVATE_OPENSSL_CONFIG: &str = "openssl.cnf";
 const PRIVATE_ENVIRONMENT_DIRECTORIES: &[&str] = &[
     "home",
     "bun-cache",
@@ -61,7 +68,7 @@ pub(crate) fn prepare_historical_runtime(
             "historical test cache must remain inside its snapshot".to_string(),
         ));
     }
-    prepare_private_environment_directories(&cache_root)?;
+    prepare_private_environment(&cache_root)?;
     let program = logical_command
         .first()
         .filter(|value| !value.trim().is_empty())
@@ -109,6 +116,17 @@ pub(crate) fn prepare_historical_runtime(
         launcher_kind = "windows_cmd_batch";
     }
 
+    #[cfg(target_os = "macos")]
+    let macos_closure = macos::resolve_runtime_closure(
+        &root,
+        &launch.target,
+        &launch.runtime_files,
+        &launch.runtime_roots,
+    )?;
+    #[cfg(target_os = "macos")]
+    launch
+        .runtime_files
+        .extend(macos_closure.identity_files.iter().cloned());
     let runtime_identity = runtime_identity(&launch.runtime_files, &root, launcher_kind)?;
     let mut read_only_paths = Vec::new();
     let mut executable_paths = Vec::new();
@@ -118,6 +136,8 @@ pub(crate) fn prepare_historical_runtime(
         #[cfg(windows)]
         collect_windows_runtime_images(runtime_root, &mut executable_paths)?;
     }
+    #[cfg(target_os = "macos")]
+    read_only_paths.extend(macos_closure.read_only_paths);
     if !launch.repository_target && !is_system_runtime(&launch.target) {
         push_external(&root, &mut read_only_paths, launch.target.clone());
         #[cfg(windows)]
@@ -190,13 +210,38 @@ pub(crate) fn prepare_historical_runtime(
     })
 }
 
-fn prepare_private_environment_directories(cache: &Path) -> Result<(), HistoricalRuntimePlanError> {
+fn prepare_private_environment(cache: &Path) -> Result<(), HistoricalRuntimePlanError> {
     for directory in PRIVATE_ENVIRONMENT_DIRECTORIES {
         fs::create_dir_all(cache.join(directory)).map_err(|error| {
             HistoricalRuntimePlanError::Invalid(format!(
                 "failed to create private historical runtime directory {directory}: {error}"
             ))
         })?;
+    }
+    let openssl_config = cache.join(PRIVATE_OPENSSL_CONFIG);
+    match OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&openssl_config)
+    {
+        Ok(_) => {}
+        Err(error) if error.kind() == ErrorKind::AlreadyExists => {
+            let metadata = fs::symlink_metadata(&openssl_config).map_err(|error| {
+                HistoricalRuntimePlanError::Invalid(format!(
+                    "failed to inspect private OpenSSL configuration: {error}"
+                ))
+            })?;
+            if !metadata.is_file() || metadata.file_type().is_symlink() || metadata.len() != 0 {
+                return Err(HistoricalRuntimePlanError::Invalid(
+                    "private OpenSSL configuration changed".to_string(),
+                ));
+            }
+        }
+        Err(error) => {
+            return Err(HistoricalRuntimePlanError::Invalid(format!(
+                "failed to create private OpenSSL configuration: {error}"
+            )));
+        }
     }
     Ok(())
 }
@@ -222,6 +267,7 @@ fn private_environment(root: &Path, cache: &Path) -> Vec<(String, String)> {
         ("HOME".to_string(), home.clone()),
         ("LOCALAPPDATA".to_string(), home.clone()),
         ("NODE_REPL_HISTORY".to_string(), path("node-history")),
+        ("OPENSSL_CONF".to_string(), path(PRIVATE_OPENSSL_CONFIG)),
         ("PIP_CACHE_DIR".to_string(), path("pip")),
         ("PYTHONPYCACHEPREFIX".to_string(), path("pycache")),
         ("TEMP".to_string(), temp.clone()),
@@ -288,6 +334,35 @@ mod tests {
                 "{directory} was not advertised by the private environment"
             );
         }
+        assert_eq!(fs::read(cache.join(PRIVATE_OPENSSL_CONFIG)).unwrap(), b"");
+        assert!(plan.command.env.iter().any(|(key, value)| {
+            key == "OPENSSL_CONF"
+                && value
+                    == &sandbox_repository_path(
+                        &plan.command.root,
+                        &canonical_cache.join(PRIVATE_OPENSSL_CONFIG),
+                    )
+        }));
+    }
+
+    #[test]
+    fn private_openssl_configuration_cannot_be_reused_after_tampering() {
+        let root = tempfile::tempdir().unwrap();
+        let cache = root.path().join("cache");
+        fs::create_dir(&cache).unwrap();
+        let command = if cfg!(windows) {
+            vec!["cmd".to_string(), "/c".to_string(), "exit 0".to_string()]
+        } else {
+            vec!["sh".to_string(), "-c".to_string(), "exit 0".to_string()]
+        };
+        prepare_historical_runtime(root.path(), &cache, &command).unwrap();
+        fs::write(cache.join(PRIVATE_OPENSSL_CONFIG), "host config").unwrap();
+
+        assert!(matches!(
+            prepare_historical_runtime(root.path(), &cache, &command),
+            Err(HistoricalRuntimePlanError::Invalid(detail))
+                if detail == "private OpenSSL configuration changed"
+        ));
     }
 
     #[test]

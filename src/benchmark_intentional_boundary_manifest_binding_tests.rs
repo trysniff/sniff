@@ -296,7 +296,7 @@ fn fixture() -> (
     ]);
     let mut manifest_census = IntentionalBoundaryManifestCensus {
         schema_version: super::super::INTENTIONAL_BOUNDARY_MANIFEST_CENSUS_SCHEMA_VERSION,
-        manifest_contract: "sniffbench-intentional-boundary-manifest-declarations-v2".to_string(),
+        manifest_contract: "sniffbench-intentional-boundary-manifest-declarations-v3".to_string(),
         repository: source_census.repository.clone(),
         revision: source_census.revision.clone(),
         inventory_sha256: source_census.inventory_sha256.clone(),

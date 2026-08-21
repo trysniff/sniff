@@ -1,4 +1,4 @@
-use super::{ExpectedOutput, ReplayFailure, ReplaySuccess, sha256};
+use super::{ExpectedOutput, GeneratorCommand, ReplayFailure, ReplaySuccess, sha256};
 use crate::benchmark::release::intentional_boundary_runtime_snapshot::IntentionalBoundaryRuntimeSnapshot;
 use crate::benchmark::release::non_blind_history_runtime::{
     HistoricalRuntimePlanError, prepare_historical_runtime,
@@ -16,14 +16,17 @@ use std::time::Duration;
 const CACHE_DIRECTORY: &str = ".sniff-boundary-generator-runtime";
 const GIT_TIMEOUT: Duration = Duration::from_secs(60);
 const GIT_OUTPUT_LIMIT: usize = 1024 * 1024;
+const GENERATOR_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+const PREPARATION_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 
 pub(super) fn execute_generator_replay(
     source_root: &Path,
     revision: &str,
     _declaration: &IntentionalBoundaryManifestDeclaration,
-    command: &[String],
+    command: &GeneratorCommand,
     expected: &[ExpectedOutput],
 ) -> Result<ReplaySuccess, ReplayFailure> {
+    let mut preparations = Vec::new();
     let mut executions = Vec::new();
     let mut run_hashes = Vec::new();
     for run_number in 1..=2 {
@@ -44,16 +47,41 @@ pub(super) fn execute_generator_replay(
         let cache = snapshot.path().join(CACHE_DIRECTORY);
         fs::create_dir(&cache)
             .map_err(|error| failed(format!("failed to create generator cache: {error}")))?;
-        let mut plan = prepare_historical_runtime(snapshot.path(), &cache, command)
+        if let Some(preparation) = &command.preparation {
+            let mut plan = prepare_historical_runtime(snapshot.path(), &cache, preparation)
+                .map_err(runtime_plan_failure)?;
+            plan.command.timeout = PREPARATION_TIMEOUT;
+            let output = crate::sandbox::run(&plan.command).map_err(sandbox_failure)?;
+            if output.timed_out || output.status_code != Some(0) {
+                let stderr = sanitized_runtime_stderr(&output.stderr, snapshot.path(), &cache);
+                return Err(failed(format!(
+                    "generator dependency preparation failed: status={:?}, timed_out={}: {}",
+                    output.status_code,
+                    output.timed_out,
+                    stderr.trim()
+                )));
+            }
+            preparations.push(IntentionalBoundaryGeneratorExecution {
+                run_number,
+                command: preparation.clone(),
+                runtime_identity_sha256: sha256(plan.runtime_identity.as_bytes()),
+                status_code: 0,
+                timed_out: false,
+                network_enabled: true,
+                stdout_sha256: output.stdout_sha256,
+                stderr_sha256: output.stderr_sha256,
+            });
+        }
+        let mut plan = prepare_historical_runtime(snapshot.path(), &cache, &command.execution)
             .map_err(runtime_plan_failure)?;
         plan.command.allow_network = false;
+        plan.command.timeout = GENERATOR_TIMEOUT;
         #[cfg(target_os = "macos")]
         {
             plan.command.allow_local_network = false;
         }
         let output = crate::sandbox::run(&plan.command).map_err(sandbox_failure);
-        let cleanup = fs::remove_dir_all(&cache)
-            .map_err(|error| failed(format!("failed to remove generator cache: {error}")));
+        let cleanup = cleanup_runtime_paths(snapshot.path(), &cache, &command.cleanup_paths);
         let output = output?;
         cleanup?;
         #[cfg(windows)]
@@ -65,13 +93,7 @@ pub(super) fn execute_generator_replay(
             });
         }
         if output.timed_out || output.status_code != Some(0) {
-            let stderr = output
-                .stderr
-                .replace(
-                    &snapshot.path().to_string_lossy().to_string(),
-                    "<repository>",
-                )
-                .replace(&cache.to_string_lossy().to_string(), "<cache>");
+            let stderr = sanitized_runtime_stderr(&output.stderr, snapshot.path(), &cache);
             return Err(ReplayFailure {
                 reason: IntentionalBoundaryGeneratorUnresolvedReason::ExecutionFailed,
                 detail: format!(
@@ -86,7 +108,7 @@ pub(super) fn execute_generator_replay(
         verify_clean_snapshot(snapshot.path())?;
         executions.push(IntentionalBoundaryGeneratorExecution {
             run_number,
-            command: command.to_vec(),
+            command: command.execution.clone(),
             runtime_identity_sha256: sha256(plan.runtime_identity.as_bytes()),
             status_code: 0,
             timed_out: false,
@@ -110,8 +132,36 @@ pub(super) fn execute_generator_replay(
         .collect();
     Ok(ReplaySuccess {
         outputs,
+        preparations,
         executions,
     })
+}
+
+fn sanitized_runtime_stderr(stderr: &str, repository: &Path, cache: &Path) -> String {
+    stderr
+        .replace(&cache.to_string_lossy().to_string(), "<cache>")
+        .replace(&repository.to_string_lossy().to_string(), "<repository>")
+}
+
+fn cleanup_runtime_paths(
+    root: &Path,
+    cache: &Path,
+    cleanup_paths: &[String],
+) -> Result<(), ReplayFailure> {
+    for relative in cleanup_paths {
+        let path = root.join(relative);
+        match fs::remove_dir_all(&path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(failed(format!(
+                    "failed to remove generator runtime path {relative}: {error}"
+                )));
+            }
+        }
+    }
+    fs::remove_dir_all(cache)
+        .map_err(|error| failed(format!("failed to remove generator cache: {error}")))
 }
 
 #[cfg(windows)]
@@ -210,6 +260,15 @@ fn sandbox_failure(error: SandboxError) -> ReplayFailure {
             reason: IntentionalBoundaryGeneratorUnresolvedReason::SandboxUnavailable,
             detail,
         },
+        #[cfg(windows)]
+        SandboxError::Failed(detail)
+            if detail.starts_with("grant Windows AppContainer access to ") =>
+        {
+            ReplayFailure {
+                reason: IntentionalBoundaryGeneratorUnresolvedReason::SandboxUnavailable,
+                detail,
+            }
+        }
         SandboxError::Invalid(detail) | SandboxError::Failed(detail) => failed(detail),
     }
 }
@@ -223,7 +282,7 @@ fn failed(detail: impl Into<String>) -> ReplayFailure {
 
 #[cfg(test)]
 mod tests {
-    use super::bounded_status_summary;
+    use super::{bounded_status_summary, sanitized_runtime_stderr};
 
     #[test]
     fn repository_mutation_summary_is_bounded_and_escaped() {
@@ -237,5 +296,17 @@ mod tests {
         assert_eq!(summary.matches("?? path-").count(), 8);
         assert!(summary.contains("path-0\\\\t.rs"));
         assert!(!summary.contains("path-8"));
+    }
+
+    #[test]
+    fn runtime_failure_stderr_redacts_snapshot_and_cache_paths() {
+        let root = std::path::Path::new("/private/sniff/repository");
+        let cache = root.join(".sniff-boundary-generator-runtime");
+        let stderr = format!("failed in {} using {}", root.display(), cache.display());
+
+        let sanitized = sanitized_runtime_stderr(&stderr, root, &cache);
+
+        assert_eq!(sanitized, "failed in <repository> using <cache>");
+        assert!(!sanitized.contains("/private/sniff"));
     }
 }

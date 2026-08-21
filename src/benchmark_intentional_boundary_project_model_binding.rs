@@ -110,6 +110,13 @@ fn bind_target(
                 "project-model target selector is not supported by this provider".to_string(),
             ));
         }
+        IntentionalBoundaryManifestTarget::PackageScript { .. } => {
+            return Ok(binding_unresolved(
+                UnresolvedReason::UnsupportedSelector,
+                "package-script selectors do not belong to command-backed project models"
+                    .to_string(),
+            ));
+        }
     };
     let mut files = Vec::with_capacity(repository_paths.len());
     for repository_path in repository_paths {
@@ -157,6 +164,9 @@ fn bind_target(
             }
         }
         IntentionalBoundaryManifestDeclarationKind::BuildScript => {
+            Ok(Outcome::AwaitingGeneratorReplay)
+        }
+        IntentionalBoundaryManifestDeclarationKind::PackageScript => {
             Ok(Outcome::AwaitingGeneratorReplay)
         }
     }

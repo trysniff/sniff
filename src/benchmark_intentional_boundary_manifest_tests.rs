@@ -175,6 +175,71 @@ fn commits_recognized_manifests_that_have_no_target_declarations() {
 }
 
 #[test]
+fn package_scripts_are_typed_with_exact_names_commands_and_spans() {
+    let package =
+        r#"{"name":"sample","scripts":{"generate":"node tools/generate.js","test":"node --test"}}"#;
+    let (root, revision, inventory) = repository(&[("package.json", package)]);
+
+    let census = census_intentional_boundary_manifests(
+        "github.com/example/manifests",
+        &revision,
+        root.path(),
+        &inventory,
+    )
+    .unwrap();
+
+    let scripts = census
+        .declarations
+        .iter()
+        .filter(|declaration| {
+            declaration.declaration_kind
+                == IntentionalBoundaryManifestDeclarationKind::PackageScript
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(scripts.len(), 2);
+    let generate = scripts
+        .iter()
+        .find(|declaration| {
+            matches!(
+                &declaration.target,
+                IntentionalBoundaryManifestTarget::PackageScript { script_name, .. }
+                    if script_name == "generate"
+            )
+        })
+        .unwrap();
+    assert_eq!(
+        generate.target,
+        IntentionalBoundaryManifestTarget::PackageScript {
+            script_name: "generate".to_string(),
+            command: "node tools/generate.js".to_string(),
+        }
+    );
+    assert_eq!(
+        range_text(package, &generate.declaration_location),
+        "\"node tools/generate.js\""
+    );
+}
+
+#[test]
+fn package_scripts_reject_non_string_commands() {
+    let (root, revision, inventory) = repository(&[(
+        "package.json",
+        r#"{"name":"sample","scripts":{"generate":["node","generate.js"]}}"#,
+    )]);
+
+    assert!(
+        census_intentional_boundary_manifests(
+            "github.com/example/manifests",
+            &revision,
+            root.path(),
+            &inventory,
+        )
+        .unwrap_err()
+        .contains("package script must be a string")
+    );
+}
+
+#[test]
 fn rejects_duplicate_json_keys_and_targets_that_escape_the_repository() {
     let (duplicate, revision, inventory) = repository(&[(
         "package.json",
