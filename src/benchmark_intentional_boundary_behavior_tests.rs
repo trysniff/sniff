@@ -449,6 +449,7 @@ fn semantic_fixture(source: &IntentionalBoundarySourceCensus) -> IntentionalBoun
             test_relationship_count: 1,
             unresolved_edge_count: 0,
         }],
+        source_references: Vec::new(),
         resolved_method_count: 2,
         compiler_excluded_method_count: methods.len() - 2,
         unresolved_method_count: 0,

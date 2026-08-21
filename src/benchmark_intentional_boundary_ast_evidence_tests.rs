@@ -122,6 +122,7 @@ fn fixture_with_language(
             test_relationship_count: 0,
             unresolved_edge_count: 0,
         }],
+        source_references: Vec::new(),
         methods: vec![IntentionalBoundarySemanticMethod {
             parser_unit_id,
             repository_path: repository_path.to_string(),

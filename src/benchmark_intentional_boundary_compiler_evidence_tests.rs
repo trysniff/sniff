@@ -76,6 +76,7 @@ fn fixture() -> (
             test_relationship_count: 1,
             unresolved_edge_count: 0,
         }],
+        source_references: Vec::new(),
         methods: vec![IntentionalBoundarySemanticMethod {
             parser_unit_id: method_id,
             repository_path: "src/lib.rs".to_string(),

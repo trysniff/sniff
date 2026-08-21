@@ -6,8 +6,9 @@ use super::{
     IntentionalBoundarySemanticIndexerCensus, IntentionalBoundarySemanticMethod,
     IntentionalBoundarySemanticMethodStatus, IntentionalBoundarySemanticOccurrenceFacts,
     IntentionalBoundarySemanticOccurrenceRole, IntentionalBoundarySemanticOrigin,
-    IntentionalBoundarySemanticRange, IntentionalBoundarySemanticRelationshipFacts,
-    IntentionalBoundarySemanticRelationshipKind, IntentionalBoundarySemanticResolution,
+    IntentionalBoundarySemanticRange, IntentionalBoundarySemanticReferenceTarget,
+    IntentionalBoundarySemanticRelationshipFacts, IntentionalBoundarySemanticRelationshipKind,
+    IntentionalBoundarySemanticResolution, IntentionalBoundarySemanticSourceReference,
     IntentionalBoundarySemanticSurface, IntentionalBoundarySemanticSymbolCategory,
     IntentionalBoundarySemanticSymbolFacts, IntentionalBoundarySemanticTestFacts,
     IntentionalBoundarySemanticTestKind, IntentionalBoundarySemanticUnresolvedReason,
@@ -29,7 +30,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 pub(super) const SEMANTIC_CENSUS_CONTRACT: &str =
-    "sniffbench-intentional-boundary-compiler-semantic-census-v1";
+    "sniffbench-intentional-boundary-compiler-semantic-census-v2";
 type MethodJoinKey = (String, String, u32, u32);
 type ExpectedMethodMap<'a> = BTreeMap<MethodJoinKey, &'a IntentionalBoundaryMethodCensusEntry>;
 
@@ -76,6 +77,7 @@ fn build_semantic_census(
     let mut expected_methods = method_identity_map(&source_census.source_files)?;
     let mut methods = Vec::with_capacity(source_census.method_count);
     let mut indexers = Vec::with_capacity(indexes.len());
+    let mut source_references = Vec::new();
     for (kind, index) in indexes {
         let files_for_indexer = crate::semantic_indexer_runner::files_for_indexer(files, *kind);
         let join = join_methods(root, &files_for_indexer, index)?;
@@ -99,6 +101,11 @@ fn build_semantic_census(
                 index,
             )?);
         }
+        source_references.extend(flatten_source_references(
+            indexer_kind(*kind),
+            source_census,
+            index,
+        )?);
         indexers.push(summarize_index(*kind, index)?);
     }
     if !expected_methods.is_empty() {
@@ -108,6 +115,18 @@ fn build_semantic_census(
         ));
     }
     methods.sort_by(|left, right| left.parser_unit_id.cmp(&right.parser_unit_id));
+    source_references.sort_by(|left, right| {
+        (
+            left.indexer,
+            &left.location,
+            source_reference_target_key(&left.target),
+        )
+            .cmp(&(
+                right.indexer,
+                &right.location,
+                source_reference_target_key(&right.target),
+            ))
+    });
     indexers.sort_by_key(|indexer| indexer.indexer);
     let resolved_method_count = methods
         .iter()
@@ -136,6 +155,7 @@ fn build_semantic_census(
         revision: source_census.revision.clone(),
         source_census_sha256: source_census.census_sha256.clone(),
         indexers,
+        source_references,
         methods,
         resolved_method_count,
         compiler_excluded_method_count,
@@ -193,6 +213,7 @@ pub(super) fn compute_semantic_census_sha256(
         &census.revision,
         &census.source_census_sha256,
         &census.indexers,
+        &census.source_references,
         &census.methods,
         census.resolved_method_count,
         census.compiler_excluded_method_count,
@@ -200,6 +221,75 @@ pub(super) fn compute_semantic_census_sha256(
     ))
     .map_err(|error| format!("failed to commit intentional-boundary semantic census: {error}"))?;
     Ok(sha256(&bytes))
+}
+
+fn flatten_source_references(
+    indexer: IntentionalBoundaryIndexerKind,
+    source_census: &IntentionalBoundarySourceCensus,
+    index: &SemanticIndex,
+) -> Result<Vec<IntentionalBoundarySemanticSourceReference>, String> {
+    let source_paths = source_census
+        .source_files
+        .iter()
+        .map(|file| file.repository_path.as_str())
+        .collect::<BTreeSet<_>>();
+    let mut references = Vec::new();
+    for document in index
+        .documents
+        .values()
+        .filter(|document| source_paths.contains(document.path.0.as_str()))
+    {
+        for occurrence in &document.occurrences {
+            let target = match occurrence.symbol.as_ref() {
+                Some(symbol_id) => match index.symbols.get(symbol_id) {
+                    Some(symbol) => IntentionalBoundarySemanticResolution::Resolved {
+                        value: IntentionalBoundarySemanticReferenceTarget {
+                            symbol_id: symbol.id.0.clone(),
+                            provider_identity: symbol.provider_identity.clone(),
+                            display_name: symbol.display_name.clone(),
+                            provider_kind: symbol.kind.provider_name.clone(),
+                            origin: origin(symbol.origin),
+                        },
+                    },
+                    None => IntentionalBoundarySemanticResolution::Unresolved {
+                        reason: IntentionalBoundarySemanticUnresolvedReason::MissingDefinition,
+                        raw_target: Some(symbol_id.0.clone()),
+                        detail: "compiler occurrence omitted referenced symbol facts".to_string(),
+                    },
+                },
+                None => IntentionalBoundarySemanticResolution::Unresolved {
+                    reason: IntentionalBoundarySemanticUnresolvedReason::MissingIndexerFact,
+                    raw_target: None,
+                    detail: "compiler occurrence has no symbol identity".to_string(),
+                },
+            };
+            references.push(IntentionalBoundarySemanticSourceReference {
+                indexer,
+                location: flatten_range(&document.path.0, &occurrence.range),
+                roles: occurrence
+                    .roles
+                    .iter()
+                    .copied()
+                    .map(occurrence_role)
+                    .collect(),
+                target,
+            });
+        }
+    }
+    Ok(references)
+}
+
+fn source_reference_target_key(
+    target: &IntentionalBoundarySemanticResolution<IntentionalBoundarySemanticReferenceTarget>,
+) -> (&str, &str) {
+    match target {
+        IntentionalBoundarySemanticResolution::Resolved { value } => {
+            ("resolved", value.symbol_id.as_str())
+        }
+        IntentionalBoundarySemanticResolution::Unresolved { raw_target, .. } => {
+            ("unresolved", raw_target.as_deref().unwrap_or_default())
+        }
+    }
 }
 
 fn flatten_location(location: &SemanticLocation) -> IntentionalBoundarySemanticRange {
