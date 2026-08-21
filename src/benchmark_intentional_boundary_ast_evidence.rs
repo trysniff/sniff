@@ -271,12 +271,12 @@ fn append_method_ast_evidence(
                 vec![marker.clone()],
                 Vec::new(),
             )?,
-            IntentionalBoundaryAstFact::VersionedCompatibilityAnnotation { annotation } => {
+            IntentionalBoundaryAstFact::VersionedCompatibilitySourceContract { contract } => {
                 append_versioned_compatibility_evidence(
                     atoms,
                     semantic_method,
                     subject_symbol_id,
-                    annotation,
+                    contract,
                 )?;
             }
         }
@@ -288,7 +288,7 @@ fn append_versioned_compatibility_evidence(
     atoms: &mut Vec<super::IntentionalBoundaryEvidenceAtom>,
     semantic_method: &IntentionalBoundarySemanticMethod,
     subject_symbol_id: &str,
-    annotation: &super::IntentionalBoundarySemanticRange,
+    contract: &super::IntentionalBoundarySemanticRange,
 ) -> Result<(), String> {
     let retained_consumers = atoms
         .iter()
@@ -305,14 +305,14 @@ fn append_versioned_compatibility_evidence(
         subject_symbol_id,
         BoundaryEvidenceKind::VersionedCompatibilityContract,
         IntentionalBoundaryEvidenceProof::SourceAst(
-            IntentionalBoundaryAstProofKind::VersionedCompatibilityAnnotation,
+            IntentionalBoundaryAstProofKind::VersionedCompatibilitySourceContract,
         ),
-        vec![annotation.clone()],
+        vec![contract.clone()],
         Vec::new(),
     )?;
     for consumer in retained_consumers {
         let mut locations = consumer.locations;
-        locations.push(annotation.clone());
+        locations.push(contract.clone());
         push_typed_atom(
             atoms,
             semantic_method,

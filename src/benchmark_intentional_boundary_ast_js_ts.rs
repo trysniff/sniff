@@ -205,7 +205,7 @@ impl JsTsBodyVisitor<'_> {
             thin_delegation,
             distinct_retry_outcomes,
             generator_marker: None,
-            versioned_compatibility_annotation: None,
+            versioned_compatibility_source_contract: None,
         });
     }
 }

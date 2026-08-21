@@ -115,7 +115,7 @@ impl PythonBodyVisitor<'_> {
                 )
             }),
             generator_marker: None,
-            versioned_compatibility_annotation: None,
+            versioned_compatibility_source_contract: None,
         };
         self.methods.insert((name, start_line), fact);
     }
