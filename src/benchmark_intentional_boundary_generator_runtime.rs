@@ -150,14 +150,24 @@ fn cleanup_runtime_paths(
 ) -> Result<(), ReplayFailure> {
     for relative in cleanup_paths {
         let path = root.join(relative);
-        match fs::remove_dir_all(&path) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        let metadata = match fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
             Err(error) => {
                 return Err(failed(format!(
-                    "failed to remove generator runtime path {relative}: {error}"
+                    "failed to inspect generator runtime path {relative}: {error}"
                 )));
             }
+        };
+        let result = if metadata.file_type().is_dir() && !metadata.file_type().is_symlink() {
+            fs::remove_dir_all(&path)
+        } else {
+            fs::remove_file(&path)
+        };
+        if let Err(error) = result {
+            return Err(failed(format!(
+                "failed to remove generator runtime path {relative}: {error}"
+            )));
         }
     }
     fs::remove_dir_all(cache)

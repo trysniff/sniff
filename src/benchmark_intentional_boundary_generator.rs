@@ -21,7 +21,7 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-pub(super) const GENERATOR_CONTRACT: &str = "sniffbench-intentional-boundary-generator-replay-v2";
+pub(super) const GENERATOR_CONTRACT: &str = "sniffbench-intentional-boundary-generator-replay-v3";
 
 #[path = "benchmark_intentional_boundary_generator_node.rs"]
 mod node;
@@ -155,6 +155,7 @@ where
             replay_outcome(
                 inventory,
                 source_census,
+                &manifest_census.declarations,
                 &candidates,
                 &subjects,
                 &mut executor,
@@ -324,6 +325,7 @@ fn path_is_under(path: &str, directory: &str) -> bool {
 fn replay_outcome<F>(
     inventory: &IntentionalBoundaryRepositoryInventory,
     source_census: &IntentionalBoundarySourceCensus,
+    all_declarations: &[IntentionalBoundaryManifestDeclaration],
     declarations: &[&IntentionalBoundaryManifestDeclaration],
     subjects: &[IntentionalBoundaryGeneratorSubject],
     executor: &mut F,
@@ -348,7 +350,7 @@ where
     let mut failures = Vec::new();
     let mut supported = 0usize;
     for declaration in candidates {
-        let Some(command) = generator_command(inventory, declaration) else {
+        let Some(command) = generator_command(inventory, all_declarations, declaration) else {
             continue;
         };
         supported += 1;

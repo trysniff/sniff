@@ -176,8 +176,7 @@ fn commits_recognized_manifests_that_have_no_target_declarations() {
 
 #[test]
 fn package_scripts_are_typed_with_exact_names_commands_and_spans() {
-    let package =
-        r#"{"name":"sample","scripts":{"generate":"node tools/generate.js","test":"node --test"}}"#;
+    let package = r#"{"name":"sample","packageManager":"pnpm@10.15.0","scripts":{"generate":"node tools/generate.js","test":"node --test"}}"#;
     let (root, revision, inventory) = repository(&[("package.json", package)]);
 
     let census = census_intentional_boundary_manifests(
@@ -212,6 +211,7 @@ fn package_scripts_are_typed_with_exact_names_commands_and_spans() {
         IntentionalBoundaryManifestTarget::PackageScript {
             script_name: "generate".to_string(),
             command: "node tools/generate.js".to_string(),
+            package_manager: Some("pnpm@10.15.0".to_string()),
         }
     );
     assert_eq!(

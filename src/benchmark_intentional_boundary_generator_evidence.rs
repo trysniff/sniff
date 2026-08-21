@@ -263,7 +263,7 @@ fn validate_reproduced(
         .iter()
         .find(|declaration| declaration.declaration_id == declaration_id)
         .ok_or_else(|| "generator replay declaration is missing".to_string())?;
-    let planned = generator_command(inventory, declaration)
+    let planned = generator_command(inventory, &manifests.declarations, declaration)
         .ok_or_else(|| "generator replay declaration is unsupported".to_string())?;
     let preparations_valid = match &planned.preparation {
         None => preparations.is_empty(),
