@@ -300,6 +300,7 @@ fn validate_reproduced(
                 && preparations.iter().enumerate().all(|(index, execution)| {
                     execution.run_number == (index + 1) as u8
                         && execution.command == *preparation
+                        && execution.environment == planned.preparation_environment
                         && execution.status_code == 0
                         && !execution.timed_out
                         && execution.network_enabled
@@ -317,6 +318,7 @@ fn validate_reproduced(
         || executions.iter().enumerate().any(|(index, execution)| {
             execution.run_number != (index + 1) as u8
                 || execution.command != command
+                || execution.environment != planned.execution_environment
                 || execution.status_code != 0
                 || execution.timed_out
                 || execution.network_enabled

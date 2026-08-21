@@ -6,6 +6,7 @@ use crate::benchmark::release::{
     IntentionalBoundaryManifestTarget, IntentionalBoundaryProjectModelCensus,
     IntentionalBoundaryRepositoryInventory, IntentionalBoundarySemanticCensus,
 };
+use std::collections::BTreeMap;
 
 pub(in crate::benchmark::release) fn cargo_generator_command(
     declaration: &IntentionalBoundaryManifestDeclaration,
@@ -47,7 +48,9 @@ pub(super) fn generator_command(
     if let Some(execution) = cargo_generator_command(declaration) {
         return Some(GeneratorCommand {
             preparation: None,
+            preparation_environment: BTreeMap::new(),
             execution,
+            execution_environment: BTreeMap::new(),
             cleanup_paths: Vec::new(),
         });
     }

@@ -21,7 +21,7 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-pub(super) const GENERATOR_CONTRACT: &str = "sniffbench-intentional-boundary-generator-replay-v5";
+pub(super) const GENERATOR_CONTRACT: &str = "sniffbench-intentional-boundary-generator-replay-v6";
 
 #[path = "benchmark_intentional_boundary_generator_command.rs"]
 mod command;
@@ -431,6 +431,7 @@ fn validate_replay_success(
                     .all(|(index, execution)| {
                         execution.run_number == (index + 1) as u8
                             && execution.command == *preparation
+                            && execution.environment == command.preparation_environment
                             && execution.status_code == 0
                             && !execution.timed_out
                             && execution.network_enabled
@@ -449,6 +450,7 @@ fn validate_replay_success(
             .any(|(index, execution)| {
                 execution.run_number != (index + 1) as u8
                     || execution.command != command.execution
+                    || execution.environment != command.execution_environment
                     || execution.status_code != 0
                     || execution.timed_out
                     || execution.network_enabled

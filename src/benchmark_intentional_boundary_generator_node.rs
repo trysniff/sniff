@@ -4,11 +4,14 @@ use crate::benchmark::release::{
     IntentionalBoundaryManifestDeclarationKind, IntentionalBoundaryManifestProvider,
     IntentionalBoundaryManifestTarget, IntentionalBoundaryRepositoryInventory,
 };
+use std::collections::BTreeMap;
 
 #[derive(Clone)]
 pub(crate) struct GeneratorCommand {
     pub(crate) preparation: Option<Vec<String>>,
+    pub(crate) preparation_environment: BTreeMap<String, String>,
     pub(crate) execution: Vec<String>,
+    pub(crate) execution_environment: BTreeMap<String, String>,
     pub(crate) cleanup_paths: Vec<String>,
 }
 
@@ -118,7 +121,9 @@ pub(super) fn node_generator_command(
     };
     Some(GeneratorCommand {
         preparation: Some(preparation.into_iter().map(str::to_string).collect()),
+        preparation_environment: BTreeMap::new(),
         execution: execution.into_iter().map(str::to_string).collect(),
+        execution_environment: BTreeMap::new(),
         cleanup_paths: cleanup_paths.into_iter().map(path).collect(),
     })
 }

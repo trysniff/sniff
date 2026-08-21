@@ -12,6 +12,7 @@ use crate::benchmark::release::{
     census_intentional_boundary_rust_ast, extract_intentional_boundary_compiler_and_ast_evidence,
     inventory_intentional_boundary_repository,
 };
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
@@ -57,6 +58,7 @@ fn success(command: &GeneratorCommand, expected: &ExpectedOutput) -> ReplaySucce
     let execution = |run_number| IntentionalBoundaryGeneratorExecution {
         run_number,
         command: command.execution.clone(),
+        environment: command.execution_environment.clone(),
         runtime_identity_sha256: "d".repeat(64),
         status_code: 0,
         timed_out: false,
@@ -115,18 +117,30 @@ fn replay_receipt_requires_two_exact_non_networked_reproductions() {
     let declaration = declaration("root", "Cargo.toml");
     let command = GeneratorCommand {
         preparation: None,
+        preparation_environment: BTreeMap::new(),
         execution: cargo_generator_command(&declaration).unwrap(),
+        execution_environment: BTreeMap::new(),
         cleanup_paths: Vec::new(),
     };
-    let expected = expected();
-    let valid = success(&command, &expected);
+    let expected_output = expected();
+    let valid = success(&command, &expected_output);
 
-    validate_replay_success(&valid, &command, std::slice::from_ref(&expected)).unwrap();
+    validate_replay_success(&valid, &command, std::slice::from_ref(&expected_output)).unwrap();
 
     let mut networked = valid;
     networked.executions[1].network_enabled = true;
     assert!(
-        validate_replay_success(&networked, &command, &[expected])
+        validate_replay_success(&networked, &command, std::slice::from_ref(&expected_output))
+            .unwrap_err()
+            .contains("receipt contract")
+    );
+
+    let mut changed_environment = success(&command, &expected_output);
+    changed_environment.executions[0]
+        .environment
+        .insert("GOENV".to_string(), "off".to_string());
+    assert!(
+        validate_replay_success(&changed_environment, &command, &[expected_output])
             .unwrap_err()
             .contains("receipt contract")
     );
@@ -585,6 +599,7 @@ fn fake_replay(command: &GeneratorCommand, outputs: &[ExpectedOutput]) -> Replay
     let execution = |run_number| IntentionalBoundaryGeneratorExecution {
         run_number,
         command: command.execution.clone(),
+        environment: command.execution_environment.clone(),
         runtime_identity_sha256: "1".repeat(64),
         status_code: 0,
         timed_out: false,
@@ -600,6 +615,7 @@ fn fake_replay(command: &GeneratorCommand, outputs: &[ExpectedOutput]) -> Replay
                 .map(|run_number| IntentionalBoundaryGeneratorExecution {
                     run_number,
                     command: preparation.clone(),
+                    environment: command.preparation_environment.clone(),
                     runtime_identity_sha256: "4".repeat(64),
                     status_code: 0,
                     timed_out: false,
@@ -726,6 +742,49 @@ fn recommitted_tampered_replay_output_is_rejected() {
         )
         .unwrap_err()
         .contains("output bytes")
+    );
+}
+
+#[test]
+fn recommitted_tampered_replay_environment_is_rejected() {
+    let fixture = fixture();
+    let mut census = census_generators_with_executor(
+        &fixture.repository,
+        &fixture.revision,
+        fixture.root.path(),
+        &fixture.inventory,
+        &fixture.source,
+        &fixture.semantic,
+        &fixture.project_models,
+        &fixture.manifests,
+        &fixture.bindings,
+        &fixture.evidence,
+        |_declaration, command, outputs| Ok(fake_replay(command, outputs)),
+    )
+    .unwrap();
+    let IntentionalBoundaryGeneratorReplayOutcome::Reproduced { executions, .. } =
+        &mut census.replays[0].outcome
+    else {
+        panic!("expected reproduced fixture");
+    };
+    executions[0]
+        .environment
+        .insert("GOENV".to_string(), "changed".to_string());
+    census.generator_census_sha256 = generator_census_sha256(&census).unwrap();
+
+    assert!(
+        super::super::validate_intentional_boundary_generator_census_commitment(
+            &fixture.inventory,
+            &fixture.source,
+            &fixture.semantic,
+            &fixture.project_models,
+            &fixture.manifests,
+            &fixture.bindings,
+            &fixture.evidence,
+            &census,
+        )
+        .unwrap_err()
+        .contains("receipt")
     );
 }
 
@@ -926,12 +985,14 @@ fn dependency_preparation_cannot_take_credit_for_generated_output() {
             )
             .to_string(),
         ]),
+        preparation_environment: BTreeMap::new(),
         execution: vec![
             python.to_string(),
             "-I".to_string(),
             "-c".to_string(),
             "pass".to_string(),
         ],
+        execution_environment: BTreeMap::new(),
         cleanup_paths: Vec::new(),
     };
     let outputs =

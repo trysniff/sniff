@@ -43,6 +43,7 @@ pub(super) fn execute_generator_replay(
         if let Some(preparation) = &command.preparation {
             let mut plan = prepare_historical_runtime(snapshot.path(), &cache, preparation)
                 .map_err(runtime_plan_failure)?;
+            extend_environment(&mut plan.command.env, &command.preparation_environment)?;
             plan.command.timeout = PREPARATION_TIMEOUT;
             let output = crate::sandbox::run(&plan.command).map_err(sandbox_failure)?;
             if output.timed_out || output.status_code != Some(0) {
@@ -65,6 +66,7 @@ pub(super) fn execute_generator_replay(
             preparations.push(IntentionalBoundaryGeneratorExecution {
                 run_number,
                 command: preparation.clone(),
+                environment: command.preparation_environment.clone(),
                 runtime_identity_sha256: sha256(plan.runtime_identity.as_bytes()),
                 status_code: 0,
                 timed_out: false,
@@ -76,6 +78,7 @@ pub(super) fn execute_generator_replay(
         }
         let mut plan = prepare_historical_runtime(snapshot.path(), &cache, &command.execution)
             .map_err(runtime_plan_failure)?;
+        extend_environment(&mut plan.command.env, &command.execution_environment)?;
         plan.command.allow_network = false;
         plan.command.timeout = GENERATOR_TIMEOUT;
         #[cfg(target_os = "macos")]
@@ -111,6 +114,7 @@ pub(super) fn execute_generator_replay(
         executions.push(IntentionalBoundaryGeneratorExecution {
             run_number,
             command: command.execution.clone(),
+            environment: command.execution_environment.clone(),
             runtime_identity_sha256: sha256(plan.runtime_identity.as_bytes()),
             status_code: 0,
             timed_out: false,
@@ -137,6 +141,24 @@ pub(super) fn execute_generator_replay(
         preparations,
         executions,
     })
+}
+
+fn extend_environment(
+    environment: &mut Vec<(String, String)>,
+    additions: &std::collections::BTreeMap<String, String>,
+) -> Result<(), ReplayFailure> {
+    environment.extend(
+        additions
+            .iter()
+            .map(|(name, value)| (name.clone(), value.clone())),
+    );
+    environment.sort_by(|left, right| left.0.cmp(&right.0));
+    if environment.windows(2).any(|pair| pair[0].0 == pair[1].0) {
+        return Err(failed(
+            "generator command environment overrides a private runtime variable",
+        ));
+    }
+    Ok(())
 }
 
 fn invalidate_expected_outputs(

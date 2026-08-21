@@ -6,6 +6,7 @@ use crate::benchmark::release::{
     IntentionalBoundaryManifestTarget, IntentionalBoundaryRepositoryInventory,
     IntentionalBoundarySemanticCensus, IntentionalBoundarySemanticMethodStatus,
 };
+use std::collections::BTreeMap;
 
 const PYTHON_ENTRYPOINT_RUNNER: &str = concat!(
     "import asyncio,functools,importlib,inspect,pathlib,sys;",
@@ -81,6 +82,7 @@ pub(super) fn python_generator_command(
             .map(str::to_string)
             .collect(),
         ),
+        preparation_environment: BTreeMap::new(),
         execution: vec![
             "uv".to_string(),
             "run".to_string(),
@@ -103,6 +105,7 @@ pub(super) fn python_generator_command(
             module.join("."),
             qualname.join("."),
         ],
+        execution_environment: BTreeMap::new(),
         cleanup_paths: Vec::new(),
     })
 }
