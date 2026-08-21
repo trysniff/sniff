@@ -10,6 +10,9 @@ use super::{
 use std::path::Path;
 use tree_sitter::Node;
 
+#[path = "benchmark_intentional_boundary_ast_go_retry.rs"]
+mod go_retry;
+
 const GO: &str = "go";
 const KOTLIN: &str = "kotlin";
 
@@ -111,7 +114,7 @@ fn kotlin_syntax_facts(
     syntax_facts(repository_path, record, KOTLIN, kotlin_candidate)
 }
 
-type CandidateExtractor = fn(&str, Node<'_>) -> Option<AstCallableCandidate>;
+type CandidateExtractor = fn(&str, &[u8], Node<'_>) -> Option<AstCallableCandidate>;
 
 fn syntax_facts(
     repository_path: &str,
@@ -130,6 +133,7 @@ fn syntax_facts(
     let mut candidates = Vec::new();
     collect_candidates(
         repository_path,
+        record.source.as_bytes(),
         tree.root_node(),
         language,
         extractor,
@@ -140,6 +144,7 @@ fn syntax_facts(
 
 fn collect_candidates(
     repository_path: &str,
+    source: &[u8],
     node: Node<'_>,
     language: &str,
     extractor: CandidateExtractor,
@@ -150,22 +155,42 @@ fn collect_candidates(
         KOTLIN => node.kind() == "function_declaration",
         _ => false,
     };
-    if is_callable && let Some(candidate) = extractor(repository_path, node) {
+    if is_callable && let Some(candidate) = extractor(repository_path, source, node) {
         candidates.push(candidate);
     }
     let mut cursor = node.walk();
     for child in node.named_children(&mut cursor) {
-        collect_candidates(repository_path, child, language, extractor, candidates);
+        collect_candidates(
+            repository_path,
+            source,
+            child,
+            language,
+            extractor,
+            candidates,
+        );
     }
 }
 
-fn go_candidate(repository_path: &str, declaration: Node<'_>) -> Option<AstCallableCandidate> {
+fn go_candidate(
+    repository_path: &str,
+    source: &[u8],
+    declaration: Node<'_>,
+) -> Option<AstCallableCandidate> {
     let body = declaration.child_by_field_name("body");
-    Some(candidate(
+    let mut result = candidate(
         declaration,
         body.and_then(go_thin_delegation)
             .map(|call| node_range(repository_path, call)),
-    ))
+    );
+    result.distinct_retry_outcomes = body
+        .and_then(|body| go_retry::find_retry_loop(body, source))
+        .map(|(retryable, terminal)| {
+            (
+                node_range(repository_path, retryable),
+                node_range(repository_path, terminal),
+            )
+        });
+    Some(result)
 }
 
 fn go_thin_delegation(body: Node<'_>) -> Option<Node<'_>> {
@@ -191,7 +216,11 @@ fn go_forwarding_call(expression: Node<'_>) -> Option<Node<'_>> {
     }
 }
 
-fn kotlin_candidate(repository_path: &str, declaration: Node<'_>) -> Option<AstCallableCandidate> {
+fn kotlin_candidate(
+    repository_path: &str,
+    _source: &[u8],
+    declaration: Node<'_>,
+) -> Option<AstCallableCandidate> {
     let mut cursor = declaration.walk();
     let body = declaration
         .named_children(&mut cursor)
@@ -280,3 +309,7 @@ fn node_range(repository_path: &str, node: Node<'_>) -> IntentionalBoundarySeman
 #[cfg(test)]
 #[path = "benchmark_intentional_boundary_ast_go_kotlin_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "benchmark_intentional_boundary_ast_go_retry_tests.rs"]
+mod retry_tests;
