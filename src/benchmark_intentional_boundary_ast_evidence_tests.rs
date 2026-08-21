@@ -175,6 +175,14 @@ fn fixture_with_language(
             &semantic_census,
             &[file],
         ),
+        "javascript" | "typescript" => {
+            super::super::intentional_boundary_ast_js_ts::derive_js_ts_ast_census(
+                &source_census,
+                &semantic_census,
+                &[file],
+                language,
+            )
+        }
         _ => panic!("unsupported AST evidence fixture language: {language}"),
     }
     .unwrap();
@@ -317,6 +325,63 @@ fn qualifies_versioned_go_api_only_with_a_resolved_retained_consumer() {
         vec![incoming_call],
     );
     let asts = BTreeMap::from([("go", &ast)]);
+
+    let evidence = derive_compiler_and_ast_evidence(&source, &semantic, &asts).unwrap();
+
+    assert!(evidence.atoms.iter().any(|atom| {
+        atom.evidence_kind == BoundaryEvidenceKind::VersionedCompatibilityContract
+            && matches!(
+                atom.proof,
+                IntentionalBoundaryEvidenceProof::SourceAst(
+                    IntentionalBoundaryAstProofKind::VersionedCompatibilitySourceContract
+                )
+            )
+    }));
+    assert!(
+        evidence.atoms.iter().any(|atom| {
+            atom.evidence_kind == BoundaryEvidenceKind::RetainedCompatibilityConsumer
+        })
+    );
+
+    let protocol = super::super::validate_intentional_boundary_protocol(
+        include_bytes!("../sniffbench/non-blind-v1-selection-policy.json"),
+        include_bytes!("../sniffbench/non-blind-v1-history-worksheet.json"),
+        include_bytes!("../sniffbench/blind-oss-v1-source-seal.json"),
+        include_bytes!("../sniffbench/non-blind-v1-intentional-boundary-protocol.json"),
+    )
+    .unwrap();
+    let candidates = super::super::qualify_intentional_boundary_candidates(
+        &protocol, &source, &semantic, &evidence,
+    )
+    .unwrap();
+    assert!(candidates.candidates.iter().any(|candidate| {
+        candidate.category == super::super::IntentionalBoundaryCategory::CompatibilityApi
+    }));
+}
+
+#[test]
+fn qualifies_versioned_typescript_api_only_with_a_resolved_retained_consumer() {
+    let repository_path = "src/lib.ts";
+    let source_text = concat!(
+        "/** @deprecated retained for callers until v3. */\n",
+        "export function Process(value: number): number { return value; }",
+    );
+    let incoming_call = IntentionalBoundarySemanticCallFacts {
+        caller: CALLEE.to_string(),
+        callee: IntentionalBoundarySemanticResolution::Resolved {
+            value: SUBJECT.to_string(),
+        },
+        callsite: source_range(repository_path, source_text, "Process"),
+        dispatch: IntentionalBoundarySemanticDispatch::Static,
+    };
+    let (source, semantic, ast) = fixture_with_language(
+        repository_path,
+        "typescript",
+        IntentionalBoundaryIndexerKind::TypeScriptJavaScript,
+        source_text,
+        vec![incoming_call],
+    );
+    let asts = BTreeMap::from([("typescript", &ast)]);
 
     let evidence = derive_compiler_and_ast_evidence(&source, &semantic, &asts).unwrap();
 

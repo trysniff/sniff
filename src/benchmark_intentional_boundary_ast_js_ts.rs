@@ -5,14 +5,18 @@ use super::{
 };
 use oxc_ast::Visit;
 use oxc_ast::ast::{
-    ArrowFunctionExpression, ChainElement, Expression, Function, FunctionBody, MethodDefinition,
-    Statement,
+    ArrowFunctionExpression, ChainElement, Declaration, ExportDefaultDeclaration,
+    ExportDefaultDeclarationKind, ExportNamedDeclaration, Expression, Function, FunctionBody,
+    MethodDefinition, Modifiers, ObjectProperty, PropertyDefinition, Statement,
+    VariableDeclaration,
 };
 use oxc_ast::visit::walk;
 use oxc_span::{SourceType, Span};
 use oxc_syntax::scope::ScopeFlags;
 use std::path::Path;
 
+#[cfg(test)]
+use super::intentional_boundary_ast::derive_language_ast_census;
 use super::intentional_boundary_ast::{
     AstCallableCandidate, AstMethodSyntaxFacts, align_callable_candidates, census_language_ast,
     validate_language_ast,
@@ -21,6 +25,9 @@ use super::intentional_boundary_ast::{
 #[path = "benchmark_intentional_boundary_ast_js_ts_retry.rs"]
 mod retry;
 use retry::find_retry_loop;
+
+#[path = "benchmark_intentional_boundary_ast_js_ts_compatibility.rs"]
+mod compatibility;
 
 pub fn census_intentional_boundary_javascript_ast(
     repository: &str,
@@ -162,8 +169,11 @@ fn js_ts_syntax_facts(
             parsed.errors
         ));
     }
+    let comments = parsed.trivias.comments().collect::<Vec<_>>();
     let mut visitor = JsTsBodyVisitor {
         repository_path,
+        source: &record.source,
+        comments,
         line_starts: line_starts(&record.source),
         candidates: Vec::new(),
     };
@@ -178,12 +188,14 @@ fn js_ts_syntax_facts(
 
 struct JsTsBodyVisitor<'a> {
     repository_path: &'a str,
+    source: &'a str,
+    comments: Vec<(oxc_ast::CommentKind, Span)>,
     line_starts: Vec<usize>,
     candidates: Vec<AstCallableCandidate>,
 }
 
 impl JsTsBodyVisitor<'_> {
-    fn record(&mut self, span: Span, body: Option<&FunctionBody<'_>>) {
+    fn record(&mut self, span: Span, body: Option<&FunctionBody<'_>>, declaration_start: u32) {
         let start_line = line_for_offset(span.start as usize, &self.line_starts) + 1;
         let end_line = line_for_offset(span.end.saturating_sub(1) as usize, &self.line_starts) + 1;
         let thin_delegation = body
@@ -205,25 +217,147 @@ impl JsTsBodyVisitor<'_> {
             thin_delegation,
             distinct_retry_outcomes,
             generator_marker: None,
-            versioned_compatibility_source_contract: None,
+            versioned_compatibility_source_contract:
+                compatibility::versioned_compatibility_contract(
+                    self.source,
+                    &self.comments,
+                    declaration_start,
+                )
+                .map(|comment| offset_range(self.repository_path, comment, &self.line_starts)),
         });
     }
+
+    fn record_direct_callable(&mut self, expression: &Expression<'_>, declaration_start: u32) {
+        match expression {
+            Expression::ArrowFunctionExpression(arrow) => {
+                self.record(arrow.span, Some(&arrow.body), declaration_start);
+            }
+            Expression::FunctionExpression(function) => {
+                self.record(function.span, function.body.as_deref(), declaration_start);
+            }
+            _ => {}
+        }
+    }
+
+    fn declaration_start(modifiers: &Modifiers<'_>, fallback: u32) -> u32 {
+        modifiers
+            .find(|_| true)
+            .map_or(fallback, |modifier| modifier.span.start)
+    }
+
+    fn record_variable_callables(
+        &mut self,
+        declaration: &VariableDeclaration<'_>,
+        declaration_start: u32,
+    ) {
+        let callables = declaration
+            .declarations
+            .iter()
+            .filter_map(|declarator| declarator.init.as_ref())
+            .filter(|expression| {
+                matches!(
+                    expression,
+                    Expression::ArrowFunctionExpression(_) | Expression::FunctionExpression(_)
+                )
+            })
+            .collect::<Vec<_>>();
+        if let [callable] = callables.as_slice() {
+            self.record_direct_callable(callable, declaration_start);
+        }
+    }
+}
+
+#[cfg(test)]
+pub(super) fn derive_js_ts_ast_census(
+    source_census: &IntentionalBoundarySourceCensus,
+    semantic_census: &IntentionalBoundarySemanticCensus,
+    files: &[crate::types::FileRecord],
+    language: &str,
+) -> Result<IntentionalBoundaryAstCensus, String> {
+    derive_language_ast_census(
+        source_census,
+        semantic_census,
+        files,
+        language,
+        js_ts_syntax_facts,
+    )
 }
 
 impl<'a> Visit<'a> for JsTsBodyVisitor<'_> {
     fn visit_function(&mut self, function: &Function<'a>, flags: Option<ScopeFlags>) {
-        self.record(function.span, function.body.as_deref());
+        self.record(
+            function.span,
+            function.body.as_deref(),
+            Self::declaration_start(&function.modifiers, function.span.start),
+        );
         walk::walk_function(self, function, flags);
     }
 
     fn visit_arrow_expression(&mut self, expression: &ArrowFunctionExpression<'a>) {
-        self.record(expression.span, Some(&expression.body));
+        self.record(
+            expression.span,
+            Some(&expression.body),
+            expression.span.start,
+        );
         walk::walk_arrow_expression(self, expression);
     }
 
     fn visit_method_definition(&mut self, definition: &MethodDefinition<'a>) {
-        self.record(definition.span, definition.value.body.as_deref());
+        self.record(
+            definition.span,
+            definition.value.body.as_deref(),
+            definition.span.start,
+        );
         walk::walk_function(self, &definition.value, Some(definition.kind.scope_flags()));
+    }
+
+    fn visit_variable_declaration(&mut self, declaration: &VariableDeclaration<'a>) {
+        self.record_variable_callables(
+            declaration,
+            Self::declaration_start(&declaration.modifiers, declaration.span.start),
+        );
+        walk::walk_variable_declaration(self, declaration);
+    }
+
+    fn visit_property_definition(&mut self, definition: &PropertyDefinition<'a>) {
+        if let Some(value) = &definition.value {
+            self.record_direct_callable(value, definition.span.start);
+        }
+        walk::walk_property_definition(self, definition);
+    }
+
+    fn visit_object_property(&mut self, property: &ObjectProperty<'a>) {
+        self.record_direct_callable(&property.value, property.span.start);
+        walk::walk_object_property(self, property);
+    }
+
+    fn visit_export_named_declaration(&mut self, export: &ExportNamedDeclaration<'a>) {
+        match &export.declaration {
+            Some(Declaration::FunctionDeclaration(function)) => {
+                self.record(function.span, function.body.as_deref(), export.span.start);
+            }
+            Some(Declaration::VariableDeclaration(declaration)) => {
+                self.record_variable_callables(declaration, export.span.start);
+            }
+            _ => {}
+        }
+        walk::walk_export_named_declaration(self, export);
+    }
+
+    fn visit_export_default_declaration(&mut self, export: &ExportDefaultDeclaration<'a>) {
+        match &export.declaration {
+            ExportDefaultDeclarationKind::FunctionDeclaration(function) => {
+                self.record(function.span, function.body.as_deref(), export.span.start);
+            }
+            ExportDefaultDeclarationKind::ArrowFunctionExpression(arrow) => {
+                self.record(arrow.span, Some(&arrow.body), export.span.start);
+            }
+            ExportDefaultDeclarationKind::FunctionExpression(function) => {
+                self.record(function.span, function.body.as_deref(), export.span.start);
+            }
+            _ => {}
+        }
+        walk::walk_export_default_declaration(self, export);
     }
 }
 
