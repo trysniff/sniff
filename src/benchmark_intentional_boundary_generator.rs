@@ -33,6 +33,7 @@ mod node;
 mod python;
 #[path = "benchmark_intentional_boundary_generator_runtime.rs"]
 mod runtime;
+use command::{GeneratorCommandPlan, generator_command_plan_with_context};
 #[cfg(test)]
 use command::{cargo_generator_command, generator_command};
 pub(super) use command::{generator_command_with_context, is_generator_declaration};
@@ -367,17 +368,22 @@ where
     let mut candidates = declarations.to_vec();
     candidates.sort_by_key(|declaration| generator_candidate_key(declaration));
     let mut failures = Vec::new();
+    let mut planning_failures = Vec::new();
     let mut supported = 0usize;
     for declaration in candidates {
-        let Some(command) = generator_command_with_context(
+        let command = match generator_command_plan_with_context(
             context.inventory,
             context.declarations,
             context.semantic_census,
             context.project_model_census,
             context.binding_census,
             declaration,
-        ) else {
-            continue;
+        ) {
+            GeneratorCommandPlan::Planned(command) => command,
+            GeneratorCommandPlan::Unresolved { reason, detail } => {
+                planning_failures.push((declaration.declaration_id.as_str(), reason, detail));
+                continue;
+            }
         };
         supported += 1;
         match executor(declaration, &command, &outputs) {
@@ -396,10 +402,21 @@ where
         }
     }
     if supported == 0 {
-        return Ok(unresolved(
-            IntentionalBoundaryGeneratorUnresolvedReason::UnsupportedConfiguration,
-            "generator replay found no supported locked generator command",
-        ));
+        let (reason, detail) = planning_failures.first().map_or_else(
+            || {
+                (
+                    IntentionalBoundaryGeneratorUnresolvedReason::UnsupportedConfiguration,
+                    "generator replay found no supported locked generator command".to_string(),
+                )
+            },
+            |(id, reason, detail)| {
+                (
+                    *reason,
+                    format!("generator declaration {id} is unresolved: {detail}"),
+                )
+            },
+        );
+        return Ok(unresolved(reason, detail));
     }
     let reason = failures.first().map_or(
         IntentionalBoundaryGeneratorUnresolvedReason::ExecutionFailed,

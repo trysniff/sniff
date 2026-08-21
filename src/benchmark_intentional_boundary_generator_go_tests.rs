@@ -211,6 +211,13 @@ fn arbitrary_direct_and_aliased_executables_are_rejected() {
 
     assert!(go_generator_command(&models, &direct).is_none());
     assert!(go_generator_command(&models, &aliased).is_none());
+    assert!(matches!(
+        go_generator_command_plan(&models, &direct),
+        GoGeneratorCommandPlan::Unresolved {
+            reason: IntentionalBoundaryGeneratorUnresolvedReason::UnsupportedConfiguration,
+            ..
+        }
+    ));
 }
 
 #[test]
@@ -238,6 +245,13 @@ fn missing_module_or_compiler_source_ownership_is_rejected() {
 
     assert!(go_generator_command(&models, &moduleless).is_none());
     assert!(go_generator_command(&models, &unowned).is_none());
+    assert!(matches!(
+        go_generator_command_plan(&models, &moduleless),
+        GoGeneratorCommandPlan::Unresolved {
+            reason: IntentionalBoundaryGeneratorUnresolvedReason::MissingConfiguration,
+            ..
+        }
+    ));
 }
 
 #[test]
@@ -257,6 +271,13 @@ fn ambiguous_compiler_package_ownership_is_rejected() {
     models.targets.push(duplicate);
 
     assert!(go_generator_command(&models, &declaration).is_none());
+    assert!(matches!(
+        go_generator_command_plan(&models, &declaration),
+        GoGeneratorCommandPlan::Unresolved {
+            reason: IntentionalBoundaryGeneratorUnresolvedReason::AmbiguousConfiguration,
+            ..
+        }
+    ));
 }
 
 #[test]
