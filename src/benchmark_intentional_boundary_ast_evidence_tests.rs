@@ -3,10 +3,11 @@ use crate::benchmark::release::{
     IntentionalBoundaryIndexerKind, IntentionalBoundaryMethodCensusEntry,
     IntentionalBoundarySemanticCallFacts, IntentionalBoundarySemanticDispatch,
     IntentionalBoundarySemanticIndexerCensus, IntentionalBoundarySemanticMethod,
-    IntentionalBoundarySemanticOrigin, IntentionalBoundarySemanticRange,
-    IntentionalBoundarySemanticResolution, IntentionalBoundarySemanticSymbolCategory,
-    IntentionalBoundarySemanticSymbolFacts, IntentionalBoundarySemanticVisibility,
-    IntentionalBoundarySourceFile,
+    IntentionalBoundarySemanticOccurrenceRole, IntentionalBoundarySemanticOrigin,
+    IntentionalBoundarySemanticRange, IntentionalBoundarySemanticReferenceTarget,
+    IntentionalBoundarySemanticResolution, IntentionalBoundarySemanticSourceReference,
+    IntentionalBoundarySemanticSymbolCategory, IntentionalBoundarySemanticSymbolFacts,
+    IntentionalBoundarySemanticVisibility, IntentionalBoundarySourceFile,
 };
 
 const SUBJECT: &str = "rust fixture process";
@@ -70,6 +71,28 @@ fn fixture_with_language(
     IntentionalBoundarySemanticCensus,
     IntentionalBoundaryAstCensus,
 ) {
+    fixture_with_language_and_references(
+        repository_path,
+        language,
+        indexer,
+        source,
+        calls,
+        Vec::new(),
+    )
+}
+
+fn fixture_with_language_and_references(
+    repository_path: &str,
+    language: &str,
+    indexer: IntentionalBoundaryIndexerKind,
+    source: &str,
+    calls: Vec<IntentionalBoundarySemanticCallFacts>,
+    source_references: Vec<IntentionalBoundarySemanticSourceReference>,
+) -> (
+    IntentionalBoundarySourceCensus,
+    IntentionalBoundarySemanticCensus,
+    IntentionalBoundaryAstCensus,
+) {
     let file = crate::parser::parse_source_checked(repository_path, source.as_bytes()).unwrap();
     let parsed_method = &file.methods[0];
     let parser_unit_id = "ibm-v1:ast-evidence-fixture".to_string();
@@ -122,7 +145,7 @@ fn fixture_with_language(
             test_relationship_count: 0,
             unresolved_edge_count: 0,
         }],
-        source_references: Vec::new(),
+        source_references,
         methods: vec![IntentionalBoundarySemanticMethod {
             parser_unit_id,
             repository_path: repository_path.to_string(),
@@ -184,10 +207,40 @@ fn fixture_with_language(
                 language,
             )
         }
+        "python" => super::super::intentional_boundary_ast_python::derive_python_ast_census(
+            &source_census,
+            &semantic_census,
+            &[file],
+        ),
         _ => panic!("unsupported AST evidence fixture language: {language}"),
     }
     .unwrap();
     (source_census, semantic_census, ast)
+}
+
+fn compiler_reference(
+    indexer: IntentionalBoundaryIndexerKind,
+    location: IntentionalBoundarySemanticRange,
+    provider_identity: &str,
+) -> IntentionalBoundarySemanticSourceReference {
+    IntentionalBoundarySemanticSourceReference {
+        indexer,
+        location,
+        roles: vec![IntentionalBoundarySemanticOccurrenceRole::Read],
+        target: IntentionalBoundarySemanticResolution::Resolved {
+            value: IntentionalBoundarySemanticReferenceTarget {
+                symbol_id: format!(
+                    "scip-global:{}:{}",
+                    provider_identity.len(),
+                    provider_identity
+                ),
+                provider_identity: provider_identity.to_string(),
+                display_name: None,
+                provider_kind: "UnspecifiedKind".to_string(),
+                origin: IntentionalBoundarySemanticOrigin::External,
+            },
+        },
+    }
 }
 
 fn fixture() -> (
@@ -412,6 +465,73 @@ fn qualifies_versioned_typescript_api_only_with_a_resolved_retained_consumer() {
         &protocol, &source, &semantic, &evidence,
     )
     .unwrap();
+    assert!(candidates.candidates.iter().any(|candidate| {
+        candidate.category == super::super::IntentionalBoundaryCategory::CompatibilityApi
+    }));
+}
+
+#[test]
+fn qualifies_python_warning_contract_only_with_compiler_identities_and_a_consumer() {
+    let repository_path = "src/lib.py";
+    let source_text = concat!(
+        "import warnings\n",
+        "def process(value):\n",
+        "    warnings.warn(\"removed in v2.0\", DeprecationWarning, stacklevel=2)\n",
+        "    return value\n",
+    );
+    let incoming_call = IntentionalBoundarySemanticCallFacts {
+        caller: CALLEE.to_string(),
+        callee: IntentionalBoundarySemanticResolution::Resolved {
+            value: SUBJECT.to_string(),
+        },
+        callsite: source_range(repository_path, source_text, "process"),
+        dispatch: IntentionalBoundarySemanticDispatch::Static,
+    };
+    let mut warn_range = source_range(repository_path, source_text, ".warn");
+    warn_range.start_character_zero_based += 1;
+    let references = vec![
+        compiler_reference(
+            IntentionalBoundaryIndexerKind::Python,
+            warn_range,
+            "scip-python python python-stdlib 3.11 _warnings/warn().",
+        ),
+        compiler_reference(
+            IntentionalBoundaryIndexerKind::Python,
+            source_range(repository_path, source_text, "DeprecationWarning"),
+            "scip-python python python-stdlib 3.11 builtins/DeprecationWarning#",
+        ),
+    ];
+    let (source, semantic, ast) = fixture_with_language_and_references(
+        repository_path,
+        "python",
+        IntentionalBoundaryIndexerKind::Python,
+        source_text,
+        vec![incoming_call],
+        references,
+    );
+    let asts = BTreeMap::from([("python", &ast)]);
+
+    let evidence = derive_compiler_and_ast_evidence(&source, &semantic, &asts).unwrap();
+    let protocol = super::super::validate_intentional_boundary_protocol(
+        include_bytes!("../sniffbench/non-blind-v1-selection-policy.json"),
+        include_bytes!("../sniffbench/non-blind-v1-history-worksheet.json"),
+        include_bytes!("../sniffbench/blind-oss-v1-source-seal.json"),
+        include_bytes!("../sniffbench/non-blind-v1-intentional-boundary-protocol.json"),
+    )
+    .unwrap();
+    let candidates = super::super::qualify_intentional_boundary_candidates(
+        &protocol, &source, &semantic, &evidence,
+    )
+    .unwrap();
+
+    assert!(evidence.atoms.iter().any(|atom| {
+        atom.evidence_kind == BoundaryEvidenceKind::VersionedCompatibilityContract
+    }));
+    assert!(
+        evidence.atoms.iter().any(|atom| {
+            atom.evidence_kind == BoundaryEvidenceKind::RetainedCompatibilityConsumer
+        })
+    );
     assert!(candidates.candidates.iter().any(|candidate| {
         candidate.category == super::super::IntentionalBoundaryCategory::CompatibilityApi
     }));

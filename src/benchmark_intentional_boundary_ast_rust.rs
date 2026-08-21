@@ -117,6 +117,7 @@ impl RustBodyVisitor<'_> {
             generator_marker: None,
             versioned_compatibility_source_contract: versioned_compatibility_annotation(attrs)
                 .map(|attribute| span_range(self.repository_path, attribute.span())),
+            versioned_compatibility_compiler_references: Vec::new(),
         };
         self.methods.insert(key, fact);
     }

@@ -415,6 +415,9 @@ pub use intentional_boundary_ast_schema::*;
 #[path = "benchmark_intentional_boundary_ast.rs"]
 mod intentional_boundary_ast;
 
+#[path = "benchmark_intentional_boundary_ast_compiler_references.rs"]
+mod intentional_boundary_ast_compiler_references;
+
 #[path = "benchmark_intentional_boundary_compatibility_version.rs"]
 mod intentional_boundary_compatibility_version;
 
@@ -425,6 +428,9 @@ pub use intentional_boundary_ast_rust::*;
 
 #[path = "benchmark_intentional_boundary_ast_python.rs"]
 mod intentional_boundary_ast_python;
+
+#[path = "benchmark_intentional_boundary_ast_python_compatibility.rs"]
+mod intentional_boundary_ast_python_compatibility;
 
 pub use intentional_boundary_ast_python::*;
 

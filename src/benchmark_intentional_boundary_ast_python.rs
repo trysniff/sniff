@@ -12,6 +12,10 @@ use super::intentional_boundary_ast::derive_language_ast_census;
 use super::intentional_boundary_ast::{
     AstMethodSyntaxFact, AstMethodSyntaxFacts, census_language_ast, validate_language_ast,
 };
+use super::intentional_boundary_ast_compiler_references::{
+    AstCompilerReferenceIdentity, AstCompilerReferenceRequirement,
+};
+use super::intentional_boundary_ast_python_compatibility::versioned_compatibility_contract;
 
 const LANGUAGE: &str = "python";
 
@@ -58,7 +62,7 @@ pub fn validate_intentional_boundary_python_ast_census(
 }
 
 #[cfg(test)]
-fn derive_python_ast_census(
+pub(super) fn derive_python_ast_census(
     source_census: &IntentionalBoundarySourceCensus,
     semantic_census: &IntentionalBoundarySemanticCensus,
     files: &[crate::types::FileRecord],
@@ -86,6 +90,7 @@ fn python_syntax_facts(
     };
     let mut visitor = PythonBodyVisitor {
         repository_path,
+        source,
         line_starts: line_starts(source),
         methods: BTreeMap::new(),
     };
@@ -97,6 +102,7 @@ fn python_syntax_facts(
 
 struct PythonBodyVisitor<'a> {
     repository_path: &'a str,
+    source: &'a str,
     line_starts: Vec<usize>,
     methods: AstMethodSyntaxFacts,
 }
@@ -104,6 +110,7 @@ struct PythonBodyVisitor<'a> {
 impl PythonBodyVisitor<'_> {
     fn record(&mut self, name: String, range: TextRange, body: &[Stmt]) {
         let (start_line, end_line) = method_lines(range, &self.line_starts);
+        let compatibility = versioned_compatibility_contract(self.source, body);
         let fact = AstMethodSyntaxFact {
             end_line,
             thin_delegation: thin_delegation_expression(body)
@@ -115,7 +122,31 @@ impl PythonBodyVisitor<'_> {
                 )
             }),
             generator_marker: None,
-            versioned_compatibility_source_contract: None,
+            versioned_compatibility_source_contract: compatibility
+                .as_ref()
+                .map(|value| text_range(self.repository_path, value.contract, &self.line_starts)),
+            versioned_compatibility_compiler_references: compatibility
+                .map(|value| {
+                    vec![
+                        AstCompilerReferenceRequirement {
+                            range: text_range(
+                                self.repository_path,
+                                value.warnings_warn,
+                                &self.line_starts,
+                            ),
+                            identity: AstCompilerReferenceIdentity::PythonWarningsWarn,
+                        },
+                        AstCompilerReferenceRequirement {
+                            range: text_range(
+                                self.repository_path,
+                                value.deprecation_warning,
+                                &self.line_starts,
+                            ),
+                            identity: AstCompilerReferenceIdentity::PythonDeprecationWarning,
+                        },
+                    ]
+                })
+                .unwrap_or_default(),
         };
         self.methods.insert((name, start_line), fact);
     }
