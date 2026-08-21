@@ -33,6 +33,7 @@ pub(in crate::benchmark::release) fn is_generator_declaration(
         declaration.declaration_kind,
         IntentionalBoundaryManifestDeclarationKind::BuildScript
             | IntentionalBoundaryManifestDeclarationKind::PackageScript
+            | IntentionalBoundaryManifestDeclarationKind::GeneratorCommand
     ) || (declaration.provider == IntentionalBoundaryManifestProvider::PythonProjectManifest
         && declaration.declaration_kind
             == IntentionalBoundaryManifestDeclarationKind::RuntimeEntrypoint)

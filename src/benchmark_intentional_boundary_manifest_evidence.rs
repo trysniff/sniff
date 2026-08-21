@@ -233,7 +233,8 @@ fn append_declaration_evidence(
             Vec::new(),
         ),
         IntentionalBoundaryManifestDeclarationKind::BuildScript
-        | IntentionalBoundaryManifestDeclarationKind::PackageScript => {
+        | IntentionalBoundaryManifestDeclarationKind::PackageScript
+        | IntentionalBoundaryManifestDeclarationKind::GeneratorCommand => {
             Err("generator-command declarations require replay before method evidence".to_string())
         }
     }

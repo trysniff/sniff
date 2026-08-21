@@ -2,7 +2,7 @@ use super::IntentionalBoundarySemanticRange;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-pub const INTENTIONAL_BOUNDARY_MANIFEST_CENSUS_SCHEMA_VERSION: u32 = 4;
+pub const INTENTIONAL_BOUNDARY_MANIFEST_CENSUS_SCHEMA_VERSION: u32 = 5;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -10,6 +10,7 @@ pub enum IntentionalBoundaryManifestProvider {
     CargoManifest,
     NodePackageManifest,
     PythonProjectManifest,
+    GoGenerateSource,
     GoPackageMetadata,
     GradleProjectModel,
 }
@@ -21,6 +22,14 @@ pub enum IntentionalBoundaryManifestDeclarationKind {
     RuntimeEntrypoint,
     BuildScript,
     PackageScript,
+    GeneratorCommand,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IntentionalBoundaryGoGenerateDirective {
+    pub location: IntentionalBoundarySemanticRange,
+    pub source_text: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -40,6 +49,11 @@ pub enum IntentionalBoundaryManifestTarget {
         script_name: String,
         command: String,
         package_manager: Option<String>,
+    },
+    GoGeneratePackage {
+        module_manifest_repository_path: Option<String>,
+        package_repository_path: String,
+        directives: Vec<IntentionalBoundaryGoGenerateDirective>,
     },
 }
 

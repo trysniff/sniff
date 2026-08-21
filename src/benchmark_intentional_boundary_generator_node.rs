@@ -297,6 +297,7 @@ pub(super) fn generator_candidate_key(
             0
         }
         IntentionalBoundaryManifestTarget::RepositoryPath { .. } => 1,
+        IntentionalBoundaryManifestTarget::GoGeneratePackage { .. } => 0,
         IntentionalBoundaryManifestTarget::PackageScript { .. } => 2,
         _ => 3,
     };

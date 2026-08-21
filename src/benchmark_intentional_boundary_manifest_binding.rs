@@ -68,6 +68,7 @@ fn bind_declaration(
         declaration.declaration_kind,
         IntentionalBoundaryManifestDeclarationKind::BuildScript
             | IntentionalBoundaryManifestDeclarationKind::PackageScript
+            | IntentionalBoundaryManifestDeclarationKind::GeneratorCommand
     ) {
         return Ok(Outcome::AwaitingGeneratorReplay);
     }
@@ -97,6 +98,9 @@ fn bind_declaration(
         ),
         IntentionalBoundaryManifestTarget::PackageScript { .. } => {
             Err("package-script manifest target escaped generator replay".to_string())
+        }
+        IntentionalBoundaryManifestTarget::GoGeneratePackage { .. } => {
+            Err("Go generator target escaped generator replay".to_string())
         }
     }
 }
@@ -178,6 +182,9 @@ fn bind_repository_paths(
             Ok(Outcome::AwaitingGeneratorReplay)
         }
         IntentionalBoundaryManifestDeclarationKind::PackageScript => {
+            Ok(Outcome::AwaitingGeneratorReplay)
+        }
+        IntentionalBoundaryManifestDeclarationKind::GeneratorCommand => {
             Ok(Outcome::AwaitingGeneratorReplay)
         }
     }
