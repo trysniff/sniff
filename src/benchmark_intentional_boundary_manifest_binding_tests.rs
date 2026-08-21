@@ -518,3 +518,83 @@ fn emits_manifest_evidence_only_for_compiler_bound_method_subjects() {
             )
     }));
 }
+
+#[test]
+fn python_binding_resolves_a_unique_src_layout_module_without_guessing_a_root() {
+    let (mut source, semantic, manifest) = fixture();
+    let file = source
+        .source_files
+        .iter_mut()
+        .find(|file| file.repository_path == "demo/cli.py")
+        .unwrap();
+    file.repository_path = "src/demo/cli.py".to_string();
+    let semantic_methods = semantic
+        .methods
+        .iter()
+        .map(|method| (method.parser_unit_id.as_str(), method))
+        .collect::<BTreeMap<_, _>>();
+    let declaration = manifest
+        .declarations
+        .iter()
+        .find(|declaration| {
+            matches!(
+                &declaration.target,
+                Target::PythonObject { qualname, .. } if qualname == &["main".to_string()]
+            )
+        })
+        .unwrap();
+    let Target::PythonObject { module, qualname } = &declaration.target else {
+        unreachable!()
+    };
+
+    let outcome =
+        bind_python_object(&source, &semantic_methods, declaration, module, qualname).unwrap();
+
+    assert!(matches!(outcome, Outcome::Bound { subjects } if subjects.len() == 1));
+}
+
+#[test]
+fn python_binding_rejects_multiple_possible_import_roots() {
+    let (mut source, semantic, manifest) = fixture();
+    let duplicate = {
+        let file = source
+            .source_files
+            .iter_mut()
+            .find(|file| file.repository_path == "demo/cli.py")
+            .unwrap();
+        file.repository_path = "src/demo/cli.py".to_string();
+        let mut duplicate = file.clone();
+        duplicate.repository_path = "lib/demo/cli.py".to_string();
+        duplicate
+    };
+    source.source_files.push(duplicate);
+    let semantic_methods = semantic
+        .methods
+        .iter()
+        .map(|method| (method.parser_unit_id.as_str(), method))
+        .collect::<BTreeMap<_, _>>();
+    let declaration = manifest
+        .declarations
+        .iter()
+        .find(|declaration| {
+            matches!(
+                &declaration.target,
+                Target::PythonObject { qualname, .. } if qualname == &["main".to_string()]
+            )
+        })
+        .unwrap();
+    let Target::PythonObject { module, qualname } = &declaration.target else {
+        unreachable!()
+    };
+
+    let outcome =
+        bind_python_object(&source, &semantic_methods, declaration, module, qualname).unwrap();
+
+    assert!(matches!(
+        outcome,
+        Outcome::Unresolved {
+            reason: UnresolvedReason::AmbiguousSourceTarget,
+            ..
+        }
+    ));
+}

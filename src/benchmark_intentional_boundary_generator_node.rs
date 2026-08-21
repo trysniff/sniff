@@ -1,4 +1,4 @@
-use super::{cargo_generator_command, manifest_directory};
+use super::manifest_directory;
 use crate::benchmark::release::{
     BoundaryGitEntryKind, IntentionalBoundaryManifestDeclaration,
     IntentionalBoundaryManifestDeclarationKind, IntentionalBoundaryManifestProvider,
@@ -21,22 +21,7 @@ enum NodeManager {
     Bun,
 }
 
-pub(crate) fn generator_command(
-    inventory: &IntentionalBoundaryRepositoryInventory,
-    declarations: &[IntentionalBoundaryManifestDeclaration],
-    declaration: &IntentionalBoundaryManifestDeclaration,
-) -> Option<GeneratorCommand> {
-    if let Some(execution) = cargo_generator_command(declaration) {
-        return Some(GeneratorCommand {
-            preparation: None,
-            execution,
-            cleanup_paths: Vec::new(),
-        });
-    }
-    node_generator_command(inventory, declarations, declaration)
-}
-
-fn node_generator_command(
+pub(super) fn node_generator_command(
     inventory: &IntentionalBoundaryRepositoryInventory,
     declarations: &[IntentionalBoundaryManifestDeclaration],
     declaration: &IntentionalBoundaryManifestDeclaration,
@@ -306,6 +291,11 @@ pub(super) fn generator_candidate_key(
             command,
             ..
         } if generator_like(script_name) || generator_like(command) => 0,
+        IntentionalBoundaryManifestTarget::PythonObject { qualname, .. }
+            if qualname.iter().any(|part| generator_like(part)) =>
+        {
+            0
+        }
         IntentionalBoundaryManifestTarget::RepositoryPath { .. } => 1,
         IntentionalBoundaryManifestTarget::PackageScript { .. } => 2,
         _ => 3,

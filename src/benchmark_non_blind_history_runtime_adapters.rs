@@ -5,6 +5,8 @@ use super::non_blind_history_runtime_support::{
     resolve_on_path, resolve_rust_tool, rust_toolchain_root, sandbox_repository_path, unavailable,
 };
 use std::path::{Path, PathBuf};
+#[cfg(windows)]
+use std::{fs, io::Read};
 
 pub(super) struct Launch {
     pub(super) target: PathBuf,
@@ -13,6 +15,8 @@ pub(super) struct Launch {
     pub(super) runtime_roots: Vec<PathBuf>,
     pub(super) env: Vec<(String, String)>,
     pub(super) repository_target: bool,
+    #[cfg(windows)]
+    pub(super) collect_runtime_images: bool,
 }
 
 pub(super) fn cargo_launch(args: &[String]) -> Result<Launch, HistoricalRuntimePlanError> {
@@ -51,6 +55,8 @@ pub(super) fn cargo_launch(args: &[String]) -> Result<Launch, HistoricalRuntimeP
         runtime_roots,
         env,
         repository_target: false,
+        #[cfg(windows)]
+        collect_runtime_images: true,
     })
 }
 
@@ -64,6 +70,8 @@ pub(super) fn go_launch(args: &[String]) -> Result<Launch, HistoricalRuntimePlan
         runtime_roots: vec![go_root.clone()],
         env: vec![("GOROOT".to_string(), path_value(&go_root))],
         repository_target: false,
+        #[cfg(windows)]
+        collect_runtime_images: true,
     })
 }
 
@@ -77,13 +85,56 @@ pub(super) fn python_launch(
         &["-c", "import sys; print(sys.prefix)"],
         "Python prefix",
     )?;
+    let runtime_files = vec![python.clone()];
+    #[cfg(windows)]
+    let runtime_files = {
+        let mut runtime_files = runtime_files;
+        extend_windows_python_images(&prefix, &mut runtime_files)?;
+        runtime_files
+    };
     Ok(Launch {
         target: python.clone(),
         args: args.to_vec(),
-        runtime_files: vec![python],
+        runtime_files,
         runtime_roots: vec![prefix],
         env: Vec::new(),
         repository_target: false,
+        #[cfg(windows)]
+        collect_runtime_images: false,
+    })
+}
+
+pub(super) fn uv_launch(args: &[String]) -> Result<Launch, HistoricalRuntimePlanError> {
+    let uv = resolve_on_path("uv")?;
+    #[cfg(windows)]
+    let python_program = "python";
+    #[cfg(not(windows))]
+    let python_program = "python3";
+    let python = resolve_on_path(python_program)?;
+    let python_prefix = query_path(
+        &python,
+        &["-c", "import sys; print(sys.prefix)"],
+        "Python prefix",
+    )?;
+    let uv_root = executable_installation_root(&uv, "uv runtime")?;
+    reject_broad_user_root(&uv_root)?;
+    reject_broad_user_root(&python_prefix)?;
+    let runtime_files = vec![uv.clone(), python.clone()];
+    #[cfg(windows)]
+    let runtime_files = {
+        let mut runtime_files = runtime_files;
+        extend_windows_python_images(&python_prefix, &mut runtime_files)?;
+        runtime_files
+    };
+    Ok(Launch {
+        target: uv.clone(),
+        args: args.to_vec(),
+        runtime_files,
+        runtime_roots: vec![uv_root, python_prefix],
+        env: vec![("UV_PYTHON".to_string(), path_value(&python))],
+        repository_target: false,
+        #[cfg(windows)]
+        collect_runtime_images: false,
     })
 }
 
@@ -105,13 +156,22 @@ pub(super) fn private_python_launch(
     #[cfg(not(windows))]
     let private = cache_root.join("python-env").join("bin").join("python");
     let private = canonical_file(&private, "private historical Python runtime")?;
+    let runtime_files = vec![host];
+    #[cfg(windows)]
+    let runtime_files = {
+        let mut runtime_files = runtime_files;
+        extend_windows_python_images(&prefix, &mut runtime_files)?;
+        runtime_files
+    };
     Ok(Launch {
         target: private,
         args: args.to_vec(),
-        runtime_files: vec![host],
+        runtime_files,
         runtime_roots: vec![prefix],
         env: Vec::new(),
         repository_target: true,
+        #[cfg(windows)]
+        collect_runtime_images: false,
     })
 }
 
@@ -126,6 +186,8 @@ pub(super) fn node_launch(args: &[String]) -> Result<Launch, HistoricalRuntimePl
         runtime_roots: vec![root],
         env: Vec::new(),
         repository_target: false,
+        #[cfg(windows)]
+        collect_runtime_images: true,
     })
 }
 
@@ -147,6 +209,8 @@ pub(super) fn node_manager_launch(
         ],
         env: Vec::new(),
         repository_target: false,
+        #[cfg(windows)]
+        collect_runtime_images: true,
     })
 }
 
@@ -159,6 +223,8 @@ pub(super) fn bun_launch(args: &[String]) -> Result<Launch, HistoricalRuntimePla
         runtime_roots: vec![parent_directory(&bun, "Bun runtime")?],
         env: Vec::new(),
         repository_target: false,
+        #[cfg(windows)]
+        collect_runtime_images: true,
     })
 }
 
@@ -181,6 +247,8 @@ pub(super) fn gradle_launch(
         runtime_roots: vec![java_home.clone()],
         env: vec![("JAVA_HOME".to_string(), path_value(&java_home))],
         repository_target: true,
+        #[cfg(windows)]
+        collect_runtime_images: true,
     })
 }
 
@@ -242,6 +310,8 @@ pub(super) fn gradle_tooling_launch(args: &[String]) -> Result<Launch, Historica
         runtime_roots: vec![java_home.clone(), gradle_home],
         env: vec![("JAVA_HOME".to_string(), path_value(&java_home))],
         repository_target: false,
+        #[cfg(windows)]
+        collect_runtime_images: true,
     })
 }
 
@@ -275,6 +345,8 @@ pub(super) fn generic_launch(
             runtime_roots: Vec::new(),
             env: Vec::new(),
             repository_target: true,
+            #[cfg(windows)]
+            collect_runtime_images: true,
         });
     }
     let target = resolve_on_path(program)?;
@@ -290,5 +362,64 @@ pub(super) fn generic_launch(
         runtime_roots,
         env: Vec::new(),
         repository_target: false,
+        #[cfg(windows)]
+        collect_runtime_images: true,
     })
+}
+
+#[cfg(windows)]
+fn extend_windows_python_images(
+    prefix: &Path,
+    images: &mut Vec<PathBuf>,
+) -> Result<(), HistoricalRuntimePlanError> {
+    const MAX_ENTRIES: usize = 512;
+    let mut entries = 0usize;
+    for directory in [prefix.to_path_buf(), prefix.join("DLLs")] {
+        if !directory.is_dir() {
+            continue;
+        }
+        for entry in fs::read_dir(&directory).map_err(|error| {
+            unavailable(format!(
+                "failed to enumerate Python runtime {}: {error}",
+                directory.display()
+            ))
+        })? {
+            let entry =
+                entry.map_err(|error| unavailable(format!("invalid runtime entry: {error}")))?;
+            entries += 1;
+            if entries > MAX_ENTRIES {
+                return Err(unavailable(
+                    "Python runtime exceeds the bounded image entry limit",
+                ));
+            }
+            let path = entry.path();
+            if !path.is_file()
+                || !path
+                    .extension()
+                    .and_then(|value| value.to_str())
+                    .is_some_and(|value| {
+                        value.eq_ignore_ascii_case("exe")
+                            || value.eq_ignore_ascii_case("dll")
+                            || value.eq_ignore_ascii_case("pyd")
+                    })
+            {
+                continue;
+            }
+            let mut file = fs::File::open(&path)
+                .map_err(|error| unavailable(format!("failed to inspect Python image: {error}")))?;
+            let mut magic = [0u8; 2];
+            file.read_exact(&mut magic)
+                .map_err(|error| unavailable(format!("failed to inspect Python image: {error}")))?;
+            if magic != *b"MZ" {
+                return Err(unavailable(format!(
+                    "Python runtime image is not PE: {}",
+                    path.display()
+                )));
+            }
+            images.push(canonical_file(&path, "Python runtime image")?);
+        }
+    }
+    images.sort();
+    images.dedup();
+    Ok(())
 }

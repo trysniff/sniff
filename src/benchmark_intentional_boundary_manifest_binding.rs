@@ -15,7 +15,7 @@ use super::{
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
-const BINDING_CONTRACT: &str = "sniffbench-intentional-boundary-manifest-bindings-v2";
+const BINDING_CONTRACT: &str = "sniffbench-intentional-boundary-manifest-bindings-v3";
 
 pub fn bind_intentional_boundary_manifests(
     source_census: &IntentionalBoundarySourceCensus,
@@ -199,20 +199,30 @@ fn bind_python_object(
     let directory = declaration
         .manifest_repository_path
         .rsplit_once('/')
-        .map(|(directory, _)| directory);
+        .map_or("", |(directory, _)| directory);
     let module_path = module.join("/");
-    let relative_candidates = [
+    let module_suffixes = [
         format!("{module_path}.py"),
         format!("{module_path}/__init__.py"),
     ];
-    let candidate_paths = relative_candidates.map(|path| match directory {
-        Some(directory) => format!("{directory}/{path}"),
-        None => path,
-    });
     let files = source_census
         .source_files
         .iter()
-        .filter(|file| candidate_paths.contains(&file.repository_path))
+        .filter(|file| {
+            let relative = if directory.is_empty() {
+                Some(file.repository_path.as_str())
+            } else {
+                file.repository_path.strip_prefix(&format!("{directory}/"))
+            };
+            relative.is_some_and(|path| {
+                module_suffixes.iter().any(|suffix| {
+                    path == suffix
+                        || path
+                            .strip_suffix(suffix)
+                            .is_some_and(|prefix| prefix.ends_with('/'))
+                })
+            })
+        })
         .collect::<Vec<_>>();
     let [file] = files.as_slice() else {
         return Ok(if files.is_empty() {

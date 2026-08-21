@@ -36,14 +36,7 @@ pub(super) fn execute_generator_replay(
             "sniff-boundary-generator",
         )
         .map_err(failed)?;
-        for output in expected {
-            fs::write(snapshot.path().join(&output.repository_path), []).map_err(|error| {
-                failed(format!(
-                    "failed to invalidate generated output {}: {error}",
-                    output.repository_path
-                ))
-            })?;
-        }
+        invalidate_expected_outputs(snapshot.path(), expected)?;
         let cache = snapshot.path().join(CACHE_DIRECTORY);
         fs::create_dir(&cache)
             .map_err(|error| failed(format!("failed to create generator cache: {error}")))?;
@@ -54,6 +47,14 @@ pub(super) fn execute_generator_replay(
             let output = crate::sandbox::run(&plan.command).map_err(sandbox_failure)?;
             if output.timed_out || output.status_code != Some(0) {
                 let stderr = sanitized_runtime_stderr(&output.stderr, snapshot.path(), &cache);
+                #[cfg(windows)]
+                if windows_python_child_launch_denied(preparation, &stderr) {
+                    return Err(ReplayFailure {
+                        reason: IntentionalBoundaryGeneratorUnresolvedReason::SandboxUnavailable,
+                        detail: "Windows AppContainer denied uv's Python interpreter child; generator replay requires a supported Linux or macOS proof host"
+                            .to_string(),
+                    });
+                }
                 return Err(failed(format!(
                     "generator dependency preparation failed: status={:?}, timed_out={}: {}",
                     output.status_code,
@@ -71,6 +72,7 @@ pub(super) fn execute_generator_replay(
                 stdout_sha256: output.stdout_sha256,
                 stderr_sha256: output.stderr_sha256,
             });
+            invalidate_expected_outputs(snapshot.path(), expected)?;
         }
         let mut plan = prepare_historical_runtime(snapshot.path(), &cache, &command.execution)
             .map_err(runtime_plan_failure)?;
@@ -137,6 +139,25 @@ pub(super) fn execute_generator_replay(
     })
 }
 
+fn invalidate_expected_outputs(
+    root: &Path,
+    expected: &[ExpectedOutput],
+) -> Result<(), ReplayFailure> {
+    for output in expected {
+        match fs::remove_file(root.join(&output.repository_path)) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(failed(format!(
+                    "failed to invalidate generated output {}: {error}",
+                    output.repository_path
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn sanitized_runtime_stderr(stderr: &str, repository: &Path, cache: &Path) -> String {
     stderr
         .replace(&cache.to_string_lossy().to_string(), "<cache>")
@@ -178,6 +199,13 @@ fn cleanup_runtime_paths(
 fn windows_cargo_child_launch_denied(stderr: &str) -> bool {
     stderr.contains("could not execute process")
         && stderr.contains("never executed")
+        && stderr.contains("Access is denied. (os error 5)")
+}
+
+#[cfg(windows)]
+fn windows_python_child_launch_denied(command: &[String], stderr: &str) -> bool {
+    command.first().is_some_and(|program| program == "uv")
+        && stderr.contains("Failed to query Python interpreter")
         && stderr.contains("Access is denied. (os error 5)")
 }
 
