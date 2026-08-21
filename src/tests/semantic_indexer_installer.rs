@@ -1,11 +1,144 @@
 #[cfg(windows)]
-use super::unpack_zip;
-#[cfg(windows)]
-use super::{
+use super::scip_java_windows::{
     WINDOWS_GRADLE_TEMP_FILES, WINDOWS_SCIP_JAVA_PROCESS_RUNNER,
     install_rebuilt_zip_preserving_prefix, patch_scip_java_windows,
 };
+#[cfg(windows)]
+use super::unpack_zip;
 use super::{compact_output, parse_json_string};
+
+const SCIP_JAVA_UPSTREAM_SHA256: &str =
+    "a694cae143c32c5b6226362fb4bd268a8d13d3cd9b482819b3b0029a9a97b8fe";
+
+#[tokio::test]
+#[ignore = "requires the checksum-pinned scip-java launcher, JDK 17, Gradle, and Maven access"]
+async fn patched_kotlin_indexer_reaches_semantic_ir_with_exact_annotation_identity() {
+    use crate::semantic_index::{
+        RepositoryPath, SemanticPosition, SemanticSourceRange, SemanticSymbolOrigin,
+    };
+    use crate::semantic_indexer_installation::SemanticIndexerStore;
+    use crate::semantic_indexer_manifest::{SemanticIndexerKind, pinned_indexer};
+    use crate::types::FileRecord;
+    use sha2::{Digest, Sha256};
+
+    let upstream = std::path::PathBuf::from(
+        std::env::var_os("SNIFF_TEST_SCIP_JAVA_LAUNCHER")
+            .expect("set SNIFF_TEST_SCIP_JAVA_LAUNCHER to the official v0.13.1 launcher"),
+    );
+    let upstream_bytes = std::fs::read(&upstream).expect("read official scip-java launcher");
+    assert_eq!(
+        format!("{:x}", Sha256::digest(&upstream_bytes)),
+        SCIP_JAVA_UPSTREAM_SHA256
+    );
+
+    let temp = tempfile::tempdir().expect("create Kotlin integration root");
+    let store = SemanticIndexerStore::at(temp.path().join("indexers"));
+    let spec = pinned_indexer(SemanticIndexerKind::Kotlin).expect("pinned Kotlin indexer");
+    let installation_root = store.installation_root(spec);
+    let launcher = installation_root.join(spec.entrypoint_relative_path());
+    std::fs::create_dir_all(launcher.parent().expect("launcher parent"))
+        .expect("create launcher directory");
+    std::fs::write(&launcher, upstream_bytes).expect("stage official launcher");
+
+    super::scip_java_patch::patch_kotlin_annotation_references(&installation_root, spec)
+        .await
+        .expect("patch Kotlin annotation compiler references");
+    #[cfg(windows)]
+    super::scip_java_windows::patch_scip_java_windows(&installation_root, spec)
+        .expect("patch Windows scip-java runtime");
+    store
+        .seal_at(spec, &installation_root)
+        .expect("seal patched Kotlin indexer");
+
+    let repository = temp.path().join("repository");
+    let source_path = repository.join("src/main/kotlin/gold/Compatibility.kt");
+    std::fs::create_dir_all(source_path.parent().expect("source parent"))
+        .expect("create Kotlin source directory");
+    std::fs::write(
+        repository.join("settings.gradle.kts"),
+        "rootProject.name = \"sniff-kotlin-compatibility-proof\"\n",
+    )
+    .expect("write Gradle settings");
+    std::fs::write(
+        repository.join("build.gradle.kts"),
+        concat!(
+            "plugins {\n",
+            "    kotlin(\"jvm\") version \"2.2.0\"\n",
+            "}\n\n",
+            "repositories {\n",
+            "    mavenCentral()\n",
+            "}\n\n",
+            "kotlin {\n",
+            "    jvmToolchain(17)\n",
+            "}\n",
+        ),
+    )
+    .expect("write Gradle build");
+    let source = concat!(
+        "package gold\n\n",
+        "fun current(value: Int): Int = value\n\n",
+        "@Deprecated(\"removed in v2.0; use current\")\n",
+        "fun legacy(value: Int): Int = current(value)\n\n",
+        "fun consumer(value: Int): Int = legacy(value)\n",
+    );
+    std::fs::write(&source_path, source).expect("write Kotlin compatibility source");
+    let files = vec![FileRecord {
+        file_path: source_path.to_string_lossy().into_owned(),
+        source: source.to_string(),
+        language: "kotlin".to_string(),
+        methods: Vec::new(),
+    }];
+
+    let index = crate::semantic_indexer_runner::run_required_indexer_with_store_for_test(
+        &repository,
+        &files,
+        &store,
+        SemanticIndexerKind::Kotlin,
+    )
+    .await
+    .unwrap_or_else(|failure| panic!("production Kotlin indexer failed: {failure:#?}"));
+    assert_eq!(index.provenance.tool_name, "scip-java");
+
+    let document = index
+        .documents
+        .get(&RepositoryPath(
+            "src/main/kotlin/gold/Compatibility.kt".to_string(),
+        ))
+        .expect("Kotlin source document");
+    let annotation_range = SemanticSourceRange {
+        start: SemanticPosition {
+            line: 4,
+            character: 1,
+        },
+        end: SemanticPosition {
+            line: 4,
+            character: 11,
+        },
+    };
+    let occurrences = document
+        .occurrences
+        .iter()
+        .filter(|occurrence| occurrence.range == annotation_range)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        occurrences.len(),
+        1,
+        "the exact Deprecated annotation range must resolve once"
+    );
+    let symbol_id = occurrences[0]
+        .symbol
+        .as_ref()
+        .expect("Deprecated occurrence must resolve");
+    let symbol = index
+        .symbols
+        .get(symbol_id)
+        .expect("resolved Deprecated symbol");
+    assert_eq!(
+        symbol.provider_identity,
+        "scip-java maven maven/org.jetbrains.kotlin/kotlin-stdlib 2.2.0 kotlin/Deprecated#"
+    );
+    assert_eq!(symbol.origin, SemanticSymbolOrigin::External);
+}
 
 #[test]
 fn json_integrity_values_must_be_strings() {

@@ -141,6 +141,9 @@ fn ingest_index(
             is_scip_typescript(metadata),
         )?;
     }
+    if is_scip_java(metadata) {
+        classify_scip_java_external_symbols(&mut index);
+    }
     Ok(index)
 }
 
@@ -201,6 +204,65 @@ fn is_scip_typescript(metadata: &Metadata) -> bool {
         .tool_info
         .as_ref()
         .is_some_and(|tool| tool.name == "scip-typescript")
+}
+
+fn is_scip_java(metadata: &Metadata) -> bool {
+    metadata
+        .tool_info
+        .as_ref()
+        .is_some_and(|tool| tool.name == "scip-java")
+}
+
+fn classify_scip_java_external_symbols(index: &mut SemanticIndex) {
+    let repository_packages = index
+        .symbols
+        .values()
+        .filter(|symbol| {
+            symbol.origin == crate::semantic_index::SemanticSymbolOrigin::Repository
+                && !symbol.definitions.is_empty()
+        })
+        .filter_map(|symbol| scip_java_package_identity(&symbol.provider_identity))
+        .collect::<BTreeSet<_>>();
+    let mut classified = 0usize;
+    for symbol in index.symbols.values_mut() {
+        if symbol.origin != crate::semantic_index::SemanticSymbolOrigin::Unknown
+            || !symbol.definitions.is_empty()
+        {
+            continue;
+        }
+        let Some(package) = scip_java_package_identity(&symbol.provider_identity) else {
+            continue;
+        };
+        if repository_packages.contains(&package) {
+            continue;
+        }
+        symbol.origin = crate::semantic_index::SemanticSymbolOrigin::External;
+        classified = classified.saturating_add(1);
+    }
+    if classified > 0 {
+        record_provider_diagnostic(
+            index,
+            format!(
+                "scip-java omits external symbol declarations; reconstructed {classified} external origins from compiler-resolved package coordinates absent from repository definitions"
+            ),
+        );
+    }
+}
+
+fn scip_java_package_identity(raw: &str) -> Option<(String, String, String)> {
+    let symbol = scip::symbol::parse_symbol(raw).ok()?;
+    let package = symbol.package.as_ref()?;
+    (symbol.scheme == "scip-java"
+        && package.manager == "maven"
+        && !package.name.is_empty()
+        && !package.version.is_empty())
+    .then(|| {
+        (
+            package.manager.clone(),
+            package.name.clone(),
+            package.version.clone(),
+        )
+    })
 }
 
 fn is_malformed_local_identity(provider_with_local_symbols: bool, raw: &str) -> bool {

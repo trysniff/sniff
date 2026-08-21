@@ -246,8 +246,14 @@ fn source_identity(spec: PinnedIndexer) -> String {
             format!("download:{}:sha256-{}", download.url, download.sha256)
         }
     };
-    #[cfg(windows)]
     if spec.kind == SemanticIndexerKind::Kotlin {
+        let source = format!(
+            "{source}:sniff-kotlin-patch-{}",
+            crate::semantic_indexer_manifest::SCIP_JAVA_KOTLIN_ANNOTATION_PATCH_ID
+        );
+        #[cfg(not(windows))]
+        return source;
+        #[cfg(windows)]
         return format!(
             "{source}:sniff-windows-patch-{}",
             crate::semantic_indexer_manifest::WINDOWS_SCIP_JAVA_PATCH_ID
