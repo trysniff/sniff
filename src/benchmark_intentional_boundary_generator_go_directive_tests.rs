@@ -45,6 +45,8 @@ fn malformed_or_environment_dependent_executables_are_rejected() {
     for command in [
         "//go:generate \"go run ./cmd/gen",
         "//go:generate \"\\x6go\" run ./cmd/gen",
+        "//go:generate \"go\"run ./cmd/gen",
+        "//go:generate \"\\777\" run ./cmd/gen",
         "//go:generate \"$GENERATOR\" run ./cmd/gen",
         "//go:generate $GENERATOR run ./cmd/gen",
     ] {
@@ -53,6 +55,15 @@ fn malformed_or_environment_dependent_executables_are_rejected() {
             "{command}"
         );
     }
+}
+
+#[test]
+fn duplicate_file_local_aliases_are_rejected_like_go_generate() {
+    assert!(!directives_use_only_go(&[
+        directive(1, "//go:generate -command generate go run ./cmd/one"),
+        directive(2, "//go:generate -command generate go run ./cmd/two"),
+        directive(3, "//go:generate generate"),
+    ]));
 }
 
 #[test]

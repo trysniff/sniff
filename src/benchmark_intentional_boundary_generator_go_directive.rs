@@ -33,7 +33,9 @@ pub(super) fn directives_use_only_go(
             if !stable_command_word(alias) || !stable_command_word(executable) {
                 return false;
             }
-            aliases.insert(alias.clone(), executable.clone());
+            if aliases.insert(alias.clone(), executable.clone()).is_some() {
+                return false;
+            }
             continue;
         }
         if !stable_command_word(first) {
@@ -57,6 +59,10 @@ fn leading_words(mut input: &str, limit: usize) -> Option<Vec<String>> {
         }
         if input.starts_with('"') {
             let (word, remaining) = go_quoted_word(input)?;
+            if !remaining.is_empty() && !remaining.starts_with(' ') && !remaining.starts_with('\t')
+            {
+                return None;
+            }
             words.push(word);
             input = remaining;
             continue;
@@ -116,21 +122,31 @@ fn go_escape(input: &[u8]) -> Option<(char, usize)> {
         return Some((character, 1));
     }
     match first {
-        b'x' => escaped_scalar(&input[1..], 2, 16).map(|value| (value, 3)),
+        b'x' => escaped_byte(&input[1..], 2, 16).map(|value| (value, 3)),
         b'u' => escaped_scalar(&input[1..], 4, 16).map(|value| (value, 5)),
         b'U' => escaped_scalar(&input[1..], 8, 16).map(|value| (value, 9)),
-        b'0'..=b'7' => escaped_scalar(input, 3, 8).map(|value| (value, 3)),
+        b'0'..=b'7' => escaped_byte(input, 3, 8).map(|value| (value, 3)),
         _ => None,
     }
 }
 
+fn escaped_byte(input: &[u8], digits: usize, radix: u32) -> Option<char> {
+    let value = escaped_value(input, digits, radix)?;
+    (value <= u8::MAX as u32)
+        .then(|| char::from_u32(value))
+        .flatten()
+}
+
 fn escaped_scalar(input: &[u8], digits: usize, radix: u32) -> Option<char> {
+    char::from_u32(escaped_value(input, digits, radix)?)
+}
+
+fn escaped_value(input: &[u8], digits: usize, radix: u32) -> Option<u32> {
     if input.len() < digits {
         return None;
     }
     let text = std::str::from_utf8(&input[..digits]).ok()?;
-    let value = u32::from_str_radix(text, radix).ok()?;
-    char::from_u32(value)
+    u32::from_str_radix(text, radix).ok()
 }
 
 fn stable_command_word(word: &str) -> bool {
