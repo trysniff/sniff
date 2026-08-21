@@ -52,13 +52,10 @@ pub(super) fn system_gradle_launcher_jar(gradle: &Path) -> Result<PathBuf, Strin
         .filter_map(Result::ok)
         .map(|entry| entry.path())
         .filter(|path| {
-            let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
-                return false;
-            };
             path.is_file()
-                && name.ends_with(".jar")
-                && (name.starts_with("gradle-gradle-cli-main-")
-                    || name.starts_with("gradle-launcher-"))
+                && path
+                    .extension()
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("jar"))
         })
         .collect::<Vec<_>>();
     candidates.sort();

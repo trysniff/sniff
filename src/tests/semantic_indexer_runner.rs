@@ -641,9 +641,9 @@ fn windows_system_gradle_requires_one_known_launcher_jar() {
 
     let launcher = lib.join("gradle-launcher-8.14.jar");
     write_runtime_jar(&launcher, &["org/gradle/launcher/bootstrap.class"]);
-    let cli_main = lib.join("gradle-gradle-cli-main-8.14.jar");
-    write_runtime_jar(&cli_main, &["org/gradle/launcher/GradleMain.class"]);
-    assert_eq!(system_gradle_launcher_jar(&command).unwrap(), cli_main);
+    let bootstrap = lib.join("gradle-bootstrap-8.14.jar");
+    write_runtime_jar(&bootstrap, &["org/gradle/launcher/GradleMain.class"]);
+    assert_eq!(system_gradle_launcher_jar(&command).unwrap(), bootstrap);
 
     write_runtime_jar(&launcher, &["org/gradle/launcher/GradleMain.class"]);
     let error = system_gradle_launcher_jar(&command).unwrap_err();
