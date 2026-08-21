@@ -318,6 +318,10 @@ fn runtime_fixture() -> (TempDir, IntentionalBoundaryRepositoryInventory) {
             "build.gradle",
             concat!(
                 "plugins { id 'application' }\n",
+                "sourceSets.main.java {\n",
+                "  srcDir 'src/main/kotlin'\n",
+                "  include '**/*.java', '**/*.kt'\n",
+                "}\n",
                 "tasks.register('prepareGenerator') {\n",
                 "  outputs.file(layout.buildDirectory.file('generator/prepared.txt'))\n",
                 "  doLast {\n",
@@ -327,11 +331,10 @@ fn runtime_fixture() -> (TempDir, IntentionalBoundaryRepositoryInventory) {
                 "}\n",
                 "tasks.register('writeGenerated') {\n",
                 "  dependsOn tasks.named('prepareGenerator')\n",
-                "  outputs.file(layout.projectDirectory.file('src/main/java/example/Generated.java'))\n",
+                "  outputs.file(layout.projectDirectory.file('src/main/kotlin/example/Generated.kt'))\n",
                 "  doLast {\n",
-                "    file('src/main/java/example/Generated.java').text = ",
-                "'// @generated\\npackage example;\\npublic final class Generated { ",
-                "public static int value() { return 7; } }\\n'\n",
+                "    file('src/main/kotlin/example/Generated.kt').text = ",
+                "'// @generated\\npackage example\\nfun generatedValue(): Int = 7\\n'\n",
                 "  }\n",
                 "}\n",
             ),
@@ -358,11 +361,11 @@ fn runtime_fixture() -> (TempDir, IntentionalBoundaryRepositoryInventory) {
             ),
         ),
         (
-            "src/main/java/example/Generated.java",
+            "src/main/kotlin/example/Generated.kt",
             concat!(
                 "// @generated\n",
-                "package example;\n",
-                "public final class Generated { public static int value() { return 7; } }\n",
+                "package example\n",
+                "fun generatedValue(): Int = 7\n",
             ),
         ),
     ] {
@@ -385,6 +388,16 @@ fn runtime_fixture() -> (TempDir, IntentionalBoundaryRepositoryInventory) {
 #[test]
 fn real_gradle_generator_reproduces_the_compiler_owned_output_twice_offline() {
     let (root, inventory) = runtime_fixture();
+    let source = census_intentional_boundary_repository(
+        &inventory.repository,
+        &inventory.revision,
+        root.path(),
+        &inventory,
+    )
+    .unwrap();
+    assert!(source.source_files.iter().any(|file| {
+        file.repository_path == "src/main/kotlin/example/Generated.kt" && file.language == "kotlin"
+    }));
     let gradle_available = Command::new("gradle")
         .arg("--version")
         .output()
@@ -409,7 +422,7 @@ fn real_gradle_generator_reproduces_the_compiler_owned_output_twice_offline() {
     assert_eq!(task.task_path, ":writeGenerated");
     assert_eq!(
         task.source_repository_paths,
-        ["src/main/java/example/Generated.java"]
+        ["src/main/kotlin/example/Generated.kt"]
     );
     assert!(
         task.output_repository_paths
@@ -421,15 +434,8 @@ fn real_gradle_generator_reproduces_the_compiler_owned_output_twice_offline() {
     else {
         panic!("real Gradle producer was not plannable");
     };
-    let source = census_intentional_boundary_repository(
-        &inventory.repository,
-        &inventory.revision,
-        root.path(),
-        &inventory,
-    )
-    .unwrap();
     let expected =
-        super::super::expected_output(&inventory, &source, "src/main/java/example/Generated.java")
+        super::super::expected_output(&inventory, &source, "src/main/kotlin/example/Generated.kt")
             .unwrap();
     let replay = super::super::runtime::execute_generator_replay(
         root.path(),
