@@ -790,7 +790,12 @@ fn python_entrypoint_command_is_bound_locked_and_project_install_free() {
             .iter()
             .any(|argument| argument == "--no-sync")
     );
-    assert!(command.execution.iter().any(|argument| argument == "-I"));
+    assert!(
+        command
+            .execution
+            .windows(3)
+            .any(|arguments| arguments == ["-I", "-B", "-c"])
+    );
     assert_eq!(
         &command.execution[command.execution.len() - 3..],
         [".", "generator", "generate"]

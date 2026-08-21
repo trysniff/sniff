@@ -96,6 +96,7 @@ pub(super) fn python_generator_command(
             "--".to_string(),
             "python".to_string(),
             "-I".to_string(),
+            "-B".to_string(),
             "-c".to_string(),
             PYTHON_ENTRYPOINT_RUNNER.to_string(),
             import_root,
