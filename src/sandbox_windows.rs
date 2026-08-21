@@ -50,11 +50,15 @@ use drive::SandboxDriveMapping;
 #[path = "sandbox_windows_recovery.rs"]
 mod recovery;
 use recovery::RecoveryLedger;
+#[path = "sandbox_windows_global_access.rs"]
+mod global_access;
+use global_access::{all_application_packages_access, all_application_packages_tree_access};
 
 const INTERNET_CLIENT_SID: &str = "S-1-15-3-1";
 const PERSISTENT_READ_CAPABILITY: &str = "trysniff.semantic-indexer-read.v1";
 const SE_GROUP_ENABLED: u32 = 0x00000004;
 const FILE_GENERIC_READ_ACCESS: u32 = 0x0012_0089;
+const FILE_GENERIC_EXECUTE_ACCESS: u32 = 0x0012_00A0;
 const DIRECTORY_TRAVERSE_ACCESS: u32 = 0x0012_00A0;
 const PROCESS_CREATION_CHILD_PROCESS_OVERRIDE: u32 = 0x02;
 const ACL_COMMAND_TIMEOUT: Duration = Duration::from_secs(5 * 60);
@@ -890,6 +894,9 @@ fn ensure_persistent_read_acl(
     if persistent_read_acl_exists(path, capability_sid)? {
         return Ok(());
     }
+    if all_application_packages_tree_access(path, FILE_GENERIC_READ_ACCESS)? {
+        return Ok(());
+    }
     grant_acl(path, capability_sid_text, "R")
 }
 
@@ -1185,6 +1192,15 @@ impl AclGuard {
         let paths = explicit_acl_paths(root, read_only_paths, writable_paths);
         let mut grants: Vec<AclGrant> = Vec::with_capacity(paths.len());
         for (path, permission) in paths {
+            if permission == "R"
+                && if path.is_dir() {
+                    all_application_packages_tree_access(&path, FILE_GENERIC_READ_ACCESS)?
+                } else {
+                    all_application_packages_access(&path, FILE_GENERIC_READ_ACCESS)?
+                }
+            {
+                continue;
+            }
             // Directory grants use inheritance rather than recursively
             // walking every dependency file. Cleanup removes the parent ACE;
             // inherited child access then disappears with it.
@@ -1240,6 +1256,9 @@ impl AclGuard {
         if self.grants.iter().any(|grant| grant.path == path) {
             return Ok(());
         }
+        if all_application_packages_access(&path, DIRECTORY_TRAVERSE_ACCESS)? {
+            return Ok(());
+        }
         recovery.record_acl(&path)?;
         update_acl_entry(&path, &self.sid, DIRECTORY_TRAVERSE_ACCESS, GRANT_ACCESS).map_err(
             |error| {
@@ -1263,6 +1282,20 @@ impl AclGuard {
         let path = normalize_windows_path(path.to_path_buf());
         if self.grants.iter().any(|grant| grant.path == path) {
             grant_acl_with_inheritance(&path, &self.sid, permission, inherit)?;
+            return Ok(());
+        }
+        let required = match permission {
+            "R" => Some(FILE_GENERIC_READ_ACCESS),
+            "RX" => Some(FILE_GENERIC_READ_ACCESS | FILE_GENERIC_EXECUTE_ACCESS),
+            _ => None,
+        };
+        if let Some(required) = required
+            && if inherit && path.is_dir() {
+                all_application_packages_tree_access(&path, required)?
+            } else {
+                all_application_packages_access(&path, required)?
+            }
+        {
             return Ok(());
         }
         recovery.record_acl(&path)?;
