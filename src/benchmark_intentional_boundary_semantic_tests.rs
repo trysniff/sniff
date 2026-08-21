@@ -82,6 +82,7 @@ fn fixture() -> (
     let caller_id = SemanticSymbolId("rust fixture caller".to_string());
     let test_id = SemanticSymbolId("rust fixture test".to_string());
     let trait_id = SemanticSymbolId("rust fixture trait".to_string());
+    let external_id = SemanticSymbolId("rust std core/fmt/Debug#fmt().".to_string());
     let definition = SemanticLocation {
         document: document.clone(),
         range: range(0, 7, 14),
@@ -105,6 +106,23 @@ fn fixture() -> (
         visibility: SemanticVisibility::Public,
         surfaces: BTreeSet::from([SemanticSurface::PublicApi]),
         origin: SemanticSymbolOrigin::Repository,
+        ambiguity_notes: Vec::new(),
+    };
+    let external_symbol = SemanticSymbol {
+        id: external_id.clone(),
+        provider_identity: external_id.0.clone(),
+        display_name: Some("fmt".to_string()),
+        kind: SemanticSymbolKind {
+            category: SemanticSymbolCategory::Method,
+            provider_name: "method".to_string(),
+        },
+        documentation: Vec::new(),
+        signature: None,
+        owner: None,
+        definitions: BTreeSet::new(),
+        visibility: SemanticVisibility::Public,
+        surfaces: BTreeSet::new(),
+        origin: SemanticSymbolOrigin::External,
         ambiguity_notes: Vec::new(),
     };
     let index = SemanticIndex {
@@ -138,10 +156,16 @@ fn fixture() -> (
                         roles: BTreeSet::from([SemanticOccurrenceRole::Read]),
                         override_documentation: Vec::new(),
                     },
+                    SemanticOccurrence {
+                        range: range(0, 15, 18),
+                        symbol: Some(external_id.clone()),
+                        roles: BTreeSet::from([SemanticOccurrenceRole::Read]),
+                        override_documentation: Vec::new(),
+                    },
                 ],
             },
         )]),
-        symbols: BTreeMap::from([(symbol_id.clone(), symbol)]),
+        symbols: BTreeMap::from([(symbol_id.clone(), symbol), (external_id, external_symbol)]),
         relationships: BTreeSet::from([SemanticRelationship {
             source: symbol_id.clone(),
             target: trait_id,
@@ -190,6 +214,13 @@ fn commits_exact_compiler_facts_for_every_census_method() {
     assert_eq!(census.resolved_method_count, 1);
     assert_eq!(census.unresolved_method_count, 0);
     assert_eq!(census.methods.len(), source_census.method_count);
+    assert_eq!(census.source_references.len(), 3);
+    assert!(census.source_references.iter().any(|reference| matches!(
+        &reference.target,
+        IntentionalBoundarySemanticResolution::Resolved { value }
+            if value.provider_identity == "rust std core/fmt/Debug#fmt()."
+                && value.origin == IntentionalBoundarySemanticOrigin::External
+    )));
     let method = &census.methods[0];
     assert_eq!(method.occurrences.len(), 2);
     assert_eq!(method.calls.len(), 1);
@@ -222,6 +253,10 @@ fn preserves_missing_compiler_facts_as_unresolved_instead_of_falling_back() {
         IntentionalBoundarySemanticMethodStatus::Unresolved { .. }
     ));
     assert!(census.methods[0].calls.is_empty());
+    assert!(census.source_references.iter().all(|reference| matches!(
+        reference.target,
+        IntentionalBoundarySemanticResolution::Unresolved { .. }
+    )));
 }
 
 #[test]
@@ -249,6 +284,20 @@ fn offline_validation_rejects_semantic_checkpoint_tampering() {
         validate_intentional_boundary_semantic_census(&source_census, &census)
             .unwrap_err()
             .contains("commitment")
+    );
+}
+
+#[test]
+fn offline_validation_rejects_source_reference_tampering() {
+    let (root, source_census, files, indexes) = fixture();
+    let mut census = build_semantic_census(root.path(), &source_census, &files, &indexes).unwrap();
+    census.source_references[0].location.repository_path = "outside.rs".to_string();
+    census.semantic_census_sha256 = compute_semantic_census_sha256(&census).unwrap();
+
+    assert!(
+        validate_intentional_boundary_semantic_census(&source_census, &census)
+            .unwrap_err()
+            .contains("source reference")
     );
 }
 

@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-pub const INTENTIONAL_BOUNDARY_SEMANTIC_CENSUS_SCHEMA_VERSION: u32 = 1;
+pub const INTENTIONAL_BOUNDARY_SEMANTIC_CENSUS_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -95,7 +95,7 @@ pub enum IntentionalBoundarySemanticRelationshipKind {
     Override,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum IntentionalBoundarySemanticOccurrenceRole {
     Definition,
@@ -164,6 +164,25 @@ pub struct IntentionalBoundarySemanticOccurrenceFacts {
     pub location: IntentionalBoundarySemanticRange,
     pub roles: Vec<IntentionalBoundarySemanticOccurrenceRole>,
     pub override_documentation: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IntentionalBoundarySemanticReferenceTarget {
+    pub symbol_id: String,
+    pub provider_identity: String,
+    pub display_name: Option<String>,
+    pub provider_kind: String,
+    pub origin: IntentionalBoundarySemanticOrigin,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IntentionalBoundarySemanticSourceReference {
+    pub indexer: IntentionalBoundaryIndexerKind,
+    pub location: IntentionalBoundarySemanticRange,
+    pub roles: Vec<IntentionalBoundarySemanticOccurrenceRole>,
+    pub target: IntentionalBoundarySemanticResolution<IntentionalBoundarySemanticReferenceTarget>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -260,6 +279,7 @@ pub struct IntentionalBoundarySemanticCensus {
     pub revision: String,
     pub source_census_sha256: String,
     pub indexers: Vec<IntentionalBoundarySemanticIndexerCensus>,
+    pub source_references: Vec<IntentionalBoundarySemanticSourceReference>,
     pub methods: Vec<IntentionalBoundarySemanticMethod>,
     pub resolved_method_count: usize,
     pub compiler_excluded_method_count: usize,

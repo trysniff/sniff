@@ -98,6 +98,7 @@ pub(super) fn validate_snapshot(
         revision: semantic.revision.clone(),
         source_census_sha256: source.snapshot_census_sha256.clone(),
         indexers: semantic.indexers.clone(),
+        source_references: Vec::new(),
         methods: semantic.methods.clone(),
         resolved_method_count: semantic.resolved_method_count,
         compiler_excluded_method_count: semantic.compiler_excluded_method_count,

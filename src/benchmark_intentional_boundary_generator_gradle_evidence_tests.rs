@@ -110,6 +110,7 @@ fn semantic_census(source: &IntentionalBoundarySourceCensus) -> IntentionalBound
             test_relationship_count: 0,
             unresolved_edge_count: 0,
         }],
+        source_references: Vec::new(),
         resolved_method_count: methods.len(),
         compiler_excluded_method_count: 0,
         unresolved_method_count: 0,

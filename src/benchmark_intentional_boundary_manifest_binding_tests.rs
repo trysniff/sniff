@@ -184,6 +184,7 @@ fn fixture() -> (
             indexer(IntentionalBoundaryIndexerKind::Python, '2'),
             indexer(IntentionalBoundaryIndexerKind::Rust, '3'),
         ],
+        source_references: Vec::new(),
         resolved_method_count: methods.len(),
         compiler_excluded_method_count: 0,
         unresolved_method_count: 0,

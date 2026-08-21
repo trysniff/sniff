@@ -69,6 +69,39 @@ pub fn validate_intentional_boundary_semantic_census(
         .iter()
         .map(|file| file.repository_path.as_str())
         .collect::<BTreeSet<_>>();
+    let mut seen_source_references = BTreeSet::new();
+    for reference in &census.source_references {
+        if !actual_indexers.contains(&reference.indexer)
+            || !valid_location(&reference.location, &source_paths)
+            || reference.roles.windows(2).any(|pair| pair[0] >= pair[1])
+            || !seen_source_references.insert((reference.indexer, &reference.location))
+        {
+            return Err(
+                "intentional-boundary semantic source reference is invalid or ambiguous"
+                    .to_string(),
+            );
+        }
+        match &reference.target {
+            IntentionalBoundarySemanticResolution::Resolved { value }
+                if value.symbol_id.trim().is_empty()
+                    || value.provider_identity.trim().is_empty()
+                    || value.provider_kind.trim().is_empty() =>
+            {
+                return Err(
+                    "intentional-boundary semantic source reference has no compiler identity"
+                        .to_string(),
+                );
+            }
+            IntentionalBoundarySemanticResolution::Unresolved { detail, .. }
+                if detail.trim().is_empty() =>
+            {
+                return Err(
+                    "intentional-boundary unresolved source reference has no evidence".to_string(),
+                );
+            }
+            _ => {}
+        }
+    }
     for method in &census.methods {
         let expected = expected_methods
             .get(method.parser_unit_id.as_str())

@@ -73,6 +73,7 @@ fn fixture(
         revision: source_census.revision.clone(),
         source_census_sha256: source_census.census_sha256.clone(),
         indexers: Vec::new(),
+        source_references: Vec::new(),
         methods: vec![IntentionalBoundarySemanticMethod {
             parser_unit_id,
             repository_path: "src/example.py".to_string(),
