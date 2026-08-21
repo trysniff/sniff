@@ -13,7 +13,7 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-const AST_CONTRACT: &str = "sniffbench-intentional-boundary-source-ast-v8";
+const AST_CONTRACT: &str = "sniffbench-intentional-boundary-source-ast-v9";
 pub(super) type AstMethodKey = (String, usize);
 
 pub(super) struct AstMethodSyntaxFact {
@@ -342,6 +342,9 @@ fn exact_generator_marker(
     repository_path: &str,
     source: &str,
 ) -> Option<IntentionalBoundarySemanticRange> {
+    if repository_path.ends_with(".go") {
+        return exact_go_generator_marker(repository_path, source);
+    }
     source
         .lines()
         .take(20)
@@ -369,6 +372,58 @@ fn exact_generator_marker(
                 end_character_zero_based: text.len() as u32,
             })
         })
+}
+
+fn exact_go_generator_marker(
+    repository_path: &str,
+    source: &str,
+) -> Option<IntentionalBoundarySemanticRange> {
+    let mut in_block_comment = false;
+    for (line, raw_text) in source.lines().enumerate() {
+        let text = raw_text.strip_suffix('\r').unwrap_or(raw_text);
+        if !in_block_comment
+            && text.starts_with("// Code generated ")
+            && text.ends_with(" DO NOT EDIT.")
+        {
+            return Some(IntentionalBoundarySemanticRange {
+                repository_path: repository_path.to_string(),
+                start_line_zero_based: line as u32,
+                start_character_zero_based: 0,
+                end_line_zero_based: line as u32,
+                end_character_zero_based: text.len() as u32,
+            });
+        }
+        if !go_line_is_comment_or_blank(text, &mut in_block_comment) {
+            return None;
+        }
+    }
+    None
+}
+
+fn go_line_is_comment_or_blank(mut text: &str, in_block_comment: &mut bool) -> bool {
+    loop {
+        text = text.trim_start();
+        if text.is_empty() {
+            return true;
+        }
+        if *in_block_comment {
+            let Some((_, remainder)) = text.split_once("*/") else {
+                return true;
+            };
+            *in_block_comment = false;
+            text = remainder;
+            continue;
+        }
+        if text.starts_with("//") {
+            return true;
+        }
+        if let Some(remainder) = text.strip_prefix("/*") {
+            *in_block_comment = true;
+            text = remainder;
+            continue;
+        }
+        return false;
+    }
 }
 
 fn range_contains(
@@ -403,3 +458,7 @@ fn compute_ast_census_sha256(census: &IntentionalBoundaryAstCensus) -> Result<St
     .map_err(|error| format!("failed to commit intentional-boundary AST census: {error}"))?;
     Ok(format!("{:x}", Sha256::digest(bytes)))
 }
+
+#[cfg(test)]
+#[path = "benchmark_intentional_boundary_ast_generator_marker_tests.rs"]
+mod generator_marker_tests;
