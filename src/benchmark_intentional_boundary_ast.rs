@@ -1,19 +1,22 @@
+use super::intentional_boundary_ast_compiler_references::{
+    AstCompilerReferenceRequirement, compiler_reference_requirements_satisfied,
+};
 use super::{
     INTENTIONAL_BOUNDARY_AST_CENSUS_SCHEMA_VERSION, IntentionalBoundaryAstCensus,
     IntentionalBoundaryAstFact, IntentionalBoundaryAstMethod, IntentionalBoundaryAstMethodStatus,
     IntentionalBoundaryMethodCensusEntry, IntentionalBoundaryRepositoryInventory,
     IntentionalBoundarySemanticCensus, IntentionalBoundarySemanticMethod,
     IntentionalBoundarySemanticMethodStatus, IntentionalBoundarySemanticRange,
-    IntentionalBoundarySemanticResolution, IntentionalBoundarySourceCensus,
-    intentional_boundary_file_records, validate_intentional_boundary_semantic_census,
-    validate_intentional_boundary_source_census,
+    IntentionalBoundarySemanticResolution, IntentionalBoundarySemanticSourceReference,
+    IntentionalBoundarySourceCensus, intentional_boundary_file_records,
+    validate_intentional_boundary_semantic_census, validate_intentional_boundary_source_census,
 };
 use crate::types::FileRecord;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-const AST_CONTRACT: &str = "sniffbench-intentional-boundary-source-ast-v11";
+const AST_CONTRACT: &str = "sniffbench-intentional-boundary-source-ast-v12";
 pub(super) type AstMethodKey = (String, usize);
 
 pub(super) struct AstMethodSyntaxFact {
@@ -25,6 +28,7 @@ pub(super) struct AstMethodSyntaxFact {
     )>,
     pub generator_marker: Option<IntentionalBoundarySemanticRange>,
     pub versioned_compatibility_source_contract: Option<IntentionalBoundarySemanticRange>,
+    pub versioned_compatibility_compiler_references: Vec<AstCompilerReferenceRequirement>,
 }
 
 #[derive(Clone)]
@@ -40,6 +44,7 @@ pub(super) struct AstCallableCandidate {
     )>,
     pub generator_marker: Option<IntentionalBoundarySemanticRange>,
     pub versioned_compatibility_source_contract: Option<IntentionalBoundarySemanticRange>,
+    pub versioned_compatibility_compiler_references: Vec<AstCompilerReferenceRequirement>,
 }
 
 pub(super) type AstMethodSyntaxFacts = BTreeMap<AstMethodKey, AstMethodSyntaxFact>;
@@ -96,6 +101,9 @@ pub(super) fn align_callable_candidates(
                     generator_marker: candidate.generator_marker.clone(),
                     versioned_compatibility_source_contract: candidate
                         .versioned_compatibility_source_contract
+                        .clone(),
+                    versioned_compatibility_compiler_references: candidate
+                        .versioned_compatibility_compiler_references
                         .clone(),
                 },
             );
@@ -208,6 +216,7 @@ pub(super) fn derive_language_ast_census(
                 source_method,
                 semantic_method,
                 &syntax,
+                &semantic_census.source_references,
                 language,
             )?);
         }
@@ -241,6 +250,7 @@ fn derive_method(
     source_method: &IntentionalBoundaryMethodCensusEntry,
     semantic_method: &IntentionalBoundarySemanticMethod,
     syntax: &AstMethodSyntaxFacts,
+    source_references: &[IntentionalBoundarySemanticSourceReference],
     language: &str,
 ) -> Result<IntentionalBoundaryAstMethod, String> {
     if semantic_method.symbol_name != source_method.symbol_name
@@ -300,7 +310,12 @@ fn derive_method(
                     marker: marker.clone(),
                 });
             }
-            if let Some(contract) = &syntax_method.versioned_compatibility_source_contract {
+            if let Some(contract) = &syntax_method.versioned_compatibility_source_contract
+                && compiler_reference_requirements_satisfied(
+                    &syntax_method.versioned_compatibility_compiler_references,
+                    source_references,
+                )
+            {
                 facts.push(
                     IntentionalBoundaryAstFact::VersionedCompatibilitySourceContract {
                         contract: contract.clone(),

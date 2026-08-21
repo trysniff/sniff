@@ -303,6 +303,7 @@ fn candidate(
         distinct_retry_outcomes: None,
         generator_marker: None,
         versioned_compatibility_source_contract: None,
+        versioned_compatibility_compiler_references: Vec::new(),
     }
 }
 

@@ -224,6 +224,7 @@ impl JsTsBodyVisitor<'_> {
                     declaration_start,
                 )
                 .map(|comment| offset_range(self.repository_path, comment, &self.line_starts)),
+            versioned_compatibility_compiler_references: Vec::new(),
         });
     }
 
