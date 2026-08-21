@@ -27,6 +27,7 @@ enum OwnerError {
     Ambiguous,
 }
 
+#[cfg(test)]
 pub(super) fn go_generator_command(
     project_models: &IntentionalBoundaryProjectModelCensus,
     declaration: &IntentionalBoundaryManifestDeclaration,
