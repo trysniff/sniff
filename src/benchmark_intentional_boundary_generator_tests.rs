@@ -656,7 +656,7 @@ fn reproduced_generator_qualifies_only_after_all_three_evidence_groups() {
         &fixture.manifests,
         &fixture.bindings,
         &fixture.evidence,
-        |_declaration, command, outputs| Ok(fake_replay(command, outputs)),
+        |command, outputs| Ok(fake_replay(command, outputs)),
     )
     .unwrap();
 
@@ -718,7 +718,7 @@ fn recommitted_tampered_replay_output_is_rejected() {
         &fixture.manifests,
         &fixture.bindings,
         &fixture.evidence,
-        |_declaration, command, outputs| Ok(fake_replay(command, outputs)),
+        |command, outputs| Ok(fake_replay(command, outputs)),
     )
     .unwrap();
     let IntentionalBoundaryGeneratorReplayOutcome::Reproduced { outputs, .. } =
@@ -759,7 +759,7 @@ fn recommitted_tampered_replay_environment_is_rejected() {
         &fixture.manifests,
         &fixture.bindings,
         &fixture.evidence,
-        |_declaration, command, outputs| Ok(fake_replay(command, outputs)),
+        |command, outputs| Ok(fake_replay(command, outputs)),
     )
     .unwrap();
     let IntentionalBoundaryGeneratorReplayOutcome::Reproduced { executions, .. } =
@@ -964,14 +964,6 @@ fn real_uv_entrypoint_reproduces_committed_output_twice_offline() {
 #[test]
 fn dependency_preparation_cannot_take_credit_for_generated_output() {
     let fixture = fixture();
-    let declaration = fixture
-        .manifests
-        .declarations
-        .iter()
-        .find(|declaration| {
-            declaration.declaration_kind == IntentionalBoundaryManifestDeclarationKind::BuildScript
-        })
-        .unwrap();
     let python = if cfg!(windows) { "python" } else { "python3" };
     let command = GeneratorCommand {
         preparation: Some(vec![
@@ -1001,7 +993,6 @@ fn dependency_preparation_cannot_take_credit_for_generated_output() {
     let failure = match runtime::execute_generator_replay(
         fixture.root.path(),
         &fixture.revision,
-        declaration,
         &command,
         &outputs,
     ) {
@@ -1023,14 +1014,6 @@ fn dependency_preparation_cannot_take_credit_for_generated_output() {
 #[test]
 fn generator_replay_rejects_collateral_repository_mutation() {
     let fixture = fixture();
-    let declaration = fixture
-        .manifests
-        .declarations
-        .iter()
-        .find(|declaration| {
-            declaration.declaration_kind == IntentionalBoundaryManifestDeclarationKind::BuildScript
-        })
-        .unwrap();
     let python = if cfg!(windows) { "python" } else { "python3" };
     let command = GeneratorCommand {
         preparation: None,
@@ -1056,7 +1039,6 @@ fn generator_replay_rejects_collateral_repository_mutation() {
     let failure = match runtime::execute_generator_replay(
         fixture.root.path(),
         &fixture.revision,
-        declaration,
         &command,
         &[expected],
     ) {
@@ -1095,19 +1077,19 @@ fn real_npm_generator_prepares_locked_dependencies_then_reproduces_twice_offline
     let outcome = &census.replays[0].outcome;
     match outcome {
         IntentionalBoundaryGeneratorReplayOutcome::Reproduced {
-            declaration_id,
+            configuration_id,
             preparations,
             command,
             outputs,
             executions,
             ..
         } => {
-            assert_eq!(census.replays[0].candidate_declaration_ids.len(), 2);
+            assert_eq!(census.replays[0].candidate_configuration_ids.len(), 2);
             let selected = fixture
                 .manifests
                 .declarations
                 .iter()
-                .find(|declaration| declaration.declaration_id == *declaration_id)
+                .find(|declaration| declaration.declaration_id == *configuration_id)
                 .unwrap();
             assert!(matches!(
                 &selected.target,
@@ -1412,7 +1394,7 @@ fn recommitted_network_disabled_npm_preparation_is_rejected() {
         &fixture.manifests,
         &fixture.bindings,
         &fixture.evidence,
-        |_declaration, command, outputs| Ok(fake_replay(command, outputs)),
+        |command, outputs| Ok(fake_replay(command, outputs)),
     )
     .unwrap();
     let IntentionalBoundaryGeneratorReplayOutcome::Reproduced { preparations, .. } =
@@ -1453,12 +1435,13 @@ fn recommitted_omitted_package_script_candidate_is_rejected() {
         &fixture.manifests,
         &fixture.bindings,
         &fixture.evidence,
-        |_declaration, command, outputs| Ok(fake_replay(command, outputs)),
+        |command, outputs| Ok(fake_replay(command, outputs)),
     )
     .unwrap();
-    assert_eq!(census.replays[0].candidate_declaration_ids.len(), 2);
-    let IntentionalBoundaryGeneratorReplayOutcome::Reproduced { declaration_id, .. } =
-        &census.replays[0].outcome
+    assert_eq!(census.replays[0].candidate_configuration_ids.len(), 2);
+    let IntentionalBoundaryGeneratorReplayOutcome::Reproduced {
+        configuration_id, ..
+    } = &census.replays[0].outcome
     else {
         panic!("expected reproduced npm fixture");
     };
@@ -1466,18 +1449,18 @@ fn recommitted_omitted_package_script_candidate_is_rejected() {
         .manifests
         .declarations
         .iter()
-        .find(|declaration| declaration.declaration_id == *declaration_id)
+        .find(|declaration| declaration.declaration_id == *configuration_id)
         .unwrap();
     assert!(matches!(
         &selected.target,
         IntentionalBoundaryManifestTarget::PackageScript { script_name, .. }
             if script_name == "generate"
     ));
-    census.replays[0].candidate_declaration_ids.pop();
+    census.replays[0].candidate_configuration_ids.pop();
     census.replays[0].replay_id = replay_id(
         &census.repository,
         &census.revision,
-        &census.replays[0].candidate_declaration_ids,
+        &census.replays[0].candidate_configuration_ids,
         &census.replays[0].subjects,
     )
     .unwrap();

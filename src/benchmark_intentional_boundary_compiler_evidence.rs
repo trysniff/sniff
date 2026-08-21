@@ -11,7 +11,7 @@ use super::{
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 
-const EVIDENCE_CENSUS_CONTRACT: &str = "sniffbench-intentional-boundary-typed-evidence-census-v2";
+const EVIDENCE_CENSUS_CONTRACT: &str = "sniffbench-intentional-boundary-typed-evidence-census-v3";
 const COMPILER_INPUT: &str = "compiler_semantic_index";
 
 pub fn extract_intentional_boundary_compiler_evidence(

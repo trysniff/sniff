@@ -1,9 +1,13 @@
 use super::intentional_boundary_compiler_evidence::{
     finish_evidence_census, push_typed_atom, validate_evidence_census_commitment,
 };
+use super::intentional_boundary_generator::configuration::{
+    GeneratorConfiguration, GeneratorConfigurationEvidenceProof, configurations,
+    configurations_by_id, validate_candidate_partition,
+};
 use super::intentional_boundary_generator::{
-    GENERATOR_CONTRACT, generator_census_sha256, generator_command_with_context,
-    generator_subjects, is_generator_declaration, is_sha256, nearest_declarations, replay_id,
+    GENERATOR_CONTRACT, ReplayContext, generator_census_sha256, generator_subjects, is_sha256,
+    replay_id,
 };
 use super::intentional_boundary_manifest::validate_manifest_census_commitment;
 use super::{
@@ -11,10 +15,9 @@ use super::{
     IntentionalBoundaryEvidenceCensus, IntentionalBoundaryEvidenceProof,
     IntentionalBoundaryGeneratorCensus, IntentionalBoundaryGeneratorProofKind,
     IntentionalBoundaryGeneratorReplayOutcome, IntentionalBoundaryManifestBindingCensus,
-    IntentionalBoundaryManifestCensus, IntentionalBoundaryManifestProofKind,
-    IntentionalBoundaryProjectModelCensus, IntentionalBoundaryRepositoryInventory,
-    IntentionalBoundarySemanticCensus, IntentionalBoundarySourceCensus,
-    validate_intentional_boundary_manifest_bindings,
+    IntentionalBoundaryManifestCensus, IntentionalBoundaryProjectModelCensus,
+    IntentionalBoundaryRepositoryInventory, IntentionalBoundarySemanticCensus,
+    IntentionalBoundarySourceCensus, validate_intentional_boundary_manifest_bindings,
     validate_intentional_boundary_project_model_census_commitment,
     validate_intentional_boundary_semantic_census,
 };
@@ -65,29 +68,41 @@ pub fn compose_intentional_boundary_generator_evidence(
     let mut atoms = base_evidence.atoms.clone();
     for replay in &generator_census.replays {
         let IntentionalBoundaryGeneratorReplayOutcome::Reproduced {
-            declaration_location,
+            configuration_id,
+            configuration_evidence_locations,
             ..
         } = &replay.outcome
         else {
             continue;
+        };
+        let configurations = configurations(&manifest_census.declarations, project_model_census)?;
+        let configuration_by_id = configurations_by_id(&configurations);
+        let configuration = configuration_by_id
+            .get(configuration_id.as_str())
+            .copied()
+            .ok_or_else(|| "generator replay configuration is missing".to_string())?;
+        let proof = match configuration.evidence_proof() {
+            GeneratorConfigurationEvidenceProof::Manifest(kind) => {
+                IntentionalBoundaryEvidenceProof::ManifestContract(kind)
+            }
+            GeneratorConfigurationEvidenceProof::ProjectModel(kind) => {
+                IntentionalBoundaryEvidenceProof::ProjectModelContract(kind)
+            }
         };
         for subject in &replay.subjects {
             let method = methods
                 .get(subject.parser_unit_id.as_str())
                 .copied()
                 .ok_or_else(|| "generator replay invented a method".to_string())?;
+            let mut configuration_locations = vec![subject.marker_location.clone()];
+            configuration_locations.extend(configuration_evidence_locations.iter().cloned());
             push_typed_atom(
                 &mut atoms,
                 method,
                 &subject.subject_symbol_id,
                 BoundaryEvidenceKind::GeneratorConfiguration,
-                IntentionalBoundaryEvidenceProof::ManifestContract(
-                    IntentionalBoundaryManifestProofKind::GeneratorConfiguration,
-                ),
-                vec![
-                    subject.marker_location.clone(),
-                    declaration_location.clone(),
-                ],
+                proof,
+                configuration_locations,
                 Vec::new(),
             )?;
             push_typed_atom(
@@ -170,30 +185,24 @@ pub fn validate_intentional_boundary_generator_census_commitment(
         return Err("intentional-boundary generator census identity changed".to_string());
     }
     let expected_subjects = generator_subjects(source_census, semantic_census, base_evidence)?;
-    let generator_declarations = manifest_census
-        .declarations
-        .iter()
-        .filter(|declaration| is_generator_declaration(declaration))
-        .collect::<Vec<_>>();
+    let configurations = configurations(&manifest_census.declarations, project_model_census)?;
+    let configuration_by_id = configurations_by_id(&configurations);
     let mut actual_subjects = Vec::new();
     for replay in &census.replays {
         if replay.subjects.is_empty() || replay.subjects.windows(2).any(|pair| pair[0] >= pair[1]) {
             return Err("generator replay subjects changed".to_string());
         }
-        let expected_configurations = replay
-            .subjects
-            .iter()
-            .map(|subject| nearest_declarations(&subject.repository_path, &generator_declarations))
-            .collect::<BTreeSet<_>>();
-        if expected_configurations.len() != 1
-            || expected_configurations.first() != Some(&replay.candidate_declaration_ids)
-        {
+        if !validate_candidate_partition(
+            &replay.subjects,
+            &configurations,
+            &replay.candidate_configuration_ids,
+        ) {
             return Err("generator replay configuration assignment changed".to_string());
         }
         match &replay.outcome {
             IntentionalBoundaryGeneratorReplayOutcome::Reproduced {
-                declaration_id,
-                declaration_location,
+                configuration_id,
+                configuration_evidence_locations,
                 preparations,
                 command,
                 outputs,
@@ -206,25 +215,29 @@ pub fn validate_intentional_boundary_generator_census_commitment(
                     project_model_census,
                     manifest_census,
                     binding_census,
+                    configuration_by_id
+                        .get(configuration_id.as_str())
+                        .copied()
+                        .ok_or_else(|| "generator replay configuration is missing".to_string())?,
                     replay,
-                    declaration_id,
-                    declaration_location,
+                    configuration_id,
+                    configuration_evidence_locations,
                     preparations,
                     command,
                     outputs,
                     executions,
                 )?;
-                if replay.configuration_declaration_id.as_deref() != Some(declaration_id)
+                if replay.configuration_id.as_deref() != Some(configuration_id)
                     || !replay
-                        .candidate_declaration_ids
+                        .candidate_configuration_ids
                         .iter()
-                        .any(|candidate| candidate == declaration_id)
+                        .any(|candidate| candidate == configuration_id)
                 {
                     return Err("generator replay configuration changed".to_string());
                 }
             }
             IntentionalBoundaryGeneratorReplayOutcome::Unresolved { detail, .. } => {
-                if detail.trim().is_empty() || replay.configuration_declaration_id.is_some() {
+                if detail.trim().is_empty() || replay.configuration_id.is_some() {
                     return Err("generator unresolved outcome has no detail".to_string());
                 }
             }
@@ -233,7 +246,7 @@ pub fn validate_intentional_boundary_generator_census_commitment(
             != replay_id(
                 &census.repository,
                 &census.revision,
-                &replay.candidate_declaration_ids,
+                &replay.candidate_configuration_ids,
                 &replay.subjects,
             )?
         {
@@ -272,28 +285,26 @@ fn validate_reproduced(
     project_models: &IntentionalBoundaryProjectModelCensus,
     manifests: &IntentionalBoundaryManifestCensus,
     bindings: &IntentionalBoundaryManifestBindingCensus,
+    configuration: &GeneratorConfiguration<'_>,
     replay: &super::IntentionalBoundaryGeneratorReplay,
-    declaration_id: &str,
-    declaration_location: &super::IntentionalBoundarySemanticRange,
+    configuration_id: &str,
+    configuration_evidence_locations: &[super::IntentionalBoundarySemanticRange],
     preparations: &[super::IntentionalBoundaryGeneratorExecution],
     command: &[String],
     outputs: &[super::IntentionalBoundaryGeneratorOutput],
     executions: &[super::IntentionalBoundaryGeneratorExecution],
 ) -> Result<(), String> {
-    let declaration = manifests
-        .declarations
-        .iter()
-        .find(|declaration| declaration.declaration_id == declaration_id)
-        .ok_or_else(|| "generator replay declaration is missing".to_string())?;
-    let planned = generator_command_with_context(
+    let context = ReplayContext {
         inventory,
-        &manifests.declarations,
-        semantic,
-        project_models,
-        bindings,
-        declaration,
-    )
-    .ok_or_else(|| "generator replay declaration is unsupported".to_string())?;
+        source_census: source,
+        semantic_census: semantic,
+        project_model_census: project_models,
+        binding_census: bindings,
+        declarations: &manifests.declarations,
+    };
+    let planned = configuration
+        .command(&context)
+        .ok_or_else(|| "generator replay configuration is unsupported".to_string())?;
     let preparations_valid = match &planned.preparation {
         None => preparations.is_empty(),
         Some(preparation) => {
@@ -311,8 +322,8 @@ fn validate_reproduced(
                 })
         }
     };
-    if !is_generator_declaration(declaration)
-        || &declaration.declaration_location != declaration_location
+    if configuration.id() != configuration_id
+        || configuration.evidence_locations() != configuration_evidence_locations
         || planned.execution != command
         || !preparations_valid
         || executions.len() != 2

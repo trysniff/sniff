@@ -2,7 +2,7 @@ use super::{BoundaryEvidenceKind, IntentionalBoundarySemanticRange};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-pub const INTENTIONAL_BOUNDARY_EVIDENCE_CENSUS_SCHEMA_VERSION: u32 = 2;
+pub const INTENTIONAL_BOUNDARY_EVIDENCE_CENSUS_SCHEMA_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -41,6 +41,12 @@ pub enum IntentionalBoundaryManifestProofKind {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+pub enum IntentionalBoundaryProjectModelProofKind {
+    GeneratorConfiguration,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum IntentionalBoundaryBehaviorTestProofKind {
     BaselinePass,
     TargetedBehaviorPass,
@@ -59,6 +65,7 @@ pub enum IntentionalBoundaryEvidenceProof {
     CompilerSemanticIndex(IntentionalBoundaryCompilerProofKind),
     SourceAst(IntentionalBoundaryAstProofKind),
     ManifestContract(IntentionalBoundaryManifestProofKind),
+    ProjectModelContract(IntentionalBoundaryProjectModelProofKind),
     ExecutedBehaviorTest(IntentionalBoundaryBehaviorTestProofKind),
     GeneratorReplay(IntentionalBoundaryGeneratorProofKind),
 }

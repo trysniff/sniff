@@ -1,6 +1,7 @@
 use super::non_blind_history_runtime_adapters::{
-    bun_launch, cargo_launch, generic_launch, go_launch, gradle_launch, gradle_tooling_launch,
-    node_launch, node_manager_launch, private_python_launch, python_launch, uv_launch,
+    bun_launch, cargo_launch, generic_launch, go_launch, gradle_installation_launch, gradle_launch,
+    gradle_tooling_launch, node_launch, node_manager_launch, private_python_launch, python_launch,
+    uv_launch,
 };
 #[cfg(windows)]
 use super::non_blind_history_runtime_support::{
@@ -37,6 +38,7 @@ const PRIVATE_ENVIRONMENT_DIRECTORIES: &[&str] = &[
     "go-mod",
     "go-path",
     "gradle",
+    "gradle-project-cache",
     "npm",
     "pip",
     "python-env",
@@ -99,6 +101,7 @@ pub(crate) fn prepare_historical_runtime(
         "npm" | "pnpm" | "yarn" => node_manager_launch(program, &expanded_args)?,
         "bun" => bun_launch(&expanded_args)?,
         "gradlew.bat" | "./gradlew" => gradle_launch(&root, program, &expanded_args)?,
+        "{sniff_gradle}" => gradle_installation_launch(&expanded_args)?,
         "{sniff_gradle_tooling}" => gradle_tooling_launch(&expanded_args)?,
         _ => generic_launch(&root, program, &expanded_args)?,
     };
@@ -312,6 +315,9 @@ fn private_environment(root: &Path, cache: &Path) -> Vec<(String, String)> {
 fn expand_reserved_argument(root: &Path, cache: &Path, argument: &str) -> String {
     match argument {
         "{sniff_private_python_env}" => sandbox_repository_path(root, &cache.join("python-env")),
+        "{sniff_gradle_project_cache}" => {
+            sandbox_repository_path(root, &cache.join("gradle-project-cache"))
+        }
         _ => argument.to_string(),
     }
 }
@@ -355,13 +361,25 @@ mod tests {
             );
             let sandbox_value =
                 sandbox_repository_path(&plan.command.root, &canonical_cache.join(directory));
-            assert!(
-                plan.command
-                    .env
-                    .iter()
-                    .any(|(_, value)| value == &sandbox_value),
-                "{directory} was not advertised by the private environment"
-            );
+            if *directory == "gradle-project-cache" {
+                assert_eq!(
+                    expand_reserved_argument(
+                        &plan.command.root,
+                        &canonical_cache,
+                        "{sniff_gradle_project_cache}",
+                    ),
+                    sandbox_value,
+                    "Gradle project cache was not exposed through its reserved argument"
+                );
+            } else {
+                assert!(
+                    plan.command
+                        .env
+                        .iter()
+                        .any(|(_, value)| value == &sandbox_value),
+                    "{directory} was not advertised by the private environment"
+                );
+            }
         }
         assert_eq!(fs::read(cache.join(PRIVATE_OPENSSL_CONFIG)).unwrap(), b"");
         assert!(plan.command.env.iter().any(|(key, value)| {
