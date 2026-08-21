@@ -34,9 +34,11 @@ mod gradle_preparation;
 mod gradle_windows;
 #[path = "semantic_indexer_java_runtime.rs"]
 mod java_runtime;
+#[cfg(test)]
+use java_runtime::resolve_java_home_runtime;
+use java_runtime::resolve_java_runtime;
 #[cfg(windows)]
 use java_runtime::system_gradle_launcher_jar;
-use java_runtime::{resolve_java_home_runtime, resolve_java_runtime};
 
 const INDEX_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 #[cfg(debug_assertions)]
