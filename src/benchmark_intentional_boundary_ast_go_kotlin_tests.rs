@@ -96,6 +96,53 @@ fn rejects_go_body_with_extra_statement() {
 }
 
 #[test]
+fn records_versioned_kotlin_deprecation_contract_and_type_reference() {
+    let source = concat!(
+        "package sample\n",
+        "@kotlin.Deprecated(message = \"removed in v2.0; use current\")\n",
+        "fun process(value: Int): Int = value\n",
+    );
+    let (record, facts) = kotlin_facts(source);
+    let fact = fact_for(&record, &facts, "process");
+
+    let contract = fact
+        .versioned_compatibility_source_contract
+        .as_ref()
+        .expect("versioned Kotlin compatibility contract");
+    assert_eq!(
+        range_text(source, contract),
+        "@kotlin.Deprecated(message = \"removed in v2.0; use current\")"
+    );
+    let [requirement] = fact.versioned_compatibility_compiler_references.as_slice() else {
+        panic!("expected exact Kotlin compiler reference requirement");
+    };
+    assert_eq!(range_text(source, &requirement.range), "Deprecated");
+}
+
+#[test]
+fn rejects_kotlin_annotations_without_an_unambiguous_versioned_literal() {
+    for source in [
+        "@Deprecated(\"use current\")\nfun process() = Unit\n",
+        "@Deprecated(\"removed in $version\")\nfun process() = Unit\n",
+        "@Deprecated(message = message)\nfun process() = Unit\n",
+        "@Deprecated()\nfun process() = Unit\n",
+        concat!(
+            "@Deprecated(\"removed in v2\")\n",
+            "@Legacy(\"removed in v3\")\n",
+            "fun process() = Unit\n",
+        ),
+    ] {
+        let (record, facts) = kotlin_facts(source);
+        let fact = fact_for(&record, &facts, "process");
+        assert!(
+            fact.versioned_compatibility_source_contract.is_none(),
+            "{source}"
+        );
+        assert!(fact.versioned_compatibility_compiler_references.is_empty());
+    }
+}
+
+#[test]
 fn records_attached_versioned_go_deprecation_contract() {
     let source = concat!(
         "package sample\n",

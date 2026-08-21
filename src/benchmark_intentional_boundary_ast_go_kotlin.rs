@@ -21,6 +21,9 @@ mod go_compatibility;
 #[path = "benchmark_intentional_boundary_ast_kotlin_retry.rs"]
 mod kotlin_retry;
 
+#[path = "benchmark_intentional_boundary_ast_kotlin_compatibility.rs"]
+mod kotlin_compatibility;
+
 const GO: &str = "go";
 const KOTLIN: &str = "kotlin";
 
@@ -115,6 +118,21 @@ pub(super) fn derive_go_ast_census(
     files: &[crate::types::FileRecord],
 ) -> Result<IntentionalBoundaryAstCensus, String> {
     derive_language_ast_census(source_census, semantic_census, files, GO, go_syntax_facts)
+}
+
+#[cfg(test)]
+pub(super) fn derive_kotlin_ast_census(
+    source_census: &IntentionalBoundarySourceCensus,
+    semantic_census: &IntentionalBoundarySemanticCensus,
+    files: &[crate::types::FileRecord],
+) -> Result<IntentionalBoundaryAstCensus, String> {
+    derive_language_ast_census(
+        source_census,
+        semantic_census,
+        files,
+        KOTLIN,
+        kotlin_syntax_facts,
+    )
 }
 
 fn go_syntax_facts(
@@ -257,6 +275,14 @@ fn kotlin_candidate(
                 node_range(repository_path, terminal),
             )
         });
+    if let Some(compatibility) =
+        kotlin_compatibility::versioned_compatibility_contract(repository_path, source, declaration)
+    {
+        result.versioned_compatibility_source_contract = Some(compatibility.contract);
+        result
+            .versioned_compatibility_compiler_references
+            .push(compatibility.annotation_type);
+    }
     Some(result)
 }
 
