@@ -52,7 +52,7 @@ jobs:
             -OutputDirectory $output `
             -WorkDirectory $work
       - name: Preserve the raw release archive
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: raw-sniff-rust-indexer-${{ matrix.target }}
           path: |
@@ -102,7 +102,7 @@ jobs:
         with:
           subject-path: ${{ runner.temp }}/sniff-rust-indexer-output/sniff-rust-indexer-${{ matrix.target }}.zip
       - name: Upload bundle evidence
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: sniff-rust-indexer-${{ matrix.target }}
           path: ${{ runner.temp }}/sniff-rust-indexer-output/*
