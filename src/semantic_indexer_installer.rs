@@ -8,7 +8,6 @@ use reqwest::Client;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::ffi::OsString;
-#[cfg(windows)]
 use std::fs::{self, OpenOptions};
 use std::io::{Cursor, Read, Write};
 use std::path::{Component, Path, PathBuf};
