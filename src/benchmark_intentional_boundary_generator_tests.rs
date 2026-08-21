@@ -1021,6 +1021,60 @@ fn dependency_preparation_cannot_take_credit_for_generated_output() {
 }
 
 #[test]
+fn generator_replay_rejects_collateral_repository_mutation() {
+    let fixture = fixture();
+    let declaration = fixture
+        .manifests
+        .declarations
+        .iter()
+        .find(|declaration| {
+            declaration.declaration_kind == IntentionalBoundaryManifestDeclarationKind::BuildScript
+        })
+        .unwrap();
+    let python = if cfg!(windows) { "python" } else { "python3" };
+    let command = GeneratorCommand {
+        preparation: None,
+        preparation_environment: BTreeMap::new(),
+        execution: vec![
+            python.to_string(),
+            "-I".to_string(),
+            "-c".to_string(),
+            concat!(
+                "from pathlib import Path;",
+                "Path('src/generated.rs').write_bytes(",
+                "b'// @generated\\npub fn generated_value() -> u8 { 7 }\\n');",
+                "Path('unexpected.txt').write_bytes(b'mutation')"
+            )
+            .to_string(),
+        ],
+        execution_environment: BTreeMap::new(),
+        cleanup_paths: Vec::new(),
+    };
+    let expected =
+        expected_output(&fixture.inventory, &fixture.source, "src/generated.rs").unwrap();
+
+    let failure = match runtime::execute_generator_replay(
+        fixture.root.path(),
+        &fixture.revision,
+        declaration,
+        &command,
+        &[expected],
+    ) {
+        Ok(_) => panic!("generator mutation was accepted"),
+        Err(failure) => failure,
+    };
+
+    assert!(
+        failure.reason == IntentionalBoundaryGeneratorUnresolvedReason::RepositoryMutation
+            || (cfg!(windows)
+                && failure.reason
+                    == IntentionalBoundaryGeneratorUnresolvedReason::SandboxUnavailable),
+        "unexpected mutation outcome: {}",
+        failure.detail
+    );
+}
+
+#[test]
 fn real_npm_generator_prepares_locked_dependencies_then_reproduces_twice_offline() {
     let fixture = node_fixture();
 
