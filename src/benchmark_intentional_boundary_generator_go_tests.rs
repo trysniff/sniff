@@ -221,19 +221,29 @@ fn arbitrary_direct_and_aliased_executables_are_rejected() {
 }
 
 #[test]
-fn quoted_or_variable_executable_words_are_rejected_without_guessing() {
+fn quoted_go_is_supported_but_variable_executables_are_rejected_without_guessing() {
     let models = project_models("go.mod", &["tools/gen.go"]);
-    for source in [
-        "//go:generate \"go\" run ./cmd/gen",
-        "//go:generate $GENERATOR run ./cmd/gen",
-    ] {
-        let declaration = declaration(
-            Some("go.mod"),
-            "tools",
-            vec![directive("tools/gen.go", 2, source)],
-        );
-        assert!(go_generator_command(&models, &declaration).is_none());
-    }
+    let quoted = declaration(
+        Some("go.mod"),
+        "tools",
+        vec![directive(
+            "tools/gen.go",
+            2,
+            "//go:generate \"go\" run ./cmd/gen",
+        )],
+    );
+    let variable = declaration(
+        Some("go.mod"),
+        "tools",
+        vec![directive(
+            "tools/gen.go",
+            2,
+            "//go:generate $GENERATOR run ./cmd/gen",
+        )],
+    );
+
+    assert!(go_generator_command(&models, &quoted).is_some());
+    assert!(go_generator_command(&models, &variable).is_none());
 }
 
 #[test]

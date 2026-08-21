@@ -9,6 +9,10 @@ use crate::benchmark::release::{
 };
 use std::collections::{BTreeMap, BTreeSet};
 
+#[path = "benchmark_intentional_boundary_generator_go_directive.rs"]
+mod directive;
+use directive::directives_use_only_go;
+
 pub(super) enum GoGeneratorCommandPlan {
     NotApplicable,
     Planned(GeneratorCommand),
@@ -225,53 +229,6 @@ fn directive_source_paths(
             paths.insert(path.clone());
             Some(paths)
         })
-}
-
-fn directives_use_only_go(directives: &[IntentionalBoundaryGoGenerateDirective]) -> bool {
-    let mut aliases = BTreeMap::<String, String>::new();
-    let mut current_file = None::<&str>;
-    let mut executable_directive = false;
-    for directive in directives {
-        let file = directive.location.repository_path.as_str();
-        if current_file != Some(file) {
-            aliases.clear();
-            current_file = Some(file);
-        }
-        let Some(body) = directive
-            .source_text
-            .strip_prefix("//go:generate ")
-            .or_else(|| directive.source_text.strip_prefix("//go:generate\t"))
-        else {
-            return false;
-        };
-        let words = body.split_ascii_whitespace().take(3).collect::<Vec<_>>();
-        let Some(first) = words.first().copied() else {
-            return false;
-        };
-        if first == "-command" {
-            let [_, alias, executable] = words.as_slice() else {
-                return false;
-            };
-            if !plain_command_word(alias) || !plain_command_word(executable) {
-                return false;
-            }
-            aliases.insert((*alias).to_string(), (*executable).to_string());
-            continue;
-        }
-        if !plain_command_word(first) {
-            return false;
-        }
-        let effective = aliases.get(first).map_or(first, String::as_str);
-        if effective != "go" {
-            return false;
-        }
-        executable_directive = true;
-    }
-    executable_directive
-}
-
-fn plain_command_word(word: &str) -> bool {
-    !word.is_empty() && !word.contains(['"', '\'', '`', '$', '\\', '\0']) && !word.contains('/')
 }
 
 fn module_directory(manifest: &str) -> Option<&str> {
