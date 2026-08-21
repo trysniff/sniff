@@ -415,6 +415,9 @@ pub use intentional_boundary_ast_schema::*;
 #[path = "benchmark_intentional_boundary_ast.rs"]
 mod intentional_boundary_ast;
 
+#[path = "benchmark_intentional_boundary_compatibility_version.rs"]
+mod intentional_boundary_compatibility_version;
+
 #[path = "benchmark_intentional_boundary_ast_rust.rs"]
 mod intentional_boundary_ast_rust;
 

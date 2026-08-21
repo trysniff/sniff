@@ -13,7 +13,7 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-const AST_CONTRACT: &str = "sniffbench-intentional-boundary-source-ast-v10";
+const AST_CONTRACT: &str = "sniffbench-intentional-boundary-source-ast-v11";
 pub(super) type AstMethodKey = (String, usize);
 
 pub(super) struct AstMethodSyntaxFact {
