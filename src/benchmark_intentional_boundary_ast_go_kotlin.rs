@@ -13,6 +13,9 @@ use tree_sitter::Node;
 #[path = "benchmark_intentional_boundary_ast_go_retry.rs"]
 mod go_retry;
 
+#[path = "benchmark_intentional_boundary_ast_kotlin_retry.rs"]
+mod kotlin_retry;
+
 const GO: &str = "go";
 const KOTLIN: &str = "kotlin";
 
@@ -218,18 +221,27 @@ fn go_forwarding_call(expression: Node<'_>) -> Option<Node<'_>> {
 
 fn kotlin_candidate(
     repository_path: &str,
-    _source: &[u8],
+    source: &[u8],
     declaration: Node<'_>,
 ) -> Option<AstCallableCandidate> {
     let mut cursor = declaration.walk();
     let body = declaration
         .named_children(&mut cursor)
         .find(|child| child.kind() == "function_body");
-    Some(candidate(
+    let mut result = candidate(
         declaration,
         body.and_then(kotlin_thin_delegation)
             .map(|call| node_range(repository_path, call)),
-    ))
+    );
+    result.distinct_retry_outcomes = body
+        .and_then(|body| kotlin_retry::find_retry_loop(body, source))
+        .map(|(retryable, terminal)| {
+            (
+                node_range(repository_path, retryable),
+                node_range(repository_path, terminal),
+            )
+        });
+    Some(result)
 }
 
 fn kotlin_thin_delegation(body: Node<'_>) -> Option<Node<'_>> {
@@ -313,3 +325,7 @@ mod tests;
 #[cfg(test)]
 #[path = "benchmark_intentional_boundary_ast_go_retry_tests.rs"]
 mod retry_tests;
+
+#[cfg(test)]
+#[path = "benchmark_intentional_boundary_ast_kotlin_retry_tests.rs"]
+mod kotlin_retry_tests;
