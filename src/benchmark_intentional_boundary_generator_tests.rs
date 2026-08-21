@@ -139,9 +139,21 @@ struct Fixture {
     inventory: IntentionalBoundaryRepositoryInventory,
     source: IntentionalBoundarySourceCensus,
     semantic: IntentionalBoundarySemanticCensus,
+    project_models: IntentionalBoundaryProjectModelCensus,
     manifests: IntentionalBoundaryManifestCensus,
     bindings: IntentionalBoundaryManifestBindingCensus,
     evidence: IntentionalBoundaryEvidenceCensus,
+}
+
+fn empty_project_models(
+    inventory: &IntentionalBoundaryRepositoryInventory,
+) -> IntentionalBoundaryProjectModelCensus {
+    super::super::intentional_boundary_project_model::finish_project_model_census(
+        inventory,
+        Vec::new(),
+        Vec::new(),
+    )
+    .unwrap()
 }
 
 fn fixture() -> Fixture {
@@ -242,6 +254,7 @@ fn fixture() -> Fixture {
         census_intentional_boundary_manifests(&repository, &revision, root.path(), &inventory)
             .unwrap();
     let bindings = bind_intentional_boundary_manifests(&source, &semantic, &manifests).unwrap();
+    let project_models = empty_project_models(&inventory);
     Fixture {
         root,
         repository,
@@ -249,6 +262,7 @@ fn fixture() -> Fixture {
         inventory,
         source,
         semantic,
+        project_models,
         manifests,
         bindings,
         evidence,
@@ -353,6 +367,7 @@ fn node_fixture() -> Fixture {
         census_intentional_boundary_manifests(&repository, &revision, root.path(), &inventory)
             .unwrap();
     let bindings = bind_intentional_boundary_manifests(&source, &semantic, &manifests).unwrap();
+    let project_models = empty_project_models(&inventory);
     Fixture {
         root,
         repository,
@@ -360,6 +375,7 @@ fn node_fixture() -> Fixture {
         inventory,
         source,
         semantic,
+        project_models,
         manifests,
         bindings,
         evidence,
@@ -461,6 +477,7 @@ fn python_fixture() -> Fixture {
         census_intentional_boundary_manifests(&repository, &revision, root.path(), &inventory)
             .unwrap();
     let bindings = bind_intentional_boundary_manifests(&source, &semantic, &manifests).unwrap();
+    let project_models = empty_project_models(&inventory);
     Fixture {
         root,
         repository,
@@ -468,6 +485,7 @@ fn python_fixture() -> Fixture {
         inventory,
         source,
         semantic,
+        project_models,
         manifests,
         bindings,
         evidence,
@@ -618,6 +636,7 @@ fn reproduced_generator_qualifies_only_after_all_three_evidence_groups() {
         &fixture.inventory,
         &fixture.source,
         &fixture.semantic,
+        &fixture.project_models,
         &fixture.manifests,
         &fixture.bindings,
         &fixture.evidence,
@@ -629,6 +648,7 @@ fn reproduced_generator_qualifies_only_after_all_three_evidence_groups() {
         &fixture.inventory,
         &fixture.source,
         &fixture.semantic,
+        &fixture.project_models,
         &fixture.manifests,
         &fixture.bindings,
         &fixture.evidence,
@@ -640,6 +660,7 @@ fn reproduced_generator_qualifies_only_after_all_three_evidence_groups() {
             inventory: &fixture.inventory,
             source_census: &fixture.source,
             semantic_census: &fixture.semantic,
+            project_model_census: &fixture.project_models,
             manifest_census: &fixture.manifests,
             binding_census: &fixture.bindings,
             base_evidence: &fixture.evidence,
@@ -677,6 +698,7 @@ fn recommitted_tampered_replay_output_is_rejected() {
         &fixture.inventory,
         &fixture.source,
         &fixture.semantic,
+        &fixture.project_models,
         &fixture.manifests,
         &fixture.bindings,
         &fixture.evidence,
@@ -696,6 +718,7 @@ fn recommitted_tampered_replay_output_is_rejected() {
             &fixture.inventory,
             &fixture.source,
             &fixture.semantic,
+            &fixture.project_models,
             &fixture.manifests,
             &fixture.bindings,
             &fixture.evidence,
@@ -717,6 +740,7 @@ fn real_cargo_generator_reproduces_committed_output_twice_offline() {
         &fixture.inventory,
         &fixture.source,
         &fixture.semantic,
+        &fixture.project_models,
         &fixture.manifests,
         &fixture.bindings,
         &fixture.evidence,
@@ -762,6 +786,7 @@ fn python_entrypoint_command_is_bound_locked_and_project_install_free() {
         &fixture.inventory,
         &fixture.manifests.declarations,
         &fixture.semantic,
+        &fixture.project_models,
         &fixture.bindings,
         declaration,
     )
@@ -821,6 +846,7 @@ fn python_entrypoint_rejects_ambiguous_lock_families() {
             &inventory,
             &fixture.manifests.declarations,
             &fixture.semantic,
+            &fixture.project_models,
             &fixture.bindings,
             declaration,
         )
@@ -839,6 +865,7 @@ fn real_uv_entrypoint_reproduces_committed_output_twice_offline() {
         &fixture.inventory,
         &fixture.source,
         &fixture.semantic,
+        &fixture.project_models,
         &fixture.manifests,
         &fixture.bindings,
         &fixture.evidence,
@@ -943,6 +970,7 @@ fn real_npm_generator_prepares_locked_dependencies_then_reproduces_twice_offline
         &fixture.inventory,
         &fixture.source,
         &fixture.semantic,
+        &fixture.project_models,
         &fixture.manifests,
         &fixture.bindings,
         &fixture.evidence,
@@ -1265,6 +1293,7 @@ fn recommitted_network_disabled_npm_preparation_is_rejected() {
         &fixture.inventory,
         &fixture.source,
         &fixture.semantic,
+        &fixture.project_models,
         &fixture.manifests,
         &fixture.bindings,
         &fixture.evidence,
@@ -1284,6 +1313,7 @@ fn recommitted_network_disabled_npm_preparation_is_rejected() {
             &fixture.inventory,
             &fixture.source,
             &fixture.semantic,
+            &fixture.project_models,
             &fixture.manifests,
             &fixture.bindings,
             &fixture.evidence,
@@ -1304,6 +1334,7 @@ fn recommitted_omitted_package_script_candidate_is_rejected() {
         &fixture.inventory,
         &fixture.source,
         &fixture.semantic,
+        &fixture.project_models,
         &fixture.manifests,
         &fixture.bindings,
         &fixture.evidence,
@@ -1342,6 +1373,7 @@ fn recommitted_omitted_package_script_candidate_is_rejected() {
             &fixture.inventory,
             &fixture.source,
             &fixture.semantic,
+            &fixture.project_models,
             &fixture.manifests,
             &fixture.bindings,
             &fixture.evidence,

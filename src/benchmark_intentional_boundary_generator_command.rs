@@ -3,8 +3,8 @@ use super::python;
 use crate::benchmark::release::{
     IntentionalBoundaryManifestBindingCensus, IntentionalBoundaryManifestDeclaration,
     IntentionalBoundaryManifestDeclarationKind, IntentionalBoundaryManifestProvider,
-    IntentionalBoundaryManifestTarget, IntentionalBoundaryRepositoryInventory,
-    IntentionalBoundarySemanticCensus,
+    IntentionalBoundaryManifestTarget, IntentionalBoundaryProjectModelCensus,
+    IntentionalBoundaryRepositoryInventory, IntentionalBoundarySemanticCensus,
 };
 
 pub(in crate::benchmark::release) fn cargo_generator_command(
@@ -58,6 +58,7 @@ pub(in crate::benchmark::release) fn generator_command_with_context(
     inventory: &IntentionalBoundaryRepositoryInventory,
     declarations: &[IntentionalBoundaryManifestDeclaration],
     semantic_census: &IntentionalBoundarySemanticCensus,
+    _project_model_census: &IntentionalBoundaryProjectModelCensus,
     binding_census: &IntentionalBoundaryManifestBindingCensus,
     declaration: &IntentionalBoundaryManifestDeclaration,
 ) -> Option<GeneratorCommand> {

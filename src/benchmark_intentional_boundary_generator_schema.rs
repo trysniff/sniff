@@ -2,7 +2,7 @@ use super::IntentionalBoundarySemanticRange;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-pub const INTENTIONAL_BOUNDARY_GENERATOR_CENSUS_SCHEMA_VERSION: u32 = 4;
+pub const INTENTIONAL_BOUNDARY_GENERATOR_CENSUS_SCHEMA_VERSION: u32 = 5;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -88,6 +88,7 @@ pub struct IntentionalBoundaryGeneratorCensus {
     pub inventory_sha256: String,
     pub source_census_sha256: String,
     pub semantic_census_sha256: String,
+    pub project_model_census_sha256: String,
     pub manifest_census_sha256: String,
     pub manifest_binding_census_sha256: String,
     pub base_evidence_census_sha256: String,
