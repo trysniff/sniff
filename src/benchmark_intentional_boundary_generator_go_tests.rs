@@ -55,7 +55,7 @@ fn project_models(module: &str, sources: &[&str]) -> IntentionalBoundaryProjectM
         .map(|path| (*path).to_string())
         .collect::<Vec<_>>();
     IntentionalBoundaryProjectModelCensus {
-        schema_version: 2,
+        schema_version: 3,
         project_model_contract: "test".to_string(),
         repository: "owner/repository".to_string(),
         revision: "1".repeat(40),
@@ -83,6 +83,7 @@ fn project_models(module: &str, sources: &[&str]) -> IntentionalBoundaryProjectM
             provider_kinds: vec!["package".to_string()],
             provider_output_types: vec!["package_archive".to_string()],
             source_repository_paths: source_repository_paths.clone(),
+            producer_tasks: Vec::new(),
             required_features: Vec::new(),
             target_status: IntentionalBoundaryProjectModelTargetStatus::Boundary {
                 declaration_kind: IntentionalBoundaryManifestDeclarationKind::PublishedModule,

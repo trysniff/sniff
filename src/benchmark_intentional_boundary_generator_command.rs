@@ -67,6 +67,7 @@ pub(super) fn generator_command(
     node::node_generator_command(inventory, declarations, declaration)
 }
 
+#[cfg(test)]
 pub(in crate::benchmark::release) fn generator_command_with_context(
     inventory: &IntentionalBoundaryRepositoryInventory,
     declarations: &[IntentionalBoundaryManifestDeclaration],

@@ -2,7 +2,7 @@ use super::{IntentionalBoundaryManifestDeclarationKind, IntentionalBoundaryManif
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-pub const INTENTIONAL_BOUNDARY_PROJECT_MODEL_CENSUS_SCHEMA_VERSION: u32 = 2;
+pub const INTENTIONAL_BOUNDARY_PROJECT_MODEL_CENSUS_SCHEMA_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -49,6 +49,15 @@ pub enum IntentionalBoundaryProjectModelTargetStatus {
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct IntentionalBoundaryProjectModelProducerTask {
+    pub task_path: String,
+    pub task_type: String,
+    pub output_repository_paths: Vec<String>,
+    pub source_repository_paths: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct IntentionalBoundaryProjectModelTarget {
     pub target_id: String,
     pub execution_id: String,
@@ -61,6 +70,7 @@ pub struct IntentionalBoundaryProjectModelTarget {
     pub provider_kinds: Vec<String>,
     pub provider_output_types: Vec<String>,
     pub source_repository_paths: Vec<String>,
+    pub producer_tasks: Vec<IntentionalBoundaryProjectModelProducerTask>,
     pub required_features: Vec<String>,
     pub target_status: IntentionalBoundaryProjectModelTargetStatus,
 }

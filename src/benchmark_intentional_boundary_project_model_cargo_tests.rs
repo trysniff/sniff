@@ -255,7 +255,7 @@ fn normalizes_every_cargo_target_to_a_typed_outcome() {
     assert_eq!(census.target_count_by_status.get("non_boundary"), Some(&1));
     assert_eq!(census.target_count_by_status.get("unresolved"), Some(&1));
     assert!(census.targets.iter().all(|target| {
-        target.target_id.starts_with("ibpmt-v2:")
+        target.target_id.starts_with("ibpmt-v3:")
             && target.source_repository_paths.first().is_some_and(|path| {
                 !path.contains(root.path().to_string_lossy().as_ref()) && !path.contains('\\')
             })

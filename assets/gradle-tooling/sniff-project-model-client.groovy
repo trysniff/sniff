@@ -11,6 +11,14 @@ interface SniffGradleProjectModel {
     boolean getBuildFileExists()
     List<String> getProviderKinds()
     List<String> getProductionSourceFiles()
+    List<? extends SniffGradleProducerTaskModel> getProducerTasks()
+}
+
+interface SniffGradleProducerTaskModel {
+    String getTaskPath()
+    String getTaskType()
+    List<String> getOutputFiles()
+    List<String> getProductionSourceFiles()
 }
 
 interface SniffGradleBuildModel {
@@ -73,6 +81,12 @@ try {
             build_file_exists: project.buildFileExists,
             provider_kinds: project.providerKinds,
             production_source_files: project.productionSourceFiles,
+            producer_tasks: project.producerTasks.collect { task -> [
+                task_path: task.taskPath,
+                task_type: task.taskType,
+                output_files: task.outputFiles,
+                production_source_files: task.productionSourceFiles,
+            ] },
         ] },
     ]
     print(JsonOutput.toJson(payload))

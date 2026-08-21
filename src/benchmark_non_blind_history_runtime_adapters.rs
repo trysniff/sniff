@@ -252,6 +252,39 @@ pub(super) fn gradle_launch(
     })
 }
 
+pub(super) fn gradle_installation_launch(
+    args: &[String],
+) -> Result<Launch, HistoricalRuntimePlanError> {
+    let java = resolve_on_path("java")?;
+    let java_home = java
+        .parent()
+        .and_then(Path::parent)
+        .ok_or_else(|| unavailable("Java runtime has no JAVA_HOME"))?
+        .to_path_buf();
+    let gradle = resolve_on_path("gradle")?;
+    let gradle_home = gradle
+        .parent()
+        .and_then(Path::parent)
+        .ok_or_else(|| unavailable("Gradle runtime has no installation root"))?
+        .to_path_buf();
+    reject_broad_user_root(&java_home)?;
+    reject_broad_user_root(&gradle_home)?;
+    let tooling_api = canonical_file(
+        &gradle_home.join("lib").join("gradle-tooling-api-8.8.jar"),
+        "pinned Gradle 8.8 Tooling API",
+    )?;
+    Ok(Launch {
+        target: gradle.clone(),
+        args: args.to_vec(),
+        runtime_files: vec![java, gradle, tooling_api],
+        runtime_roots: vec![java_home.clone(), gradle_home],
+        env: vec![("JAVA_HOME".to_string(), path_value(&java_home))],
+        repository_target: false,
+        #[cfg(windows)]
+        collect_runtime_images: true,
+    })
+}
+
 pub(super) fn gradle_tooling_launch(args: &[String]) -> Result<Launch, HistoricalRuntimePlanError> {
     if args.len() != 4 {
         return Err(HistoricalRuntimePlanError::Invalid(

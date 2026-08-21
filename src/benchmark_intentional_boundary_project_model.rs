@@ -10,6 +10,7 @@ use super::intentional_boundary_project_model_gradle::{
 use super::{
     BoundaryGitEntryKind, INTENTIONAL_BOUNDARY_PROJECT_MODEL_CENSUS_SCHEMA_VERSION,
     IntentionalBoundaryProjectModelCensus, IntentionalBoundaryProjectModelExecution,
+    IntentionalBoundaryProjectModelProducerTask,
     IntentionalBoundaryProjectModelProvider as Provider, IntentionalBoundaryProjectModelTarget,
     IntentionalBoundaryProjectModelTargetStatus as TargetStatus,
     IntentionalBoundaryRepositoryInventory, IntentionalBoundaryTrackedEntry,
@@ -19,7 +20,7 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path};
 
-pub(super) const PROJECT_MODEL_CONTRACT: &str = "sniffbench-intentional-boundary-project-model-v2";
+pub(super) const PROJECT_MODEL_CONTRACT: &str = "sniffbench-intentional-boundary-project-model-v3";
 
 #[derive(Serialize)]
 struct NormalizedTarget<'a> {
@@ -32,6 +33,7 @@ struct NormalizedTarget<'a> {
     provider_kinds: &'a [String],
     provider_output_types: &'a [String],
     source_repository_paths: &'a [String],
+    producer_tasks: &'a [IntentionalBoundaryProjectModelProducerTask],
     required_features: &'a [String],
     target_status: &'a TargetStatus,
 }
@@ -53,7 +55,7 @@ pub(super) fn compute_normalized_model_sha256(
         .collect::<Result<Vec<_>, String>>()?;
     normalized_targets.sort();
     hash_json(&(
-        "sniffbench-intentional-boundary-normalized-project-model-v2",
+        "sniffbench-intentional-boundary-normalized-project-model-v3",
         provider,
         covered_manifest_repository_paths,
         normalized_targets,
@@ -69,9 +71,9 @@ pub(super) fn compute_execution_id(
     normalized_model_sha256: &str,
 ) -> Result<String, String> {
     Ok(format!(
-        "ibpme-v2:{}",
+        "ibpme-v3:{}",
         hash_json(&(
-            "sniffbench-intentional-boundary-project-model-execution-v2",
+            "sniffbench-intentional-boundary-project-model-execution-v3",
             provider,
             invocation_anchor_repository_path,
             invocation_anchor_object_id,
@@ -86,9 +88,9 @@ pub(super) fn compute_target_id(
     target: &IntentionalBoundaryProjectModelTarget,
 ) -> Result<String, String> {
     Ok(format!(
-        "ibpmt-v2:{}",
+        "ibpmt-v3:{}",
         hash_json(&(
-            "sniffbench-intentional-boundary-project-model-target-v2",
+            "sniffbench-intentional-boundary-project-model-target-v3",
             &target.execution_id,
             normalized_target(target),
         ))?
@@ -244,6 +246,10 @@ pub fn validate_intentional_boundary_project_model_census_commitment(
             || !sorted_unique(&target.provider_kinds)
             || !sorted_unique(&target.provider_output_types)
             || !sorted_unique(&target.source_repository_paths)
+            || target
+                .producer_tasks
+                .windows(2)
+                .any(|pair| pair[0] >= pair[1])
             || !sorted_unique(&target.required_features)
             || target
                 .source_repository_paths
@@ -294,6 +300,7 @@ fn normalized_target(target: &IntentionalBoundaryProjectModelTarget) -> Normaliz
         provider_kinds: &target.provider_kinds,
         provider_output_types: &target.provider_output_types,
         source_repository_paths: &target.source_repository_paths,
+        producer_tasks: &target.producer_tasks,
         required_features: &target.required_features,
         target_status: &target.target_status,
     }

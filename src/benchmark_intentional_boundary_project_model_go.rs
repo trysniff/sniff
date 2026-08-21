@@ -268,6 +268,7 @@ fn normalize_package(
         provider_kinds,
         provider_output_types,
         source_repository_paths,
+        producer_tasks: Vec::new(),
         required_features: Vec::new(),
         target_status,
     })

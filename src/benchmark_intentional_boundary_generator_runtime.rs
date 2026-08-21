@@ -5,7 +5,7 @@ use crate::benchmark::release::non_blind_history_runtime::{
 };
 use crate::benchmark::release::{
     IntentionalBoundaryGeneratorExecution, IntentionalBoundaryGeneratorOutput,
-    IntentionalBoundaryGeneratorUnresolvedReason, IntentionalBoundaryManifestDeclaration,
+    IntentionalBoundaryGeneratorUnresolvedReason,
 };
 use crate::sandbox::SandboxError;
 use std::fs;
@@ -22,7 +22,6 @@ const PREPARATION_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 pub(super) fn execute_generator_replay(
     source_root: &Path,
     revision: &str,
-    _declaration: &IntentionalBoundaryManifestDeclaration,
     command: &GeneratorCommand,
     expected: &[ExpectedOutput],
 ) -> Result<ReplaySuccess, ReplayFailure> {
@@ -74,6 +73,9 @@ pub(super) fn execute_generator_replay(
                 stdout_sha256: output.stdout_sha256,
                 stderr_sha256: output.stderr_sha256,
             });
+            if is_gradle_execution(&command.execution) {
+                cleanup_declared_paths(snapshot.path(), &command.cleanup_paths)?;
+            }
             invalidate_expected_outputs(snapshot.path(), expected)?;
         }
         let mut plan = prepare_historical_runtime(snapshot.path(), &cache, &command.execution)
@@ -83,7 +85,9 @@ pub(super) fn execute_generator_replay(
         plan.command.timeout = GENERATOR_TIMEOUT;
         #[cfg(target_os = "macos")]
         {
-            plan.command.allow_local_network = false;
+            // Gradle's mandatory single-use daemon uses loopback IPC even with
+            // --no-daemon. Seatbelt still denies every non-loopback endpoint.
+            plan.command.allow_local_network = is_gradle_execution(&command.execution);
         }
         let output = crate::sandbox::run(&plan.command).map_err(sandbox_failure);
         let cleanup = cleanup_runtime_paths(snapshot.path(), &cache, &command.cleanup_paths);
@@ -151,6 +155,10 @@ pub(super) fn execute_generator_replay(
     })
 }
 
+fn is_gradle_execution(command: &[String]) -> bool {
+    command.first().map(String::as_str) == Some("{sniff_gradle}")
+}
+
 fn extend_environment(
     environment: &mut Vec<(String, String)>,
     additions: &std::collections::BTreeMap<String, String>,
@@ -199,6 +207,12 @@ fn cleanup_runtime_paths(
     cache: &Path,
     cleanup_paths: &[String],
 ) -> Result<(), ReplayFailure> {
+    cleanup_declared_paths(root, cleanup_paths)?;
+    fs::remove_dir_all(cache)
+        .map_err(|error| failed(format!("failed to remove generator cache: {error}")))
+}
+
+fn cleanup_declared_paths(root: &Path, cleanup_paths: &[String]) -> Result<(), ReplayFailure> {
     for relative in cleanup_paths {
         let path = root.join(relative);
         let metadata = match fs::symlink_metadata(&path) {
@@ -221,8 +235,31 @@ fn cleanup_runtime_paths(
             )));
         }
     }
-    fs::remove_dir_all(cache)
-        .map_err(|error| failed(format!("failed to remove generator cache: {error}")))
+    Ok(())
+}
+
+#[cfg(test)]
+mod cleanup_tests {
+    use super::*;
+
+    #[test]
+    fn gradle_interphase_cleanup_preserves_the_private_dependency_cache() {
+        let root = tempfile::tempdir().unwrap();
+        let cache = root.path().join(CACHE_DIRECTORY);
+        let output = root.path().join("build/generated/state.txt");
+        fs::create_dir_all(&cache).unwrap();
+        fs::create_dir_all(output.parent().unwrap()).unwrap();
+        fs::write(cache.join("dependency"), "cached").unwrap();
+        fs::write(&output, "prepared").unwrap();
+
+        assert!(cleanup_declared_paths(root.path(), &["build/generated".to_string()]).is_ok());
+
+        assert!(!output.exists());
+        assert_eq!(
+            fs::read_to_string(cache.join("dependency")).unwrap(),
+            "cached"
+        );
+    }
 }
 
 #[cfg(windows)]
@@ -359,7 +396,15 @@ fn failed(detail: impl Into<String>) -> ReplayFailure {
 
 #[cfg(test)]
 mod tests {
-    use super::{bounded_status_summary, sanitized_runtime_stderr};
+    use super::{bounded_status_summary, is_gradle_execution, sanitized_runtime_stderr};
+
+    #[test]
+    fn loopback_exception_is_identified_only_for_the_pinned_gradle_adapter() {
+        assert!(is_gradle_execution(&["{sniff_gradle}".to_string()]));
+        assert!(!is_gradle_execution(&["gradle".to_string()]));
+        assert!(!is_gradle_execution(&["cargo".to_string()]));
+        assert!(!is_gradle_execution(&[]));
+    }
 
     #[test]
     fn repository_mutation_summary_is_bounded_and_escaped() {

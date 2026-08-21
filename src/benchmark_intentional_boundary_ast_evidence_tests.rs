@@ -163,7 +163,7 @@ fn composes_hash_bound_compiler_and_ast_delegation_evidence() {
 
     let evidence = derive_compiler_and_ast_evidence(&source, &semantic, &asts).unwrap();
 
-    assert_eq!(evidence.schema_version, 2);
+    assert_eq!(evidence.schema_version, 3);
     assert_eq!(evidence.atoms.len(), 2);
     assert_eq!(
         evidence.input_census_sha256.get("source_ast:rust"),
