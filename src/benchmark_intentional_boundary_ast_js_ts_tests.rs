@@ -1,5 +1,22 @@
 use super::*;
 
+#[test]
+fn rejects_unknown_source_type_without_defaulting_to_javascript() {
+    let record = crate::parser::parse_source_checked(
+        "src/example.js",
+        b"export function process() { return target(); }",
+    )
+    .unwrap();
+    let error = js_ts_syntax_facts("src/example.unknown", &record)
+        .err()
+        .unwrap();
+
+    assert_eq!(
+        error.kind,
+        super::super::intentional_boundary_ast_outcome::AstDerivationErrorKind::SourceParserRejected
+    );
+}
+
 fn facts(path: &str, source: &str) -> (crate::types::FileRecord, AstMethodSyntaxFacts) {
     let record = crate::parser::parse_source_checked(path, source.as_bytes()).unwrap();
     let facts = js_ts_syntax_facts(path, &record).unwrap();

@@ -463,6 +463,12 @@ mod intentional_boundary_ast_schema;
 
 pub use intentional_boundary_ast_schema::*;
 
+#[path = "benchmark_intentional_boundary_ast_outcome.rs"]
+mod intentional_boundary_ast_outcome;
+
+#[path = "benchmark_intentional_boundary_ast_generator_marker.rs"]
+mod intentional_boundary_ast_generator_marker;
+
 #[path = "benchmark_intentional_boundary_ast.rs"]
 mod intentional_boundary_ast;
 
@@ -494,6 +500,19 @@ pub use intentional_boundary_ast_js_ts::*;
 mod intentional_boundary_ast_go_kotlin;
 
 pub use intentional_boundary_ast_go_kotlin::*;
+
+#[path = "benchmark_intentional_boundary_ast_stage_schema.rs"]
+mod intentional_boundary_ast_stage_schema;
+
+pub use intentional_boundary_ast_stage_schema::*;
+
+#[path = "benchmark_intentional_boundary_ast_stage_support.rs"]
+mod intentional_boundary_ast_stage_support;
+
+#[path = "benchmark_intentional_boundary_ast_stage.rs"]
+mod intentional_boundary_ast_stage;
+
+pub use intentional_boundary_ast_stage::*;
 
 #[path = "benchmark_intentional_boundary_ast_evidence.rs"]
 mod intentional_boundary_ast_evidence;

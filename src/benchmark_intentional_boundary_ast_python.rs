@@ -7,14 +7,14 @@ use rustpython_ast::{ExceptHandler, Expr, Ranged, Stmt, Visitor, text_size::Text
 use std::collections::BTreeMap;
 use std::path::Path;
 
-#[cfg(test)]
-use super::intentional_boundary_ast::derive_language_ast_census;
 use super::intentional_boundary_ast::{
-    AstMethodSyntaxFact, AstMethodSyntaxFacts, census_language_ast, validate_language_ast,
+    AstMethodSyntaxFact, AstMethodSyntaxFacts, census_language_ast, derive_language_ast_census,
+    validate_language_ast,
 };
 use super::intentional_boundary_ast_compiler_references::{
     AstCompilerReferenceIdentity, AstCompilerReferenceRequirement,
 };
+use super::intentional_boundary_ast_outcome::{AstDerivationError, ast_parser_rejected};
 use super::intentional_boundary_ast_python_compatibility::versioned_compatibility_contract;
 
 const LANGUAGE: &str = "python";
@@ -61,12 +61,11 @@ pub fn validate_intentional_boundary_python_ast_census(
     )
 }
 
-#[cfg(test)]
 pub(super) fn derive_python_ast_census(
     source_census: &IntentionalBoundarySourceCensus,
     semantic_census: &IntentionalBoundarySemanticCensus,
     files: &[crate::types::FileRecord],
-) -> Result<IntentionalBoundaryAstCensus, String> {
+) -> Result<IntentionalBoundaryAstCensus, AstDerivationError> {
     derive_language_ast_census(
         source_census,
         semantic_census,
@@ -76,16 +75,24 @@ pub(super) fn derive_python_ast_census(
     )
 }
 
-fn python_syntax_facts(
+pub(super) fn python_syntax_facts(
     repository_path: &str,
     record: &crate::types::FileRecord,
-) -> Result<AstMethodSyntaxFacts, String> {
+) -> Result<AstMethodSyntaxFacts, AstDerivationError> {
     let source = &record.source;
     let parsed = rustpython_parser::parse(source, rustpython_parser::Mode::Module, repository_path)
-        .map_err(|error| format!("failed to parse Python AST {repository_path}: {error}"))?;
+        .map_err(|error| {
+            ast_parser_rejected(
+                LANGUAGE,
+                repository_path,
+                format!("failed to parse Python AST: {error}"),
+            )
+        })?;
     let rustpython_ast::Mod::Module(module) = parsed else {
-        return Err(format!(
-            "failed to parse Python AST {repository_path}: source is not a module"
+        return Err(ast_parser_rejected(
+            LANGUAGE,
+            repository_path,
+            "failed to parse Python AST: source is not a module",
         ));
     };
     let mut visitor = PythonBodyVisitor {

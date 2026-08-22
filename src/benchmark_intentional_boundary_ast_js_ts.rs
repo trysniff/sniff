@@ -15,12 +15,11 @@ use oxc_span::{SourceType, Span};
 use oxc_syntax::scope::ScopeFlags;
 use std::path::Path;
 
-#[cfg(test)]
-use super::intentional_boundary_ast::derive_language_ast_census;
 use super::intentional_boundary_ast::{
     AstCallableCandidate, AstMethodSyntaxFacts, align_callable_candidates, census_language_ast,
-    validate_language_ast,
+    derive_language_ast_census, validate_language_ast,
 };
+use super::intentional_boundary_ast_outcome::{AstDerivationError, ast_parser_rejected};
 
 #[path = "benchmark_intentional_boundary_ast_js_ts_retry.rs"]
 mod retry;
@@ -155,18 +154,28 @@ fn validate_js_ts_ast(
     )
 }
 
-fn js_ts_syntax_facts(
+pub(super) fn js_ts_syntax_facts(
     repository_path: &str,
     record: &crate::types::FileRecord,
-) -> Result<AstMethodSyntaxFacts, String> {
+) -> Result<AstMethodSyntaxFacts, AstDerivationError> {
     let allocator = oxc_allocator::Allocator::default();
-    let source_type = SourceType::from_path(Path::new(repository_path)).unwrap_or_default();
+    let source_type = SourceType::from_path(Path::new(repository_path)).map_err(|error| {
+        ast_parser_rejected(
+            record.language.as_str(),
+            repository_path,
+            format!("failed to resolve JavaScript/TypeScript source type: {error:?}"),
+        )
+    })?;
     let parsed = oxc_parser::Parser::new(&allocator, &record.source, source_type).parse();
     if !parsed.errors.is_empty() {
-        return Err(format!(
-            "failed to parse JavaScript/TypeScript AST {repository_path}: {} parser error(s): {:?}",
-            parsed.errors.len(),
-            parsed.errors
+        return Err(ast_parser_rejected(
+            record.language.as_str(),
+            repository_path,
+            format!(
+                "failed to parse JavaScript/TypeScript AST: {} parser error(s): {:?}",
+                parsed.errors.len(),
+                parsed.errors
+            ),
         ));
     }
     let comments = parsed.trivias.comments().collect::<Vec<_>>();
@@ -268,13 +277,12 @@ impl JsTsBodyVisitor<'_> {
     }
 }
 
-#[cfg(test)]
 pub(super) fn derive_js_ts_ast_census(
     source_census: &IntentionalBoundarySourceCensus,
     semantic_census: &IntentionalBoundarySemanticCensus,
     files: &[crate::types::FileRecord],
     language: &str,
-) -> Result<IntentionalBoundaryAstCensus, String> {
+) -> Result<IntentionalBoundaryAstCensus, AstDerivationError> {
     derive_language_ast_census(
         source_census,
         semantic_census,
