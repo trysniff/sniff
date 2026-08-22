@@ -28,6 +28,7 @@ pub(super) const GRADLE_TOOLING_COMMAND_CONTRACT: &str =
 #[path = "benchmark_intentional_boundary_project_model_gradle_runtime.rs"]
 mod runtime;
 pub use runtime::census_intentional_boundary_gradle_project_models;
+pub(super) use runtime::census_intentional_boundary_gradle_project_models_typed;
 #[cfg(test)]
 use runtime::{GradleToolingExecutionOutput, census_gradle_project_models_with_executor};
 

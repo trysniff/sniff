@@ -159,7 +159,10 @@ fn append_target_evidence(
         joined_definition,
     } = &method.status
     else {
-        unreachable!("resolved_subject_method checked the method status")
+        return Err(format!(
+            "project-model evidence subject is not compiler-resolved: {}",
+            method.parser_unit_id
+        ));
     };
     let definitions = joined_definition
         .iter()

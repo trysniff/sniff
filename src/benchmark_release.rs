@@ -529,6 +529,14 @@ mod intentional_boundary_project_model_schema;
 
 pub use intentional_boundary_project_model_schema::*;
 
+#[path = "benchmark_intentional_boundary_project_model_stage_schema.rs"]
+mod intentional_boundary_project_model_stage_schema;
+
+pub use intentional_boundary_project_model_stage_schema::*;
+
+#[path = "benchmark_intentional_boundary_project_model_outcome.rs"]
+mod intentional_boundary_project_model_outcome;
+
 #[path = "benchmark_intentional_boundary_runtime_snapshot.rs"]
 mod intentional_boundary_runtime_snapshot;
 
@@ -591,6 +599,17 @@ pub use intentional_boundary_project_model_binding::*;
 mod intentional_boundary_project_model_evidence;
 
 pub use intentional_boundary_project_model_evidence::*;
+
+#[path = "benchmark_intentional_boundary_project_model_stage_support.rs"]
+mod intentional_boundary_project_model_stage_support;
+
+#[path = "benchmark_intentional_boundary_project_model_stage_commitment.rs"]
+mod intentional_boundary_project_model_stage_commitment;
+
+#[path = "benchmark_intentional_boundary_project_model_stage.rs"]
+mod intentional_boundary_project_model_stage;
+
+pub use intentional_boundary_project_model_stage::*;
 
 #[path = "benchmark_intentional_boundary_candidate_schema.rs"]
 mod intentional_boundary_candidate_schema;
