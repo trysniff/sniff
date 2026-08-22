@@ -382,6 +382,16 @@ mod intentional_boundary_frame_task;
 
 pub use intentional_boundary_frame_task::*;
 
+#[path = "benchmark_intentional_boundary_materialization_schema.rs"]
+mod intentional_boundary_materialization_schema;
+
+pub use intentional_boundary_materialization_schema::*;
+
+#[path = "benchmark_intentional_boundary_materialization.rs"]
+mod intentional_boundary_materialization;
+
+pub use intentional_boundary_materialization::*;
+
 #[path = "benchmark_intentional_boundary_inventory.rs"]
 mod intentional_boundary_inventory;
 
