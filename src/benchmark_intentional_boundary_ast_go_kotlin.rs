@@ -1,8 +1,9 @@
-#[cfg(test)]
-use super::intentional_boundary_ast::derive_language_ast_census;
 use super::intentional_boundary_ast::{
     AstCallableCandidate, AstMethodSyntaxFacts, align_callable_candidates, census_language_ast,
-    validate_language_ast,
+    derive_language_ast_census, validate_language_ast,
+};
+use super::intentional_boundary_ast_outcome::{
+    AstDerivationError, ast_invalid, ast_parser_rejected,
 };
 use super::{
     IntentionalBoundaryAstCensus, IntentionalBoundaryRepositoryInventory,
@@ -111,21 +112,19 @@ pub fn validate_intentional_boundary_kotlin_ast_census(
     )
 }
 
-#[cfg(test)]
 pub(super) fn derive_go_ast_census(
     source_census: &IntentionalBoundarySourceCensus,
     semantic_census: &IntentionalBoundarySemanticCensus,
     files: &[crate::types::FileRecord],
-) -> Result<IntentionalBoundaryAstCensus, String> {
+) -> Result<IntentionalBoundaryAstCensus, AstDerivationError> {
     derive_language_ast_census(source_census, semantic_census, files, GO, go_syntax_facts)
 }
 
-#[cfg(test)]
 pub(super) fn derive_kotlin_ast_census(
     source_census: &IntentionalBoundarySourceCensus,
     semantic_census: &IntentionalBoundarySemanticCensus,
     files: &[crate::types::FileRecord],
-) -> Result<IntentionalBoundaryAstCensus, String> {
+) -> Result<IntentionalBoundaryAstCensus, AstDerivationError> {
     derive_language_ast_census(
         source_census,
         semantic_census,
@@ -135,17 +134,17 @@ pub(super) fn derive_kotlin_ast_census(
     )
 }
 
-fn go_syntax_facts(
+pub(super) fn go_syntax_facts(
     repository_path: &str,
     record: &crate::types::FileRecord,
-) -> Result<AstMethodSyntaxFacts, String> {
+) -> Result<AstMethodSyntaxFacts, AstDerivationError> {
     syntax_facts(repository_path, record, GO, go_candidate)
 }
 
-fn kotlin_syntax_facts(
+pub(super) fn kotlin_syntax_facts(
     repository_path: &str,
     record: &crate::types::FileRecord,
-) -> Result<AstMethodSyntaxFacts, String> {
+) -> Result<AstMethodSyntaxFacts, AstDerivationError> {
     syntax_facts(repository_path, record, KOTLIN, kotlin_candidate)
 }
 
@@ -156,15 +155,17 @@ fn syntax_facts(
     record: &crate::types::FileRecord,
     language: &str,
     extractor: CandidateExtractor,
-) -> Result<AstMethodSyntaxFacts, String> {
+) -> Result<AstMethodSyntaxFacts, AstDerivationError> {
     if record.language != language {
-        return Err(format!(
-            "{language} AST received {} parser record: {repository_path}",
-            record.language
+        return Err(ast_invalid(
+            language,
+            Some(repository_path),
+            format!("{language} AST received {} parser record", record.language),
         ));
     }
     let tree =
-        crate::parser::parse_tree_sitter_source_checked(repository_path, record.source.as_bytes())?;
+        crate::parser::parse_tree_sitter_source_checked(repository_path, record.source.as_bytes())
+            .map_err(|detail| ast_parser_rejected(language, repository_path, detail))?;
     let mut candidates = Vec::new();
     collect_candidates(
         repository_path,

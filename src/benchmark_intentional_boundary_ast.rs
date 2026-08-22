@@ -1,6 +1,8 @@
 use super::intentional_boundary_ast_compiler_references::{
     AstCompilerReferenceRequirement, compiler_reference_requirements_satisfied,
 };
+use super::intentional_boundary_ast_generator_marker::exact_generator_marker;
+use super::intentional_boundary_ast_outcome::{AstDerivationError, ast_incomplete, ast_invalid};
 use super::{
     INTENTIONAL_BOUNDARY_AST_CENSUS_SCHEMA_VERSION, IntentionalBoundaryAstCensus,
     IntentionalBoundaryAstFact, IntentionalBoundaryAstMethod, IntentionalBoundaryAstMethodStatus,
@@ -48,14 +50,15 @@ pub(super) struct AstCallableCandidate {
 }
 
 pub(super) type AstMethodSyntaxFacts = BTreeMap<AstMethodKey, AstMethodSyntaxFact>;
-pub(super) type AstSyntaxExtractor = fn(&str, &FileRecord) -> Result<AstMethodSyntaxFacts, String>;
+pub(super) type AstSyntaxExtractor =
+    fn(&str, &FileRecord) -> Result<AstMethodSyntaxFacts, AstDerivationError>;
 
 pub(super) fn align_callable_candidates(
     repository_path: &str,
     language: &str,
     record: &FileRecord,
     candidates: Vec<AstCallableCandidate>,
-) -> Result<AstMethodSyntaxFacts, String> {
+) -> Result<AstMethodSyntaxFacts, AstDerivationError> {
     let mut candidates_by_lines = BTreeMap::<(usize, usize), Vec<AstCallableCandidate>>::new();
     let mut seen_spans = BTreeSet::new();
     for candidate in candidates {
@@ -75,20 +78,33 @@ pub(super) fn align_callable_candidates(
     }
     if candidates_by_lines.keys().collect::<Vec<_>>() != methods_by_lines.keys().collect::<Vec<_>>()
     {
-        return Err(format!(
-            "{language} AST callable ranges changed from parser census: {repository_path}"
+        return Err(ast_incomplete(
+            language,
+            Some(repository_path),
+            format!("{language} AST callable ranges changed from parser census"),
         ));
     }
     let mut facts = BTreeMap::new();
     for (lines, methods) in methods_by_lines {
-        let candidates = candidates_by_lines
-            .get_mut(&lines)
-            .expect("candidate keys were compared");
+        let Some(candidates) = candidates_by_lines.get_mut(&lines) else {
+            return Err(ast_incomplete(
+                language,
+                Some(repository_path),
+                format!(
+                    "{language} AST callable range disappeared at {}-{}",
+                    lines.0, lines.1
+                ),
+            ));
+        };
         candidates.sort_by_key(|candidate| (candidate.byte_start, candidate.byte_end));
         if methods.len() != candidates.len() {
-            return Err(format!(
-                "{language} AST callable count changed at {}:{}-{}",
-                repository_path, lines.0, lines.1
+            return Err(ast_incomplete(
+                language,
+                Some(repository_path),
+                format!(
+                    "{language} AST callable count changed at {}-{}",
+                    lines.0, lines.1
+                ),
             ));
         }
         for (method, candidate) in methods.into_iter().zip(candidates.iter()) {
@@ -108,9 +124,13 @@ pub(super) fn align_callable_candidates(
                 },
             );
             if previous.is_some() {
-                return Err(format!(
-                    "{language} AST repeated parser method identity: {}:{}:{}",
-                    repository_path, method.start_line, method.name
+                return Err(ast_incomplete(
+                    language,
+                    Some(repository_path),
+                    format!(
+                        "{language} AST repeated parser method identity at {}:{}",
+                        method.start_line, method.name
+                    ),
                 ));
             }
         }
@@ -139,6 +159,7 @@ pub(super) fn census_language_ast(
     validate_intentional_boundary_semantic_census(source_census, semantic_census)?;
     let files = intentional_boundary_file_records(root, inventory, source_census)?;
     derive_language_ast_census(source_census, semantic_census, &files, language, extractor)
+        .map_err(|error| error.detail)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -177,9 +198,13 @@ pub(super) fn derive_language_ast_census(
     files: &[FileRecord],
     language: &str,
     extractor: AstSyntaxExtractor,
-) -> Result<IntentionalBoundaryAstCensus, String> {
+) -> Result<IntentionalBoundaryAstCensus, AstDerivationError> {
     if files.len() != source_census.source_files.len() {
-        return Err("intentional-boundary AST input omitted source files".to_string());
+        return Err(ast_invalid(
+            language,
+            None,
+            "intentional-boundary AST input omitted source files",
+        ));
     }
     let semantic_methods = semantic_census
         .methods
@@ -189,9 +214,10 @@ pub(super) fn derive_language_ast_census(
     let mut methods = Vec::new();
     for (source_file, file) in source_census.source_files.iter().zip(files) {
         if source_file.language != file.language {
-            return Err(format!(
-                "intentional-boundary AST input changed parser language: {}",
-                source_file.repository_path
+            return Err(ast_invalid(
+                language,
+                Some(&source_file.repository_path),
+                "intentional-boundary AST input changed parser language",
             ));
         }
         if source_file.language != language {
@@ -207,9 +233,13 @@ pub(super) fn derive_language_ast_census(
             let semantic_method = semantic_methods
                 .get(source_method.parser_unit_id.as_str())
                 .ok_or_else(|| {
-                    format!(
-                        "intentional-boundary AST input omitted semantic method {}",
-                        source_method.parser_unit_id
+                    ast_invalid(
+                        language,
+                        Some(&source_file.repository_path),
+                        format!(
+                            "intentional-boundary AST input omitted semantic method {}",
+                            source_method.parser_unit_id
+                        ),
                     )
                 })?;
             methods.push(derive_method(
@@ -242,7 +272,8 @@ pub(super) fn derive_language_ast_census(
         methods,
         ast_census_sha256: String::new(),
     };
-    census.ast_census_sha256 = compute_ast_census_sha256(&census)?;
+    census.ast_census_sha256 = compute_ast_census_sha256(&census)
+        .map_err(|detail| ast_incomplete(language, None, detail))?;
     Ok(census)
 }
 
@@ -252,28 +283,40 @@ fn derive_method(
     syntax: &AstMethodSyntaxFacts,
     source_references: &[IntentionalBoundarySemanticSourceReference],
     language: &str,
-) -> Result<IntentionalBoundaryAstMethod, String> {
+) -> Result<IntentionalBoundaryAstMethod, AstDerivationError> {
     if semantic_method.symbol_name != source_method.symbol_name
         || semantic_method.start_line != source_method.start_line
         || semantic_method.end_line != source_method.end_line
     {
-        return Err(format!(
-            "intentional-boundary AST semantic identity changed for {}",
-            source_method.parser_unit_id
+        return Err(ast_invalid(
+            language,
+            Some(&semantic_method.repository_path),
+            format!(
+                "intentional-boundary AST semantic identity changed for {}",
+                source_method.parser_unit_id
+            ),
         ));
     }
     let syntax_method = syntax
         .get(&(source_method.symbol_name.clone(), source_method.start_line))
         .ok_or_else(|| {
-            format!(
-                "intentional-boundary AST omitted parser method {}",
-                source_method.parser_unit_id
+            ast_incomplete(
+                language,
+                Some(&semantic_method.repository_path),
+                format!(
+                    "intentional-boundary AST omitted parser method {}",
+                    source_method.parser_unit_id
+                ),
             )
         })?;
     if syntax_method.end_line > source_method.end_line {
-        return Err(format!(
-            "intentional-boundary AST exceeded parser method range {}",
-            source_method.parser_unit_id
+        return Err(ast_incomplete(
+            language,
+            Some(&semantic_method.repository_path),
+            format!(
+                "intentional-boundary AST exceeded parser method range {}",
+                source_method.parser_unit_id
+            ),
         ));
     }
     let status = match &semantic_method.status {
@@ -351,94 +394,6 @@ fn derive_method(
         end_line: source_method.end_line,
         status,
     })
-}
-
-fn exact_generator_marker(
-    repository_path: &str,
-    source: &str,
-) -> Option<IntentionalBoundarySemanticRange> {
-    if repository_path.ends_with(".go") {
-        return exact_go_generator_marker(repository_path, source);
-    }
-    source
-        .lines()
-        .take(20)
-        .enumerate()
-        .find_map(|(line, text)| {
-            let leading = text.len().saturating_sub(text.trim_start().len());
-            let trimmed = text.trim();
-            let payload = trimmed
-                .strip_prefix("//")
-                .or_else(|| trimmed.strip_prefix('#'))
-                .map(str::trim)
-                .or_else(|| {
-                    trimmed
-                        .strip_prefix("/*")
-                        .and_then(|value| value.strip_suffix("*/"))
-                        .map(str::trim)
-                })?;
-            let exact_marker = payload == "@generated"
-                || (payload.starts_with("Code generated ") && payload.ends_with(" DO NOT EDIT."));
-            exact_marker.then(|| IntentionalBoundarySemanticRange {
-                repository_path: repository_path.to_string(),
-                start_line_zero_based: line as u32,
-                start_character_zero_based: leading as u32,
-                end_line_zero_based: line as u32,
-                end_character_zero_based: text.len() as u32,
-            })
-        })
-}
-
-fn exact_go_generator_marker(
-    repository_path: &str,
-    source: &str,
-) -> Option<IntentionalBoundarySemanticRange> {
-    let mut in_block_comment = false;
-    for (line, raw_text) in source.lines().enumerate() {
-        let text = raw_text.strip_suffix('\r').unwrap_or(raw_text);
-        if !in_block_comment
-            && text.starts_with("// Code generated ")
-            && text.ends_with(" DO NOT EDIT.")
-        {
-            return Some(IntentionalBoundarySemanticRange {
-                repository_path: repository_path.to_string(),
-                start_line_zero_based: line as u32,
-                start_character_zero_based: 0,
-                end_line_zero_based: line as u32,
-                end_character_zero_based: text.len() as u32,
-            });
-        }
-        if !go_line_is_comment_or_blank(text, &mut in_block_comment) {
-            return None;
-        }
-    }
-    None
-}
-
-fn go_line_is_comment_or_blank(mut text: &str, in_block_comment: &mut bool) -> bool {
-    loop {
-        text = text.trim_start();
-        if text.is_empty() {
-            return true;
-        }
-        if *in_block_comment {
-            let Some((_, remainder)) = text.split_once("*/") else {
-                return true;
-            };
-            *in_block_comment = false;
-            text = remainder;
-            continue;
-        }
-        if text.starts_with("//") {
-            return true;
-        }
-        if let Some(remainder) = text.strip_prefix("/*") {
-            *in_block_comment = true;
-            text = remainder;
-            continue;
-        }
-        return false;
-    }
 }
 
 fn range_contains(

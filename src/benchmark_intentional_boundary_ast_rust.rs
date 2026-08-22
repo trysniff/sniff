@@ -8,11 +8,11 @@ use std::path::Path;
 use syn::spanned::Spanned;
 use syn::visit::Visit;
 
-#[cfg(test)]
-use super::intentional_boundary_ast::derive_language_ast_census;
 use super::intentional_boundary_ast::{
-    AstMethodSyntaxFact, AstMethodSyntaxFacts, census_language_ast, validate_language_ast,
+    AstMethodSyntaxFact, AstMethodSyntaxFacts, census_language_ast, derive_language_ast_census,
+    validate_language_ast,
 };
+use super::intentional_boundary_ast_outcome::{AstDerivationError, ast_parser_rejected};
 
 const LANGUAGE: &str = "rust";
 
@@ -58,12 +58,11 @@ pub fn validate_intentional_boundary_rust_ast_census(
     )
 }
 
-#[cfg(test)]
 pub(super) fn derive_rust_ast_census(
     source_census: &IntentionalBoundarySourceCensus,
     semantic_census: &IntentionalBoundarySemanticCensus,
     files: &[crate::types::FileRecord],
-) -> Result<IntentionalBoundaryAstCensus, String> {
+) -> Result<IntentionalBoundaryAstCensus, AstDerivationError> {
     derive_language_ast_census(
         source_census,
         semantic_census,
@@ -73,12 +72,17 @@ pub(super) fn derive_rust_ast_census(
     )
 }
 
-fn rust_syntax_facts(
+pub(super) fn rust_syntax_facts(
     repository_path: &str,
     record: &crate::types::FileRecord,
-) -> Result<AstMethodSyntaxFacts, String> {
-    let file = syn::parse_file(&record.source)
-        .map_err(|error| format!("failed to parse Rust AST {repository_path}: {error}"))?;
+) -> Result<AstMethodSyntaxFacts, AstDerivationError> {
+    let file = syn::parse_file(&record.source).map_err(|error| {
+        ast_parser_rejected(
+            LANGUAGE,
+            repository_path,
+            format!("failed to parse Rust AST: {error}"),
+        )
+    })?;
     let mut visitor = RustBodyVisitor {
         repository_path,
         methods: BTreeMap::new(),
