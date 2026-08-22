@@ -24,6 +24,7 @@ pub(super) const CARGO_COMMAND_CONTRACT: &str = "cargo-metadata-format-v1-no-dep
 #[path = "benchmark_intentional_boundary_project_model_cargo_runtime.rs"]
 mod runtime;
 pub use runtime::census_intentional_boundary_cargo_project_models;
+pub(super) use runtime::census_intentional_boundary_cargo_project_models_typed;
 #[cfg(test)]
 use runtime::{CargoMetadataExecutionOutput, census_cargo_project_models_with_executor};
 

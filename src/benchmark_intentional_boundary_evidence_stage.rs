@@ -247,4 +247,4 @@ fn invalid(detail: impl Into<String>) -> IntentionalBoundaryEvidenceStageError {
 
 #[cfg(test)]
 #[path = "benchmark_intentional_boundary_evidence_stage_tests.rs"]
-mod tests;
+pub(super) mod tests;

@@ -24,6 +24,7 @@ pub(super) const GO_LIST_COMMAND_CONTRACT: &str =
 #[path = "benchmark_intentional_boundary_project_model_go_runtime.rs"]
 mod runtime;
 pub use runtime::census_intentional_boundary_go_project_models;
+pub(super) use runtime::census_intentional_boundary_go_project_models_typed;
 #[cfg(test)]
 use runtime::{GoListExecutionOutput, census_go_project_models_with_executor};
 

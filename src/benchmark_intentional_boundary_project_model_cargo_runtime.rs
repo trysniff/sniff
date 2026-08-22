@@ -1,9 +1,13 @@
+use super::super::IntentionalBoundaryProjectModelFailurePhase;
+use super::super::intentional_boundary_project_model_outcome::{
+    ProjectModelDerivationError, ProjectModelDerivationErrorKind, legacy_project_model_error,
+    project_model_error, project_model_process_error, project_model_runtime_plan_error,
+    project_model_sandbox_error,
+};
 use super::super::intentional_boundary_runtime_snapshot::{
     IntentionalBoundaryRuntimeSnapshot, allocate_runtime_directory,
 };
-use super::super::non_blind_history_runtime::{
-    HistoricalRuntimePlanError, prepare_historical_runtime,
-};
+use super::super::non_blind_history_runtime::prepare_historical_runtime;
 use super::*;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -41,12 +45,35 @@ pub fn census_intentional_boundary_cargo_project_models(
     root: &Path,
     inventory: &IntentionalBoundaryRepositoryInventory,
 ) -> Result<IntentionalBoundaryProjectModelCensus, String> {
-    validate_intentional_boundary_repository_inventory(repository, revision, root, inventory)?;
-    let snapshot = IntentionalBoundaryRuntimeSnapshot::create(
-        root,
-        revision,
-        "sniff-cargo-metadata-snapshot",
-    )?;
+    census_intentional_boundary_cargo_project_models_typed(repository, revision, root, inventory)
+        .map_err(legacy_project_model_error)
+}
+
+pub(in crate::benchmark::release) fn census_intentional_boundary_cargo_project_models_typed(
+    repository: &str,
+    revision: &str,
+    root: &Path,
+    inventory: &IntentionalBoundaryRepositoryInventory,
+) -> Result<IntentionalBoundaryProjectModelCensus, ProjectModelDerivationError> {
+    validate_intentional_boundary_repository_inventory(repository, revision, root, inventory)
+        .map_err(|detail| {
+            cargo_error(
+                ProjectModelDerivationErrorKind::InvalidInput,
+                IntentionalBoundaryProjectModelFailurePhase::RepositoryValidation,
+                None,
+                detail,
+            )
+        })?;
+    let snapshot =
+        IntentionalBoundaryRuntimeSnapshot::create(root, revision, "sniff-cargo-metadata-snapshot")
+            .map_err(|detail| {
+                cargo_error(
+                    ProjectModelDerivationErrorKind::InfrastructureFailed,
+                    IntentionalBoundaryProjectModelFailurePhase::SnapshotPreparation,
+                    None,
+                    detail,
+                )
+            })?;
     census_cargo_project_models_at_execution_root(
         repository,
         revision,
@@ -68,9 +95,25 @@ pub(super) fn census_cargo_project_models_with_executor<F>(
 where
     F: FnMut(&Path, &str) -> Result<CargoMetadataExecutionOutput, String>,
 {
+    let mut executor = executor;
     census_cargo_project_models_at_execution_root(
-        repository, revision, root, root, inventory, executor,
+        repository,
+        revision,
+        root,
+        root,
+        inventory,
+        |execution_root, manifest_path| {
+            executor(execution_root, manifest_path).map_err(|detail| {
+                cargo_error(
+                    ProjectModelDerivationErrorKind::InfrastructureFailed,
+                    IntentionalBoundaryProjectModelFailurePhase::Execution,
+                    Some(manifest_path),
+                    detail,
+                )
+            })
+        },
     )
+    .map_err(legacy_project_model_error)
 }
 
 fn census_cargo_project_models_at_execution_root<F>(
@@ -80,30 +123,43 @@ fn census_cargo_project_models_at_execution_root<F>(
     execution_root: &Path,
     inventory: &IntentionalBoundaryRepositoryInventory,
     mut executor: F,
-) -> Result<IntentionalBoundaryProjectModelCensus, String>
+) -> Result<IntentionalBoundaryProjectModelCensus, ProjectModelDerivationError>
 where
-    F: FnMut(&Path, &str) -> Result<CargoMetadataExecutionOutput, String>,
+    F: FnMut(&Path, &str) -> Result<CargoMetadataExecutionOutput, ProjectModelDerivationError>,
 {
     validate_intentional_boundary_repository_inventory(
         repository,
         revision,
         immutable_root,
         inventory,
-    )?;
+    )
+    .map_err(|detail| {
+        cargo_error(
+            ProjectModelDerivationErrorKind::InvalidInput,
+            IntentionalBoundaryProjectModelFailurePhase::RepositoryValidation,
+            None,
+            detail,
+        )
+    })?;
     let cargo_manifests = inventory
         .tracked_entries
         .iter()
         .filter(|entry| entry.repository_path.rsplit('/').next() == Some("Cargo.toml"))
         .map(|entry| {
             if entry.kind != BoundaryGitEntryKind::RegularBlob {
-                return Err(format!(
-                    "Cargo manifest is not a regular Git blob: {}",
-                    entry.repository_path
+                return Err(cargo_error(
+                    ProjectModelDerivationErrorKind::UnsupportedProjectShape,
+                    IntentionalBoundaryProjectModelFailurePhase::RepositoryValidation,
+                    Some(&entry.repository_path),
+                    format!(
+                        "Cargo manifest is not a regular Git blob: {}",
+                        entry.repository_path
+                    ),
                 ));
             }
             Ok(entry.repository_path.clone())
         })
-        .collect::<Result<BTreeSet<_>, String>>()?;
+        .collect::<Result<BTreeSet<_>, ProjectModelDerivationError>>()?;
     let mut covered_manifests = BTreeSet::new();
     let mut executions = Vec::new();
     let mut targets = Vec::new();
@@ -119,8 +175,11 @@ where
             inventory,
         );
         if let Err(error) = post_execution_inventory {
-            return Err(format!(
-                "Cargo metadata changed the immutable repository: {error}"
+            return Err(cargo_error(
+                ProjectModelDerivationErrorKind::InfrastructureFailed,
+                IntentionalBoundaryProjectModelFailurePhase::IntegrityVerification,
+                Some(manifest_path),
+                format!("Cargo metadata changed the immutable repository: {error}"),
             ));
         }
         let output = output?;
@@ -130,14 +189,30 @@ where
             manifest_path,
             &output.toolchain_identity_sha256,
             output.stdout.as_bytes(),
-        )?;
+        )
+        .map_err(|detail| {
+            cargo_error(
+                ProjectModelDerivationErrorKind::ProviderOutputIncomplete,
+                IntentionalBoundaryProjectModelFailurePhase::OutputValidation,
+                Some(manifest_path),
+                detail,
+            )
+        })?;
         let [execution] = contribution.executions.as_slice() else {
-            return Err("Cargo project-model contribution changed cardinality".to_string());
+            return Err(cargo_error(
+                ProjectModelDerivationErrorKind::ProviderOutputIncomplete,
+                IntentionalBoundaryProjectModelFailurePhase::CensusAssembly,
+                Some(manifest_path),
+                "Cargo project-model contribution changed cardinality",
+            ));
         };
         for covered in &execution.covered_manifest_repository_paths {
             if !cargo_manifests.contains(covered) {
-                return Err(format!(
-                    "Cargo metadata covered an unrecognized manifest: {covered}"
+                return Err(cargo_error(
+                    ProjectModelDerivationErrorKind::ProviderOutputIncomplete,
+                    IntentionalBoundaryProjectModelFailurePhase::OutputValidation,
+                    Some(manifest_path),
+                    format!("Cargo metadata covered an unrecognized manifest: {covered}"),
                 ));
             }
             covered_manifests.insert(covered.clone());
@@ -146,25 +221,58 @@ where
         targets.extend(contribution.targets);
     }
     if covered_manifests != cargo_manifests {
-        return Err("Cargo metadata omitted a tracked Cargo manifest".to_string());
+        return Err(cargo_error(
+            ProjectModelDerivationErrorKind::ProviderOutputIncomplete,
+            IntentionalBoundaryProjectModelFailurePhase::CensusAssembly,
+            None,
+            "Cargo metadata omitted a tracked Cargo manifest",
+        ));
     }
     validate_intentional_boundary_repository_inventory(
         repository,
         revision,
         immutable_root,
         inventory,
-    )?;
-    finish_project_model_census(inventory, executions, targets)
+    )
+    .map_err(|detail| {
+        cargo_error(
+            ProjectModelDerivationErrorKind::InfrastructureFailed,
+            IntentionalBoundaryProjectModelFailurePhase::IntegrityVerification,
+            None,
+            detail,
+        )
+    })?;
+    finish_project_model_census(inventory, executions, targets).map_err(|detail| {
+        cargo_error(
+            ProjectModelDerivationErrorKind::ProviderOutputIncomplete,
+            IntentionalBoundaryProjectModelFailurePhase::CensusAssembly,
+            None,
+            detail,
+        )
+    })
 }
 
 fn run_cargo_metadata(
     root: &Path,
     manifest_repository_path: &str,
-) -> Result<CargoMetadataExecutionOutput, String> {
-    let runtime = CargoMetadataCallRuntime::create(root)?;
+) -> Result<CargoMetadataExecutionOutput, ProjectModelDerivationError> {
+    let runtime = CargoMetadataCallRuntime::create(root).map_err(|detail| {
+        cargo_error(
+            ProjectModelDerivationErrorKind::InfrastructureFailed,
+            IntentionalBoundaryProjectModelFailurePhase::RuntimePreparation,
+            Some(manifest_repository_path),
+            detail,
+        )
+    })?;
     let cache = runtime.path().join("cache");
-    fs::create_dir(&cache)
-        .map_err(|error| format!("failed to create private Cargo metadata cache: {error}"))?;
+    fs::create_dir(&cache).map_err(|error| {
+        cargo_error(
+            ProjectModelDerivationErrorKind::InfrastructureFailed,
+            IntentionalBoundaryProjectModelFailurePhase::RuntimePreparation,
+            Some(manifest_repository_path),
+            format!("failed to create private Cargo metadata cache: {error}"),
+        )
+    })?;
     let logical_command = vec![
         "cargo".to_string(),
         "metadata".to_string(),
@@ -175,8 +283,14 @@ fn run_cargo_metadata(
         "--manifest-path".to_string(),
         manifest_repository_path.to_string(),
     ];
-    let mut plan = prepare_historical_runtime(root, &cache, &logical_command)
-        .map_err(project_model_runtime_error)?;
+    let mut plan = prepare_historical_runtime(root, &cache, &logical_command).map_err(|error| {
+        project_model_runtime_plan_error(
+            Provider::CargoMetadata,
+            manifest_repository_path,
+            "Cargo metadata runtime",
+            error,
+        )
+    })?;
     plan.command.allow_network = false;
     #[cfg(target_os = "macos")]
     {
@@ -185,17 +299,38 @@ fn run_cargo_metadata(
     plan.command.timeout = CARGO_METADATA_TIMEOUT;
     plan.command.output_limit = CARGO_METADATA_OUTPUT_LIMIT;
     let toolchain_identity_sha256 = plan.runtime_identity;
-    let output = crate::sandbox::run(&plan.command)
-        .map_err(|error| format!("sandboxed Cargo metadata failed: {error}"))?;
+    let output = crate::sandbox::run(&plan.command).map_err(|error| {
+        project_model_sandbox_error(
+            Provider::CargoMetadata,
+            manifest_repository_path,
+            "sandboxed Cargo metadata failed",
+            error,
+        )
+    })?;
     if output.timed_out {
-        return Err("sandboxed Cargo metadata timed out".to_string());
+        return Err(project_model_process_error(
+            ProjectModelDerivationErrorKind::InfrastructureFailed,
+            Provider::CargoMetadata,
+            IntentionalBoundaryProjectModelFailurePhase::Execution,
+            manifest_repository_path,
+            "sandboxed Cargo metadata timed out",
+            output,
+        ));
     }
     if output.status_code != Some(0) {
-        return Err(format!(
+        let detail = format!(
             "sandboxed Cargo metadata exited with status {}",
             output
                 .status_code
                 .map_or_else(|| "unknown".to_string(), |status| status.to_string())
+        );
+        return Err(project_model_process_error(
+            ProjectModelDerivationErrorKind::ProviderRejectedRepository,
+            Provider::CargoMetadata,
+            IntentionalBoundaryProjectModelFailurePhase::Execution,
+            manifest_repository_path,
+            detail,
+            output,
         ));
     }
     Ok(CargoMetadataExecutionOutput {
@@ -204,13 +339,17 @@ fn run_cargo_metadata(
     })
 }
 
-fn project_model_runtime_error(error: HistoricalRuntimePlanError) -> String {
-    match error {
-        HistoricalRuntimePlanError::Unavailable(message) => {
-            format!("Cargo metadata runtime is unavailable: {message}")
-        }
-        HistoricalRuntimePlanError::Invalid(message) => {
-            format!("Cargo metadata runtime is invalid: {message}")
-        }
-    }
+fn cargo_error(
+    kind: ProjectModelDerivationErrorKind,
+    phase: IntentionalBoundaryProjectModelFailurePhase,
+    invocation_anchor_repository_path: Option<&str>,
+    detail: impl Into<String>,
+) -> ProjectModelDerivationError {
+    project_model_error(
+        kind,
+        Provider::CargoMetadata,
+        phase,
+        invocation_anchor_repository_path,
+        detail,
+    )
 }

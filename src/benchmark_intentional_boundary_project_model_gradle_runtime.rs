@@ -1,10 +1,14 @@
+use super::super::IntentionalBoundaryProjectModelFailurePhase;
 use super::super::intentional_boundary_project_model::hash_json;
+use super::super::intentional_boundary_project_model_outcome::{
+    ProjectModelDerivationError, ProjectModelDerivationErrorKind, legacy_project_model_error,
+    project_model_error, project_model_process_error, project_model_runtime_plan_error,
+    project_model_sandbox_error,
+};
 use super::super::intentional_boundary_runtime_snapshot::{
     IntentionalBoundaryRuntimeSnapshot, allocate_runtime_directory,
 };
-use super::super::non_blind_history_runtime::{
-    HistoricalRuntimePlanError, prepare_historical_runtime,
-};
+use super::super::non_blind_history_runtime::prepare_historical_runtime;
 use super::*;
 use crate::benchmark::release::BoundaryGitEntryKind;
 use std::fs;
@@ -48,14 +52,37 @@ pub fn census_intentional_boundary_gradle_project_models(
     root: &Path,
     inventory: &IntentionalBoundaryRepositoryInventory,
 ) -> Result<IntentionalBoundaryProjectModelCensus, String> {
+    census_intentional_boundary_gradle_project_models_typed(repository, revision, root, inventory)
+        .map_err(legacy_project_model_error)
+}
+
+pub(in crate::benchmark::release) fn census_intentional_boundary_gradle_project_models_typed(
+    repository: &str,
+    revision: &str,
+    root: &Path,
+    inventory: &IntentionalBoundaryRepositoryInventory,
+) -> Result<IntentionalBoundaryProjectModelCensus, ProjectModelDerivationError> {
     super::super::validate_intentional_boundary_repository_inventory(
         repository, revision, root, inventory,
-    )?;
-    let snapshot = IntentionalBoundaryRuntimeSnapshot::create(
-        root,
-        revision,
-        "sniff-gradle-tooling-snapshot",
-    )?;
+    )
+    .map_err(|detail| {
+        gradle_error(
+            ProjectModelDerivationErrorKind::InvalidInput,
+            IntentionalBoundaryProjectModelFailurePhase::RepositoryValidation,
+            None,
+            detail,
+        )
+    })?;
+    let snapshot =
+        IntentionalBoundaryRuntimeSnapshot::create(root, revision, "sniff-gradle-tooling-snapshot")
+            .map_err(|detail| {
+                gradle_error(
+                    ProjectModelDerivationErrorKind::InfrastructureFailed,
+                    IntentionalBoundaryProjectModelFailurePhase::SnapshotPreparation,
+                    None,
+                    detail,
+                )
+            })?;
     census_gradle_project_models_at_execution_root(
         repository,
         revision,
@@ -77,9 +104,25 @@ pub(super) fn census_gradle_project_models_with_executor<F>(
 where
     F: FnMut(&Path, &str) -> Result<GradleToolingExecutionOutput, String>,
 {
+    let mut executor = executor;
     census_gradle_project_models_at_execution_root(
-        repository, revision, root, root, inventory, executor,
+        repository,
+        revision,
+        root,
+        root,
+        inventory,
+        |execution_root, settings_path| {
+            executor(execution_root, settings_path).map_err(|detail| {
+                gradle_error(
+                    ProjectModelDerivationErrorKind::InfrastructureFailed,
+                    IntentionalBoundaryProjectModelFailurePhase::Execution,
+                    Some(settings_path),
+                    detail,
+                )
+            })
+        },
     )
+    .map_err(legacy_project_model_error)
 }
 
 fn census_gradle_project_models_at_execution_root<F>(
@@ -89,16 +132,24 @@ fn census_gradle_project_models_at_execution_root<F>(
     execution_root: &Path,
     inventory: &IntentionalBoundaryRepositoryInventory,
     mut executor: F,
-) -> Result<IntentionalBoundaryProjectModelCensus, String>
+) -> Result<IntentionalBoundaryProjectModelCensus, ProjectModelDerivationError>
 where
-    F: FnMut(&Path, &str) -> Result<GradleToolingExecutionOutput, String>,
+    F: FnMut(&Path, &str) -> Result<GradleToolingExecutionOutput, ProjectModelDerivationError>,
 {
     super::super::validate_intentional_boundary_repository_inventory(
         repository,
         revision,
         immutable_root,
         inventory,
-    )?;
+    )
+    .map_err(|detail| {
+        gradle_error(
+            ProjectModelDerivationErrorKind::InvalidInput,
+            IntentionalBoundaryProjectModelFailurePhase::RepositoryValidation,
+            None,
+            detail,
+        )
+    })?;
     let settings_files = inventory
         .tracked_entries
         .iter()
@@ -110,14 +161,19 @@ where
         })
         .map(|entry| {
             if entry.kind != BoundaryGitEntryKind::RegularBlob {
-                return Err(format!(
-                    "Gradle settings file is not a regular Git blob: {}",
-                    entry.repository_path
+                return Err(gradle_error(
+                    ProjectModelDerivationErrorKind::UnsupportedProjectShape,
+                    IntentionalBoundaryProjectModelFailurePhase::RepositoryValidation,
+                    Some(&entry.repository_path),
+                    format!(
+                        "Gradle settings file is not a regular Git blob: {}",
+                        entry.repository_path
+                    ),
                 ));
             }
             Ok(entry.repository_path.clone())
         })
-        .collect::<Result<Vec<_>, String>>()?;
+        .collect::<Result<Vec<_>, ProjectModelDerivationError>>()?;
     let mut executions = Vec::with_capacity(settings_files.len());
     let mut targets = Vec::new();
     let mut source_owners = std::collections::BTreeMap::<String, String>::new();
@@ -129,8 +185,11 @@ where
             immutable_root,
             inventory,
         ) {
-            return Err(format!(
-                "Gradle Tooling API changed the immutable repository: {error}"
+            return Err(gradle_error(
+                ProjectModelDerivationErrorKind::InfrastructureFailed,
+                IntentionalBoundaryProjectModelFailurePhase::IntegrityVerification,
+                Some(settings_path),
+                format!("Gradle Tooling API changed the immutable repository: {error}"),
             ));
         }
         let output = output?;
@@ -140,23 +199,44 @@ where
             settings_path,
             &output.toolchain_identity_sha256,
             output.stdout.as_bytes(),
-        )?;
+        )
+        .map_err(|detail| {
+            gradle_error(
+                ProjectModelDerivationErrorKind::ProviderOutputIncomplete,
+                IntentionalBoundaryProjectModelFailurePhase::OutputValidation,
+                Some(settings_path),
+                detail,
+            )
+        })?;
         let [execution] = contribution.executions.as_slice() else {
-            return Err("Gradle project-model contribution changed cardinality".to_string());
+            return Err(gradle_error(
+                ProjectModelDerivationErrorKind::ProviderOutputIncomplete,
+                IntentionalBoundaryProjectModelFailurePhase::CensusAssembly,
+                Some(settings_path),
+                "Gradle project-model contribution changed cardinality",
+            ));
         };
         if !execution
             .covered_manifest_repository_paths
             .contains(settings_path)
         {
-            return Err("Gradle Tooling API omitted its invocation settings file".to_string());
+            return Err(gradle_error(
+                ProjectModelDerivationErrorKind::ProviderOutputIncomplete,
+                IntentionalBoundaryProjectModelFailurePhase::OutputValidation,
+                Some(settings_path),
+                "Gradle Tooling API omitted its invocation settings file",
+            ));
         }
         for target in &contribution.targets {
             for source in &target.source_repository_paths {
                 if let Some(owner) = source_owners.insert(source.clone(), settings_path.clone())
                     && owner != *settings_path
                 {
-                    return Err(format!(
-                        "Gradle Tooling API assigned source {source} to multiple builds"
+                    return Err(gradle_error(
+                        ProjectModelDerivationErrorKind::ProviderOutputIncomplete,
+                        IntentionalBoundaryProjectModelFailurePhase::OutputValidation,
+                        Some(settings_path),
+                        format!("Gradle Tooling API assigned source {source} to multiple builds"),
                     ));
                 }
             }
@@ -169,32 +249,79 @@ where
         revision,
         immutable_root,
         inventory,
-    )?;
-    finish_project_model_census(inventory, executions, targets)
+    )
+    .map_err(|detail| {
+        gradle_error(
+            ProjectModelDerivationErrorKind::InfrastructureFailed,
+            IntentionalBoundaryProjectModelFailurePhase::IntegrityVerification,
+            None,
+            detail,
+        )
+    })?;
+    finish_project_model_census(inventory, executions, targets).map_err(|detail| {
+        gradle_error(
+            ProjectModelDerivationErrorKind::ProviderOutputIncomplete,
+            IntentionalBoundaryProjectModelFailurePhase::CensusAssembly,
+            None,
+            detail,
+        )
+    })
 }
 
 fn run_gradle_tooling_model(
     root: &Path,
     settings_repository_path: &str,
-) -> Result<GradleToolingExecutionOutput, String> {
-    let runtime = GradleToolingCallRuntime::create(root)?;
+) -> Result<GradleToolingExecutionOutput, ProjectModelDerivationError> {
+    let runtime = GradleToolingCallRuntime::create(root).map_err(|detail| {
+        gradle_error(
+            ProjectModelDerivationErrorKind::InfrastructureFailed,
+            IntentionalBoundaryProjectModelFailurePhase::RuntimePreparation,
+            Some(settings_repository_path),
+            detail,
+        )
+    })?;
     let cache = runtime.path().join("cache");
     let gradle_home = cache.join("gradle-user-home");
-    fs::create_dir_all(&gradle_home)
-        .map_err(|error| format!("failed to create private Gradle Tooling API cache: {error}"))?;
+    fs::create_dir_all(&gradle_home).map_err(|error| {
+        gradle_error(
+            ProjectModelDerivationErrorKind::InfrastructureFailed,
+            IntentionalBoundaryProjectModelFailurePhase::RuntimePreparation,
+            Some(settings_repository_path),
+            format!("failed to create private Gradle Tooling API cache: {error}"),
+        )
+    })?;
     let client = cache.join("sniff-project-model-client.groovy");
     let init = cache.join("sniff-project-model.init.gradle");
-    fs::write(&client, GRADLE_CLIENT_SOURCE)
-        .map_err(|error| format!("failed to write trusted Gradle Tooling API client: {error}"))?;
-    fs::write(&init, GRADLE_INIT_SOURCE)
-        .map_err(|error| format!("failed to write trusted Gradle model builder: {error}"))?;
+    fs::write(&client, GRADLE_CLIENT_SOURCE).map_err(|error| {
+        gradle_error(
+            ProjectModelDerivationErrorKind::InfrastructureFailed,
+            IntentionalBoundaryProjectModelFailurePhase::RuntimePreparation,
+            Some(settings_repository_path),
+            format!("failed to write trusted Gradle Tooling API client: {error}"),
+        )
+    })?;
+    fs::write(&init, GRADLE_INIT_SOURCE).map_err(|error| {
+        gradle_error(
+            ProjectModelDerivationErrorKind::InfrastructureFailed,
+            IntentionalBoundaryProjectModelFailurePhase::RuntimePreparation,
+            Some(settings_repository_path),
+            format!("failed to write trusted Gradle model builder: {error}"),
+        )
+    })?;
     let project_directory = settings_repository_path
         .rsplit_once('/')
         .map_or(".", |(directory, _)| directory);
-    let relative = |path: &Path| {
+    let relative = |path: &Path| -> Result<String, ProjectModelDerivationError> {
         path.strip_prefix(root)
             .map(|path| path.to_string_lossy().into_owned())
-            .map_err(|_| "Gradle Tooling API runtime path escaped its snapshot".to_string())
+            .map_err(|_| {
+                gradle_error(
+                    ProjectModelDerivationErrorKind::InfrastructureFailed,
+                    IntentionalBoundaryProjectModelFailurePhase::RuntimePreparation,
+                    Some(settings_repository_path),
+                    "Gradle Tooling API runtime path escaped its snapshot",
+                )
+            })
     };
     let logical_command = vec![
         "{sniff_gradle_tooling}".to_string(),
@@ -203,8 +330,14 @@ fn run_gradle_tooling_model(
         relative(&gradle_home)?,
         relative(&init)?,
     ];
-    let mut plan = prepare_historical_runtime(root, &cache, &logical_command)
-        .map_err(project_model_runtime_error)?;
+    let mut plan = prepare_historical_runtime(root, &cache, &logical_command).map_err(|error| {
+        project_model_runtime_plan_error(
+            Provider::GradleToolingApi,
+            settings_repository_path,
+            "Gradle Tooling API runtime",
+            error,
+        )
+    })?;
     plan.command.allow_network = false;
     #[cfg(target_os = "macos")]
     {
@@ -225,11 +358,32 @@ fn run_gradle_tooling_model(
         GRADLE_MACOS_JAVA_TOOL_OPTIONS,
         GRADLE_CLIENT_SOURCE,
         GRADLE_INIT_SOURCE,
-    ))?;
-    let output = crate::sandbox::run(&plan.command)
-        .map_err(|error| format!("sandboxed Gradle Tooling API failed: {error}"))?;
+    ))
+    .map_err(|detail| {
+        gradle_error(
+            ProjectModelDerivationErrorKind::InfrastructureFailed,
+            IntentionalBoundaryProjectModelFailurePhase::RuntimePreparation,
+            Some(settings_repository_path),
+            detail,
+        )
+    })?;
+    let output = crate::sandbox::run(&plan.command).map_err(|error| {
+        project_model_sandbox_error(
+            Provider::GradleToolingApi,
+            settings_repository_path,
+            "sandboxed Gradle Tooling API failed",
+            error,
+        )
+    })?;
     if output.timed_out {
-        return Err("sandboxed Gradle Tooling API timed out".to_string());
+        return Err(project_model_process_error(
+            ProjectModelDerivationErrorKind::InfrastructureFailed,
+            Provider::GradleToolingApi,
+            IntentionalBoundaryProjectModelFailurePhase::Execution,
+            settings_repository_path,
+            "sandboxed Gradle Tooling API timed out",
+            output,
+        ));
     }
     if output.status_code != Some(0) {
         let stderr = output.stderr.trim();
@@ -241,7 +395,7 @@ fn run_gradle_tooling_model(
         } else {
             String::new()
         };
-        return Err(format!(
+        let detail = format!(
             "sandboxed Gradle Tooling API exited with status {}{}",
             output
                 .status_code
@@ -251,6 +405,14 @@ fn run_gradle_tooling_model(
             } else {
                 format!(": {diagnostics}")
             }
+        );
+        return Err(project_model_process_error(
+            ProjectModelDerivationErrorKind::ProviderRejectedRepository,
+            Provider::GradleToolingApi,
+            IntentionalBoundaryProjectModelFailurePhase::Execution,
+            settings_repository_path,
+            detail,
+            output,
         ));
     }
     Ok(GradleToolingExecutionOutput {
@@ -271,13 +433,17 @@ fn diagnostic_tail(value: &str) -> String {
     format!("[truncated] {}", &value[start..])
 }
 
-fn project_model_runtime_error(error: HistoricalRuntimePlanError) -> String {
-    match error {
-        HistoricalRuntimePlanError::Unavailable(message) => {
-            format!("Gradle Tooling API runtime is unavailable: {message}")
-        }
-        HistoricalRuntimePlanError::Invalid(message) => {
-            format!("Gradle Tooling API runtime is invalid: {message}")
-        }
-    }
+fn gradle_error(
+    kind: ProjectModelDerivationErrorKind,
+    phase: IntentionalBoundaryProjectModelFailurePhase,
+    invocation_anchor_repository_path: Option<&str>,
+    detail: impl Into<String>,
+) -> ProjectModelDerivationError {
+    project_model_error(
+        kind,
+        Provider::GradleToolingApi,
+        phase,
+        invocation_anchor_repository_path,
+        detail,
+    )
 }

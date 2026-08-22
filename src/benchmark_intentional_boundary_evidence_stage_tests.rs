@@ -15,7 +15,7 @@ const TASK: &[u8] =
     include_bytes!("../sniffbench/non-blind-v1-intentional-boundary-frame-task.json");
 
 #[allow(clippy::type_complexity)]
-fn fixture() -> (
+pub(in crate::benchmark::release) fn fixture() -> (
     IntentionalBoundaryFrameTask,
     IntentionalBoundaryMaterialization,
     IntentionalBoundaryRepositoryInventory,
@@ -182,7 +182,7 @@ fn fixture() -> (
     )
 }
 
-fn evidence(
+pub(in crate::benchmark::release) fn evidence(
     source: &IntentionalBoundarySourceCensusStage,
     semantic: &IntentionalBoundarySemanticCensusStage,
     ast: &IntentionalBoundaryAstCensusStage,
