@@ -13,8 +13,8 @@ use super::{
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-const MANIFEST_INPUT: &str = "package_manifest_declarations";
-const MANIFEST_BINDING_INPUT: &str = "package_manifest_bindings";
+pub(super) const MANIFEST_INPUT: &str = "package_manifest_declarations";
+pub(super) const MANIFEST_BINDING_INPUT: &str = "package_manifest_bindings";
 
 #[allow(clippy::too_many_arguments)]
 pub fn extract_intentional_boundary_compiler_ast_and_manifest_evidence(
@@ -179,7 +179,10 @@ fn append_declaration_evidence(
         joined_definition,
     } = &method.status
     else {
-        unreachable!("resolved_subject_method checked the method status")
+        return Err(format!(
+            "intentional-boundary manifest evidence lost resolved subject {}",
+            method.parser_unit_id
+        ));
     };
     let definitions = joined_definition
         .iter()

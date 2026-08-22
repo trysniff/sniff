@@ -12,7 +12,7 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 
 const EVIDENCE_CENSUS_CONTRACT: &str = "sniffbench-intentional-boundary-typed-evidence-census-v4";
-const COMPILER_INPUT: &str = "compiler_semantic_index";
+pub(super) const COMPILER_INPUT: &str = "compiler_semantic_index";
 
 pub fn extract_intentional_boundary_compiler_evidence(
     source_census: &IntentionalBoundarySourceCensus,
@@ -90,7 +90,7 @@ pub(super) fn validate_evidence_census_commitment(
     Ok(())
 }
 
-fn derive_compiler_evidence(
+pub(super) fn derive_compiler_evidence(
     source_census: &IntentionalBoundarySourceCensus,
     semantic_census: &IntentionalBoundarySemanticCensus,
 ) -> Result<IntentionalBoundaryEvidenceCensus, String> {
