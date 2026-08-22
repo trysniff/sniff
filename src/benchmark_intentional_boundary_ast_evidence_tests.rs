@@ -199,6 +199,11 @@ fn fixture_with_language_and_references(
             &semantic_census,
             &[file],
         ),
+        "kotlin" => super::super::intentional_boundary_ast_go_kotlin::derive_kotlin_ast_census(
+            &source_census,
+            &semantic_census,
+            &[file],
+        ),
         "javascript" | "typescript" => {
             super::super::intentional_boundary_ast_js_ts::derive_js_ts_ast_census(
                 &source_census,
@@ -535,6 +540,84 @@ fn qualifies_python_warning_contract_only_with_compiler_identities_and_a_consume
     assert!(candidates.candidates.iter().any(|candidate| {
         candidate.category == super::super::IntentionalBoundaryCategory::CompatibilityApi
     }));
+}
+
+#[test]
+fn qualifies_kotlin_deprecation_only_with_exact_compiler_identity_and_a_consumer() {
+    let repository_path = "src/Lib.kt";
+    let source_text = concat!(
+        "package sample\n",
+        "@Deprecated(\"removed in v2.0; use current\")\n",
+        "fun process(value: Int): Int = value\n",
+    );
+    let incoming_call = IntentionalBoundarySemanticCallFacts {
+        caller: CALLEE.to_string(),
+        callee: IntentionalBoundarySemanticResolution::Resolved {
+            value: SUBJECT.to_string(),
+        },
+        callsite: source_range(repository_path, source_text, "process"),
+        dispatch: IntentionalBoundarySemanticDispatch::Static,
+    };
+    let reference = compiler_reference(
+        IntentionalBoundaryIndexerKind::Kotlin,
+        source_range(repository_path, source_text, "Deprecated"),
+        "scip-java maven maven/org.jetbrains.kotlin/kotlin-stdlib 2.2.0 kotlin/Deprecated#",
+    );
+    let (source, semantic, ast) = fixture_with_language_and_references(
+        repository_path,
+        "kotlin",
+        IntentionalBoundaryIndexerKind::Kotlin,
+        source_text,
+        vec![incoming_call],
+        vec![reference],
+    );
+    let asts = BTreeMap::from([("kotlin", &ast)]);
+
+    let evidence = derive_compiler_and_ast_evidence(&source, &semantic, &asts).unwrap();
+
+    assert!(evidence.atoms.iter().any(|atom| {
+        atom.evidence_kind == BoundaryEvidenceKind::VersionedCompatibilityContract
+    }));
+    assert!(
+        evidence.atoms.iter().any(|atom| {
+            atom.evidence_kind == BoundaryEvidenceKind::RetainedCompatibilityConsumer
+        })
+    );
+}
+
+#[test]
+fn refuses_kotlin_deprecation_without_the_exact_external_compiler_identity() {
+    let repository_path = "src/Lib.kt";
+    let source_text = concat!(
+        "package sample\n",
+        "@Deprecated(\"removed in v2.0; use current\")\n",
+        "fun process(value: Int): Int = value\n",
+    );
+    let variants = [
+        Vec::new(),
+        vec![compiler_reference(
+            IntentionalBoundaryIndexerKind::Kotlin,
+            source_range(repository_path, source_text, "Deprecated"),
+            "scip-java maven example 1.0 sample/Deprecated#",
+        )],
+        vec![compiler_reference(
+            IntentionalBoundaryIndexerKind::Kotlin,
+            source_range(repository_path, source_text, "Deprecated"),
+            "scip-java maven maven/org.jetbrains.kotlin/kotlin-stdlib 2.2.0 kotlin/Deprecated().",
+        )],
+    ];
+
+    for references in variants {
+        let (_, _, ast) = fixture_with_language_and_references(
+            repository_path,
+            "kotlin",
+            IntentionalBoundaryIndexerKind::Kotlin,
+            source_text,
+            Vec::new(),
+            references,
+        );
+        assert_eq!(ast.fact_count, 0);
+    }
 }
 
 #[test]

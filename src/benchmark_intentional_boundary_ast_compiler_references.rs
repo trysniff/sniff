@@ -8,6 +8,7 @@ use super::{
 pub(super) enum AstCompilerReferenceIdentity {
     PythonWarningsWarn,
     PythonDeprecationWarning,
+    KotlinDeprecated,
 }
 
 #[derive(Clone)]
@@ -52,6 +53,7 @@ fn required_indexer(identity: AstCompilerReferenceIdentity) -> IntentionalBounda
         | AstCompilerReferenceIdentity::PythonDeprecationWarning => {
             IntentionalBoundaryIndexerKind::Python
         }
+        AstCompilerReferenceIdentity::KotlinDeprecated => IntentionalBoundaryIndexerKind::Kotlin,
     }
 }
 
@@ -69,6 +71,9 @@ fn compiler_identity_matches(
             ("builtins", Suffix::Package),
             ("DeprecationWarning", Suffix::Type),
         ],
+        AstCompilerReferenceIdentity::KotlinDeprecated => {
+            [("kotlin", Suffix::Package), ("Deprecated", Suffix::Type)]
+        }
     };
     let Ok(symbol) = scip::symbol::parse_symbol(provider_identity) else {
         return false;
@@ -76,9 +81,20 @@ fn compiler_identity_matches(
     let Some(package) = symbol.package.as_ref() else {
         return false;
     };
-    symbol.scheme == "scip-python"
-        && package.manager == "python"
-        && package.name == "python-stdlib"
+    let package_matches = match identity {
+        AstCompilerReferenceIdentity::PythonWarningsWarn
+        | AstCompilerReferenceIdentity::PythonDeprecationWarning => {
+            symbol.scheme == "scip-python"
+                && package.manager == "python"
+                && package.name == "python-stdlib"
+        }
+        AstCompilerReferenceIdentity::KotlinDeprecated => {
+            symbol.scheme == "scip-java"
+                && package.manager == "maven"
+                && package.name == "maven/org.jetbrains.kotlin/kotlin-stdlib"
+        }
+    };
+    package_matches
         && !package.version.is_empty()
         && symbol.descriptors.len() == expected.len()
         && symbol
