@@ -59,24 +59,46 @@ pub struct IntentionalBoundaryRepositoryInventory {
     pub inventory_sha256: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IntentionalBoundaryInventoryErrorKind {
+    InvalidInput,
+    InfrastructureUnavailable,
+    InfrastructureFailed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IntentionalBoundaryInventoryError {
+    pub kind: IntentionalBoundaryInventoryErrorKind,
+    pub detail: String,
+}
+
 pub fn inventory_intentional_boundary_repository(
     repository: &str,
     revision: &str,
     root: &Path,
 ) -> Result<IntentionalBoundaryRepositoryInventory, String> {
-    let repository = normalize_repository(repository)?;
+    inventory_intentional_boundary_repository_typed(repository, revision, root)
+        .map_err(|error| error.detail)
+}
+
+pub fn inventory_intentional_boundary_repository_typed(
+    repository: &str,
+    revision: &str,
+    root: &Path,
+) -> Result<IntentionalBoundaryRepositoryInventory, IntentionalBoundaryInventoryError> {
+    let repository = normalize_repository(repository).map_err(invalid)?;
     let root = require_complete_checkout(&repository, revision, root)?;
     let object_format = match git_text(&root, &["rev-parse", "--show-object-format"])?.trim() {
         "sha1" => BoundaryGitObjectFormat::Sha1,
         "sha256" => BoundaryGitObjectFormat::Sha256,
-        other => return Err(format!("unsupported Git object format: {other}")),
+        other => return Err(invalid(format!("unsupported Git object format: {other}"))),
     };
-    require_revision("intentional-boundary revision", revision, object_format)?;
+    require_revision("intentional-boundary revision", revision, object_format).map_err(invalid)?;
     let tree = git_bytes(
         &root,
         &["ls-tree", "-r", "-l", "-z", "--full-tree", revision],
     )?;
-    let tracked_entries = parse_tree(&tree, object_format)?;
+    let tracked_entries = parse_tree(&tree, object_format).map_err(invalid)?;
     let mut inventory = IntentionalBoundaryRepositoryInventory {
         schema_version: INTENTIONAL_BOUNDARY_INVENTORY_SCHEMA_VERSION,
         inventory_contract: INVENTORY_CONTRACT.to_string(),
@@ -86,7 +108,7 @@ pub fn inventory_intentional_boundary_repository(
         tracked_entries,
         inventory_sha256: String::new(),
     };
-    inventory.inventory_sha256 = compute_inventory_sha256(&inventory)?;
+    inventory.inventory_sha256 = compute_inventory_sha256(&inventory).map_err(invalid)?;
     Ok(inventory)
 }
 
@@ -96,9 +118,21 @@ pub fn validate_intentional_boundary_repository_inventory(
     root: &Path,
     inventory: &IntentionalBoundaryRepositoryInventory,
 ) -> Result<(), String> {
-    let expected = inventory_intentional_boundary_repository(repository, revision, root)?;
+    validate_intentional_boundary_repository_inventory_typed(repository, revision, root, inventory)
+        .map_err(|error| error.detail)
+}
+
+pub fn validate_intentional_boundary_repository_inventory_typed(
+    repository: &str,
+    revision: &str,
+    root: &Path,
+    inventory: &IntentionalBoundaryRepositoryInventory,
+) -> Result<(), IntentionalBoundaryInventoryError> {
+    let expected = inventory_intentional_boundary_repository_typed(repository, revision, root)?;
     if inventory != &expected {
-        return Err("intentional-boundary Git inventory changed its immutable tree".to_string());
+        return Err(invalid(
+            "intentional-boundary Git inventory changed its immutable tree",
+        ));
     }
     Ok(())
 }
@@ -108,11 +142,20 @@ pub(super) fn read_intentional_boundary_git_blob(
     object_id: &str,
     expected_length: u64,
 ) -> Result<Vec<u8>, String> {
+    read_intentional_boundary_git_blob_typed(root, object_id, expected_length)
+        .map_err(|error| error.detail)
+}
+
+pub(super) fn read_intentional_boundary_git_blob_typed(
+    root: &Path,
+    object_id: &str,
+    expected_length: u64,
+) -> Result<Vec<u8>, IntentionalBoundaryInventoryError> {
     let bytes = git_bytes(root, &["cat-file", "blob", object_id])?;
     if bytes.len() as u64 != expected_length {
-        return Err(format!(
+        return Err(invalid(format!(
             "intentional-boundary Git blob {object_id} changed its committed length"
-        ));
+        )));
     }
     Ok(bytes)
 }
@@ -121,21 +164,23 @@ fn require_complete_checkout(
     repository: &str,
     revision: &str,
     root: &Path,
-) -> Result<std::path::PathBuf, String> {
+) -> Result<std::path::PathBuf, IntentionalBoundaryInventoryError> {
     let canonical_root = fs::canonicalize(root).map_err(|error| {
-        format!(
+        invalid(format!(
             "failed to resolve intentional-boundary checkout {}: {error}",
             root.display()
-        )
+        ))
     })?;
     if git_text(&canonical_root, &["rev-parse", "--is-inside-work-tree"])?.trim() != "true" {
-        return Err("intentional-boundary source is not a Git worktree".to_string());
+        return Err(invalid("intentional-boundary source is not a Git worktree"));
     }
     let top = git_text(&canonical_root, &["rev-parse", "--show-toplevel"])?;
     let canonical_top = fs::canonicalize(top.trim())
-        .map_err(|error| format!("failed to resolve Git repository root: {error}"))?;
+        .map_err(|error| invalid(format!("failed to resolve Git repository root: {error}")))?;
     if canonical_top != canonical_root {
-        return Err("intentional-boundary checkout must be the Git repository root".to_string());
+        return Err(invalid(
+            "intentional-boundary checkout must be the Git repository root",
+        ));
     }
     if !git_text(
         &canonical_root,
@@ -144,10 +189,10 @@ fn require_complete_checkout(
     .trim()
     .is_empty()
     {
-        return Err("intentional-boundary source worktree is dirty".to_string());
+        return Err(invalid("intentional-boundary source worktree is dirty"));
     }
     if git_text(&canonical_root, &["rev-parse", "--is-shallow-repository"])?.trim() != "false" {
-        return Err("intentional-boundary source repository is shallow".to_string());
+        return Err(invalid("intentional-boundary source repository is shallow"));
     }
     if git_optional_text(
         &canonical_root,
@@ -155,7 +200,9 @@ fn require_complete_checkout(
     )?
     .is_some_and(|value| value.trim().eq_ignore_ascii_case("true"))
     {
-        return Err("intentional-boundary source repository uses sparse checkout".to_string());
+        return Err(invalid(
+            "intentional-boundary source repository uses sparse checkout",
+        ));
     }
     if git_optional_text(
         &canonical_root,
@@ -163,22 +210,22 @@ fn require_complete_checkout(
     )?
     .is_some_and(|value| !value.trim().is_empty())
     {
-        return Err(
-            "intentional-boundary source repository depends on a promisor remote".to_string(),
-        );
+        return Err(invalid(
+            "intentional-boundary source repository depends on a promisor remote",
+        ));
     }
     let origin = git_text(&canonical_root, &["remote", "get-url", "origin"])?;
-    if normalize_repository(origin.trim())? != repository {
-        return Err(
-            "intentional-boundary source origin does not match its ranked repository".to_string(),
-        );
+    if normalize_repository(origin.trim()).map_err(invalid)? != repository {
+        return Err(invalid(
+            "intentional-boundary source origin does not match its ranked repository",
+        ));
     }
     let head = git_text(&canonical_root, &["rev-parse", "--verify", "HEAD"])?;
     if !head.trim().eq_ignore_ascii_case(revision) {
-        return Err(format!(
+        return Err(invalid(format!(
             "intentional-boundary source revision mismatch: expected {revision}, found {}",
             head.trim()
-        ));
+        )));
     }
     git_bytes(
         &canonical_root,
@@ -284,58 +331,108 @@ fn compute_inventory_sha256(
     Ok(format!("{:x}", Sha256::digest(bytes)))
 }
 
-fn git_text(root: &Path, args: &[&str]) -> Result<String, String> {
+fn git_text(root: &Path, args: &[&str]) -> Result<String, IntentionalBoundaryInventoryError> {
     String::from_utf8(git_bytes(root, args)?)
-        .map_err(|_| format!("git {} returned non-UTF-8 text", args.join(" ")))
+        .map_err(|_| invalid(format!("git {} returned non-UTF-8 text", args.join(" "))))
 }
 
-fn git_optional_text(root: &Path, args: &[&str]) -> Result<Option<String>, String> {
+fn git_optional_text(
+    root: &Path,
+    args: &[&str],
+) -> Result<Option<String>, IntentionalBoundaryInventoryError> {
     let output = run_git(root, args)?;
     if output.status.success() {
         String::from_utf8(output.stdout)
             .map(Some)
-            .map_err(|_| format!("git {} returned non-UTF-8 text", args.join(" ")))
-    } else {
+            .map_err(|_| invalid(format!("git {} returned non-UTF-8 text", args.join(" "))))
+    } else if output.status.code() == Some(1) {
         Ok(None)
+    } else {
+        Err(invalid(git_command_failure(root, args, &output)))
     }
 }
 
-fn git_bytes(root: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
+fn git_bytes(root: &Path, args: &[&str]) -> Result<Vec<u8>, IntentionalBoundaryInventoryError> {
     let output = run_git(root, args)?;
     if !output.status.success() {
-        return Err(format!(
-            "git {} failed for {}: {}",
-            args.join(" "),
-            root.display(),
-            String::from_utf8_lossy(&output.stderr)
-                .chars()
-                .take(1024)
-                .collect::<String>()
-        ));
+        return Err(invalid(git_command_failure(root, args, &output)));
     }
     Ok(output.stdout)
 }
 
-fn run_git(root: &Path, args: &[&str]) -> Result<crate::bounded_process::BoundedOutput, String> {
-    let mut command = Command::new("git");
+fn git_command_failure(
+    root: &Path,
+    args: &[&str],
+    output: &crate::bounded_process::BoundedOutput,
+) -> String {
+    format!(
+        "git {} failed for {} with exit {:?}: {}",
+        args.join(" "),
+        root.display(),
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+            .chars()
+            .take(1024)
+            .collect::<String>()
+    )
+}
+
+fn run_git(
+    root: &Path,
+    args: &[&str],
+) -> Result<crate::bounded_process::BoundedOutput, IntentionalBoundaryInventoryError> {
+    run_git_program(root, args, "git")
+}
+
+fn run_git_program(
+    root: &Path,
+    args: &[&str],
+    program: &str,
+) -> Result<crate::bounded_process::BoundedOutput, IntentionalBoundaryInventoryError> {
+    let mut command = Command::new(program);
     command.arg("-C").arg(root).args(args);
     let output =
         crate::bounded_process::run_with_output_limit(&mut command, GIT_TIMEOUT, GIT_OUTPUT_LIMIT)
-            .map_err(|error| format!("intentional-boundary inventory requires git: {error}"))?;
+            .map_err(|error| {
+                unavailable(format!(
+                    "intentional-boundary inventory requires git: {error}"
+                ))
+            })?;
     if output.timed_out {
-        return Err(format!(
+        return Err(failed(format!(
             "git {} exceeded its {}-second deadline",
             args.join(" "),
             GIT_TIMEOUT.as_secs()
-        ));
+        )));
     }
     if output.stdout_truncated || output.stderr_truncated {
-        return Err(format!(
+        return Err(failed(format!(
             "git {} exceeded the {GIT_OUTPUT_LIMIT}-byte inventory limit",
             args.join(" ")
-        ));
+        )));
     }
     Ok(output)
+}
+
+fn invalid(detail: impl Into<String>) -> IntentionalBoundaryInventoryError {
+    IntentionalBoundaryInventoryError {
+        kind: IntentionalBoundaryInventoryErrorKind::InvalidInput,
+        detail: detail.into(),
+    }
+}
+
+fn unavailable(detail: impl Into<String>) -> IntentionalBoundaryInventoryError {
+    IntentionalBoundaryInventoryError {
+        kind: IntentionalBoundaryInventoryErrorKind::InfrastructureUnavailable,
+        detail: detail.into(),
+    }
+}
+
+fn failed(detail: impl Into<String>) -> IntentionalBoundaryInventoryError {
+    IntentionalBoundaryInventoryError {
+        kind: IntentionalBoundaryInventoryErrorKind::InfrastructureFailed,
+        detail: detail.into(),
+    }
 }
 
 fn require_revision(
@@ -431,7 +528,7 @@ mod tests {
     #[test]
     fn inventories_every_tracked_role_from_the_immutable_git_tree() {
         let (root, revision) = repository();
-        let inventory = inventory_intentional_boundary_repository(
+        let inventory = inventory_intentional_boundary_repository_typed(
             "github.com/example/repo",
             &revision,
             root.path(),
@@ -456,7 +553,7 @@ mod tests {
         assert_eq!(inventory.repository, "github.com/example/repo");
         assert_eq!(inventory.revision, revision);
         assert_eq!(inventory.inventory_sha256.len(), 64);
-        validate_intentional_boundary_repository_inventory(
+        validate_intentional_boundary_repository_inventory_typed(
             "github.com/example/repo",
             &revision,
             root.path(),
@@ -469,15 +566,17 @@ mod tests {
     fn rejects_dirty_sparse_promisor_wrong_revision_and_wrong_origin_checkouts() {
         let (dirty, revision) = repository();
         fs::write(dirty.path().join("untracked.txt"), "dirty").unwrap();
-        assert!(
-            inventory_intentional_boundary_repository(
-                "github.com/example/repo",
-                &revision,
-                dirty.path(),
-            )
-            .unwrap_err()
-            .contains("dirty")
+        let error = inventory_intentional_boundary_repository_typed(
+            "github.com/example/repo",
+            &revision,
+            dirty.path(),
+        )
+        .unwrap_err();
+        assert_eq!(
+            error.kind,
+            IntentionalBoundaryInventoryErrorKind::InvalidInput
         );
+        assert!(error.detail.contains("dirty"));
 
         let (sparse, revision) = repository();
         git(sparse.path(), &["config", "core.sparseCheckout", "true"]);
@@ -540,16 +639,46 @@ mod tests {
         .unwrap();
         inventory.tracked_entries[0].byte_length = Some(999);
 
-        assert!(
-            validate_intentional_boundary_repository_inventory(
-                "github.com/example/repo",
-                &revision,
-                root.path(),
-                &inventory,
-            )
-            .unwrap_err()
-            .contains("immutable tree")
+        let error = validate_intentional_boundary_repository_inventory_typed(
+            "github.com/example/repo",
+            &revision,
+            root.path(),
+            &inventory,
+        )
+        .unwrap_err();
+        assert_eq!(
+            error.kind,
+            IntentionalBoundaryInventoryErrorKind::InvalidInput
         );
+        assert!(error.detail.contains("immutable tree"));
+    }
+
+    #[test]
+    fn reports_a_missing_git_runtime_as_infrastructure_unavailable() {
+        let root = tempfile::tempdir().unwrap();
+        let error = match run_git_program(root.path(), &["status"], "sniff-missing-git-runtime") {
+            Err(error) => error,
+            Ok(_) => panic!("missing Git runtime unexpectedly executed"),
+        };
+
+        assert_eq!(
+            error.kind,
+            IntentionalBoundaryInventoryErrorKind::InfrastructureUnavailable
+        );
+        assert!(error.detail.contains("requires git"));
+    }
+
+    #[test]
+    fn optional_git_probe_rejects_unexpected_nonzero_status() {
+        let root = tempfile::tempdir().unwrap();
+        let error =
+            git_optional_text(root.path(), &["config", "--sniff-invalid-option"]).unwrap_err();
+
+        assert_eq!(
+            error.kind,
+            IntentionalBoundaryInventoryErrorKind::InvalidInput
+        );
+        assert!(error.detail.contains("failed"));
     }
 
     #[test]
