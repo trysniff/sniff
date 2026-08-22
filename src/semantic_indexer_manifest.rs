@@ -4,6 +4,8 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 pub(crate) const INDEXER_INSTALL_CONTRACT: &str = "semantic-indexers-v1";
+pub(crate) const SCIP_JAVA_KOTLIN_ANNOTATION_PATCH_ID: &str =
+    "compiler-resolved-annotation-use-sites-v1";
 #[cfg(windows)]
 pub(crate) const WINDOWS_SCIP_GO_PATCH_ID: &str = "x-tools-v0.45.0-and-go-tool-explicit-stdin-v4";
 #[cfg(windows)]

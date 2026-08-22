@@ -209,6 +209,62 @@ fn non_python_local_external_symbols_remain_strictly_rejected() {
 }
 
 #[test]
+fn scip_java_package_coordinates_reconstruct_only_proven_external_origins() {
+    const OWNED: &str = "scip-java maven com.example/demo 1.0 demo/Owned#";
+    const SAME_PACKAGE_UNKNOWN: &str = "scip-java maven com.example/demo 1.0 demo/Generated#";
+    const DEPRECATED: &str =
+        "scip-java maven maven/org.jetbrains.kotlin/kotlin-stdlib 2.2.0 kotlin/Deprecated#";
+    const UNRESOLVED_INTRINSIC: &str = "scip-java maven . . kotlin/Int#";
+
+    let root = root("scip-java-external-origin");
+    let mut index = base_index();
+    index
+        .metadata
+        .as_mut()
+        .unwrap()
+        .tool_info
+        .as_mut()
+        .unwrap()
+        .name = "scip-java".to_string();
+    let mut source = document("src/main/kotlin/demo/Main.kt");
+    source.language = "kotlin".to_string();
+    source.position_encoding =
+        EnumOrUnknown::new(PositionEncoding::UTF16CodeUnitOffsetFromLineStart);
+    let mut owned = SymbolInformation::new();
+    owned.symbol = OWNED.to_string();
+    owned.kind = EnumOrUnknown::new(Kind::Class);
+    source.symbols.push(owned);
+    source.occurrences.extend([
+        single_line(OWNED, 0, 0, 5, 1),
+        single_line(SAME_PACKAGE_UNKNOWN, 1, 0, 9, 8),
+        single_line(DEPRECATED, 2, 1, 11, 8),
+        single_line(UNRESOLVED_INTRINSIC, 3, 0, 3, 8),
+    ]);
+    index.documents.push(source);
+
+    let imported = ingest(&root, &index).unwrap();
+    let origin = |identity: &str| {
+        imported
+            .symbols
+            .get(&symbols::stable_symbol_id(identity, None).unwrap())
+            .unwrap()
+            .origin
+    };
+    assert_eq!(origin(OWNED), SemanticSymbolOrigin::Repository);
+    assert_eq!(origin(SAME_PACKAGE_UNKNOWN), SemanticSymbolOrigin::Unknown);
+    assert_eq!(origin(DEPRECATED), SemanticSymbolOrigin::External);
+    assert_eq!(origin(UNRESOLVED_INTRINSIC), SemanticSymbolOrigin::Unknown);
+    assert!(
+        imported
+            .provenance
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.contains("reconstructed 1 external origins"))
+    );
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
 fn malformed_python_local_occurrences_remain_unresolved() {
     let root = root("python-malformed-local");
     let mut index = base_index();

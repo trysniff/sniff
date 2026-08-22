@@ -161,12 +161,18 @@ pub(super) fn run(spec: &SandboxCommand) -> Result<SandboxOutput, SandboxError> 
         &effective_spec.root,
         &effective_spec.read_only_paths,
         &effective_spec.writable_paths,
+        &effective_spec.persistent_read_only_paths,
         &app_container_sid_text,
         &recovery_ledger,
     )?;
     trace_phase(started, "filesystem access granted");
     // AppContainer file-read permission is not enough to launch an executable.
-    if !system_program {
+    if !system_program
+        && !globally_accessible_persistent_executable(
+            &program,
+            &effective_spec.persistent_read_only_paths,
+        )?
+    {
         acl_guard.grant_once(&program, "RX", false, &recovery_ledger)?;
     }
     for path in &effective_spec.executable_paths {
@@ -1190,12 +1196,18 @@ impl AclGuard {
         root: &Path,
         read_only_paths: &[std::path::PathBuf],
         writable_paths: &[std::path::PathBuf],
+        persistent_read_only_paths: &[PathBuf],
         sid: &str,
         recovery: &RecoveryLedger,
     ) -> Result<Self, SandboxError> {
         let paths = explicit_acl_paths(root, read_only_paths, writable_paths);
         let mut grants: Vec<AclGrant> = Vec::with_capacity(paths.len());
         for (path, permission) in paths {
+            if permission == "R"
+                && globally_accessible_persistent_read(&path, persistent_read_only_paths)?
+            {
+                continue;
+            }
             // Directory grants use inheritance rather than recursively
             // walking every dependency file. Cleanup removes the parent ACE;
             // inherited child access then disappears with it.
@@ -1305,20 +1317,7 @@ fn globally_accessible_persistent_executable(
     executable: &Path,
     persistent_read_only_paths: &[PathBuf],
 ) -> Result<bool, SandboxError> {
-    let mut covered = false;
-    for root in persistent_read_only_paths {
-        let root = normalize_windows_path(std::fs::canonicalize(root).map_err(|error| {
-            SandboxError::Invalid(format!(
-                "persistent sandbox path could not be canonicalized: {} ({error})",
-                root.display()
-            ))
-        })?);
-        if executable.starts_with(root) {
-            covered = true;
-            break;
-        }
-    }
-    if !covered {
+    if !covered_by_persistent_path(executable, persistent_read_only_paths)? {
         return Ok(false);
     }
     if executable.is_dir() {
@@ -1337,6 +1336,38 @@ fn globally_accessible_persistent_executable(
                 FILE_GENERIC_READ_ACCESS | FILE_GENERIC_EXECUTE_ACCESS,
             )?,
     )
+}
+
+fn globally_accessible_persistent_read(
+    path: &Path,
+    persistent_read_only_paths: &[PathBuf],
+) -> Result<bool, SandboxError> {
+    if !covered_by_persistent_path(path, persistent_read_only_paths)? {
+        return Ok(false);
+    }
+    if path.is_dir() {
+        all_application_packages_tree_access(path, FILE_GENERIC_READ_ACCESS)
+    } else {
+        all_application_packages_access(path, FILE_GENERIC_READ_ACCESS)
+    }
+}
+
+fn covered_by_persistent_path(
+    path: &Path,
+    persistent_read_only_paths: &[PathBuf],
+) -> Result<bool, SandboxError> {
+    for root in persistent_read_only_paths {
+        let root = normalize_windows_path(std::fs::canonicalize(root).map_err(|error| {
+            SandboxError::Invalid(format!(
+                "persistent sandbox path could not be canonicalized: {} ({error})",
+                root.display()
+            ))
+        })?);
+        if path.starts_with(root) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn explicit_acl_paths(

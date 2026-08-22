@@ -90,6 +90,7 @@ pub fn validate_historical_v2_selected_payloads_commitment(
     Ok(())
 }
 
+#[cfg(any(test, feature = "sniffbench-frame"))]
 pub(super) fn seal_historical_v2_selected_payload(
     mut payload: HistoricalV2SelectedPayload,
 ) -> Result<HistoricalV2SelectedPayload, String> {
@@ -100,6 +101,7 @@ pub(super) fn seal_historical_v2_selected_payload(
     Ok(payload)
 }
 
+#[cfg(any(test, feature = "sniffbench-frame"))]
 pub(super) fn seal_historical_v2_selected_payloads(
     mut payloads: HistoricalV2SelectedPayloads,
 ) -> Result<HistoricalV2SelectedPayloads, String> {

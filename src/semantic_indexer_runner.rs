@@ -204,6 +204,28 @@ pub(crate) async fn run_required_indexers_exhaustive_typed(
     Ok(SemanticIndexerBatchOutcome { indexes, failures })
 }
 
+#[cfg(test)]
+pub(crate) async fn run_required_indexer_with_store_for_test(
+    repository_root: &Path,
+    files: &[FileRecord],
+    store: &SemanticIndexerStore,
+    kind: SemanticIndexerKind,
+) -> Result<SemanticIndex, SemanticIndexerRunFailure> {
+    let root =
+        strip_windows_verbatim_prefix(fs::canonicalize(repository_root).map_err(|error| {
+            failure(
+                SemanticIndexerRunFailureKind::InvalidInput,
+                SemanticIndexerRunPhase::RepositoryValidation,
+                Some(kind),
+                format!(
+                    "failed to resolve semantic index repository root {}: {error}",
+                    repository_root.display()
+                ),
+            )
+        })?);
+    run_required_indexer_typed(&root, files, store, kind).await
+}
+
 async fn run_required_indexer_typed(
     root: &Path,
     files: &[FileRecord],
