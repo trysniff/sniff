@@ -693,6 +693,22 @@ mod intentional_boundary_compiler_evidence;
 
 pub use intentional_boundary_compiler_evidence::*;
 
+#[path = "benchmark_intentional_boundary_evidence_outcome.rs"]
+mod intentional_boundary_evidence_outcome;
+
+#[path = "benchmark_intentional_boundary_evidence_stage_schema.rs"]
+mod intentional_boundary_evidence_stage_schema;
+
+pub use intentional_boundary_evidence_stage_schema::*;
+
+#[path = "benchmark_intentional_boundary_evidence_stage_support.rs"]
+mod intentional_boundary_evidence_stage_support;
+
+#[path = "benchmark_intentional_boundary_evidence_stage.rs"]
+mod intentional_boundary_evidence_stage;
+
+pub use intentional_boundary_evidence_stage::*;
+
 #[path = "benchmark_non_blind_history_assessment_schema.rs"]
 mod non_blind_history_assessment_schema;
 

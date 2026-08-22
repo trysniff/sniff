@@ -1,21 +1,23 @@
-use super::intentional_boundary_compiler_evidence::{finish_evidence_census, push_typed_atom};
+use super::intentional_boundary_compiler_evidence::{
+    derive_compiler_evidence, finish_evidence_census, push_typed_atom,
+};
 use super::{
     BoundaryEvidenceKind, IntentionalBoundaryAstCensus, IntentionalBoundaryAstFact,
     IntentionalBoundaryAstMethodStatus, IntentionalBoundaryAstProofKind,
     IntentionalBoundaryEvidenceCensus, IntentionalBoundaryEvidenceProof,
     IntentionalBoundaryRepositoryInventory, IntentionalBoundarySemanticCensus,
     IntentionalBoundarySemanticMethod, IntentionalBoundarySemanticMethodStatus,
-    IntentionalBoundarySourceCensus, extract_intentional_boundary_compiler_evidence,
-    validate_intentional_boundary_go_ast_census,
+    IntentionalBoundarySourceCensus, validate_intentional_boundary_go_ast_census,
     validate_intentional_boundary_javascript_ast_census,
     validate_intentional_boundary_kotlin_ast_census,
     validate_intentional_boundary_python_ast_census, validate_intentional_boundary_rust_ast_census,
+    validate_intentional_boundary_semantic_census,
     validate_intentional_boundary_typescript_ast_census,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-const AST_INPUT_PREFIX: &str = "source_ast:";
+pub(super) const AST_INPUT_PREFIX: &str = "source_ast:";
 
 #[allow(clippy::too_many_arguments)]
 pub fn extract_intentional_boundary_compiler_and_ast_evidence(
@@ -27,6 +29,7 @@ pub fn extract_intentional_boundary_compiler_and_ast_evidence(
     semantic_census: &IntentionalBoundarySemanticCensus,
     ast_censuses: &[IntentionalBoundaryAstCensus],
 ) -> Result<IntentionalBoundaryEvidenceCensus, String> {
+    validate_intentional_boundary_semantic_census(source_census, semantic_census)?;
     let ast_by_language = validate_ast_census_set(
         repository,
         revision,
@@ -75,26 +78,9 @@ fn validate_ast_census_set<'a>(
     semantic_census: &IntentionalBoundarySemanticCensus,
     ast_censuses: &'a [IntentionalBoundaryAstCensus],
 ) -> Result<BTreeMap<&'a str, &'a IntentionalBoundaryAstCensus>, String> {
-    let expected_languages = source_census
-        .source_files
-        .iter()
-        .map(|file| file.language.as_str())
-        .collect::<BTreeSet<_>>();
-    let mut by_language = BTreeMap::new();
-    for census in ast_censuses {
-        let [language] = census.languages.as_slice() else {
-            return Err(
-                "intentional-boundary AST evidence requires one language per census".to_string(),
-            );
-        };
-        if !expected_languages.contains(language.as_str())
-            || by_language.insert(language.as_str(), census).is_some()
-        {
-            return Err(format!(
-                "intentional-boundary AST evidence has unexpected or repeated language {language}"
-            ));
-        }
-        match language.as_str() {
+    let by_language = index_ast_census_set(source_census, ast_censuses)?;
+    for (language, census) in &by_language {
+        match *language {
             "go" => validate_intentional_boundary_go_ast_census(
                 repository,
                 revision,
@@ -149,10 +135,39 @@ fn validate_ast_census_set<'a>(
                 semantic_census,
                 census,
             ),
-            _ => Err(format!(
-                "intentional-boundary AST evidence has unsupported language {language}"
-            )),
+            _ => {
+                return Err(format!(
+                    "intentional-boundary AST evidence has unsupported language {language}"
+                ));
+            }
         }?;
+    }
+    Ok(by_language)
+}
+
+pub(super) fn index_ast_census_set<'a>(
+    source_census: &IntentionalBoundarySourceCensus,
+    ast_censuses: &'a [IntentionalBoundaryAstCensus],
+) -> Result<BTreeMap<&'a str, &'a IntentionalBoundaryAstCensus>, String> {
+    let expected_languages = source_census
+        .source_files
+        .iter()
+        .map(|file| file.language.as_str())
+        .collect::<BTreeSet<_>>();
+    let mut by_language = BTreeMap::new();
+    for census in ast_censuses {
+        let [language] = census.languages.as_slice() else {
+            return Err(
+                "intentional-boundary AST evidence requires one language per census".to_string(),
+            );
+        };
+        if !expected_languages.contains(language.as_str())
+            || by_language.insert(language.as_str(), census).is_some()
+        {
+            return Err(format!(
+                "intentional-boundary AST evidence has unexpected or repeated language {language}"
+            ));
+        }
     }
     if by_language.keys().copied().collect::<BTreeSet<_>>() != expected_languages {
         return Err("intentional-boundary AST evidence omitted a source language".to_string());
@@ -160,12 +175,12 @@ fn validate_ast_census_set<'a>(
     Ok(by_language)
 }
 
-fn derive_compiler_and_ast_evidence(
+pub(super) fn derive_compiler_and_ast_evidence(
     source_census: &IntentionalBoundarySourceCensus,
     semantic_census: &IntentionalBoundarySemanticCensus,
     ast_by_language: &BTreeMap<&str, &IntentionalBoundaryAstCensus>,
 ) -> Result<IntentionalBoundaryEvidenceCensus, String> {
-    let compiler = extract_intentional_boundary_compiler_evidence(source_census, semantic_census)?;
+    let compiler = derive_compiler_evidence(source_census, semantic_census)?;
     let semantic_methods = semantic_census
         .methods
         .iter()
