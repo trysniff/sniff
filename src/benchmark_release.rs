@@ -657,6 +657,9 @@ mod intentional_boundary_manifest_schema;
 
 pub use intentional_boundary_manifest_schema::*;
 
+#[path = "benchmark_intentional_boundary_manifest_outcome.rs"]
+mod intentional_boundary_manifest_outcome;
+
 #[path = "benchmark_intentional_boundary_manifest.rs"]
 mod intentional_boundary_manifest;
 
@@ -671,6 +674,19 @@ pub use intentional_boundary_manifest_binding_schema::*;
 mod intentional_boundary_manifest_binding;
 
 pub use intentional_boundary_manifest_binding::*;
+
+#[path = "benchmark_intentional_boundary_manifest_stage_schema.rs"]
+mod intentional_boundary_manifest_stage_schema;
+
+pub use intentional_boundary_manifest_stage_schema::*;
+
+#[path = "benchmark_intentional_boundary_manifest_stage_support.rs"]
+mod intentional_boundary_manifest_stage_support;
+
+#[path = "benchmark_intentional_boundary_manifest_stage.rs"]
+mod intentional_boundary_manifest_stage;
+
+pub use intentional_boundary_manifest_stage::*;
 
 #[path = "benchmark_intentional_boundary_compiler_evidence.rs"]
 mod intentional_boundary_compiler_evidence;

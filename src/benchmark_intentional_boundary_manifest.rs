@@ -1,11 +1,19 @@
-use super::intentional_boundary_inventory::read_intentional_boundary_git_blob;
+use super::intentional_boundary_inventory::{
+    read_intentional_boundary_git_blob_typed,
+    validate_intentional_boundary_repository_inventory_typed,
+};
+use super::intentional_boundary_manifest_outcome::{
+    ManifestDerivationError, manifest_encoding_rejected, manifest_infrastructure_failed,
+    manifest_infrastructure_unavailable, manifest_invalid, manifest_parser_rejected,
+    manifest_shape_rejected,
+};
 use super::{
     BoundaryGitEntryKind, INTENTIONAL_BOUNDARY_MANIFEST_CENSUS_SCHEMA_VERSION,
+    IntentionalBoundaryInventoryError, IntentionalBoundaryInventoryErrorKind,
     IntentionalBoundaryManifestCensus, IntentionalBoundaryManifestDeclaration,
     IntentionalBoundaryManifestDeclarationKind, IntentionalBoundaryManifestDocument,
     IntentionalBoundaryManifestProvider, IntentionalBoundaryManifestTarget,
     IntentionalBoundaryRepositoryInventory, IntentionalBoundarySemanticRange,
-    validate_intentional_boundary_repository_inventory,
 };
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -35,7 +43,18 @@ pub fn census_intentional_boundary_manifests(
     root: &Path,
     inventory: &IntentionalBoundaryRepositoryInventory,
 ) -> Result<IntentionalBoundaryManifestCensus, String> {
-    validate_intentional_boundary_repository_inventory(repository, revision, root, inventory)?;
+    census_intentional_boundary_manifests_typed(repository, revision, root, inventory)
+        .map_err(|error| error.detail)
+}
+
+pub(super) fn census_intentional_boundary_manifests_typed(
+    repository: &str,
+    revision: &str,
+    root: &Path,
+    inventory: &IntentionalBoundaryRepositoryInventory,
+) -> Result<IntentionalBoundaryManifestCensus, ManifestDerivationError> {
+    validate_intentional_boundary_repository_inventory_typed(repository, revision, root, inventory)
+        .map_err(map_inventory_error)?;
     let mut documents = Vec::new();
     let mut declarations = Vec::new();
     for entry in &inventory.tracked_entries {
@@ -43,38 +62,29 @@ pub fn census_intentional_boundary_manifests(
             continue;
         };
         if entry.kind != BoundaryGitEntryKind::RegularBlob {
-            return Err(format!(
-                "intentional-boundary recognized manifest is not a regular Git blob: {}",
-                entry.repository_path
+            return Err(manifest_shape_rejected(
+                provider,
+                &entry.repository_path,
+                "intentional-boundary recognized manifest is not a regular Git blob",
             ));
         }
         let expected_length = entry.byte_length.ok_or_else(|| {
-            format!(
+            manifest_invalid(format!(
                 "intentional-boundary manifest has no committed byte length: {}",
                 entry.repository_path
-            )
+            ))
         })?;
-        let bytes = read_intentional_boundary_git_blob(root, &entry.object_id, expected_length)?;
+        let bytes =
+            read_intentional_boundary_git_blob_typed(root, &entry.object_id, expected_length)
+                .map_err(map_inventory_error)?;
         let source = std::str::from_utf8(&bytes).map_err(|_| {
-            format!(
-                "intentional-boundary manifest is not UTF-8: {}",
-                entry.repository_path
+            manifest_encoding_rejected(
+                provider,
+                &entry.repository_path,
+                "intentional-boundary manifest is not UTF-8",
             )
         })?;
-        let parsed = match provider {
-            IntentionalBoundaryManifestProvider::CargoManifest
-            | IntentionalBoundaryManifestProvider::PythonProjectManifest => {
-                toml::parse_manifest(provider, &entry.repository_path, source)
-            }
-            IntentionalBoundaryManifestProvider::NodePackageManifest => {
-                node::parse_package_json(&entry.repository_path, source)
-            }
-            IntentionalBoundaryManifestProvider::GoGenerateSource
-            | IntentionalBoundaryManifestProvider::GoPackageMetadata
-            | IntentionalBoundaryManifestProvider::GradleProjectModel => {
-                unreachable!("command-backed providers have no static manifest path")
-            }
-        }?;
+        let parsed = parse_static_manifest(provider, &entry.repository_path, source)?;
         documents.push(IntentionalBoundaryManifestDocument {
             provider,
             repository_path: entry.repository_path.clone(),
@@ -92,7 +102,8 @@ pub fn census_intentional_boundary_manifests(
                 declaration_location: span_range(&entry.repository_path, source, declaration.span),
                 target: declaration.target,
             };
-            declaration.declaration_id = compute_manifest_declaration_id(&declaration)?;
+            declaration.declaration_id =
+                compute_manifest_declaration_id(&declaration).map_err(manifest_invalid)?;
             declarations.push(declaration);
         }
     }
@@ -127,7 +138,8 @@ pub fn census_intentional_boundary_manifests(
         declaration_count_by_kind,
         manifest_census_sha256: String::new(),
     };
-    census.manifest_census_sha256 = compute_manifest_census_sha256(&census)?;
+    census.manifest_census_sha256 =
+        compute_manifest_census_sha256(&census).map_err(manifest_invalid)?;
     Ok(census)
 }
 
@@ -216,12 +228,50 @@ pub(super) fn validate_manifest_census_commitment(
     Ok(())
 }
 
-fn provider_for_path(path: &str) -> Option<IntentionalBoundaryManifestProvider> {
+pub(super) fn provider_for_path(path: &str) -> Option<IntentionalBoundaryManifestProvider> {
     match path.rsplit('/').next()? {
         "Cargo.toml" => Some(IntentionalBoundaryManifestProvider::CargoManifest),
         "package.json" => Some(IntentionalBoundaryManifestProvider::NodePackageManifest),
         "pyproject.toml" => Some(IntentionalBoundaryManifestProvider::PythonProjectManifest),
         _ => None,
+    }
+}
+
+pub(super) fn parse_static_manifest(
+    provider: IntentionalBoundaryManifestProvider,
+    repository_path: &str,
+    source: &str,
+) -> Result<Vec<ParsedManifestDeclaration>, ManifestDerivationError> {
+    let parsed = match provider {
+        IntentionalBoundaryManifestProvider::CargoManifest
+        | IntentionalBoundaryManifestProvider::PythonProjectManifest => {
+            toml::parse_manifest(provider, repository_path, source)
+        }
+        IntentionalBoundaryManifestProvider::NodePackageManifest => {
+            node::parse_package_json(repository_path, source)
+        }
+        IntentionalBoundaryManifestProvider::GoGenerateSource
+        | IntentionalBoundaryManifestProvider::GoPackageMetadata
+        | IntentionalBoundaryManifestProvider::GradleProjectModel => {
+            return Err(manifest_invalid(format!(
+                "command-backed provider {provider:?} escaped static manifest dispatch"
+            )));
+        }
+    };
+    parsed.map_err(|detail| manifest_parser_rejected(provider, repository_path, detail))
+}
+
+pub(super) fn map_inventory_error(
+    error: IntentionalBoundaryInventoryError,
+) -> ManifestDerivationError {
+    match error.kind {
+        IntentionalBoundaryInventoryErrorKind::InvalidInput => manifest_invalid(error.detail),
+        IntentionalBoundaryInventoryErrorKind::InfrastructureUnavailable => {
+            manifest_infrastructure_unavailable(error.detail)
+        }
+        IntentionalBoundaryInventoryErrorKind::InfrastructureFailed => {
+            manifest_infrastructure_failed(error.detail)
+        }
     }
 }
 
