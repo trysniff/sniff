@@ -56,7 +56,7 @@ required-features = ["sniffbench-frame"]
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
-colored = "2"
+colored = "3"
 dotenvy = "0.15"
 flate2 = "1"
 ignore = "0.4"
