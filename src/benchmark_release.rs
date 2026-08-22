@@ -412,6 +412,24 @@ mod intentional_boundary_source_census_stage;
 
 pub use intentional_boundary_source_census_stage::*;
 
+#[path = "benchmark_intentional_boundary_license_census_schema.rs"]
+mod intentional_boundary_license_census_schema;
+
+pub use intentional_boundary_license_census_schema::*;
+
+#[path = "benchmark_intentional_boundary_license_filename.rs"]
+mod intentional_boundary_license_filename;
+
+pub use intentional_boundary_license_filename::{
+    INTENTIONAL_BOUNDARY_LICENSE_FILENAME_CONTRACT, LICENSEE_COMMIT_SHA1,
+    LICENSEE_LICENSE_FILE_BLOB_SHA1, LICENSEE_RELEASE,
+};
+
+#[path = "benchmark_intentional_boundary_license_census.rs"]
+mod intentional_boundary_license_census;
+
+pub use intentional_boundary_license_census::*;
+
 #[path = "benchmark_intentional_boundary_semantic_schema.rs"]
 mod intentional_boundary_semantic_schema;
 
