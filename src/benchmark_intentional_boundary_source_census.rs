@@ -1,6 +1,8 @@
 use super::{
-    BoundaryGitEntryKind, IntentionalBoundaryRepositoryInventory,
-    read_intentional_boundary_git_blob, validate_intentional_boundary_repository_inventory,
+    BoundaryGitEntryKind, IntentionalBoundaryInventoryError, IntentionalBoundaryInventoryErrorKind,
+    IntentionalBoundaryRepositoryInventory, IntentionalBoundarySourceCensusFailureEvidence,
+    read_intentional_boundary_git_blob, read_intentional_boundary_git_blob_typed,
+    validate_intentional_boundary_repository_inventory_typed,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -10,6 +12,10 @@ use std::path::Path;
 
 pub const INTENTIONAL_BOUNDARY_SOURCE_CENSUS_SCHEMA_VERSION: u32 = 1;
 const SOURCE_CENSUS_CONTRACT: &str = "sniffbench-intentional-boundary-source-census-v1";
+pub(super) const INTENTIONAL_BOUNDARY_SOURCE_EXTENSION_CONTRACT: &str =
+    "sniff-supported-source-extensions-v1:go,js,jsx,kt,kts,py,rs,ts,tsx";
+pub(super) const INTENTIONAL_BOUNDARY_PARSER_ERROR_LIMIT: usize = 4 * 1024;
+type SourceFailureEvidence = IntentionalBoundarySourceCensusFailureEvidence;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -48,26 +54,49 @@ pub struct IntentionalBoundarySourceCensus {
     pub census_sha256: String,
 }
 
+pub(super) enum IntentionalBoundarySourceInspection {
+    Completed(IntentionalBoundarySourceCensus),
+    Excluded(Vec<SourceFailureEvidence>),
+}
+
 pub fn census_intentional_boundary_repository(
     repository: &str,
     revision: &str,
     root: &Path,
     inventory: &IntentionalBoundaryRepositoryInventory,
 ) -> Result<IntentionalBoundarySourceCensus, String> {
-    validate_intentional_boundary_repository_inventory(repository, revision, root, inventory)?;
-    if inventory
-        .tracked_entries
-        .iter()
-        .any(|entry| entry.kind == BoundaryGitEntryKind::Gitlink)
+    match inspect_intentional_boundary_repository_sources_typed(
+        repository, revision, root, inventory,
+    )
+    .map_err(|error| error.detail)?
     {
-        return Err(
-            "intentional-boundary source census does not support Gitlinks in the immutable tree"
-                .to_string(),
-        );
+        IntentionalBoundarySourceInspection::Completed(census) => Ok(census),
+        IntentionalBoundarySourceInspection::Excluded(failures) => Err(format!(
+            "intentional-boundary source census rejected unsupported project shape: {failures:?}"
+        )),
     }
+}
+
+pub(super) fn inspect_intentional_boundary_repository_sources_typed(
+    repository: &str,
+    revision: &str,
+    root: &Path,
+    inventory: &IntentionalBoundaryRepositoryInventory,
+) -> Result<IntentionalBoundarySourceInspection, IntentionalBoundaryInventoryError> {
+    validate_intentional_boundary_repository_inventory_typed(
+        repository, revision, root, inventory,
+    )?;
 
     let mut source_files = Vec::new();
+    let mut failures = Vec::new();
     for entry in &inventory.tracked_entries {
+        if entry.kind == BoundaryGitEntryKind::Gitlink {
+            failures.push(SourceFailureEvidence::RepositoryContainsGitlink {
+                repository_path: entry.repository_path.clone(),
+                object_id: entry.object_id.clone(),
+            });
+            continue;
+        }
         let extension = Path::new(&entry.repository_path)
             .extension()
             .and_then(|value| value.to_str());
@@ -78,44 +107,71 @@ pub fn census_intentional_boundary_repository(
             entry.kind,
             BoundaryGitEntryKind::RegularBlob | BoundaryGitEntryKind::ExecutableBlob
         ) {
-            return Err(format!(
-                "intentional-boundary supported source is not a regular Git blob: {}",
-                entry.repository_path
-            ));
+            failures.push(SourceFailureEvidence::SupportedSourceIsNotRegularBlob {
+                repository_path: entry.repository_path.clone(),
+                object_id: entry.object_id.clone(),
+                entry_kind: entry.kind,
+            });
+            continue;
         }
         let expected_length = entry.byte_length.ok_or_else(|| {
-            format!(
+            invalid(format!(
                 "intentional-boundary source has no committed byte length: {}",
                 entry.repository_path
-            )
+            ))
         })?;
         let committed_bytes =
-            read_intentional_boundary_git_blob(root, &entry.object_id, expected_length)?;
+            read_intentional_boundary_git_blob_typed(root, &entry.object_id, expected_length)?;
         let worktree_bytes =
             fs::read(root.join(Path::new(&entry.repository_path))).map_err(|error| {
-                format!(
+                failed(format!(
                     "failed to read intentional-boundary source {}: {error}",
                     entry.repository_path
-                )
+                ))
             })?;
         if worktree_bytes != committed_bytes {
-            return Err(format!(
+            return Err(invalid(format!(
                 "intentional-boundary source bytes differ from committed Git blob: {}",
                 entry.repository_path
-            ));
+            )));
         }
-        let parsed = crate::parser::parse_source_checked(&entry.repository_path, &committed_bytes)
-            .map_err(|error| {
-                format!(
-                    "failed to parse committed intentional-boundary source {}: {error}",
-                    entry.repository_path
-                )
-            })?;
+        let source_sha256 = sha256(&committed_bytes);
+        if let Err(error) = std::str::from_utf8(&committed_bytes) {
+            failures.push(SourceFailureEvidence::SupportedSourceIsNotUtf8 {
+                repository_path: entry.repository_path.clone(),
+                object_id: entry.object_id.clone(),
+                byte_length: expected_length,
+                source_sha256,
+                language: adapter.name,
+                valid_up_to: error.valid_up_to(),
+                error_length: error.error_len(),
+            });
+            continue;
+        }
+        let parsed =
+            match crate::parser::parse_source_checked(&entry.repository_path, &committed_bytes) {
+                Ok(parsed) => parsed,
+                Err(error) => {
+                    let (retained_parser_error, parser_error_truncated) = retain_error(&error);
+                    let failure = SourceFailureEvidence::SupportedSourceCannotBeParsed {
+                        repository_path: entry.repository_path.clone(),
+                        object_id: entry.object_id.clone(),
+                        byte_length: expected_length,
+                        source_sha256,
+                        language: adapter.name,
+                        parser_error_sha256: sha256(error.as_bytes()),
+                        retained_parser_error,
+                        parser_error_truncated,
+                    };
+                    failures.push(failure);
+                    continue;
+                }
+            };
         if parsed.language != adapter.name {
-            return Err(format!(
+            return Err(invalid(format!(
                 "intentional-boundary parser language changed for {}",
                 entry.repository_path
-            ));
+            )));
         }
         let mut parser_unit_ids = BTreeSet::new();
         let methods = parsed
@@ -129,11 +185,12 @@ pub fn census_intentional_boundary_repository(
                     method.start_line,
                     method.end_line,
                     &source_sha256,
-                )?;
+                )
+                .map_err(invalid)?;
                 if !parser_unit_ids.insert(parser_unit_id.clone()) {
-                    return Err(format!(
+                    return Err(invalid(format!(
                         "intentional-boundary parser repeated unit identity {parser_unit_id}"
-                    ));
+                    )));
                 }
                 Ok(IntentionalBoundaryMethodCensusEntry {
                     parser_unit_id,
@@ -144,18 +201,26 @@ pub fn census_intentional_boundary_repository(
                     is_exported: method.is_exported,
                 })
             })
-            .collect::<Result<Vec<_>, String>>()?;
+            .collect::<Result<Vec<_>, IntentionalBoundaryInventoryError>>()?;
         source_files.push(IntentionalBoundarySourceFile {
             repository_path: entry.repository_path.clone(),
             object_id: entry.object_id.clone(),
             byte_length: expected_length,
-            source_sha256: sha256(&committed_bytes),
+            source_sha256,
             language: adapter.name,
             methods,
         });
     }
+    failures.sort_by(|left, right| failure_key(left).cmp(&failure_key(right)));
+    if !failures.is_empty() {
+        return Ok(IntentionalBoundarySourceInspection::Excluded(failures));
+    }
     source_files.sort_by(|left, right| left.repository_path.cmp(&right.repository_path));
-    let method_count = source_files.iter().map(|file| file.methods.len()).sum();
+    let method_count = source_files.iter().try_fold(0_usize, |total, file| {
+        total
+            .checked_add(file.methods.len())
+            .ok_or_else(|| invalid("intentional-boundary source method count overflowed"))
+    })?;
     let mut census = IntentionalBoundarySourceCensus {
         schema_version: INTENTIONAL_BOUNDARY_SOURCE_CENSUS_SCHEMA_VERSION,
         census_contract: SOURCE_CENSUS_CONTRACT.to_string(),
@@ -168,8 +233,8 @@ pub fn census_intentional_boundary_repository(
         source_files,
         census_sha256: String::new(),
     };
-    census.census_sha256 = compute_census_sha256(&census)?;
-    Ok(census)
+    census.census_sha256 = compute_census_sha256(&census).map_err(invalid)?;
+    Ok(IntentionalBoundarySourceInspection::Completed(census))
 }
 
 pub fn validate_intentional_boundary_source_census(
@@ -294,151 +359,52 @@ fn method_unit_id(
     Ok(format!("ibm-v1:{}", sha256(&bytes)))
 }
 
+fn failure_key(failure: &SourceFailureEvidence) -> (&str, u8) {
+    match failure {
+        SourceFailureEvidence::RepositoryContainsGitlink {
+            repository_path, ..
+        } => (repository_path, 0),
+        SourceFailureEvidence::SupportedSourceIsNotRegularBlob {
+            repository_path, ..
+        } => (repository_path, 1),
+        SourceFailureEvidence::SupportedSourceIsNotUtf8 {
+            repository_path, ..
+        } => (repository_path, 2),
+        SourceFailureEvidence::SupportedSourceCannotBeParsed {
+            repository_path, ..
+        } => (repository_path, 3),
+    }
+}
+
+fn retain_error(error: &str) -> (String, bool) {
+    if error.len() <= INTENTIONAL_BOUNDARY_PARSER_ERROR_LIMIT {
+        return (error.to_string(), false);
+    }
+    let mut end = INTENTIONAL_BOUNDARY_PARSER_ERROR_LIMIT;
+    while !error.is_char_boundary(end) {
+        end -= 1;
+    }
+    (error[..end].to_string(), true)
+}
+
+fn invalid(detail: impl Into<String>) -> IntentionalBoundaryInventoryError {
+    IntentionalBoundaryInventoryError {
+        kind: IntentionalBoundaryInventoryErrorKind::InvalidInput,
+        detail: detail.into(),
+    }
+}
+
+fn failed(detail: impl Into<String>) -> IntentionalBoundaryInventoryError {
+    IntentionalBoundaryInventoryError {
+        kind: IntentionalBoundaryInventoryErrorKind::InfrastructureFailed,
+        detail: detail.into(),
+    }
+}
+
 fn sha256(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::benchmark::inventory_intentional_boundary_repository;
-    use std::process::Command;
-    use tempfile::TempDir;
-
-    fn git(root: &Path, args: &[&str]) -> String {
-        let output = Command::new("git")
-            .arg("-C")
-            .arg(root)
-            .args(args)
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "git {} failed: {}",
-            args.join(" "),
-            String::from_utf8_lossy(&output.stderr)
-        );
-        String::from_utf8(output.stdout).unwrap().trim().to_string()
-    }
-
-    fn repository() -> (TempDir, String) {
-        let root = tempfile::tempdir().unwrap();
-        git(root.path(), &["init", "--quiet"]);
-        git(root.path(), &["config", "user.name", "SniffBench"]);
-        git(
-            root.path(),
-            &["config", "user.email", "bench@example.invalid"],
-        );
-        git(
-            root.path(),
-            &[
-                "remote",
-                "add",
-                "origin",
-                "https://github.com/example/census.git",
-            ],
-        );
-        fs::create_dir_all(root.path().join("src/generated")).unwrap();
-        fs::create_dir_all(root.path().join("tests")).unwrap();
-        fs::write(
-            root.path().join("src/lib.rs"),
-            "pub fn production() -> u8 { 1 }\n",
-        )
-        .unwrap();
-        fs::write(
-            root.path().join("src/generated/model.rs"),
-            "pub fn generated() -> u8 { 2 }\n",
-        )
-        .unwrap();
-        fs::write(
-            root.path().join("tests/value.rs"),
-            "#[test] fn behavior() { assert_eq!(1, 1); }\n",
-        )
-        .unwrap();
-        fs::write(root.path().join("README.md"), "fixture\n").unwrap();
-        git(root.path(), &["add", "."]);
-        git(root.path(), &["commit", "--quiet", "-m", "fixture"]);
-        let revision = git(root.path(), &["rev-parse", "HEAD"]);
-        (root, revision)
-    }
-
-    #[test]
-    fn censuses_every_supported_committed_source_without_walker_roles() {
-        let (root, revision) = repository();
-        let inventory = inventory_intentional_boundary_repository(
-            "github.com/example/census",
-            &revision,
-            root.path(),
-        )
-        .unwrap();
-
-        let census = census_intentional_boundary_repository(
-            "github.com/example/census",
-            &revision,
-            root.path(),
-            &inventory,
-        )
-        .unwrap();
-
-        assert_eq!(census.tracked_entry_count, 4);
-        assert_eq!(census.source_file_count, 3);
-        assert_eq!(census.method_count, 3);
-        assert_eq!(
-            census
-                .source_files
-                .iter()
-                .map(|file| file.repository_path.as_str())
-                .collect::<Vec<_>>(),
-            ["src/generated/model.rs", "src/lib.rs", "tests/value.rs"]
-        );
-        validate_intentional_boundary_source_census(
-            "github.com/example/census",
-            &revision,
-            root.path(),
-            &inventory,
-            &census,
-        )
-        .unwrap();
-    }
-
-    #[test]
-    fn parser_consumes_the_verified_blob_bytes_not_a_separate_read() {
-        let source = b"pub fn exact() -> u8 { 1 }\n";
-        let parsed = crate::parser::parse_source_checked("src/lib.rs", source).unwrap();
-
-        assert_eq!(parsed.source.as_bytes(), source);
-        assert_eq!(parsed.methods.len(), 1);
-        assert_eq!(parsed.methods[0].name, "exact");
-    }
-
-    #[test]
-    fn replay_rejects_census_tampering() {
-        let (root, revision) = repository();
-        let inventory = inventory_intentional_boundary_repository(
-            "github.com/example/census",
-            &revision,
-            root.path(),
-        )
-        .unwrap();
-        let mut census = census_intentional_boundary_repository(
-            "github.com/example/census",
-            &revision,
-            root.path(),
-            &inventory,
-        )
-        .unwrap();
-        census.source_files[0].methods[0].is_exported = false;
-
-        assert!(
-            validate_intentional_boundary_source_census(
-                "github.com/example/census",
-                &revision,
-                root.path(),
-                &inventory,
-                &census,
-            )
-            .unwrap_err()
-            .contains("changed")
-        );
-    }
-}
+#[path = "benchmark_intentional_boundary_source_census_tests.rs"]
+mod tests;

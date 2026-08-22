@@ -397,10 +397,20 @@ mod intentional_boundary_inventory;
 
 pub use intentional_boundary_inventory::*;
 
+#[path = "benchmark_intentional_boundary_source_census_stage_schema.rs"]
+mod intentional_boundary_source_census_stage_schema;
+
+pub use intentional_boundary_source_census_stage_schema::*;
+
 #[path = "benchmark_intentional_boundary_source_census.rs"]
 mod intentional_boundary_source_census;
 
 pub use intentional_boundary_source_census::*;
+
+#[path = "benchmark_intentional_boundary_source_census_stage.rs"]
+mod intentional_boundary_source_census_stage;
+
+pub use intentional_boundary_source_census_stage::*;
 
 #[path = "benchmark_intentional_boundary_semantic_schema.rs"]
 mod intentional_boundary_semantic_schema;
