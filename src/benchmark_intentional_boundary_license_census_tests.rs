@@ -258,9 +258,7 @@ fn replay_rejects_lineage_and_evidence_tampering() {
     let IntentionalBoundaryLicenseCensusStageOutcome::Completed(stage) = &mut outcome else {
         panic!("fixture must complete");
     };
-    stage.license_artifacts[0]
-        .content_sha256
-        .replace_range(..1, "0");
+    corrupt_sha256(&mut stage.license_artifacts[0].content_sha256);
     let error = validate_intentional_boundary_license_census_stage_outcome(
         &fixture.task,
         &fixture.materialization,
@@ -276,7 +274,7 @@ fn replay_rejects_lineage_and_evidence_tampering() {
     );
 
     let mut changed_source = fixture.source_census.clone();
-    changed_source.stage_sha256.replace_range(..1, "0");
+    corrupt_sha256(&mut changed_source.stage_sha256);
     let error = census_intentional_boundary_repository_licenses(
         &fixture.task,
         &fixture.materialization,
@@ -289,6 +287,11 @@ fn replay_rejects_lineage_and_evidence_tampering() {
         error.kind,
         IntentionalBoundaryLicenseCensusStageErrorKind::InvalidInput
     );
+}
+
+fn corrupt_sha256(value: &mut String) {
+    let replacement = if value.starts_with('0') { "1" } else { "0" };
+    value.replace_range(..1, replacement);
 }
 
 #[test]
