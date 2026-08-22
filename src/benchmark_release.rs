@@ -440,6 +440,19 @@ mod intentional_boundary_semantic;
 
 pub use intentional_boundary_semantic::*;
 
+#[path = "benchmark_intentional_boundary_semantic_stage_schema.rs"]
+mod intentional_boundary_semantic_stage_schema;
+
+pub use intentional_boundary_semantic_stage_schema::*;
+
+#[path = "benchmark_intentional_boundary_semantic_stage_support.rs"]
+mod intentional_boundary_semantic_stage_support;
+
+#[path = "benchmark_intentional_boundary_semantic_stage.rs"]
+mod intentional_boundary_semantic_stage;
+
+pub use intentional_boundary_semantic_stage::*;
+
 #[path = "benchmark_intentional_boundary_evidence_schema.rs"]
 mod intentional_boundary_evidence_schema;
 

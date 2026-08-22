@@ -1,7 +1,7 @@
 use super::{
     BoundaryGitEntryKind, IntentionalBoundaryInventoryError, IntentionalBoundaryInventoryErrorKind,
     IntentionalBoundaryRepositoryInventory, IntentionalBoundarySourceCensusFailureEvidence,
-    read_intentional_boundary_git_blob, read_intentional_boundary_git_blob_typed,
+    read_intentional_boundary_git_blob_typed,
     validate_intentional_boundary_repository_inventory_typed,
 };
 use serde::{Deserialize, Serialize};
@@ -256,6 +256,14 @@ pub(super) fn intentional_boundary_file_records(
     inventory: &IntentionalBoundaryRepositoryInventory,
     census: &IntentionalBoundarySourceCensus,
 ) -> Result<Vec<crate::types::FileRecord>, String> {
+    intentional_boundary_file_records_typed(root, inventory, census).map_err(|error| error.detail)
+}
+
+pub(super) fn intentional_boundary_file_records_typed(
+    root: &Path,
+    inventory: &IntentionalBoundaryRepositoryInventory,
+    census: &IntentionalBoundarySourceCensus,
+) -> Result<Vec<crate::types::FileRecord>, IntentionalBoundaryInventoryError> {
     let mut records = Vec::with_capacity(census.source_files.len());
     for source_file in &census.source_files {
         let inventory_entry = inventory
@@ -263,39 +271,39 @@ pub(super) fn intentional_boundary_file_records(
             .iter()
             .find(|entry| entry.repository_path == source_file.repository_path)
             .ok_or_else(|| {
-                format!(
+                invalid(format!(
                     "intentional-boundary census source disappeared from inventory: {}",
                     source_file.repository_path
-                )
+                ))
             })?;
         if inventory_entry.object_id != source_file.object_id
             || inventory_entry.byte_length != Some(source_file.byte_length)
         {
-            return Err(format!(
+            return Err(invalid(format!(
                 "intentional-boundary census source changed its Git identity: {}",
                 source_file.repository_path
-            ));
+            )));
         }
-        let bytes = read_intentional_boundary_git_blob(
+        let bytes = read_intentional_boundary_git_blob_typed(
             root,
             &source_file.object_id,
             source_file.byte_length,
         )?;
         let absolute_path = root.join(Path::new(&source_file.repository_path));
         let absolute_path = absolute_path.to_str().ok_or_else(|| {
-            format!(
+            invalid(format!(
                 "intentional-boundary source path is not UTF-8: {}",
                 source_file.repository_path
-            )
+            ))
         })?;
-        let record = crate::parser::parse_source_checked(absolute_path, &bytes)?;
+        let record = crate::parser::parse_source_checked(absolute_path, &bytes).map_err(invalid)?;
         if record.language != source_file.language
             || record.methods.len() != source_file.methods.len()
         {
-            return Err(format!(
+            return Err(invalid(format!(
                 "intentional-boundary semantic input changed its parser census: {}",
                 source_file.repository_path
-            ));
+            )));
         }
         for (method, expected) in record.methods.iter().zip(&source_file.methods) {
             let source_sha256 = sha256(method.source.as_bytes());
@@ -305,7 +313,8 @@ pub(super) fn intentional_boundary_file_records(
                 method.start_line,
                 method.end_line,
                 &source_sha256,
-            )?;
+            )
+            .map_err(invalid)?;
             if parser_unit_id != expected.parser_unit_id
                 || method.name != expected.symbol_name
                 || method.start_line != expected.start_line
@@ -313,10 +322,10 @@ pub(super) fn intentional_boundary_file_records(
                 || source_sha256 != expected.source_sha256
                 || method.is_exported != expected.is_exported
             {
-                return Err(format!(
+                return Err(invalid(format!(
                     "intentional-boundary semantic input changed method identity {}",
                     expected.parser_unit_id
-                ));
+                )));
             }
         }
         records.push(record);
