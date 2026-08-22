@@ -58,7 +58,7 @@ pub async fn census_intentional_boundary_semantics(
     build_semantic_census(root, source_census, &files, &indexes)
 }
 
-fn build_semantic_census(
+pub(super) fn build_semantic_census(
     root: &Path,
     source_census: &IntentionalBoundarySourceCensus,
     files: &[FileRecord],
@@ -360,7 +360,7 @@ fn indexer_for_language(language: &str) -> Result<SemanticIndexerKind, String> {
     }
 }
 
-fn indexer_kind(kind: SemanticIndexerKind) -> IntentionalBoundaryIndexerKind {
+pub(super) fn indexer_kind(kind: SemanticIndexerKind) -> IntentionalBoundaryIndexerKind {
     match kind {
         SemanticIndexerKind::TypeScriptJavaScript => {
             IntentionalBoundaryIndexerKind::TypeScriptJavaScript
