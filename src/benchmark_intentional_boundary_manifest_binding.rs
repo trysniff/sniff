@@ -1,4 +1,5 @@
 use super::intentional_boundary_manifest::validate_manifest_census_commitment;
+use super::intentional_boundary_manifest_outcome::{ManifestDerivationError, manifest_invalid};
 use super::{
     INTENTIONAL_BOUNDARY_MANIFEST_BINDING_CENSUS_SCHEMA_VERSION,
     IntentionalBoundaryManifestBinding, IntentionalBoundaryManifestBindingCensus,
@@ -22,12 +23,25 @@ pub fn bind_intentional_boundary_manifests(
     semantic_census: &IntentionalBoundarySemanticCensus,
     manifest_census: &IntentionalBoundaryManifestCensus,
 ) -> Result<IntentionalBoundaryManifestBindingCensus, String> {
-    validate_intentional_boundary_semantic_census(source_census, semantic_census)?;
-    validate_manifest_census_commitment(&source_census.inventory_sha256, manifest_census)?;
+    bind_intentional_boundary_manifests_typed(source_census, semantic_census, manifest_census)
+        .map_err(|error| error.detail)
+}
+
+pub(super) fn bind_intentional_boundary_manifests_typed(
+    source_census: &IntentionalBoundarySourceCensus,
+    semantic_census: &IntentionalBoundarySemanticCensus,
+    manifest_census: &IntentionalBoundaryManifestCensus,
+) -> Result<IntentionalBoundaryManifestBindingCensus, ManifestDerivationError> {
+    validate_intentional_boundary_semantic_census(source_census, semantic_census)
+        .map_err(manifest_invalid)?;
+    validate_manifest_census_commitment(&source_census.inventory_sha256, manifest_census)
+        .map_err(manifest_invalid)?;
     if manifest_census.repository != source_census.repository
         || manifest_census.revision != source_census.revision
     {
-        return Err("intentional-boundary manifest binding identity changed".to_string());
+        return Err(manifest_invalid(
+            "intentional-boundary manifest binding identity changed",
+        ));
     }
     let semantic_methods = semantic_census
         .methods
@@ -36,13 +50,15 @@ pub fn bind_intentional_boundary_manifests(
         .collect::<BTreeMap<_, _>>();
     let mut bindings = Vec::with_capacity(manifest_census.declarations.len());
     for declaration in &manifest_census.declarations {
-        let outcome = bind_declaration(source_census, &semantic_methods, declaration)?;
+        let outcome = bind_declaration(source_census, &semantic_methods, declaration)
+            .map_err(manifest_invalid)?;
         bindings.push(IntentionalBoundaryManifestBinding {
             declaration_id: declaration.declaration_id.clone(),
             outcome,
         });
     }
     finish_binding_census(source_census, semantic_census, manifest_census, bindings)
+        .map_err(manifest_invalid)
 }
 
 pub fn validate_intentional_boundary_manifest_bindings(

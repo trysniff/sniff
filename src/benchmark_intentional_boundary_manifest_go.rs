@@ -1,5 +1,8 @@
-use super::super::intentional_boundary_inventory::read_intentional_boundary_git_blob;
-use super::{compute_manifest_declaration_id, sha256};
+use super::super::intentional_boundary_inventory::read_intentional_boundary_git_blob_typed;
+use super::super::intentional_boundary_manifest_outcome::{
+    ManifestDerivationError, manifest_encoding_rejected, manifest_invalid,
+};
+use super::{compute_manifest_declaration_id, map_inventory_error, sha256};
 use crate::benchmark::release::{
     BoundaryGitEntryKind, IntentionalBoundaryGoGenerateDirective,
     IntentionalBoundaryManifestDeclaration, IntentionalBoundaryManifestDeclarationKind,
@@ -25,7 +28,7 @@ pub(super) fn parse_go_generate_sources(
         Vec<IntentionalBoundaryManifestDocument>,
         Vec<IntentionalBoundaryManifestDeclaration>,
     ),
-    String,
+    ManifestDerivationError,
 > {
     let mut packages = BTreeMap::<String, Vec<GoGenerateSource>>::new();
     for entry in inventory
@@ -37,16 +40,19 @@ pub(super) fn parse_go_generate_sources(
             continue;
         }
         let expected_length = entry.byte_length.ok_or_else(|| {
-            format!(
+            manifest_invalid(format!(
                 "Go generator source has no committed byte length: {}",
                 entry.repository_path
-            )
+            ))
         })?;
-        let bytes = read_intentional_boundary_git_blob(root, &entry.object_id, expected_length)?;
+        let bytes =
+            read_intentional_boundary_git_blob_typed(root, &entry.object_id, expected_length)
+                .map_err(map_inventory_error)?;
         let source = std::str::from_utf8(&bytes).map_err(|_| {
-            format!(
-                "Go generator source is not UTF-8: {}",
-                entry.repository_path
+            manifest_encoding_rejected(
+                IntentionalBoundaryManifestProvider::GoGenerateSource,
+                &entry.repository_path,
+                "Go generator source is not UTF-8",
             )
         })?;
         let directives = directives(&entry.repository_path, source);
@@ -97,7 +103,8 @@ pub(super) fn parse_go_generate_sources(
                 directives: package_directives,
             },
         };
-        declaration.declaration_id = compute_manifest_declaration_id(&declaration)?;
+        declaration.declaration_id =
+            compute_manifest_declaration_id(&declaration).map_err(manifest_invalid)?;
         for source in sources {
             documents.push(IntentionalBoundaryManifestDocument {
                 provider: IntentionalBoundaryManifestProvider::GoGenerateSource,
