@@ -642,10 +642,23 @@ mod intentional_boundary_candidate_schema;
 
 pub use intentional_boundary_candidate_schema::*;
 
+#[path = "benchmark_intentional_boundary_candidate_outcome.rs"]
+mod intentional_boundary_candidate_outcome;
+
 #[path = "benchmark_intentional_boundary_candidate.rs"]
 mod intentional_boundary_candidate;
 
 pub use intentional_boundary_candidate::*;
+
+#[path = "benchmark_intentional_boundary_candidate_stage_schema.rs"]
+mod intentional_boundary_candidate_stage_schema;
+
+pub use intentional_boundary_candidate_stage_schema::*;
+
+#[path = "benchmark_intentional_boundary_candidate_stage.rs"]
+mod intentional_boundary_candidate_stage;
+
+pub use intentional_boundary_candidate_stage::*;
 
 #[path = "benchmark_intentional_boundary_frame_schema.rs"]
 mod intentional_boundary_frame_schema;

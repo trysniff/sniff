@@ -1,3 +1,6 @@
+use super::intentional_boundary_candidate_outcome::{
+    CandidateDerivationError, candidate_invalid, legacy_candidate_error,
+};
 use super::intentional_boundary_compiler_evidence::validate_evidence_census_commitment;
 use super::{
     BoundaryCategoryContract, BoundaryEvidenceKind,
@@ -20,8 +23,25 @@ pub fn qualify_intentional_boundary_candidates(
     semantic_census: &IntentionalBoundarySemanticCensus,
     evidence_census: &IntentionalBoundaryEvidenceCensus,
 ) -> Result<IntentionalBoundaryCandidateCensus, String> {
-    validate_intentional_boundary_semantic_census(source_census, semantic_census)?;
-    validate_evidence_census_commitment(source_census, semantic_census, evidence_census)?;
+    qualify_intentional_boundary_candidates_typed(
+        protocol,
+        source_census,
+        semantic_census,
+        evidence_census,
+    )
+    .map_err(legacy_candidate_error)
+}
+
+pub(super) fn qualify_intentional_boundary_candidates_typed(
+    protocol: &ValidatedIntentionalBoundaryProtocol,
+    source_census: &IntentionalBoundarySourceCensus,
+    semantic_census: &IntentionalBoundarySemanticCensus,
+    evidence_census: &IntentionalBoundaryEvidenceCensus,
+) -> Result<IntentionalBoundaryCandidateCensus, CandidateDerivationError> {
+    validate_intentional_boundary_semantic_census(source_census, semantic_census)
+        .map_err(candidate_invalid)?;
+    validate_evidence_census_commitment(source_census, semantic_census, evidence_census)
+        .map_err(candidate_invalid)?;
     let subjects = semantic_census
         .methods
         .iter()
@@ -37,16 +57,16 @@ pub fn qualify_intentional_boundary_candidates(
         BTreeMap::<(&str, &str), Vec<&IntentionalBoundaryEvidenceAtom>>::new();
     for atom in &evidence_census.atoms {
         let Some((_, exact_symbol_id)) = subjects.get(atom.subject_parser_unit_id.as_str()) else {
-            return Err(format!(
+            return Err(candidate_invalid(format!(
                 "intentional-boundary evidence names an unresolved parser unit {}",
                 atom.subject_parser_unit_id
-            ));
+            )));
         };
         if atom.subject_symbol_id != *exact_symbol_id {
-            return Err(format!(
+            return Err(candidate_invalid(format!(
                 "intentional-boundary evidence changed the exact symbol for {}",
                 atom.subject_parser_unit_id
-            ));
+            )));
         }
         atoms_by_subject
             .entry((
@@ -63,19 +83,24 @@ pub fn qualify_intentional_boundary_candidates(
             .get(parser_unit_id)
             .map(|(path, _)| *path)
             .ok_or_else(|| {
-                format!("intentional-boundary evidence invented parser unit {parser_unit_id}")
+                candidate_invalid(format!(
+                    "intentional-boundary evidence invented parser unit {parser_unit_id}"
+                ))
             })?;
         for contract in &protocol.protocol.category_contracts {
             if let Some((evidence_kinds, evidence_ids)) = qualifying_evidence(contract, &atoms) {
-                candidates.push(candidate(
-                    contract.category,
-                    source_census,
-                    repository_path,
-                    parser_unit_id,
-                    symbol_id,
-                    evidence_kinds,
-                    evidence_ids,
-                )?);
+                candidates.push(
+                    candidate(
+                        contract.category,
+                        source_census,
+                        repository_path,
+                        parser_unit_id,
+                        symbol_id,
+                        evidence_kinds,
+                        evidence_ids,
+                    )
+                    .map_err(candidate_invalid)?,
+                );
             }
         }
     }
@@ -84,7 +109,9 @@ pub fn qualify_intentional_boundary_candidates(
         .windows(2)
         .any(|pair| pair[0].candidate_id == pair[1].candidate_id)
     {
-        return Err("intentional-boundary candidate identity collision".to_string());
+        return Err(candidate_invalid(
+            "intentional-boundary candidate identity collision",
+        ));
     }
     let candidate_count_by_category =
         candidates
@@ -106,7 +133,7 @@ pub fn qualify_intentional_boundary_candidates(
         candidate_count_by_category,
         candidate_census_sha256: String::new(),
     };
-    census.candidate_census_sha256 = candidate_census_sha256(&census)?;
+    census.candidate_census_sha256 = candidate_census_sha256(&census).map_err(candidate_invalid)?;
     Ok(census)
 }
 
