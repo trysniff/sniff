@@ -113,6 +113,10 @@ async fn terminal_frame_conflict_preserves_checkout_and_committed_journal() {
         .await
         .unwrap_err();
 
+    assert_eq!(
+        error.kind,
+        IntentionalBoundaryRankStageErrorKind::InvalidInput
+    );
     assert!(error.detail.contains("conflicts with its committed record"));
     assert_eq!(fs::read(checkout.join("sentinel")).unwrap(), b"preserve");
     let journal = IntentionalBoundaryRankStageJournal::open(&state, &task, 1).unwrap();
@@ -121,6 +125,45 @@ async fn terminal_frame_conflict_preserves_checkout_and_committed_journal() {
         load_intentional_boundary_frame_ranks(&frame, &task).unwrap(),
         [conflicting]
     );
+}
+
+#[tokio::test]
+async fn terminal_frame_io_failure_is_typed_and_preserves_checkout() {
+    let task = task();
+    let protocol = protocol();
+    let root = tempfile::tempdir().unwrap();
+    let state = root.path().join("state");
+    let work = root.path().join("work");
+    let frame = root.path().join("frame");
+    let mut executor =
+        IntentionalBoundaryProductionRankExecutor::new(&protocol, &state, &work, &frame, None)
+            .unwrap();
+    let checkout = work.join("rank-0001");
+    fs::create_dir(&checkout).unwrap();
+    fs::write(checkout.join("sentinel"), b"preserve").unwrap();
+    fs::remove_dir(&frame).unwrap();
+    fs::write(&frame, b"not a directory").unwrap();
+    {
+        let mut journal = IntentionalBoundaryRankStageJournal::open(&state, &task, 1).unwrap();
+        journal
+            .append(
+                &task,
+                &IntentionalBoundaryRankStageArtifact::MaterializationExclusion(exclusion(&task)),
+            )
+            .unwrap();
+    }
+
+    let error = run_intentional_boundary_rank(&state, &task, 1, &mut executor)
+        .await
+        .unwrap_err();
+
+    assert_eq!(
+        error.kind,
+        IntentionalBoundaryRankStageErrorKind::InfrastructureFailed
+    );
+    assert_eq!(fs::read(checkout.join("sentinel")).unwrap(), b"preserve");
+    let journal = IntentionalBoundaryRankStageJournal::open(&state, &task, 1).unwrap();
+    assert_eq!(journal.history().len(), 1);
 }
 
 #[tokio::test]
