@@ -1,3 +1,6 @@
+use super::intentional_boundary_behavior_outcome::{
+    BehaviorDerivationError, BehaviorExecutionAttempt, behavior_invalid, legacy_behavior_error,
+};
 use super::intentional_boundary_compiler_evidence::validate_evidence_census_commitment;
 use super::intentional_boundary_compiler_evidence::{finish_evidence_census, push_typed_atom};
 use super::{
@@ -7,32 +10,46 @@ use super::{
     IntentionalBoundaryBehaviorSelector, IntentionalBoundaryBehaviorTestProofKind,
     IntentionalBoundaryBehaviorUnresolvedReason, IntentionalBoundaryBehaviorWitness,
     IntentionalBoundaryBehaviorWitnessOutcome, IntentionalBoundaryEvidenceCensus,
-    IntentionalBoundaryEvidenceProof, IntentionalBoundaryIndexerKind,
-    IntentionalBoundaryRepositoryInventory, IntentionalBoundarySemanticCensus,
-    IntentionalBoundarySemanticMethod, IntentionalBoundarySemanticMethodStatus,
-    IntentionalBoundarySemanticResolution, IntentionalBoundarySemanticSymbolCategory,
+    IntentionalBoundaryEvidenceProof, IntentionalBoundaryRepositoryInventory,
+    IntentionalBoundarySemanticCensus, IntentionalBoundarySemanticMethod,
+    IntentionalBoundarySemanticMethodStatus, IntentionalBoundarySemanticResolution,
     IntentionalBoundarySemanticTestFacts, IntentionalBoundarySemanticTestKind,
     IntentionalBoundarySourceCensus, validate_intentional_boundary_repository_inventory,
     validate_intentional_boundary_semantic_census, validate_intentional_boundary_source_census,
 };
+#[cfg(test)]
+use super::{IntentionalBoundaryIndexerKind, IntentionalBoundarySemanticSymbolCategory};
+#[cfg(test)]
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Component, Path};
+use std::path::Path;
 
-const BEHAVIOR_CONTRACT: &str = "sniffbench-intentional-boundary-behavior-v1";
+#[path = "benchmark_intentional_boundary_behavior_commitment.rs"]
+pub(super) mod commitment;
+use commitment::{
+    BEHAVIOR_CONTRACT, candidate_id, compute_behavior_census_sha256, finish_behavior_census,
+    hash_json, is_sha256, witness_id,
+};
+
+#[path = "benchmark_intentional_boundary_behavior_selector.rs"]
+mod selector;
+#[cfg(test)]
+use selector::{is_safe_repository_path, parent_repository_path, rust_harness_name};
+use selector::{resolved_symbol_id, selector_for};
 
 #[path = "benchmark_intentional_boundary_behavior_runtime.rs"]
 mod runtime;
 
+#[path = "benchmark_intentional_boundary_behavior_output.rs"]
+mod output;
+use output::{TestCount, count_tests};
+
+#[path = "benchmark_intentional_boundary_behavior_receipt.rs"]
+mod receipt;
+
 #[path = "benchmark_intentional_boundary_behavior_validation.rs"]
 mod validation;
 pub use validation::validate_intentional_boundary_behavior_census_commitment;
-
-#[derive(Clone)]
-pub(super) struct BehaviorExecutionAttempt {
-    pub(super) execution: Option<IntentionalBoundaryBehaviorExecution>,
-    pub(super) outcome: IntentionalBoundaryBehaviorWitnessOutcome,
-}
 
 #[allow(clippy::too_many_arguments)]
 pub fn census_intentional_boundary_behavior_tests(
@@ -44,6 +61,28 @@ pub fn census_intentional_boundary_behavior_tests(
     semantic_census: &IntentionalBoundarySemanticCensus,
     base_evidence: &IntentionalBoundaryEvidenceCensus,
 ) -> Result<IntentionalBoundaryBehaviorCensus, String> {
+    census_intentional_boundary_behavior_tests_typed(
+        repository,
+        revision,
+        root,
+        inventory,
+        source_census,
+        semantic_census,
+        base_evidence,
+    )
+    .map_err(legacy_behavior_error)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn census_intentional_boundary_behavior_tests_typed(
+    repository: &str,
+    revision: &str,
+    root: &Path,
+    inventory: &IntentionalBoundaryRepositoryInventory,
+    source_census: &IntentionalBoundarySourceCensus,
+    semantic_census: &IntentionalBoundarySemanticCensus,
+    base_evidence: &IntentionalBoundaryEvidenceCensus,
+) -> Result<IntentionalBoundaryBehaviorCensus, BehaviorDerivationError> {
     census_behavior_tests_with_executor(
         repository,
         revision,
@@ -144,21 +183,27 @@ fn census_behavior_tests_with_executor<F>(
     semantic_census: &IntentionalBoundarySemanticCensus,
     base_evidence: &IntentionalBoundaryEvidenceCensus,
     mut executor: F,
-) -> Result<IntentionalBoundaryBehaviorCensus, String>
+) -> Result<IntentionalBoundaryBehaviorCensus, BehaviorDerivationError>
 where
-    F: FnMut(&IntentionalBoundaryBehaviorSelector) -> Result<BehaviorExecutionAttempt, String>,
+    F: FnMut(
+        &IntentionalBoundaryBehaviorSelector,
+    ) -> Result<BehaviorExecutionAttempt, BehaviorDerivationError>,
 {
-    validate_intentional_boundary_repository_inventory(repository, revision, root, inventory)?;
+    validate_intentional_boundary_repository_inventory(repository, revision, root, inventory)
+        .map_err(behavior_invalid)?;
     validate_intentional_boundary_source_census(
         repository,
         revision,
         root,
         inventory,
         source_census,
-    )?;
-    validate_intentional_boundary_semantic_census(source_census, semantic_census)?;
-    validate_evidence_census_commitment(source_census, semantic_census, base_evidence)?;
-    validate_behavior_base_evidence(base_evidence)?;
+    )
+    .map_err(behavior_invalid)?;
+    validate_intentional_boundary_semantic_census(source_census, semantic_census)
+        .map_err(behavior_invalid)?;
+    validate_evidence_census_commitment(source_census, semantic_census, base_evidence)
+        .map_err(behavior_invalid)?;
+    validate_behavior_base_evidence(base_evidence).map_err(behavior_invalid)?;
 
     let methods = semantic_census
         .methods
@@ -191,10 +236,14 @@ where
         BTreeMap::<IntentionalBoundaryBehaviorSelector, BehaviorExecutionAttempt>::new();
     for parser_unit_id in candidate_units {
         let method = methods.get(parser_unit_id).copied().ok_or_else(|| {
-            format!("intentional-boundary behavior evidence invented method {parser_unit_id}")
+            behavior_invalid(format!(
+                "intentional-boundary behavior evidence invented method {parser_unit_id}"
+            ))
         })?;
         let production_symbol_id = resolved_symbol_id(method).ok_or_else(|| {
-            format!("behavior-test candidate has no compiler identity: {parser_unit_id}")
+            behavior_invalid(format!(
+                "behavior-test candidate has no compiler identity: {parser_unit_id}"
+            ))
         })?;
         if base_evidence.atoms.iter().any(|atom| {
             atom.subject_parser_unit_id == parser_unit_id
@@ -205,11 +254,12 @@ where
                 )
                 && atom.subject_symbol_id != production_symbol_id
         }) {
-            return Err(format!(
+            return Err(behavior_invalid(format!(
                 "behavior-test candidate changed compiler identity: {parser_unit_id}"
-            ));
+            )));
         }
-        let candidate_id = candidate_id(parser_unit_id, production_symbol_id)?;
+        let candidate_id =
+            candidate_id(parser_unit_id, production_symbol_id).map_err(behavior_invalid)?;
         let behavior_relationships = method
             .test_relationships
             .iter()
@@ -292,7 +342,8 @@ where
                 &relationship.test_symbol,
                 relationship.kind,
                 test_parser_unit_id.as_deref(),
-            )?;
+            )
+            .map_err(behavior_invalid)?;
             witnesses.push(IntentionalBoundaryBehaviorWitness {
                 witness_id,
                 candidate_id: candidate_id.clone(),
@@ -333,7 +384,8 @@ where
             status,
         });
     }
-    validate_intentional_boundary_repository_inventory(repository, revision, root, inventory)?;
+    validate_intentional_boundary_repository_inventory(repository, revision, root, inventory)
+        .map_err(behavior_invalid)?;
     let census = finish_behavior_census(
         source_census,
         semantic_census,
@@ -341,140 +393,16 @@ where
         candidates,
         witnesses,
         executions,
-    )?;
+    )
+    .map_err(behavior_invalid)?;
     validate_intentional_boundary_behavior_census_commitment(
         source_census,
         semantic_census,
         base_evidence,
         &census,
-    )?;
-    Ok(census)
-}
-
-fn selector_for(
-    test_method: &IntentionalBoundarySemanticMethod,
-) -> Result<
-    IntentionalBoundaryBehaviorSelector,
-    (IntentionalBoundaryBehaviorUnresolvedReason, String),
-> {
-    if test_method.symbol_name.trim().is_empty()
-        || !is_safe_repository_path(&test_method.repository_path)
-    {
-        return Err((
-            IntentionalBoundaryBehaviorUnresolvedReason::UnsupportedTargetSelector,
-            "test method has no safe exact selector".to_string(),
-        ));
-    }
-    Ok(match test_method.indexer {
-        IntentionalBoundaryIndexerKind::Rust => IntentionalBoundaryBehaviorSelector::CargoTest {
-            test_name: exact_rust_test_name(test_method)?,
-        },
-        IntentionalBoundaryIndexerKind::Python => IntentionalBoundaryBehaviorSelector::Pytest {
-            repository_path: test_method.repository_path.clone(),
-            test_name: exact_python_test_name(test_method)?,
-        },
-        IntentionalBoundaryIndexerKind::Go => IntentionalBoundaryBehaviorSelector::GoTest {
-            package_repository_path: parent_repository_path(&test_method.repository_path),
-            test_name: exact_go_test_name(test_method)?,
-        },
-        IntentionalBoundaryIndexerKind::TypeScriptJavaScript => {
-            IntentionalBoundaryBehaviorSelector::JavaScriptTest {
-                repository_path: test_method.repository_path.clone(),
-                test_name: test_method.symbol_name.clone(),
-            }
-        }
-        IntentionalBoundaryIndexerKind::Kotlin => IntentionalBoundaryBehaviorSelector::GradleTest {
-            repository_path: test_method.repository_path.clone(),
-            test_name: test_method.symbol_name.clone(),
-        },
-    })
-}
-
-fn exact_rust_test_name(
-    method: &IntentionalBoundarySemanticMethod,
-) -> Result<String, (IntentionalBoundaryBehaviorUnresolvedReason, String)> {
-    let symbol_id = resolved_symbol_id(method).ok_or_else(unsupported_selector)?;
-    rust_harness_name(symbol_id, &method.symbol_name).ok_or_else(unsupported_selector)
-}
-
-fn rust_harness_name(symbol_id: &str, leaf_name: &str) -> Option<String> {
-    let mut fields = symbol_id.splitn(5, ' ');
-    if fields.next()? != "rust-analyzer"
-        || fields.next()? != "cargo"
-        || fields.next()?.is_empty()
-        || fields.next()?.is_empty()
-    {
-        return None;
-    }
-    let mut descriptors = fields.next()?;
-    let mut components = Vec::new();
-    while let Some((component, remaining)) = descriptors.split_once('/') {
-        if !is_ascii_identifier(component) {
-            return None;
-        }
-        components.push(component);
-        descriptors = remaining;
-    }
-    let function = descriptors.strip_suffix("().")?;
-    if function != leaf_name || !is_ascii_identifier(function) {
-        return None;
-    }
-    components.push(function);
-    Some(components.join("::"))
-}
-
-fn exact_python_test_name(
-    method: &IntentionalBoundarySemanticMethod,
-) -> Result<String, (IntentionalBoundaryBehaviorUnresolvedReason, String)> {
-    let symbol = resolved_symbol(method).ok_or_else(unsupported_selector)?;
-    if symbol.category != IntentionalBoundarySemanticSymbolCategory::Callable
-        || !is_ascii_identifier(&method.symbol_name)
-    {
-        return Err(unsupported_selector());
-    }
-    Ok(method.symbol_name.clone())
-}
-
-fn exact_go_test_name(
-    method: &IntentionalBoundarySemanticMethod,
-) -> Result<String, (IntentionalBoundaryBehaviorUnresolvedReason, String)> {
-    if !is_ascii_identifier(&method.symbol_name) {
-        return Err(unsupported_selector());
-    }
-    Ok(method.symbol_name.clone())
-}
-
-fn unsupported_selector() -> (IntentionalBoundaryBehaviorUnresolvedReason, String) {
-    (
-        IntentionalBoundaryBehaviorUnresolvedReason::UnsupportedTargetSelector,
-        "compiler identity cannot be converted to an exact test selector".to_string(),
     )
-}
-
-fn is_ascii_identifier(value: &str) -> bool {
-    let mut bytes = value.bytes();
-    bytes
-        .next()
-        .is_some_and(|byte| byte == b'_' || byte.is_ascii_alphabetic())
-        && bytes.all(|byte| byte == b'_' || byte.is_ascii_alphanumeric())
-}
-
-fn parent_repository_path(path: &str) -> String {
-    path.rsplit_once('/')
-        .map_or_else(|| ".".to_string(), |(parent, _)| parent.to_string())
-}
-
-fn resolved_symbol_id(method: &IntentionalBoundarySemanticMethod) -> Option<&str> {
-    resolved_symbol(method).map(|symbol| symbol.symbol_id.as_str())
-}
-
-fn resolved_symbol(
-    method: &IntentionalBoundarySemanticMethod,
-) -> Option<&super::IntentionalBoundarySemanticSymbolFacts> {
-    match &method.status {
-        IntentionalBoundarySemanticMethodStatus::Resolved { symbol, .. } => Some(symbol),
-        _ => None,
-    }
+    .map_err(behavior_invalid)?;
+    Ok(census)
 }
 
 fn definition_locations(
@@ -520,140 +448,6 @@ fn validate_behavior_base_evidence(
         );
     }
     Ok(())
-}
-
-fn candidate_id(parser_unit_id: &str, production_symbol_id: &str) -> Result<String, String> {
-    Ok(format!(
-        "ibbc-v1:{}",
-        hash_json(&(
-            "sniffbench-intentional-boundary-behavior-candidate-v1",
-            parser_unit_id,
-            production_symbol_id,
-        ))?
-    ))
-}
-
-fn witness_id(
-    candidate_id: &str,
-    test_symbol_id: &str,
-    relationship_kind: IntentionalBoundarySemanticTestKind,
-    test_parser_unit_id: Option<&str>,
-) -> Result<String, String> {
-    Ok(format!(
-        "ibbw-v1:{}",
-        hash_json(&(
-            "sniffbench-intentional-boundary-behavior-witness-v1",
-            candidate_id,
-            test_symbol_id,
-            relationship_kind,
-            test_parser_unit_id,
-        ))?
-    ))
-}
-
-pub(super) fn finish_behavior_census(
-    source_census: &IntentionalBoundarySourceCensus,
-    semantic_census: &IntentionalBoundarySemanticCensus,
-    base_evidence: &IntentionalBoundaryEvidenceCensus,
-    mut candidates: Vec<IntentionalBoundaryBehaviorCandidate>,
-    mut witnesses: Vec<IntentionalBoundaryBehaviorWitness>,
-    mut executions: Vec<IntentionalBoundaryBehaviorExecution>,
-) -> Result<IntentionalBoundaryBehaviorCensus, String> {
-    candidates.sort_by(|left, right| left.candidate_id.cmp(&right.candidate_id));
-    witnesses.sort_by(|left, right| left.witness_id.cmp(&right.witness_id));
-    executions.sort_by(|left, right| left.execution_id.cmp(&right.execution_id));
-    if candidates
-        .windows(2)
-        .any(|pair| pair[0].candidate_id >= pair[1].candidate_id)
-        || witnesses
-            .windows(2)
-            .any(|pair| pair[0].witness_id >= pair[1].witness_id)
-        || executions
-            .windows(2)
-            .any(|pair| pair[0].execution_id >= pair[1].execution_id)
-    {
-        return Err("intentional-boundary behavior census contains duplicate records".to_string());
-    }
-    let candidate_count_by_status = candidates.iter().fold(
-        BTreeMap::new(),
-        |mut counts: BTreeMap<String, usize>, candidate| {
-            let key = match candidate.status {
-                IntentionalBoundaryBehaviorCandidateStatus::Passed { .. } => "passed",
-                IntentionalBoundaryBehaviorCandidateStatus::NoResolvedBehaviorTest => {
-                    "no_resolved_behavior_test"
-                }
-                IntentionalBoundaryBehaviorCandidateStatus::Unresolved => "unresolved",
-            };
-            *counts.entry(key.to_string()).or_default() += 1;
-            counts
-        },
-    );
-    let witness_count_by_status = witnesses.iter().fold(
-        BTreeMap::new(),
-        |mut counts: BTreeMap<String, usize>, witness| {
-            let key = match witness.outcome {
-                IntentionalBoundaryBehaviorWitnessOutcome::Passed { .. } => "passed",
-                IntentionalBoundaryBehaviorWitnessOutcome::Unresolved { .. } => "unresolved",
-            };
-            *counts.entry(key.to_string()).or_default() += 1;
-            counts
-        },
-    );
-    let mut census = IntentionalBoundaryBehaviorCensus {
-        schema_version: INTENTIONAL_BOUNDARY_BEHAVIOR_CENSUS_SCHEMA_VERSION,
-        behavior_contract: BEHAVIOR_CONTRACT.to_string(),
-        repository: source_census.repository.clone(),
-        revision: source_census.revision.clone(),
-        source_census_sha256: source_census.census_sha256.clone(),
-        semantic_census_sha256: semantic_census.semantic_census_sha256.clone(),
-        base_evidence_census_sha256: base_evidence.evidence_census_sha256.clone(),
-        candidates,
-        witnesses,
-        executions,
-        candidate_count_by_status,
-        witness_count_by_status,
-        behavior_census_sha256: String::new(),
-    };
-    census.behavior_census_sha256 = compute_behavior_census_sha256(&census)?;
-    Ok(census)
-}
-
-pub(super) fn compute_behavior_census_sha256(
-    census: &IntentionalBoundaryBehaviorCensus,
-) -> Result<String, String> {
-    hash_json(&(
-        census.schema_version,
-        &census.behavior_contract,
-        &census.repository,
-        &census.revision,
-        &census.source_census_sha256,
-        &census.semantic_census_sha256,
-        &census.base_evidence_census_sha256,
-        &census.candidates,
-        &census.witnesses,
-        &census.executions,
-        &census.candidate_count_by_status,
-        &census.witness_count_by_status,
-    ))
-}
-
-pub(super) fn hash_json(value: &impl serde::Serialize) -> Result<String, String> {
-    let bytes = serde_json::to_vec(value)
-        .map_err(|error| format!("failed to commit behavior-test evidence: {error}"))?;
-    Ok(format!("{:x}", Sha256::digest(bytes)))
-}
-
-pub(super) fn is_sha256(value: &str) -> bool {
-    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
-}
-
-fn is_safe_repository_path(path: &str) -> bool {
-    !path.is_empty()
-        && !path.contains('\\')
-        && !path.contains('\0')
-        && Path::new(path)
-            .components()
-            .all(|component| matches!(component, Component::Normal(_)))
 }
 
 #[cfg(test)]

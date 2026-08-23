@@ -1,15 +1,16 @@
+use super::super::intentional_boundary_behavior_outcome::{
+    BehaviorDerivationError, BehaviorExecutionAttempt, behavior_failed, behavior_unavailable,
+};
 use super::super::intentional_boundary_runtime_snapshot::IntentionalBoundaryRuntimeSnapshot;
 use super::super::{
     HistoricalTestExecution, HistoricalTestExecutionOutcome, HistoricalTestRecipeDiscovery,
     HistoricalTestRecipeStatus, discover_historical_test_recipe, run_intentional_boundary_test,
 };
 use super::{
-    BehaviorExecutionAttempt, IntentionalBoundaryBehaviorExecution,
-    IntentionalBoundaryBehaviorSelector, IntentionalBoundaryBehaviorTestProofKind,
-    IntentionalBoundaryBehaviorUnresolvedReason, IntentionalBoundaryBehaviorWitnessOutcome,
-    hash_json, is_sha256,
+    IntentionalBoundaryBehaviorExecution, IntentionalBoundaryBehaviorSelector,
+    IntentionalBoundaryBehaviorTestProofKind, IntentionalBoundaryBehaviorUnresolvedReason,
+    IntentionalBoundaryBehaviorWitnessOutcome, TestCount, count_tests, hash_json, is_sha256,
 };
-use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::path::Path;
 
@@ -17,7 +18,7 @@ pub(super) fn execute_behavior_selector(
     source_root: &Path,
     revision: &str,
     selector: &IntentionalBoundaryBehaviorSelector,
-) -> Result<BehaviorExecutionAttempt, String> {
+) -> Result<BehaviorExecutionAttempt, BehaviorDerivationError> {
     if matches!(
         selector,
         IntentionalBoundaryBehaviorSelector::JavaScriptTest { .. }
@@ -36,17 +37,20 @@ pub(super) fn execute_behavior_selector(
         source_root,
         revision,
         "sniff-boundary-behavior",
-    )?;
-    let recipe = discover_historical_test_recipe(snapshot.path(), snapshot.path())?;
+    )
+    .map_err(behavior_failed)?;
+    let recipe = discover_historical_test_recipe(snapshot.path(), snapshot.path())
+        .map_err(behavior_failed)?;
     if recipe.status != HistoricalTestRecipeStatus::Selected {
         return Ok(unresolved_without_execution(
             IntentionalBoundaryBehaviorUnresolvedReason::RecipeUnavailable,
             recipe.reason,
         ));
     }
-    let recipe_sha256 = hash_json(&recipe)?;
-    let recipe_json = serde_json::to_string(&recipe)
-        .map_err(|error| format!("failed to retain targeted test recipe: {error}"))?;
+    let recipe_sha256 = hash_json(&recipe).map_err(behavior_failed)?;
+    let recipe_json = serde_json::to_string(&recipe).map_err(|error| {
+        behavior_failed(format!("failed to retain targeted test recipe: {error}"))
+    })?;
     let (preparation, command) = match targeted_command(selector, &recipe) {
         Ok(value) => value,
         Err(detail) => {
@@ -56,20 +60,15 @@ pub(super) fn execute_behavior_selector(
             ));
         }
     };
-    let outcome = run_intentional_boundary_test(snapshot.path(), revision, &preparation, &command)?;
+    let outcome = run_intentional_boundary_test(snapshot.path(), revision, &preparation, &command)
+        .map_err(behavior_failed)?;
     match outcome {
-        HistoricalTestExecutionOutcome::RuntimeUnavailable(detail) => {
-            Ok(unresolved_without_execution(
-                IntentionalBoundaryBehaviorUnresolvedReason::RuntimeUnavailable,
-                detail,
-            ))
-        }
-        HistoricalTestExecutionOutcome::SandboxUnavailable(detail) => {
-            Ok(unresolved_without_execution(
-                IntentionalBoundaryBehaviorUnresolvedReason::SandboxUnavailable,
-                detail,
-            ))
-        }
+        HistoricalTestExecutionOutcome::RuntimeUnavailable(detail) => Err(behavior_unavailable(
+            format!("targeted behavior runtime is unavailable: {detail}"),
+        )),
+        HistoricalTestExecutionOutcome::SandboxUnavailable(detail) => Err(behavior_unavailable(
+            format!("targeted behavior sandbox is unavailable: {detail}"),
+        )),
         HistoricalTestExecutionOutcome::Completed(completed) => {
             completed_attempt(selector, recipe_sha256, recipe_json, command, *completed)
         }
@@ -182,7 +181,7 @@ fn completed_attempt(
     recipe_json: String,
     command: Vec<String>,
     completed: HistoricalTestExecution,
-) -> Result<BehaviorExecutionAttempt, String> {
+) -> Result<BehaviorExecutionAttempt, BehaviorDerivationError> {
     let result = &completed.result;
     if result.network_enabled
         || result.command != command
@@ -191,7 +190,9 @@ fn completed_attempt(
         || !is_sha256(&result.stderr_sha256)
         || !is_sha256(&result.raw_result_sha256)
     {
-        return Err("targeted behavior execution violated its sealed runtime contract".to_string());
+        return Err(behavior_failed(
+            "targeted behavior execution violated its sealed runtime contract",
+        ));
     }
     let count = if result.test_executed && !result.timed_out && result.status_code == Some(0) {
         count_tests(
@@ -207,7 +208,7 @@ fn completed_attempt(
         Err(error) => (TestCount::default(), Some(error)),
     };
     let raw_result_json = String::from_utf8(completed.raw_result.clone())
-        .map_err(|_| "targeted behavior execution receipt is not UTF-8 JSON".to_string())?;
+        .map_err(|_| behavior_failed("targeted behavior execution receipt is not UTF-8 JSON"))?;
     let mut execution = IntentionalBoundaryBehaviorExecution {
         execution_id: String::new(),
         revision: result.revision.clone(),
@@ -228,15 +229,17 @@ fn completed_attempt(
         raw_result_sha256: result.raw_result_sha256.clone(),
         raw_result_json,
     };
-    execution.execution_id = compute_execution_id(&execution)?;
+    execution.execution_id = compute_execution_id(&execution).map_err(behavior_failed)?;
     let execution_id = execution.execution_id.clone();
-    let outcome = if !result.test_executed {
-        unresolved_with_execution(
-            IntentionalBoundaryBehaviorUnresolvedReason::PreparationFailed,
-            "targeted test preparation did not complete".to_string(),
-            execution_id,
-        )
-    } else if result.timed_out || result.status_code != Some(0) {
+    if !result.test_executed {
+        return Err(behavior_failed(
+            "targeted behavior dependency preparation did not complete",
+        ));
+    }
+    if result.timed_out {
+        return Err(behavior_failed("targeted behavior test timed out"));
+    }
+    let outcome = if result.status_code != Some(0) {
         unresolved_with_execution(
             IntentionalBoundaryBehaviorUnresolvedReason::TargetedTestFailed,
             format!(
@@ -270,94 +273,6 @@ fn completed_attempt(
         execution: Some(execution),
         outcome,
     })
-}
-
-#[derive(Default, PartialEq, Eq)]
-pub(super) struct TestCount {
-    pub(super) executed: usize,
-    pub(super) matched: usize,
-}
-
-pub(super) fn count_tests(
-    selector: &IntentionalBoundaryBehaviorSelector,
-    stdout: &str,
-    stderr: &str,
-) -> Result<TestCount, String> {
-    match selector {
-        IntentionalBoundaryBehaviorSelector::CargoTest { test_name } => {
-            let mut count = TestCount::default();
-            for line in stdout.lines().chain(stderr.lines()) {
-                let Some(result) = line.trim().strip_prefix("test ") else {
-                    continue;
-                };
-                let Some((name, status)) = result.rsplit_once(" ... ") else {
-                    continue;
-                };
-                if !matches!(status, "ok" | "FAILED" | "ignored") {
-                    continue;
-                }
-                count.executed += 1;
-                if name == test_name && status == "ok" {
-                    count.matched += 1;
-                }
-            }
-            Ok(count)
-        }
-        IntentionalBoundaryBehaviorSelector::Pytest { .. } => {
-            let summary = stdout.lines().chain(stderr.lines()).find(|line| {
-                let line = line.trim();
-                line.starts_with("1 passed") || line.contains(" 1 passed")
-            });
-            let Some(summary) = summary else {
-                return Err("pytest emitted no exact one-pass summary".to_string());
-            };
-            if [
-                "failed",
-                "error",
-                "skipped",
-                "xfailed",
-                "xpassed",
-                "deselected",
-            ]
-            .iter()
-            .any(|status| summary.contains(status))
-            {
-                return Err("pytest summary contains non-target outcomes".to_string());
-            }
-            Ok(TestCount {
-                executed: 1,
-                matched: 1,
-            })
-        }
-        IntentionalBoundaryBehaviorSelector::GoTest { test_name, .. } => {
-            let mut count = TestCount::default();
-            for line in stdout
-                .lines()
-                .chain(stderr.lines())
-                .filter(|line| !line.trim().is_empty())
-            {
-                let value: Value = serde_json::from_str(line)
-                    .map_err(|_| "go test -json emitted a non-JSON record".to_string())?;
-                let Some(name) = value.get("Test").and_then(Value::as_str) else {
-                    continue;
-                };
-                let Some(action) = value.get("Action").and_then(Value::as_str) else {
-                    return Err("go test -json emitted a test record without an action".to_string());
-                };
-                if matches!(action, "pass" | "fail" | "skip") {
-                    count.executed += 1;
-                    if name == test_name && action == "pass" {
-                        count.matched += 1;
-                    }
-                }
-            }
-            Ok(count)
-        }
-        IntentionalBoundaryBehaviorSelector::JavaScriptTest { .. }
-        | IntentionalBoundaryBehaviorSelector::GradleTest { .. } => {
-            Err("provider has no frozen output parser".to_string())
-        }
-    }
 }
 
 pub(super) fn compute_execution_id(
@@ -465,45 +380,6 @@ mod tests {
                 "--test-threads=1",
             ]
         );
-    }
-
-    #[test]
-    fn cargo_output_must_contain_only_the_exact_test() {
-        let selector = IntentionalBoundaryBehaviorSelector::CargoTest {
-            test_name: "tests::adapter_works".to_string(),
-        };
-        let exact = count_tests(
-            &selector,
-            "running 1 test\ntest tests::adapter_works ... ok\n",
-            "",
-        )
-        .unwrap();
-        let ambiguous = count_tests(
-            &selector,
-            "test tests::adapter_works ... ok\ntest other::adapter_works ... ok\n",
-            "",
-        )
-        .unwrap();
-
-        assert_eq!((exact.executed, exact.matched), (1, 1));
-        assert_eq!((ambiguous.executed, ambiguous.matched), (2, 1));
-    }
-
-    #[test]
-    fn go_output_counts_terminal_test_events_only() {
-        let selector = IntentionalBoundaryBehaviorSelector::GoTest {
-            package_repository_path: "internal/retry".to_string(),
-            test_name: "TestRetryBoundary".to_string(),
-        };
-        let output = concat!(
-            "{\"Action\":\"run\",\"Test\":\"TestRetryBoundary\"}\n",
-            "{\"Action\":\"output\",\"Test\":\"TestRetryBoundary\",\"Output\":\"ok\"}\n",
-            "{\"Action\":\"pass\",\"Test\":\"TestRetryBoundary\"}\n",
-            "{\"Action\":\"pass\",\"Package\":\"example/internal/retry\"}\n",
-        );
-
-        let count = count_tests(&selector, output, "").unwrap();
-        assert_eq!((count.executed, count.matched), (1, 1));
     }
 
     #[test]

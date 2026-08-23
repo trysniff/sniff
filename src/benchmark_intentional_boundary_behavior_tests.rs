@@ -1,3 +1,6 @@
+use super::super::intentional_boundary_behavior_outcome::{
+    BehaviorDerivationErrorKind, behavior_failed, behavior_unavailable,
+};
 use super::*;
 use crate::benchmark::release::{
     HistoricalTestRecipeDiscovery, HistoricalTestRecipeStatus, IntentionalBoundaryAstProofKind,
@@ -167,7 +170,86 @@ fn baseline_pass_is_not_qualifying_behavior_evidence() {
     )
     .unwrap_err();
 
-    assert!(error.contains("non-targeted proof"));
+    assert!(error.detail.contains("non-targeted proof"));
+}
+
+#[test]
+fn operational_executor_failures_abort_the_census() {
+    let fixture = fixture();
+    for (source, expected) in [
+        (
+            behavior_unavailable("same detail"),
+            BehaviorDerivationErrorKind::InfrastructureUnavailable,
+        ),
+        (
+            behavior_failed("same detail"),
+            BehaviorDerivationErrorKind::InfrastructureFailed,
+        ),
+    ] {
+        let error = census_behavior_tests_with_executor(
+            &fixture.repository,
+            &fixture.revision,
+            fixture.root.path(),
+            &fixture.inventory,
+            &fixture.source,
+            &fixture.semantic,
+            &fixture.evidence,
+            |_| Err(source.clone()),
+        )
+        .unwrap_err();
+
+        assert_eq!(error.kind, expected);
+        assert_eq!(error.detail, "same detail");
+    }
+}
+
+#[test]
+fn legacy_operational_unresolved_records_cannot_checkpoint() {
+    for reason in [
+        IntentionalBoundaryBehaviorUnresolvedReason::RuntimeUnavailable,
+        IntentionalBoundaryBehaviorUnresolvedReason::SandboxUnavailable,
+        IntentionalBoundaryBehaviorUnresolvedReason::PreparationFailed,
+    ] {
+        let fixture = fixture();
+        let census = census_behavior_tests_with_executor(
+            &fixture.repository,
+            &fixture.revision,
+            fixture.root.path(),
+            &fixture.inventory,
+            &fixture.source,
+            &fixture.semantic,
+            &fixture.evidence,
+            |selector| Ok(passing_attempt(selector.clone(), &fixture.revision)),
+        )
+        .unwrap();
+        let mut witness = census.witnesses[0].clone();
+        witness.outcome = IntentionalBoundaryBehaviorWitnessOutcome::Unresolved {
+            reason,
+            detail: "legacy operational record".to_string(),
+            execution_id: None,
+        };
+        let mut candidate = census.candidates[0].clone();
+        candidate.status = IntentionalBoundaryBehaviorCandidateStatus::Unresolved;
+        let forged = finish_behavior_census(
+            &fixture.source,
+            &fixture.semantic,
+            &fixture.evidence,
+            vec![candidate],
+            vec![witness],
+            Vec::new(),
+        )
+        .unwrap();
+
+        assert!(
+            validate_intentional_boundary_behavior_census_commitment(
+                &fixture.source,
+                &fixture.semantic,
+                &fixture.evidence,
+                &forged,
+            )
+            .is_err()
+        );
+    }
 }
 
 #[test]
@@ -231,8 +313,17 @@ fn real_cargo_test_is_exact_and_network_is_disabled() {
     };
 
     let attempt =
-        runtime::execute_behavior_selector(fixture.root.path(), &fixture.revision, &selector)
-            .unwrap();
+        match runtime::execute_behavior_selector(fixture.root.path(), &fixture.revision, &selector)
+        {
+            Ok(attempt) => attempt,
+            Err(error)
+                if cfg!(windows)
+                    && error.kind == BehaviorDerivationErrorKind::InfrastructureUnavailable =>
+            {
+                return;
+            }
+            Err(error) => panic!("real Cargo behavior proof failed operationally: {error:?}"),
+        };
     match attempt.outcome {
         IntentionalBoundaryBehaviorWitnessOutcome::Passed {
             proof: IntentionalBoundaryBehaviorTestProofKind::TargetedBehaviorPass,
@@ -245,11 +336,6 @@ fn real_cargo_test_is_exact_and_network_is_disabled() {
             assert_eq!(execution.executed_test_count, 1);
             assert_eq!(execution.matched_test_count, 1);
         }
-        IntentionalBoundaryBehaviorWitnessOutcome::Unresolved {
-            reason: IntentionalBoundaryBehaviorUnresolvedReason::SandboxUnavailable,
-            execution_id: None,
-            ..
-        } if cfg!(windows) => {}
         outcome => panic!("real Cargo behavior proof did not pass safely: {outcome:?}"),
     }
 }

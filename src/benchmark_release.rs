@@ -545,10 +545,18 @@ mod intentional_boundary_behavior_schema;
 
 pub use intentional_boundary_behavior_schema::*;
 
+#[path = "benchmark_intentional_boundary_behavior_outcome.rs"]
+mod intentional_boundary_behavior_outcome;
+
 #[path = "benchmark_intentional_boundary_behavior.rs"]
 mod intentional_boundary_behavior;
 
 pub use intentional_boundary_behavior::*;
+
+#[path = "benchmark_intentional_boundary_behavior_stage_schema.rs"]
+mod intentional_boundary_behavior_stage_schema;
+
+pub use intentional_boundary_behavior_stage_schema::*;
 
 #[path = "benchmark_intentional_boundary_generator_schema.rs"]
 mod intentional_boundary_generator_schema;
@@ -623,6 +631,11 @@ pub use intentional_boundary_project_model_stage::*;
 mod intentional_boundary_generator_stage;
 
 pub use intentional_boundary_generator_stage::*;
+
+#[path = "benchmark_intentional_boundary_behavior_stage.rs"]
+mod intentional_boundary_behavior_stage;
+
+pub use intentional_boundary_behavior_stage::*;
 
 #[path = "benchmark_intentional_boundary_candidate_schema.rs"]
 mod intentional_boundary_candidate_schema;
