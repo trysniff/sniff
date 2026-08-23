@@ -1,3 +1,6 @@
+use super::super::intentional_boundary_generator_outcome::{
+    GeneratorDerivationErrorKind, ReplayFailureKind,
+};
 use super::*;
 use crate::benchmark::release::{
     IntentionalBoundaryIndexerKind, IntentionalBoundaryManifestDeclarationKind,
@@ -281,6 +284,85 @@ fn fixture() -> Fixture {
         bindings,
         evidence,
     }
+}
+
+#[test]
+fn operational_replay_failures_cannot_become_unresolved_census_records() {
+    let fixture = fixture();
+    let unavailable = census_generators_with_executor(
+        &fixture.repository,
+        &fixture.revision,
+        fixture.root.path(),
+        &fixture.inventory,
+        &fixture.source,
+        &fixture.semantic,
+        &fixture.project_models,
+        &fixture.manifests,
+        &fixture.bindings,
+        &fixture.evidence,
+        |_, _| {
+            Err(ReplayFailure::unavailable(
+                IntentionalBoundaryGeneratorUnresolvedReason::SandboxUnavailable,
+                "typed unavailable",
+            ))
+        },
+    )
+    .unwrap_err();
+    assert_eq!(
+        unavailable.kind,
+        GeneratorDerivationErrorKind::InfrastructureUnavailable
+    );
+
+    let failed = census_generators_with_executor(
+        &fixture.repository,
+        &fixture.revision,
+        fixture.root.path(),
+        &fixture.inventory,
+        &fixture.source,
+        &fixture.semantic,
+        &fixture.project_models,
+        &fixture.manifests,
+        &fixture.bindings,
+        &fixture.evidence,
+        |_, _| Err(ReplayFailure::failed("typed infrastructure failure")),
+    )
+    .unwrap_err();
+    assert_eq!(
+        failed.kind,
+        GeneratorDerivationErrorKind::InfrastructureFailed
+    );
+}
+
+#[test]
+fn terminal_replay_failure_remains_typed_repository_evidence() {
+    let fixture = fixture();
+    let census = census_generators_with_executor(
+        &fixture.repository,
+        &fixture.revision,
+        fixture.root.path(),
+        &fixture.inventory,
+        &fixture.source,
+        &fixture.semantic,
+        &fixture.project_models,
+        &fixture.manifests,
+        &fixture.bindings,
+        &fixture.evidence,
+        |_, _| {
+            Err(ReplayFailure::terminal(
+                IntentionalBoundaryGeneratorUnresolvedReason::OutputChanged,
+                "tracked output differs",
+            ))
+        },
+    )
+    .unwrap();
+
+    assert!(matches!(
+        census.replays[0].outcome,
+        IntentionalBoundaryGeneratorReplayOutcome::Unresolved {
+            reason: IntentionalBoundaryGeneratorUnresolvedReason::OutputChanged,
+            ..
+        }
+    ));
 }
 
 fn node_fixture() -> Fixture {
@@ -793,7 +875,7 @@ fn recommitted_tampered_replay_environment_is_rejected() {
 fn real_cargo_generator_reproduces_committed_output_twice_offline() {
     let fixture = fixture();
 
-    let census = census_intentional_boundary_generators(
+    let census = census_intentional_boundary_generators_typed(
         &fixture.repository,
         &fixture.revision,
         fixture.root.path(),
@@ -804,8 +886,17 @@ fn real_cargo_generator_reproduces_committed_output_twice_offline() {
         &fixture.manifests,
         &fixture.bindings,
         &fixture.evidence,
-    )
-    .unwrap();
+    );
+    let census = match census {
+        Ok(census) => census,
+        Err(error)
+            if cfg!(windows)
+                && error.kind == GeneratorDerivationErrorKind::InfrastructureUnavailable =>
+        {
+            return;
+        }
+        Err(error) => panic!("real Cargo generator failed operationally: {error:?}"),
+    };
 
     let outcome = &census.replays[0].outcome;
     match outcome {
@@ -918,7 +1009,7 @@ fn python_entrypoint_rejects_ambiguous_lock_families() {
 fn real_uv_entrypoint_reproduces_committed_output_twice_offline() {
     let fixture = python_fixture();
 
-    let census = census_intentional_boundary_generators(
+    let census = census_intentional_boundary_generators_typed(
         &fixture.repository,
         &fixture.revision,
         fixture.root.path(),
@@ -929,8 +1020,17 @@ fn real_uv_entrypoint_reproduces_committed_output_twice_offline() {
         &fixture.manifests,
         &fixture.bindings,
         &fixture.evidence,
-    )
-    .unwrap();
+    );
+    let census = match census {
+        Ok(census) => census,
+        Err(error)
+            if cfg!(windows)
+                && error.kind == GeneratorDerivationErrorKind::InfrastructureUnavailable =>
+        {
+            return;
+        }
+        Err(error) => panic!("real uv generator failed operationally: {error:?}"),
+    };
 
     let outcome = &census.replays[0].outcome;
     match outcome {
@@ -1049,9 +1149,7 @@ fn generator_replay_rejects_collateral_repository_mutation() {
 
     assert!(
         failure.reason == IntentionalBoundaryGeneratorUnresolvedReason::RepositoryMutation
-            || (cfg!(windows)
-                && failure.reason
-                    == IntentionalBoundaryGeneratorUnresolvedReason::SandboxUnavailable),
+            || (cfg!(windows) && failure.kind != ReplayFailureKind::Terminal),
         "unexpected mutation outcome: {}",
         failure.detail
     );
@@ -1061,7 +1159,7 @@ fn generator_replay_rejects_collateral_repository_mutation() {
 fn real_npm_generator_prepares_locked_dependencies_then_reproduces_twice_offline() {
     let fixture = node_fixture();
 
-    let census = census_intentional_boundary_generators(
+    let census = census_intentional_boundary_generators_typed(
         &fixture.repository,
         &fixture.revision,
         fixture.root.path(),
@@ -1072,8 +1170,17 @@ fn real_npm_generator_prepares_locked_dependencies_then_reproduces_twice_offline
         &fixture.manifests,
         &fixture.bindings,
         &fixture.evidence,
-    )
-    .unwrap();
+    );
+    let census = match census {
+        Ok(census) => census,
+        Err(error)
+            if cfg!(windows)
+                && error.kind == GeneratorDerivationErrorKind::InfrastructureUnavailable =>
+        {
+            return;
+        }
+        Err(error) => panic!("real npm generator failed operationally: {error:?}"),
+    };
 
     let outcome = &census.replays[0].outcome;
     match outcome {

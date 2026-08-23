@@ -93,7 +93,7 @@ pub(super) fn expected_output(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(super) fn finish_census(
+pub(in crate::benchmark::release) fn finish_census(
     inventory: &IntentionalBoundaryRepositoryInventory,
     source: &IntentionalBoundarySourceCensus,
     semantic: &IntentionalBoundarySemanticCensus,
