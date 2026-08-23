@@ -13,7 +13,7 @@ use super::{
     IntentionalBoundaryMaterialization, IntentionalBoundaryProjectModelStage,
     IntentionalBoundaryRepositoryInventory, IntentionalBoundarySemanticCensusStage,
     IntentionalBoundarySourceCensusStage, ValidatedIntentionalBoundaryProtocol,
-    validate_intentional_boundary_candidate_census,
+    validate_committed_behavior_stage, validate_intentional_boundary_candidate_census,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -36,7 +36,7 @@ pub fn qualify_intentional_boundary_candidate_stage(
     generator_stage: &IntentionalBoundaryGeneratorStage,
     behavior_stage: &IntentionalBoundaryBehaviorStage,
 ) -> Result<IntentionalBoundaryCandidateStage, IntentionalBoundaryCandidateStageError> {
-    validate_upstream_lineage(
+    validate_committed_upstream_lineage(
         protocol,
         task,
         materialization,
@@ -110,6 +110,62 @@ pub fn validate_intentional_boundary_candidate_stage(
     )?;
     if stage != &expected {
         return Err(invalid("intentional-boundary candidate stage changed"));
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn validate_committed_intentional_boundary_candidate_stage(
+    protocol: &ValidatedIntentionalBoundaryProtocol,
+    task: &IntentionalBoundaryFrameTask,
+    materialization: &IntentionalBoundaryMaterialization,
+    inventory: &IntentionalBoundaryRepositoryInventory,
+    source_census: &IntentionalBoundarySourceCensusStage,
+    license_census: &IntentionalBoundaryLicenseCensusStage,
+    semantic_census: &IntentionalBoundarySemanticCensusStage,
+    ast_census: &IntentionalBoundaryAstCensusStage,
+    manifest_stage: &IntentionalBoundaryManifestStage,
+    base_evidence_stage: &IntentionalBoundaryEvidenceStage,
+    project_model_stage: &IntentionalBoundaryProjectModelStage,
+    generator_stage: &IntentionalBoundaryGeneratorStage,
+    behavior_stage: &IntentionalBoundaryBehaviorStage,
+    stage: &IntentionalBoundaryCandidateStage,
+) -> Result<(), IntentionalBoundaryCandidateStageError> {
+    validate_committed_upstream_lineage(
+        protocol,
+        task,
+        materialization,
+        inventory,
+        source_census,
+        license_census,
+        semantic_census,
+        ast_census,
+        manifest_stage,
+        base_evidence_stage,
+        project_model_stage,
+        generator_stage,
+        behavior_stage,
+    )?;
+    let expected = finish_candidate_stage(
+        protocol,
+        task,
+        materialization,
+        inventory,
+        source_census,
+        license_census,
+        semantic_census,
+        ast_census,
+        manifest_stage,
+        base_evidence_stage,
+        project_model_stage,
+        generator_stage,
+        behavior_stage,
+        stage.candidate_census.clone(),
+    )?;
+    if stage != &expected {
+        return Err(invalid(
+            "intentional-boundary committed candidate stage changed",
+        ));
     }
     Ok(())
 }
@@ -222,6 +278,44 @@ fn validate_upstream_lineage(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
+fn validate_committed_upstream_lineage(
+    protocol: &ValidatedIntentionalBoundaryProtocol,
+    task: &IntentionalBoundaryFrameTask,
+    materialization: &IntentionalBoundaryMaterialization,
+    inventory: &IntentionalBoundaryRepositoryInventory,
+    source_census: &IntentionalBoundarySourceCensusStage,
+    license_census: &IntentionalBoundaryLicenseCensusStage,
+    semantic_census: &IntentionalBoundarySemanticCensusStage,
+    ast_census: &IntentionalBoundaryAstCensusStage,
+    manifest_stage: &IntentionalBoundaryManifestStage,
+    base_evidence_stage: &IntentionalBoundaryEvidenceStage,
+    project_model_stage: &IntentionalBoundaryProjectModelStage,
+    generator_stage: &IntentionalBoundaryGeneratorStage,
+    behavior_stage: &IntentionalBoundaryBehaviorStage,
+) -> Result<(), IntentionalBoundaryCandidateStageError> {
+    if protocol.protocol_sha256 != task.protocol_sha256 {
+        return Err(invalid(
+            "intentional-boundary candidate protocol does not match the frame task",
+        ));
+    }
+    validate_committed_behavior_stage(
+        task,
+        materialization,
+        inventory,
+        source_census,
+        license_census,
+        semantic_census,
+        ast_census,
+        manifest_stage,
+        base_evidence_stage,
+        project_model_stage,
+        generator_stage,
+        behavior_stage,
+    )
+    .map_err(map_behavior_error)
+}
+
 pub(super) fn candidate_stage_sha256(
     value: &IntentionalBoundaryCandidateStage,
 ) -> Result<String, IntentionalBoundaryCandidateStageError> {
@@ -262,6 +356,22 @@ fn map_derivation_error(error: CandidateDerivationError) -> IntentionalBoundaryC
             kind: IntentionalBoundaryCandidateStageErrorKind::InvalidInput,
             detail: error.detail,
         },
+    }
+}
+
+fn map_behavior_error(
+    error: super::IntentionalBoundaryBehaviorStageError,
+) -> IntentionalBoundaryCandidateStageError {
+    let kind = match error.kind {
+        super::IntentionalBoundaryBehaviorStageErrorKind::InvalidInput
+        | super::IntentionalBoundaryBehaviorStageErrorKind::InfrastructureUnavailable
+        | super::IntentionalBoundaryBehaviorStageErrorKind::InfrastructureFailed => {
+            IntentionalBoundaryCandidateStageErrorKind::InvalidInput
+        }
+    };
+    IntentionalBoundaryCandidateStageError {
+        kind,
+        detail: error.detail,
     }
 }
 

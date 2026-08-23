@@ -8,12 +8,12 @@ use super::{
     INTENTIONAL_BOUNDARY_SEMANTIC_CENSUS_STAGE_SCHEMA_VERSION, IntentionalBoundaryFrameTask,
     IntentionalBoundaryInventoryError, IntentionalBoundaryInventoryErrorKind,
     IntentionalBoundaryLicenseCensusStage, IntentionalBoundaryLicenseCensusStageError,
-    IntentionalBoundaryLicenseCensusStageErrorKind, IntentionalBoundaryLicenseCensusStageOutcome,
-    IntentionalBoundaryMaterialization, IntentionalBoundaryRepositoryInventory,
-    IntentionalBoundarySemanticCensusExclusion, IntentionalBoundarySemanticCensusStage,
-    IntentionalBoundarySemanticCensusStageError, IntentionalBoundarySemanticCensusStageErrorKind,
-    IntentionalBoundarySemanticCensusStageOutcome, IntentionalBoundarySourceCensusStage,
-    validate_intentional_boundary_license_census_stage_outcome,
+    IntentionalBoundaryLicenseCensusStageErrorKind, IntentionalBoundaryMaterialization,
+    IntentionalBoundaryRepositoryInventory, IntentionalBoundarySemanticCensusExclusion,
+    IntentionalBoundarySemanticCensusStage, IntentionalBoundarySemanticCensusStageError,
+    IntentionalBoundarySemanticCensusStageErrorKind, IntentionalBoundarySemanticCensusStageOutcome,
+    IntentionalBoundarySourceCensusStage, validate_committed_license_census_stage,
+    validate_intentional_boundary_semantic_census,
 };
 use crate::semantic_indexer_runner::{SemanticIndexerBatchOutcome, SemanticIndexerRunFailure};
 use crate::types::FileRecord;
@@ -39,7 +39,6 @@ pub async fn census_intentional_boundary_semantics_stage(
     validate_license_census(
         task,
         materialization,
-        root,
         inventory,
         source_census,
         license_census,
@@ -82,6 +81,43 @@ pub async fn validate_intentional_boundary_semantic_census_stage_outcome(
     if outcome != &expected {
         return Err(invalid(
             "intentional-boundary semantic census stage outcome changed",
+        ));
+    }
+    Ok(())
+}
+
+pub(super) fn validate_committed_semantic_census_stage(
+    task: &IntentionalBoundaryFrameTask,
+    materialization: &IntentionalBoundaryMaterialization,
+    inventory: &IntentionalBoundaryRepositoryInventory,
+    source_census: &IntentionalBoundarySourceCensusStage,
+    license_census: &IntentionalBoundaryLicenseCensusStage,
+    stage: &IntentionalBoundarySemanticCensusStage,
+) -> Result<(), IntentionalBoundarySemanticCensusStageError> {
+    validate_license_census(
+        task,
+        materialization,
+        inventory,
+        source_census,
+        license_census,
+    )?;
+    validate_intentional_boundary_semantic_census(
+        &source_census.source_census,
+        &stage.semantic_census,
+    )
+    .map_err(invalid)?;
+    if stage.schema_version != INTENTIONAL_BOUNDARY_SEMANTIC_CENSUS_STAGE_SCHEMA_VERSION
+        || stage.stage_contract != STAGE_CONTRACT
+        || stage.frame_task_sha256 != task.task_sha256
+        || stage.population_rank != materialization.population_rank
+        || stage.materialization_sha256 != materialization.materialization_sha256
+        || stage.inventory_sha256 != inventory.inventory_sha256
+        || stage.source_census_stage_sha256 != source_census.stage_sha256
+        || stage.license_census_stage_sha256 != license_census.stage_sha256
+        || stage.stage_sha256 != stage_sha256(stage)?
+    {
+        return Err(invalid(
+            "intentional-boundary committed semantic census stage changed",
         ));
     }
     Ok(())
@@ -208,18 +244,16 @@ fn exclusion(
 fn validate_license_census(
     task: &IntentionalBoundaryFrameTask,
     materialization: &IntentionalBoundaryMaterialization,
-    root: &Path,
     inventory: &IntentionalBoundaryRepositoryInventory,
     source_census: &IntentionalBoundarySourceCensusStage,
     license_census: &IntentionalBoundaryLicenseCensusStage,
 ) -> Result<(), IntentionalBoundarySemanticCensusStageError> {
-    validate_intentional_boundary_license_census_stage_outcome(
+    validate_committed_license_census_stage(
         task,
         materialization,
-        root,
         inventory,
         source_census,
-        &IntentionalBoundaryLicenseCensusStageOutcome::Completed(license_census.clone()),
+        license_census,
     )
     .map_err(map_license_error)
 }

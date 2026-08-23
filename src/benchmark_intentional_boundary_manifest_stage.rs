@@ -1,4 +1,6 @@
-use super::intentional_boundary_manifest::census_intentional_boundary_manifests_typed;
+use super::intentional_boundary_manifest::{
+    census_intentional_boundary_manifests_typed, validate_manifest_census_commitment,
+};
 use super::intentional_boundary_manifest_binding::bind_intentional_boundary_manifests_typed;
 use super::intentional_boundary_manifest_stage_support::{
     ManifestPreflight, failure_key, preflight_manifest_entries, resolve_manifest_errors,
@@ -7,14 +9,14 @@ use super::{
     INTENTIONAL_BOUNDARY_MANIFEST_EXCLUSION_SCHEMA_VERSION,
     INTENTIONAL_BOUNDARY_MANIFEST_STAGE_SCHEMA_VERSION, IntentionalBoundaryAstCensusStage,
     IntentionalBoundaryAstCensusStageError, IntentionalBoundaryAstCensusStageErrorKind,
-    IntentionalBoundaryAstCensusStageOutcome, IntentionalBoundaryFrameTask,
-    IntentionalBoundaryLicenseCensusStage, IntentionalBoundaryManifestBindingCensus,
-    IntentionalBoundaryManifestCensus, IntentionalBoundaryManifestExclusion,
-    IntentionalBoundaryManifestFailureEvidence, IntentionalBoundaryManifestStage,
-    IntentionalBoundaryManifestStageError, IntentionalBoundaryManifestStageErrorKind,
-    IntentionalBoundaryManifestStageOutcome, IntentionalBoundaryMaterialization,
-    IntentionalBoundaryRepositoryInventory, IntentionalBoundarySemanticCensusStage,
-    IntentionalBoundarySourceCensusStage, validate_intentional_boundary_ast_census_stage_outcome,
+    IntentionalBoundaryFrameTask, IntentionalBoundaryLicenseCensusStage,
+    IntentionalBoundaryManifestBindingCensus, IntentionalBoundaryManifestCensus,
+    IntentionalBoundaryManifestExclusion, IntentionalBoundaryManifestFailureEvidence,
+    IntentionalBoundaryManifestStage, IntentionalBoundaryManifestStageError,
+    IntentionalBoundaryManifestStageErrorKind, IntentionalBoundaryManifestStageOutcome,
+    IntentionalBoundaryMaterialization, IntentionalBoundaryRepositoryInventory,
+    IntentionalBoundarySemanticCensusStage, IntentionalBoundarySourceCensusStage,
+    validate_committed_ast_census_stage, validate_intentional_boundary_manifest_bindings,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -38,14 +40,12 @@ pub async fn census_intentional_boundary_manifest_stage(
     validate_ast_census(
         task,
         materialization,
-        root,
         inventory,
         source_census,
         license_census,
         semantic_census,
         ast_census,
-    )
-    .await?;
+    )?;
     let preflight = preflight_manifest_entries(root, inventory);
     if !preflight.is_empty() {
         return finish_manifest_stage(
@@ -136,6 +136,59 @@ pub async fn validate_intentional_boundary_manifest_stage_outcome(
     if outcome != &expected {
         return Err(invalid(
             "intentional-boundary manifest stage outcome changed",
+        ));
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn validate_committed_manifest_stage(
+    task: &IntentionalBoundaryFrameTask,
+    materialization: &IntentionalBoundaryMaterialization,
+    inventory: &IntentionalBoundaryRepositoryInventory,
+    source_census: &IntentionalBoundarySourceCensusStage,
+    license_census: &IntentionalBoundaryLicenseCensusStage,
+    semantic_census: &IntentionalBoundarySemanticCensusStage,
+    ast_census: &IntentionalBoundaryAstCensusStage,
+    stage: &IntentionalBoundaryManifestStage,
+) -> Result<(), IntentionalBoundaryManifestStageError> {
+    validate_ast_census(
+        task,
+        materialization,
+        inventory,
+        source_census,
+        license_census,
+        semantic_census,
+        ast_census,
+    )?;
+    validate_manifest_census_commitment(
+        inventory.inventory_sha256.as_str(),
+        &stage.manifest_census,
+    )
+    .map_err(invalid)?;
+    validate_intentional_boundary_manifest_bindings(
+        &source_census.source_census,
+        &semantic_census.semantic_census,
+        &stage.manifest_census,
+        &stage.binding_census,
+    )
+    .map_err(invalid)?;
+    if stage.schema_version != INTENTIONAL_BOUNDARY_MANIFEST_STAGE_SCHEMA_VERSION
+        || stage.stage_contract != STAGE_CONTRACT
+        || stage.frame_task_sha256 != task.task_sha256
+        || stage.population_rank != materialization.population_rank
+        || stage.materialization_sha256 != materialization.materialization_sha256
+        || stage.inventory_sha256 != inventory.inventory_sha256
+        || stage.source_census_stage_sha256 != source_census.stage_sha256
+        || stage.license_census_stage_sha256 != license_census.stage_sha256
+        || stage.semantic_census_stage_sha256 != semantic_census.stage_sha256
+        || stage.ast_census_stage_sha256 != ast_census.stage_sha256
+        || stage.manifest_census.repository != materialization.repository
+        || stage.manifest_census.revision != materialization.revision
+        || stage.stage_sha256 != stage_sha256(stage)?
+    {
+        return Err(invalid(
+            "intentional-boundary committed manifest stage changed",
         ));
     }
     Ok(())
@@ -282,27 +335,24 @@ fn exclusion(
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn validate_ast_census(
+fn validate_ast_census(
     task: &IntentionalBoundaryFrameTask,
     materialization: &IntentionalBoundaryMaterialization,
-    root: &Path,
     inventory: &IntentionalBoundaryRepositoryInventory,
     source_census: &IntentionalBoundarySourceCensusStage,
     license_census: &IntentionalBoundaryLicenseCensusStage,
     semantic_census: &IntentionalBoundarySemanticCensusStage,
     ast_census: &IntentionalBoundaryAstCensusStage,
 ) -> Result<(), IntentionalBoundaryManifestStageError> {
-    validate_intentional_boundary_ast_census_stage_outcome(
+    validate_committed_ast_census_stage(
         task,
         materialization,
-        root,
         inventory,
         source_census,
         license_census,
         semantic_census,
-        &IntentionalBoundaryAstCensusStageOutcome::Completed(ast_census.clone()),
+        ast_census,
     )
-    .await
     .map_err(map_ast_error)
 }
 

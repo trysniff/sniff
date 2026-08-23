@@ -11,10 +11,9 @@ use super::{
     IntentionalBoundaryEvidenceStageError, IntentionalBoundaryEvidenceStageErrorKind,
     IntentionalBoundaryFrameTask, IntentionalBoundaryLicenseCensusStage,
     IntentionalBoundaryManifestStage, IntentionalBoundaryManifestStageError,
-    IntentionalBoundaryManifestStageErrorKind, IntentionalBoundaryManifestStageOutcome,
-    IntentionalBoundaryMaterialization, IntentionalBoundaryRepositoryInventory,
-    IntentionalBoundarySemanticCensusStage, IntentionalBoundarySourceCensusStage,
-    validate_intentional_boundary_manifest_stage_outcome,
+    IntentionalBoundaryManifestStageErrorKind, IntentionalBoundaryMaterialization,
+    IntentionalBoundaryRepositoryInventory, IntentionalBoundarySemanticCensusStage,
+    IntentionalBoundarySourceCensusStage, validate_committed_manifest_stage,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -26,7 +25,7 @@ const STAGE_CONTRACT: &str = "sniffbench-intentional-boundary-base-evidence-stag
 pub async fn census_intentional_boundary_evidence_stage(
     task: &IntentionalBoundaryFrameTask,
     materialization: &IntentionalBoundaryMaterialization,
-    root: &Path,
+    _root: &Path,
     inventory: &IntentionalBoundaryRepositoryInventory,
     source_census: &IntentionalBoundarySourceCensusStage,
     license_census: &IntentionalBoundaryLicenseCensusStage,
@@ -37,15 +36,13 @@ pub async fn census_intentional_boundary_evidence_stage(
     validate_manifest_stage(
         task,
         materialization,
-        root,
         inventory,
         source_census,
         license_census,
         semantic_census,
         ast_census,
         manifest_stage,
-    )
-    .await?;
+    )?;
     let evidence_census = derive_base_evidence(
         &source_census.source_census,
         &semantic_census.semantic_census,
@@ -94,6 +91,47 @@ pub async fn validate_intentional_boundary_evidence_stage(
     .await?;
     if stage != &expected {
         return Err(invalid("intentional-boundary base evidence stage changed"));
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn validate_committed_evidence_stage(
+    task: &IntentionalBoundaryFrameTask,
+    materialization: &IntentionalBoundaryMaterialization,
+    inventory: &IntentionalBoundaryRepositoryInventory,
+    source_census: &IntentionalBoundarySourceCensusStage,
+    license_census: &IntentionalBoundaryLicenseCensusStage,
+    semantic_census: &IntentionalBoundarySemanticCensusStage,
+    ast_census: &IntentionalBoundaryAstCensusStage,
+    manifest_stage: &IntentionalBoundaryManifestStage,
+    stage: &IntentionalBoundaryEvidenceStage,
+) -> Result<(), IntentionalBoundaryEvidenceStageError> {
+    validate_manifest_stage(
+        task,
+        materialization,
+        inventory,
+        source_census,
+        license_census,
+        semantic_census,
+        ast_census,
+        manifest_stage,
+    )?;
+    let expected = finish_evidence_stage(
+        task,
+        materialization,
+        inventory,
+        source_census,
+        license_census,
+        semantic_census,
+        ast_census,
+        manifest_stage,
+        stage.evidence_census.clone(),
+    )?;
+    if stage != &expected {
+        return Err(invalid(
+            "intentional-boundary committed base evidence stage changed",
+        ));
     }
     Ok(())
 }
@@ -162,10 +200,9 @@ pub(super) fn finish_evidence_stage(
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn validate_manifest_stage(
+fn validate_manifest_stage(
     task: &IntentionalBoundaryFrameTask,
     materialization: &IntentionalBoundaryMaterialization,
-    root: &Path,
     inventory: &IntentionalBoundaryRepositoryInventory,
     source_census: &IntentionalBoundarySourceCensusStage,
     license_census: &IntentionalBoundaryLicenseCensusStage,
@@ -173,18 +210,16 @@ async fn validate_manifest_stage(
     ast_census: &IntentionalBoundaryAstCensusStage,
     manifest_stage: &IntentionalBoundaryManifestStage,
 ) -> Result<(), IntentionalBoundaryEvidenceStageError> {
-    validate_intentional_boundary_manifest_stage_outcome(
+    validate_committed_manifest_stage(
         task,
         materialization,
-        root,
         inventory,
         source_census,
         license_census,
         semantic_census,
         ast_census,
-        &IntentionalBoundaryManifestStageOutcome::Completed(Box::new(manifest_stage.clone())),
+        manifest_stage,
     )
-    .await
     .map_err(map_manifest_error)
 }
 

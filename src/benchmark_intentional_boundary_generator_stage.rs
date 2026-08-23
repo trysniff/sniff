@@ -12,7 +12,7 @@ use super::{
     IntentionalBoundaryManifestStage, IntentionalBoundaryMaterialization,
     IntentionalBoundaryProjectModelStage, IntentionalBoundaryRepositoryInventory,
     IntentionalBoundarySemanticCensusStage, IntentionalBoundarySourceCensusStage,
-    compose_intentional_boundary_generator_evidence,
+    compose_intentional_boundary_generator_evidence, validate_committed_project_model_stage,
     validate_intentional_boundary_generator_census_commitment,
 };
 use serde::Serialize;
@@ -35,7 +35,7 @@ pub fn census_intentional_boundary_generator_stage(
     base_evidence_stage: &IntentionalBoundaryEvidenceStage,
     project_model_stage: &IntentionalBoundaryProjectModelStage,
 ) -> Result<IntentionalBoundaryGeneratorStage, IntentionalBoundaryGeneratorStageError> {
-    validate_upstream_lineage(
+    validate_committed_upstream_lineage(
         task,
         materialization,
         inventory,
@@ -105,6 +105,53 @@ pub fn validate_intentional_boundary_generator_stage(
     )?;
     if stage != &expected {
         return Err(invalid("intentional-boundary generator stage changed"));
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn validate_committed_generator_stage(
+    task: &IntentionalBoundaryFrameTask,
+    materialization: &IntentionalBoundaryMaterialization,
+    inventory: &IntentionalBoundaryRepositoryInventory,
+    source_census: &IntentionalBoundarySourceCensusStage,
+    license_census: &IntentionalBoundaryLicenseCensusStage,
+    semantic_census: &IntentionalBoundarySemanticCensusStage,
+    ast_census: &IntentionalBoundaryAstCensusStage,
+    manifest_stage: &IntentionalBoundaryManifestStage,
+    base_evidence_stage: &IntentionalBoundaryEvidenceStage,
+    project_model_stage: &IntentionalBoundaryProjectModelStage,
+    stage: &IntentionalBoundaryGeneratorStage,
+) -> Result<(), IntentionalBoundaryGeneratorStageError> {
+    validate_committed_upstream_lineage(
+        task,
+        materialization,
+        inventory,
+        source_census,
+        license_census,
+        semantic_census,
+        ast_census,
+        manifest_stage,
+        base_evidence_stage,
+        project_model_stage,
+    )?;
+    let expected = finish_generator_stage(
+        task,
+        materialization,
+        inventory,
+        source_census,
+        license_census,
+        semantic_census,
+        ast_census,
+        manifest_stage,
+        base_evidence_stage,
+        project_model_stage,
+        stage.generator_census.clone(),
+    )?;
+    if stage != &expected {
+        return Err(invalid(
+            "intentional-boundary committed generator stage changed",
+        ));
     }
     Ok(())
 }
@@ -214,6 +261,34 @@ fn validate_upstream_lineage(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
+fn validate_committed_upstream_lineage(
+    task: &IntentionalBoundaryFrameTask,
+    materialization: &IntentionalBoundaryMaterialization,
+    inventory: &IntentionalBoundaryRepositoryInventory,
+    source_census: &IntentionalBoundarySourceCensusStage,
+    license_census: &IntentionalBoundaryLicenseCensusStage,
+    semantic_census: &IntentionalBoundarySemanticCensusStage,
+    ast_census: &IntentionalBoundaryAstCensusStage,
+    manifest_stage: &IntentionalBoundaryManifestStage,
+    base_evidence_stage: &IntentionalBoundaryEvidenceStage,
+    project_model_stage: &IntentionalBoundaryProjectModelStage,
+) -> Result<(), IntentionalBoundaryGeneratorStageError> {
+    validate_committed_project_model_stage(
+        task,
+        materialization,
+        inventory,
+        source_census,
+        license_census,
+        semantic_census,
+        ast_census,
+        manifest_stage,
+        base_evidence_stage,
+        project_model_stage,
+    )
+    .map_err(map_project_model_error)
+}
+
 pub(super) fn generator_stage_sha256(
     value: &IntentionalBoundaryGeneratorStage,
 ) -> Result<String, IntentionalBoundaryGeneratorStageError> {
@@ -256,6 +331,25 @@ fn map_derivation_error(error: GeneratorDerivationError) -> IntentionalBoundaryG
                 IntentionalBoundaryGeneratorStageErrorKind::InfrastructureUnavailable
             }
             GeneratorDerivationErrorKind::InfrastructureFailed => {
+                IntentionalBoundaryGeneratorStageErrorKind::InfrastructureFailed
+            }
+        },
+        detail: error.detail,
+    }
+}
+
+fn map_project_model_error(
+    error: super::IntentionalBoundaryProjectModelStageError,
+) -> IntentionalBoundaryGeneratorStageError {
+    IntentionalBoundaryGeneratorStageError {
+        kind: match error.kind {
+            super::IntentionalBoundaryProjectModelStageErrorKind::InvalidInput => {
+                IntentionalBoundaryGeneratorStageErrorKind::InvalidInput
+            }
+            super::IntentionalBoundaryProjectModelStageErrorKind::InfrastructureUnavailable => {
+                IntentionalBoundaryGeneratorStageErrorKind::InfrastructureUnavailable
+            }
+            super::IntentionalBoundaryProjectModelStageErrorKind::InfrastructureFailed => {
                 IntentionalBoundaryGeneratorStageErrorKind::InfrastructureFailed
             }
         },

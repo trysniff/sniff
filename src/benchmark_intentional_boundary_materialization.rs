@@ -54,19 +54,7 @@ pub fn validate_intentional_boundary_materialization(
     artifact: &IntentionalBoundaryMaterialization,
     checkout_root: &Path,
 ) -> Result<(), IntentionalBoundaryMaterializationError> {
-    let repository = expected_repository(task, artifact.population_rank)?;
-    if artifact.schema_version != INTENTIONAL_BOUNDARY_MATERIALIZATION_SCHEMA_VERSION
-        || artifact.materialization_contract != MATERIALIZATION_CONTRACT
-        || artifact.frame_task_sha256 != task.task_sha256
-        || artifact.population_rank_sha256 != repository.population_rank_sha256
-        || artifact.repository != repository.repository
-        || artifact.clone_url != format!("https://{}.git", repository.repository)
-        || artifact.materialization_sha256 != materialization_sha256(artifact)?
-    {
-        return Err(invalid(
-            "intentional-boundary materialization commitment changed",
-        ));
-    }
+    validate_intentional_boundary_materialization_commitment(task, artifact)?;
     let facts = inspect_checkout(checkout_root, &artifact.repository, &artifact.clone_url)?;
     if facts.revision != artifact.revision
         || facts.object_format != artifact.git_object_format
@@ -77,6 +65,41 @@ pub fn validate_intentional_boundary_materialization(
         ));
     }
     Ok(())
+}
+
+pub fn validate_intentional_boundary_materialization_commitment(
+    task: &IntentionalBoundaryFrameTask,
+    artifact: &IntentionalBoundaryMaterialization,
+) -> Result<(), IntentionalBoundaryMaterializationError> {
+    let repository = expected_repository(task, artifact.population_rank)?;
+    let object_id_length = match artifact.git_object_format.as_str() {
+        "sha1" => 40,
+        "sha256" => 64,
+        _ => 0,
+    };
+    if artifact.schema_version != INTENTIONAL_BOUNDARY_MATERIALIZATION_SCHEMA_VERSION
+        || artifact.materialization_contract != MATERIALIZATION_CONTRACT
+        || artifact.frame_task_sha256 != task.task_sha256
+        || artifact.population_rank_sha256 != repository.population_rank_sha256
+        || artifact.repository != repository.repository
+        || artifact.clone_url != format!("https://{}.git", repository.repository)
+        || !valid_object_id(&artifact.revision, object_id_length)
+        || !valid_object_id(&artifact.tree_oid, object_id_length)
+        || artifact.materialization_sha256 != materialization_sha256(artifact)?
+    {
+        return Err(invalid(
+            "intentional-boundary materialization commitment changed",
+        ));
+    }
+    Ok(())
+}
+
+fn valid_object_id(value: &str, expected_length: usize) -> bool {
+    expected_length != 0
+        && value.len() == expected_length
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
 }
 
 pub fn validate_intentional_boundary_materialization_exclusion(

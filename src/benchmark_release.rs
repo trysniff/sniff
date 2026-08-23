@@ -397,6 +397,11 @@ mod intentional_boundary_inventory;
 
 pub use intentional_boundary_inventory::*;
 
+#[path = "benchmark_intentional_boundary_inventory_commitment.rs"]
+mod intentional_boundary_inventory_commitment;
+
+pub use intentional_boundary_inventory_commitment::*;
+
 #[path = "benchmark_intentional_boundary_source_census_stage_schema.rs"]
 mod intentional_boundary_source_census_stage_schema;
 
@@ -406,6 +411,9 @@ pub use intentional_boundary_source_census_stage_schema::*;
 mod intentional_boundary_source_census;
 
 pub use intentional_boundary_source_census::*;
+
+#[path = "benchmark_intentional_boundary_source_census_commitment.rs"]
+mod intentional_boundary_source_census_commitment;
 
 #[path = "benchmark_intentional_boundary_source_census_stage.rs"]
 mod intentional_boundary_source_census_stage;
@@ -424,6 +432,9 @@ pub use intentional_boundary_license_filename::{
     INTENTIONAL_BOUNDARY_LICENSE_FILENAME_CONTRACT, LICENSEE_COMMIT_SHA1,
     LICENSEE_LICENSE_FILE_BLOB_SHA1, LICENSEE_RELEASE,
 };
+
+#[path = "benchmark_intentional_boundary_license_commitment.rs"]
+mod intentional_boundary_license_commitment;
 
 #[path = "benchmark_intentional_boundary_license_census.rs"]
 mod intentional_boundary_license_census;
@@ -471,6 +482,9 @@ mod intentional_boundary_ast_generator_marker;
 
 #[path = "benchmark_intentional_boundary_ast.rs"]
 mod intentional_boundary_ast;
+
+#[path = "benchmark_intentional_boundary_ast_commitment.rs"]
+mod intentional_boundary_ast_commitment;
 
 #[path = "benchmark_intentional_boundary_ast_compiler_references.rs"]
 mod intentional_boundary_ast_compiler_references;

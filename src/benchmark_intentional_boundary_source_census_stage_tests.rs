@@ -260,6 +260,43 @@ fn replay_rejects_completed_and_excluded_artifact_tampering() {
 }
 
 #[test]
+fn committed_replay_rejects_an_omitted_source_after_rehashing() {
+    let source = repository(&[
+        ("src/first.rs", b"pub fn first() -> u8 { 1 }\n"),
+        ("src/second.rs", b"pub fn second() -> u8 { 2 }\n"),
+    ]);
+    let (_state, task, materialization, inventory, root) = materialize(source.path());
+    let outcome =
+        census_intentional_boundary_repository_stage(&task, &materialization, &root, &inventory)
+            .unwrap();
+    let IntentionalBoundarySourceCensusStageOutcome::Completed(mut stage) = outcome else {
+        panic!("fixture must complete");
+    };
+
+    stage.source_census.source_files.pop();
+    stage.source_census.source_file_count = stage.source_census.source_files.len();
+    stage.source_census.method_count = stage
+        .source_census
+        .source_files
+        .iter()
+        .map(|file| file.methods.len())
+        .sum();
+    stage.source_census.census_sha256 =
+        super::super::intentional_boundary_source_census::compute_census_sha256(
+            &stage.source_census,
+        )
+        .unwrap();
+    stage.stage_sha256 = stage_sha256(&stage).unwrap();
+
+    let error = validate_committed_source_census_stage(&task, &materialization, &inventory, &stage)
+        .unwrap_err();
+    assert_eq!(
+        error.kind,
+        IntentionalBoundarySourceCensusStageErrorKind::InvalidInput
+    );
+}
+
+#[test]
 fn preserves_typed_infrastructure_failures_without_reason_string_parsing() {
     let inventory_error = IntentionalBoundaryInventoryError {
         kind: IntentionalBoundaryInventoryErrorKind::InfrastructureUnavailable,
