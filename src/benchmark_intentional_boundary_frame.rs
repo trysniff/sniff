@@ -58,10 +58,28 @@ pub fn commit_intentional_boundary_frame_rank(
     task: &IntentionalBoundaryFrameTask,
     record: &IntentionalBoundaryFrameRankRecord,
 ) -> Result<(), String> {
+    reconcile_intentional_boundary_frame_rank(root, task, record).map(|_| ())
+}
+
+pub fn reconcile_intentional_boundary_frame_rank(
+    root: &Path,
+    task: &IntentionalBoundaryFrameTask,
+    record: &IntentionalBoundaryFrameRankRecord,
+) -> Result<IntentionalBoundaryFrameRankReconciliation, String> {
     validate_rank_record(task, record)?;
     let completed = load_intentional_boundary_frame_ranks(root, task)?;
+    let rank = record.repository_task.population_rank;
+    if let Some(existing) = completed.get(rank.saturating_sub(1)) {
+        return if existing == record {
+            Ok(IntentionalBoundaryFrameRankReconciliation::AlreadyCommitted)
+        } else {
+            Err(format!(
+                "intentional-boundary frame rank {rank} conflicts with its committed record"
+            ))
+        };
+    }
     let expected_rank = completed.len() + 1;
-    if record.repository_task.population_rank != expected_rank {
+    if rank != expected_rank {
         return Err(format!(
             "intentional-boundary frame requires contiguous rank {expected_rank}"
         ));
@@ -80,7 +98,8 @@ pub fn commit_intentional_boundary_frame_rank(
         &task.task_sha256,
         expected_rank,
         &sha256(&bytes),
-    )
+    )?;
+    Ok(IntentionalBoundaryFrameRankReconciliation::Committed)
 }
 
 pub fn load_intentional_boundary_frame_ranks(
