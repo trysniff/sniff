@@ -1,10 +1,12 @@
 use super::super::{
+    IntentionalBoundaryFrameError, IntentionalBoundaryFrameErrorKind,
     IntentionalBoundaryFrameExclusionReason, IntentionalBoundaryLicenseCensusExclusionReason,
     IntentionalBoundaryMaterializationExclusionReason, IntentionalBoundaryRankStage,
     IntentionalBoundaryRankStageArtifact, IntentionalBoundaryRankStageError,
     IntentionalBoundaryRankTerminalContext, IntentionalBoundarySourceCensusExclusionReason,
-    prepare_intentional_boundary_analyzed_rank, prepare_intentional_boundary_excluded_rank,
-    reconcile_intentional_boundary_frame_rank,
+    prepare_intentional_boundary_analyzed_rank_typed,
+    prepare_intentional_boundary_excluded_rank_typed,
+    reconcile_intentional_boundary_frame_rank_typed,
 };
 use super::history::{candidate, inventory};
 use super::roots::ProductionRoots;
@@ -24,28 +26,43 @@ pub(super) fn reconcile_terminal(
         IntentionalBoundaryRankStageArtifact::Candidate(_) => {
             let inventory = inventory(context.history, stage)?;
             let candidate = candidate(context.history, stage)?;
-            prepare_intentional_boundary_analyzed_rank(
+            prepare_intentional_boundary_analyzed_rank_typed(
                 context.task,
                 context.repository_task.population_rank,
                 &inventory.inventory_sha256,
                 candidate.candidate_census.clone(),
             )
-            .map_err(|detail| IntentionalBoundaryRankStageError::invalid(stage, detail))?
+            .map_err(|error| map_frame_error(stage, error))?
         }
         artifact => {
             let (reason, evidence_sha256) = exclusion_record(artifact, stage)?;
-            prepare_intentional_boundary_excluded_rank(
+            prepare_intentional_boundary_excluded_rank_typed(
                 context.task,
                 context.repository_task.population_rank,
                 reason,
                 evidence_sha256,
             )
-            .map_err(|detail| IntentionalBoundaryRankStageError::invalid(stage, detail))?
+            .map_err(|error| map_frame_error(stage, error))?
         }
     };
-    reconcile_intentional_boundary_frame_rank(&roots.frame, context.task, &record)
-        .map_err(|detail| IntentionalBoundaryRankStageError::infrastructure(stage, detail))?;
+    reconcile_intentional_boundary_frame_rank_typed(&roots.frame, context.task, &record)
+        .map_err(|error| map_frame_error(stage, error))?;
     roots.remove_checkout(context.repository_task.population_rank, stage)
+}
+
+fn map_frame_error(
+    stage: IntentionalBoundaryRankStage,
+    error: IntentionalBoundaryFrameError,
+) -> IntentionalBoundaryRankStageError {
+    match error.kind {
+        IntentionalBoundaryFrameErrorKind::InvalidInput
+        | IntentionalBoundaryFrameErrorKind::CorruptState => {
+            IntentionalBoundaryRankStageError::invalid(stage, error.detail)
+        }
+        IntentionalBoundaryFrameErrorKind::InfrastructureFailed => {
+            IntentionalBoundaryRankStageError::infrastructure(stage, error.detail)
+        }
+    }
 }
 
 fn exclusion_record(

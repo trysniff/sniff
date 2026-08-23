@@ -210,3 +210,49 @@ fn candidate_and_task_tampering_fail_before_persistence() {
             .contains("commitment changed")
     );
 }
+
+#[test]
+fn typed_frame_errors_distinguish_input_corruption_and_infrastructure() {
+    let task = task();
+
+    let mut invalid_record = excluded(&task, 1);
+    invalid_record.frame_task_sha256 = "0".repeat(64);
+    let state = tempfile::tempdir().unwrap();
+    let invalid =
+        commit_intentional_boundary_frame_rank_typed(state.path(), &task, &invalid_record)
+            .unwrap_err();
+    assert_eq!(
+        invalid.kind,
+        IntentionalBoundaryFrameErrorKind::InvalidInput
+    );
+
+    let first = analyzed(&task, 1);
+    commit_intentional_boundary_frame_rank_typed(state.path(), &task, &first).unwrap();
+    let conflict =
+        reconcile_intentional_boundary_frame_rank_typed(state.path(), &task, &excluded(&task, 1))
+            .unwrap_err();
+    assert_eq!(
+        conflict.kind,
+        IntentionalBoundaryFrameErrorKind::CorruptState
+    );
+
+    let malformed = tempfile::tempdir().unwrap();
+    let artifacts = malformed.path().join(ARTIFACT_DIRECTORY);
+    fs::create_dir_all(&artifacts).unwrap();
+    fs::write(rank_path(&artifacts, 2), "{}\n").unwrap();
+    let corrupt = load_intentional_boundary_frame_ranks_typed(malformed.path(), &task).unwrap_err();
+    assert_eq!(
+        corrupt.kind,
+        IntentionalBoundaryFrameErrorKind::CorruptState
+    );
+
+    let blocked = tempfile::tempdir().unwrap();
+    let frame_file = blocked.path().join("frame");
+    fs::write(&frame_file, b"not a directory").unwrap();
+    let infrastructure =
+        load_intentional_boundary_frame_ranks_typed(&frame_file, &task).unwrap_err();
+    assert_eq!(
+        infrastructure.kind,
+        IntentionalBoundaryFrameErrorKind::InfrastructureFailed
+    );
+}

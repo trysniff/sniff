@@ -719,6 +719,11 @@ mod intentional_boundary_production;
 
 pub use intentional_boundary_production::*;
 
+#[path = "benchmark_intentional_boundary_frame_error.rs"]
+mod intentional_boundary_frame_error;
+
+pub use intentional_boundary_frame_error::*;
+
 #[path = "benchmark_intentional_boundary_frame.rs"]
 mod intentional_boundary_frame;
 
