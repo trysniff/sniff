@@ -49,11 +49,10 @@ pub(super) fn execute_generator_replay(
                 let stderr = sanitized_runtime_stderr(&output.stderr, snapshot.path(), &cache);
                 #[cfg(windows)]
                 if windows_python_child_launch_denied(preparation, &stderr) {
-                    return Err(ReplayFailure {
-                        reason: IntentionalBoundaryGeneratorUnresolvedReason::SandboxUnavailable,
-                        detail: "Windows AppContainer denied uv's Python interpreter child; generator replay requires a supported Linux or macOS proof host"
-                            .to_string(),
-                    });
+                    return Err(ReplayFailure::unavailable(
+                        IntentionalBoundaryGeneratorUnresolvedReason::SandboxUnavailable,
+                        "Windows AppContainer denied uv's Python interpreter child; generator replay requires a supported Linux or macOS proof host",
+                    ));
                 }
                 return Err(failed(format!(
                     "generator dependency preparation failed: status={:?}, timed_out={}: {}",
@@ -95,30 +94,33 @@ pub(super) fn execute_generator_replay(
         cleanup?;
         #[cfg(windows)]
         if windows_cargo_child_launch_denied(&output.stderr) {
-            return Err(ReplayFailure {
-                reason: IntentionalBoundaryGeneratorUnresolvedReason::SandboxUnavailable,
-                detail: "Windows AppContainer denied Cargo's compiler child; generator replay requires a supported Linux proof host"
-                    .to_string(),
-                });
+            return Err(ReplayFailure::unavailable(
+                IntentionalBoundaryGeneratorUnresolvedReason::SandboxUnavailable,
+                "Windows AppContainer denied Cargo's compiler child; generator replay requires a supported Linux proof host",
+            ));
         }
         #[cfg(windows)]
         if windows_go_child_launch_denied(&command.execution, &output.stderr) {
-            return Err(ReplayFailure {
-                reason: IntentionalBoundaryGeneratorUnresolvedReason::SandboxUnavailable,
-                detail: "Windows AppContainer denied a Go toolchain child; generator replay requires a supported Linux or macOS proof host"
-                    .to_string(),
-            });
+            return Err(ReplayFailure::unavailable(
+                IntentionalBoundaryGeneratorUnresolvedReason::SandboxUnavailable,
+                "Windows AppContainer denied a Go toolchain child; generator replay requires a supported Linux or macOS proof host",
+            ));
         }
         if output.timed_out || output.status_code != Some(0) {
             let stderr = sanitized_runtime_stderr(&output.stderr, snapshot.path(), &cache);
-            return Err(ReplayFailure {
-                reason: IntentionalBoundaryGeneratorUnresolvedReason::ExecutionFailed,
-                detail: format!(
-                    "generator command failed: status={:?}, timed_out={}: {}",
-                    output.status_code,
-                    output.timed_out,
-                    stderr.trim()
-                ),
+            let detail = format!(
+                "generator command failed: status={:?}, timed_out={}: {}",
+                output.status_code,
+                output.timed_out,
+                stderr.trim()
+            );
+            return Err(if output.timed_out {
+                ReplayFailure::failed(detail)
+            } else {
+                ReplayFailure::terminal(
+                    IntentionalBoundaryGeneratorUnresolvedReason::ExecutionFailed,
+                    detail,
+                )
             });
         }
         let hashes = verify_outputs(snapshot.path(), expected)?;
@@ -289,23 +291,24 @@ fn verify_outputs(root: &Path, expected: &[ExpectedOutput]) -> Result<Vec<String
     expected
         .iter()
         .map(|output| {
-            let bytes =
-                fs::read(root.join(&output.repository_path)).map_err(|error| ReplayFailure {
-                    reason: IntentionalBoundaryGeneratorUnresolvedReason::OutputMissing,
-                    detail: format!(
+            let bytes = fs::read(root.join(&output.repository_path)).map_err(|error| {
+                ReplayFailure::terminal(
+                    IntentionalBoundaryGeneratorUnresolvedReason::OutputMissing,
+                    format!(
                         "generator did not recreate {}: {error}",
                         output.repository_path
                     ),
-                })?;
+                )
+            })?;
             let actual = sha256(&bytes);
             if bytes.len() as u64 != output.byte_length || actual != output.committed_sha256 {
-                return Err(ReplayFailure {
-                    reason: IntentionalBoundaryGeneratorUnresolvedReason::OutputChanged,
-                    detail: format!(
+                return Err(ReplayFailure::terminal(
+                    IntentionalBoundaryGeneratorUnresolvedReason::OutputChanged,
+                    format!(
                         "generator output differs from committed bytes: {}",
                         output.repository_path
                     ),
-                });
+                ));
             }
             Ok(actual)
         })
@@ -329,13 +332,13 @@ fn verify_clean_snapshot(root: &Path) -> Result<(), ReplayFailure> {
         return Err(failed("generator snapshot verification failed"));
     }
     if !output.stdout.is_empty() {
-        return Err(ReplayFailure {
-            reason: IntentionalBoundaryGeneratorUnresolvedReason::RepositoryMutation,
-            detail: format!(
+        return Err(ReplayFailure::terminal(
+            IntentionalBoundaryGeneratorUnresolvedReason::RepositoryMutation,
+            format!(
                 "generator changed repository paths after replay: {}",
                 bounded_status_summary(&output.stdout)
             ),
-        });
+        ));
     }
     Ok(())
 }
@@ -360,38 +363,26 @@ fn bounded_status_summary(status: &[u8]) -> String {
 
 fn runtime_plan_failure(error: HistoricalRuntimePlanError) -> ReplayFailure {
     match error {
-        HistoricalRuntimePlanError::Unavailable(detail) => ReplayFailure {
-            reason: IntentionalBoundaryGeneratorUnresolvedReason::RuntimeUnavailable,
+        HistoricalRuntimePlanError::Unavailable(detail) => ReplayFailure::unavailable(
+            IntentionalBoundaryGeneratorUnresolvedReason::RuntimeUnavailable,
             detail,
-        },
+        ),
         HistoricalRuntimePlanError::Invalid(detail) => failed(detail),
     }
 }
 
 fn sandbox_failure(error: SandboxError) -> ReplayFailure {
     match error {
-        SandboxError::Unavailable(detail) => ReplayFailure {
-            reason: IntentionalBoundaryGeneratorUnresolvedReason::SandboxUnavailable,
+        SandboxError::Unavailable(detail) => ReplayFailure::unavailable(
+            IntentionalBoundaryGeneratorUnresolvedReason::SandboxUnavailable,
             detail,
-        },
-        #[cfg(windows)]
-        SandboxError::Failed(detail)
-            if detail.starts_with("grant Windows AppContainer access to ") =>
-        {
-            ReplayFailure {
-                reason: IntentionalBoundaryGeneratorUnresolvedReason::SandboxUnavailable,
-                detail,
-            }
-        }
+        ),
         SandboxError::Invalid(detail) | SandboxError::Failed(detail) => failed(detail),
     }
 }
 
 fn failed(detail: impl Into<String>) -> ReplayFailure {
-    ReplayFailure {
-        reason: IntentionalBoundaryGeneratorUnresolvedReason::ExecutionFailed,
-        detail: detail.into(),
-    }
+    ReplayFailure::failed(detail)
 }
 
 #[cfg(test)]

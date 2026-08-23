@@ -887,7 +887,7 @@ fn grant_acl_with_inheritance(
         }
     })?;
     if !output.success {
-        return Err(SandboxError::Failed(format!(
+        return Err(SandboxError::Unavailable(format!(
             "grant Windows AppContainer access to {} failed: {}",
             path.display(),
             output.error_text()

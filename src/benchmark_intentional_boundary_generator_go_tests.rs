@@ -361,7 +361,7 @@ fn real_go_generator_reproduces_compiler_owned_output_twice_offline() {
         .output()
         .is_ok_and(|output| output.status.success());
 
-    let census = super::super::census_intentional_boundary_generators(
+    let census = super::super::census_intentional_boundary_generators_typed(
         &fixture.repository,
         &fixture.revision,
         fixture.root.path(),
@@ -372,8 +372,18 @@ fn real_go_generator_reproduces_compiler_owned_output_twice_offline() {
         &fixture.manifests,
         &fixture.bindings,
         &fixture.evidence,
-    )
-    .unwrap();
+    );
+    let census = match census {
+        Ok(census) => census,
+        Err(error)
+            if (!go_available || cfg!(windows))
+                && error.kind
+                    == super::super::super::intentional_boundary_generator_outcome::GeneratorDerivationErrorKind::InfrastructureUnavailable =>
+        {
+            return;
+        }
+        Err(error) => panic!("real Go generator failed operationally: {error:?}"),
+    };
 
     let outcome = &census.replays[0].outcome;
     match outcome {

@@ -19,6 +19,11 @@ use super::{
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
+pub(super) use super::intentional_boundary_generator_outcome::ReplayFailure;
+use super::intentional_boundary_generator_outcome::{
+    GeneratorDerivationError, generator_invalid, generator_replay_operational_error,
+};
+
 pub(super) const GENERATOR_CONTRACT: &str = "sniffbench-intentional-boundary-generator-replay-v7";
 
 #[path = "benchmark_intentional_boundary_generator_command.rs"]
@@ -28,7 +33,7 @@ mod commitment;
 #[path = "benchmark_intentional_boundary_generator_configuration.rs"]
 pub(super) mod configuration;
 use commitment::*;
-pub(super) use commitment::{generator_census_sha256, is_sha256, replay_id};
+pub(super) use commitment::{finish_census, generator_census_sha256, is_sha256, replay_id};
 #[path = "benchmark_intentional_boundary_generator_go.rs"]
 mod go;
 #[path = "benchmark_intentional_boundary_generator_gradle.rs"]
@@ -63,11 +68,6 @@ struct ReplaySuccess {
     executions: Vec<IntentionalBoundaryGeneratorExecution>,
 }
 
-struct ReplayFailure {
-    reason: IntentionalBoundaryGeneratorUnresolvedReason,
-    detail: String,
-}
-
 pub(super) struct ReplayContext<'a> {
     pub(super) inventory: &'a IntentionalBoundaryRepositoryInventory,
     pub(super) source_census: &'a IntentionalBoundarySourceCensus,
@@ -90,6 +90,34 @@ pub fn census_intentional_boundary_generators(
     binding_census: &IntentionalBoundaryManifestBindingCensus,
     base_evidence: &IntentionalBoundaryEvidenceCensus,
 ) -> Result<IntentionalBoundaryGeneratorCensus, String> {
+    census_intentional_boundary_generators_typed(
+        repository,
+        revision,
+        root,
+        inventory,
+        source_census,
+        semantic_census,
+        project_model_census,
+        manifest_census,
+        binding_census,
+        base_evidence,
+    )
+    .map_err(|error| error.detail)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn census_intentional_boundary_generators_typed(
+    repository: &str,
+    revision: &str,
+    root: &Path,
+    inventory: &IntentionalBoundaryRepositoryInventory,
+    source_census: &IntentionalBoundarySourceCensus,
+    semantic_census: &IntentionalBoundarySemanticCensus,
+    project_model_census: &IntentionalBoundaryProjectModelCensus,
+    manifest_census: &IntentionalBoundaryManifestCensus,
+    binding_census: &IntentionalBoundaryManifestBindingCensus,
+    base_evidence: &IntentionalBoundaryEvidenceCensus,
+) -> Result<IntentionalBoundaryGeneratorCensus, GeneratorDerivationError> {
     census_generators_with_executor(
         repository,
         revision,
@@ -118,7 +146,7 @@ fn census_generators_with_executor<F>(
     binding_census: &IntentionalBoundaryManifestBindingCensus,
     base_evidence: &IntentionalBoundaryEvidenceCensus,
     mut executor: F,
-) -> Result<IntentionalBoundaryGeneratorCensus, String>
+) -> Result<IntentionalBoundaryGeneratorCensus, GeneratorDerivationError>
 where
     F: FnMut(&GeneratorCommand, &[ExpectedOutput]) -> Result<ReplaySuccess, ReplayFailure>,
 {
@@ -134,8 +162,10 @@ where
         binding_census,
         base_evidence,
     )?;
-    let subjects = generator_subjects(source_census, semantic_census, base_evidence)?;
-    let configurations = configurations(&manifest_census.declarations, project_model_census)?;
+    let subjects = generator_subjects(source_census, semantic_census, base_evidence)
+        .map_err(generator_invalid)?;
+    let configurations = configurations(&manifest_census.declarations, project_model_census)
+        .map_err(generator_invalid)?;
     let mut grouped = BTreeMap::<Vec<String>, Vec<IntentionalBoundaryGeneratorSubject>>::new();
     let configuration_by_id = configurations_by_id(&configurations);
     let replay_context = ReplayContext {
@@ -164,7 +194,8 @@ where
                 "generated subjects have no enclosing declared generator command",
             )
         } else {
-            let candidates = sorted_candidates(&candidate_ids, &configuration_by_id)?;
+            let candidates = sorted_candidates(&candidate_ids, &configuration_by_id)
+                .map_err(generator_invalid)?;
             replay_outcome(&replay_context, &candidates, &subjects, &mut executor)?
         };
         let configuration_id = match &outcome {
@@ -173,7 +204,8 @@ where
             } => Some(configuration_id.clone()),
             IntentionalBoundaryGeneratorReplayOutcome::Unresolved { .. } => None,
         };
-        let replay_id = replay_id(repository, revision, &candidate_ids, &subjects)?;
+        let replay_id = replay_id(repository, revision, &candidate_ids, &subjects)
+            .map_err(generator_invalid)?;
         replays.push(IntentionalBoundaryGeneratorReplay {
             replay_id,
             configuration_id,
@@ -192,6 +224,7 @@ where
         base_evidence,
         replays,
     )
+    .map_err(generator_invalid)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -206,31 +239,40 @@ fn validate_inputs(
     manifest_census: &IntentionalBoundaryManifestCensus,
     binding_census: &IntentionalBoundaryManifestBindingCensus,
     base_evidence: &IntentionalBoundaryEvidenceCensus,
-) -> Result<(), String> {
-    validate_intentional_boundary_repository_inventory(repository, revision, root, inventory)?;
+) -> Result<(), GeneratorDerivationError> {
+    validate_intentional_boundary_repository_inventory(repository, revision, root, inventory)
+        .map_err(generator_invalid)?;
     validate_intentional_boundary_source_census(
         repository,
         revision,
         root,
         inventory,
         source_census,
-    )?;
-    validate_intentional_boundary_semantic_census(source_census, semantic_census)?;
-    validate_intentional_boundary_project_model_census_commitment(inventory, project_model_census)?;
-    validate_manifest_census_commitment(&inventory.inventory_sha256, manifest_census)?;
+    )
+    .map_err(generator_invalid)?;
+    validate_intentional_boundary_semantic_census(source_census, semantic_census)
+        .map_err(generator_invalid)?;
+    validate_intentional_boundary_project_model_census_commitment(inventory, project_model_census)
+        .map_err(generator_invalid)?;
+    validate_manifest_census_commitment(&inventory.inventory_sha256, manifest_census)
+        .map_err(generator_invalid)?;
     validate_intentional_boundary_manifest_bindings(
         source_census,
         semantic_census,
         manifest_census,
         binding_census,
-    )?;
-    validate_evidence_census_commitment(source_census, semantic_census, base_evidence)?;
+    )
+    .map_err(generator_invalid)?;
+    validate_evidence_census_commitment(source_census, semantic_census, base_evidence)
+        .map_err(generator_invalid)?;
     if manifest_census.repository != repository
         || manifest_census.revision != revision
         || base_evidence.repository != repository
         || base_evidence.revision != revision
     {
-        return Err("intentional-boundary generator input identity changed".to_string());
+        return Err(generator_invalid(
+            "intentional-boundary generator input identity changed",
+        ));
     }
     Ok(())
 }
@@ -337,7 +379,7 @@ fn replay_outcome<F>(
     configurations: &[&GeneratorConfiguration<'_>],
     subjects: &[IntentionalBoundaryGeneratorSubject],
     executor: &mut F,
-) -> Result<IntentionalBoundaryGeneratorReplayOutcome, String>
+) -> Result<IntentionalBoundaryGeneratorReplayOutcome, GeneratorDerivationError>
 where
     F: FnMut(&GeneratorCommand, &[ExpectedOutput]) -> Result<ReplaySuccess, ReplayFailure>,
 {
@@ -348,7 +390,8 @@ where
     let outputs = paths
         .into_iter()
         .map(|path| expected_output(context.inventory, context.source_census, path))
-        .collect::<Result<Vec<_>, _>>()?;
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(generator_invalid)?;
     if has_ambiguous_exact_gradle(configurations) {
         return Ok(unresolved(
             IntentionalBoundaryGeneratorUnresolvedReason::AmbiguousConfiguration,
@@ -369,7 +412,7 @@ where
         supported += 1;
         match executor(&command, &outputs) {
             Ok(success) => {
-                validate_replay_success(&success, &command, &outputs)?;
+                validate_replay_success(&success, &command, &outputs).map_err(generator_invalid)?;
                 return Ok(IntentionalBoundaryGeneratorReplayOutcome::Reproduced {
                     configuration_id: configuration.id().to_string(),
                     configuration_evidence_locations: configuration.evidence_locations(),
@@ -398,6 +441,11 @@ where
             },
         );
         return Ok(unresolved(reason, detail));
+    }
+    if let Some(error) = failures.iter().find_map(|(configuration_id, failure)| {
+        generator_replay_operational_error(configuration_id, failure)
+    }) {
+        return Err(error);
     }
     let reason = failures.first().map_or(
         IntentionalBoundaryGeneratorUnresolvedReason::ExecutionFailed,
