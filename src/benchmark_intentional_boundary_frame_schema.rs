@@ -8,6 +8,12 @@ use std::collections::BTreeMap;
 pub const INTENTIONAL_BOUNDARY_FRAME_RANK_SCHEMA_VERSION: u32 = 1;
 pub const INTENTIONAL_BOUNDARY_CANDIDATE_FRAME_SCHEMA_VERSION: u32 = 1;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IntentionalBoundaryFrameRankReconciliation {
+    Committed,
+    AlreadyCommitted,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum IntentionalBoundaryFrameRankOutcome {

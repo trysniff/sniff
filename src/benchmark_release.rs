@@ -679,6 +679,16 @@ mod intentional_boundary_frame_schema;
 
 pub use intentional_boundary_frame_schema::*;
 
+#[path = "benchmark_intentional_boundary_rank_stage_schema.rs"]
+mod intentional_boundary_rank_stage_schema;
+
+pub use intentional_boundary_rank_stage_schema::*;
+
+#[path = "benchmark_intentional_boundary_rank_stage.rs"]
+mod intentional_boundary_rank_stage;
+
+pub use intentional_boundary_rank_stage::*;
+
 #[path = "benchmark_intentional_boundary_frame.rs"]
 mod intentional_boundary_frame;
 

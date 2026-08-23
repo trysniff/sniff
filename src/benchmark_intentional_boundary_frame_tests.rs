@@ -58,7 +58,7 @@ fn excluded(
 }
 
 #[test]
-fn commits_and_loads_only_a_contiguous_create_new_prefix() {
+fn commits_and_idempotently_reconciles_a_contiguous_create_new_prefix() {
     let task = task();
     let state = tempfile::tempdir().unwrap();
     let first = analyzed(&task, 1);
@@ -71,15 +71,33 @@ fn commits_and_loads_only_a_contiguous_create_new_prefix() {
         load_intentional_boundary_frame_ranks(state.path(), &task).unwrap(),
         vec![first.clone(), second]
     );
-    assert!(
-        commit_intentional_boundary_frame_rank(state.path(), &task, &first)
-            .unwrap_err()
-            .contains("contiguous rank 3")
+    assert_eq!(
+        reconcile_intentional_boundary_frame_rank(state.path(), &task, &first).unwrap(),
+        IntentionalBoundaryFrameRankReconciliation::AlreadyCommitted
     );
     assert!(
         commit_intentional_boundary_frame_rank(state.path(), &task, &excluded(&task, 4))
             .unwrap_err()
             .contains("contiguous rank 3")
+    );
+}
+
+#[test]
+fn reconciliation_rejects_a_changed_existing_rank() {
+    let task = task();
+    let state = tempfile::tempdir().unwrap();
+    let first = analyzed(&task, 1);
+    commit_intentional_boundary_frame_rank(state.path(), &task, &first).unwrap();
+
+    let changed = excluded(&task, 1);
+    assert!(
+        reconcile_intentional_boundary_frame_rank(state.path(), &task, &changed)
+            .unwrap_err()
+            .contains("conflicts with its committed record")
+    );
+    assert_eq!(
+        load_intentional_boundary_frame_ranks(state.path(), &task).unwrap(),
+        vec![first]
     );
 }
 
