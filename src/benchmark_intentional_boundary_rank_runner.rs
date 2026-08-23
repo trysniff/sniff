@@ -3,7 +3,7 @@ use super::{
     IntentionalBoundaryRankRunSummary, IntentionalBoundaryRankStage,
     IntentionalBoundaryRankStageContext, IntentionalBoundaryRankStageError,
     IntentionalBoundaryRankStageExecutor, IntentionalBoundaryRankStageJournal,
-    IntentionalBoundaryRankStageOutcome,
+    IntentionalBoundaryRankStageOutcome, IntentionalBoundaryRankTerminalContext,
 };
 use std::num::NonZeroUsize;
 use std::path::Path;
@@ -61,6 +61,13 @@ pub async fn run_intentional_boundary_rank_slice_through<
 
     loop {
         let Some(stage) = journal.next_stage()? else {
+            executor
+                .reconcile_terminal(IntentionalBoundaryRankTerminalContext {
+                    task,
+                    repository_task,
+                    history: journal.history(),
+                })
+                .await?;
             return terminal_summary(&journal, resumed_after_sequence, executed_stages);
         };
         if through_stage.is_some_and(|last_stage| stage > last_stage)

@@ -21,6 +21,8 @@ const HASH_B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 struct RecordingExecutor {
     recovered: RefCell<Vec<IntentionalBoundaryRankStage>>,
     executed: RefCell<Vec<IntentionalBoundaryRankStage>>,
+    terminal_reconciliations: RefCell<usize>,
+    terminal_failures_remaining: usize,
     recover_fail_at: Option<IntentionalBoundaryRankStage>,
     fail_at: Option<IntentionalBoundaryRankStage>,
     exclude_materialization: bool,
@@ -32,6 +34,8 @@ impl RecordingExecutor {
         Self {
             recovered: RefCell::new(Vec::new()),
             executed: RefCell::new(Vec::new()),
+            terminal_reconciliations: RefCell::new(0),
+            terminal_failures_remaining: 0,
             recover_fail_at: None,
             fail_at: None,
             exclude_materialization: false,
@@ -89,6 +93,25 @@ impl IntentionalBoundaryRankStageExecutor for RecordingExecutor {
                 }
                 IntentionalBoundaryRankStage::Inventory => Ok(inventory_artifact(context)),
                 _ => panic!("fixture executor reached an unconfigured stage"),
+            }
+        })
+    }
+
+    fn reconcile_terminal<'a>(
+        &'a mut self,
+        _context: IntentionalBoundaryRankTerminalContext<'a>,
+    ) -> crate::benchmark::IntentionalBoundaryRankStageFuture<'a, ()> {
+        *self.terminal_reconciliations.borrow_mut() += 1;
+        let fail = self.terminal_failures_remaining > 0;
+        self.terminal_failures_remaining = self.terminal_failures_remaining.saturating_sub(1);
+        Box::pin(async move {
+            if fail {
+                Err(IntentionalBoundaryRankStageError::infrastructure(
+                    IntentionalBoundaryRankStage::Materialization,
+                    "injected terminal reconciliation failure",
+                ))
+            } else {
+                Ok(())
             }
         })
     }
@@ -233,6 +256,60 @@ async fn terminal_exclusion_is_stable_and_never_reexecutes() {
     assert!(second.executed_stages.is_empty());
     assert!(resumed.recovered.borrow().is_empty());
     assert!(resumed.executed.borrow().is_empty());
+    assert_eq!(*resumed.terminal_reconciliations.borrow(), 1);
+}
+
+#[tokio::test]
+async fn terminal_reconciliation_failure_retries_without_replaying_stages() {
+    let task = task();
+    let state = tempfile::tempdir().unwrap();
+    let mut excluding = RecordingExecutor {
+        exclude_materialization: true,
+        ..RecordingExecutor::clean()
+    };
+    run_intentional_boundary_rank(state.path(), &task, 1, &mut excluding)
+        .await
+        .unwrap();
+
+    let terminal_checkpoint = IntentionalBoundaryRankStageJournal::open(state.path(), &task, 1)
+        .unwrap()
+        .history()[0]
+        .checkpoint
+        .checkpoint_sha256
+        .clone();
+    let mut failing = RecordingExecutor {
+        terminal_failures_remaining: 1,
+        ..RecordingExecutor::clean()
+    };
+    let error = run_intentional_boundary_rank(state.path(), &task, 1, &mut failing)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error.kind,
+        IntentionalBoundaryRankStageErrorKind::InfrastructureFailed
+    );
+    assert!(failing.recovered.borrow().is_empty());
+    assert!(failing.executed.borrow().is_empty());
+    assert_eq!(*failing.terminal_reconciliations.borrow(), 1);
+
+    let journal = IntentionalBoundaryRankStageJournal::open(state.path(), &task, 1).unwrap();
+    assert_eq!(journal.history().len(), 1);
+    assert_eq!(
+        journal.history()[0].checkpoint.checkpoint_sha256,
+        terminal_checkpoint
+    );
+    drop(journal);
+
+    let mut resumed = RecordingExecutor::clean();
+    let summary = run_intentional_boundary_rank(state.path(), &task, 1, &mut resumed)
+        .await
+        .unwrap();
+    assert!(summary.executed_stages.is_empty());
+    assert!(matches!(
+        summary.disposition,
+        IntentionalBoundaryRankRunDisposition::Excluded { .. }
+    ));
+    assert_eq!(*resumed.terminal_reconciliations.borrow(), 1);
 }
 
 fn task() -> IntentionalBoundaryFrameTask {

@@ -709,6 +709,16 @@ mod intentional_boundary_rank_sweep;
 
 pub use intentional_boundary_rank_sweep::*;
 
+#[path = "benchmark_intentional_boundary_production_schema.rs"]
+mod intentional_boundary_production_schema;
+
+pub use intentional_boundary_production_schema::*;
+
+#[path = "benchmark_intentional_boundary_production.rs"]
+mod intentional_boundary_production;
+
+pub use intentional_boundary_production::*;
+
 #[path = "benchmark_intentional_boundary_frame.rs"]
 mod intentional_boundary_frame;
 
