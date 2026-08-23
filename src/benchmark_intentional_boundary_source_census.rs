@@ -11,7 +11,7 @@ use std::fs;
 use std::path::Path;
 
 pub const INTENTIONAL_BOUNDARY_SOURCE_CENSUS_SCHEMA_VERSION: u32 = 1;
-const SOURCE_CENSUS_CONTRACT: &str = "sniffbench-intentional-boundary-source-census-v1";
+pub(super) const SOURCE_CENSUS_CONTRACT: &str = "sniffbench-intentional-boundary-source-census-v1";
 pub(super) const INTENTIONAL_BOUNDARY_SOURCE_EXTENSION_CONTRACT: &str =
     "sniff-supported-source-extensions-v1:go,js,jsx,kt,kts,py,rs,ts,tsx";
 pub(super) const INTENTIONAL_BOUNDARY_PARSER_ERROR_LIMIT: usize = 4 * 1024;
@@ -333,7 +333,9 @@ pub(super) fn intentional_boundary_file_records_typed(
     Ok(records)
 }
 
-fn compute_census_sha256(census: &IntentionalBoundarySourceCensus) -> Result<String, String> {
+pub(super) fn compute_census_sha256(
+    census: &IntentionalBoundarySourceCensus,
+) -> Result<String, String> {
     let bytes = serde_json::to_vec(&(
         census.schema_version,
         &census.census_contract,
@@ -349,7 +351,7 @@ fn compute_census_sha256(census: &IntentionalBoundarySourceCensus) -> Result<Str
     Ok(sha256(&bytes))
 }
 
-fn method_unit_id(
+pub(super) fn method_unit_id(
     repository_path: &str,
     symbol_name: &str,
     start_line: usize,

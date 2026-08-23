@@ -8,7 +8,7 @@ use std::process::Command;
 use std::time::Duration;
 
 pub const INTENTIONAL_BOUNDARY_INVENTORY_SCHEMA_VERSION: u32 = 1;
-const INVENTORY_CONTRACT: &str = "sniffbench-intentional-boundary-git-inventory-v1";
+pub(super) const INVENTORY_CONTRACT: &str = "sniffbench-intentional-boundary-git-inventory-v1";
 const GIT_TIMEOUT: Duration = Duration::from_secs(300);
 const GIT_OUTPUT_LIMIT: usize = 128 * 1024 * 1024;
 
@@ -303,7 +303,7 @@ fn parse_tree(
     Ok(entries)
 }
 
-fn validate_git_path(path: &str) -> Result<(), String> {
+pub(super) fn validate_git_path(path: &str) -> Result<(), String> {
     if path.is_empty()
         || path.starts_with('/')
         || path.ends_with('/')
@@ -316,7 +316,7 @@ fn validate_git_path(path: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn compute_inventory_sha256(
+pub(super) fn compute_inventory_sha256(
     inventory: &IntentionalBoundaryRepositoryInventory,
 ) -> Result<String, String> {
     let bytes = serde_json::to_vec(&(
@@ -443,7 +443,7 @@ fn require_revision(
     require_object_id(label, value, object_format)
 }
 
-fn require_object_id(
+pub(super) fn require_object_id(
     label: &str,
     value: &str,
     object_format: BoundaryGitObjectFormat,

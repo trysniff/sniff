@@ -1,3 +1,4 @@
+use super::intentional_boundary_license_commitment::validate_license_payload_commitment;
 use super::intentional_boundary_license_filename::{
     INTENTIONAL_BOUNDARY_LICENSE_FILENAME_CONTRACT, match_license_filename,
 };
@@ -12,8 +13,7 @@ use super::{
     IntentionalBoundaryLicenseFailureEvidence, IntentionalBoundaryMaterialization,
     IntentionalBoundaryRepositoryInventory, IntentionalBoundarySourceCensusStage,
     IntentionalBoundarySourceCensusStageError, IntentionalBoundarySourceCensusStageErrorKind,
-    IntentionalBoundarySourceCensusStageOutcome, read_intentional_boundary_git_blob_typed,
-    validate_intentional_boundary_source_census_stage_outcome,
+    read_intentional_boundary_git_blob_typed, validate_committed_source_census_stage,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -31,7 +31,7 @@ pub fn census_intentional_boundary_repository_licenses(
     source_census: &IntentionalBoundarySourceCensusStage,
 ) -> Result<IntentionalBoundaryLicenseCensusStageOutcome, IntentionalBoundaryLicenseCensusStageError>
 {
-    validate_source_census(task, materialization, root, inventory, source_census)?;
+    validate_source_census(task, materialization, inventory, source_census)?;
     let inspection = inspect_license_candidates(root, inventory)?;
 
     if !inspection.failures.is_empty() {
@@ -96,6 +96,33 @@ pub fn validate_intentional_boundary_license_census_stage_outcome(
     if outcome != &expected {
         return Err(invalid(
             "intentional-boundary license census stage outcome changed",
+        ));
+    }
+    Ok(())
+}
+
+pub(super) fn validate_committed_license_census_stage(
+    task: &IntentionalBoundaryFrameTask,
+    materialization: &IntentionalBoundaryMaterialization,
+    inventory: &IntentionalBoundaryRepositoryInventory,
+    source_census: &IntentionalBoundarySourceCensusStage,
+    stage: &IntentionalBoundaryLicenseCensusStage,
+) -> Result<(), IntentionalBoundaryLicenseCensusStageError> {
+    validate_source_census(task, materialization, inventory, source_census)?;
+    validate_license_payload_commitment(inventory, stage).map_err(invalid)?;
+    if stage.schema_version != INTENTIONAL_BOUNDARY_LICENSE_CENSUS_STAGE_SCHEMA_VERSION
+        || stage.stage_contract != STAGE_CONTRACT
+        || stage.frame_task_sha256 != task.task_sha256
+        || stage.population_rank != materialization.population_rank
+        || stage.materialization_sha256 != materialization.materialization_sha256
+        || stage.inventory_sha256 != inventory.inventory_sha256
+        || stage.source_census_stage_sha256 != source_census.stage_sha256
+        || stage.filename_contract != INTENTIONAL_BOUNDARY_LICENSE_FILENAME_CONTRACT
+        || stage.tracked_entry_count != inventory.tracked_entries.len()
+        || stage.stage_sha256 != stage_sha256(stage)?
+    {
+        return Err(invalid(
+            "intentional-boundary committed license census stage changed",
         ));
     }
     Ok(())
@@ -231,18 +258,11 @@ fn exclusion(
 fn validate_source_census(
     task: &IntentionalBoundaryFrameTask,
     materialization: &IntentionalBoundaryMaterialization,
-    root: &Path,
     inventory: &IntentionalBoundaryRepositoryInventory,
     source_census: &IntentionalBoundarySourceCensusStage,
 ) -> Result<(), IntentionalBoundaryLicenseCensusStageError> {
-    validate_intentional_boundary_source_census_stage_outcome(
-        task,
-        materialization,
-        root,
-        inventory,
-        &IntentionalBoundarySourceCensusStageOutcome::Completed(source_census.clone()),
-    )
-    .map_err(map_source_error)
+    validate_committed_source_census_stage(task, materialization, inventory, source_census)
+        .map_err(map_source_error)
 }
 
 fn stage_sha256(

@@ -23,7 +23,9 @@ use super::{
     IntentionalBoundaryProjectModelStageOutcome, IntentionalBoundaryRepositoryInventory,
     IntentionalBoundarySemanticCensusStage, IntentionalBoundarySourceCensusStage,
     bind_intentional_boundary_project_models, compose_intentional_boundary_project_model_evidence,
-    validate_intentional_boundary_evidence_stage,
+    validate_committed_evidence_stage, validate_intentional_boundary_project_model_bindings,
+    validate_intentional_boundary_project_model_census_commitment,
+    validate_intentional_boundary_project_model_evidence,
 };
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -48,7 +50,6 @@ pub async fn census_intentional_boundary_project_model_stage(
     validate_base_evidence(
         task,
         materialization,
-        root,
         inventory,
         source_census,
         license_census,
@@ -56,8 +57,7 @@ pub async fn census_intentional_boundary_project_model_stage(
         ast_census,
         manifest_stage,
         base_evidence_stage,
-    )
-    .await?;
+    )?;
     let required_providers = manifest_required_providers(manifest_stage);
     let runs = collect_provider_runs(
         &required_providers,
@@ -110,6 +110,87 @@ pub async fn validate_intentional_boundary_project_model_stage_outcome(
     .await?;
     if outcome != &expected {
         return Err(invalid("intentional-boundary project-model stage changed"));
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn validate_committed_project_model_stage(
+    task: &IntentionalBoundaryFrameTask,
+    materialization: &IntentionalBoundaryMaterialization,
+    inventory: &IntentionalBoundaryRepositoryInventory,
+    source_census: &IntentionalBoundarySourceCensusStage,
+    license_census: &IntentionalBoundaryLicenseCensusStage,
+    semantic_census: &IntentionalBoundarySemanticCensusStage,
+    ast_census: &IntentionalBoundaryAstCensusStage,
+    manifest_stage: &IntentionalBoundaryManifestStage,
+    base_evidence_stage: &IntentionalBoundaryEvidenceStage,
+    stage: &IntentionalBoundaryProjectModelStage,
+) -> Result<(), IntentionalBoundaryProjectModelStageError> {
+    validate_base_evidence(
+        task,
+        materialization,
+        inventory,
+        source_census,
+        license_census,
+        semantic_census,
+        ast_census,
+        manifest_stage,
+        base_evidence_stage,
+    )?;
+    validate_intentional_boundary_project_model_census_commitment(
+        inventory,
+        &stage.project_model_census,
+    )
+    .map_err(invalid)?;
+    validate_intentional_boundary_project_model_bindings(
+        inventory,
+        &source_census.source_census,
+        &semantic_census.semantic_census,
+        &stage.project_model_census,
+        &stage.binding_census,
+    )
+    .map_err(invalid)?;
+    validate_intentional_boundary_project_model_evidence(
+        inventory,
+        &source_census.source_census,
+        &semantic_census.semantic_census,
+        &stage.project_model_census,
+        &stage.binding_census,
+        base_evidence_stage.evidence_census.clone(),
+        &stage.evidence_census,
+    )
+    .map_err(invalid)?;
+    validate_completion_lineage(
+        materialization,
+        inventory,
+        source_census,
+        semantic_census,
+        manifest_stage,
+        base_evidence_stage,
+        &stage.required_providers,
+        &stage.project_model_census,
+        &stage.binding_census,
+        &stage.evidence_census,
+    )?;
+    if stage.schema_version != INTENTIONAL_BOUNDARY_PROJECT_MODEL_STAGE_SCHEMA_VERSION
+        || stage.stage_contract != STAGE_CONTRACT
+        || stage.frame_task_sha256 != task.task_sha256
+        || stage.population_rank != materialization.population_rank
+        || stage.materialization_sha256 != materialization.materialization_sha256
+        || stage.inventory_sha256 != inventory.inventory_sha256
+        || stage.source_census_stage_sha256 != source_census.stage_sha256
+        || stage.license_census_stage_sha256 != license_census.stage_sha256
+        || stage.semantic_census_stage_sha256 != semantic_census.stage_sha256
+        || stage.ast_census_stage_sha256 != ast_census.stage_sha256
+        || stage.manifest_stage_sha256 != manifest_stage.stage_sha256
+        || stage.base_evidence_stage_sha256 != base_evidence_stage.stage_sha256
+        || stage.required_providers != manifest_required_providers(manifest_stage)
+        || stage.stage_sha256 != stage_sha256(stage)?
+    {
+        return Err(invalid(
+            "intentional-boundary committed project-model stage changed",
+        ));
     }
     Ok(())
 }
@@ -355,10 +436,9 @@ fn collect_provider_runs(
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn validate_base_evidence(
+fn validate_base_evidence(
     task: &IntentionalBoundaryFrameTask,
     materialization: &IntentionalBoundaryMaterialization,
-    root: &Path,
     inventory: &IntentionalBoundaryRepositoryInventory,
     source_census: &IntentionalBoundarySourceCensusStage,
     license_census: &IntentionalBoundaryLicenseCensusStage,
@@ -367,10 +447,9 @@ async fn validate_base_evidence(
     manifest_stage: &IntentionalBoundaryManifestStage,
     base_evidence_stage: &IntentionalBoundaryEvidenceStage,
 ) -> Result<(), IntentionalBoundaryProjectModelStageError> {
-    validate_intentional_boundary_evidence_stage(
+    validate_committed_evidence_stage(
         task,
         materialization,
-        root,
         inventory,
         source_census,
         license_census,
@@ -379,7 +458,6 @@ async fn validate_base_evidence(
         manifest_stage,
         base_evidence_stage,
     )
-    .await
     .map_err(map_evidence_error)
 }
 

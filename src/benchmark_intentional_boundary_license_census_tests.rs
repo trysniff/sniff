@@ -1,4 +1,5 @@
 use super::*;
+use crate::benchmark::IntentionalBoundarySourceCensusStageOutcome;
 use crate::benchmark::{
     IntentionalBoundaryMaterializationOutcome, census_intentional_boundary_repository_stage,
     inventory_intentional_boundary_repository_typed,
@@ -287,6 +288,59 @@ fn replay_rejects_lineage_and_evidence_tampering() {
         error.kind,
         IntentionalBoundaryLicenseCensusStageErrorKind::InvalidInput
     );
+}
+
+#[test]
+fn committed_replay_rejects_forged_candidate_metadata_after_rehashing() {
+    let source = repository(&[
+        ("src/lib.rs", b"pub fn value() -> u8 { 1 }\n"),
+        ("LICENSE", b"sample license\n"),
+        ("LICENSES/MIT.txt", b"secondary license\n"),
+    ]);
+    let fixture = materialize(source.path());
+    let IntentionalBoundaryLicenseCensusStageOutcome::Completed(stage) = census(&fixture) else {
+        panic!("fixture must complete");
+    };
+
+    let mut forged = stage.clone();
+    forged.license_artifacts[0].repository_path = "PATENTS".to_string();
+    forged.stage_sha256 = stage_sha256(&forged).unwrap();
+    let error = validate_committed_license_census_stage(
+        &fixture.task,
+        &fixture.materialization,
+        &fixture.inventory,
+        &fixture.source_census,
+        &forged,
+    )
+    .unwrap_err();
+    assert_eq!(
+        error.kind,
+        IntentionalBoundaryLicenseCensusStageErrorKind::InvalidInput
+    );
+
+    let mut forged = stage.clone();
+    forged.license_artifacts[0].filename_score_basis_points -= 1;
+    forged.stage_sha256 = stage_sha256(&forged).unwrap();
+    validate_committed_license_census_stage(
+        &fixture.task,
+        &fixture.materialization,
+        &fixture.inventory,
+        &fixture.source_census,
+        &forged,
+    )
+    .unwrap_err();
+
+    let mut forged = stage;
+    forged.license_artifacts[1] = forged.license_artifacts[0].clone();
+    forged.stage_sha256 = stage_sha256(&forged).unwrap();
+    validate_committed_license_census_stage(
+        &fixture.task,
+        &fixture.materialization,
+        &fixture.inventory,
+        &fixture.source_census,
+        &forged,
+    )
+    .unwrap_err();
 }
 
 fn corrupt_sha256(value: &mut String) {

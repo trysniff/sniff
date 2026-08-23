@@ -18,7 +18,7 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-const AST_CONTRACT: &str = "sniffbench-intentional-boundary-source-ast-v12";
+pub(super) const AST_CONTRACT: &str = "sniffbench-intentional-boundary-source-ast-v12";
 pub(super) type AstMethodKey = (String, usize);
 
 pub(super) struct AstMethodSyntaxFact {
@@ -412,7 +412,9 @@ fn range_contains(
             >= (inner.end_line_zero_based, inner.end_character_zero_based)
 }
 
-fn compute_ast_census_sha256(census: &IntentionalBoundaryAstCensus) -> Result<String, String> {
+pub(super) fn compute_ast_census_sha256(
+    census: &IntentionalBoundaryAstCensus,
+) -> Result<String, String> {
     let bytes = serde_json::to_vec(&(
         census.schema_version,
         &census.ast_contract,

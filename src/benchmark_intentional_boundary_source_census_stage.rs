@@ -2,6 +2,7 @@ use super::intentional_boundary_source_census::{
     INTENTIONAL_BOUNDARY_SOURCE_EXTENSION_CONTRACT, IntentionalBoundarySourceInspection,
     inspect_intentional_boundary_repository_sources_typed,
 };
+use super::intentional_boundary_source_census_commitment::validate_source_census_commitment;
 use super::{
     INTENTIONAL_BOUNDARY_SOURCE_CENSUS_EXCLUSION_SCHEMA_VERSION,
     INTENTIONAL_BOUNDARY_SOURCE_CENSUS_STAGE_SCHEMA_VERSION, IntentionalBoundaryFrameTask,
@@ -12,6 +13,8 @@ use super::{
     IntentionalBoundarySourceCensusFailureEvidence, IntentionalBoundarySourceCensusStage,
     IntentionalBoundarySourceCensusStageError, IntentionalBoundarySourceCensusStageErrorKind,
     IntentionalBoundarySourceCensusStageOutcome, validate_intentional_boundary_materialization,
+    validate_intentional_boundary_materialization_commitment,
+    validate_intentional_boundary_repository_inventory_commitment_typed,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -97,6 +100,38 @@ pub fn validate_intentional_boundary_source_census_stage_outcome(
     if outcome != &expected {
         return Err(invalid(
             "intentional-boundary source census stage outcome changed",
+        ));
+    }
+    Ok(())
+}
+
+pub(super) fn validate_committed_source_census_stage(
+    task: &IntentionalBoundaryFrameTask,
+    materialization: &IntentionalBoundaryMaterialization,
+    inventory: &IntentionalBoundaryRepositoryInventory,
+    stage: &IntentionalBoundarySourceCensusStage,
+) -> Result<(), IntentionalBoundarySourceCensusStageError> {
+    validate_intentional_boundary_materialization_commitment(task, materialization)
+        .map_err(map_materialization_error)?;
+    validate_intentional_boundary_repository_inventory_commitment_typed(
+        &materialization.repository,
+        &materialization.revision,
+        inventory,
+    )
+    .map_err(map_inventory_error)?;
+    validate_source_census_commitment(inventory, &stage.source_census).map_err(invalid)?;
+    if stage.schema_version != INTENTIONAL_BOUNDARY_SOURCE_CENSUS_STAGE_SCHEMA_VERSION
+        || stage.stage_contract != STAGE_CONTRACT
+        || stage.frame_task_sha256 != task.task_sha256
+        || stage.population_rank != materialization.population_rank
+        || stage.materialization_sha256 != materialization.materialization_sha256
+        || stage.inventory_sha256 != inventory.inventory_sha256
+        || stage.source_extension_contract != INTENTIONAL_BOUNDARY_SOURCE_EXTENSION_CONTRACT
+        || stage.source_census.source_files.is_empty()
+        || stage.stage_sha256 != stage_sha256(stage)?
+    {
+        return Err(invalid(
+            "intentional-boundary committed source census stage changed",
         ));
     }
     Ok(())
