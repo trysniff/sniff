@@ -689,6 +689,26 @@ mod intentional_boundary_rank_stage;
 
 pub use intentional_boundary_rank_stage::*;
 
+#[path = "benchmark_intentional_boundary_rank_runner_schema.rs"]
+mod intentional_boundary_rank_runner_schema;
+
+pub use intentional_boundary_rank_runner_schema::*;
+
+#[path = "benchmark_intentional_boundary_rank_runner.rs"]
+mod intentional_boundary_rank_runner;
+
+pub use intentional_boundary_rank_runner::*;
+
+#[path = "benchmark_intentional_boundary_rank_sweep_schema.rs"]
+mod intentional_boundary_rank_sweep_schema;
+
+pub use intentional_boundary_rank_sweep_schema::*;
+
+#[path = "benchmark_intentional_boundary_rank_sweep.rs"]
+mod intentional_boundary_rank_sweep;
+
+pub use intentional_boundary_rank_sweep::*;
+
 #[path = "benchmark_intentional_boundary_frame.rs"]
 mod intentional_boundary_frame;
 
