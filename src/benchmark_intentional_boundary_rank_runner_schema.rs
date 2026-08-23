@@ -36,6 +36,13 @@ pub struct IntentionalBoundaryRankStageContext<'a> {
     pub history: &'a [IntentionalBoundaryStoredRankStage],
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct IntentionalBoundaryRankTerminalContext<'a> {
+    pub task: &'a IntentionalBoundaryFrameTask,
+    pub repository_task: &'a IntentionalBoundaryRepositoryTask,
+    pub history: &'a [IntentionalBoundaryStoredRankStage],
+}
+
 pub type IntentionalBoundaryRankStageFuture<'a, T> =
     Pin<Box<dyn Future<Output = Result<T, super::IntentionalBoundaryRankStageError>> + 'a>>;
 
@@ -51,4 +58,11 @@ pub trait IntentionalBoundaryRankStageExecutor {
         &'a mut self,
         context: IntentionalBoundaryRankStageContext<'a>,
     ) -> IntentionalBoundaryRankStageFuture<'a, IntentionalBoundaryRankStageArtifact>;
+
+    fn reconcile_terminal<'a>(
+        &'a mut self,
+        _context: IntentionalBoundaryRankTerminalContext<'a>,
+    ) -> IntentionalBoundaryRankStageFuture<'a, ()> {
+        Box::pin(async { Ok(()) })
+    }
 }
