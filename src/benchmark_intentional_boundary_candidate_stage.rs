@@ -37,6 +37,7 @@ pub fn qualify_intentional_boundary_candidate_stage(
     behavior_stage: &IntentionalBoundaryBehaviorStage,
 ) -> Result<IntentionalBoundaryCandidateStage, IntentionalBoundaryCandidateStageError> {
     validate_upstream_lineage(
+        protocol,
         task,
         materialization,
         inventory,
@@ -131,6 +132,7 @@ pub(super) fn finish_candidate_stage(
     candidate_census: IntentionalBoundaryCandidateCensus,
 ) -> Result<IntentionalBoundaryCandidateStage, IntentionalBoundaryCandidateStageError> {
     validate_upstream_lineage(
+        protocol,
         task,
         materialization,
         inventory,
@@ -178,6 +180,7 @@ pub(super) fn finish_candidate_stage(
 
 #[allow(clippy::too_many_arguments)]
 fn validate_upstream_lineage(
+    protocol: &ValidatedIntentionalBoundaryProtocol,
     task: &IntentionalBoundaryFrameTask,
     materialization: &IntentionalBoundaryMaterialization,
     inventory: &IntentionalBoundaryRepositoryInventory,
@@ -193,6 +196,11 @@ fn validate_upstream_lineage(
 ) -> Result<(), IntentionalBoundaryCandidateStageError> {
     let committed_behavior =
         behavior_stage_sha256(behavior_stage).map_err(|error| invalid(error.detail))?;
+    if protocol.protocol_sha256 != task.protocol_sha256 {
+        return Err(invalid(
+            "intentional-boundary candidate protocol does not match the frame task",
+        ));
+    }
     if behavior_stage.stage_sha256 != committed_behavior
         || behavior_stage.frame_task_sha256 != task.task_sha256
         || behavior_stage.population_rank != materialization.population_rank

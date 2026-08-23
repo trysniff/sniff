@@ -161,7 +161,7 @@ fn completion_binds_behavior_lineage_and_uses_its_evidence() {
         stage.stage_sha256
     );
 
-    let mut tampered_behavior = behavior;
+    let mut tampered_behavior = behavior.clone();
     tampered_behavior.stage_sha256 = "0".repeat(64);
     let error = finish_candidate_stage(
         &protocol,
@@ -177,12 +177,40 @@ fn completion_binds_behavior_lineage_and_uses_its_evidence() {
         &project_model,
         &generator,
         &tampered_behavior,
+        stage.candidate_census.clone(),
+    )
+    .unwrap_err();
+    assert_eq!(
+        error.kind,
+        IntentionalBoundaryCandidateStageErrorKind::InvalidInput
+    );
+
+    let mut mismatched_task = task.clone();
+    mismatched_task.protocol_sha256 = "0".repeat(64);
+    let error = finish_candidate_stage(
+        &protocol,
+        &mismatched_task,
+        &materialization,
+        &inventory,
+        &source,
+        &license,
+        &semantic,
+        &ast,
+        &manifest,
+        &base,
+        &project_model,
+        &generator,
+        &behavior,
         stage.candidate_census,
     )
     .unwrap_err();
     assert_eq!(
         error.kind,
         IntentionalBoundaryCandidateStageErrorKind::InvalidInput
+    );
+    assert_eq!(
+        error.detail,
+        "intentional-boundary candidate protocol does not match the frame task"
     );
 }
 
