@@ -10,10 +10,10 @@ use super::{
     GRADLE_INDEXER_BASE_JVM_ARGS, WINDOWS_SCIP_NODE_BOOTSTRAP, WINDOWS_SCIP_PYTHON_BOOTSTRAP,
     compact_process_output, files_for_indexer, format_timeout, go_sandbox_environment,
     gradle_indexer_jvm_args, gradle_script_uses_android, indexer_arguments_with_project,
-    missing_position_encoding, private_indexer_environment, private_indexer_jvm_arguments,
-    project_name, reject_unsupported_android_gradle, resolve_java_home_runtime,
-    runtime_file_identities, sandbox_repository_argument, source_integrity_digest,
-    verify_runtime_identities_unchanged, write_private_gradle_properties,
+    missing_position_encoding, private_indexer_directory_argument, private_indexer_environment,
+    private_indexer_jvm_arguments, project_name, reject_unsupported_android_gradle,
+    resolve_java_home_runtime, runtime_file_identities, sandbox_repository_argument,
+    source_integrity_digest, verify_runtime_identities_unchanged, write_private_gradle_properties,
 };
 #[cfg(windows)]
 use super::{
@@ -310,21 +310,34 @@ fn indexer_process_state_uses_only_the_cleaned_private_workspace() {
         .collect::<std::collections::BTreeMap<_, _>>();
     let private_root = root.path().join(".sniff-indexer-tmp");
 
-    for name in ["HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "TEMP", "TMP"] {
+    for (name, directory_name) in [
+        ("HOME", "home"),
+        ("XDG_CONFIG_HOME", "config"),
+        ("XDG_CACHE_HOME", "cache"),
+        ("TEMP", "temp"),
+        ("TMP", "temp"),
+    ] {
         let value = environment.get(name).unwrap();
+        assert_eq!(
+            value,
+            &private_indexer_directory_argument(root.path(), directory_name),
+            "{name}"
+        );
         assert!(
-            Path::new(value).starts_with(&private_root),
+            private_root.join(directory_name).is_dir(),
             "{name}: {value}"
         );
-        assert!(Path::new(value).is_dir(), "{name}: {value}");
     }
     assert_ne!(
         environment.get("HOME").unwrap(),
-        &root.path().to_string_lossy()
+        &sandbox_repository_argument(root.path(), &root.path().to_string_lossy())
     );
     #[cfg(windows)]
     for name in ["USERPROFILE", "APPDATA", "LOCALAPPDATA"] {
-        assert!(Path::new(environment.get(name).unwrap()).starts_with(&private_root));
+        assert_ne!(
+            environment.get(name).unwrap(),
+            &sandbox_repository_argument(root.path(), &root.path().to_string_lossy())
+        );
     }
 
     let jvm_arguments = private_indexer_jvm_arguments(root.path());
@@ -333,11 +346,11 @@ fn indexer_process_state_uses_only_the_cleaned_private_workspace() {
         [
             format!(
                 "-Duser.home={}",
-                private_root.join("home").to_string_lossy()
+                private_indexer_directory_argument(root.path(), "home")
             ),
             format!(
                 "-Djava.io.tmpdir={}",
-                private_root.join("temp").to_string_lossy()
+                private_indexer_directory_argument(root.path(), "temp")
             ),
         ]
     );
