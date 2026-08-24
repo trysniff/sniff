@@ -1,4 +1,7 @@
 use super::*;
+use crate::benchmark::{
+    census_intentional_boundary_repository, inventory_intentional_boundary_repository,
+};
 use crate::semantic_index::{
     RepositoryPath, SemanticCallEdge, SemanticDocument, SemanticImportEdge,
     SemanticIndexProvenance, SemanticOccurrence, SemanticPosition, SemanticPositionEncoding,
@@ -6,6 +9,8 @@ use crate::semantic_index::{
     SemanticSymbolKind, SemanticTestRelationship, SemanticTextEncoding,
 };
 use crate::types::MethodRecord;
+use std::path::Path;
+use std::process::Command;
 
 fn range(line: u32, start: u32, end: u32) -> SemanticSourceRange {
     SemanticSourceRange {
@@ -229,6 +234,88 @@ fn fixture() -> (
         files,
         BTreeMap::from([(SemanticIndexerKind::Rust, index)]),
     )
+}
+
+fn git(root: &Path, args: &[&str]) -> String {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "git {:?} failed: {}",
+        args,
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).unwrap().trim().to_string()
+}
+
+#[test]
+fn semantic_indexer_mutations_are_confined_to_disposable_snapshot() {
+    let source = tempfile::tempdir().unwrap();
+    git(source.path(), &["init", "--quiet"]);
+    git(source.path(), &["config", "user.name", "SniffBench"]);
+    git(
+        source.path(),
+        &["config", "user.email", "bench@example.invalid"],
+    );
+    git(
+        source.path(),
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/example/semantic-snapshot.git",
+        ],
+    );
+    std::fs::write(
+        source.path().join("go.mod"),
+        "module github.com/example/semantic-snapshot\n\ngo 1.24\n",
+    )
+    .unwrap();
+    std::fs::write(source.path().join("go.sum"), "committed checksum\n").unwrap();
+    std::fs::write(
+        source.path().join("main.go"),
+        "package main\n\nfunc main() {}\n",
+    )
+    .unwrap();
+    git(source.path(), &["add", "go.mod", "go.sum", "main.go"]);
+    git(source.path(), &["commit", "--quiet", "-m", "fixture"]);
+    let revision = git(source.path(), &["rev-parse", "HEAD"]);
+    let repository = "github.com/example/semantic-snapshot";
+    let inventory =
+        inventory_intentional_boundary_repository(repository, &revision, source.path()).unwrap();
+    let source_census =
+        census_intentional_boundary_repository(repository, &revision, source.path(), &inventory)
+            .unwrap();
+
+    let runtime =
+        prepare_semantic_runtime_snapshot(&revision, source.path(), &inventory, &source_census)
+            .unwrap();
+    std::fs::write(runtime.root().join("go.sum"), "indexer-updated checksum\n").unwrap();
+
+    assert!(!git(runtime.root(), &["status", "--porcelain=v1"]).is_empty());
+    validate_intentional_boundary_source_census(
+        repository,
+        &revision,
+        source.path(),
+        &inventory,
+        &source_census,
+    )
+    .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(source.path().join("go.sum")).unwrap(),
+        "committed checksum\n"
+    );
+    assert!(git(source.path(), &["status", "--porcelain=v1"]).is_empty());
+    assert!(
+        runtime
+            .files()
+            .iter()
+            .all(|file| Path::new(&file.file_path).starts_with(runtime.root()))
+    );
 }
 
 #[test]

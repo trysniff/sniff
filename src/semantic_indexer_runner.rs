@@ -925,6 +925,7 @@ fn build_indexer_sandbox_command(
             installed.entrypoint.display()
         )
     })?;
+    let mut env = private_indexer_environment(root)?;
     #[cfg(windows)]
     let gradle_child = if spec.kind == SemanticIndexerKind::Kotlin {
         let workspace = workspace.ok_or_else(|| {
@@ -971,15 +972,7 @@ fn build_indexer_sandbox_command(
         ),
         IndexerRuntime::JavaJar => {
             let java = resolve_java_runtime()?;
-            let mut args = Vec::new();
-            args.push(format!(
-                "-Duser.home={}",
-                sandbox_repository_argument(root, &root.to_string_lossy())
-            ));
-            args.push(format!(
-                "-Djava.io.tmpdir={}",
-                sandbox_repository_argument(root, &root.join(INDEXER_CACHE_DIR).to_string_lossy(),)
-            ));
+            let mut args = private_indexer_jvm_arguments(root).to_vec();
             #[cfg(windows)]
             if spec.kind == SemanticIndexerKind::Kotlin {
                 let patch_dir = entrypoint
@@ -1035,9 +1028,6 @@ fn build_indexer_sandbox_command(
     }
     let mut path_prefixes = Vec::new();
     let mut runtime_files = vec![runtime_path.clone()];
-    let mut env = Vec::new();
-    let sandbox_home = sandbox_repository_argument(root, &root.to_string_lossy());
-    env.push(("HOME".to_string(), sandbox_home.clone()));
     env.push(("SNIFF_INTERNAL_INDEXER".to_string(), "1".to_string()));
     if std::env::var_os("SNIFF_DEBUG_INDEXERS").is_some() {
         env.push(("SNIFF_DEBUG_INDEXERS".to_string(), "1".to_string()));
@@ -2082,6 +2072,70 @@ fn go_sandbox_environment(root: &Path, go_root: &Path) -> Vec<(String, String)> 
             ),
         ),
     ]
+}
+
+fn private_indexer_directory_argument(root: &Path, name: &str) -> String {
+    sandbox_repository_argument(
+        root,
+        &root.join(INDEXER_TEMP_DIR).join(name).to_string_lossy(),
+    )
+}
+
+fn private_indexer_jvm_arguments(root: &Path) -> [String; 2] {
+    [
+        format!(
+            "-Duser.home={}",
+            private_indexer_directory_argument(root, "home")
+        ),
+        format!(
+            "-Djava.io.tmpdir={}",
+            private_indexer_directory_argument(root, "temp")
+        ),
+    ]
+}
+
+fn private_indexer_environment(root: &Path) -> Result<Vec<(String, String)>, String> {
+    let private_root = root.join(INDEXER_TEMP_DIR);
+    let directories = [
+        ("HOME", "home"),
+        ("XDG_CONFIG_HOME", "config"),
+        ("XDG_CACHE_HOME", "cache"),
+        ("TEMP", "temp"),
+        ("TMP", "temp"),
+    ];
+    let mut environment = Vec::with_capacity(directories.len() + 3);
+    for (name, directory_name) in directories {
+        let directory = private_root.join(directory_name);
+        fs::create_dir_all(&directory).map_err(|error| {
+            format!(
+                "failed to create private semantic indexer {name} directory {}: {error}",
+                directory.display()
+            )
+        })?;
+        environment.push((
+            name.to_string(),
+            private_indexer_directory_argument(root, directory_name),
+        ));
+    }
+    #[cfg(windows)]
+    {
+        let home = environment
+            .iter()
+            .find(|(name, _)| name == "HOME")
+            .map(|(_, value)| value.clone())
+            .ok_or_else(|| "private semantic indexer HOME is missing".to_string())?;
+        let config = environment
+            .iter()
+            .find(|(name, _)| name == "XDG_CONFIG_HOME")
+            .map(|(_, value)| value.clone())
+            .ok_or_else(|| "private semantic indexer config directory is missing".to_string())?;
+        environment.extend([
+            ("USERPROFILE".to_string(), home),
+            ("APPDATA".to_string(), config.clone()),
+            ("LOCALAPPDATA".to_string(), config),
+        ]);
+    }
+    Ok(environment)
 }
 
 fn indexer_arguments_with_workspace(

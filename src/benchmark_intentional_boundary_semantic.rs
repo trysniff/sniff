@@ -29,6 +29,8 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
+use super::intentional_boundary_runtime_snapshot::IntentionalBoundaryRuntimeSnapshot;
+
 pub(super) const SEMANTIC_CENSUS_CONTRACT: &str =
     "sniffbench-intentional-boundary-compiler-semantic-census-v3";
 type MethodJoinKey = (String, String, u32, u32);
@@ -53,9 +55,49 @@ pub async fn census_intentional_boundary_semantics(
         inventory,
         source_census,
     )?;
-    let files = intentional_boundary_file_records(root, inventory, source_census)?;
-    let indexes = crate::semantic_indexer_runner::run_required_indexers(root, &files).await?;
-    build_semantic_census(root, source_census, &files, &indexes)
+    let runtime = prepare_semantic_runtime_snapshot(revision, root, inventory, source_census)?;
+    let indexes =
+        crate::semantic_indexer_runner::run_required_indexers(runtime.root(), runtime.files())
+            .await?;
+    let census = build_semantic_census(runtime.root(), source_census, runtime.files(), &indexes)?;
+    validate_intentional_boundary_source_census(
+        repository,
+        revision,
+        root,
+        inventory,
+        source_census,
+    )?;
+    Ok(census)
+}
+
+struct SemanticRuntimeSnapshot {
+    snapshot: IntentionalBoundaryRuntimeSnapshot,
+    files: Vec<FileRecord>,
+}
+
+impl SemanticRuntimeSnapshot {
+    fn root(&self) -> &Path {
+        self.snapshot.path()
+    }
+
+    fn files(&self) -> &[FileRecord] {
+        &self.files
+    }
+}
+
+fn prepare_semantic_runtime_snapshot(
+    revision: &str,
+    source_root: &Path,
+    inventory: &IntentionalBoundaryRepositoryInventory,
+    source_census: &IntentionalBoundarySourceCensus,
+) -> Result<SemanticRuntimeSnapshot, String> {
+    let snapshot = IntentionalBoundaryRuntimeSnapshot::create(
+        source_root,
+        revision,
+        "sniff-semantic-snapshot",
+    )?;
+    let files = intentional_boundary_file_records(snapshot.path(), inventory, source_census)?;
+    Ok(SemanticRuntimeSnapshot { snapshot, files })
 }
 
 pub(super) fn build_semantic_census(
