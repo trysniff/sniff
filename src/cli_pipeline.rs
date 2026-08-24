@@ -4,6 +4,8 @@ mod benchmark_run;
 mod env;
 #[path = "cli_pipeline_graph.rs"]
 mod graph;
+#[path = "cli_pipeline_intentional_boundary.rs"]
+mod intentional_boundary;
 #[path = "cli_pipeline_io.rs"]
 mod io;
 #[path = "cli_pipeline_llm.rs"]
@@ -30,6 +32,9 @@ pub(crate) use benchmark_run::{
     validate_benchmark_labels, validate_benchmark_source_frame,
     validate_historical_v2_benchmark_protocol, validate_intentional_boundary_benchmark_frame_task,
     validate_intentional_boundary_benchmark_protocol,
+};
+pub(crate) use intentional_boundary::{
+    IntentionalBoundaryCollectionInputs, collect_intentional_boundary_benchmark_frame,
 };
 pub use preflight::{doctor, estimate, index_semantic_sources, install_indexers};
 pub use run::{resume, run, status};

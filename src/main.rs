@@ -49,12 +49,14 @@ pub mod benchmark;
 pub mod benchmark_import;
 
 fn main() {
-    let args = cli::CliArgs::parse();
-    cli_banner::print();
     let handle = match thread::Builder::new()
         .name("sniff-runner".to_string())
         .stack_size(64 * 1024 * 1024)
         .spawn(move || {
+            // Clap builds the complete command graph while parsing, so parsing belongs on the
+            // same deliberately sized stack as the rest of the CLI pipeline.
+            let args = cli::CliArgs::parse();
+            cli_banner::print();
             let rt = match tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
                 .build()

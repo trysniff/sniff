@@ -318,6 +318,76 @@ async fn production_sweep_rejects_protocol_mismatch_before_creating_roots() {
     assert!(!frame.exists());
 }
 
+#[tokio::test]
+async fn production_sweep_rejects_unsafe_task_before_creating_roots() {
+    let mut task = task();
+    task.model_access_forbidden = false;
+    let protocol = protocol();
+    let root = tempfile::tempdir().unwrap();
+    let state = root.path().join("state");
+    let work = root.path().join("work");
+    let frame = root.path().join("frame");
+
+    let error =
+        run_intentional_boundary_production_sweep(IntentionalBoundaryProductionSweepInputs {
+            protocol: &protocol,
+            task: &task,
+            state_root: &state,
+            work_root: &work,
+            frame_root: &frame,
+            github_token: None,
+            maximum_new_stages_per_rank: None,
+            through_stage: None,
+        })
+        .await
+        .unwrap_err();
+
+    assert_eq!(
+        error.kind,
+        IntentionalBoundaryRankStageErrorKind::InvalidInput
+    );
+    assert!(error.detail.contains("safety policy changed"));
+    assert!(!state.exists());
+    assert!(!work.exists());
+    assert!(!frame.exists());
+}
+
+#[tokio::test]
+async fn production_slice_rejects_unvisited_rank_drift_before_creating_roots() {
+    let mut task = task();
+    task.repositories[599].population_rank = 599;
+    let protocol = protocol();
+    let root = tempfile::tempdir().unwrap();
+    let state = root.path().join("state");
+    let work = root.path().join("work");
+    let frame = root.path().join("frame");
+
+    let error = run_intentional_boundary_production_sweep_slice(
+        IntentionalBoundaryProductionSweepInputs {
+            protocol: &protocol,
+            task: &task,
+            state_root: &state,
+            work_root: &work,
+            frame_root: &frame,
+            github_token: None,
+            maximum_new_stages_per_rank: None,
+            through_stage: None,
+        },
+        NonZeroUsize::new(1).unwrap(),
+    )
+    .await
+    .unwrap_err();
+
+    assert_eq!(
+        error.kind,
+        IntentionalBoundaryRankStageErrorKind::InvalidInput
+    );
+    assert!(error.detail.contains("rank sequence changed"));
+    assert!(!state.exists());
+    assert!(!work.exists());
+    assert!(!frame.exists());
+}
+
 fn task() -> super::super::IntentionalBoundaryFrameTask {
     prepare_intentional_boundary_frame_task(POLICY, POPULATION, BLIND_SEAL, PROTOCOL).unwrap()
 }

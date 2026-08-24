@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand};
+use std::num::NonZeroUsize;
 
 #[path = "cli_pipeline.rs"]
 mod pipeline;
@@ -329,6 +330,30 @@ pub enum BenchmarkCommand {
         /// Blank frame task produced by `prepare-intentional-frame-task`.
         task: String,
     },
+    /// Execute or resume the frozen intentional-boundary frame without model access.
+    CollectIntentionalFrame {
+        /// Public non-blind selection policy.
+        policy: String,
+        /// Frozen 600-repository population worksheet.
+        population: String,
+        /// Frozen blind source seal whose repositories remain excluded.
+        blind_seal: String,
+        /// Precommitted intentional-boundary protocol.
+        protocol: String,
+        /// Immutable blank frame task produced before candidate inspection.
+        task: String,
+        /// Durable per-rank stage journals.
+        state_directory: String,
+        /// Disposable checkout root; terminal ranks are removed automatically.
+        work_directory: String,
+        /// Durable create-new terminal rank records.
+        frame_directory: String,
+        /// New completed candidate frame; partial runs never write this file.
+        output: String,
+        /// Admit at most this many previously nonterminal ranks in this invocation.
+        #[arg(long)]
+        max_new_ranks: NonZeroUsize,
+    },
     /// Execute and resume every frozen historical rank without inspecting labels.
     AssessNonBlindHistory {
         /// Public non-blind selection policy.
@@ -610,6 +635,34 @@ pub async fn run(args: CliArgs) -> Result<i32, Box<dyn std::error::Error>> {
                 &protocol,
                 &task,
             ),
+            BenchmarkCommand::CollectIntentionalFrame {
+                policy,
+                population,
+                blind_seal,
+                protocol,
+                task,
+                state_directory,
+                work_directory,
+                frame_directory,
+                output,
+                max_new_ranks,
+            } => {
+                pipeline::collect_intentional_boundary_benchmark_frame(
+                    pipeline::IntentionalBoundaryCollectionInputs {
+                        policy_path: &policy,
+                        population_path: &population,
+                        blind_seal_path: &blind_seal,
+                        protocol_path: &protocol,
+                        task_path: &task,
+                        state_directory: &state_directory,
+                        work_directory: &work_directory,
+                        frame_directory: &frame_directory,
+                        output_path: &output,
+                        maximum_new_ranks: max_new_ranks,
+                    },
+                )
+                .await
+            }
             BenchmarkCommand::AssessNonBlindHistory {
                 policy,
                 worksheet,
@@ -1023,6 +1076,54 @@ mod tests {
                 && blind_seal == "blind-seal.json"
                 && protocol == "protocol.json"
                 && task == "task.json"
+        ));
+    }
+
+    #[test]
+    fn parses_offline_resumable_intentional_boundary_collection() {
+        let args = CliArgs::try_parse_from([
+            "sniff",
+            "benchmark",
+            "collect-intentional-frame",
+            "policy.json",
+            "population.json",
+            "blind-seal.json",
+            "protocol.json",
+            "task.json",
+            "state",
+            "work",
+            "frame",
+            "candidate-frame.json",
+            "--max-new-ranks",
+            "3",
+        ])
+        .expect("intentional-boundary collection arguments");
+
+        assert!(matches!(
+            args.command,
+            Some(CliCommand::Benchmark {
+                command: BenchmarkCommand::CollectIntentionalFrame {
+                    policy,
+                    population,
+                    blind_seal,
+                    protocol,
+                    task,
+                    state_directory,
+                    work_directory,
+                    frame_directory,
+                    output,
+                    max_new_ranks,
+                }
+            }) if policy == "policy.json"
+                && population == "population.json"
+                && blind_seal == "blind-seal.json"
+                && protocol == "protocol.json"
+                && task == "task.json"
+                && state_directory == "state"
+                && work_directory == "work"
+                && frame_directory == "frame"
+                && output == "candidate-frame.json"
+                && max_new_ranks.get() == 3
         ));
     }
 
