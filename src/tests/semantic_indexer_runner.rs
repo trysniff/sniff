@@ -10,7 +10,8 @@ use super::{
     GRADLE_INDEXER_BASE_JVM_ARGS, WINDOWS_SCIP_NODE_BOOTSTRAP, WINDOWS_SCIP_PYTHON_BOOTSTRAP,
     compact_process_output, files_for_indexer, format_timeout, go_sandbox_environment,
     gradle_indexer_jvm_args, gradle_script_uses_android, indexer_arguments_with_project,
-    missing_position_encoding, project_name, reject_unsupported_android_gradle,
+    missing_position_encoding, private_indexer_directory_argument, private_indexer_environment,
+    private_indexer_jvm_arguments, project_name, reject_unsupported_android_gradle,
     resolve_java_home_runtime, runtime_file_identities, sandbox_repository_argument,
     source_integrity_digest, verify_runtime_identities_unchanged, write_private_gradle_properties,
 };
@@ -296,6 +297,62 @@ fn go_indexing_keeps_mutable_state_inside_the_sandbox() {
         environment
             .get("GOCACHE")
             .is_some_and(|path| path.contains(".sniff-indexer-tmp"))
+    );
+}
+
+#[test]
+fn indexer_process_state_uses_only_the_cleaned_private_workspace() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join(".sniff-indexer-tmp")).unwrap();
+    let environment = private_indexer_environment(root.path())
+        .unwrap()
+        .into_iter()
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let private_root = root.path().join(".sniff-indexer-tmp");
+
+    for (name, directory_name) in [
+        ("HOME", "home"),
+        ("XDG_CONFIG_HOME", "config"),
+        ("XDG_CACHE_HOME", "cache"),
+        ("TEMP", "temp"),
+        ("TMP", "temp"),
+    ] {
+        let value = environment.get(name).unwrap();
+        assert_eq!(
+            value,
+            &private_indexer_directory_argument(root.path(), directory_name),
+            "{name}"
+        );
+        assert!(
+            private_root.join(directory_name).is_dir(),
+            "{name}: {value}"
+        );
+    }
+    assert_ne!(
+        environment.get("HOME").unwrap(),
+        &sandbox_repository_argument(root.path(), &root.path().to_string_lossy())
+    );
+    #[cfg(windows)]
+    for name in ["USERPROFILE", "APPDATA", "LOCALAPPDATA"] {
+        assert!(
+            !environment.contains_key(name),
+            "the AppContainer must provide its own disposable {name}"
+        );
+    }
+
+    let jvm_arguments = private_indexer_jvm_arguments(root.path());
+    assert_eq!(
+        jvm_arguments,
+        [
+            format!(
+                "-Duser.home={}",
+                private_indexer_directory_argument(root.path(), "home")
+            ),
+            format!(
+                "-Djava.io.tmpdir={}",
+                private_indexer_directory_argument(root.path(), "temp")
+            ),
+        ]
     );
 }
 
