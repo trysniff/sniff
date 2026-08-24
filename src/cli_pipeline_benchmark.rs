@@ -839,7 +839,7 @@ pub(crate) fn import_benchmark_run(
     Ok(0)
 }
 
-fn write_new_file(path: &Path, bytes: &[u8]) -> Result<(), IoError> {
+pub(super) fn write_new_file(path: &Path, bytes: &[u8]) -> Result<(), IoError> {
     let mut file = fs::OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -858,7 +858,7 @@ fn write_new_file(path: &Path, bytes: &[u8]) -> Result<(), IoError> {
     file.sync_all()
 }
 
-fn read_json<T>(path: &str) -> Result<T, Box<dyn std::error::Error>>
+pub(super) fn read_json<T>(path: &str) -> Result<T, Box<dyn std::error::Error>>
 where
     T: serde::de::DeserializeOwned,
 {

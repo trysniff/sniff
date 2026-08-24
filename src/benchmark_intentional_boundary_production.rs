@@ -7,8 +7,10 @@ use super::{
     ValidatedIntentionalBoundaryProtocol, census_intentional_boundary_evidence_stage,
     census_intentional_boundary_repository_licenses, census_intentional_boundary_repository_stage,
     inventory_intentional_boundary_repository_typed, materialize_intentional_boundary_repository,
-    run_intentional_boundary_rank_sweep,
+    run_intentional_boundary_rank_sweep, run_intentional_boundary_rank_sweep_limit,
+    validate_intentional_boundary_rank_sweep_task,
 };
+use std::num::NonZeroUsize;
 use std::path::Path;
 
 #[path = "benchmark_intentional_boundary_production_error.rs"]
@@ -222,6 +224,7 @@ pub async fn run_intentional_boundary_production_sweep(
             "intentional-boundary production protocol does not match the frame task",
         ));
     }
+    validate_intentional_boundary_rank_sweep_task(inputs.task)?;
     let mut executor = IntentionalBoundaryProductionRankExecutor::new(
         inputs.protocol,
         inputs.state_root,
@@ -236,6 +239,40 @@ pub async fn run_intentional_boundary_production_sweep(
         &mut executor,
         inputs.maximum_new_stages_per_rank,
         inputs.through_stage,
+    )
+    .await
+}
+
+pub async fn run_intentional_boundary_production_sweep_slice(
+    inputs: IntentionalBoundaryProductionSweepInputs<'_>,
+    maximum_new_ranks: NonZeroUsize,
+) -> Result<IntentionalBoundaryRankSweepSummary, IntentionalBoundaryRankStageError> {
+    if inputs.maximum_new_stages_per_rank.is_some() || inputs.through_stage.is_some() {
+        return Err(IntentionalBoundaryRankStageError::invalid(
+            IntentionalBoundaryRankStage::Materialization,
+            "intentional-boundary production rank slices require terminal per-rank execution",
+        ));
+    }
+    if inputs.protocol.protocol_sha256 != inputs.task.protocol_sha256 {
+        return Err(IntentionalBoundaryRankStageError::invalid(
+            IntentionalBoundaryRankStage::Materialization,
+            "intentional-boundary production protocol does not match the frame task",
+        ));
+    }
+    validate_intentional_boundary_rank_sweep_task(inputs.task)?;
+    let mut executor = IntentionalBoundaryProductionRankExecutor::new(
+        inputs.protocol,
+        inputs.state_root,
+        inputs.work_root,
+        inputs.frame_root,
+        inputs.github_token,
+    )?;
+    let state_root = executor.roots.state.clone();
+    run_intentional_boundary_rank_sweep_limit(
+        &state_root,
+        inputs.task,
+        &mut executor,
+        maximum_new_ranks,
     )
     .await
 }

@@ -7,6 +7,7 @@ use crate::benchmark::{
     IntentionalBoundaryRankStageFuture, IntentionalBoundaryRankStageJournal,
     prepare_intentional_boundary_frame_task,
 };
+use std::num::NonZeroUsize;
 
 const POLICY: &[u8] = include_bytes!("../sniffbench/non-blind-v1-selection-policy.json");
 const POPULATION: &[u8] = include_bytes!("../sniffbench/non-blind-v1-history-worksheet.json");
@@ -119,6 +120,68 @@ async fn frozen_six_hundred_rank_sweep_resumes_after_interruption_without_replay
             .iter()
             .all(|rank| rank.executed_stages.is_empty())
     );
+}
+
+#[tokio::test]
+async fn rank_limited_sweep_advances_new_ranks_without_replaying_terminal_prefix() {
+    let task =
+        prepare_intentional_boundary_frame_task(POLICY, POPULATION, BLIND_SEAL, PROTOCOL).unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let limit = NonZeroUsize::new(2).unwrap();
+    let mut first = ExcludingExecutor {
+        calls: Vec::new(),
+        fail_once_at: None,
+    };
+
+    let first_summary =
+        run_intentional_boundary_rank_sweep_limit(state.path(), &task, &mut first, limit)
+            .await
+            .unwrap();
+    assert_eq!(first.calls, vec![1, 2]);
+    assert_eq!(first_summary.rank_count, 2);
+    assert_eq!(first_summary.excluded_count, 2);
+
+    let mut resumed = ExcludingExecutor {
+        calls: Vec::new(),
+        fail_once_at: None,
+    };
+    let resumed_summary =
+        run_intentional_boundary_rank_sweep_limit(state.path(), &task, &mut resumed, limit)
+            .await
+            .unwrap();
+
+    assert_eq!(resumed.calls, vec![3, 4]);
+    assert_eq!(resumed_summary.rank_count, 4);
+    assert_eq!(resumed_summary.excluded_count, 4);
+    assert!(
+        resumed_summary.ranks[..2]
+            .iter()
+            .all(|rank| rank.executed_stages.is_empty())
+    );
+}
+
+#[tokio::test]
+async fn rank_limited_sweep_rejects_unvisited_rank_drift_before_execution() {
+    let mut task =
+        prepare_intentional_boundary_frame_task(POLICY, POPULATION, BLIND_SEAL, PROTOCOL).unwrap();
+    task.repositories[599].population_rank = 599;
+    let state = tempfile::tempdir().unwrap();
+    let mut executor = ExcludingExecutor {
+        calls: Vec::new(),
+        fail_once_at: None,
+    };
+
+    let error = run_intentional_boundary_rank_sweep_limit(
+        state.path(),
+        &task,
+        &mut executor,
+        NonZeroUsize::new(1).unwrap(),
+    )
+    .await
+    .unwrap_err();
+
+    assert!(error.detail.contains("rank sequence changed"));
+    assert!(executor.calls.is_empty());
 }
 
 #[tokio::test]
