@@ -177,6 +177,145 @@ fn refuses_unknown_ranks_existing_destinations_and_checkout_mutation() {
     );
 }
 
+#[test]
+fn rematerializes_the_frozen_revision_after_the_source_branch_advances() {
+    let task = task();
+    let source = committed_repository();
+    let first = tempfile::tempdir().unwrap();
+    let first_destination = first.path().join("rank-0001");
+    let outcome = materialize_intentional_boundary_repository_fixture(
+        &task,
+        1,
+        &first_destination,
+        source.path(),
+    )
+    .unwrap();
+    let IntentionalBoundaryMaterializationOutcome::Completed(frozen) = outcome else {
+        panic!("committed fixture must materialize");
+    };
+
+    fs::write(
+        source.path().join("lib.js"),
+        "export function value() { return 2; }\n",
+    )
+    .unwrap();
+    git(source.path(), &["add", "lib.js"]);
+    git(source.path(), &["commit", "--quiet", "-m", "advance"]);
+    assert_ne!(
+        frozen.artifact.revision,
+        git(source.path(), &["rev-parse", "HEAD"])
+    );
+
+    let second = tempfile::tempdir().unwrap();
+    let second_destination = second.path().join("rank-0001");
+    let restored = rematerialize_intentional_boundary_repository_fixture(
+        &task,
+        &frozen.artifact,
+        &second_destination,
+        source.path(),
+    )
+    .unwrap();
+
+    assert_eq!(restored.artifact, frozen.artifact);
+    assert_eq!(
+        git(&second_destination, &["rev-parse", "HEAD"]),
+        frozen.artifact.revision
+    );
+    assert_eq!(
+        fs::read_to_string(second_destination.join("lib.js")).unwrap(),
+        "export function value() { return 1; }\n"
+    );
+}
+
+#[test]
+fn exact_rematerialization_rejects_a_changed_tree_commitment() {
+    let task = task();
+    let source = committed_repository();
+    let first = tempfile::tempdir().unwrap();
+    let first_destination = first.path().join("rank-0001");
+    let outcome = materialize_intentional_boundary_repository_fixture(
+        &task,
+        1,
+        &first_destination,
+        source.path(),
+    )
+    .unwrap();
+    let IntentionalBoundaryMaterializationOutcome::Completed(mut frozen) = outcome else {
+        panic!("committed fixture must materialize");
+    };
+    frozen.artifact.tree_oid = "0".repeat(frozen.artifact.tree_oid.len());
+
+    let second = tempfile::tempdir().unwrap();
+    let second_destination = second.path().join("rank-0001");
+    let error = rematerialize_intentional_boundary_repository_fixture(
+        &task,
+        &frozen.artifact,
+        &second_destination,
+        source.path(),
+    )
+    .unwrap_err();
+
+    assert_eq!(
+        error.kind,
+        IntentionalBoundaryMaterializationErrorKind::InvalidInput
+    );
+    assert!(!second_destination.exists());
+}
+
+#[test]
+fn exact_rematerialization_removes_a_clone_when_the_frozen_commit_disappears() {
+    let task = task();
+    let source = committed_repository();
+    let first = tempfile::tempdir().unwrap();
+    let first_destination = first.path().join("rank-0001");
+    let outcome = materialize_intentional_boundary_repository_fixture(
+        &task,
+        1,
+        &first_destination,
+        source.path(),
+    )
+    .unwrap();
+    let IntentionalBoundaryMaterializationOutcome::Completed(frozen) = outcome else {
+        panic!("committed fixture must materialize");
+    };
+
+    let original_branch = git(source.path(), &["symbolic-ref", "--short", "HEAD"]);
+    git(
+        source.path(),
+        &["checkout", "--quiet", "--orphan", "replacement"],
+    );
+    fs::write(
+        source.path().join("lib.js"),
+        "export function replacement() { return 2; }\n",
+    )
+    .unwrap();
+    git(source.path(), &["add", "lib.js"]);
+    git(source.path(), &["commit", "--quiet", "-m", "replacement"]);
+    git(source.path(), &["branch", "-D", &original_branch]);
+    git(
+        source.path(),
+        &["reflog", "expire", "--expire=now", "--all"],
+    );
+    git(source.path(), &["gc", "--prune=now"]);
+
+    let second = tempfile::tempdir().unwrap();
+    let second_destination = second.path().join("rank-0001");
+    let error = rematerialize_intentional_boundary_repository_fixture(
+        &task,
+        &frozen.artifact,
+        &second_destination,
+        source.path(),
+    )
+    .unwrap_err();
+
+    assert_eq!(
+        error.kind,
+        IntentionalBoundaryMaterializationErrorKind::InfrastructureFailed
+    );
+    assert!(error.detail.contains("frozen revision"));
+    assert!(!second_destination.exists());
+}
+
 #[tokio::test]
 async fn preserves_a_definitive_not_found_probe_as_typed_status() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();

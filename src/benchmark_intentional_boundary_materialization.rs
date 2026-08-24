@@ -94,6 +94,53 @@ pub fn validate_intentional_boundary_materialization_commitment(
     Ok(())
 }
 
+pub fn rematerialize_intentional_boundary_repository(
+    task: &IntentionalBoundaryFrameTask,
+    artifact: &IntentionalBoundaryMaterialization,
+    destination: &Path,
+) -> Result<IntentionalBoundaryMaterializedRepository, IntentionalBoundaryMaterializationError> {
+    validate_intentional_boundary_materialization_commitment(task, artifact)?;
+    require_new_destination(destination)?;
+    let result =
+        clone_repository_for_exact_revision(&artifact.clone_url, destination, &artifact.revision)
+            .and_then(|()| finalize_exact_rematerialization(task, artifact, destination));
+    if result.is_err() {
+        remove_partial(destination)?;
+    }
+    result
+}
+
+fn finalize_exact_rematerialization(
+    task: &IntentionalBoundaryFrameTask,
+    artifact: &IntentionalBoundaryMaterialization,
+    destination: &Path,
+) -> Result<IntentionalBoundaryMaterializedRepository, IntentionalBoundaryMaterializationError> {
+    git_success(
+        destination,
+        &["remote", "set-url", "origin", &artifact.clone_url],
+        git_timeout(),
+        "set frozen canonical origin",
+    )?;
+    git_success(
+        destination,
+        &[
+            "-c",
+            "core.autocrlf=false",
+            "checkout",
+            "--force",
+            "--detach",
+            &artifact.revision,
+        ],
+        git_timeout(),
+        "checkout frozen revision",
+    )?;
+    validate_intentional_boundary_materialization(task, artifact, destination)?;
+    Ok(IntentionalBoundaryMaterializedRepository {
+        artifact: artifact.clone(),
+        checkout_root: destination.to_path_buf(),
+    })
+}
+
 fn valid_object_id(value: &str, expected_length: usize) -> bool {
     expected_length != 0
         && value.len() == expected_length
@@ -339,6 +386,27 @@ pub(super) fn materialize_intentional_boundary_repository_fixture(
         &source.to_string_lossy(),
         &canonical_clone_url,
     )
+}
+
+#[cfg(test)]
+pub(super) fn rematerialize_intentional_boundary_repository_fixture(
+    task: &IntentionalBoundaryFrameTask,
+    artifact: &IntentionalBoundaryMaterialization,
+    destination: &Path,
+    source: &Path,
+) -> Result<IntentionalBoundaryMaterializedRepository, IntentionalBoundaryMaterializationError> {
+    validate_intentional_boundary_materialization_commitment(task, artifact)?;
+    require_new_destination(destination)?;
+    let result = clone_repository_for_exact_revision(
+        &source.to_string_lossy(),
+        destination,
+        &artifact.revision,
+    )
+    .and_then(|()| finalize_exact_rematerialization(task, artifact, destination));
+    if result.is_err() {
+        remove_partial(destination)?;
+    }
+    result
 }
 
 #[cfg(test)]

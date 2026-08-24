@@ -60,6 +60,30 @@ pub(super) fn clone_complete_repository(
     source_url: &str,
     destination: &Path,
 ) -> Result<(), IntentionalBoundaryMaterializationError> {
+    clone_repository(source_url, destination, true)
+}
+
+pub(super) fn clone_repository_for_exact_revision(
+    source_url: &str,
+    destination: &Path,
+    revision: &str,
+) -> Result<(), IntentionalBoundaryMaterializationError> {
+    clone_repository(source_url, destination, false)?;
+    let revision_commit = format!("{revision}^{{commit}}");
+    git_success(
+        destination,
+        &["cat-file", "-e", &revision_commit],
+        GIT_VERIFY_TIMEOUT,
+        "verify frozen revision is available",
+    )?;
+    Ok(())
+}
+
+fn clone_repository(
+    source_url: &str,
+    destination: &Path,
+    single_branch: bool,
+) -> Result<(), IntentionalBoundaryMaterializationError> {
     if let Some(parent) = destination.parent() {
         fs::create_dir_all(parent)
             .map_err(|error| failed(format!("failed to create materialization parent: {error}")))?;
@@ -68,18 +92,17 @@ pub(super) fn clone_complete_repository(
     for attempt in 0..ATTEMPTS {
         remove_partial(destination)?;
         let mut command = Command::new("git");
-        command
-            .args([
-                "-c",
-                "core.autocrlf=false",
-                "clone",
-                "--no-checkout",
-                "--no-tags",
-                "--single-branch",
-                "--",
-            ])
-            .arg(source_url)
-            .arg(destination);
+        command.args([
+            "-c",
+            "core.autocrlf=false",
+            "clone",
+            "--no-checkout",
+            "--no-tags",
+        ]);
+        if single_branch {
+            command.arg("--single-branch");
+        }
+        command.arg("--").arg(source_url).arg(destination);
         let output = crate::bounded_process::run(&mut command, GIT_TIMEOUT).map_err(|error| {
             unavailable(format!(
                 "intentional-boundary materialization requires git: {error}"
