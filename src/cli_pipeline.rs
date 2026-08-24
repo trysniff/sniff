@@ -6,6 +6,8 @@ mod env;
 mod graph;
 #[path = "cli_pipeline_intentional_boundary.rs"]
 mod intentional_boundary;
+#[path = "cli_pipeline_intentional_boundary_review.rs"]
+mod intentional_boundary_review;
 #[path = "cli_pipeline_io.rs"]
 mod io;
 #[path = "cli_pipeline_llm.rs"]
@@ -35,6 +37,13 @@ pub(crate) use benchmark_run::{
 };
 pub(crate) use intentional_boundary::{
     IntentionalBoundaryCollectionInputs, collect_intentional_boundary_benchmark_frame,
+};
+pub(crate) use intentional_boundary_review::{
+    IntentionalBoundaryLabelInputs, IntentionalBoundarySourceBundleInputs,
+    audit_intentional_boundary_labels, intentional_boundary_label_status,
+    prepare_intentional_boundary_labels, prepare_intentional_boundary_resolution,
+    prepare_intentional_boundary_source_bundle, resolve_intentional_boundary_labels_cli,
+    validate_intentional_boundary_labels, validate_intentional_boundary_source_bundle_cli,
 };
 pub use preflight::{doctor, estimate, index_semantic_sources, install_indexers};
 pub use run::{resume, run, status};

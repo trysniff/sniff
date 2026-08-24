@@ -39,6 +39,37 @@ pub fn validate_intentional_boundary_label_review(
     validate_completed_worksheet(bundle_root, bundle, worksheet, &expected)
 }
 
+pub fn inspect_intentional_boundary_label_review_progress(
+    bundle_root: &Path,
+    bundle: &IntentionalBoundarySourceBundle,
+    worksheet: &IntentionalBoundaryLabelWorksheet,
+) -> Result<IntentionalBoundaryLabelProgress, String> {
+    let expected = prepare_intentional_boundary_label_review(bundle_root, bundle)?;
+    validate_protected_worksheet(worksheet, &expected)?;
+    let reviewer_complete = match &worksheet.reviewer {
+        Some(reviewer) => {
+            validate_reviewer(reviewer)?;
+            true
+        }
+        None => false,
+    };
+    let mut completed_items = 0;
+    for item in &worksheet.items {
+        if decision_is_complete(&item.decision) {
+            validate_boundary_decision(bundle_root, bundle, &item.source, &item.decision)?;
+            completed_items += 1;
+        }
+    }
+    let total_items = worksheet.items.len();
+    Ok(IntentionalBoundaryLabelProgress {
+        total_items,
+        completed_items,
+        pending_items: total_items - completed_items,
+        reviewer_complete,
+        complete: reviewer_complete && completed_items == total_items,
+    })
+}
+
 pub fn audit_intentional_boundary_label_reviews(
     protocol: &ValidatedIntentionalBoundaryProtocol,
     bundle_root: &Path,
@@ -202,6 +233,22 @@ fn validate_completed_worksheet(
     worksheet: &IntentionalBoundaryLabelWorksheet,
     expected: &IntentionalBoundaryLabelWorksheet,
 ) -> Result<(), String> {
+    validate_protected_worksheet(worksheet, expected)?;
+    let reviewer = worksheet
+        .reviewer
+        .as_ref()
+        .ok_or_else(|| "intentional-boundary label worksheet has no reviewer".to_string())?;
+    validate_reviewer(reviewer)?;
+    for actual in &worksheet.items {
+        validate_boundary_decision(bundle_root, bundle, &actual.source, &actual.decision)?;
+    }
+    Ok(())
+}
+
+fn validate_protected_worksheet(
+    worksheet: &IntentionalBoundaryLabelWorksheet,
+    expected: &IntentionalBoundaryLabelWorksheet,
+) -> Result<(), String> {
     if worksheet.schema_version != expected.schema_version
         || worksheet.source_bundle_sha256 != expected.source_bundle_sha256
         || worksheet.task_sha256 != expected.task_sha256
@@ -209,11 +256,6 @@ fn validate_completed_worksheet(
     {
         return Err("intentional-boundary label worksheet changed its immutable task".to_string());
     }
-    let reviewer = worksheet
-        .reviewer
-        .as_ref()
-        .ok_or_else(|| "intentional-boundary label worksheet has no reviewer".to_string())?;
-    validate_reviewer(reviewer)?;
     for (actual, protected) in worksheet.items.iter().zip(&expected.items) {
         if actual.source != protected.source || actual.method_source != protected.method_source {
             return Err(format!(
@@ -221,9 +263,15 @@ fn validate_completed_worksheet(
                 protected.source.review_item_id
             ));
         }
-        validate_boundary_decision(bundle_root, bundle, &actual.source, &actual.decision)?;
     }
     Ok(())
+}
+
+fn decision_is_complete(decision: &IntentionalBoundaryLabelDecision) -> bool {
+    decision.tier.is_some()
+        && decision.intentional_boundary.is_some()
+        && !decision.rationale.trim().is_empty()
+        && !decision.citations.is_empty()
 }
 
 fn label_task(

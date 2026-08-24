@@ -354,6 +354,96 @@ pub enum BenchmarkCommand {
         #[arg(long)]
         max_new_ranks: NonZeroUsize,
     },
+    /// Build the fixed-slot source-only human-review bundle from the frozen frame journals.
+    PrepareIntentionalBoundarySourceBundle {
+        /// Public non-blind selection policy committed before candidate inspection.
+        policy: String,
+        /// Frozen 600-repository population worksheet.
+        population: String,
+        /// Frozen blind source seal whose repositories remain excluded.
+        blind_seal: String,
+        /// Precommitted intentional-boundary protocol.
+        protocol: String,
+        /// Immutable frame task used for collection.
+        task: String,
+        /// Completed candidate frame produced by `collect-intentional-frame`.
+        frame: String,
+        /// Durable per-rank stage journals from the completed collection.
+        state_directory: String,
+        /// New or resumable root for exact committed-revision checkouts.
+        checkout_directory: String,
+        /// New portable source-only bundle directory.
+        output_directory: String,
+    },
+    /// Validate a portable intentional-boundary source-only bundle offline.
+    ValidateIntentionalBoundarySourceBundle {
+        /// Source-only bundle directory containing `manifest.json` and committed blobs.
+        bundle_directory: String,
+    },
+    /// Create an independent source-only intentional-boundary label worksheet.
+    PrepareIntentionalBoundaryLabels {
+        /// Verified source-only bundle directory.
+        bundle_directory: String,
+        /// New reviewer worksheet; existing files are never overwritten.
+        output: String,
+    },
+    /// Validate one completed intentional-boundary label worksheet.
+    ValidateIntentionalBoundaryLabels {
+        /// Verified source-only bundle directory.
+        bundle_directory: String,
+        /// Independently completed reviewer worksheet.
+        review: String,
+    },
+    /// Report verified progress for an in-progress intentional-boundary worksheet.
+    IntentionalBoundaryLabelStatus {
+        /// Verified source-only bundle directory.
+        bundle_directory: String,
+        /// In-progress or completed reviewer worksheet.
+        review: String,
+    },
+    /// Audit the required independent intentional-boundary reviews and preserve every dispute.
+    AuditIntentionalBoundaryLabels {
+        policy: String,
+        population: String,
+        blind_seal: String,
+        protocol: String,
+        bundle_directory: String,
+        /// New immutable label-audit ledger.
+        output: String,
+        /// Independently completed worksheet; repeat for every required reviewer.
+        #[arg(long = "review", required = true)]
+        reviews: Vec<String>,
+    },
+    /// Create the immutable dispute-resolution task from an audited review set.
+    PrepareIntentionalBoundaryResolution {
+        policy: String,
+        population: String,
+        blind_seal: String,
+        protocol: String,
+        bundle_directory: String,
+        /// Verified output from `audit-intentional-boundary-labels`.
+        audit: String,
+        /// New resolver worksheet; existing files are never overwritten.
+        output: String,
+        #[arg(long = "review", required = true)]
+        reviews: Vec<String>,
+    },
+    /// Validate dispute resolution and freeze the final intentional-boundary labels.
+    ResolveIntentionalBoundaryLabels {
+        policy: String,
+        population: String,
+        blind_seal: String,
+        protocol: String,
+        bundle_directory: String,
+        /// Verified output from `audit-intentional-boundary-labels`.
+        audit: String,
+        /// Completed output from `prepare-intentional-boundary-resolution`.
+        resolution: String,
+        /// New immutable final-label bundle.
+        output: String,
+        #[arg(long = "review", required = true)]
+        reviews: Vec<String>,
+    },
     /// Execute and resume every frozen historical rank without inspecting labels.
     AssessNonBlindHistory {
         /// Public non-blind selection policy.
@@ -663,6 +753,107 @@ pub async fn run(args: CliArgs) -> Result<i32, Box<dyn std::error::Error>> {
                 )
                 .await
             }
+            BenchmarkCommand::PrepareIntentionalBoundarySourceBundle {
+                policy,
+                population,
+                blind_seal,
+                protocol,
+                task,
+                frame,
+                state_directory,
+                checkout_directory,
+                output_directory,
+            } => pipeline::prepare_intentional_boundary_source_bundle(
+                pipeline::IntentionalBoundarySourceBundleInputs {
+                    policy_path: &policy,
+                    population_path: &population,
+                    blind_seal_path: &blind_seal,
+                    protocol_path: &protocol,
+                    task_path: &task,
+                    frame_path: &frame,
+                    state_directory: &state_directory,
+                    checkout_directory: &checkout_directory,
+                    output_directory: &output_directory,
+                },
+            ),
+            BenchmarkCommand::ValidateIntentionalBoundarySourceBundle { bundle_directory } => {
+                pipeline::validate_intentional_boundary_source_bundle_cli(&bundle_directory)
+            }
+            BenchmarkCommand::PrepareIntentionalBoundaryLabels {
+                bundle_directory,
+                output,
+            } => pipeline::prepare_intentional_boundary_labels(&bundle_directory, &output),
+            BenchmarkCommand::ValidateIntentionalBoundaryLabels {
+                bundle_directory,
+                review,
+            } => pipeline::validate_intentional_boundary_labels(&bundle_directory, &review),
+            BenchmarkCommand::IntentionalBoundaryLabelStatus {
+                bundle_directory,
+                review,
+            } => pipeline::intentional_boundary_label_status(&bundle_directory, &review),
+            BenchmarkCommand::AuditIntentionalBoundaryLabels {
+                policy,
+                population,
+                blind_seal,
+                protocol,
+                bundle_directory,
+                output,
+                reviews,
+            } => pipeline::audit_intentional_boundary_labels(
+                pipeline::IntentionalBoundaryLabelInputs {
+                    policy_path: &policy,
+                    population_path: &population,
+                    blind_seal_path: &blind_seal,
+                    protocol_path: &protocol,
+                    bundle_directory: &bundle_directory,
+                    review_paths: &reviews,
+                },
+                &output,
+            ),
+            BenchmarkCommand::PrepareIntentionalBoundaryResolution {
+                policy,
+                population,
+                blind_seal,
+                protocol,
+                bundle_directory,
+                audit,
+                output,
+                reviews,
+            } => pipeline::prepare_intentional_boundary_resolution(
+                pipeline::IntentionalBoundaryLabelInputs {
+                    policy_path: &policy,
+                    population_path: &population,
+                    blind_seal_path: &blind_seal,
+                    protocol_path: &protocol,
+                    bundle_directory: &bundle_directory,
+                    review_paths: &reviews,
+                },
+                &audit,
+                &output,
+            ),
+            BenchmarkCommand::ResolveIntentionalBoundaryLabels {
+                policy,
+                population,
+                blind_seal,
+                protocol,
+                bundle_directory,
+                audit,
+                resolution,
+                output,
+                reviews,
+            } => pipeline::resolve_intentional_boundary_labels_cli(
+                pipeline::IntentionalBoundaryLabelInputs {
+                    policy_path: &policy,
+                    population_path: &population,
+                    blind_seal_path: &blind_seal,
+                    protocol_path: &protocol,
+                    bundle_directory: &bundle_directory,
+                    review_paths: &reviews,
+                },
+                &audit,
+                &resolution,
+                &output,
+            ),
             BenchmarkCommand::AssessNonBlindHistory {
                 policy,
                 worksheet,
@@ -1124,6 +1315,126 @@ mod tests {
                 && frame_directory == "frame"
                 && output == "candidate-frame.json"
                 && max_new_ranks.get() == 3
+        ));
+    }
+
+    #[test]
+    fn parses_offline_intentional_boundary_review_workflow() {
+        let source_bundle = CliArgs::try_parse_from([
+            "sniff",
+            "benchmark",
+            "prepare-intentional-boundary-source-bundle",
+            "policy.json",
+            "population.json",
+            "blind-seal.json",
+            "protocol.json",
+            "task.json",
+            "frame.json",
+            "state",
+            "checkouts",
+            "source-bundle",
+        ])
+        .expect("intentional-boundary source-bundle arguments");
+        assert!(matches!(
+            source_bundle.command,
+            Some(CliCommand::Benchmark {
+                command: BenchmarkCommand::PrepareIntentionalBoundarySourceBundle {
+                    policy,
+                    population,
+                    blind_seal,
+                    protocol,
+                    task,
+                    frame,
+                    state_directory,
+                    checkout_directory,
+                    output_directory,
+                }
+            }) if policy == "policy.json"
+                && population == "population.json"
+                && blind_seal == "blind-seal.json"
+                && protocol == "protocol.json"
+                && task == "task.json"
+                && frame == "frame.json"
+                && state_directory == "state"
+                && checkout_directory == "checkouts"
+                && output_directory == "source-bundle"
+        ));
+
+        let status = CliArgs::try_parse_from([
+            "sniff",
+            "benchmark",
+            "intentional-boundary-label-status",
+            "source-bundle",
+            "review-a.json",
+        ])
+        .expect("intentional-boundary label-status arguments");
+        assert!(matches!(
+            status.command,
+            Some(CliCommand::Benchmark {
+                command: BenchmarkCommand::IntentionalBoundaryLabelStatus {
+                    bundle_directory,
+                    review,
+                }
+            }) if bundle_directory == "source-bundle" && review == "review-a.json"
+        ));
+
+        let audit = CliArgs::try_parse_from([
+            "sniff",
+            "benchmark",
+            "audit-intentional-boundary-labels",
+            "policy.json",
+            "population.json",
+            "blind-seal.json",
+            "protocol.json",
+            "source-bundle",
+            "audit.json",
+            "--review",
+            "review-a.json",
+            "--review",
+            "review-b.json",
+        ])
+        .expect("intentional-boundary label-audit arguments");
+        assert!(matches!(
+            audit.command,
+            Some(CliCommand::Benchmark {
+                command: BenchmarkCommand::AuditIntentionalBoundaryLabels {
+                    output, reviews, ..
+                }
+            }) if output == "audit.json" && reviews == ["review-a.json", "review-b.json"]
+        ));
+
+        let resolve = CliArgs::try_parse_from([
+            "sniff",
+            "benchmark",
+            "resolve-intentional-boundary-labels",
+            "policy.json",
+            "population.json",
+            "blind-seal.json",
+            "protocol.json",
+            "source-bundle",
+            "audit.json",
+            "resolution.json",
+            "final.json",
+            "--review",
+            "review-a.json",
+            "--review",
+            "review-b.json",
+        ])
+        .expect("intentional-boundary label-resolution arguments");
+        assert!(matches!(
+            resolve.command,
+            Some(CliCommand::Benchmark {
+                command: BenchmarkCommand::ResolveIntentionalBoundaryLabels {
+                    audit,
+                    resolution,
+                    output,
+                    reviews,
+                    ..
+                }
+            }) if audit == "audit.json"
+                && resolution == "resolution.json"
+                && output == "final.json"
+                && reviews == ["review-a.json", "review-b.json"]
         ));
     }
 
