@@ -43,9 +43,7 @@ pub fn validate_intentional_boundary_behavior_census_commitment(
     let expected_units = base_evidence
         .atoms
         .iter()
-        .filter(|atom| {
-            atom.evidence_kind == BoundaryEvidenceKind::CompilerResolvedImplementationOrDelegation
-        })
+        .filter(|atom| is_behavior_candidate_evidence_kind(atom.evidence_kind))
         .map(|atom| atom.subject_parser_unit_id.as_str())
         .collect::<BTreeSet<_>>();
     let candidate_units = census

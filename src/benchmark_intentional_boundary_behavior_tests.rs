@@ -147,6 +147,64 @@ fn exact_behavior_proof_survives_full_commitment_replay() {
 }
 
 #[test]
+fn retry_only_candidate_survives_full_commitment_replay() {
+    let fixture = fixture();
+    let atoms = fixture
+        .evidence
+        .atoms
+        .iter()
+        .filter(|atom| {
+            atom.evidence_kind != BoundaryEvidenceKind::CompilerResolvedImplementationOrDelegation
+        })
+        .cloned()
+        .collect();
+    let evidence = super::super::intentional_boundary_compiler_evidence::finish_evidence_census(
+        &fixture.source,
+        &fixture.semantic,
+        fixture.evidence.input_census_sha256.clone(),
+        atoms,
+    )
+    .unwrap();
+    assert!(evidence.atoms.iter().all(|atom| {
+        atom.evidence_kind != BoundaryEvidenceKind::CompilerResolvedImplementationOrDelegation
+    }));
+    let retry_units = evidence
+        .atoms
+        .iter()
+        .filter(|atom| {
+            atom.evidence_kind == BoundaryEvidenceKind::DistinctRetryableAndTerminalOutcomes
+        })
+        .map(|atom| atom.subject_parser_unit_id.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(retry_units.len(), 1);
+
+    let census = census_behavior_tests_with_executor(
+        &fixture.repository,
+        &fixture.revision,
+        fixture.root.path(),
+        &fixture.inventory,
+        &fixture.source,
+        &fixture.semantic,
+        &evidence,
+        |selector| Ok(passing_attempt(selector.clone(), &fixture.revision)),
+    )
+    .unwrap();
+
+    assert_eq!(census.candidates.len(), 1);
+    assert_eq!(
+        census.candidates[0].production_parser_unit_id,
+        retry_units[0]
+    );
+    validate_intentional_boundary_behavior_census_commitment(
+        &fixture.source,
+        &fixture.semantic,
+        &evidence,
+        &census,
+    )
+    .unwrap();
+}
+
+#[test]
 fn baseline_pass_is_not_qualifying_behavior_evidence() {
     let fixture = fixture();
     let error = census_behavior_tests_with_executor(
