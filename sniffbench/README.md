@@ -203,8 +203,8 @@ is the immutable blank execution task derived from those four bound inputs. It
 contains all 600 repositories in exact population order and commits the narrow
 set of terminal repository exclusions. Transport, rate-limit, tool,
 checkout-integrity, indexer, and method-join failures are not exclusions: the
-future collector must stop and resume rather than silently remove those
-repositories. Reproduce and validate the task offline:
+collector stops and resumes rather than silently removing those repositories.
+Reproduce and validate the task offline:
 
 ```console
 sniff benchmark prepare-intentional-frame-task \
@@ -224,9 +224,31 @@ sniff benchmark validate-intentional-frame-task \
 
 The frame task commitment is
 `8bac634f0f0feb0a6634b41c26907c7116b7cb1427002b9f71b7803521c90114`.
-Candidate collection has not started. Every repository in the task must receive
-a hash-bound checkpoint, and paths or names may identify a symbol but can never
-prove its category or intentional contract.
+Run a bounded slice without model access. Every admitted rank runs until it is
+analyzed or receives a typed terminal exclusion; a partial slice never writes
+the final frame. Rerun the same command against the same three roots to verify
+and resume the terminal prefix without replaying completed stages:
+
+```console
+sniff benchmark collect-intentional-frame \
+  sniffbench/non-blind-v1-selection-policy.json \
+  sniffbench/non-blind-v1-history-worksheet.json \
+  sniffbench/blind-oss-v1-source-seal.json \
+  sniffbench/non-blind-v1-intentional-boundary-protocol.json \
+  sniffbench/non-blind-v1-intentional-boundary-frame-task.json \
+  STATE_ROOT WORK_ROOT FRAME_ROOT candidate-frame.json \
+  --max-new-ranks 10
+```
+
+The manual `SniffBench intentional-boundary collection` workflow provides the
+same bounded Linux execution from `main`. Start without a resume run ID. For
+each later slice, provide the immediately preceding run ID; the workflow
+restores its immutable tar transport artifact, preserving Git metadata,
+symlinks, filename case, and executable bits. The final candidate-frame artifact
+appears only after all 600 ranks are terminal. The actual production collection
+has not started. Every repository in the task must receive a hash-bound
+checkpoint, and paths or names may identify a symbol but can never prove its
+category or intentional contract.
 
 ## Blind OSS v1
 
