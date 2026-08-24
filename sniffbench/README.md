@@ -248,9 +248,21 @@ symlinks, filename case, and executable bits. The first slice also freezes the
 exact collector revision and canonical production-runtime manifest. Every
 resume checks out that collector and rejects runtime drift before processing a
 repository. The final candidate-frame artifact appears only after all 600 ranks
-are terminal. The actual production collection has not started. Every
-repository in the task must receive a hash-bound checkpoint, and paths or names
-may identify a symbol but can never prove its category or intentional contract.
+are terminal. No production rank has completed terminally. Every repository in
+the task must receive a hash-bound checkpoint, and paths or names may identify a
+symbol but can never prove its category or intentional contract.
+
+The first one-rank hosted canary, [run 32682452033](https://github.com/trysniff/sniff/actions/runs/32682452033),
+remains public as a failed attempt. It completed materialization, complete Git
+inventory, source, license, and semantic censuses before failing closed at the
+AST stage. Semantic-census v2 incorrectly required one compiler identity per
+source range, but `scip-typescript` legitimately emitted distinct type and value
+identities at the same token. No rank became terminal and no candidate frame or
+model output was produced. Its preserved state artifact has SHA-256
+`e3f64c7526651b73a1ef3230c1697cc726b789c11639e2163393eb238db8f052`.
+Semantic-census v3 merges duplicate occurrences and their roles while retaining
+distinct compiler identities. The frozen v2 artifact is not resumed under the
+changed collector; production collection restarts from rank 1.
 
 ## Blind OSS v1
 

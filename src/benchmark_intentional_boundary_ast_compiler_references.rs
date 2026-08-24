@@ -24,27 +24,33 @@ pub(super) fn compiler_reference_requirements_satisfied(
     requirements.iter().all(|requirement| {
         let indexer = required_indexer(requirement.identity);
         let mut matches = source_references.iter().filter(|reference| {
-            reference.indexer == indexer && reference.location == requirement.range
+            reference.indexer == indexer
+                && reference.location == requirement.range
+                && reference_matches_identity(reference, requirement.identity)
         });
-        let Some(reference) = matches.next() else {
-            return false;
-        };
-        if matches.next().is_some() {
+        if matches.next().is_none() {
             return false;
         }
-        let IntentionalBoundarySemanticResolution::Resolved { value: target } = &reference.target
-        else {
-            return false;
-        };
-        target.origin == IntentionalBoundarySemanticOrigin::External
-            && target.symbol_id
-                == format!(
-                    "scip-global:{}:{}",
-                    target.provider_identity.len(),
-                    target.provider_identity
-                )
-            && compiler_identity_matches(requirement.identity, &target.provider_identity)
+        matches.next().is_none()
     })
+}
+
+fn reference_matches_identity(
+    reference: &IntentionalBoundarySemanticSourceReference,
+    identity: AstCompilerReferenceIdentity,
+) -> bool {
+    let IntentionalBoundarySemanticResolution::Resolved { value: target } = &reference.target
+    else {
+        return false;
+    };
+    target.origin == IntentionalBoundarySemanticOrigin::External
+        && target.symbol_id
+            == format!(
+                "scip-global:{}:{}",
+                target.provider_identity.len(),
+                target.provider_identity
+            )
+        && compiler_identity_matches(identity, &target.provider_identity)
 }
 
 fn required_indexer(identity: AstCompilerReferenceIdentity) -> IntentionalBoundaryIndexerKind {

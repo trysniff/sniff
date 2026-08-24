@@ -145,7 +145,11 @@ fn fixture_with_language_and_references(
             test_relationship_count: 0,
             unresolved_edge_count: 0,
         }],
-        source_references,
+        source_references:
+            super::super::intentional_boundary_semantic::canonical_source_references(
+                source_references,
+            )
+            .unwrap(),
         methods: vec![IntentionalBoundarySemanticMethod {
             parser_unit_id,
             repository_path: repository_path.to_string(),
@@ -497,8 +501,13 @@ fn qualifies_python_warning_contract_only_with_compiler_identities_and_a_consume
     let references = vec![
         compiler_reference(
             IntentionalBoundaryIndexerKind::Python,
-            warn_range,
+            warn_range.clone(),
             "scip-python python python-stdlib 3.11 _warnings/warn().",
+        ),
+        compiler_reference(
+            IntentionalBoundaryIndexerKind::Python,
+            warn_range,
+            "scip-python python python-stdlib 3.11 builtins/str#",
         ),
         compiler_reference(
             IntentionalBoundaryIndexerKind::Python,

@@ -83,6 +83,7 @@ fn fixture() -> (
     let test_id = SemanticSymbolId("rust fixture test".to_string());
     let trait_id = SemanticSymbolId("rust fixture trait".to_string());
     let external_id = SemanticSymbolId("rust std core/fmt/Debug#fmt().".to_string());
+    let external_type_id = SemanticSymbolId("rust std core/fmt/Debug#fmt().(type)".to_string());
     let definition = SemanticLocation {
         document: document.clone(),
         range: range(0, 7, 14),
@@ -125,6 +126,9 @@ fn fixture() -> (
         origin: SemanticSymbolOrigin::External,
         ambiguity_notes: Vec::new(),
     };
+    let mut external_type_symbol = external_symbol.clone();
+    external_type_symbol.id = external_type_id.clone();
+    external_type_symbol.provider_identity = external_type_id.0.clone();
     let index = SemanticIndex {
         format_version: 1,
         repository_root: root.path().to_string_lossy().replace('\\', "/"),
@@ -159,13 +163,35 @@ fn fixture() -> (
                     SemanticOccurrence {
                         range: range(0, 15, 18),
                         symbol: Some(external_id.clone()),
+                        roles: BTreeSet::from([SemanticOccurrenceRole::Write]),
+                        override_documentation: Vec::new(),
+                    },
+                    SemanticOccurrence {
+                        range: range(0, 15, 18),
+                        symbol: Some(external_id.clone()),
+                        roles: BTreeSet::from([SemanticOccurrenceRole::Read]),
+                        override_documentation: Vec::new(),
+                    },
+                    SemanticOccurrence {
+                        range: range(0, 15, 18),
+                        symbol: Some(external_id.clone()),
+                        roles: BTreeSet::from([SemanticOccurrenceRole::Read]),
+                        override_documentation: Vec::new(),
+                    },
+                    SemanticOccurrence {
+                        range: range(0, 15, 18),
+                        symbol: Some(external_type_id.clone()),
                         roles: BTreeSet::from([SemanticOccurrenceRole::Read]),
                         override_documentation: Vec::new(),
                     },
                 ],
             },
         )]),
-        symbols: BTreeMap::from([(symbol_id.clone(), symbol), (external_id, external_symbol)]),
+        symbols: BTreeMap::from([
+            (symbol_id.clone(), symbol),
+            (external_id, external_symbol),
+            (external_type_id, external_type_symbol),
+        ]),
         relationships: BTreeSet::from([SemanticRelationship {
             source: symbol_id.clone(),
             target: trait_id,
@@ -214,7 +240,52 @@ fn commits_exact_compiler_facts_for_every_census_method() {
     assert_eq!(census.resolved_method_count, 1);
     assert_eq!(census.unresolved_method_count, 0);
     assert_eq!(census.methods.len(), source_census.method_count);
-    assert_eq!(census.source_references.len(), 3);
+    assert_eq!(census.source_references.len(), 4);
+    let same_range_identities = census
+        .source_references
+        .iter()
+        .filter(|reference| {
+            reference.location
+                == IntentionalBoundarySemanticRange {
+                    repository_path: "src/lib.rs".to_string(),
+                    start_line_zero_based: 0,
+                    start_character_zero_based: 15,
+                    end_line_zero_based: 0,
+                    end_character_zero_based: 18,
+                }
+        })
+        .filter_map(|reference| match &reference.target {
+            IntentionalBoundarySemanticResolution::Resolved { value } => {
+                Some(value.provider_identity.as_str())
+            }
+            IntentionalBoundarySemanticResolution::Unresolved { .. } => None,
+        })
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        same_range_identities,
+        BTreeSet::from([
+            "rust std core/fmt/Debug#fmt().",
+            "rust std core/fmt/Debug#fmt().(type)",
+        ])
+    );
+    let merged_reference = census
+        .source_references
+        .iter()
+        .find(|reference| {
+            matches!(
+                &reference.target,
+                IntentionalBoundarySemanticResolution::Resolved { value }
+                    if value.provider_identity == "rust std core/fmt/Debug#fmt()."
+            )
+        })
+        .unwrap();
+    assert_eq!(
+        merged_reference.roles,
+        [
+            IntentionalBoundarySemanticOccurrenceRole::Write,
+            IntentionalBoundarySemanticOccurrenceRole::Read,
+        ]
+    );
     assert!(census.source_references.iter().any(|reference| matches!(
         &reference.target,
         IntentionalBoundarySemanticResolution::Resolved { value }
@@ -292,6 +363,22 @@ fn offline_validation_rejects_source_reference_tampering() {
     let (root, source_census, files, indexes) = fixture();
     let mut census = build_semantic_census(root.path(), &source_census, &files, &indexes).unwrap();
     census.source_references[0].location.repository_path = "outside.rs".to_string();
+    census.semantic_census_sha256 = compute_semantic_census_sha256(&census).unwrap();
+
+    assert!(
+        validate_intentional_boundary_semantic_census(&source_census, &census)
+            .unwrap_err()
+            .contains("source reference")
+    );
+}
+
+#[test]
+fn offline_validation_rejects_duplicate_source_references() {
+    let (root, source_census, files, indexes) = fixture();
+    let mut census = build_semantic_census(root.path(), &source_census, &files, &indexes).unwrap();
+    census
+        .source_references
+        .push(census.source_references[0].clone());
     census.semantic_census_sha256 = compute_semantic_census_sha256(&census).unwrap();
 
     assert!(

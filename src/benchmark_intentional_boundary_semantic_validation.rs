@@ -3,7 +3,7 @@ use super::{
     IntentionalBoundarySemanticMethodStatus, IntentionalBoundarySemanticRange,
     IntentionalBoundarySemanticResolution, IntentionalBoundarySourceCensus,
     SEMANTIC_CENSUS_CONTRACT, compute_semantic_census_sha256, indexer_for_language, indexer_kind,
-    is_sha256,
+    is_sha256, source_reference_identity,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -69,18 +69,24 @@ pub fn validate_intentional_boundary_semantic_census(
         .iter()
         .map(|file| file.repository_path.as_str())
         .collect::<BTreeSet<_>>();
-    let mut seen_source_references = BTreeSet::new();
+    let mut previous_source_reference = None;
     for reference in &census.source_references {
+        let reference_identity = source_reference_identity(reference).map_err(|error| {
+            format!("failed to validate intentional-boundary source reference: {error}")
+        })?;
         if !actual_indexers.contains(&reference.indexer)
             || !valid_location(&reference.location, &source_paths)
             || reference.roles.windows(2).any(|pair| pair[0] >= pair[1])
-            || !seen_source_references.insert((reference.indexer, &reference.location))
+            || previous_source_reference
+                .as_ref()
+                .is_some_and(|previous| previous >= &reference_identity)
         {
             return Err(
-                "intentional-boundary semantic source reference is invalid or ambiguous"
+                "intentional-boundary semantic source reference is invalid or noncanonical"
                     .to_string(),
             );
         }
+        previous_source_reference = Some(reference_identity);
         match &reference.target {
             IntentionalBoundarySemanticResolution::Resolved { value }
                 if value.symbol_id.trim().is_empty()

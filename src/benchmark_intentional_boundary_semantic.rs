@@ -30,7 +30,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 pub(super) const SEMANTIC_CENSUS_CONTRACT: &str =
-    "sniffbench-intentional-boundary-compiler-semantic-census-v2";
+    "sniffbench-intentional-boundary-compiler-semantic-census-v3";
 type MethodJoinKey = (String, String, u32, u32);
 type ExpectedMethodMap<'a> = BTreeMap<MethodJoinKey, &'a IntentionalBoundaryMethodCensusEntry>;
 
@@ -115,18 +115,7 @@ pub(super) fn build_semantic_census(
         ));
     }
     methods.sort_by(|left, right| left.parser_unit_id.cmp(&right.parser_unit_id));
-    source_references.sort_by(|left, right| {
-        (
-            left.indexer,
-            &left.location,
-            source_reference_target_key(&left.target),
-        )
-            .cmp(&(
-                right.indexer,
-                &right.location,
-                source_reference_target_key(&right.target),
-            ))
-    });
+    source_references = canonical_source_references(source_references)?;
     indexers.sort_by_key(|indexer| indexer.indexer);
     let resolved_method_count = methods
         .iter()
@@ -279,17 +268,37 @@ fn flatten_source_references(
     Ok(references)
 }
 
-fn source_reference_target_key(
-    target: &IntentionalBoundarySemanticResolution<IntentionalBoundarySemanticReferenceTarget>,
-) -> (&str, &str) {
-    match target {
-        IntentionalBoundarySemanticResolution::Resolved { value } => {
-            ("resolved", value.symbol_id.as_str())
-        }
-        IntentionalBoundarySemanticResolution::Unresolved { raw_target, .. } => {
-            ("unresolved", raw_target.as_deref().unwrap_or_default())
-        }
+pub(super) fn canonical_source_references(
+    references: Vec<IntentionalBoundarySemanticSourceReference>,
+) -> Result<Vec<IntentionalBoundarySemanticSourceReference>, String> {
+    let mut canonical = BTreeMap::new();
+    for reference in references {
+        let identity = source_reference_identity(&reference).map_err(|error| {
+            format!("failed to canonicalize intentional-boundary source reference: {error}")
+        })?;
+        canonical
+            .entry(identity)
+            .and_modify(
+                |existing: &mut IntentionalBoundarySemanticSourceReference| {
+                    existing.roles = existing
+                        .roles
+                        .iter()
+                        .chain(&reference.roles)
+                        .copied()
+                        .collect::<BTreeSet<_>>()
+                        .into_iter()
+                        .collect();
+                },
+            )
+            .or_insert(reference);
     }
+    Ok(canonical.into_values().collect())
+}
+
+pub(super) fn source_reference_identity(
+    reference: &IntentionalBoundarySemanticSourceReference,
+) -> Result<Vec<u8>, serde_json::Error> {
+    serde_json::to_vec(&(reference.indexer, &reference.location, &reference.target))
 }
 
 fn flatten_location(location: &SemanticLocation) -> IntentionalBoundarySemanticRange {
