@@ -334,9 +334,9 @@ fn indexer_process_state_uses_only_the_cleaned_private_workspace() {
     );
     #[cfg(windows)]
     for name in ["USERPROFILE", "APPDATA", "LOCALAPPDATA"] {
-        assert_ne!(
-            environment.get(name).unwrap(),
-            &sandbox_repository_argument(root.path(), &root.path().to_string_lossy())
+        assert!(
+            !environment.contains_key(name),
+            "the AppContainer must provide its own disposable {name}"
         );
     }
 

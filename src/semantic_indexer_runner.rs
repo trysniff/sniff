@@ -2103,7 +2103,7 @@ fn private_indexer_environment(root: &Path) -> Result<Vec<(String, String)>, Str
         ("TEMP", "temp"),
         ("TMP", "temp"),
     ];
-    let mut environment = Vec::with_capacity(directories.len() + 3);
+    let mut environment = Vec::with_capacity(directories.len());
     for (name, directory_name) in directories {
         let directory = private_root.join(directory_name);
         fs::create_dir_all(&directory).map_err(|error| {
@@ -2116,24 +2116,6 @@ fn private_indexer_environment(root: &Path) -> Result<Vec<(String, String)>, Str
             name.to_string(),
             private_indexer_directory_argument(root, directory_name),
         ));
-    }
-    #[cfg(windows)]
-    {
-        let home = environment
-            .iter()
-            .find(|(name, _)| name == "HOME")
-            .map(|(_, value)| value.clone())
-            .ok_or_else(|| "private semantic indexer HOME is missing".to_string())?;
-        let config = environment
-            .iter()
-            .find(|(name, _)| name == "XDG_CONFIG_HOME")
-            .map(|(_, value)| value.clone())
-            .ok_or_else(|| "private semantic indexer config directory is missing".to_string())?;
-        environment.extend([
-            ("USERPROFILE".to_string(), home),
-            ("APPDATA".to_string(), config.clone()),
-            ("LOCALAPPDATA".to_string(), config),
-        ]);
     }
     Ok(environment)
 }
