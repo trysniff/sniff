@@ -64,6 +64,16 @@ pub struct IntentionalBoundaryLabelWorksheet {
     pub items: Vec<IntentionalBoundaryLabelTask>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IntentionalBoundaryLabelProgress {
+    pub total_items: usize,
+    pub completed_items: usize,
+    pub pending_items: usize,
+    pub reviewer_complete: bool,
+    pub complete: bool,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum IntentionalBoundaryLabelStatus {

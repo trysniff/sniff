@@ -151,6 +151,43 @@ fn two_independent_clean_boundary_reviews_accept_the_fixed_item() {
 }
 
 #[test]
+fn progress_distinguishes_a_blank_task_from_a_valid_completed_review() {
+    let (root, bundle) = source_bundle();
+    let blank = prepare_intentional_boundary_label_review(root.path(), &bundle).unwrap();
+    let blank_progress =
+        inspect_intentional_boundary_label_review_progress(root.path(), &bundle, &blank).unwrap();
+    assert_eq!(blank_progress.total_items, 1);
+    assert_eq!(blank_progress.completed_items, 0);
+    assert_eq!(blank_progress.pending_items, 1);
+    assert!(!blank_progress.reviewer_complete);
+    assert!(!blank_progress.complete);
+
+    let completed = completed(root.path(), &bundle, "reviewer-a", FindingTier::Clean, true);
+    let completed_progress =
+        inspect_intentional_boundary_label_review_progress(root.path(), &bundle, &completed)
+            .unwrap();
+    assert_eq!(completed_progress.completed_items, 1);
+    assert_eq!(completed_progress.pending_items, 0);
+    assert!(completed_progress.reviewer_complete);
+    assert!(completed_progress.complete);
+}
+
+#[test]
+fn progress_rejects_completed_decisions_with_inexact_source_evidence() {
+    let (root, bundle) = source_bundle();
+    let mut review = completed(root.path(), &bundle, "reviewer-a", FindingTier::Clean, true);
+    review.items[0].decision.citations[0]
+        .quote
+        .push_str(" invented");
+
+    assert!(
+        inspect_intentional_boundary_label_review_progress(root.path(), &bundle, &review)
+            .unwrap_err()
+            .contains("not exact source")
+    );
+}
+
+#[test]
 fn disagreement_is_preserved_and_matching_non_boundary_labels_close_the_item() {
     let (root, bundle) = source_bundle();
     let accepted = completed(root.path(), &bundle, "reviewer-a", FindingTier::Clean, true);
