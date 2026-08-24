@@ -32,7 +32,7 @@ jobs:
       MAX_NEW_RANKS: ${{ inputs.max_new_ranks }}
       RESUME_RUN_ID: ${{ inputs.resume_run_id }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       - name: Validate bounded dispatch inputs
         shell: bash
         run: |
@@ -45,22 +45,29 @@ jobs:
             echo 'resume_run_id must be an unsigned GitHub Actions run ID' >&2
             exit 1
           fi
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Configure the Rust toolchain for sandboxed Rust indexing
-        run: rustup default stable
-      - uses: actions/setup-node@v6
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
         with:
-          node-version: "24"
-      - uses: actions/setup-java@v5
+          toolchain: "1.96.0"
+      - name: Configure the Rust toolchain for sandboxed Rust indexing
+        run: rustup default 1.96.0
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24.19.0"
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.13.15"
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:
           distribution: temurin
-          java-version: "17"
-      - uses: actions/setup-go@v6
+          java-version: "17.0.20+8"
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
-          go-version: "1.25"
+          go-version: "1.25.9"
           cache: false
       - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
-      - uses: gradle/actions/setup-gradle@v6
+        with:
+          version: "0.12.1"
+      - uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6
         with:
           gradle-version: "8.8"
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
@@ -116,7 +123,7 @@ jobs:
             ' <<<"$run" >/dev/null
       - name: Restore the prior immutable transport artifact
         if: inputs.resume_run_id != ''
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: intentional-boundary-state.tar.gz
           path: ${{ runner.temp }}/intentional-boundary-resume
@@ -130,9 +137,10 @@ jobs:
           state_root="${RUNNER_TEMP}/intentional-boundary-state"
           work_root="${RUNNER_TEMP}/intentional-boundary-work"
           frame_root="${RUNNER_TEMP}/intentional-boundary-frame"
+          transport_root="${RUNNER_TEMP}/intentional-boundary-transport"
           output_root="${RUNNER_TEMP}/intentional-boundary-output"
           archive="${RUNNER_TEMP}/intentional-boundary-state.tar.gz"
-          for root in "$state_root" "$work_root" "$frame_root" "$output_root"; do
+          for root in "$state_root" "$work_root" "$frame_root" "$transport_root" "$output_root"; do
             if [[ -e "$root" ]]; then
               echo "production root already exists before restore: $root" >&2
               exit 1
@@ -151,7 +159,9 @@ jobs:
               "intentional-boundary-state",
               "intentional-boundary-work",
               "intentional-boundary-frame",
+              "intentional-boundary-transport",
           }
+          seen = set()
           with tarfile.open(archive, "r:gz") as payload:
               members = payload.getmembers()
               if not members:
@@ -162,25 +172,117 @@ jobs:
                       raise SystemExit(f"unsafe resume member: {member.name}")
                   if not path.parts or path.parts[0] not in allowed:
                       raise SystemExit(f"unexpected resume member: {member.name}")
+                  seen.add(path.parts[0])
                   if member.isdev() or member.isfifo():
                       raise SystemExit(f"unsupported resume member: {member.name}")
+              if seen != allowed:
+                  raise SystemExit(f"resume archive roots differ: {sorted(seen)}")
+              payload.extractall(path=archive.parent.parent, filter="data")
           PY
-            tar --extract --gzip --file="$source_archive" \
-              --directory="$RUNNER_TEMP" --no-same-owner
           else
-            mkdir -p "$state_root" "$work_root" "$frame_root"
+            mkdir -p "$state_root" "$work_root" "$frame_root" "$transport_root"
           fi
-          for root in "$state_root" "$work_root" "$frame_root"; do
+          for root in "$state_root" "$work_root" "$frame_root" "$transport_root"; do
             if [[ ! -d "$root" || -L "$root" || "$(dirname "$(realpath "$root")")" != "$RUNNER_TEMP" ]]; then
               echo "restored production root is not a plain runner-temp child: $root" >&2
               exit 1
             fi
           done
+          transport_manifest="${transport_root}/manifest.json"
+          if [[ -n "$RESUME_RUN_ID" ]]; then
+            python3 - "$transport_manifest" <<'PY'
+          import json
+          import pathlib
+          import re
+          import sys
+
+          manifest_path = pathlib.Path(sys.argv[1])
+          if not manifest_path.is_file() or manifest_path.is_symlink():
+              raise SystemExit("transport manifest is not a plain file")
+          manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+          expected_keys = {"schema_version", "collector_sha", "frame_task_commitment"}
+          if not isinstance(manifest, dict) or set(manifest) != expected_keys:
+              raise SystemExit("transport manifest fields differ from the frozen schema")
+          if manifest["schema_version"] != 1:
+              raise SystemExit("unsupported transport manifest schema")
+          if not isinstance(manifest["collector_sha"], str) or not re.fullmatch(
+              r"[0-9a-f]{40}", manifest["collector_sha"]
+          ):
+              raise SystemExit("transport collector SHA is invalid")
+          expected_task = "8bac634f0f0feb0a6634b41c26907c7116b7cb1427002b9f71b7803521c90114"
+          if manifest["frame_task_commitment"] != expected_task:
+              raise SystemExit("transport frame-task commitment drifted")
+          PY
+            collector_sha="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["collector_sha"])' "$transport_manifest")"
+          else
+            collector_sha="$GITHUB_SHA"
+            python3 - "$transport_manifest" "$collector_sha" <<'PY'
+          import json
+          import pathlib
+          import sys
+
+          destination = pathlib.Path(sys.argv[1])
+          payload = {
+              "schema_version": 1,
+              "collector_sha": sys.argv[2],
+              "frame_task_commitment": "8bac634f0f0feb0a6634b41c26907c7116b7cb1427002b9f71b7803521c90114",
+          }
+          with destination.open("x", encoding="utf-8", newline="\n") as handle:
+              json.dump(payload, handle, sort_keys=True, separators=(",", ":"))
+              handle.write("\n")
+          PY
+          fi
           printf 'STATE_ROOT=%s\n' "$state_root" >> "$GITHUB_ENV"
           printf 'WORK_ROOT=%s\n' "$work_root" >> "$GITHUB_ENV"
           printf 'FRAME_ROOT=%s\n' "$frame_root" >> "$GITHUB_ENV"
+          printf 'TRANSPORT_ROOT=%s\n' "$transport_root" >> "$GITHUB_ENV"
+          printf 'COLLECTOR_SHA=%s\n' "$collector_sha" >> "$GITHUB_ENV"
           printf 'FINAL_FRAME=%s\n' "${output_root}/candidate-frame.json" >> "$GITHUB_ENV"
           printf 'SNAPSHOT_ARCHIVE=%s\n' "$archive" >> "$GITHUB_ENV"
+      - name: Restore the frozen collector revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$(git rev-parse HEAD)" != "$COLLECTOR_SHA" ]]; then
+            git fetch --no-tags --depth=1 origin "$COLLECTOR_SHA"
+            git checkout --detach "$COLLECTOR_SHA"
+          fi
+          test "$(git rev-parse HEAD)" = "$COLLECTOR_SHA"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+      - name: Freeze or verify the production runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          observed="${RUNNER_TEMP}/intentional-boundary-runtime.txt"
+          {
+            printf 'git=%s\n' "$(git --version)"
+            printf 'cargo=%s\n' "$(cargo --version)"
+            printf 'rustc=%s\n' "$(rustc --version)"
+            printf 'node=%s\n' "$(node --version)"
+            printf 'npm=%s\n' "$(npm --version)"
+            printf 'corepack=%s\n' "$(corepack --version)"
+            printf 'python=%s\n' "$(python3 --version)"
+            printf 'uv=%s\n' "$(uv --version)"
+            printf 'go=%s\n' "$(go version)"
+            printf 'java=%s\n' "$(java --version 2>&1 | head -n 1)"
+            printf 'gradle=%s\n' "$(gradle --version | awk '/^Gradle / { print; exit }')"
+            printf 'bun=%s\n' "$(bun --version)"
+            printf 'bwrap=%s\n' "$(bwrap --version)"
+          } > "$observed"
+          frozen="${TRANSPORT_ROOT}/runtime.txt"
+          if [[ -e "$frozen" ]]; then
+            if [[ ! -f "$frozen" || -L "$frozen" ]]; then
+              echo 'frozen runtime manifest is not a plain file' >&2
+              exit 1
+            fi
+            cmp --silent "$frozen" "$observed" || {
+              diff --unified "$frozen" "$observed" >&2 || true
+              echo 'production runtime drifted from the first collection slice' >&2
+              exit 1
+            }
+          else
+            install -m 0644 "$observed" "$frozen"
+          fi
       - name: Build the frozen collector
         run: cargo build --release --locked
       - name: Install every pinned semantic indexer
@@ -219,7 +321,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for root in "$STATE_ROOT" "$WORK_ROOT" "$FRAME_ROOT"; do
+          for root in "$STATE_ROOT" "$WORK_ROOT" "$FRAME_ROOT" "$TRANSPORT_ROOT"; do
             if [[ ! -d "$root" || -L "$root" || "$(dirname "$(realpath "$root")")" != "$RUNNER_TEMP" ]]; then
               echo "production root changed before archival: $root" >&2
               exit 1
@@ -231,13 +333,14 @@ jobs:
             intentional-boundary-state \
             intentional-boundary-work \
             intentional-boundary-frame \
+            intentional-boundary-transport \
             | gzip -n -9 > "$SNAPSHOT_ARCHIVE"
           gzip --test "$SNAPSHOT_ARCHIVE"
           printf 'State archive SHA-256: `%s`\n' \
             "$(sha256sum "$SNAPSHOT_ARCHIVE" | cut -d' ' -f1)" >> "$GITHUB_STEP_SUMMARY"
       - name: Upload immutable resumable state
         if: ${{ always() && steps.collect.outcome == 'success' }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           path: ${{ env.SNAPSHOT_ARCHIVE }}
           archive: false
@@ -245,7 +348,7 @@ jobs:
           retention-days: 90
       - name: Upload the completed candidate frame
         if: ${{ steps.collect.outputs.completed == 'true' }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           path: ${{ env.FINAL_FRAME }}
           archive: false

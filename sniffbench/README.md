@@ -244,11 +244,13 @@ The manual `SniffBench intentional-boundary collection` workflow provides the
 same bounded Linux execution from `main`. Start without a resume run ID. For
 each later slice, provide the immediately preceding run ID; the workflow
 restores its immutable tar transport artifact, preserving Git metadata,
-symlinks, filename case, and executable bits. The final candidate-frame artifact
-appears only after all 600 ranks are terminal. The actual production collection
-has not started. Every repository in the task must receive a hash-bound
-checkpoint, and paths or names may identify a symbol but can never prove its
-category or intentional contract.
+symlinks, filename case, and executable bits. The first slice also freezes the
+exact collector revision and canonical production-runtime manifest. Every
+resume checks out that collector and rejects runtime drift before processing a
+repository. The final candidate-frame artifact appears only after all 600 ranks
+are terminal. The actual production collection has not started. Every
+repository in the task must receive a hash-bound checkpoint, and paths or names
+may identify a symbol but can never prove its category or intentional contract.
 
 ## Blind OSS v1
 
