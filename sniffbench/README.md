@@ -260,6 +260,19 @@ source range, but `scip-typescript` legitimately emitted distinct type and value
 identities at the same token. No rank became terminal and no candidate frame or
 model output was produced. Its preserved state artifact has SHA-256
 `e3f64c7526651b73a1ef3230c1697cc726b789c11639e2163393eb238db8f052`.
+
+The fresh semantic-census v3 canary,
+[run 32686342345](https://github.com/trysniff/sniff/actions/runs/32686342345),
+also remains public as a failed attempt. It passed the corrected semantic and AST
+censuses, then failed closed before the manifest census because
+`scip-typescript --infer-tsconfig` had generated an untracked root
+`tsconfig.json`. The source-cleanliness invariant rejected that mutation. No rank
+became terminal and no candidate frame or model output was produced. Its
+preserved state artifact has SHA-256
+`cf1bbb29f4f2ff9fe6125c4178bd270c50e90cb2e033425d6e913286552e8bc6`.
+
+Semantic-indexer recovery v2 records whether the inferred config existed before
+execution and removes only an indexer-created file after success or interruption.
 Semantic-census v3 merges duplicate occurrences and their roles while retaining
 distinct compiler identities. The frozen v2 artifact is not resumed under the
 changed collector; production collection restarts from rank 1.

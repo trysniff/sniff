@@ -4,8 +4,10 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-const SCHEMA_VERSION: u32 = 1;
-const CONTRACT: &str = "sniff-semantic-indexer-recovery-v1";
+const SCHEMA_VERSION: u32 = 2;
+const CONTRACT: &str = "sniff-semantic-indexer-recovery-v2";
+const LEGACY_SCHEMA_VERSION: u32 = 1;
+const LEGACY_CONTRACT: &str = "sniff-semantic-indexer-recovery-v1";
 const MARKER: &str = ".sniff-indexer-recovery.json";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -91,7 +93,18 @@ pub(crate) fn recover_interrupted_semantic_indexing(root: &Path) -> Result<bool,
     Ok(true)
 }
 
-fn recovery_paths() -> [(&'static str, RecoveryPathKind); 5] {
+fn recovery_paths() -> [(&'static str, RecoveryPathKind); 6] {
+    [
+        ("index.scip", RecoveryPathKind::File),
+        (".sniff-indexer-tmp", RecoveryPathKind::Directory),
+        (".sniff-indexer-cache", RecoveryPathKind::Directory),
+        (".sniff-jsconfig.json", RecoveryPathKind::File),
+        ("scip-pyrightconfig.json", RecoveryPathKind::File),
+        ("tsconfig.json", RecoveryPathKind::File),
+    ]
+}
+
+fn legacy_recovery_paths() -> [(&'static str, RecoveryPathKind); 5] {
     [
         ("index.scip", RecoveryPathKind::File),
         (".sniff-indexer-tmp", RecoveryPathKind::Directory),
@@ -103,6 +116,12 @@ fn recovery_paths() -> [(&'static str, RecoveryPathKind); 5] {
 
 fn cleanup_generated_paths(root: &Path, marker: &RecoveryMarker) -> Result<(), String> {
     validate_marker(marker)?;
+    if marker.schema_version == LEGACY_SCHEMA_VERSION && root.join("tsconfig.json").exists() {
+        return Err(format!(
+            "legacy semantic recovery marker cannot prove whether {} was generated; refusing automatic cleanup",
+            root.join("tsconfig.json").display()
+        ));
+    }
     for entry in &marker.paths {
         if entry.existed_before {
             continue;
@@ -160,17 +179,19 @@ fn remove_marker(root: &Path) -> Result<(), String> {
 }
 
 fn validate_marker(marker: &RecoveryMarker) -> Result<(), String> {
-    let expected_paths = recovery_paths().into_iter().collect::<Vec<_>>();
+    let expected_paths = match (marker.schema_version, marker.recovery_contract.as_str()) {
+        (SCHEMA_VERSION, CONTRACT) => recovery_paths().into_iter().collect::<Vec<_>>(),
+        (LEGACY_SCHEMA_VERSION, LEGACY_CONTRACT) => {
+            legacy_recovery_paths().into_iter().collect::<Vec<_>>()
+        }
+        _ => return Err("semantic recovery marker changed".to_string()),
+    };
     let actual_paths = marker
         .paths
         .iter()
         .map(|path| (path.relative_path.as_str(), path.kind))
         .collect::<Vec<_>>();
-    if marker.schema_version != SCHEMA_VERSION
-        || marker.recovery_contract != CONTRACT
-        || marker.marker_sha256 != marker_sha256(marker)?
-        || actual_paths != expected_paths
-    {
+    if marker.marker_sha256 != marker_sha256(marker)? || actual_paths != expected_paths {
         return Err("semantic recovery marker changed".to_string());
     }
     Ok(())
@@ -215,6 +236,7 @@ mod tests {
         let guard = SemanticIndexerRecoveryGuard::begin(root.path()).unwrap();
         fs::create_dir(root.path().join(".sniff-indexer-tmp")).unwrap();
         fs::write(root.path().join(".sniff-jsconfig.json"), b"generated").unwrap();
+        fs::write(root.path().join("tsconfig.json"), b"generated").unwrap();
 
         guard.finish().unwrap();
 
@@ -224,6 +246,22 @@ mod tests {
         );
         assert!(!root.path().join(".sniff-indexer-tmp").exists());
         assert!(!root.path().join(".sniff-jsconfig.json").exists());
+        assert!(!root.path().join("tsconfig.json").exists());
+        assert!(!root.path().join(MARKER).exists());
+    }
+
+    #[test]
+    fn finish_preserves_a_preexisting_typescript_config() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("tsconfig.json"), b"original").unwrap();
+        let guard = SemanticIndexerRecoveryGuard::begin(root.path()).unwrap();
+
+        guard.finish().unwrap();
+
+        assert_eq!(
+            fs::read(root.path().join("tsconfig.json")).unwrap(),
+            b"original"
+        );
         assert!(!root.path().join(MARKER).exists());
     }
 
@@ -233,12 +271,66 @@ mod tests {
         let guard = SemanticIndexerRecoveryGuard::begin(root.path()).unwrap();
         fs::create_dir(root.path().join(".sniff-indexer-cache")).unwrap();
         fs::write(root.path().join("index.scip"), b"generated").unwrap();
+        fs::write(root.path().join("tsconfig.json"), b"generated").unwrap();
         drop(guard);
 
         assert!(recover_interrupted_semantic_indexing(root.path()).unwrap());
         assert!(!root.path().join(".sniff-indexer-cache").exists());
         assert!(!root.path().join("index.scip").exists());
+        assert!(!root.path().join("tsconfig.json").exists());
         assert!(!recover_interrupted_semantic_indexing(root.path()).unwrap());
+    }
+
+    #[test]
+    fn legacy_marker_without_an_ambiguous_typescript_config_is_recoverable() {
+        let root = tempfile::tempdir().unwrap();
+        let mut marker = RecoveryMarker {
+            schema_version: LEGACY_SCHEMA_VERSION,
+            recovery_contract: LEGACY_CONTRACT.to_string(),
+            paths: legacy_recovery_paths()
+                .into_iter()
+                .map(|(relative_path, kind)| RecoveryPath {
+                    relative_path: relative_path.to_string(),
+                    kind,
+                    existed_before: false,
+                })
+                .collect(),
+            marker_sha256: String::new(),
+        };
+        marker.marker_sha256 = marker_sha256(&marker).unwrap();
+        write_marker(&root.path().join(MARKER), &marker).unwrap();
+        fs::write(root.path().join("index.scip"), b"generated").unwrap();
+
+        assert!(recover_interrupted_semantic_indexing(root.path()).unwrap());
+        assert!(!root.path().join("index.scip").exists());
+        assert!(!root.path().join(MARKER).exists());
+    }
+
+    #[test]
+    fn legacy_marker_with_an_ambiguous_typescript_config_fails_closed() {
+        let root = tempfile::tempdir().unwrap();
+        let mut marker = RecoveryMarker {
+            schema_version: LEGACY_SCHEMA_VERSION,
+            recovery_contract: LEGACY_CONTRACT.to_string(),
+            paths: legacy_recovery_paths()
+                .into_iter()
+                .map(|(relative_path, kind)| RecoveryPath {
+                    relative_path: relative_path.to_string(),
+                    kind,
+                    existed_before: false,
+                })
+                .collect(),
+            marker_sha256: String::new(),
+        };
+        marker.marker_sha256 = marker_sha256(&marker).unwrap();
+        write_marker(&root.path().join(MARKER), &marker).unwrap();
+        fs::write(root.path().join("tsconfig.json"), b"unknown provenance").unwrap();
+
+        let error = recover_interrupted_semantic_indexing(root.path()).unwrap_err();
+
+        assert!(error.contains("cannot prove"));
+        assert!(root.path().join("tsconfig.json").exists());
+        assert!(root.path().join(MARKER).exists());
     }
 
     #[test]
