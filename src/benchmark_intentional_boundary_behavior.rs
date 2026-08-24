@@ -218,13 +218,7 @@ where
     let candidate_units = base_evidence
         .atoms
         .iter()
-        .filter(|atom| {
-            matches!(
-                atom.evidence_kind,
-                BoundaryEvidenceKind::CompilerResolvedImplementationOrDelegation
-                    | BoundaryEvidenceKind::DistinctRetryableAndTerminalOutcomes
-            )
-        })
+        .filter(|atom| is_behavior_candidate_evidence_kind(atom.evidence_kind))
         .map(|atom| atom.subject_parser_unit_id.as_str())
         .collect::<BTreeSet<_>>();
 
@@ -403,6 +397,14 @@ where
     )
     .map_err(behavior_invalid)?;
     Ok(census)
+}
+
+fn is_behavior_candidate_evidence_kind(kind: BoundaryEvidenceKind) -> bool {
+    matches!(
+        kind,
+        BoundaryEvidenceKind::CompilerResolvedImplementationOrDelegation
+            | BoundaryEvidenceKind::DistinctRetryableAndTerminalOutcomes
+    )
 }
 
 fn definition_locations(
