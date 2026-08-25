@@ -3,8 +3,9 @@ use serde::de::DeserializeOwned;
 use sniff::benchmark::{
     DockerHistoricalV2TestExecutor, HistoricalV2ExclusionManifest, HistoricalV2Frame,
     HistoricalV2SelectedPayloads, HistoricalV2SelectedSlotSweepInputs,
-    HistoricalV2SlotRunDisposition, HistoricalV2SlotSelection, HistoricalV2SlotStageError,
-    HistoricalV2SlotStageErrorKind, run_historical_v2_selected_slots_bounded,
+    HistoricalV2SelectedSlotWorkRecoveryInputs, HistoricalV2SlotRunDisposition,
+    HistoricalV2SlotSelection, HistoricalV2SlotStageError, HistoricalV2SlotStageErrorKind,
+    recover_historical_v2_selected_slot_work, run_historical_v2_selected_slots_bounded,
 };
 use std::fs;
 use std::io::{Error as IoError, ErrorKind};
@@ -42,6 +43,24 @@ pub(super) struct RunSlotsArgs {
     max_new_stages_per_slot: Option<NonZeroUsize>,
     #[arg(long)]
     through_stage: Option<RunThroughStage>,
+}
+
+#[derive(Debug, Args)]
+pub(super) struct RecoverSlotWorkArgs {
+    #[arg(long)]
+    protocol: PathBuf,
+    #[arg(long)]
+    artifact_root: PathBuf,
+    #[arg(long)]
+    frame: PathBuf,
+    #[arg(long)]
+    exclusions: PathBuf,
+    #[arg(long)]
+    selection: PathBuf,
+    #[arg(long)]
+    payloads: PathBuf,
+    #[arg(long)]
+    work_root: PathBuf,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -113,6 +132,37 @@ pub(super) async fn run(args: RunSlotsArgs) -> Result<(), Box<dyn std::error::Er
         summary.ready_for_review_count,
         summary.excluded_count,
         summary.paused_count
+    );
+    Ok(())
+}
+
+pub(super) fn recover_slot_work(
+    args: RecoverSlotWorkArgs,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let protocol = read_plain_file(&args.protocol, "historical-v2 protocol", MAX_PROTOCOL_BYTES)?;
+    let frame: HistoricalV2Frame = read_json(&args.frame, "historical-v2 frame")?;
+    let exclusions: HistoricalV2ExclusionManifest =
+        read_json(&args.exclusions, "historical-v2 exclusions")?;
+    let selection: HistoricalV2SlotSelection =
+        read_json(&args.selection, "historical-v2 selection")?;
+    let payloads: HistoricalV2SelectedPayloads =
+        read_json(&args.payloads, "historical-v2 selected payloads")?;
+    let summary =
+        recover_historical_v2_selected_slot_work(HistoricalV2SelectedSlotWorkRecoveryInputs {
+            protocol_bytes: &protocol,
+            artifact_root: &args.artifact_root,
+            frame: &frame,
+            exclusions: &exclusions,
+            selection: &selection,
+            payloads: &payloads,
+            work_root: &args.work_root,
+        })
+        .map_err(stage_error)?;
+    eprintln!(
+        "Historical-v2 selected-slot work recovered\nSelected: {}\nMaterialized semantic roots: {}\nRecovered semantic roots: {}",
+        summary.selected_slot_count,
+        summary.materialized_semantic_root_count,
+        summary.recovered_semantic_root_count
     );
     Ok(())
 }

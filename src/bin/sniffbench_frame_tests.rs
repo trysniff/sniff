@@ -97,6 +97,38 @@ fn run_slots_reports_only_slots_that_executed_in_the_current_slice() {
     assert!(sniffbench_frame_run::should_report_slot(&touched));
 }
 
+#[test]
+fn recover_slot_work_parses_every_frozen_boundary() {
+    let parsed = Args::try_parse_from(recover_slot_work_arguments()).unwrap();
+    let Command::RecoverSlotWork { .. } = parsed.command else {
+        panic!("recover-slot-work command was not parsed");
+    };
+}
+
+#[test]
+fn recover_slot_work_requires_every_frozen_boundary() {
+    for required in [
+        "--protocol",
+        "--artifact-root",
+        "--frame",
+        "--exclusions",
+        "--selection",
+        "--payloads",
+        "--work-root",
+    ] {
+        let mut arguments = recover_slot_work_arguments();
+        let index = arguments
+            .iter()
+            .position(|value| *value == required)
+            .unwrap();
+        arguments.drain(index..=index + 1);
+        assert!(
+            Args::try_parse_from(arguments).is_err(),
+            "{required} was optional"
+        );
+    }
+}
+
 fn run_slots_arguments() -> Vec<&'static str> {
     vec![
         "sniffbench-frame",
@@ -127,5 +159,26 @@ fn run_slots_arguments() -> Vec<&'static str> {
         "1",
         "--through-stage",
         "payload",
+    ]
+}
+
+fn recover_slot_work_arguments() -> Vec<&'static str> {
+    vec![
+        "sniffbench-frame",
+        "recover-slot-work",
+        "--protocol",
+        "protocol.json",
+        "--artifact-root",
+        "artifacts",
+        "--frame",
+        "frame.json",
+        "--exclusions",
+        "exclusions.json",
+        "--selection",
+        "selection.json",
+        "--payloads",
+        "payloads.json",
+        "--work-root",
+        "work",
     ]
 }

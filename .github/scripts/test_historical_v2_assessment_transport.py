@@ -13,6 +13,9 @@ import unittest
 from unittest import mock
 
 MODULE_PATH = pathlib.Path(__file__).with_name("historical_v2_assessment_transport.py")
+WORKFLOW_PATH = pathlib.Path(__file__).parents[1].joinpath(
+    "workflows", "sniffbench-historical-v2-assessment.yml"
+)
 SPEC = importlib.util.spec_from_file_location("assessment_transport", MODULE_PATH)
 if SPEC is None or SPEC.loader is None:
     raise RuntimeError("could not load assessment transport helper")
@@ -256,6 +259,38 @@ class FrameTests(unittest.TestCase):
     @staticmethod
     def _sha256(path: pathlib.Path) -> str:
         return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+class WorkflowContractTests(unittest.TestCase):
+    def test_marker_recovery_precedes_snapshot_archival(self) -> None:
+        workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+        seal = workflow.index("- name: Seal resumable assessment state")
+        recover = workflow.index("sniffbench-frame recover-slot-work", seal)
+        archive = workflow.index("tar --create", recover)
+        upload = workflow.index("- name: Upload immutable resumable assessment state", archive)
+        seal_body = workflow[seal:upload]
+
+        self.assertLess(seal, recover)
+        self.assertLess(recover, archive)
+        for required in (
+            "--protocol sniffbench/historical-v2-protocol.json",
+            '--artifact-root "$GITHUB_WORKSPACE"',
+            '--frame "$FRAME_ROOT/frame.json"',
+            '--exclusions "$FRAME_ROOT/exclusions.json"',
+            '--selection "$FRAME_ROOT/selection.json"',
+            '--payloads "$FRAME_ROOT/selected-payloads.json"',
+            '--work-root "$WORK_ROOT"',
+        ):
+            self.assertIn(required, seal_body)
+        for provider_variable in (
+            "SNIFF_API_KEY",
+            "SNIFF_ENDPOINT",
+            "SNIFF_MODEL",
+            "DEEPSEEK_API_KEY",
+            "OPENAI_API_KEY",
+            "ANTHROPIC_API_KEY",
+        ):
+            self.assertNotIn(provider_variable, seal_body)
 
 
 if __name__ == "__main__":

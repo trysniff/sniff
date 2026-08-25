@@ -406,6 +406,14 @@ jobs:
               exit 1
             fi
           done
+          target/release/sniffbench-frame recover-slot-work \
+            --protocol sniffbench/historical-v2-protocol.json \
+            --artifact-root "$GITHUB_WORKSPACE" \
+            --frame "$FRAME_ROOT/frame.json" \
+            --exclusions "$FRAME_ROOT/exclusions.json" \
+            --selection "$FRAME_ROOT/selection.json" \
+            --payloads "$FRAME_ROOT/selected-payloads.json" \
+            --work-root "$WORK_ROOT"
           tar --create --file=- --sort=name --mtime='@0' --hard-dereference \
             --owner=0 --group=0 --numeric-owner \
             --directory="$RUNNER_TEMP" \

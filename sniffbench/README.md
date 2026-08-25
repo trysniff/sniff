@@ -119,7 +119,13 @@ are downloaded into a fresh private cache during an explicit network-enabled
 preparation phase. `scip-go` then runs with networking disabled, and an
 unavailable dependency registry remains retryable infrastructure rather than a
 repository label. Terminally excluded slots retain their immutable journals but
-discard their worktrees; paused and ready-for-review slots retain theirs.
+discard their worktrees; paused and ready-for-review slots retain theirs. Before
+archival, the hosted workflow validates the frozen frame and exact selected-slot
+work layout, then removes only transient compiler paths authenticated by an
+interrupted semantic-indexer recovery marker. Repository paths recorded as
+preexisting by that marker are preserved. Source worktrees and durable stage
+journals remain resumable, while reconstructable module and compiler caches do
+not inflate the snapshot.
 
 ```console
 cargo run --locked --features sniffbench-frame --bin sniffbench-frame -- \
@@ -136,6 +142,23 @@ cargo run --locked --features sniffbench-frame --bin sniffbench-frame -- \
   --docker-executable /usr/bin/docker \
   --max-new-slots 10
 ```
+
+The archival recovery boundary can also be invoked explicitly:
+
+```console
+cargo run --locked --features sniffbench-frame --bin sniffbench-frame -- \
+  recover-slot-work \
+  --protocol sniffbench/historical-v2-protocol.json \
+  --artifact-root ARTIFACT_ROOT \
+  --frame frame.json \
+  --exclusions exclusions.json \
+  --selection selection.json \
+  --payloads selected-payloads.json \
+  --work-root WORK_ROOT
+```
+
+It rejects unknown language or slot roots before mutation and never performs a
+filename-only or blanket cache deletion.
 
 `SWE_REBENCH_V2_REPOSITORY_ROOT` must be a clean, non-shallow checkout of
 `SWE-rebench/SWE-rebench-V2` at the exact execution-harness revision declared
