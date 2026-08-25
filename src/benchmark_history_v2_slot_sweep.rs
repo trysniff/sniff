@@ -114,6 +114,12 @@ where
             inputs.through_stage,
         )
         .await?;
+        super::history_v2_slot_operations_support::reconcile_terminal_slot_work(
+            &roots.work,
+            &payload.language,
+            payload.slot_number,
+            &run.disposition,
+        )?;
         slots.push(HistoricalV2SelectedSlotRunSummary {
             language: payload.language.clone(),
             slot_number: payload.slot_number,

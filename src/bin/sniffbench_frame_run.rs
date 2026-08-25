@@ -90,7 +90,7 @@ pub(super) async fn run(args: RunSlotsArgs) -> Result<(), Box<dyn std::error::Er
     .await
     .map_err(stage_error)?;
 
-    for slot in &summary.slots {
+    for slot in summary.slots.iter().filter(|slot| should_report_slot(slot)) {
         eprintln!(
             "{} slot {} | {} | {} | resumed at {} | executed {} stage(s)",
             slot.language,
@@ -115,6 +115,12 @@ pub(super) async fn run(args: RunSlotsArgs) -> Result<(), Box<dyn std::error::Er
         summary.paused_count
     );
     Ok(())
+}
+
+pub(super) fn should_report_slot(
+    slot: &sniff::benchmark::HistoricalV2SelectedSlotRunSummary,
+) -> bool {
+    !slot.run.executed_stages.is_empty()
 }
 
 impl From<RunThroughStage> for sniff::benchmark::HistoricalV2SlotStage {

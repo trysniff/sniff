@@ -1,8 +1,9 @@
 use super::*;
 use crate::benchmark::{
     HISTORICAL_V2_SLOT_STAGE_CHECKPOINT_SCHEMA_VERSION, HistoricalV2MaterializationExclusionReason,
-    HistoricalV2SlotRunIdentity, HistoricalV2SlotStageCheckpoint, HistoricalV2SlotStageErrorKind,
-    HistoricalV2StoredSlotStage,
+    HistoricalV2SlotRunDisposition, HistoricalV2SlotRunIdentity, HistoricalV2SlotStageCheckpoint,
+    HistoricalV2SlotStageErrorKind, HistoricalV2StoredSlotStage,
+    HistoricalV2TerminalExclusionReason,
 };
 use serde_json::json;
 
@@ -48,6 +49,57 @@ fn materialization_recovery_refuses_a_file_at_the_slot_path() {
 
     assert_eq!(error.kind, HistoricalV2SlotStageErrorKind::InvalidInput);
     assert_eq!(fs::read(target).unwrap(), b"not a directory");
+}
+
+#[test]
+fn terminal_reconciliation_discards_only_excluded_slot_work() {
+    let root = tempfile::tempdir().unwrap();
+    let work_root = canonical_work_root(&root.path().join("work"), "rust", 1).unwrap();
+    let language_root = work_root.join("rust");
+    for slot in 1..=3 {
+        let slot_root = language_root.join(format!("slot-{slot:04}"));
+        fs::create_dir(&slot_root).unwrap();
+        fs::write(slot_root.join("retained"), slot.to_string()).unwrap();
+    }
+
+    reconcile_terminal_slot_work(
+        &work_root,
+        "rust",
+        1,
+        &HistoricalV2SlotRunDisposition::Excluded {
+            stage: HistoricalV2SlotStage::Materialization,
+            reason: HistoricalV2TerminalExclusionReason::Materialization(
+                HistoricalV2MaterializationExclusionReason::RepositoryUnavailable,
+            ),
+        },
+    )
+    .unwrap();
+    reconcile_terminal_slot_work(
+        &work_root,
+        "rust",
+        2,
+        &HistoricalV2SlotRunDisposition::Paused {
+            next_stage: HistoricalV2SlotStage::SemanticCensus,
+        },
+    )
+    .unwrap();
+    reconcile_terminal_slot_work(
+        &work_root,
+        "rust",
+        3,
+        &HistoricalV2SlotRunDisposition::ReadyForReview,
+    )
+    .unwrap();
+
+    assert!(!language_root.join("slot-0001").exists());
+    assert_eq!(
+        fs::read_to_string(language_root.join("slot-0002/retained")).unwrap(),
+        "2"
+    );
+    assert_eq!(
+        fs::read_to_string(language_root.join("slot-0003/retained")).unwrap(),
+        "3"
+    );
 }
 
 #[test]
