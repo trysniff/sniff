@@ -1,0 +1,127 @@
+name: SniffBench historical-v2 frame
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sniffbench-historical-v2-frame
+  cancel-in-progress: false
+
+jobs:
+  freeze:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 330
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_RELEASE_DEBUG: "0"
+      DATASET_ROOT: ${{ runner.temp }}/historical-v2-dataset
+      OUTPUT_ROOT: ${{ runner.temp }}/historical-v2-frame
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
+        with:
+          toolchain: "1.96.0"
+
+      - name: Download and verify the exact pinned dataset shards
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$DATASET_ROOT/data"
+          revision='40faf2c1bb160de625f3c3270ac9d62ea45f3f9c'
+          base="https://huggingface.co/datasets/nebius/SWE-rebench-V2-PRs/resolve/${revision}/data"
+          names=(
+            'train-00000-of-00003.parquet'
+            'train-00001-of-00003.parquet'
+            'train-00002-of-00003.parquet'
+          )
+          sizes=(920026603 948535559 817735990)
+          hashes=(
+            '8faffd024e34e157308212912887ffd393e04aa6760d7fb1438b8f7c31ce0e0e'
+            'f2bc9061699bb7c5ddd83af1498737008c55ff699dac999d31a1f39b8ce6083d'
+            '7f33795ee41acd6974f409a0240cef165b385e088ecd431803b1ea1059357f52'
+          )
+          for index in "${!names[@]}"; do
+            name="${names[$index]}"
+            path="$DATASET_ROOT/data/$name"
+            curl --fail --location --continue-at - \
+              --retry 20 --retry-all-errors --retry-delay 5 \
+              --output "$path" "$base/$name?download=true"
+            [[ "$(stat --format='%s' "$path")" == "${sizes[$index]}" ]]
+            printf '%s  %s\n' "${hashes[$index]}" "$path" | sha256sum --check --strict
+          done
+
+      - name: Build the pinned frame tool
+        run: cargo build --release --locked --features sniffbench-frame --bin sniffbench-frame
+
+      - name: Freeze and replay the historical-v2 selection
+        shell: bash
+        run: |
+          set -euo pipefail
+          tool='target/release/sniffbench-frame'
+          protocol='sniffbench/historical-v2-protocol.json'
+          frame="$OUTPUT_ROOT/frame.json"
+          exclusions="$OUTPUT_ROOT/exclusions.json"
+          selection="$OUTPUT_ROOT/selection.json"
+          payloads="$OUTPUT_ROOT/selected-payloads.json"
+          mkdir -p "$OUTPUT_ROOT"
+
+          {
+            printf 'runner_image_os=%s\n' "${ImageOS:-unknown}"
+            printf 'runner_image_version=%s\n' "${ImageVersion:-unknown}"
+            uname -a
+            rustc --version --verbose
+            cargo --version --verbose
+            curl --version
+            jq --version
+          } > "$OUTPUT_ROOT/environment.txt"
+
+          "$tool" collect "$protocol" "$DATASET_ROOT" "$frame"
+          "$tool" validate "$protocol" "$DATASET_ROOT" "$frame"
+          "$tool" derive-exclusions "$protocol" "$GITHUB_WORKSPACE" "$exclusions"
+          "$tool" select \
+            "$protocol" "$DATASET_ROOT" "$GITHUB_WORKSPACE" \
+            "$frame" "$exclusions" "$selection"
+          "$tool" validate-selection \
+            "$protocol" "$DATASET_ROOT" "$GITHUB_WORKSPACE" \
+            "$frame" "$exclusions" "$selection"
+          "$tool" extract-selected-payloads \
+            "$protocol" "$DATASET_ROOT" "$GITHUB_WORKSPACE" \
+            "$frame" "$exclusions" "$selection" "$payloads"
+          "$tool" validate-selected-payloads \
+            "$protocol" "$DATASET_ROOT" "$GITHUB_WORKSPACE" \
+            "$frame" "$exclusions" "$selection" "$payloads"
+
+          jq --null-input \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --arg collector_revision "$GITHUB_SHA" \
+            --arg workflow_run_id "$GITHUB_RUN_ID" \
+            --arg workflow_run_attempt "$GITHUB_RUN_ATTEMPT" \
+            '{
+              schema_version: 1,
+              repository: $repository,
+              collector_revision: $collector_revision,
+              workflow_run_id: $workflow_run_id,
+              workflow_run_attempt: $workflow_run_attempt,
+              model_provider_access: false
+            }' > "$OUTPUT_ROOT/provenance.json"
+          (
+            cd "$OUTPUT_ROOT"
+            sha256sum environment.txt exclusions.json frame.json provenance.json \
+              selection.json selected-payloads.json > SHA256SUMS
+            sha256sum --check --strict SHA256SUMS
+          )
+
+      - name: Upload the immutable derived frame
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: historical-v2-frame-${{ github.run_id }}
+          path: ${{ runner.temp }}/historical-v2-frame
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 6

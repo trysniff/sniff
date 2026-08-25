@@ -79,6 +79,53 @@ cargo run --locked --features sniffbench-frame --bin sniffbench-frame -- \
   ARTIFACT_ROOT frame.json exclusions.json selection.json
 ```
 
+The main-only `SniffBench historical-v2 frame` workflow performs those steps on
+a clean hosted runner. It downloads only the three protocol-pinned public
+shards, verifies every declared byte count and SHA-256, replays the complete
+frame and selection, and uploads only the derived artifacts plus collector
+and runner provenance. Its checkout, toolchain, and artifact actions are pinned,
+checkout credentials are not persisted, the workflow receives no repository
+secret, and it does not contact a model provider.
+
+Only after the fixed selection is committed may the maintainer tool open each
+selected row's patch, install configuration, and test patch. Extraction and
+validation both replay the pinned dataset and frozen selection:
+
+```console
+cargo run --locked --features sniffbench-frame --bin sniffbench-frame -- \
+  extract-selected-payloads sniffbench/historical-v2-protocol.json \
+  DATASET_ROOT ARTIFACT_ROOT frame.json exclusions.json selection.json \
+  selected-payloads.json
+
+cargo run --locked --features sniffbench-frame --bin sniffbench-frame -- \
+  validate-selected-payloads sniffbench/historical-v2-protocol.json \
+  DATASET_ROOT ARTIFACT_ROOT frame.json exclusions.json selection.json \
+  selected-payloads.json
+```
+
+Repository assessment is globally admission-bounded and durably journaled.
+`--max-new-slots` is mandatory and nonzero: a run resumes previously started
+slots, but it cannot create more than that number of untouched slot journals.
+Each admitted slot normally runs to a terminal exclusion or ready-for-review
+checkpoint. `--max-new-stages-per-slot` and `--through-stage` are optional test
+and recovery ceilings, not substitutes for the global admission bound.
+
+```console
+cargo run --locked --features sniffbench-frame --bin sniffbench-frame -- \
+  run-slots \
+  --protocol sniffbench/historical-v2-protocol.json \
+  --artifact-root ARTIFACT_ROOT \
+  --frame frame.json \
+  --exclusions exclusions.json \
+  --selection selection.json \
+  --payloads selected-payloads.json \
+  --state-root STATE_ROOT \
+  --work-root WORK_ROOT \
+  --harness-repository-root SNIFF_REPOSITORY_ROOT \
+  --docker-executable /usr/bin/docker \
+  --max-new-slots 10
+```
+
 ## Non-blind real evidence
 
 Historical simplifications, research trajectories, and intentional clean
