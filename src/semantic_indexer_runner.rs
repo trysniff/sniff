@@ -491,14 +491,7 @@ async fn run_one_in_recovery_scope(
     if spec.kind == SemanticIndexerKind::Kotlin {
         prepare_kotlin_dependency_cache(spec, root, installed)
             .await
-            .map_err(|detail| {
-                indexer_failure(
-                    spec,
-                    SemanticIndexerRunFailureKind::InfrastructureFailed,
-                    SemanticIndexerRunPhase::Preparation,
-                    detail,
-                )
-            })?;
+            .map_err(|error| kotlin_dependency_preparation_failure(spec, error))?;
     }
     let workspace = prepare_indexer_workspace(spec, root).map_err(|detail| {
         indexer_failure(
@@ -1628,7 +1621,7 @@ async fn prepare_kotlin_dependency_cache(
     spec: PinnedIndexer,
     root: &Path,
     installed: &InstalledIndexer,
-) -> Result<(), String> {
+) -> Result<(), gradle_preparation::KotlinDependencyPreparationError> {
     let preparation_root = root
         .join(INDEXER_TEMP_DIR)
         .join("kotlin-dependency-preparation");
@@ -1681,9 +1674,9 @@ async fn prepare_kotlin_dependency_cache(
         .transpose();
     let output = match (output, workspace_cleanup) {
         (Ok(output), Ok(_)) => output,
-        (Err(error), Ok(_)) | (Ok(_), Err(error)) => return Err(error),
+        (Err(error), Ok(_)) | (Ok(_), Err(error)) => return Err(error.into()),
         (Err(error), Err(cleanup)) => {
-            return Err(format!("{error}; additionally, {cleanup}"));
+            return Err(format!("{error}; additionally, {cleanup}").into());
         }
     };
     if output.timed_out || output.status_code != Some(0) {
@@ -1699,7 +1692,8 @@ async fn prepare_kotlin_dependency_cache(
             },
             compact_process_output(output.stdout.as_bytes(), output.stderr.as_bytes()),
             gradle_launcher_trace(&preparation_root)
-        ));
+        )
+        .into());
     }
 
     let preparation_index = preparation_root.join("index.scip");
@@ -1709,9 +1703,26 @@ async fn prepare_kotlin_dependency_cache(
         return Err(format!(
             "{} dependency preparation emitted an index that could not be cleared: {error}",
             spec.display_name
-        ));
+        )
+        .into());
     }
     gradle_preparation::transfer_cache(&preparation_cache, &root.join(INDEXER_CACHE_DIR))
+        .map_err(gradle_preparation::KotlinDependencyPreparationError::from)
+}
+
+fn kotlin_dependency_preparation_failure(
+    spec: PinnedIndexer,
+    error: gradle_preparation::KotlinDependencyPreparationError,
+) -> SemanticIndexerRunFailure {
+    let (kind, detail) = match error {
+        gradle_preparation::KotlinDependencyPreparationError::RepositoryRejected(detail) => {
+            (SemanticIndexerRunFailureKind::RepositoryRejected, detail)
+        }
+        gradle_preparation::KotlinDependencyPreparationError::InfrastructureFailed(detail) => {
+            (SemanticIndexerRunFailureKind::InfrastructureFailed, detail)
+        }
+    };
+    indexer_failure(spec, kind, SemanticIndexerRunPhase::Preparation, detail)
 }
 
 fn windows_node_entrypoint_argument(root: &Path, entrypoint: &Path) -> Result<String, String> {
