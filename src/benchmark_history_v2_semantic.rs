@@ -10,9 +10,10 @@ use super::{
     HistoricalV2SemanticCensusFailureEvidence, HistoricalV2SemanticCensusFailurePhase,
     HistoricalV2SemanticProcessEvidence, HistoricalV2SemanticSnapshotCensus,
     HistoricalV2SemanticSnapshotSide, HistoricalV2SlotStage, HistoricalV2SlotStageError,
-    HistoricalV2SlotStageErrorKind, HistoricalV2SourceCensus, HistoricalV2SourceSnapshotCensus,
-    HistoricalV2StageResult, IntentionalBoundaryIndexerKind, IntentionalBoundaryMethodCensusEntry,
-    IntentionalBoundarySemanticMethod, validate_historical_v2_source_census,
+    HistoricalV2SlotStageErrorKind, HistoricalV2SourceCensus, HistoricalV2SourceSemanticCoverage,
+    HistoricalV2SourceSnapshotCensus, HistoricalV2StageResult, IntentionalBoundaryIndexerKind,
+    IntentionalBoundaryMethodCensusEntry, IntentionalBoundarySemanticMethod,
+    validate_historical_v2_source_census,
 };
 use crate::semantic_index::{SemanticIndex, SemanticSymbolOrigin, SemanticVisibility};
 use crate::semantic_indexer_manifest::SemanticIndexerKind;
@@ -190,12 +191,19 @@ fn build_semantic_snapshot(
     let expected_indexers = source
         .source_files
         .iter()
+        .filter(|file| file.semantic_coverage == HistoricalV2SourceSemanticCoverage::Required)
         .map(|file| indexer_for_language(&file.language))
         .collect::<Result<BTreeSet<_>, String>>()?;
     if indexes.keys().copied().collect::<BTreeSet<_>>() != expected_indexers {
         return Err("historical-v2 semantic indexer set is incomplete".to_string());
     }
     let mut expected_methods = expected_method_map(source)?;
+    let required_paths = source
+        .source_files
+        .iter()
+        .filter(|file| file.semantic_coverage == HistoricalV2SourceSemanticCoverage::Required)
+        .map(|file| file.repository_path.as_str())
+        .collect::<BTreeSet<_>>();
     let mut methods = Vec::<IntentionalBoundarySemanticMethod>::with_capacity(source.method_count);
     let mut public_symbols = Vec::new();
     let mut indexers = Vec::with_capacity(indexes.len());
@@ -228,6 +236,9 @@ fn build_semantic_snapshot(
                 .values()
                 .filter(|symbol| {
                     symbol.origin == SemanticSymbolOrigin::Repository
+                        && symbol.definitions.iter().any(|definition| {
+                            required_paths.contains(definition.document.0.as_str())
+                        })
                         && (matches!(
                             symbol.visibility,
                             SemanticVisibility::Public | SemanticVisibility::Protected
@@ -301,6 +312,9 @@ fn snapshot_file_records(
 ) -> Result<Vec<FileRecord>, String> {
     let mut records = Vec::with_capacity(source.source_files.len());
     for file in &source.source_files {
+        if file.semantic_coverage != HistoricalV2SourceSemanticCoverage::Required {
+            continue;
+        }
         let bytes = read_intentional_boundary_git_blob(root, &file.object_id, file.byte_length)?;
         if sha256(&bytes) != file.source_sha256 {
             return Err(format!(
@@ -345,6 +359,9 @@ fn expected_method_map(
 ) -> Result<BTreeMap<MethodKey, IntentionalBoundaryMethodCensusEntry>, String> {
     let mut methods = BTreeMap::new();
     for file in &source.source_files {
+        if file.semantic_coverage != HistoricalV2SourceSemanticCoverage::Required {
+            continue;
+        }
         for method in &file.methods {
             let start_line = u32::try_from(method.start_line)
                 .map_err(|_| "historical-v2 method start exceeds semantic range".to_string())?;

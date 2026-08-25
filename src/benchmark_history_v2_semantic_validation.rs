@@ -4,7 +4,7 @@ use super::super::intentional_boundary_semantic::{
 use super::super::{
     HISTORICAL_V2_SEMANTIC_CENSUS_SCHEMA_VERSION, HistoricalV2Materialization,
     HistoricalV2MaterializedRoots, HistoricalV2SemanticCensus, HistoricalV2SemanticSnapshotCensus,
-    HistoricalV2SourceCensus, HistoricalV2SourceSnapshotCensus,
+    HistoricalV2SourceCensus, HistoricalV2SourceSemanticCoverage, HistoricalV2SourceSnapshotCensus,
     INTENTIONAL_BOUNDARY_SEMANTIC_CENSUS_SCHEMA_VERSION,
     INTENTIONAL_BOUNDARY_SOURCE_CENSUS_SCHEMA_VERSION, IntentionalBoundaryMethodCensusEntry,
     IntentionalBoundarySemanticCensus, IntentionalBoundarySemanticOrigin,
@@ -57,6 +57,31 @@ pub(super) fn validate_snapshot(
         return Err("historical-v2 semantic snapshot identity changed".to_string());
     }
     validate_public_symbols(source, semantic)?;
+    let source_files = source
+        .source_files
+        .iter()
+        .filter(|file| file.semantic_coverage == HistoricalV2SourceSemanticCoverage::Required)
+        .map(|file| IntentionalBoundarySourceFile {
+            repository_path: file.repository_path.clone(),
+            object_id: file.object_id.clone(),
+            byte_length: file.byte_length,
+            source_sha256: file.source_sha256.clone(),
+            language: file.language.clone(),
+            methods: file
+                .methods
+                .iter()
+                .map(|method| IntentionalBoundaryMethodCensusEntry {
+                    parser_unit_id: method.parser_unit_id.clone(),
+                    symbol_name: method.symbol_name.clone(),
+                    start_line: method.start_line,
+                    end_line: method.end_line,
+                    source_sha256: method.source_sha256.clone(),
+                    is_exported: method.is_exported,
+                })
+                .collect(),
+        })
+        .collect::<Vec<_>>();
+    let method_count = source_files.iter().map(|file| file.methods.len()).sum();
     let source_projection = IntentionalBoundarySourceCensus {
         schema_version: INTENTIONAL_BOUNDARY_SOURCE_CENSUS_SCHEMA_VERSION,
         census_contract: "historical-v2-semantic-validation-projection".to_string(),
@@ -64,31 +89,9 @@ pub(super) fn validate_snapshot(
         revision: source.revision.clone(),
         inventory_sha256: source.inventory_sha256.clone(),
         tracked_entry_count: source.tracked_entry_count,
-        source_files: source
-            .source_files
-            .iter()
-            .map(|file| IntentionalBoundarySourceFile {
-                repository_path: file.repository_path.clone(),
-                object_id: file.object_id.clone(),
-                byte_length: file.byte_length,
-                source_sha256: file.source_sha256.clone(),
-                language: file.language.clone(),
-                methods: file
-                    .methods
-                    .iter()
-                    .map(|method| IntentionalBoundaryMethodCensusEntry {
-                        parser_unit_id: method.parser_unit_id.clone(),
-                        symbol_name: method.symbol_name.clone(),
-                        start_line: method.start_line,
-                        end_line: method.end_line,
-                        source_sha256: method.source_sha256.clone(),
-                        is_exported: method.is_exported,
-                    })
-                    .collect(),
-            })
-            .collect(),
-        source_file_count: source.source_file_count,
-        method_count: source.method_count,
+        source_file_count: source_files.len(),
+        source_files,
+        method_count,
         census_sha256: source.snapshot_census_sha256.clone(),
     };
     let mut semantic_projection = IntentionalBoundarySemanticCensus {
