@@ -98,14 +98,19 @@ fn validate_failure(failure: &HistoricalV2SemanticCensusFailureEvidence) -> Resu
             }
         }
         HistoricalV2SemanticCensusExclusionReason::CompilerIndexerRejectedRepository => {
-            if failure.indexer.is_none()
-                || failure.phase != HistoricalV2SemanticCensusFailurePhase::Execution
-                || failure.process.is_none()
-                || failure.process.as_ref().is_some_and(|process| {
-                    process.status_code.is_none() || process.status_code == Some(0)
-                })
-            {
+            if failure.indexer.is_none() {
                 return Err("historical-v2 indexer rejection evidence changed".to_string());
+            }
+            match failure.phase {
+                HistoricalV2SemanticCensusFailurePhase::Preparation
+                    if failure.process.is_none() => {}
+                HistoricalV2SemanticCensusFailurePhase::Execution
+                    if failure.process.as_ref().is_some_and(|process| {
+                        process.status_code.is_some() && process.status_code != Some(0)
+                    }) => {}
+                _ => {
+                    return Err("historical-v2 indexer rejection evidence changed".to_string());
+                }
             }
         }
         HistoricalV2SemanticCensusExclusionReason::CompilerCensusIncomplete => {

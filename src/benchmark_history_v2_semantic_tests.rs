@@ -163,6 +163,60 @@ fn repository_rejection_becomes_hash_bound_terminal_evidence() {
 }
 
 #[test]
+fn preparation_repository_rejection_becomes_hash_bound_terminal_evidence() {
+    let detail = "no Gradle build project exists at the repository root";
+    let evidence = indexer_failure_evidence(
+        HistoricalV2SemanticSnapshotSide::Patched,
+        &"a".repeat(40),
+        SemanticIndexerRunFailure {
+            kind: SemanticIndexerRunFailureKind::RepositoryRejected,
+            phase: SemanticIndexerRunPhase::Preparation,
+            indexer: Some(SemanticIndexerKind::Kotlin),
+            detail: detail.to_string(),
+            process: None,
+        },
+    )
+    .unwrap();
+    let exclusion =
+        seal_semantic_census_exclusion(&"b".repeat(64), &"c".repeat(64), vec![evidence]).unwrap();
+
+    assert_eq!(
+        exclusion.reasons,
+        vec![HistoricalV2SemanticCensusExclusionReason::CompilerIndexerRejectedRepository]
+    );
+    assert_eq!(
+        exclusion.failures[0].indexer,
+        Some(IntentionalBoundaryIndexerKind::Kotlin)
+    );
+    assert_eq!(
+        exclusion.failures[0].phase,
+        HistoricalV2SemanticCensusFailurePhase::Preparation
+    );
+    assert!(exclusion.failures[0].process.is_none());
+    super::super::validate_historical_v2_semantic_census_exclusion(&exclusion).unwrap();
+}
+
+#[test]
+fn processless_execution_rejection_cannot_be_sealed() {
+    let evidence = indexer_failure_evidence(
+        HistoricalV2SemanticSnapshotSide::Base,
+        &"a".repeat(40),
+        SemanticIndexerRunFailure {
+            kind: SemanticIndexerRunFailureKind::RepositoryRejected,
+            phase: SemanticIndexerRunPhase::Execution,
+            indexer: Some(SemanticIndexerKind::Rust),
+            detail: "indexer execution did not provide process evidence".to_string(),
+            process: None,
+        },
+    )
+    .unwrap();
+
+    let error = seal_semantic_census_exclusion(&"b".repeat(64), &"c".repeat(64), vec![evidence])
+        .unwrap_err();
+    assert!(error.detail.contains("indexer rejection evidence"));
+}
+
+#[test]
 fn infrastructure_failure_cannot_be_sealed_as_candidate_exclusion() {
     let error = indexer_failure_evidence(
         HistoricalV2SemanticSnapshotSide::Patched,
