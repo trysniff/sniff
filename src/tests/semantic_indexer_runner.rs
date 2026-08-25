@@ -1,6 +1,7 @@
 #[cfg(windows)]
 use super::SemanticIndexerRecoveryGuard;
 use super::combine_run_and_integrity;
+use super::gradle_preparation;
 #[cfg(windows)]
 use super::gradle_windows::{
     TEMP_CLASS as WINDOWS_GRADLE_TEMP_CLASS, java_classpath as windows_java_classpath,
@@ -9,12 +10,13 @@ use super::gradle_windows::{
 #[cfg(windows)]
 use super::run_one;
 use super::{
-    GRADLE_INDEXER_BASE_JVM_ARGS, WINDOWS_SCIP_NODE_BOOTSTRAP, WINDOWS_SCIP_PYTHON_BOOTSTRAP,
-    compact_process_output, files_for_indexer, format_timeout, go_dependency_arguments,
-    go_sandbox_environment, gradle_indexer_jvm_args, gradle_script_uses_android,
-    indexer_arguments_with_project, missing_position_encoding, private_indexer_directory_argument,
-    private_indexer_environment, private_indexer_jvm_arguments, project_name,
-    reject_unsupported_android_gradle, require_dependency_preparation_success,
+    GRADLE_INDEXER_BASE_JVM_ARGS, SemanticIndexerRunFailureKind, SemanticIndexerRunPhase,
+    WINDOWS_SCIP_NODE_BOOTSTRAP, WINDOWS_SCIP_PYTHON_BOOTSTRAP, compact_process_output,
+    files_for_indexer, format_timeout, go_dependency_arguments, go_sandbox_environment,
+    gradle_indexer_jvm_args, gradle_script_uses_android, indexer_arguments_with_project,
+    kotlin_dependency_preparation_failure, missing_position_encoding,
+    private_indexer_directory_argument, private_indexer_environment, private_indexer_jvm_arguments,
+    project_name, reject_unsupported_android_gradle, require_dependency_preparation_success,
     resolve_java_home_runtime, runtime_file_identities, sandbox_repository_argument,
     source_integrity_digest, verify_runtime_identities_unchanged, write_private_gradle_properties,
 };
@@ -630,6 +632,44 @@ fn android_gradle_detection_is_strict_but_does_not_reject_plugin_catalogs() {
     assert!(!gradle_script_uses_android(
         r#"plugins { id("com.android.application") apply false }"#
     ));
+}
+
+#[test]
+fn missing_kotlin_gradle_project_maps_to_repository_rejection() {
+    let spec = pinned_indexer(SemanticIndexerKind::Kotlin).unwrap();
+    let failure = kotlin_dependency_preparation_failure(
+        spec,
+        gradle_preparation::KotlinDependencyPreparationError::RepositoryRejected(
+            "no Gradle project".to_string(),
+        ),
+    );
+
+    assert_eq!(
+        failure.kind,
+        SemanticIndexerRunFailureKind::RepositoryRejected
+    );
+    assert_eq!(failure.phase, SemanticIndexerRunPhase::Preparation);
+    assert_eq!(failure.indexer, Some(SemanticIndexerKind::Kotlin));
+    assert_eq!(failure.detail, "no Gradle project");
+}
+
+#[test]
+fn kotlin_preparation_infrastructure_errors_remain_infrastructure_failures() {
+    let spec = pinned_indexer(SemanticIndexerKind::Kotlin).unwrap();
+    let failure = kotlin_dependency_preparation_failure(
+        spec,
+        gradle_preparation::KotlinDependencyPreparationError::InfrastructureFailed(
+            "dependency preparation timed out".to_string(),
+        ),
+    );
+
+    assert_eq!(
+        failure.kind,
+        SemanticIndexerRunFailureKind::InfrastructureFailed
+    );
+    assert_eq!(failure.phase, SemanticIndexerRunPhase::Preparation);
+    assert_eq!(failure.indexer, Some(SemanticIndexerKind::Kotlin));
+    assert_eq!(failure.detail, "dependency preparation timed out");
 }
 
 #[test]

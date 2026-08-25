@@ -1,8 +1,15 @@
 use super::cache::transfer_cache;
-use super::control_plane::stage_control_plane;
+use super::control_plane::{KotlinDependencyPreparationError, stage_control_plane};
 use super::settings::include_build_literals;
 use std::fs;
 use std::path::Path;
+
+fn preparation_error_detail(error: &KotlinDependencyPreparationError) -> &str {
+    match error {
+        KotlinDependencyPreparationError::RepositoryRejected(detail)
+        | KotlinDependencyPreparationError::InfrastructureFailed(detail) => detail,
+    }
+}
 
 #[test]
 fn source_minimized_stage_keeps_build_logic_but_not_application_source_or_secrets() {
@@ -111,7 +118,7 @@ fn repository_escaping_included_builds_fail_closed() {
 
     let error =
         stage_control_plane(root, &root.join(".sniff-indexer-tmp/preparation")).unwrap_err();
-    assert!(error.contains("repository-relative child path"));
+    assert!(preparation_error_detail(&error).contains("repository-relative child path"));
 }
 
 #[test]
@@ -131,8 +138,41 @@ fn likely_credentials_in_build_logic_never_enter_preparation() {
 
     let error =
         stage_control_plane(root, &root.join(".sniff-indexer-tmp/preparation")).unwrap_err();
-    assert!(error.contains("likely GitHub token"));
-    assert!(!error.contains("123456789012345678901234567890123456"));
+    assert!(preparation_error_detail(&error).contains("likely GitHub token"));
+    assert!(!preparation_error_detail(&error).contains("123456789012345678901234567890123456"));
+}
+
+#[test]
+fn kotlin_sources_without_a_root_gradle_project_are_repository_rejections() {
+    let repository = tempfile::tempdir().unwrap();
+    let target = repository.path().join(".sniff-indexer-tmp/preparation");
+
+    let error = stage_control_plane(repository.path(), &target).unwrap_err();
+
+    assert!(matches!(
+        error,
+        KotlinDependencyPreparationError::RepositoryRejected(_)
+    ));
+    assert!(preparation_error_detail(&error).contains("repository-root"));
+}
+
+#[test]
+fn settings_without_a_compilable_gradle_project_are_repository_rejections() {
+    let repository = tempfile::tempdir().unwrap();
+    fs::write(
+        repository.path().join("settings.gradle.kts"),
+        "rootProject.name = \"scripts-only\"\n",
+    )
+    .unwrap();
+    let target = repository.path().join(".sniff-indexer-tmp/preparation");
+
+    let error = stage_control_plane(repository.path(), &target).unwrap_err();
+
+    assert!(matches!(
+        error,
+        KotlinDependencyPreparationError::RepositoryRejected(_)
+    ));
+    assert!(preparation_error_detail(&error).contains("no build.gradle"));
 }
 
 #[test]

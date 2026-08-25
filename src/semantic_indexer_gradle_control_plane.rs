@@ -9,13 +9,28 @@ const MAX_CONTROL_FILES: usize = 5_000;
 const MAX_CONTROL_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_CONTROL_FILE_BYTES: u64 = 4 * 1024 * 1024;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(in crate::semantic_indexer_runner) enum KotlinDependencyPreparationError {
+    RepositoryRejected(String),
+    InfrastructureFailed(String),
+}
+
+impl From<String> for KotlinDependencyPreparationError {
+    fn from(detail: String) -> Self {
+        Self::InfrastructureFailed(detail)
+    }
+}
+
 #[derive(Default)]
 struct CopyBudget {
     files: usize,
     bytes: u64,
 }
 
-pub(super) fn stage_control_plane(repository: &Path, target: &Path) -> Result<(), String> {
+pub(super) fn stage_control_plane(
+    repository: &Path,
+    target: &Path,
+) -> Result<(), KotlinDependencyPreparationError> {
     let repository = fs::canonicalize(repository).map_err(|error| {
         format!(
             "failed to resolve Kotlin dependency-preparation source {}: {error}",
@@ -26,7 +41,8 @@ pub(super) fn stage_control_plane(repository: &Path, target: &Path) -> Result<()
         return Err(format!(
             "refusing to reuse Kotlin dependency-preparation root {}",
             target.display()
-        ));
+        )
+        .into());
     }
     fs::create_dir_all(target).map_err(|error| {
         format!(
@@ -74,7 +90,8 @@ pub(super) fn stage_control_plane(repository: &Path, target: &Path) -> Result<()
             return Err(format!(
                 "Gradle control-plane entry is not a regular file: {}",
                 path.display()
-            ));
+            )
+            .into());
         }
         budget.files = budget.files.saturating_add(1);
         budget.bytes = budget.bytes.saturating_add(metadata.len());
@@ -84,7 +101,8 @@ pub(super) fn stage_control_plane(repository: &Path, target: &Path) -> Result<()
         {
             return Err(format!(
                 "Gradle control plane exceeds the strict preparation limit of {MAX_CONTROL_FILES} files, {MAX_CONTROL_BYTES} total bytes, or {MAX_CONTROL_FILE_BYTES} bytes per file"
-            ));
+            )
+            .into());
         }
 
         let bytes = fs::read(path).map_err(|error| {
@@ -103,7 +121,8 @@ pub(super) fn stage_control_plane(repository: &Path, target: &Path) -> Result<()
             return Err(format!(
                 "likely {kind} found in Gradle control-plane file {}:{line}; refusing network-enabled dependency preparation",
                 path.display()
-            ));
+            )
+            .into());
         }
         let output = target.join(relative);
         if let Some(parent) = output.parent() {
@@ -147,16 +166,16 @@ pub(super) fn stage_control_plane(repository: &Path, target: &Path) -> Result<()
     }
 
     if !root_script_found {
-        return Err(
+        return Err(KotlinDependencyPreparationError::RepositoryRejected(
             "Kotlin dependency preparation requires a repository-root settings.gradle(.kts) or build.gradle(.kts) file"
                 .to_string(),
-        );
+        ));
     }
     if project_roots.is_empty() {
-        return Err(
+        return Err(KotlinDependencyPreparationError::RepositoryRejected(
             "Kotlin dependency preparation found no build.gradle(.kts) project to compile"
                 .to_string(),
-        );
+        ));
     }
     write_compiler_probes(target, &project_roots)?;
     Ok(())

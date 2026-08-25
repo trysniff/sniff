@@ -7,10 +7,12 @@ mod fs_safety;
 #[path = "semantic_indexer_gradle_settings.rs"]
 mod settings;
 
+pub(super) use control_plane::KotlinDependencyPreparationError;
+
 pub(super) fn stage_control_plane(
     repository: &std::path::Path,
     target: &std::path::Path,
-) -> Result<(), String> {
+) -> Result<(), KotlinDependencyPreparationError> {
     control_plane::stage_control_plane(repository, target)
 }
 
