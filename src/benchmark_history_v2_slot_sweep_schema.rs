@@ -32,6 +32,7 @@ pub struct HistoricalV2SelectedSlotRunSummary {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HistoricalV2SelectedSlotSweepSummary {
     pub selected_slot_count: usize,
+    pub newly_admitted_slot_count: usize,
     pub ready_for_review_count: usize,
     pub excluded_count: usize,
     pub paused_count: usize,

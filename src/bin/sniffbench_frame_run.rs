@@ -4,7 +4,7 @@ use sniff::benchmark::{
     DockerHistoricalV2TestExecutor, HistoricalV2ExclusionManifest, HistoricalV2Frame,
     HistoricalV2SelectedPayloads, HistoricalV2SelectedSlotSweepInputs,
     HistoricalV2SlotRunDisposition, HistoricalV2SlotSelection, HistoricalV2SlotStageError,
-    HistoricalV2SlotStageErrorKind, run_historical_v2_selected_slots,
+    HistoricalV2SlotStageErrorKind, run_historical_v2_selected_slots_bounded,
 };
 use std::fs;
 use std::io::{Error as IoError, ErrorKind};
@@ -37,6 +37,8 @@ pub(super) struct RunSlotsArgs {
     #[arg(long)]
     docker_executable: PathBuf,
     #[arg(long)]
+    max_new_slots: NonZeroUsize,
+    #[arg(long)]
     max_new_stages_per_slot: Option<NonZeroUsize>,
     #[arg(long)]
     through_stage: Option<RunThroughStage>,
@@ -67,7 +69,7 @@ pub(super) async fn run(args: RunSlotsArgs) -> Result<(), Box<dyn std::error::Er
         read_json(&args.payloads, "historical-v2 selected payloads")?;
     let client = reqwest::Client::builder().build()?;
     let executor = DockerHistoricalV2TestExecutor::new(args.docker_executable);
-    let summary = run_historical_v2_selected_slots(
+    let summary = run_historical_v2_selected_slots_bounded(
         HistoricalV2SelectedSlotSweepInputs {
             client: &client,
             protocol_bytes: &protocol,
@@ -82,6 +84,7 @@ pub(super) async fn run(args: RunSlotsArgs) -> Result<(), Box<dyn std::error::Er
             test_executor: &executor,
             through_stage: args.through_stage.map(Into::into),
         },
+        args.max_new_slots,
         args.max_new_stages_per_slot,
     )
     .await
@@ -99,13 +102,14 @@ pub(super) async fn run(args: RunSlotsArgs) -> Result<(), Box<dyn std::error::Er
         );
     }
     eprintln!(
-        "Historical-v2 selected-slot sweep {}\nSelected: {}\nReady for review: {}\nExcluded: {}\nPaused: {}",
+        "Historical-v2 selected-slot sweep {}\nSelected: {}\nNewly admitted: {}\nReady for review: {}\nExcluded: {}\nPaused: {}",
         if summary.paused_count == 0 {
             "complete"
         } else {
             "paused"
         },
         summary.selected_slot_count,
+        summary.newly_admitted_slot_count,
         summary.ready_for_review_count,
         summary.excluded_count,
         summary.paused_count

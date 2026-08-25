@@ -26,6 +26,7 @@ const PARTITIONS: [&str; 6] = [
     "trim",
 ];
 const PATCH: &str = "diff --git a/src/app.py b/src/app.py\n--- a/src/app.py\n+++ b/src/app.py\n@@ -1,2 +1 @@\n-old_one = prepare()\n-old_two = finish(old_one)\n+result = finish(prepare())\n";
+const RUST_PATCH: &str = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 +1 @@\n-let old_one = prepare();\n-let old_two = finish(old_one);\n+let result = finish(prepare());\n";
 
 #[tokio::test]
 async fn one_stage_sweep_persists_every_selected_payload_without_external_execution() {
@@ -37,7 +38,7 @@ async fn one_stage_sweep_persists_every_selected_payload_without_external_execut
     let harness = tempfile::tempdir().unwrap();
     let executor = ForbiddenExecutor;
 
-    let summary = run_historical_v2_selected_slots(
+    let summary = run_historical_v2_selected_slots_bounded(
         HistoricalV2SelectedSlotSweepInputs {
             client: &client,
             protocol_bytes: PROTOCOL,
@@ -52,12 +53,14 @@ async fn one_stage_sweep_persists_every_selected_payload_without_external_execut
             test_executor: &executor,
             through_stage: Some(HistoricalV2SlotStage::Payload),
         },
+        NonZeroUsize::new(1).unwrap(),
         None,
     )
     .await
     .unwrap();
 
     assert_eq!(summary.selected_slot_count, 1);
+    assert_eq!(summary.newly_admitted_slot_count, 1);
     assert_eq!(summary.paused_count, 1);
     assert_eq!(summary.ready_for_review_count, 0);
     assert_eq!(summary.excluded_count, 0);
@@ -76,7 +79,7 @@ async fn one_stage_sweep_persists_every_selected_payload_without_external_execut
     );
     drop(journal);
 
-    let resumed = run_historical_v2_selected_slots(
+    let resumed = run_historical_v2_selected_slots_bounded(
         HistoricalV2SelectedSlotSweepInputs {
             client: &client,
             protocol_bytes: PROTOCOL,
@@ -91,13 +94,167 @@ async fn one_stage_sweep_persists_every_selected_payload_without_external_execut
             test_executor: &executor,
             through_stage: Some(HistoricalV2SlotStage::Payload),
         },
+        NonZeroUsize::new(1).unwrap(),
         None,
     )
     .await
     .unwrap();
     assert_eq!(resumed.paused_count, 1);
+    assert_eq!(resumed.newly_admitted_slot_count, 0);
     assert_eq!(resumed.slots[0].run.resumed_after_sequence, 1);
     assert!(resumed.slots[0].run.executed_stages.is_empty());
+}
+
+#[tokio::test]
+async fn bounded_sweep_admits_only_the_declared_number_of_new_slots() {
+    let fixture = Fixture::with_selected_count(2);
+    let client = reqwest::Client::builder().build().unwrap();
+    let mutable = tempfile::tempdir().unwrap();
+    let state_root = mutable.path().join("state");
+    let work_root = mutable.path().join("work");
+    let harness = tempfile::tempdir().unwrap();
+    let executor = ForbiddenExecutor;
+
+    let run = || HistoricalV2SelectedSlotSweepInputs {
+        client: &client,
+        protocol_bytes: PROTOCOL,
+        artifact_root: fixture.artifacts.path(),
+        frame: &fixture.frame,
+        exclusions: &fixture.exclusions,
+        selection: &fixture.selection,
+        payloads: &fixture.payloads,
+        state_root: &state_root,
+        work_root: &work_root,
+        harness_repository_root: harness.path(),
+        test_executor: &executor,
+        through_stage: Some(HistoricalV2SlotStage::Payload),
+    };
+
+    let first =
+        run_historical_v2_selected_slots_bounded(run(), NonZeroUsize::new(1).unwrap(), None)
+            .await
+            .unwrap();
+    assert_eq!(first.selected_slot_count, 2);
+    assert_eq!(first.newly_admitted_slot_count, 1);
+    assert_eq!(first.paused_count, 2);
+    assert_eq!(
+        first
+            .slots
+            .iter()
+            .map(|slot| slot.run.executed_stages.len())
+            .sum::<usize>(),
+        1
+    );
+    assert_eq!(persisted_slot_count(&state_root), 1);
+
+    let second =
+        run_historical_v2_selected_slots_bounded(run(), NonZeroUsize::new(1).unwrap(), None)
+            .await
+            .unwrap();
+    assert_eq!(second.newly_admitted_slot_count, 1);
+    assert_eq!(
+        second
+            .slots
+            .iter()
+            .map(|slot| slot.run.executed_stages.len())
+            .sum::<usize>(),
+        1
+    );
+    assert_eq!(persisted_slot_count(&state_root), 2);
+}
+
+#[tokio::test]
+async fn bounded_sweep_rejects_malformed_language_state_before_admitting_a_slot() {
+    let fixture = Fixture::with_patches(&[PATCH, RUST_PATCH]);
+    let client = reqwest::Client::builder().build().unwrap();
+    let mutable = tempfile::tempdir().unwrap();
+    let state_root = mutable.path().join("state");
+    let work_root = mutable.path().join("work");
+    let harness = tempfile::tempdir().unwrap();
+    let executor = ForbiddenExecutor;
+    fs::create_dir(&state_root).unwrap();
+    fs::write(state_root.join("rust"), b"not a directory").unwrap();
+
+    let error = run_historical_v2_selected_slots_bounded(
+        HistoricalV2SelectedSlotSweepInputs {
+            client: &client,
+            protocol_bytes: PROTOCOL,
+            artifact_root: fixture.artifacts.path(),
+            frame: &fixture.frame,
+            exclusions: &fixture.exclusions,
+            selection: &fixture.selection,
+            payloads: &fixture.payloads,
+            state_root: &state_root,
+            work_root: &work_root,
+            harness_repository_root: harness.path(),
+            test_executor: &executor,
+            through_stage: Some(HistoricalV2SlotStage::Payload),
+        },
+        NonZeroUsize::new(1).unwrap(),
+        None,
+    )
+    .await
+    .unwrap_err();
+
+    assert_eq!(error.kind, HistoricalV2SlotStageErrorKind::InvalidInput);
+    assert!(
+        error
+            .detail
+            .contains("language state must be a plain directory")
+    );
+    assert!(!state_root.join("python").exists());
+}
+
+#[tokio::test]
+async fn bounded_sweep_rejects_a_malformed_unadmitted_slot_marker() {
+    let fixture = Fixture::with_selected_count(2);
+    let client = reqwest::Client::builder().build().unwrap();
+    let mutable = tempfile::tempdir().unwrap();
+    let state_root = mutable.path().join("state");
+    let work_root = mutable.path().join("work");
+    let harness = tempfile::tempdir().unwrap();
+    let executor = ForbiddenExecutor;
+    fs::create_dir_all(state_root.join("python")).unwrap();
+    fs::create_dir(state_root.join("python/slot-0002.lock")).unwrap();
+
+    let error = run_historical_v2_selected_slots_bounded(
+        HistoricalV2SelectedSlotSweepInputs {
+            client: &client,
+            protocol_bytes: PROTOCOL,
+            artifact_root: fixture.artifacts.path(),
+            frame: &fixture.frame,
+            exclusions: &fixture.exclusions,
+            selection: &fixture.selection,
+            payloads: &fixture.payloads,
+            state_root: &state_root,
+            work_root: &work_root,
+            harness_repository_root: harness.path(),
+            test_executor: &executor,
+            through_stage: Some(HistoricalV2SlotStage::Payload),
+        },
+        NonZeroUsize::new(1).unwrap(),
+        None,
+    )
+    .await
+    .unwrap_err();
+
+    assert_eq!(error.kind, HistoricalV2SlotStageErrorKind::InvalidInput);
+    assert!(error.detail.contains("wrong entry type"));
+    assert!(
+        !state_root.join("python/slot-0001").exists(),
+        "all selected slot markers must be validated before admission"
+    );
+}
+
+fn persisted_slot_count(state_root: &Path) -> usize {
+    fs::read_dir(state_root.join("python"))
+        .unwrap()
+        .map(Result::unwrap)
+        .filter(|entry| {
+            entry.file_type().unwrap().is_dir()
+                && entry.file_name().to_string_lossy().starts_with("slot-")
+        })
+        .count()
 }
 
 #[test]
@@ -128,6 +285,14 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
+        Self::with_selected_count(1)
+    }
+
+    fn with_selected_count(selected_count: usize) -> Self {
+        Self::with_patches(&vec![PATCH; selected_count])
+    }
+
+    fn with_patches(patches: &[&str]) -> Self {
         let artifacts = tempfile::tempdir().unwrap();
         let protocol = validate_historical_v2_protocol(PROTOCOL).unwrap();
         let partitions = PARTITIONS
@@ -158,53 +323,80 @@ impl Fixture {
             },
         )
         .unwrap();
-        let row = HistoricalV2ProjectedRow {
-            source_shard_index: 0,
-            source_row_index: 0,
-            global_row_index: 0,
-            base_commit: "1".repeat(40),
-            created_at: "2026-01-01T00:00:00Z".to_string(),
-            instance_id: "owner__repository-1".to_string(),
-            license: "MIT".to_string(),
-            patch: PATCH.to_string(),
-            pull_number: 1,
-            repo: "Owner/Repository".to_string(),
-        };
-        let record = derive_historical_v2_frame_record(
-            row.clone(),
-            &protocol.protocol.selection.ranking_seed,
-        );
+        let rows = patches
+            .iter()
+            .enumerate()
+            .map(|(index, patch)| HistoricalV2ProjectedRow {
+                source_shard_index: 0,
+                source_row_index: index,
+                global_row_index: index,
+                base_commit: format!("{:040x}", index + 1),
+                created_at: "2026-01-01T00:00:00Z".to_string(),
+                instance_id: format!("owner__repository-{}", index + 1),
+                license: "MIT".to_string(),
+                patch: (*patch).to_string(),
+                pull_number: (index + 1) as i64,
+                repo: format!("Owner/Repository-{}", index + 1),
+            })
+            .collect::<Vec<_>>();
+        let records = rows
+            .iter()
+            .cloned()
+            .map(|row| {
+                derive_historical_v2_frame_record(row, &protocol.protocol.selection.ranking_seed)
+            })
+            .collect::<Vec<_>>();
         let mut frame = HistoricalV2Frame {
             schema_version: HISTORICAL_V2_FRAME_SCHEMA_VERSION,
             protocol_sha256: protocol.protocol_sha256.clone(),
             dataset_revision: protocol.protocol.dataset.revision.clone(),
             ranking_seed: protocol.protocol.selection.ranking_seed.clone(),
             shards: Vec::new(),
-            row_count: 1,
-            eligible_count: 1,
+            row_count: patches.len(),
+            eligible_count: patches.len(),
             excluded_count: 0,
-            records: vec![record],
+            records,
             frame_sha256: String::new(),
         };
         frame.frame_sha256 = historical_v2_frame_sha256(&frame).unwrap();
         let selection =
             select_historical_v2_slots(PROTOCOL, artifacts.path(), &frame, &exclusions).unwrap();
-        let payload = seal_historical_v2_selected_payload(HistoricalV2SelectedPayload {
-            language: "python".to_string(),
-            slot_number: 1,
-            source_shard_index: row.source_shard_index,
-            source_row_index: row.source_row_index,
-            global_row_index: row.global_row_index,
-            instance_id: row.instance_id,
-            patch: row.patch,
-            patch_sha256: sha256(PATCH.as_bytes()),
-            install_config: None,
-            install_config_sha256: None,
-            test_patch: None,
-            test_patch_sha256: None,
-            payload_sha256: String::new(),
-        })
-        .unwrap();
+        let records = selection
+            .slots
+            .iter()
+            .filter_map(|slot| match &slot.outcome {
+                HistoricalV2SlotOutcome::Selected {
+                    global_row_index,
+                    instance_id,
+                    ..
+                } => Some((
+                    slot.language.clone(),
+                    slot.slot_number,
+                    *global_row_index,
+                    instance_id,
+                )),
+                HistoricalV2SlotOutcome::Unfilled => None,
+            })
+            .map(|(language, slot_number, global_row_index, instance_id)| {
+                let row = &rows[global_row_index];
+                seal_historical_v2_selected_payload(HistoricalV2SelectedPayload {
+                    language,
+                    slot_number,
+                    source_shard_index: row.source_shard_index,
+                    source_row_index: row.source_row_index,
+                    global_row_index,
+                    instance_id: instance_id.clone(),
+                    patch: row.patch.clone(),
+                    patch_sha256: sha256(row.patch.as_bytes()),
+                    install_config: None,
+                    install_config_sha256: None,
+                    test_patch: None,
+                    test_patch_sha256: None,
+                    payload_sha256: String::new(),
+                })
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
         let payloads = seal_historical_v2_selected_payloads(HistoricalV2SelectedPayloads {
             schema_version: HISTORICAL_V2_SELECTED_PAYLOADS_SCHEMA_VERSION,
             payload_contract: "sniffbench-historical-v2-selected-payloads-v1".to_string(),
@@ -212,8 +404,8 @@ impl Fixture {
             frame_sha256: frame.frame_sha256.clone(),
             exclusion_manifest_sha256: exclusions.manifest_sha256.clone(),
             selection_sha256: selection.selection_sha256.clone(),
-            selected_count: 1,
-            records: vec![payload],
+            selected_count: records.len(),
+            records,
             payloads_sha256: String::new(),
         })
         .unwrap();
