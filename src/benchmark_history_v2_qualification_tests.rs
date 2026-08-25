@@ -2,6 +2,7 @@ use super::*;
 use crate::benchmark::{
     HistoricalDiffHunk, HistoricalV2ChangedMethodResolutionFailure, HistoricalV2PublicSurfaceDelta,
     HistoricalV2SemanticSnapshotCensus, HistoricalV2SourceMethod,
+    HistoricalV2SourceSemanticCoverage,
 };
 
 #[test]
@@ -112,6 +113,7 @@ fn source_file_fixture() -> HistoricalV2SourceFile {
         source_sha256: "2".repeat(64),
         non_whitespace_lines: 10,
         language: "rust".to_string(),
+        semantic_coverage: HistoricalV2SourceSemanticCoverage::Required,
         methods: vec![source_method()],
     }
 }

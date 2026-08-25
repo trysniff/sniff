@@ -1,7 +1,16 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-pub const HISTORICAL_V2_SOURCE_CENSUS_SCHEMA_VERSION: u32 = 1;
+pub const HISTORICAL_V2_SOURCE_CENSUS_SCHEMA_VERSION: u32 = 2;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HistoricalV2SourceSemanticCoverage {
+    Required,
+    GeneratedPath,
+    GeneratedHeader,
+    VendoredPath,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -23,6 +32,7 @@ pub struct HistoricalV2SourceFile {
     pub source_sha256: String,
     pub non_whitespace_lines: usize,
     pub language: String,
+    pub semantic_coverage: HistoricalV2SourceSemanticCoverage,
     pub methods: Vec<HistoricalV2SourceMethod>,
 }
 

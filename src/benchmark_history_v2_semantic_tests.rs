@@ -32,6 +32,36 @@ fn commits_exact_compiler_facts_for_every_historical_method() {
 }
 
 #[test]
+fn generated_files_are_committed_but_not_required_from_the_compiler_index() {
+    let mut fixture = fixture();
+    let mut generated = fixture.source.source_files[0].clone();
+    generated.repository_path = "public/angular.min.js".to_string();
+    generated.language = "javascript".to_string();
+    generated.semantic_coverage = HistoricalV2SourceSemanticCoverage::GeneratedPath;
+    generated.methods[0].parser_unit_id = "h2m-v1:generated".to_string();
+    fixture.source.source_files.push(generated);
+    fixture.source.source_file_count += 1;
+    fixture.source.method_count += 1;
+    *fixture
+        .source
+        .method_counts_by_language
+        .entry("javascript".to_string())
+        .or_default() += 1;
+
+    let snapshot = build_semantic_snapshot(
+        fixture.root.path(),
+        &fixture.source,
+        &fixture.files,
+        &fixture.indexes,
+    )
+    .unwrap();
+
+    assert_eq!(snapshot.methods.len(), 1);
+    assert_eq!(snapshot.methods[0].parser_unit_id, "h2m-v1:fixture");
+    validation::validate_snapshot("example/repo", &fixture.source, &snapshot).unwrap();
+}
+
+#[test]
 fn semantic_validation_rejects_recommitted_invented_method() {
     let fixture = fixture();
     let mut snapshot = build_semantic_snapshot(
@@ -302,6 +332,7 @@ fn fixture() -> Fixture {
             source_sha256: sha256(source_text.as_bytes()),
             non_whitespace_lines: 1,
             language: "rust".to_string(),
+            semantic_coverage: HistoricalV2SourceSemanticCoverage::Required,
             methods: vec![super::super::HistoricalV2SourceMethod {
                 parser_unit_id: "h2m-v1:fixture".to_string(),
                 symbol_name: method.name.clone(),
