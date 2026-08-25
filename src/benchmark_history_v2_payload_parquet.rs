@@ -3,6 +3,7 @@ use super::history_v2_parquet::validate_dataset_schema;
 use parquet::file::reader::{FileReader, SerializedFileReader};
 use parquet::record::Field;
 use parquet::schema::parser::parse_message_type;
+use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
 use std::path::Path;
@@ -11,7 +12,16 @@ const POST_SELECTION_SCHEMA: &str = r#"
 message schema {
   OPTIONAL BYTE_ARRAY instance_id (UTF8);
   OPTIONAL BYTE_ARRAY patch (UTF8);
-  OPTIONAL BYTE_ARRAY install_config (UTF8);
+  OPTIONAL GROUP install_config {
+    OPTIONAL BYTE_ARRAY base_image_name (UTF8);
+    OPTIONAL GROUP install (LIST) {
+      REPEATED GROUP list {
+        OPTIONAL BYTE_ARRAY element (UTF8);
+      }
+    }
+    OPTIONAL BYTE_ARRAY log_parser (UTF8);
+    OPTIONAL BYTE_ARRAY test_cmd (UTF8);
+  }
   OPTIONAL BYTE_ARRAY test_patch (UTF8);
 }
 "#;
@@ -80,7 +90,7 @@ fn projected_payload_row(
         global_row_index,
         instance_id: take_required_string(&mut fields, "instance_id")?,
         patch: take_required_string(&mut fields, "patch")?,
-        install_config: take_optional_string(&mut fields, "install_config")?,
+        install_config: take_optional_install_config(&mut fields, "install_config")?,
         test_patch: take_optional_string(&mut fields, "test_patch")?,
     };
     if !fields.is_empty() {
@@ -115,6 +125,81 @@ fn take_optional_string(
     }
 }
 
+#[derive(Serialize)]
+struct ProjectedInstallConfig {
+    base_image_name: Option<String>,
+    install: Option<Vec<String>>,
+    log_parser: Option<String>,
+    test_cmd: Option<String>,
+}
+
+fn take_optional_install_config(
+    fields: &mut BTreeMap<String, Field>,
+    name: &str,
+) -> Result<Option<String>, String> {
+    let Some(field) = fields.remove(name) else {
+        return Ok(None);
+    };
+    let group = match field {
+        Field::Group(group) => group,
+        Field::Null => return Ok(None),
+        _ => {
+            return Err(format!(
+                "historical-v2 payload field {name} is not an install-config struct"
+            ));
+        }
+    };
+    let mut config_fields = collect_fields(group.into_columns(), "install config")?;
+    let config = ProjectedInstallConfig {
+        base_image_name: take_optional_string(&mut config_fields, "base_image_name")?,
+        install: take_optional_string_list(&mut config_fields, "install")?,
+        log_parser: take_optional_string(&mut config_fields, "log_parser")?,
+        test_cmd: take_optional_string(&mut config_fields, "test_cmd")?,
+    };
+    if !config_fields.is_empty() {
+        return Err("historical-v2 install config contains an unlisted field".to_string());
+    }
+    serde_json::to_string(&config)
+        .map(Some)
+        .map_err(|error| format!("failed to serialize historical-v2 install config: {error}"))
+}
+
+fn take_optional_string_list(
+    fields: &mut BTreeMap<String, Field>,
+    name: &str,
+) -> Result<Option<Vec<String>>, String> {
+    match fields.remove(name) {
+        Some(Field::ListInternal(list)) => list
+            .elements()
+            .iter()
+            .map(|element| match element {
+                Field::Str(value) => Ok(value.clone()),
+                _ => Err(format!(
+                    "historical-v2 install config field {name} contains a non-string"
+                )),
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map(Some),
+        Some(Field::Null) | None => Ok(None),
+        Some(_) => Err(format!(
+            "historical-v2 install config field {name} is not a string list"
+        )),
+    }
+}
+
+fn collect_fields(
+    columns: Vec<(String, Field)>,
+    label: &str,
+) -> Result<BTreeMap<String, Field>, String> {
+    let mut fields = BTreeMap::new();
+    for (name, field) in columns {
+        if fields.insert(name, field).is_some() {
+            return Err(format!("historical-v2 {label} repeats a field"));
+        }
+    }
+    Ok(fields)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -140,7 +225,16 @@ message schema {
   OPTIONAL BYTE_ARRAY PASS_TO_PASS (UTF8);
   OPTIONAL BYTE_ARRAY interface (UTF8);
   OPTIONAL BYTE_ARRAY license (UTF8);
-  OPTIONAL BYTE_ARRAY install_config (UTF8);
+  OPTIONAL GROUP install_config {
+    OPTIONAL BYTE_ARRAY base_image_name (UTF8);
+    OPTIONAL GROUP install (LIST) {
+      REPEATED GROUP list {
+        OPTIONAL BYTE_ARRAY element (UTF8);
+      }
+    }
+    OPTIONAL BYTE_ARRAY log_parser (UTF8);
+    OPTIONAL BYTE_ARRAY test_cmd (UTF8);
+  }
   OPTIONAL BYTE_ARRAY meta (UTF8);
 }
 "#;
@@ -164,7 +258,12 @@ message schema {
         assert_eq!(rows[0].global_row_index, 10);
         assert_eq!(rows[0].instance_id, "owner__repo-42");
         assert_eq!(rows[0].patch, "diff --git a/x.py b/x.py");
-        assert_eq!(rows[0].install_config.as_deref(), Some("install config"));
+        assert_eq!(
+            rows[0].install_config.as_deref(),
+            Some(
+                r#"{"base_image_name":"python_3.11","install":["pip install -e ."],"log_parser":"parse_log_pytest","test_cmd":"pytest -q"}"#
+            )
+        );
         assert_eq!(rows[0].test_patch.as_deref(), Some("test patch"));
     }
 
@@ -219,16 +318,21 @@ message schema {
             b"forbidden pass labels".to_vec(),
             b"forbidden interface".to_vec(),
             b"mit".to_vec(),
-            b"install config".to_vec(),
+            b"python_3.11".to_vec(),
+            b"pip install -e .".to_vec(),
+            b"parse_log_pytest".to_vec(),
+            b"pytest -q".to_vec(),
             b"forbidden metadata".to_vec(),
         ];
         let mut string_index = 0;
         let mut column_index = 0;
         while let Some(mut column) = row_group.next_column().unwrap() {
             if column_index == 7 {
+                let definition_levels =
+                    [column.typed::<Int64Type>().get_descriptor().max_def_level()];
                 column
                     .typed::<Int64Type>()
-                    .write_batch(&[42], Some(&[1]), None)
+                    .write_batch(&[42], Some(&definition_levels), None)
                     .unwrap();
             } else {
                 let bytes = string_values
@@ -236,9 +340,16 @@ message schema {
                     .cloned()
                     .unwrap_or_else(|| b"forbidden injected field".to_vec());
                 let value = ByteArray::from(bytes);
-                column
-                    .typed::<ByteArrayType>()
-                    .write_batch(&[value], Some(&[1]), None)
+                let writer = column.typed::<ByteArrayType>();
+                let descriptor = writer.get_descriptor();
+                let definition_levels = [descriptor.max_def_level()];
+                let repetition_levels = [0];
+                writer
+                    .write_batch(
+                        &[value],
+                        Some(&definition_levels),
+                        (descriptor.max_rep_level() > 0).then_some(&repetition_levels[..]),
+                    )
                     .unwrap();
                 string_index += 1;
             }
