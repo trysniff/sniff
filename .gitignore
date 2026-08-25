@@ -4,6 +4,8 @@
 
 target/
 target_*/
+__pycache__/
+*.py[cod]
 .dogfood-logs/
 provider-probe-dir/
 temp_kotlin_*/

@@ -121,10 +121,22 @@ cargo run --locked --features sniffbench-frame --bin sniffbench-frame -- \
   --payloads selected-payloads.json \
   --state-root STATE_ROOT \
   --work-root WORK_ROOT \
-  --harness-repository-root SNIFF_REPOSITORY_ROOT \
+  --harness-repository-root SWE_REBENCH_V2_REPOSITORY_ROOT \
   --docker-executable /usr/bin/docker \
   --max-new-slots 10
 ```
+
+`SWE_REBENCH_V2_REPOSITORY_ROOT` must be a clean, non-shallow checkout of
+`SWE-rebench/SWE-rebench-V2` at the exact execution-harness revision declared
+by `historical-v2-execution-harness.json`; it is not the Sniff repository.
+
+The main-only `SniffBench historical-v2 assessment` workflow accepts only the
+frozen frame run, requires a positive global slot-admission cap, and preserves
+state, worktrees, frame inputs, runtime provenance, and transport commitments in
+an immutable resumable artifact after every bounded slice. Resume restores the
+original assessment collector and rejects runtime, frame, archive, or lineage
+drift. The assessment command receives no GitHub credential or model-provider
+configuration and does not execute Sniff's model-review pipeline.
 
 ## Non-blind real evidence
 

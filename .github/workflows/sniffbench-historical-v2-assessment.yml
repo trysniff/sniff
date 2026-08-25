@@ -1,0 +1,446 @@
+name: SniffBench historical-v2 assessment
+
+on:
+  workflow_dispatch:
+    inputs:
+      frame_run_id:
+        description: "Frozen historical-v2 frame workflow run ID"
+        required: true
+        default: "32804623556"
+        type: string
+      resume_run_id:
+        description: "Prior assessment run ID whose immutable state should be resumed"
+        required: false
+        type: string
+      max_new_slots:
+        description: "Maximum untouched selected slots to admit"
+        required: true
+        default: "1"
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: sniffbench-historical-v2-assessment-v1
+  cancel-in-progress: false
+
+jobs:
+  assess:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 330
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_RELEASE_DEBUG: "0"
+      FRAME_RUN_ID: ${{ inputs.frame_run_id }}
+      MAX_NEW_SLOTS: ${{ inputs.max_new_slots }}
+      RESUME_RUN_ID: ${{ inputs.resume_run_id }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.13.15"
+
+      - name: Validate the bounded dispatch
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$FRAME_RUN_ID" != '32804623556' ]]; then
+            echo 'frame_run_id must identify the accepted frozen frame run 32804623556' >&2
+            exit 1
+          fi
+          if [[ ! "$MAX_NEW_SLOTS" =~ ^[1-9][0-9]*$ ]] || (( MAX_NEW_SLOTS > 768 )); then
+            echo 'max_new_slots must be an integer from 1 through 768' >&2
+            exit 1
+          fi
+          if [[ -n "$RESUME_RUN_ID" && ! "$RESUME_RUN_ID" =~ ^[1-9][0-9]*$ ]]; then
+            echo 'resume_run_id must be an unsigned GitHub Actions run ID' >&2
+            exit 1
+          fi
+          if [[ "$RESUME_RUN_ID" == "$GITHUB_RUN_ID" ]]; then
+            echo 'an assessment run cannot resume itself' >&2
+            exit 1
+          fi
+          for variable in \
+            SNIFF_API_KEY SNIFF_ENDPOINT SNIFF_MODEL \
+            DEEPSEEK_API_KEY OPENAI_API_KEY ANTHROPIC_API_KEY \
+            GEMINI_API_KEY GOOGLE_API_KEY OPENROUTER_API_KEY; do
+            if [[ -n "${!variable+x}" ]]; then
+              echo "model-provider environment variable is forbidden: $variable" >&2
+              exit 1
+            fi
+          done
+
+      - name: Validate the frozen frame provenance
+        if: inputs.resume_run_id == ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          run="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${FRAME_RUN_ID}")"
+          jq --exit-status \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --arg workflow '.github/workflows/sniffbench-historical-v2-frame.yml' \
+            --arg head_sha '8681f9c379c4e4817c7ed49f06f47f4c47d1f91b' \
+            '
+              .event == "workflow_dispatch"
+              and .head_branch == "main"
+              and .head_repository.full_name == $repository
+              and .path == $workflow
+              and .status == "completed"
+              and .conclusion == "success"
+              and .head_sha == $head_sha
+              and .run_attempt == 1
+            ' <<<"$run" >/dev/null
+
+          artifacts="$(gh api \
+            "repos/${GITHUB_REPOSITORY}/actions/runs/${FRAME_RUN_ID}/artifacts?per_page=100")"
+          count="$(jq '[.artifacts[] | select(.name == "historical-v2-frame-32804623556")] | length' <<<"$artifacts")"
+          if [[ "$count" != '1' ]]; then
+            echo "expected one immutable frame artifact, observed $count" >&2
+            exit 1
+          fi
+          jq --exit-status '
+            .artifacts[]
+            | select(.name == "historical-v2-frame-32804623556")
+            | .id == 9547888605
+              and .expired == false
+              and .size_in_bytes == 25669281
+              and .digest == "sha256:542174315793a4a46c5c897ef549273f3202a36afdf464ed9ddaa65cc9ffbe7b"
+          ' <<<"$artifacts" >/dev/null
+
+      - name: Download the immutable frozen frame
+        if: inputs.resume_run_id == ''
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: historical-v2-frame-32804623556
+          path: ${{ runner.temp }}/historical-v2-assessment-frame
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.frame_run_id }}
+
+      - name: Validate prior assessment provenance
+        if: inputs.resume_run_id != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          run="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RESUME_RUN_ID}")"
+          jq --exit-status \
+            --arg workflow '.github/workflows/sniffbench-historical-v2-assessment.yml' \
+            --arg repository "$GITHUB_REPOSITORY" \
+            '
+              .event == "workflow_dispatch"
+              and .head_branch == "main"
+              and .head_repository.full_name == $repository
+              and .path == $workflow
+              and .status == "completed"
+              and (.head_sha | test("^[0-9a-f]{40}$"))
+            ' <<<"$run" >/dev/null
+
+          artifacts="$(gh api \
+            "repos/${GITHUB_REPOSITORY}/actions/runs/${RESUME_RUN_ID}/artifacts?per_page=100")"
+          count="$(jq '[.artifacts[] | select(.name == "historical-v2-assessment-state")] | length' <<<"$artifacts")"
+          if [[ "$count" != '1' ]]; then
+            echo "expected one resumable assessment artifact, observed $count" >&2
+            exit 1
+          fi
+          jq --exit-status '
+            .artifacts[]
+            | select(.name == "historical-v2-assessment-state")
+            | .expired == false
+              and (.id | type == "number")
+              and (.size_in_bytes | type == "number" and . > 0)
+              and (.digest | test("^sha256:[0-9a-f]{64}$"))
+          ' <<<"$artifacts" >/dev/null
+
+      - name: Download prior immutable assessment state
+        if: inputs.resume_run_id != ''
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: historical-v2-assessment-state
+          path: ${{ runner.temp }}/historical-v2-assessment-resume
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.resume_run_id }}
+
+      - name: Initialize or restore assessment roots
+        shell: bash
+        run: |
+          set -euo pipefail
+          state_root="${RUNNER_TEMP}/historical-v2-assessment-state"
+          work_root="${RUNNER_TEMP}/historical-v2-assessment-work"
+          frame_root="${RUNNER_TEMP}/historical-v2-assessment-frame"
+          transport_root="${RUNNER_TEMP}/historical-v2-assessment-transport"
+          harness_root="${RUNNER_TEMP}/historical-v2-assessment-harness"
+          archive="${RUNNER_TEMP}/historical-v2-assessment-state.tar.gz"
+
+          for root in "$state_root" "$work_root" "$transport_root" "$harness_root"; do
+            if [[ -e "$root" ]]; then
+              echo "assessment root already exists before restore: $root" >&2
+              exit 1
+            fi
+          done
+          if [[ -n "$RESUME_RUN_ID" && -e "$frame_root" ]]; then
+            echo "frame root already exists before resume extraction: $frame_root" >&2
+            exit 1
+          fi
+
+          if [[ -n "$RESUME_RUN_ID" ]]; then
+            source_archive="${RUNNER_TEMP}/historical-v2-assessment-resume/historical-v2-assessment-state.tar.gz"
+            python3 .github/scripts/historical_v2_assessment_transport.py \
+              extract-resume "$source_archive" "$RUNNER_TEMP"
+          else
+            if [[ ! -d "$frame_root" || -L "$frame_root" ]]; then
+              echo 'downloaded frame root is not a plain directory' >&2
+              exit 1
+            fi
+            mkdir "$state_root" "$work_root" "$transport_root"
+          fi
+
+          for root in "$state_root" "$work_root" "$frame_root" "$transport_root"; do
+            if [[ ! -d "$root" || -L "$root" || "$(dirname "$(realpath "$root")")" != "$RUNNER_TEMP" ]]; then
+              echo "assessment root is not a plain runner-temp child: $root" >&2
+              exit 1
+            fi
+          done
+
+          {
+            printf 'STATE_ROOT=%s\n' "$state_root"
+            printf 'WORK_ROOT=%s\n' "$work_root"
+            printf 'FRAME_ROOT=%s\n' "$frame_root"
+            printf 'TRANSPORT_ROOT=%s\n' "$transport_root"
+            printf 'HARNESS_ROOT=%s\n' "$harness_root"
+            printf 'SNAPSHOT_ARCHIVE=%s\n' "$archive"
+          } >> "$GITHUB_ENV"
+
+      - name: Validate the frozen frame and transport
+        shell: bash
+        run: |
+          set -euo pipefail
+          transport='.github/scripts/historical_v2_assessment_transport.py'
+          python3 "$transport" validate-frame "$FRAME_ROOT"
+          manifest="$TRANSPORT_ROOT/manifest.json"
+          if [[ -n "$RESUME_RUN_ID" ]]; then
+            collector_sha="$(python3 "$transport" validate-manifest \
+              "$manifest" "$FRAME_RUN_ID")"
+          else
+            collector_sha="$GITHUB_SHA"
+            python3 "$transport" initialize-manifest \
+              "$manifest" "$collector_sha" "$FRAME_RUN_ID"
+          fi
+          printf 'COLLECTOR_SHA=%s\n' "$collector_sha" >> "$GITHUB_ENV"
+
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
+        with:
+          toolchain: "1.96.0"
+      - name: Configure the Rust toolchain for sandboxed Rust indexing
+        run: rustup default 1.96.0
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24.19.0"
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: "17.0.20+8"
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: "1.25.9"
+          cache: false
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.12.1"
+      - uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6
+        with:
+          gradle-version: "8.8"
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: "1.4.0"
+
+      - name: Install the hardened Linux sandbox
+        run: sudo apt-get update && sudo apt-get install --no-install-recommends --yes bubblewrap
+      - name: Enable Linux user namespaces for the assessment sandbox
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: Enable project-selected Node package managers
+        shell: bash
+        run: |
+          set -euo pipefail
+          corepack enable
+          command -v npm
+          command -v pnpm
+          command -v yarn
+
+      - name: Restore the frozen assessment collector
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$(git rev-parse HEAD)" != "$COLLECTOR_SHA" ]]; then
+            git fetch --no-tags --depth=1 origin "$COLLECTOR_SHA"
+            git checkout --detach "$COLLECTOR_SHA"
+          fi
+          test "$(git rev-parse HEAD)" = "$COLLECTOR_SHA"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+
+      - name: Materialize the exact execution harness
+        shell: bash
+        run: |
+          set -euo pipefail
+          test ! -e "$HARNESS_ROOT"
+          git init "$HARNESS_ROOT"
+          git -C "$HARNESS_ROOT" remote add origin \
+            'https://github.com/SWE-rebench/SWE-rebench-V2.git'
+          git -C "$HARNESS_ROOT" fetch --no-tags origin \
+            'c71902a8cf8d2b725f63d51f199f4d3e56f68d2d'
+          git -C "$HARNESS_ROOT" checkout --detach \
+            'c71902a8cf8d2b725f63d51f199f4d3e56f68d2d'
+          test "$(git -C "$HARNESS_ROOT" rev-parse HEAD)" = \
+            'c71902a8cf8d2b725f63d51f199f4d3e56f68d2d'
+          test "$(git -C "$HARNESS_ROOT" rev-parse --is-shallow-repository)" = 'false'
+          test "$(git -C "$HARNESS_ROOT" remote get-url origin)" = \
+            'https://github.com/SWE-rebench/SWE-rebench-V2.git'
+          test -z "$(git -C "$HARNESS_ROOT" status --porcelain=v1 --untracked-files=all)"
+
+      - name: Require and freeze the production runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker info >/dev/null
+          observed="${RUNNER_TEMP}/historical-v2-assessment-runtime.txt"
+          {
+            printf 'git=%s\n' "$(git --version)"
+            printf 'cargo=%s\n' "$(cargo --version)"
+            printf 'rustc=%s\n' "$(rustc --version)"
+            printf 'node=%s\n' "$(node --version)"
+            printf 'npm=%s\n' "$(npm --version)"
+            printf 'corepack=%s\n' "$(corepack --version)"
+            printf 'python=%s\n' "$(python3 --version)"
+            printf 'uv=%s\n' "$(uv --version)"
+            printf 'go=%s\n' "$(go version)"
+            printf 'java=%s\n' "$(java --version 2>&1 | head -n 1)"
+            printf 'gradle=%s\n' "$(gradle --version | awk '/^Gradle / { print; exit }')"
+            printf 'bun=%s\n' "$(bun --version)"
+            printf 'bwrap=%s\n' "$(bwrap --version)"
+            printf 'docker-client=%s\n' "$(docker version --format '{{.Client.Version}}')"
+            printf 'docker-server=%s\n' "$(docker version --format '{{.Server.Version}}')"
+          } > "$observed"
+          frozen="$TRANSPORT_ROOT/runtime.txt"
+          if [[ -e "$frozen" ]]; then
+            if [[ ! -f "$frozen" || -L "$frozen" ]]; then
+              echo 'frozen runtime manifest is not a plain file' >&2
+              exit 1
+            fi
+            cmp --silent "$frozen" "$observed" || {
+              diff --unified "$frozen" "$observed" >&2 || true
+              echo 'assessment runtime drifted from the first slice' >&2
+              exit 1
+            }
+          else
+            install -m 0644 "$observed" "$frozen"
+          fi
+
+      - name: Build the frozen assessment tools
+        run: >-
+          cargo build --release --locked --features sniffbench-frame
+          --bin sniff --bin sniffbench-frame
+
+      - name: Install every pinned semantic indexer
+        shell: bash
+        run: |
+          set -euo pipefail
+          for fixture in typescript javascript python go kotlin rust; do
+            target/release/sniff indexers install \
+              "tests/semantic_gold_fixtures/${fixture}" --yes
+          done
+
+      - name: Prove model-provider access remains unavailable
+        shell: bash
+        run: |
+          set -euo pipefail
+          for variable in \
+            SNIFF_API_KEY SNIFF_ENDPOINT SNIFF_MODEL \
+            DEEPSEEK_API_KEY OPENAI_API_KEY ANTHROPIC_API_KEY \
+            GEMINI_API_KEY GOOGLE_API_KEY OPENROUTER_API_KEY; do
+            if [[ -n "${!variable+x}" ]]; then
+              echo "model-provider environment variable is forbidden: $variable" >&2
+              exit 1
+            fi
+          done
+
+      - name: Assess a bounded resumable slot slice
+        id: assess
+        shell: bash
+        run: |
+          set +e
+          timeout --foreground --signal=INT --kill-after=60s 300m \
+            target/release/sniffbench-frame run-slots \
+              --protocol sniffbench/historical-v2-protocol.json \
+              --artifact-root "$GITHUB_WORKSPACE" \
+              --frame "$FRAME_ROOT/frame.json" \
+              --exclusions "$FRAME_ROOT/exclusions.json" \
+              --selection "$FRAME_ROOT/selection.json" \
+              --payloads "$FRAME_ROOT/selected-payloads.json" \
+              --state-root "$STATE_ROOT" \
+              --work-root "$WORK_ROOT" \
+              --harness-repository-root "$HARNESS_ROOT" \
+              --docker-executable "$(command -v docker)" \
+              --max-new-slots "$MAX_NEW_SLOTS"
+          status=$?
+          set -e
+          printf 'status=%s\n' "$status" >> "$GITHUB_OUTPUT"
+
+      - name: Seal resumable assessment state
+        id: seal
+        if: ${{ always() && steps.assess.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for root in "$STATE_ROOT" "$WORK_ROOT" "$FRAME_ROOT" "$TRANSPORT_ROOT"; do
+            if [[ ! -d "$root" || -L "$root" || "$(dirname "$(realpath "$root")")" != "$RUNNER_TEMP" ]]; then
+              echo "assessment root changed before archival: $root" >&2
+              exit 1
+            fi
+          done
+          tar --create --file=- --sort=name --mtime='@0' --hard-dereference \
+            --owner=0 --group=0 --numeric-owner \
+            --directory="$RUNNER_TEMP" \
+            historical-v2-assessment-state \
+            historical-v2-assessment-work \
+            historical-v2-assessment-frame \
+            historical-v2-assessment-transport \
+            | gzip -n -9 > "$SNAPSHOT_ARCHIVE"
+          gzip --test "$SNAPSHOT_ARCHIVE"
+          python3 .github/scripts/historical_v2_assessment_transport.py \
+            validate-archive "$SNAPSHOT_ARCHIVE"
+          printf "Assessment state SHA-256: \`%s\`\n" \
+            "$(sha256sum "$SNAPSHOT_ARCHIVE" | cut -d' ' -f1)" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload immutable resumable assessment state
+        if: ${{ always() && steps.seal.outcome == 'success' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: historical-v2-assessment-state
+          path: ${{ env.SNAPSHOT_ARCHIVE }}
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 0
+
+      - name: Enforce assessment outcome
+        if: ${{ always() && steps.assess.outcome == 'success' }}
+        shell: bash
+        env:
+          ASSESSMENT_STATUS: ${{ steps.assess.outputs.status }}
+        run: |
+          set -euo pipefail
+          case "$ASSESSMENT_STATUS" in
+            0|124|130) ;;
+            *)
+              echo "historical-v2 assessment failed with status $ASSESSMENT_STATUS" >&2
+              exit "$ASSESSMENT_STATUS"
+              ;;
+          esac
