@@ -118,6 +118,21 @@ pub(super) fn remove_interrupted_materialization(
     })
 }
 
+pub(super) fn reconcile_terminal_slot_work(
+    work_root: &Path,
+    language: &str,
+    slot_number: usize,
+    disposition: &super::HistoricalV2SlotRunDisposition,
+) -> Result<(), HistoricalV2SlotStageError> {
+    if matches!(
+        disposition,
+        super::HistoricalV2SlotRunDisposition::Excluded { .. }
+    ) {
+        remove_interrupted_materialization(work_root, language, slot_number)?;
+    }
+    Ok(())
+}
+
 pub(super) fn require_operation_identity(
     context: HistoricalV2SlotStageContext<'_>,
     selection_sha256: &str,

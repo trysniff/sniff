@@ -1,4 +1,8 @@
 use super::*;
+use sniff::benchmark::{
+    HistoricalV2SelectedSlotRunSummary, HistoricalV2SlotRunDisposition, HistoricalV2SlotRunSummary,
+    HistoricalV2SlotStage,
+};
 
 #[test]
 fn run_slots_requires_every_execution_boundary_explicitly() {
@@ -66,6 +70,31 @@ fn run_slots_rejects_an_unknown_stage_ceiling() {
     arguments[index + 1] = "not-a-stage";
 
     assert!(Args::try_parse_from(arguments).is_err());
+}
+
+#[test]
+fn run_slots_reports_only_slots_that_executed_in_the_current_slice() {
+    let untouched = HistoricalV2SelectedSlotRunSummary {
+        language: "go".to_string(),
+        slot_number: 2,
+        canonical_repository: "example/untouched".to_string(),
+        run: HistoricalV2SlotRunSummary {
+            resumed_after_sequence: 0,
+            executed_stages: Vec::new(),
+            terminal_checkpoint_sha256: None,
+            disposition: HistoricalV2SlotRunDisposition::Paused {
+                next_stage: HistoricalV2SlotStage::Payload,
+            },
+        },
+    };
+    let mut touched = untouched.clone();
+    touched
+        .run
+        .executed_stages
+        .push(HistoricalV2SlotStage::Payload);
+
+    assert!(!sniffbench_frame_run::should_report_slot(&untouched));
+    assert!(sniffbench_frame_run::should_report_slot(&touched));
 }
 
 fn run_slots_arguments() -> Vec<&'static str> {

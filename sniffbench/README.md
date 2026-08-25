@@ -110,6 +110,17 @@ Each admitted slot normally runs to a terminal exclusion or ready-for-review
 checkpoint. `--max-new-stages-per-slot` and `--through-stage` are optional test
 and recovery ceilings, not substitutes for the global admission bound.
 
+The source census commits a compiler-coverage decision for every supported
+source file. Coverage is required unless exact path or header evidence identifies
+the file as generated or vendored; narrow minified JavaScript suffixes such as
+`.min.js` are generated-path evidence. Those files remain in the source census
+but cannot cause a false incomplete-compiler exclusion. Go module dependencies
+are downloaded into a fresh private cache during an explicit network-enabled
+preparation phase. `scip-go` then runs with networking disabled, and an
+unavailable dependency registry remains retryable infrastructure rather than a
+repository label. Terminally excluded slots retain their immutable journals but
+discard their worktrees; paused and ready-for-review slots retain theirs.
+
 ```console
 cargo run --locked --features sniffbench-frame --bin sniffbench-frame -- \
   run-slots \
