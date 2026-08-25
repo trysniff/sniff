@@ -83,6 +83,11 @@ enum Command {
         #[command(flatten)]
         args: sniffbench_frame_run::RunSlotsArgs,
     },
+    /// Remove marker-proven transient semantic state before snapshot archival.
+    RecoverSlotWork {
+        #[command(flatten)]
+        args: sniffbench_frame_run::RecoverSlotWorkArgs,
+    },
 }
 
 #[tokio::main]
@@ -258,6 +263,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
         }
         Command::RunSlots { args } => sniffbench_frame_run::run(args).await?,
+        Command::RecoverSlotWork { args } => sniffbench_frame_run::recover_slot_work(args)?,
     }
     Ok(())
 }
