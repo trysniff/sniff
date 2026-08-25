@@ -140,6 +140,7 @@ fn cleanup_generated_paths(root: &Path, marker: &RecoveryMarker) -> Result<(), S
         match entry.kind {
             RecoveryPathKind::File if metadata.file_type().is_file() => fs::remove_file(&path),
             RecoveryPathKind::Directory if metadata.file_type().is_dir() => {
+                make_generated_directory_removable(&path)?;
                 fs::remove_dir_all(&path)
             }
             _ => {
@@ -157,6 +158,96 @@ fn cleanup_generated_paths(root: &Path, marker: &RecoveryMarker) -> Result<(), S
         })?;
     }
     Ok(())
+}
+
+fn make_generated_directory_removable(path: &Path) -> Result<(), String> {
+    let metadata = fs::symlink_metadata(path).map_err(|error| {
+        format!(
+            "failed to inspect generated semantic directory {}: {error}",
+            path.display()
+        )
+    })?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return Err(format!(
+            "refusing to change permissions on non-directory semantic path: {}",
+            path.display()
+        ));
+    }
+    make_directory_owner_accessible(path, &metadata)?;
+    for child in fs::read_dir(path).map_err(|error| {
+        format!(
+            "failed to enumerate generated semantic directory {}: {error}",
+            path.display()
+        )
+    })? {
+        let child = child.map_err(|error| {
+            format!(
+                "failed to enumerate generated semantic directory {}: {error}",
+                path.display()
+            )
+        })?;
+        let child_path = child.path();
+        let child_metadata = fs::symlink_metadata(&child_path).map_err(|error| {
+            format!(
+                "failed to inspect generated semantic path {}: {error}",
+                child_path.display()
+            )
+        })?;
+        if child_metadata.file_type().is_symlink() {
+            continue;
+        }
+        if child_metadata.is_dir() {
+            make_generated_directory_removable(&child_path)?;
+        } else {
+            make_file_owner_removable(&child_path, &child_metadata)?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn make_directory_owner_accessible(path: &Path, metadata: &fs::Metadata) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mode = metadata.permissions().mode();
+    let permissions = fs::Permissions::from_mode(mode | 0o700);
+    fs::set_permissions(path, permissions).map_err(|error| {
+        format!(
+            "failed to restore owner access to generated semantic directory {}: {error}",
+            path.display()
+        )
+    })
+}
+
+#[cfg(unix)]
+fn make_file_owner_removable(_path: &Path, _metadata: &fs::Metadata) -> Result<(), String> {
+    Ok(())
+}
+
+#[cfg(windows)]
+fn make_directory_owner_accessible(path: &Path, metadata: &fs::Metadata) -> Result<(), String> {
+    clear_windows_readonly(path, metadata)
+}
+
+#[cfg(windows)]
+fn make_file_owner_removable(path: &Path, metadata: &fs::Metadata) -> Result<(), String> {
+    clear_windows_readonly(path, metadata)
+}
+
+#[cfg(windows)]
+#[allow(clippy::permissions_set_readonly_false)]
+fn clear_windows_readonly(path: &Path, metadata: &fs::Metadata) -> Result<(), String> {
+    let mut permissions = metadata.permissions();
+    if !permissions.readonly() {
+        return Ok(());
+    }
+    permissions.set_readonly(false);
+    fs::set_permissions(path, permissions).map_err(|error| {
+        format!(
+            "failed to clear read-only generated semantic path {}: {error}",
+            path.display()
+        )
+    })
 }
 
 fn write_marker(path: &Path, marker: &RecoveryMarker) -> Result<(), String> {
@@ -248,6 +339,49 @@ mod tests {
         assert!(!root.path().join(".sniff-jsconfig.json").exists());
         assert!(!root.path().join("tsconfig.json").exists());
         assert!(!root.path().join(MARKER).exists());
+    }
+
+    #[test]
+    fn finish_removes_read_only_go_module_cache_entries() {
+        let root = tempfile::tempdir().unwrap();
+        let guard = SemanticIndexerRecoveryGuard::begin(root.path()).unwrap();
+        let module = root
+            .path()
+            .join(".sniff-indexer-tmp/go/pkg/mod/example.com/module@v1.0.0");
+        fs::create_dir_all(&module).unwrap();
+        let source = module.join("module.go");
+        fs::write(&source, b"package module\n").unwrap();
+        let mut file_permissions = fs::metadata(&source).unwrap().permissions();
+        file_permissions.set_readonly(true);
+        fs::set_permissions(&source, file_permissions).unwrap();
+        let mut directory_permissions = fs::metadata(&module).unwrap().permissions();
+        directory_permissions.set_readonly(true);
+        fs::set_permissions(&module, directory_permissions).unwrap();
+
+        guard.finish().unwrap();
+
+        assert!(!root.path().join(".sniff-indexer-tmp").exists());
+        assert!(!root.path().join(MARKER).exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn finish_unlinks_generated_symlinks_without_touching_their_targets() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+        let external = tempfile::tempdir().unwrap();
+        let external_file = external.path().join("proof.txt");
+        fs::write(&external_file, b"preserved").unwrap();
+        let guard = SemanticIndexerRecoveryGuard::begin(root.path()).unwrap();
+        let generated = root.path().join(".sniff-indexer-tmp");
+        fs::create_dir(&generated).unwrap();
+        symlink(external.path(), generated.join("external-link")).unwrap();
+
+        guard.finish().unwrap();
+
+        assert_eq!(fs::read(&external_file).unwrap(), b"preserved");
+        assert!(!generated.exists());
     }
 
     #[test]
