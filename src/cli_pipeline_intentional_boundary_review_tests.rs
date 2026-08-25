@@ -72,7 +72,7 @@ fn source_bundle_roots_must_be_disjoint() {
     let state = root.path().join("state");
     let checkout = state.join("checkouts");
     fs::create_dir(&state).unwrap();
-    let state = fs::canonicalize(state).unwrap();
+    let state = canonical_path(&state).unwrap();
     let checkout = inspect_checkout_root(checkout.to_str().unwrap(), &BTreeSet::new()).unwrap();
     let output = root.path().join("source-bundle");
 
