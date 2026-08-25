@@ -275,6 +275,83 @@ fn sweep_rejects_overlapping_mutable_roots() {
     assert!(!shared.exists());
 }
 
+#[test]
+fn selected_slot_work_recovery_removes_only_marker_proven_semantic_state() {
+    let fixture = Fixture::new();
+    let mutable = tempfile::tempdir().unwrap();
+    let work_root = mutable.path().join("work");
+    fs::create_dir(&work_root).unwrap();
+    let payload = &fixture.payloads.records[0];
+    let slot_root = work_root
+        .join(&payload.language)
+        .join(format!("slot-{:04}", payload.slot_number));
+    let repository = slot_root.join("repository");
+    let patched = slot_root.join("patched");
+    for root in [&repository, &patched] {
+        fs::create_dir_all(root).unwrap();
+        crate::semantic_indexer_runner::install_test_semantic_recovery_marker(root).unwrap();
+        fs::create_dir(root.join(".sniff-indexer-tmp")).unwrap();
+        fs::write(root.join(".sniff-indexer-tmp/cache"), b"transient").unwrap();
+    }
+    fs::create_dir(slot_root.join("base-tested")).unwrap();
+
+    let summary =
+        recover_historical_v2_selected_slot_work(HistoricalV2SelectedSlotWorkRecoveryInputs {
+            protocol_bytes: PROTOCOL,
+            artifact_root: fixture.artifacts.path(),
+            frame: &fixture.frame,
+            exclusions: &fixture.exclusions,
+            selection: &fixture.selection,
+            payloads: &fixture.payloads,
+            work_root: &work_root,
+        })
+        .unwrap();
+
+    assert_eq!(summary.selected_slot_count, 1);
+    assert_eq!(summary.materialized_semantic_root_count, 2);
+    assert_eq!(summary.recovered_semantic_root_count, 2);
+    for root in [&repository, &patched] {
+        assert!(!root.join(".sniff-indexer-recovery.json").exists());
+        assert!(!root.join(".sniff-indexer-tmp").exists());
+    }
+    assert!(slot_root.join("base-tested").is_dir());
+}
+
+#[test]
+fn selected_slot_work_recovery_rejects_unknown_layout_before_mutation() {
+    let fixture = Fixture::new();
+    let mutable = tempfile::tempdir().unwrap();
+    let work_root = mutable.path().join("work");
+    fs::create_dir(&work_root).unwrap();
+    let payload = &fixture.payloads.records[0];
+    let language_root = work_root.join(&payload.language);
+    let repository = language_root
+        .join(format!("slot-{:04}", payload.slot_number))
+        .join("repository");
+    fs::create_dir_all(&repository).unwrap();
+    crate::semantic_indexer_runner::install_test_semantic_recovery_marker(&repository).unwrap();
+    fs::create_dir(repository.join(".sniff-indexer-tmp")).unwrap();
+    fs::create_dir(language_root.join("slot-9999")).unwrap();
+
+    let error =
+        recover_historical_v2_selected_slot_work(HistoricalV2SelectedSlotWorkRecoveryInputs {
+            protocol_bytes: PROTOCOL,
+            artifact_root: fixture.artifacts.path(),
+            frame: &fixture.frame,
+            exclusions: &fixture.exclusions,
+            selection: &fixture.selection,
+            payloads: &fixture.payloads,
+            work_root: &work_root,
+        })
+        .unwrap_err();
+
+    assert_eq!(error.stage, HistoricalV2SlotStage::SemanticCensus);
+    assert_eq!(error.kind, HistoricalV2SlotStageErrorKind::InvalidInput);
+    assert!(error.detail.contains("unselected slot"));
+    assert!(repository.join(".sniff-indexer-recovery.json").is_file());
+    assert!(repository.join(".sniff-indexer-tmp").is_dir());
+}
+
 struct Fixture {
     artifacts: tempfile::TempDir,
     frame: HistoricalV2Frame,
