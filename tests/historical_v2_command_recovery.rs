@@ -155,6 +155,8 @@ impl Fixture {
             .arg(&self.harness_root)
             .arg("--docker-executable")
             .arg(&self.missing_docker)
+            .arg("--max-new-slots")
+            .arg(self.selected_count.to_string())
             .arg("--through-stage")
             .arg("payload");
         command
