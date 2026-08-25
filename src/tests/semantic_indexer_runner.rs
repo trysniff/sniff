@@ -8,10 +8,11 @@ use super::gradle_windows::{
 use super::run_one;
 use super::{
     GRADLE_INDEXER_BASE_JVM_ARGS, WINDOWS_SCIP_NODE_BOOTSTRAP, WINDOWS_SCIP_PYTHON_BOOTSTRAP,
-    compact_process_output, files_for_indexer, format_timeout, go_sandbox_environment,
-    gradle_indexer_jvm_args, gradle_script_uses_android, indexer_arguments_with_project,
-    missing_position_encoding, private_indexer_directory_argument, private_indexer_environment,
-    private_indexer_jvm_arguments, project_name, reject_unsupported_android_gradle,
+    compact_process_output, files_for_indexer, format_timeout, go_dependency_arguments,
+    go_sandbox_environment, gradle_indexer_jvm_args, gradle_script_uses_android,
+    indexer_arguments_with_project, missing_position_encoding, private_indexer_directory_argument,
+    private_indexer_environment, private_indexer_jvm_arguments, project_name,
+    reject_unsupported_android_gradle, require_dependency_preparation_success,
     resolve_java_home_runtime, runtime_file_identities, sandbox_repository_argument,
     source_integrity_digest, verify_runtime_identities_unchanged, write_private_gradle_properties,
 };
@@ -21,6 +22,7 @@ use super::{
     indexer_arguments_with_workspace, prepare_indexer_workspace, push_external_read_only,
     system_gradle_launcher_jar,
 };
+use crate::sandbox::SandboxOutput;
 use crate::semantic_index::SemanticPositionEncoding;
 #[cfg(windows)]
 use crate::semantic_indexer_installation::InstalledIndexer;
@@ -264,6 +266,35 @@ fn go_indexing_uses_explicit_module_scope() {
         indexer_arguments_with_project(spec, synthetic_python_root(), None),
         ["--module-root", ".", "./..."]
     );
+}
+
+#[test]
+fn go_dependency_preparation_downloads_the_complete_module_graph() {
+    assert_eq!(go_dependency_arguments(), ["mod", "download", "all"]);
+}
+
+#[test]
+fn dependency_registry_failure_is_retryable_infrastructure() {
+    let spec = pinned_indexer(SemanticIndexerKind::Go).unwrap();
+    let error = require_dependency_preparation_success(
+        spec,
+        SandboxOutput {
+            status_code: Some(1),
+            stdout: String::new(),
+            stderr: "registry unavailable".to_string(),
+            stdout_sha256: "a".repeat(64),
+            stderr_sha256: "b".repeat(64),
+            timed_out: false,
+        },
+    )
+    .unwrap_err();
+
+    assert_eq!(
+        error.kind,
+        super::SemanticIndexerRunFailureKind::InfrastructureUnavailable
+    );
+    assert_eq!(error.phase, super::SemanticIndexerRunPhase::Preparation);
+    assert!(error.process.is_some());
 }
 
 #[test]

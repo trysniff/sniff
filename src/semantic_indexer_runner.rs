@@ -433,6 +433,9 @@ async fn run_one(
     let _cache_cleanup = cache_root
         .as_ref()
         .map(|path| TemporaryIndexerDirectory(path.clone()));
+    if spec.kind == SemanticIndexerKind::Go {
+        prepare_go_dependency_cache(spec, root, installed).await?;
+    }
     if spec.kind == SemanticIndexerKind::Kotlin {
         prepare_kotlin_dependency_cache(spec, root, installed)
             .await
@@ -676,6 +679,109 @@ async fn run_one(
         SemanticIndexerRunPhase::Execution,
         format!(
             "{} indexing failed with {}; output: {}",
+            spec.display_name,
+            output
+                .status_code
+                .map_or_else(|| "signal".to_string(), |status| status.to_string()),
+            compact_process_output(output.stdout.as_bytes(), output.stderr.as_bytes())
+        ),
+        output,
+    ))
+}
+
+async fn prepare_go_dependency_cache(
+    spec: PinnedIndexer,
+    root: &Path,
+    installed: &InstalledIndexer,
+) -> Result<(), SemanticIndexerRunFailure> {
+    let mut prepared = build_indexer_sandbox_command(spec, root, installed, Vec::new(), None)
+        .map_err(|detail| {
+            indexer_failure(
+                spec,
+                SemanticIndexerRunFailureKind::InfrastructureFailed,
+                SemanticIndexerRunPhase::Preparation,
+                detail,
+            )
+        })?;
+    prepared.command.program = go_dependency_program(installed)
+        .map_err(|detail| {
+            indexer_failure(
+                spec,
+                SemanticIndexerRunFailureKind::InfrastructureUnavailable,
+                SemanticIndexerRunPhase::Preparation,
+                detail,
+            )
+        })?
+        .to_string_lossy()
+        .into_owned();
+    prepared.command.args = go_dependency_arguments();
+    prepared.command.allow_network = true;
+    let output = run_with_runtime_identity(prepared, "Go dependency preparation")
+        .await
+        .map_err(|detail| {
+            indexer_failure(
+                spec,
+                SemanticIndexerRunFailureKind::InfrastructureFailed,
+                SemanticIndexerRunPhase::Preparation,
+                detail,
+            )
+        })?;
+    require_dependency_preparation_success(spec, output)
+}
+
+fn go_dependency_arguments() -> Vec<String> {
+    vec!["mod".to_string(), "download".to_string(), "all".to_string()]
+}
+
+fn go_dependency_program(installed: &InstalledIndexer) -> Result<PathBuf, String> {
+    #[cfg(windows)]
+    {
+        fs::canonicalize(installed.root.join("bin").join("go.exe")).map_err(|error| {
+            format!(
+                "sandbox-compatible Go command is missing from the sealed scip-go installation: {error}"
+            )
+        })
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = installed;
+        resolve_runtime("go")
+    }
+}
+
+fn require_dependency_preparation_success(
+    spec: PinnedIndexer,
+    output: crate::sandbox::SandboxOutput,
+) -> Result<(), SemanticIndexerRunFailure> {
+    if output.timed_out {
+        return Err(indexer_process_failure(
+            spec,
+            SemanticIndexerRunFailureKind::InfrastructureUnavailable,
+            SemanticIndexerRunPhase::Preparation,
+            format!(
+                "{} dependency preparation timed out after {}",
+                spec.display_name,
+                format_timeout(index_timeout())
+            ),
+            output,
+        ));
+    }
+    if output.status_code == Some(0) {
+        return Ok(());
+    }
+    let kind = if output.status_code.is_some() {
+        // Preparation depends on external registries. A nonzero result cannot
+        // safely become a repository label without typed registry evidence.
+        SemanticIndexerRunFailureKind::InfrastructureUnavailable
+    } else {
+        SemanticIndexerRunFailureKind::InfrastructureFailed
+    };
+    Err(indexer_process_failure(
+        spec,
+        kind,
+        SemanticIndexerRunPhase::Preparation,
+        format!(
+            "{} dependency preparation failed with {}; output: {}",
             spec.display_name,
             output
                 .status_code
