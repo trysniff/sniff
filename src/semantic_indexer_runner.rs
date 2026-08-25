@@ -27,6 +27,13 @@ mod recovery;
 
 pub(crate) use recovery::recover_interrupted_semantic_indexing;
 
+#[cfg(test)]
+pub(crate) fn install_test_semantic_recovery_marker(root: &Path) -> Result<(), String> {
+    let guard = recovery::SemanticIndexerRecoveryGuard::begin(root)?;
+    std::mem::forget(guard);
+    Ok(())
+}
+
 #[path = "semantic_indexer_gradle_preparation.rs"]
 mod gradle_preparation;
 #[cfg(windows)]

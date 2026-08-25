@@ -1,13 +1,14 @@
 use super::{
     HistoricalV2PayloadStageInputs, HistoricalV2SelectedPayload,
     HistoricalV2SelectedSlotRunSummary, HistoricalV2SelectedSlotSweepInputs,
-    HistoricalV2SelectedSlotSweepSummary, HistoricalV2SlotOperations, HistoricalV2SlotOutcome,
-    HistoricalV2SlotRunDisposition, HistoricalV2SlotRunIdentity, HistoricalV2SlotStage,
-    HistoricalV2SlotStageError, HistoricalV2SlotStageJournal, run_historical_v2_slot_slice_through,
-    validate_historical_v2_protocol, validate_historical_v2_selected_payloads_commitment,
-    validate_historical_v2_slot_selection,
+    HistoricalV2SelectedSlotSweepSummary, HistoricalV2SelectedSlotWorkRecoveryInputs,
+    HistoricalV2SelectedSlotWorkRecoverySummary, HistoricalV2SlotOperations,
+    HistoricalV2SlotOutcome, HistoricalV2SlotRunDisposition, HistoricalV2SlotRunIdentity,
+    HistoricalV2SlotStage, HistoricalV2SlotStageError, HistoricalV2SlotStageJournal,
+    run_historical_v2_slot_slice_through, validate_historical_v2_protocol,
+    validate_historical_v2_selected_payloads_commitment, validate_historical_v2_slot_selection,
 };
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::fs;
 use std::io::ErrorKind;
@@ -23,6 +24,170 @@ where
     E: super::HistoricalV2RecoverableTestExecutor,
 {
     run_selected_slots(inputs, maximum_new_slots, maximum_new_stages_per_slot).await
+}
+
+pub fn recover_historical_v2_selected_slot_work(
+    inputs: HistoricalV2SelectedSlotWorkRecoveryInputs<'_>,
+) -> Result<HistoricalV2SelectedSlotWorkRecoverySummary, HistoricalV2SlotStageError> {
+    let protocol =
+        validate_historical_v2_protocol(inputs.protocol_bytes).map_err(recovery_invalid)?;
+    validate_historical_v2_slot_selection(
+        inputs.protocol_bytes,
+        inputs.artifact_root,
+        inputs.frame,
+        inputs.exclusions,
+        inputs.selection,
+    )
+    .map_err(recovery_invalid)?;
+    validate_historical_v2_selected_payloads_commitment(
+        &protocol,
+        inputs.frame,
+        inputs.exclusions,
+        inputs.selection,
+        inputs.payloads,
+    )
+    .map_err(recovery_invalid)?;
+
+    let artifact_root =
+        existing_plain_directory(inputs.artifact_root, "historical-v2 artifact root")?;
+    let work_root = existing_plain_directory(inputs.work_root, "historical-v2 work root")?;
+    if overlaps(&artifact_root, &work_root) {
+        return Err(recovery_invalid(
+            "historical-v2 work and artifact roots must not overlap",
+        ));
+    }
+
+    let expected = expected_selected_slot_work(inputs.selection, inputs.payloads)?;
+    let semantic_roots = validate_selected_slot_work_layout(&work_root, &expected)?;
+    let mut recovered_semantic_root_count = 0;
+    for root in &semantic_roots {
+        if crate::semantic_indexer_runner::recover_interrupted_semantic_indexing(root)
+            .map_err(recovery_infrastructure)?
+        {
+            recovered_semantic_root_count += 1;
+        }
+    }
+
+    Ok(HistoricalV2SelectedSlotWorkRecoverySummary {
+        selected_slot_count: inputs.payloads.records.len(),
+        materialized_semantic_root_count: semantic_roots.len(),
+        recovered_semantic_root_count,
+    })
+}
+
+fn expected_selected_slot_work(
+    selection: &super::HistoricalV2SlotSelection,
+    payloads: &super::HistoricalV2SelectedPayloads,
+) -> Result<BTreeMap<String, BTreeSet<String>>, HistoricalV2SlotStageError> {
+    let mut expected = BTreeMap::<String, BTreeSet<String>>::new();
+    for payload in &payloads.records {
+        selected_repository(selection, payload).map_err(|error| {
+            HistoricalV2SlotStageError::invalid(HistoricalV2SlotStage::SemanticCensus, error.detail)
+        })?;
+        let slot_name = format!("slot-{:04}", payload.slot_number);
+        if !expected
+            .entry(payload.language.clone())
+            .or_default()
+            .insert(slot_name)
+        {
+            return Err(recovery_invalid(
+                "historical-v2 selected payloads contain a duplicate work slot",
+            ));
+        }
+    }
+    Ok(expected)
+}
+
+fn validate_selected_slot_work_layout(
+    work_root: &Path,
+    expected: &BTreeMap<String, BTreeSet<String>>,
+) -> Result<Vec<PathBuf>, HistoricalV2SlotStageError> {
+    let mut semantic_roots = Vec::new();
+    for language_entry in read_plain_directory(work_root, "historical-v2 work root")? {
+        let language = plain_entry_name(&language_entry, "historical-v2 language work root")?;
+        let expected_slots = expected.get(&language).ok_or_else(|| {
+            recovery_invalid(format!(
+                "historical-v2 work root contains an unselected language: {language}"
+            ))
+        })?;
+        let language_root = exact_plain_child(
+            work_root,
+            &language_entry.path(),
+            "historical-v2 language work root",
+        )?;
+        for slot_entry in read_plain_directory(&language_root, "historical-v2 language work root")?
+        {
+            let slot_name = plain_entry_name(&slot_entry, "historical-v2 slot work root")?;
+            if !expected_slots.contains(&slot_name) {
+                return Err(recovery_invalid(format!(
+                    "historical-v2 work root contains an unselected slot: {language}/{slot_name}"
+                )));
+            }
+            let slot_root = exact_plain_child(
+                &language_root,
+                &slot_entry.path(),
+                "historical-v2 slot work root",
+            )?;
+            for name in ["repository", "patched"] {
+                let root = slot_root.join(name);
+                match fs::symlink_metadata(&root) {
+                    Ok(_) => semantic_roots.push(exact_plain_child(
+                        &slot_root,
+                        &root,
+                        "historical-v2 semantic work root",
+                    )?),
+                    Err(error) if error.kind() == ErrorKind::NotFound => {}
+                    Err(error) => {
+                        return Err(recovery_infrastructure(format!(
+                            "failed to inspect historical-v2 semantic work root: {error}"
+                        )));
+                    }
+                }
+            }
+        }
+    }
+    semantic_roots.sort();
+    Ok(semantic_roots)
+}
+
+fn read_plain_directory(
+    path: &Path,
+    label: &str,
+) -> Result<Vec<fs::DirEntry>, HistoricalV2SlotStageError> {
+    fs::read_dir(path)
+        .map_err(|error| recovery_infrastructure(format!("failed to enumerate {label}: {error}")))?
+        .map(|entry| {
+            entry.map_err(|error| {
+                recovery_infrastructure(format!("failed to enumerate {label}: {error}"))
+            })
+        })
+        .collect()
+}
+
+fn plain_entry_name(
+    entry: &fs::DirEntry,
+    label: &str,
+) -> Result<String, HistoricalV2SlotStageError> {
+    entry
+        .file_name()
+        .into_string()
+        .map_err(|_| recovery_invalid(format!("{label} name is not valid UTF-8")))
+}
+
+fn exact_plain_child(
+    parent: &Path,
+    path: &Path,
+    label: &str,
+) -> Result<PathBuf, HistoricalV2SlotStageError> {
+    require_plain_directory(path, label).map_err(|error| {
+        HistoricalV2SlotStageError::invalid(HistoricalV2SlotStage::SemanticCensus, error.detail)
+    })?;
+    let resolved = fs::canonicalize(path)
+        .map_err(|error| recovery_infrastructure(format!("failed to resolve {label}: {error}")))?;
+    if resolved.parent() != Some(parent) || resolved.file_name() != path.file_name() {
+        return Err(recovery_invalid(format!("{label} escaped its parent")));
+    }
+    Ok(resolved)
 }
 
 async fn run_selected_slots<E>(
@@ -463,6 +628,14 @@ fn invalid(detail: impl Into<String>) -> HistoricalV2SlotStageError {
 
 fn infrastructure(detail: impl Into<String>) -> HistoricalV2SlotStageError {
     HistoricalV2SlotStageError::infrastructure(HistoricalV2SlotStage::Payload, detail)
+}
+
+fn recovery_invalid(detail: impl Into<String>) -> HistoricalV2SlotStageError {
+    HistoricalV2SlotStageError::invalid(HistoricalV2SlotStage::SemanticCensus, detail)
+}
+
+fn recovery_infrastructure(detail: impl Into<String>) -> HistoricalV2SlotStageError {
+    HistoricalV2SlotStageError::infrastructure(HistoricalV2SlotStage::SemanticCensus, detail)
 }
 
 #[cfg(test)]

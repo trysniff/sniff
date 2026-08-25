@@ -21,6 +21,23 @@ pub struct HistoricalV2SelectedSlotSweepInputs<'a, E: HistoricalV2RecoverableTes
     pub through_stage: Option<HistoricalV2SlotStage>,
 }
 
+pub struct HistoricalV2SelectedSlotWorkRecoveryInputs<'a> {
+    pub protocol_bytes: &'a [u8],
+    pub artifact_root: &'a Path,
+    pub frame: &'a HistoricalV2Frame,
+    pub exclusions: &'a HistoricalV2ExclusionManifest,
+    pub selection: &'a HistoricalV2SlotSelection,
+    pub payloads: &'a HistoricalV2SelectedPayloads,
+    pub work_root: &'a Path,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HistoricalV2SelectedSlotWorkRecoverySummary {
+    pub selected_slot_count: usize,
+    pub materialized_semantic_root_count: usize,
+    pub recovered_semantic_root_count: usize,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HistoricalV2SelectedSlotRunSummary {
     pub language: String,
