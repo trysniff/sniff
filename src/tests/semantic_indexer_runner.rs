@@ -1,3 +1,5 @@
+#[cfg(windows)]
+use super::SemanticIndexerRecoveryGuard;
 use super::combine_run_and_integrity;
 #[cfg(windows)]
 use super::gradle_windows::{
@@ -68,8 +70,10 @@ async fn windows_compatible_rust_analyzer_emits_scip_inside_appcontainer() {
         root: installation_root,
         entrypoint,
     };
+    let recovery = SemanticIndexerRecoveryGuard::begin(repository.path())
+        .expect("start semantic recovery lifecycle");
 
-    run_one(spec, repository.path(), &installed, &files)
+    run_one(spec, repository.path(), &installed, &files, &recovery)
         .await
         .expect("compatibility artifact should index inside AppContainer");
 
@@ -79,6 +83,10 @@ async fn windows_compatible_rust_analyzer_emits_scip_inside_appcontainer() {
         std::fs::metadata(index).unwrap().len() > 0,
         "rust-analyzer emitted an empty SCIP index"
     );
+    std::fs::remove_file(repository.path().join("index.scip")).expect("remove probe SCIP output");
+    recovery
+        .finish()
+        .expect("finish semantic recovery lifecycle");
 }
 
 fn javascript_file() -> FileRecord {

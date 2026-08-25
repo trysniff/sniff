@@ -26,6 +26,7 @@ pub(crate) use outcome::*;
 mod recovery;
 
 pub(crate) use recovery::recover_interrupted_semantic_indexing;
+use recovery::{INDEXER_CACHE_DIR, INDEXER_TEMP_DIR, SemanticIndexerRecoveryGuard};
 
 #[cfg(test)]
 pub(crate) fn install_test_semantic_recovery_marker(root: &Path) -> Result<(), String> {
@@ -56,9 +57,6 @@ const INDEXER_PROCESS_LIMIT: u32 = 512;
 const MAX_COMPACT_ERROR_OUTPUT: usize = 8 * 1024;
 const MAX_RUNTIME_IDENTITY_FILE_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_RUNTIME_IDENTITY_TOTAL_BYTES: u64 = 1024 * 1024 * 1024;
-const INDEXER_CACHE_DIR: &str = ".sniff-indexer-cache";
-const INDEXER_TEMP_DIR: &str = ".sniff-indexer-tmp";
-
 const GRADLE_INDEXER_BASE_JVM_ARGS: &str = concat!(
     "--add-opens=java.base/java.util=ALL-UNNAMED ",
     "--add-opens=java.base/java.lang=ALL-UNNAMED ",
@@ -93,14 +91,6 @@ struct RuntimeFileIdentity {
     path: PathBuf,
     length: u64,
     sha256: String,
-}
-
-struct TemporaryIndexerDirectory(PathBuf);
-
-impl Drop for TemporaryIndexerDirectory {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
-    }
 }
 
 impl TemporaryIndexerWorkspace {
@@ -193,7 +183,7 @@ pub(crate) async fn run_required_indexers_exhaustive_typed(
     let mut indexes = BTreeMap::new();
     let mut failures = Vec::new();
     for kind in required_indexers(files) {
-        match run_required_indexer_typed(&root, files, &store, kind).await {
+        match run_required_indexer_typed(&root, files, &store, kind, &recovery).await {
             Ok(index) => {
                 indexes.insert(kind, index);
             }
@@ -230,7 +220,24 @@ pub(crate) async fn run_required_indexer_with_store_for_test(
                 ),
             )
         })?);
-    run_required_indexer_typed(&root, files, store, kind).await
+    let recovery = SemanticIndexerRecoveryGuard::begin(&root).map_err(|detail| {
+        failure(
+            SemanticIndexerRunFailureKind::InfrastructureFailed,
+            SemanticIndexerRunPhase::Preparation,
+            Some(kind),
+            detail,
+        )
+    })?;
+    let run_result = run_required_indexer_typed(&root, files, store, kind, &recovery).await;
+    let cleanup_result = recovery.finish().map_err(|detail| {
+        failure(
+            SemanticIndexerRunFailureKind::InfrastructureFailed,
+            SemanticIndexerRunPhase::Cleanup,
+            Some(kind),
+            detail,
+        )
+    });
+    combine_typed_run_and_integrity(run_result, cleanup_result)
 }
 
 async fn run_required_indexer_typed(
@@ -238,6 +245,7 @@ async fn run_required_indexer_typed(
     files: &[FileRecord],
     store: &SemanticIndexerStore,
     kind: SemanticIndexerKind,
+    recovery: &SemanticIndexerRecoveryGuard,
 ) -> Result<SemanticIndex, SemanticIndexerRunFailure> {
     let spec = pinned_indexer(kind).map_err(|detail| {
         failure(
@@ -270,7 +278,7 @@ async fn run_required_indexer_typed(
     if std::env::var_os("SNIFF_DEBUG_INDEXERS").is_some() {
         eprintln!("[sniff] semantic indexer start: {}", spec.display_name);
     }
-    let run_result = run_one(spec, root, &installed, files).await;
+    let run_result = run_one(spec, root, &installed, files, recovery).await;
     let installation_result = store.verify(spec).map(|_| ()).map_err(|error| {
         failure(
             SemanticIndexerRunFailureKind::InfrastructureFailed,
@@ -389,6 +397,33 @@ async fn run_one(
     root: &Path,
     installed: &InstalledIndexer,
     files: &[FileRecord],
+    recovery: &SemanticIndexerRecoveryGuard,
+) -> Result<SemanticIndexerProcessEvidence, SemanticIndexerRunFailure> {
+    recovery.prepare_indexer_run().map_err(|detail| {
+        indexer_failure(
+            spec,
+            SemanticIndexerRunFailureKind::InfrastructureFailed,
+            SemanticIndexerRunPhase::Preparation,
+            detail,
+        )
+    })?;
+    let run_result = run_one_in_recovery_scope(spec, root, installed, files).await;
+    let cleanup_result = recovery.finish_indexer_run().map_err(|detail| {
+        indexer_failure(
+            spec,
+            SemanticIndexerRunFailureKind::InfrastructureFailed,
+            SemanticIndexerRunPhase::Cleanup,
+            detail,
+        )
+    });
+    combine_typed_run_and_integrity(run_result, cleanup_result)
+}
+
+async fn run_one_in_recovery_scope(
+    spec: PinnedIndexer,
+    root: &Path,
+    installed: &InstalledIndexer,
+    files: &[FileRecord],
 ) -> Result<SemanticIndexerProcessEvidence, SemanticIndexerRunFailure> {
     let source_digest_before = source_integrity_digest(files).map_err(|detail| {
         indexer_failure(
@@ -398,48 +433,58 @@ async fn run_one(
             detail,
         )
     })?;
-    let cache_root =
-        (spec.kind == SemanticIndexerKind::Kotlin).then(|| root.join(INDEXER_CACHE_DIR));
-    if let Some(cache_root) = &cache_root
-        && cache_root.exists()
-    {
-        return Err(indexer_failure(
-            spec,
-            SemanticIndexerRunFailureKind::InvalidInput,
-            SemanticIndexerRunPhase::Preparation,
-            format!(
-                "refusing to reuse an unexpected semantic indexer cache {}; remove it before indexing",
-                cache_root.display()
-            ),
-        ));
-    }
     let temporary_dir = root.join(INDEXER_TEMP_DIR);
-    if temporary_dir.exists() {
-        return Err(indexer_failure(
-            spec,
-            SemanticIndexerRunFailureKind::InvalidInput,
-            SemanticIndexerRunPhase::Preparation,
-            format!(
-                "refusing to reuse an unexpected semantic indexer temp directory {}; remove it before indexing",
-                temporary_dir.display()
-            ),
-        ));
-    }
-    fs::create_dir(&temporary_dir).map_err(|error| {
+    let temporary_metadata = fs::symlink_metadata(&temporary_dir).map_err(|error| {
         indexer_failure(
             spec,
             SemanticIndexerRunFailureKind::InfrastructureFailed,
             SemanticIndexerRunPhase::Preparation,
             format!(
-                "failed to create private semantic indexer temp directory {}: {error}",
+                "failed to inspect private semantic indexer temp directory {}: {error}",
                 temporary_dir.display()
             ),
         )
     })?;
-    let _temporary_dir_cleanup = TemporaryIndexerDirectory(temporary_dir.clone());
-    let _cache_cleanup = cache_root
-        .as_ref()
-        .map(|path| TemporaryIndexerDirectory(path.clone()));
+    if !temporary_metadata.file_type().is_dir() {
+        return Err(indexer_failure(
+            spec,
+            SemanticIndexerRunFailureKind::InfrastructureFailed,
+            SemanticIndexerRunPhase::Preparation,
+            format!(
+                "semantic recovery lifecycle did not prepare private runtime directory {}",
+                temporary_dir.display()
+            ),
+        ));
+    }
+    let cache_root =
+        (spec.kind == SemanticIndexerKind::Kotlin).then(|| root.join(INDEXER_CACHE_DIR));
+    if let Some(cache_root) = &cache_root {
+        match fs::symlink_metadata(cache_root) {
+            Ok(_) => {
+                return Err(indexer_failure(
+                    spec,
+                    SemanticIndexerRunFailureKind::InfrastructureFailed,
+                    SemanticIndexerRunPhase::Preparation,
+                    format!(
+                        "semantic recovery lifecycle did not provide a clean private cache path {}",
+                        cache_root.display()
+                    ),
+                ));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(indexer_failure(
+                    spec,
+                    SemanticIndexerRunFailureKind::InfrastructureFailed,
+                    SemanticIndexerRunPhase::Preparation,
+                    format!(
+                        "failed to inspect private semantic indexer cache path {}: {error}",
+                        cache_root.display()
+                    ),
+                ));
+            }
+        }
+    }
     if spec.kind == SemanticIndexerKind::Go {
         prepare_go_dependency_cache(spec, root, installed).await?;
     }

@@ -9,6 +9,8 @@ const CONTRACT: &str = "sniff-semantic-indexer-recovery-v2";
 const LEGACY_SCHEMA_VERSION: u32 = 1;
 const LEGACY_CONTRACT: &str = "sniff-semantic-indexer-recovery-v1";
 const MARKER: &str = ".sniff-indexer-recovery.json";
+pub(super) const INDEXER_CACHE_DIR: &str = ".sniff-indexer-cache";
+pub(super) const INDEXER_TEMP_DIR: &str = ".sniff-indexer-tmp";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -50,6 +52,7 @@ impl SemanticIndexerRecoveryGuard {
                 root.display()
             ));
         }
+        reject_preexisting_private_runtime_paths(&root)?;
         let mut marker = RecoveryMarker {
             schema_version: SCHEMA_VERSION,
             recovery_contract: CONTRACT.to_string(),
@@ -69,9 +72,43 @@ impl SemanticIndexerRecoveryGuard {
         Ok(Self { root, marker })
     }
 
+    pub(super) fn prepare_indexer_run(&self) -> Result<(), String> {
+        self.require_current_marker()?;
+        cleanup_runtime_paths(&self.root, &self.marker)?;
+        let temporary_dir = self.root.join(INDEXER_TEMP_DIR);
+        fs::create_dir(&temporary_dir).map_err(|error| {
+            format!(
+                "failed to create private semantic indexer temp directory {}: {error}",
+                temporary_dir.display()
+            )
+        })?;
+        sync_directory(&self.root)
+    }
+
+    pub(super) fn finish_indexer_run(&self) -> Result<(), String> {
+        self.require_current_marker()?;
+        cleanup_runtime_paths(&self.root, &self.marker)?;
+        sync_directory(&self.root)
+    }
+
     pub(super) fn finish(self) -> Result<(), String> {
+        self.require_current_marker()?;
         cleanup_generated_paths(&self.root, &self.marker)?;
         remove_marker(&self.root)
+    }
+
+    fn require_current_marker(&self) -> Result<(), String> {
+        let marker_path = self.root.join(MARKER);
+        let persisted: RecoveryMarker = serde_json::from_slice(
+            &fs::read(&marker_path)
+                .map_err(|error| format!("failed to read semantic recovery marker: {error}"))?,
+        )
+        .map_err(|error| format!("invalid semantic recovery marker: {error}"))?;
+        validate_marker(&persisted)?;
+        if persisted != self.marker {
+            return Err("semantic recovery marker changed while indexing".to_string());
+        }
+        Ok(())
     }
 }
 
@@ -96,8 +133,8 @@ pub(crate) fn recover_interrupted_semantic_indexing(root: &Path) -> Result<bool,
 fn recovery_paths() -> [(&'static str, RecoveryPathKind); 6] {
     [
         ("index.scip", RecoveryPathKind::File),
-        (".sniff-indexer-tmp", RecoveryPathKind::Directory),
-        (".sniff-indexer-cache", RecoveryPathKind::Directory),
+        (INDEXER_TEMP_DIR, RecoveryPathKind::Directory),
+        (INDEXER_CACHE_DIR, RecoveryPathKind::Directory),
         (".sniff-jsconfig.json", RecoveryPathKind::File),
         ("scip-pyrightconfig.json", RecoveryPathKind::File),
         ("tsconfig.json", RecoveryPathKind::File),
@@ -107,8 +144,8 @@ fn recovery_paths() -> [(&'static str, RecoveryPathKind); 6] {
 fn legacy_recovery_paths() -> [(&'static str, RecoveryPathKind); 5] {
     [
         ("index.scip", RecoveryPathKind::File),
-        (".sniff-indexer-tmp", RecoveryPathKind::Directory),
-        (".sniff-indexer-cache", RecoveryPathKind::Directory),
+        (INDEXER_TEMP_DIR, RecoveryPathKind::Directory),
+        (INDEXER_CACHE_DIR, RecoveryPathKind::Directory),
         (".sniff-jsconfig.json", RecoveryPathKind::File),
         ("scip-pyrightconfig.json", RecoveryPathKind::File),
     ]
@@ -126,38 +163,83 @@ fn cleanup_generated_paths(root: &Path, marker: &RecoveryMarker) -> Result<(), S
         if entry.existed_before {
             continue;
         }
-        let path = root.join(&entry.relative_path);
-        let metadata = match fs::symlink_metadata(&path) {
-            Ok(metadata) => metadata,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(error) => {
+        cleanup_generated_path(root, entry)?;
+    }
+    Ok(())
+}
+
+fn reject_preexisting_private_runtime_paths(root: &Path) -> Result<(), String> {
+    for relative_path in [INDEXER_TEMP_DIR, INDEXER_CACHE_DIR] {
+        let path = root.join(relative_path);
+        match fs::symlink_metadata(&path) {
+            Ok(_) => {
                 return Err(format!(
-                    "failed to inspect semantic recovery path {}: {error}",
+                    "refusing to reuse an unexpected semantic indexer runtime path {}; remove it before indexing",
                     path.display()
                 ));
             }
-        };
-        match entry.kind {
-            RecoveryPathKind::File if metadata.file_type().is_file() => fs::remove_file(&path),
-            RecoveryPathKind::Directory if metadata.file_type().is_dir() => {
-                make_generated_directory_removable(&path)?;
-                fs::remove_dir_all(&path)
-            }
-            _ => {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
                 return Err(format!(
-                    "refusing to remove semantic recovery path with changed type: {}",
+                    "failed to inspect semantic indexer runtime path {}: {error}",
                     path.display()
                 ));
             }
         }
-        .map_err(|error| {
-            format!(
-                "failed to remove semantic recovery path {}: {error}",
-                path.display()
-            )
-        })?;
     }
     Ok(())
+}
+
+fn cleanup_runtime_paths(root: &Path, marker: &RecoveryMarker) -> Result<(), String> {
+    validate_marker(marker)?;
+    for relative_path in [INDEXER_TEMP_DIR, INDEXER_CACHE_DIR] {
+        let entry = marker
+            .paths
+            .iter()
+            .find(|entry| entry.relative_path == relative_path)
+            .ok_or_else(|| format!("semantic recovery marker omitted {relative_path}"))?;
+        if entry.existed_before {
+            return Err(format!(
+                "semantic recovery marker does not own private runtime path {}",
+                root.join(relative_path).display()
+            ));
+        }
+        cleanup_generated_path(root, entry)?;
+    }
+    Ok(())
+}
+
+fn cleanup_generated_path(root: &Path, entry: &RecoveryPath) -> Result<(), String> {
+    let path = root.join(&entry.relative_path);
+    let metadata = match fs::symlink_metadata(&path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(format!(
+                "failed to inspect semantic recovery path {}: {error}",
+                path.display()
+            ));
+        }
+    };
+    match entry.kind {
+        RecoveryPathKind::File if metadata.file_type().is_file() => fs::remove_file(&path),
+        RecoveryPathKind::Directory if metadata.file_type().is_dir() => {
+            make_generated_directory_removable(&path)?;
+            fs::remove_dir_all(&path)
+        }
+        _ => {
+            return Err(format!(
+                "refusing to remove semantic recovery path with changed type: {}",
+                path.display()
+            ));
+        }
+    }
+    .map_err(|error| {
+        format!(
+            "failed to remove semantic recovery path {}: {error}",
+            path.display()
+        )
+    })
 }
 
 fn make_generated_directory_removable(path: &Path) -> Result<(), String> {
@@ -361,6 +443,89 @@ mod tests {
         guard.finish().unwrap();
 
         assert!(!root.path().join(".sniff-indexer-tmp").exists());
+        assert!(!root.path().join(MARKER).exists());
+    }
+
+    #[test]
+    fn begin_rejects_a_preexisting_private_runtime_path_without_claiming_it() {
+        let root = tempfile::tempdir().unwrap();
+        let private = root.path().join(INDEXER_TEMP_DIR);
+        fs::create_dir(&private).unwrap();
+        fs::write(private.join("owner.txt"), b"not sniff").unwrap();
+
+        let error = SemanticIndexerRecoveryGuard::begin(root.path())
+            .err()
+            .unwrap();
+
+        assert!(error.contains("unexpected semantic indexer runtime path"));
+        assert_eq!(fs::read(private.join("owner.txt")).unwrap(), b"not sniff");
+        assert!(!root.path().join(MARKER).exists());
+    }
+
+    #[test]
+    fn preparing_a_run_replaces_only_marker_owned_interrupted_runtime_state() {
+        let root = tempfile::tempdir().unwrap();
+        let guard = SemanticIndexerRecoveryGuard::begin(root.path()).unwrap();
+        let private = root.path().join(INDEXER_TEMP_DIR);
+        fs::create_dir(&private).unwrap();
+        fs::write(private.join("stale"), b"generated after marker").unwrap();
+
+        guard.prepare_indexer_run().unwrap();
+
+        assert!(private.is_dir());
+        assert_eq!(fs::read_dir(&private).unwrap().count(), 0);
+        guard.finish_indexer_run().unwrap();
+        assert!(!private.exists());
+        guard.finish().unwrap();
+    }
+
+    #[test]
+    fn explicit_run_cleanup_allows_another_run_after_read_only_go_modules() {
+        let root = tempfile::tempdir().unwrap();
+        let guard = SemanticIndexerRecoveryGuard::begin(root.path()).unwrap();
+        guard.prepare_indexer_run().unwrap();
+        let module = root
+            .path()
+            .join(INDEXER_TEMP_DIR)
+            .join("go/pkg/mod/example.com/module@v1.0.0");
+        fs::create_dir_all(&module).unwrap();
+        let source = module.join("module.go");
+        fs::write(&source, b"package module\n").unwrap();
+        let mut file_permissions = fs::metadata(&source).unwrap().permissions();
+        file_permissions.set_readonly(true);
+        fs::set_permissions(&source, file_permissions).unwrap();
+        let mut directory_permissions = fs::metadata(&module).unwrap().permissions();
+        directory_permissions.set_readonly(true);
+        fs::set_permissions(&module, directory_permissions).unwrap();
+
+        guard.finish_indexer_run().unwrap();
+        guard.prepare_indexer_run().unwrap();
+
+        assert_eq!(
+            fs::read_dir(root.path().join(INDEXER_TEMP_DIR))
+                .unwrap()
+                .count(),
+            0
+        );
+        guard.finish_indexer_run().unwrap();
+        guard.finish().unwrap();
+    }
+
+    #[test]
+    fn interrupted_dependency_preparation_remains_marker_recoverable() {
+        let root = tempfile::tempdir().unwrap();
+        let guard = SemanticIndexerRecoveryGuard::begin(root.path()).unwrap();
+        guard.prepare_indexer_run().unwrap();
+        let module = root
+            .path()
+            .join(INDEXER_TEMP_DIR)
+            .join("go/pkg/mod/example.com/module@v1.0.0/module.go");
+        fs::create_dir_all(module.parent().unwrap()).unwrap();
+        fs::write(&module, b"package module\n").unwrap();
+        drop(guard);
+
+        assert!(recover_interrupted_semantic_indexing(root.path()).unwrap());
+        assert!(!root.path().join(INDEXER_TEMP_DIR).exists());
         assert!(!root.path().join(MARKER).exists());
     }
 
