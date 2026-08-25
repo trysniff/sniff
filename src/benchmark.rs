@@ -336,7 +336,7 @@ pub use release::{
     reconcile_intentional_boundary_frame_rank_typed, rematerialize_intentional_boundary_repository,
     remove_historical_materialization, resolve_historical_v2_base_image,
     resolve_historical_v2_label, resolve_intentional_boundary_labels, run_historical_test,
-    run_historical_v2_identical_tests_checkpointed, run_historical_v2_selected_slots,
+    run_historical_v2_identical_tests_checkpointed, run_historical_v2_selected_slots_bounded,
     run_historical_v2_slot, run_historical_v2_slot_slice,
     run_intentional_boundary_production_sweep, run_intentional_boundary_production_sweep_slice,
     run_intentional_boundary_rank, run_intentional_boundary_rank_slice,

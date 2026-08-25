@@ -21,6 +21,30 @@ fn run_slots_has_no_implicit_docker_executable() {
 }
 
 #[test]
+fn run_slots_has_no_unbounded_slot_admission_mode() {
+    let mut arguments = run_slots_arguments();
+    let index = arguments
+        .iter()
+        .position(|value| *value == "--max-new-slots")
+        .unwrap();
+    arguments.drain(index..=index + 1);
+
+    assert!(Args::try_parse_from(arguments).is_err());
+}
+
+#[test]
+fn run_slots_rejects_a_zero_slot_admission_limit() {
+    let mut arguments = run_slots_arguments();
+    let index = arguments
+        .iter()
+        .position(|value| *value == "--max-new-slots")
+        .unwrap();
+    arguments[index + 1] = "0";
+
+    assert!(Args::try_parse_from(arguments).is_err());
+}
+
+#[test]
 fn run_slots_rejects_a_zero_stage_slice() {
     let mut arguments = run_slots_arguments();
     let index = arguments
@@ -68,6 +92,8 @@ fn run_slots_arguments() -> Vec<&'static str> {
         "harness",
         "--docker-executable",
         "docker-test",
+        "--max-new-slots",
+        "1",
         "--max-new-stages-per-slot",
         "1",
         "--through-stage",
