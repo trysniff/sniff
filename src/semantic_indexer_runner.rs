@@ -2765,7 +2765,13 @@ fn repository_relative_path(root: &Path, file: &Path) -> Result<RepositoryPath, 
             file.display()
         )
     })?);
-    let normalized_root = strip_windows_verbatim_prefix(root.to_path_buf());
+    let normalized_root =
+        strip_windows_verbatim_prefix(fs::canonicalize(root).map_err(|error| {
+            format!(
+                "failed to resolve semantic repository root {}: {error}",
+                root.display()
+            )
+        })?);
     let relative = canonical.strip_prefix(&normalized_root).map_err(|_| {
         format!(
             "semantic source {} is outside repository root {}",
