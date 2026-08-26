@@ -37,6 +37,36 @@ fn container_creation_enforces_every_frozen_boundary() {
 }
 
 #[test]
+fn container_exec_trusts_only_the_ephemeral_repository_for_every_git_child() {
+    let args = container_exec_args("container", "git status")
+        .into_iter()
+        .map(|value| value.into_string().unwrap())
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        args,
+        [
+            "exec",
+            "--env",
+            "GIT_CONFIG_COUNT=1",
+            "--env",
+            "GIT_CONFIG_KEY_0=safe.directory",
+            "--env",
+            "GIT_CONFIG_VALUE_0=/workspace",
+            "--workdir",
+            "/workspace",
+            "container",
+            "/bin/bash",
+            "-lc",
+            "git status",
+        ]
+    );
+    assert!(!args.iter().any(|argument| argument.contains('*')));
+    assert!(!args.iter().any(|argument| argument.contains("--global")));
+    assert!(!args.iter().any(|argument| argument == "--user"));
+}
+
+#[test]
 fn resource_names_are_stable_across_process_restarts() {
     let plan = fixture_plan();
     let first = ResourceNames::new(&plan.plan_sha256);

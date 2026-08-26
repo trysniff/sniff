@@ -2,6 +2,26 @@ use super::*;
 use std::ffi::{OsStr, OsString};
 use std::path::Path;
 
+const CONTAINER_REPOSITORY: &str = "/workspace";
+
+pub(super) fn container_exec_args(container: &str, script: &str) -> Vec<OsString> {
+    vec![
+        "exec".into(),
+        "--env".into(),
+        "GIT_CONFIG_COUNT=1".into(),
+        "--env".into(),
+        "GIT_CONFIG_KEY_0=safe.directory".into(),
+        "--env".into(),
+        format!("GIT_CONFIG_VALUE_0={CONTAINER_REPOSITORY}").into(),
+        "--workdir".into(),
+        CONTAINER_REPOSITORY.into(),
+        container.into(),
+        "/bin/bash".into(),
+        "-lc".into(),
+        script.into(),
+    ]
+}
+
 pub(super) fn container_create_args(
     request: &HistoricalV2IdenticalTestExecutionRequest<'_>,
     image_id: &str,
@@ -39,9 +59,9 @@ pub(super) fn container_create_args(
         )
         .into(),
         "--mount".into(),
-        format!("type=volume,source={volume},target=/workspace").into(),
+        format!("type=volume,source={volume},target={CONTAINER_REPOSITORY}").into(),
         "--workdir".into(),
-        "/workspace".into(),
+        CONTAINER_REPOSITORY.into(),
         image_id.into(),
         "/bin/sh".into(),
         "-c".into(),
