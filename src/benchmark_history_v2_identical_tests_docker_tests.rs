@@ -67,6 +67,33 @@ fn container_exec_trusts_only_the_ephemeral_repository_for_every_git_child() {
 }
 
 #[test]
+fn workspace_permission_control_is_root_only_without_a_shell_or_candidate_input() {
+    let args = container_workspace_permission_args("container")
+        .into_iter()
+        .map(|value| value.into_string().unwrap())
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        args,
+        [
+            "exec",
+            "--user",
+            "0:0",
+            "--workdir",
+            "/workspace",
+            "container",
+            "/bin/chmod",
+            "-R",
+            "a+rwX",
+            "--",
+            "/workspace",
+        ]
+    );
+    assert!(!args.iter().any(|argument| argument.contains("bash")));
+    assert!(!args.iter().any(|argument| argument.contains("sh")));
+}
+
+#[test]
 fn resource_names_are_stable_across_process_restarts() {
     let plan = fixture_plan();
     let first = ResourceNames::new(&plan.plan_sha256);
