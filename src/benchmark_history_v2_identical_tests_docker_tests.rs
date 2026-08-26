@@ -32,6 +32,7 @@ fn container_creation_enforces_every_frozen_boundary() {
     assert!(args.contains(&"--cpus".to_string()));
     assert!(args.contains(&"--tmpfs".to_string()));
     assert!(!args.contains(&"--privileged".to_string()));
+    assert!(!args.contains(&"--cap-add".to_string()));
     assert!(!args.iter().any(|argument| argument.contains("type=bind")));
     assert!(args.contains(&plan_label(&plan.plan_sha256)));
 }
@@ -67,30 +68,85 @@ fn container_exec_trusts_only_the_ephemeral_repository_for_every_git_child() {
 }
 
 #[test]
-fn workspace_permission_control_is_root_only_without_a_shell_or_candidate_input() {
-    let args = container_workspace_permission_args("container")
-        .into_iter()
-        .map(|value| value.into_string().unwrap())
-        .collect::<Vec<_>>();
+fn workspace_permission_control_is_separate_and_receives_only_fowner() {
+    let root = tempfile::tempdir().unwrap();
+    let plan = fixture_plan();
+    let request = HistoricalV2IdenticalTestExecutionRequest {
+        plan: &plan,
+        harness_repository_root: root.path(),
+        repository_root: root.path(),
+    };
+    let args = workspace_permission_container_create_args(
+        &request,
+        &format!("sha256:{}", "a".repeat(64)),
+        "permission-container",
+        "workspace-volume",
+    )
+    .into_iter()
+    .map(|value| value.into_string().unwrap())
+    .collect::<Vec<_>>();
 
     assert_eq!(
         args,
         [
-            "exec",
-            "--user",
-            "0:0",
+            "create",
+            "--name",
+            "permission-container",
+            "--label",
+            "org.trysniff.historical-v2=true",
+            "--label",
+            &plan_label(&plan.plan_sha256),
+            "--platform",
+            "linux/amd64",
+            "--network",
+            "none",
+            "--cap-drop",
+            "ALL",
+            "--cap-add",
+            "FOWNER",
+            "--security-opt",
+            "no-new-privileges",
+            "--pids-limit",
+            "16",
+            "--memory",
+            "67108864",
+            "--cpus",
+            "0.250",
+            "--read-only",
+            "--mount",
+            "type=volume,source=workspace-volume,target=/workspace",
             "--workdir",
             "/workspace",
-            "container",
+            "--user",
+            "0:0",
+            "--entrypoint",
             "/bin/chmod",
+            &format!("sha256:{}", "a".repeat(64)),
             "-R",
             "a+rwX",
             "--",
             "/workspace",
         ]
     );
-    assert!(!args.iter().any(|argument| argument.contains("bash")));
-    assert!(!args.iter().any(|argument| argument.contains("sh")));
+    assert!(
+        !args
+            .iter()
+            .any(|argument| argument == "/bin/bash" || argument == "/bin/sh")
+    );
+    assert!(
+        !args
+            .iter()
+            .any(|argument| argument == "-c" || argument == "-lc")
+    );
+    assert!(!args.contains(&"--privileged".to_string()));
+    assert!(!args.iter().any(|argument| argument.contains("type=bind")));
+    assert_eq!(
+        args.windows(2)
+            .filter(|pair| pair[0] == "--cap-add")
+            .map(|pair| pair[1].as_str())
+            .collect::<Vec<_>>(),
+        ["FOWNER"]
+    );
 }
 
 #[test]
@@ -112,14 +168,35 @@ fn recovery_rejects_unexpected_plan_labelled_resources() {
     let names = ResourceNames::new(&plan.plan_sha256);
     require_expected_resources(
         std::slice::from_ref(&names.base_container),
-        [&names.base_container, &names.patched_container],
+        [
+            &names.base_container,
+            &names.patched_container,
+            &names.base_permission_container,
+            &names.patched_permission_container,
+        ],
+        "container",
+    )
+    .unwrap();
+    require_expected_resources(
+        std::slice::from_ref(&names.base_permission_container),
+        [
+            &names.base_container,
+            &names.patched_container,
+            &names.base_permission_container,
+            &names.patched_permission_container,
+        ],
         "container",
     )
     .unwrap();
 
     let error = require_expected_resources(
         &["unrelated-container".to_string()],
-        [&names.base_container, &names.patched_container],
+        [
+            &names.base_container,
+            &names.patched_container,
+            &names.base_permission_container,
+            &names.patched_permission_container,
+        ],
         "container",
     )
     .unwrap_err();

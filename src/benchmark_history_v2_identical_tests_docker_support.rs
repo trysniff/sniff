@@ -3,16 +3,49 @@ use std::ffi::{OsStr, OsString};
 use std::path::Path;
 
 const CONTAINER_REPOSITORY: &str = "/workspace";
+const PERMISSION_CONTROL_MEMORY_BYTES: u64 = 64 * 1024 * 1024;
+const PERMISSION_CONTROL_PROCESS_LIMIT: u16 = 16;
 
-pub(super) fn container_workspace_permission_args(container: &str) -> Vec<OsString> {
+pub(super) fn workspace_permission_container_create_args(
+    request: &HistoricalV2IdenticalTestExecutionRequest<'_>,
+    image_id: &str,
+    container: &str,
+    volume: &str,
+) -> Vec<OsString> {
     vec![
-        "exec".into(),
-        "--user".into(),
-        "0:0".into(),
+        "create".into(),
+        "--name".into(),
+        container.into(),
+        "--label".into(),
+        "org.trysniff.historical-v2=true".into(),
+        "--label".into(),
+        plan_label(&request.plan.plan_sha256).into(),
+        "--platform".into(),
+        request.plan.policy.platform.as_str().into(),
+        "--network".into(),
+        "none".into(),
+        "--cap-drop".into(),
+        "ALL".into(),
+        "--cap-add".into(),
+        "FOWNER".into(),
+        "--security-opt".into(),
+        "no-new-privileges".into(),
+        "--pids-limit".into(),
+        PERMISSION_CONTROL_PROCESS_LIMIT.to_string().into(),
+        "--memory".into(),
+        PERMISSION_CONTROL_MEMORY_BYTES.to_string().into(),
+        "--cpus".into(),
+        "0.250".into(),
+        "--read-only".into(),
+        "--mount".into(),
+        format!("type=volume,source={volume},target={CONTAINER_REPOSITORY}").into(),
         "--workdir".into(),
         CONTAINER_REPOSITORY.into(),
-        container.into(),
+        "--user".into(),
+        "0:0".into(),
+        "--entrypoint".into(),
         "/bin/chmod".into(),
+        image_id.into(),
         "-R".into(),
         "a+rwX".into(),
         "--".into(),
@@ -118,6 +151,8 @@ pub(super) struct ResourceNames {
     pub(super) network: String,
     pub(super) base_container: String,
     pub(super) patched_container: String,
+    pub(super) base_permission_container: String,
+    pub(super) patched_permission_container: String,
     pub(super) base_volume: String,
     pub(super) patched_volume: String,
 }
@@ -129,6 +164,8 @@ impl ResourceNames {
             network: format!("{prefix}-network"),
             base_container: format!("{prefix}-base"),
             patched_container: format!("{prefix}-patched"),
+            base_permission_container: format!("{prefix}-base-permissions"),
+            patched_permission_container: format!("{prefix}-patched-permissions"),
             base_volume: format!("{prefix}-base-work"),
             patched_volume: format!("{prefix}-patched-work"),
         }
