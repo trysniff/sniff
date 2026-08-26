@@ -60,7 +60,7 @@ const INDEXER_PROCESS_LIMIT: u32 = 512;
 const MAX_COMPACT_ERROR_OUTPUT: usize = 8 * 1024;
 const MAX_RUNTIME_IDENTITY_FILE_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_RUNTIME_IDENTITY_TOTAL_BYTES: u64 = 1024 * 1024 * 1024;
-const GO_INDEX_WORKSPACE: &str = "go-index-workspace";
+const INDEXER_REPOSITORY_WORKSPACE: &str = "repository-workspace";
 const GRADLE_INDEXER_BASE_JVM_ARGS: &str = concat!(
     "--add-opens=java.base/java.util=ALL-UNNAMED ",
     "--add-opens=java.base/java.lang=ALL-UNNAMED ",
@@ -478,23 +478,28 @@ async fn run_one_in_recovery_scope(
             ),
         ));
     }
-    let go_execution_root = if spec.kind == SemanticIndexerKind::Go {
-        let staged = temporary_dir.join(GO_INDEX_WORKSPACE);
-        repository_snapshot::stage_repository_snapshot(root, &staged).map_err(|detail| {
-            indexer_failure(
-                spec,
-                SemanticIndexerRunFailureKind::InfrastructureFailed,
-                SemanticIndexerRunPhase::Preparation,
-                detail,
-            )
-        })?;
-        Some(staged)
-    } else {
-        None
-    };
-    let execution_root = go_execution_root.as_deref().unwrap_or(root);
+    let execution_root = temporary_dir.join(INDEXER_REPOSITORY_WORKSPACE);
+    repository_snapshot::stage_repository_snapshot(root, &execution_root).map_err(|detail| {
+        indexer_failure(
+            spec,
+            SemanticIndexerRunFailureKind::InfrastructureFailed,
+            SemanticIndexerRunPhase::Preparation,
+            detail,
+        )
+    })?;
+    fs::create_dir(execution_root.join(INDEXER_TEMP_DIR)).map_err(|error| {
+        indexer_failure(
+            spec,
+            SemanticIndexerRunFailureKind::InfrastructureFailed,
+            SemanticIndexerRunPhase::Preparation,
+            format!(
+                "failed to create isolated semantic runtime directory under {}: {error}",
+                execution_root.display()
+            ),
+        )
+    })?;
     let source_digest_before =
-        source_integrity_digest_at(root, execution_root, files).map_err(|detail| {
+        source_integrity_digest_at(root, &execution_root, files).map_err(|detail| {
             indexer_failure(
                 spec,
                 SemanticIndexerRunFailureKind::InvalidInput,
@@ -503,7 +508,7 @@ async fn run_one_in_recovery_scope(
             )
         })?;
     let cache_root =
-        (spec.kind == SemanticIndexerKind::Kotlin).then(|| root.join(INDEXER_CACHE_DIR));
+        (spec.kind == SemanticIndexerKind::Kotlin).then(|| execution_root.join(INDEXER_CACHE_DIR));
     if let Some(cache_root) = &cache_root {
         match fs::symlink_metadata(cache_root) {
             Ok(_) => {
@@ -532,14 +537,14 @@ async fn run_one_in_recovery_scope(
         }
     }
     if spec.kind == SemanticIndexerKind::Go {
-        prepare_go_dependency_cache(spec, execution_root, installed).await?;
+        prepare_go_dependency_cache(spec, &execution_root, installed).await?;
     }
     if spec.kind == SemanticIndexerKind::Kotlin {
-        prepare_kotlin_dependency_cache(spec, root, installed)
+        prepare_kotlin_dependency_cache(spec, &execution_root, installed)
             .await
             .map_err(|error| kotlin_dependency_preparation_failure(spec, error))?;
     }
-    let workspace = prepare_indexer_workspace(spec, execution_root).map_err(|detail| {
+    let workspace = prepare_indexer_workspace(spec, &execution_root).map_err(|detail| {
         indexer_failure(
             spec,
             SemanticIndexerRunFailureKind::InfrastructureFailed,
@@ -548,7 +553,7 @@ async fn run_one_in_recovery_scope(
         )
     })?;
     let temporary_project = if spec.kind == SemanticIndexerKind::TypeScriptJavaScript {
-        prepare_mixed_typescript_javascript_project(spec, execution_root, files).map_err(
+        prepare_mixed_typescript_javascript_project(spec, root, &execution_root, files).map_err(
             |detail| {
                 indexer_failure(
                     spec,
@@ -561,7 +566,7 @@ async fn run_one_in_recovery_scope(
     } else {
         #[cfg(windows)]
         if spec.kind == SemanticIndexerKind::Python {
-            prepare_windows_python_project(execution_root, files).map_err(|detail| {
+            prepare_windows_python_project(root, &execution_root, files).map_err(|detail| {
                 indexer_failure(
                     spec,
                     SemanticIndexerRunFailureKind::InfrastructureFailed,
@@ -580,14 +585,16 @@ async fn run_one_in_recovery_scope(
     #[cfg(windows)]
     let python_environment = if spec.kind == SemanticIndexerKind::Python {
         Some(
-            prepare_windows_python_environment(&temporary_dir).map_err(|detail| {
-                indexer_failure(
-                    spec,
-                    SemanticIndexerRunFailureKind::InfrastructureFailed,
-                    SemanticIndexerRunPhase::Preparation,
-                    detail,
-                )
-            })?,
+            prepare_windows_python_environment(&execution_root.join(INDEXER_TEMP_DIR)).map_err(
+                |detail| {
+                    indexer_failure(
+                        spec,
+                        SemanticIndexerRunFailureKind::InfrastructureFailed,
+                        SemanticIndexerRunPhase::Preparation,
+                        detail,
+                    )
+                },
+            )?,
         )
     } else {
         None
@@ -596,7 +603,8 @@ async fn run_one_in_recovery_scope(
     let python_environment: Option<PathBuf> = None;
     let mut arguments = indexer_arguments_with_workspace(
         spec,
-        execution_root,
+        &execution_root,
+        root,
         temporary_project.as_deref(),
         workspace.as_ref(),
     );
@@ -608,7 +616,7 @@ async fn run_one_in_recovery_scope(
     }
     let prepared_command = build_indexer_sandbox_command(
         spec,
-        execution_root,
+        &execution_root,
         installed,
         arguments,
         workspace.as_ref(),
@@ -639,7 +647,7 @@ async fn run_one_in_recovery_scope(
                 ),
             ));
         }
-        write_private_gradle_properties(root, cache_root).map_err(|detail| {
+        write_private_gradle_properties(&execution_root, cache_root).map_err(|detail| {
             indexer_failure(
                 spec,
                 SemanticIndexerRunFailureKind::InfrastructureFailed,
@@ -701,7 +709,7 @@ async fn run_one_in_recovery_scope(
         })?;
     }
     let source_digest_after =
-        source_integrity_digest_at(root, execution_root, files).map_err(|detail| {
+        source_integrity_digest_at(root, &execution_root, files).map_err(|detail| {
             indexer_failure(
                 spec,
                 SemanticIndexerRunFailureKind::InfrastructureFailed,
@@ -728,8 +736,8 @@ async fn run_one_in_recovery_scope(
             detail,
         )
     })?;
-    if spec.kind == SemanticIndexerKind::Go && !output.timed_out && output.status_code == Some(0) {
-        publish_isolated_go_index(execution_root, root).map_err(|detail| {
+    if !output.timed_out && output.status_code == Some(0) {
+        publish_isolated_index(&execution_root, root).map_err(|detail| {
             indexer_failure(
                 spec,
                 SemanticIndexerRunFailureKind::InfrastructureFailed,
@@ -1708,7 +1716,7 @@ async fn prepare_kotlin_dependency_cache(
 
     let workspace = prepare_indexer_workspace(spec, &preparation_root)?;
     let arguments =
-        indexer_arguments_with_workspace(spec, &preparation_root, None, workspace.as_ref());
+        indexer_arguments_with_workspace(spec, &preparation_root, root, None, workspace.as_ref());
     let command = build_indexer_sandbox_command(
         spec,
         &preparation_root,
@@ -2128,13 +2136,13 @@ fn source_integrity_digest_at(
     Ok(format!("{:x}", digest.finalize()))
 }
 
-fn publish_isolated_go_index(isolated_root: &Path, repository_root: &Path) -> Result<(), String> {
+fn publish_isolated_index(isolated_root: &Path, repository_root: &Path) -> Result<(), String> {
     let expected_root = repository_root
         .join(INDEXER_TEMP_DIR)
-        .join(GO_INDEX_WORKSPACE);
+        .join(INDEXER_REPOSITORY_WORKSPACE);
     if isolated_root != expected_root {
         return Err(format!(
-            "refusing to publish Go SCIP output from an unexpected workspace: {}",
+            "refusing to publish compiler SCIP output from an unexpected workspace: {}",
             isolated_root.display()
         ));
     }
@@ -2145,14 +2153,14 @@ fn publish_isolated_go_index(isolated_root: &Path, repository_root: &Path) -> Re
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(error) => {
             return Err(format!(
-                "failed to inspect isolated Go SCIP output {}: {error}",
+                "failed to inspect isolated compiler SCIP output {}: {error}",
                 isolated_index.display()
             ));
         }
     };
     if !metadata.is_file() || metadata.file_type().is_symlink() {
         return Err(format!(
-            "isolated Go SCIP output is not a plain file: {}",
+            "isolated compiler SCIP output is not a plain file: {}",
             isolated_index.display()
         ));
     }
@@ -2161,7 +2169,7 @@ fn publish_isolated_go_index(isolated_root: &Path, repository_root: &Path) -> Re
     match fs::symlink_metadata(&repository_index) {
         Ok(_) => {
             return Err(
-                "refusing to overwrite repository file index.scip while publishing isolated Go SCIP output"
+                "refusing to overwrite repository file index.scip while publishing isolated compiler SCIP output"
                     .to_string(),
             );
         }
@@ -2175,7 +2183,7 @@ fn publish_isolated_go_index(isolated_root: &Path, repository_root: &Path) -> Re
     }
     fs::rename(&isolated_index, &repository_index).map_err(|error| {
         format!(
-            "failed to publish isolated Go SCIP output {} to {}: {error}",
+            "failed to publish isolated compiler SCIP output {} to {}: {error}",
             isolated_index.display(),
             repository_index.display()
         )
@@ -2295,6 +2303,7 @@ fn gradle_script_uses_android(source: &str) -> bool {
 fn indexer_arguments_with_project(
     spec: PinnedIndexer,
     root: &Path,
+    project_identity_root: &Path,
     extra_project: Option<&Path>,
 ) -> Vec<String> {
     match spec.kind {
@@ -2317,7 +2326,7 @@ fn indexer_arguments_with_project(
             "index".to_string(),
             ".".to_string(),
             "--project-name".to_string(),
-            project_name(root),
+            project_name(project_identity_root),
             // scip-python 0.6.6 assumes a project version exists while
             // normalizing symbols. A stable synthetic version keeps
             // dependency-free repositories valid without touching them.
@@ -2416,10 +2425,12 @@ fn private_indexer_environment(root: &Path) -> Result<Vec<(String, String)>, Str
 fn indexer_arguments_with_workspace(
     spec: PinnedIndexer,
     root: &Path,
+    project_identity_root: &Path,
     extra_project: Option<&Path>,
     workspace: Option<&TemporaryIndexerWorkspace>,
 ) -> Vec<String> {
-    let arguments = indexer_arguments_with_project(spec, root, extra_project);
+    let arguments =
+        indexer_arguments_with_project(spec, root, project_identity_root, extra_project);
     let Some(workspace) = workspace else {
         return arguments;
     };
@@ -2580,7 +2591,8 @@ fn create_temporary_workspace_in(base: &Path, prefix: &str) -> Result<PathBuf, S
 
 fn prepare_mixed_typescript_javascript_project(
     spec: PinnedIndexer,
-    root: &Path,
+    repository_root: &Path,
+    content_root: &Path,
     files: &[FileRecord],
 ) -> Result<Option<PathBuf>, String> {
     if spec.kind != SemanticIndexerKind::TypeScriptJavaScript {
@@ -2592,13 +2604,13 @@ fn prepare_mixed_typescript_javascript_project(
     let javascript_files = files
         .iter()
         .filter(|file| file.language.eq_ignore_ascii_case("javascript"))
-        .map(|file| repository_relative_path(root, Path::new(&file.file_path)))
+        .map(|file| repository_relative_path(repository_root, Path::new(&file.file_path)))
         .collect::<Result<Vec<_>, _>>()?;
     if !has_typescript || javascript_files.is_empty() {
         return Ok(None);
     }
 
-    let path = root.join(".sniff-jsconfig.json");
+    let path = content_root.join(".sniff-jsconfig.json");
     let file_list = javascript_files
         .into_iter()
         .map(|path| path.0)
@@ -2635,19 +2647,20 @@ fn prepare_mixed_typescript_javascript_project(
 
 #[cfg(windows)]
 fn prepare_windows_python_project(
-    root: &Path,
+    repository_root: &Path,
+    content_root: &Path,
     files: &[FileRecord],
 ) -> Result<Option<PathBuf>, String> {
     let python_files = files
         .iter()
         .filter(|file| file.language.eq_ignore_ascii_case("python"))
-        .map(|file| repository_relative_path(root, Path::new(&file.file_path)))
+        .map(|file| repository_relative_path(repository_root, Path::new(&file.file_path)))
         .collect::<Result<Vec<_>, _>>()?;
     if python_files.is_empty() {
         return Ok(None);
     }
 
-    let path = root.join("scip-pyrightconfig.json");
+    let path = content_root.join("scip-pyrightconfig.json");
     if path.exists() {
         return Err(format!(
             "refusing to overwrite existing Python semantic config {}",

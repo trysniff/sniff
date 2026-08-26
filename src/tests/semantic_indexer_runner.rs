@@ -15,8 +15,9 @@ use super::{
     files_for_indexer, format_timeout, go_dependency_arguments, go_sandbox_environment,
     gradle_indexer_jvm_args, gradle_script_uses_android, indexer_arguments_with_project,
     kotlin_dependency_preparation_failure, missing_position_encoding,
-    private_indexer_directory_argument, private_indexer_environment, private_indexer_jvm_arguments,
-    project_name, publish_isolated_go_index, reject_unsupported_android_gradle,
+    prepare_mixed_typescript_javascript_project, private_indexer_directory_argument,
+    private_indexer_environment, private_indexer_jvm_arguments, project_name,
+    publish_isolated_index, reject_unsupported_android_gradle,
     require_dependency_preparation_success, resolve_java_home_runtime, runtime_file_identities,
     sandbox_repository_argument, source_integrity_digest_at, verify_runtime_identities_unchanged,
     write_private_gradle_properties,
@@ -24,8 +25,8 @@ use super::{
 #[cfg(windows)]
 use super::{
     TemporaryIndexerWorkspace, configure_windows_runtime_images, external_runtime_path_value,
-    indexer_arguments_with_workspace, prepare_indexer_workspace, push_external_read_only,
-    system_gradle_launcher_jar,
+    indexer_arguments_with_workspace, prepare_indexer_workspace, prepare_windows_python_project,
+    push_external_read_only, system_gradle_launcher_jar,
 };
 use crate::sandbox::SandboxOutput;
 use crate::semantic_index::SemanticPositionEncoding;
@@ -243,7 +244,12 @@ fn synthetic_root() -> &'static Path {
 #[test]
 fn python_arguments_include_stable_project_identity() {
     let spec = pinned_indexer(SemanticIndexerKind::Python).unwrap();
-    let arguments = indexer_arguments_with_project(spec, synthetic_python_root(), None);
+    let arguments = indexer_arguments_with_project(
+        spec,
+        synthetic_python_root(),
+        synthetic_python_root(),
+        None,
+    );
     assert_eq!(
         arguments,
         [
@@ -258,15 +264,91 @@ fn python_arguments_include_stable_project_identity() {
 }
 
 #[test]
+fn python_arguments_keep_canonical_identity_inside_an_isolated_checkout() {
+    let spec = pinned_indexer(SemanticIndexerKind::Python).unwrap();
+    let isolated = Path::new("repository-workspace");
+    let arguments = indexer_arguments_with_project(spec, isolated, synthetic_python_root(), None);
+
+    assert_eq!(arguments[3], "bumpkin");
+}
+
+#[test]
 fn javascript_projects_without_tsconfig_use_inference() {
     let temp = std::env::temp_dir().join(format!("sniff-runner-test-{}", std::process::id()));
     std::fs::create_dir_all(&temp).unwrap();
     let spec = pinned_indexer(SemanticIndexerKind::TypeScriptJavaScript).unwrap();
     assert_eq!(
-        indexer_arguments_with_project(spec, &temp, None),
+        indexer_arguments_with_project(spec, &temp, &temp, None),
         ["index", "--infer-tsconfig"]
     );
     let _ = std::fs::remove_dir_all(temp);
+}
+
+#[test]
+fn mixed_javascript_project_is_written_only_to_the_isolated_checkout() {
+    let repository = tempfile::tempdir().unwrap();
+    let source = repository.path().join("src");
+    std::fs::create_dir(&source).unwrap();
+    let javascript = source.join("main.js");
+    let typescript = source.join("main.ts");
+    std::fs::write(&javascript, "export const value = 1;\n").unwrap();
+    std::fs::write(&typescript, "export const typed: number = 1;\n").unwrap();
+    let isolated = tempfile::tempdir().unwrap();
+    let files = vec![
+        FileRecord {
+            file_path: javascript.to_string_lossy().into_owned(),
+            source: String::new(),
+            language: "javascript".to_string(),
+            methods: Vec::new(),
+        },
+        FileRecord {
+            file_path: typescript.to_string_lossy().into_owned(),
+            source: String::new(),
+            language: "typescript".to_string(),
+            methods: Vec::new(),
+        },
+    ];
+    let spec = pinned_indexer(SemanticIndexerKind::TypeScriptJavaScript).unwrap();
+
+    let config = prepare_mixed_typescript_javascript_project(
+        spec,
+        repository.path(),
+        isolated.path(),
+        &files,
+    )
+    .unwrap()
+    .unwrap();
+
+    assert_eq!(config, isolated.path().join(".sniff-jsconfig.json"));
+    assert!(!repository.path().join(".sniff-jsconfig.json").exists());
+    let contents = std::fs::read_to_string(config).unwrap();
+    assert!(contents.contains("src/main.js"));
+}
+
+#[cfg(windows)]
+#[test]
+fn python_project_config_is_written_only_to_the_isolated_checkout() {
+    let repository = tempfile::tempdir().unwrap();
+    let source = repository.path().join("src");
+    std::fs::create_dir(&source).unwrap();
+    let python = source.join("main.py");
+    std::fs::write(&python, "value = 1\n").unwrap();
+    let isolated = tempfile::tempdir().unwrap();
+    let files = vec![FileRecord {
+        file_path: python.to_string_lossy().into_owned(),
+        source: String::new(),
+        language: "python".to_string(),
+        methods: Vec::new(),
+    }];
+
+    let config = prepare_windows_python_project(repository.path(), isolated.path(), &files)
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(config, isolated.path().join("scip-pyrightconfig.json"));
+    assert!(!repository.path().join("scip-pyrightconfig.json").exists());
+    let contents = std::fs::read_to_string(config).unwrap();
+    assert!(contents.contains("src/main.py"));
 }
 
 #[test]
@@ -274,7 +356,12 @@ fn go_indexing_uses_explicit_module_scope() {
     let spec = pinned_indexer(SemanticIndexerKind::Go).unwrap();
 
     assert_eq!(
-        indexer_arguments_with_project(spec, synthetic_python_root(), None),
+        indexer_arguments_with_project(
+            spec,
+            synthetic_python_root(),
+            synthetic_python_root(),
+            None,
+        ),
         ["--module-root", ".", "./..."]
     );
 }
@@ -602,19 +689,19 @@ fn source_integrity_digest_reads_the_isolated_content_at_the_same_repository_pat
 }
 
 #[test]
-fn isolated_go_index_is_the_only_artifact_published_to_the_repository() {
+fn isolated_compiler_index_is_the_only_artifact_published_to_the_repository() {
     let repository = tempfile::tempdir().unwrap();
     let isolated = repository
         .path()
         .join(super::INDEXER_TEMP_DIR)
-        .join(super::GO_INDEX_WORKSPACE);
+        .join(super::INDEXER_REPOSITORY_WORKSPACE);
     std::fs::create_dir_all(&isolated).unwrap();
 
-    publish_isolated_go_index(&isolated, repository.path()).unwrap();
+    publish_isolated_index(&isolated, repository.path()).unwrap();
     assert!(!repository.path().join("index.scip").exists());
 
     std::fs::write(isolated.join("index.scip"), b"scip").unwrap();
-    publish_isolated_go_index(&isolated, repository.path()).unwrap();
+    publish_isolated_index(&isolated, repository.path()).unwrap();
     assert_eq!(
         std::fs::read(repository.path().join("index.scip")).unwrap(),
         b"scip"
@@ -623,17 +710,17 @@ fn isolated_go_index_is_the_only_artifact_published_to_the_repository() {
 }
 
 #[test]
-fn isolated_go_index_never_overwrites_repository_content() {
+fn isolated_compiler_index_never_overwrites_repository_content() {
     let repository = tempfile::tempdir().unwrap();
     let isolated = repository
         .path()
         .join(super::INDEXER_TEMP_DIR)
-        .join(super::GO_INDEX_WORKSPACE);
+        .join(super::INDEXER_REPOSITORY_WORKSPACE);
     std::fs::create_dir_all(&isolated).unwrap();
     std::fs::write(isolated.join("index.scip"), b"new").unwrap();
     std::fs::write(repository.path().join("index.scip"), b"existing").unwrap();
 
-    let error = publish_isolated_go_index(&isolated, repository.path()).unwrap_err();
+    let error = publish_isolated_index(&isolated, repository.path()).unwrap_err();
     assert!(error.contains("refusing to overwrite"));
     assert_eq!(
         std::fs::read(repository.path().join("index.scip")).unwrap(),
@@ -643,28 +730,28 @@ fn isolated_go_index_never_overwrites_repository_content() {
 }
 
 #[test]
-fn isolated_go_index_rejects_non_file_output() {
+fn isolated_compiler_index_rejects_non_file_output() {
     let repository = tempfile::tempdir().unwrap();
     let isolated = repository
         .path()
         .join(super::INDEXER_TEMP_DIR)
-        .join(super::GO_INDEX_WORKSPACE);
+        .join(super::INDEXER_REPOSITORY_WORKSPACE);
     std::fs::create_dir_all(isolated.join("index.scip")).unwrap();
 
-    let error = publish_isolated_go_index(&isolated, repository.path()).unwrap_err();
+    let error = publish_isolated_index(&isolated, repository.path()).unwrap_err();
 
     assert!(error.contains("not a plain file"));
     assert!(!repository.path().join("index.scip").exists());
 }
 
 #[test]
-fn isolated_go_index_rejects_an_unowned_workspace() {
+fn isolated_compiler_index_rejects_an_unowned_workspace() {
     let repository = tempfile::tempdir().unwrap();
     let unowned = repository.path().join("unowned");
     std::fs::create_dir(&unowned).unwrap();
     std::fs::write(unowned.join("index.scip"), b"scip").unwrap();
 
-    let error = publish_isolated_go_index(&unowned, repository.path()).unwrap_err();
+    let error = publish_isolated_index(&unowned, repository.path()).unwrap_err();
 
     assert!(error.contains("unexpected workspace"));
     assert!(!repository.path().join("index.scip").exists());
@@ -829,7 +916,7 @@ fn windows_kotlin_workspace_launches_the_project_wrapper_jar_directly() {
         "org.gradle.wrapper.GradleWrapperMain"
     );
 
-    let arguments = indexer_arguments_with_workspace(spec, &root, None, Some(&workspace));
+    let arguments = indexer_arguments_with_workspace(spec, &root, &root, None, Some(&workspace));
     assert_eq!(arguments[0], "--cwd");
     assert_eq!(arguments[2], "index");
     assert!(
