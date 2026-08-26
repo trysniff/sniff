@@ -88,7 +88,7 @@ fn digest_directory(root: &Path, directory: &Path, digest: &mut Sha256) -> Resul
         })?;
         update_path(digest, relative)?;
         if metadata.file_type().is_symlink() {
-            digest.update([b'l']);
+            digest.update(b"l");
             let target = fs::read_link(&path).map_err(|error| {
                 format!(
                     "failed to read semantic repository snapshot symlink {}: {error}",
@@ -97,10 +97,10 @@ fn digest_directory(root: &Path, directory: &Path, digest: &mut Sha256) -> Resul
             })?;
             update_link_target(digest, &target);
         } else if metadata.is_dir() {
-            digest.update([b'd']);
+            digest.update(b"d");
             digest_directory(root, &path, digest)?;
         } else if metadata.is_file() {
-            digest.update([b'f']);
+            digest.update(b"f");
             digest.update(metadata.len().to_le_bytes());
             let mut file = fs::File::open(&path).map_err(|error| {
                 format!(
