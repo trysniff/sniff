@@ -1,4 +1,3 @@
-#[cfg(windows)]
 use super::SemanticIndexerRecoveryGuard;
 use super::combine_run_and_integrity;
 use super::gradle_preparation;
