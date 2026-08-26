@@ -279,13 +279,14 @@ mod tests {
             let mut command = Command::new("sh");
             command
                 .arg("-c")
-                .arg("(sleep 3; printf survived > \"$1\") & echo $!; wait")
+                .arg("(sleep 30; printf survived > \"$1\") & echo $!; wait")
                 .arg("bounded-process-test")
                 .arg(&marker);
             (command, (directory, marker))
         };
 
-        let output = run(&mut command, Duration::from_secs(2)).unwrap();
+        // Process startup can exceed two seconds under the fully parallel suite.
+        let output = run(&mut command, Duration::from_secs(10)).unwrap();
         assert!(output.timed_out);
         let descendant = String::from_utf8(output.stdout)
             .unwrap()
