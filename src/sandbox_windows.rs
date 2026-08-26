@@ -475,6 +475,20 @@ fn normalize_windows_path(path: std::path::PathBuf) -> std::path::PathBuf {
         .map_or(path, std::path::PathBuf::from)
 }
 
+fn native_acl_path(path: &Path) -> PathBuf {
+    let text = path.to_string_lossy();
+    if text.starts_with(r"\\?\") {
+        return path.to_path_buf();
+    }
+    if let Some(rest) = text.strip_prefix(r"\\") {
+        return PathBuf::from(format!(r"\\?\UNC\{rest}"));
+    }
+    if path.is_absolute() {
+        return PathBuf::from(format!(r"\\?\{text}"));
+    }
+    path.to_path_buf()
+}
+
 fn run_process(
     spec: &SandboxCommand,
     app_container_sid: *mut c_void,
@@ -915,7 +929,8 @@ fn persistent_read_acl_exists(
     capability_sid: *mut c_void,
 ) -> Result<bool, SandboxError> {
     let path = normalize_windows_path(path.to_path_buf());
-    let path_w = wide_null(&path.to_string_lossy());
+    let native_path = native_acl_path(&path);
+    let path_w = wide_null(&native_path.to_string_lossy());
     let mut acl = std::ptr::null_mut();
     let mut descriptor = std::ptr::null_mut();
     let get_status = unsafe {
@@ -996,7 +1011,8 @@ fn update_acl_entry(
         ));
     }
 
-    let path_w = wide_null(&path.to_string_lossy());
+    let native_path = native_acl_path(path);
+    let path_w = wide_null(&native_path.to_string_lossy());
     let mut old_acl = std::ptr::null_mut();
     let mut descriptor = std::ptr::null_mut();
     let get_status = unsafe {
@@ -1497,7 +1513,7 @@ mod tests {
     use super::{
         CREATE_SUSPENDED, CapabilitySid, SANDBOX_PROCESS_CREATION_FLAGS,
         ensure_persistent_read_acl, explicit_acl_paths, extend_executable_mapping_roots,
-        persistent_read_acl_exists, revoke_acl, sid_string,
+        native_acl_path, persistent_read_acl_exists, revoke_acl, sid_string, update_acl_entry,
     };
     use std::path::{Path, PathBuf};
     use windows_sys::Win32::Security::EqualSid;
@@ -1516,6 +1532,43 @@ mod tests {
             .join("cmd.exe");
 
         revoke_acl(&cmd, &sid).unwrap();
+    }
+
+    #[test]
+    fn native_acl_updates_support_paths_longer_than_max_path() {
+        let capability = CapabilitySid::derive(super::PERSISTENT_READ_CAPABILITY).unwrap();
+        let sid = sid_string(capability.sid).unwrap();
+        let mut root = std::env::temp_dir().join(format!(
+            "sniff-long-acl-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        while root.as_os_str().len() <= 280 {
+            root.push("long-path-segment-0123456789");
+        }
+        std::fs::create_dir_all(&root).unwrap();
+        let canonical = std::fs::canonicalize(&root).unwrap();
+        let normalized = super::normalize_windows_path(canonical);
+
+        assert!(normalized.as_os_str().len() > 260);
+        assert!(
+            native_acl_path(&normalized)
+                .to_string_lossy()
+                .starts_with(r"\\?\")
+        );
+        update_acl_entry(
+            &normalized,
+            &sid,
+            super::DIRECTORY_TRAVERSE_ACCESS,
+            super::GRANT_ACCESS,
+        )
+        .unwrap();
+        revoke_acl(&normalized, &sid).unwrap();
+
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
