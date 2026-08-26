@@ -4,6 +4,22 @@ use std::path::Path;
 
 const CONTAINER_REPOSITORY: &str = "/workspace";
 
+pub(super) fn container_workspace_permission_args(container: &str) -> Vec<OsString> {
+    vec![
+        "exec".into(),
+        "--user".into(),
+        "0:0".into(),
+        "--workdir".into(),
+        CONTAINER_REPOSITORY.into(),
+        container.into(),
+        "/bin/chmod".into(),
+        "-R".into(),
+        "a+rwX".into(),
+        "--".into(),
+        CONTAINER_REPOSITORY.into(),
+    ]
+}
+
 pub(super) fn container_exec_args(container: &str, script: &str) -> Vec<OsString> {
     vec![
         "exec".into(),

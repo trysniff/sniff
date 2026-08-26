@@ -300,6 +300,15 @@ impl DockerHistoricalV2TestExecutor {
             CONTROL_OUTPUT_LIMIT,
         )?;
         require_control_success(&copied, "copy committed repository into container")?;
+        let permissions = self.run_control_os(
+            container_workspace_permission_args(container),
+            CONTROL_TIMEOUT,
+            CONTROL_OUTPUT_LIMIT,
+        )?;
+        require_control_success(
+            &permissions,
+            "make the isolated repository writable by the image user",
+        )?;
         let script = format!(
             "set -euo pipefail\ngit reset --hard {commit_oid}\ngit clean -ffdqx\ntest \"$(git rev-parse HEAD)\" = \"{commit_oid}\"\ntest -z \"$(git status --porcelain=v1 --untracked-files=all)\"\n"
         );
