@@ -16,9 +16,10 @@ use super::{
     gradle_indexer_jvm_args, gradle_script_uses_android, indexer_arguments_with_project,
     kotlin_dependency_preparation_failure, missing_position_encoding,
     private_indexer_directory_argument, private_indexer_environment, private_indexer_jvm_arguments,
-    project_name, reject_unsupported_android_gradle, require_dependency_preparation_success,
-    resolve_java_home_runtime, runtime_file_identities, sandbox_repository_argument,
-    source_integrity_digest, verify_runtime_identities_unchanged, write_private_gradle_properties,
+    project_name, publish_isolated_go_index, reject_unsupported_android_gradle,
+    require_dependency_preparation_success, resolve_java_home_runtime, runtime_file_identities,
+    sandbox_repository_argument, source_integrity_digest_at, verify_runtime_identities_unchanged,
+    write_private_gradle_properties,
 };
 #[cfg(windows)]
 use super::{
@@ -564,12 +565,109 @@ fn source_integrity_digest_changes_when_an_eligible_file_changes() {
         methods: Vec::new(),
     }];
 
-    let before = source_integrity_digest(&files).unwrap();
+    let before = source_integrity_digest_at(&root, &root, &files).unwrap();
     std::fs::write(&source, "def main():\n    return 2\n").unwrap();
-    let after = source_integrity_digest(&files).unwrap();
+    let after = source_integrity_digest_at(&root, &root, &files).unwrap();
 
     assert_ne!(before, after);
     std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn source_integrity_digest_reads_the_isolated_content_at_the_same_repository_path() {
+    let repository = tempfile::tempdir().unwrap();
+    let source_dir = repository.path().join("src");
+    std::fs::create_dir(&source_dir).unwrap();
+    let source = source_dir.join("main.go");
+    std::fs::write(&source, "package main\n").unwrap();
+    let files = vec![FileRecord {
+        file_path: source.to_string_lossy().to_string(),
+        source: String::new(),
+        language: "go".to_string(),
+        methods: Vec::new(),
+    }];
+    let isolated = repository.path().join("isolated");
+    std::fs::create_dir(&isolated).unwrap();
+    std::fs::create_dir(isolated.join("src")).unwrap();
+    std::fs::write(isolated.join("src/main.go"), "package main\n").unwrap();
+
+    let canonical =
+        source_integrity_digest_at(repository.path(), repository.path(), &files).unwrap();
+    let staged = source_integrity_digest_at(repository.path(), &isolated, &files).unwrap();
+    assert_eq!(canonical, staged);
+
+    std::fs::write(isolated.join("src/main.go"), "package changed\n").unwrap();
+    let changed = source_integrity_digest_at(repository.path(), &isolated, &files).unwrap();
+    assert_ne!(canonical, changed);
+}
+
+#[test]
+fn isolated_go_index_is_the_only_artifact_published_to_the_repository() {
+    let repository = tempfile::tempdir().unwrap();
+    let isolated = repository
+        .path()
+        .join(super::INDEXER_TEMP_DIR)
+        .join(super::GO_INDEX_WORKSPACE);
+    std::fs::create_dir_all(&isolated).unwrap();
+
+    publish_isolated_go_index(&isolated, repository.path()).unwrap();
+    assert!(!repository.path().join("index.scip").exists());
+
+    std::fs::write(isolated.join("index.scip"), b"scip").unwrap();
+    publish_isolated_go_index(&isolated, repository.path()).unwrap();
+    assert_eq!(
+        std::fs::read(repository.path().join("index.scip")).unwrap(),
+        b"scip"
+    );
+    assert!(!isolated.join("index.scip").exists());
+}
+
+#[test]
+fn isolated_go_index_never_overwrites_repository_content() {
+    let repository = tempfile::tempdir().unwrap();
+    let isolated = repository
+        .path()
+        .join(super::INDEXER_TEMP_DIR)
+        .join(super::GO_INDEX_WORKSPACE);
+    std::fs::create_dir_all(&isolated).unwrap();
+    std::fs::write(isolated.join("index.scip"), b"new").unwrap();
+    std::fs::write(repository.path().join("index.scip"), b"existing").unwrap();
+
+    let error = publish_isolated_go_index(&isolated, repository.path()).unwrap_err();
+    assert!(error.contains("refusing to overwrite"));
+    assert_eq!(
+        std::fs::read(repository.path().join("index.scip")).unwrap(),
+        b"existing"
+    );
+    assert_eq!(std::fs::read(isolated.join("index.scip")).unwrap(), b"new");
+}
+
+#[test]
+fn isolated_go_index_rejects_non_file_output() {
+    let repository = tempfile::tempdir().unwrap();
+    let isolated = repository
+        .path()
+        .join(super::INDEXER_TEMP_DIR)
+        .join(super::GO_INDEX_WORKSPACE);
+    std::fs::create_dir_all(isolated.join("index.scip")).unwrap();
+
+    let error = publish_isolated_go_index(&isolated, repository.path()).unwrap_err();
+
+    assert!(error.contains("not a plain file"));
+    assert!(!repository.path().join("index.scip").exists());
+}
+
+#[test]
+fn isolated_go_index_rejects_an_unowned_workspace() {
+    let repository = tempfile::tempdir().unwrap();
+    let unowned = repository.path().join("unowned");
+    std::fs::create_dir(&unowned).unwrap();
+    std::fs::write(unowned.join("index.scip"), b"scip").unwrap();
+
+    let error = publish_isolated_go_index(&unowned, repository.path()).unwrap_err();
+
+    assert!(error.contains("unexpected workspace"));
+    assert!(!repository.path().join("index.scip").exists());
 }
 
 #[test]
