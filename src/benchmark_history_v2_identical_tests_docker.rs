@@ -21,6 +21,12 @@ pub struct DockerHistoricalV2TestExecutor {
     program: PathBuf,
 }
 
+struct StagedWorkspace<'a> {
+    candidate_container: &'a str,
+    permission_container: &'a str,
+    volume: &'a str,
+}
+
 impl DockerHistoricalV2TestExecutor {
     pub fn new(program: impl Into<PathBuf>) -> Self {
         Self {
@@ -84,7 +90,12 @@ impl DockerHistoricalV2TestExecutor {
         )?;
         require_expected_resources(
             &containers,
-            [&names.base_container, &names.patched_container],
+            [
+                &names.base_container,
+                &names.patched_container,
+                &names.base_permission_container,
+                &names.patched_permission_container,
+            ],
             "container",
         )?;
         require_expected_resources(
@@ -165,24 +176,36 @@ impl DockerHistoricalV2TestExecutor {
         let names = ResourceNames::new(&request.plan.plan_sha256);
         resources.create_network(&names.network, &request.plan.plan_sha256)?;
         let mut events = Vec::new();
-        for (side, commit_oid, container, volume) in [
+        for (side, commit_oid, container, permission_container, volume) in [
             (
                 HistoricalV2ExecutionSide::Base,
                 request.plan.base_commit_oid.as_str(),
                 names.base_container.as_str(),
+                names.base_permission_container.as_str(),
                 names.base_volume.as_str(),
             ),
             (
                 HistoricalV2ExecutionSide::Patched,
                 request.plan.patched_commit_oid.as_str(),
                 names.patched_container.as_str(),
+                names.patched_permission_container.as_str(),
                 names.patched_volume.as_str(),
             ),
         ] {
             resources.create_volume(volume, &request.plan.plan_sha256)?;
             self.create_container(request, &image_id, &names.network, container, volume)?;
             resources.track_container(container);
-            self.start_and_stage_repository(request, container, commit_oid)?;
+            self.start_and_stage_repository(
+                request,
+                resources,
+                &image_id,
+                StagedWorkspace {
+                    candidate_container: container,
+                    permission_container,
+                    volume,
+                },
+                commit_oid,
+            )?;
             if let Some(outcome) =
                 self.run_install_commands(request, side, container, &mut events)?
             {
@@ -287,33 +310,50 @@ impl DockerHistoricalV2TestExecutor {
     fn start_and_stage_repository(
         &self,
         request: &HistoricalV2IdenticalTestExecutionRequest<'_>,
-        container: &str,
+        resources: &mut DockerResources<'_>,
+        image_id: &str,
+        workspace: StagedWorkspace<'_>,
         commit_oid: &str,
     ) -> Result<(), HistoricalV2ExecutionError> {
-        let start = self.run_control(["start", container], CONTROL_TIMEOUT)?;
+        let start = self.run_control(["start", workspace.candidate_container], CONTROL_TIMEOUT)?;
         require_control_success(&start, "start historical-v2 container")?;
         let source = copy_source_argument(request.repository_root);
-        let target = format!("{container}:/workspace");
+        let target = format!("{}:/workspace", workspace.candidate_container);
         let copied = self.run_control_os(
             [OsString::from("cp"), source, OsString::from(target)],
             CONTROL_TIMEOUT,
             CONTROL_OUTPUT_LIMIT,
         )?;
         require_control_success(&copied, "copy committed repository into container")?;
-        let permissions = self.run_control_os(
-            container_workspace_permission_args(container),
+        let permission_container_created = self.run_control_os(
+            workspace_permission_container_create_args(
+                request,
+                image_id,
+                workspace.permission_container,
+                workspace.volume,
+            ),
             CONTROL_TIMEOUT,
             CONTROL_OUTPUT_LIMIT,
         )?;
         require_control_success(
-            &permissions,
-            "make the isolated repository writable by the image user",
+            &permission_container_created,
+            "create the isolated workspace permission container",
         )?;
+        resources.track_container(workspace.permission_container);
+        let permissions = self.run_control(
+            ["start", "--attach", workspace.permission_container],
+            CONTROL_TIMEOUT,
+        )?;
+        require_control_success(&permissions, "prepare isolated workspace permissions")?;
         let script = format!(
             "set -euo pipefail\ngit reset --hard {commit_oid}\ngit clean -ffdqx\ntest \"$(git rev-parse HEAD)\" = \"{commit_oid}\"\ntest -z \"$(git status --porcelain=v1 --untracked-files=all)\"\n"
         );
-        let prepared =
-            self.exec_script(container, &script, CONTROL_TIMEOUT, CONTROL_OUTPUT_LIMIT)?;
+        let prepared = self.exec_script(
+            workspace.candidate_container,
+            &script,
+            CONTROL_TIMEOUT,
+            CONTROL_OUTPUT_LIMIT,
+        )?;
         require_control_success(&prepared, "prepare committed repository snapshot")
     }
 
