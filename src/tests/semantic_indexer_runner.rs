@@ -17,7 +17,7 @@ use super::{
     kotlin_dependency_preparation_failure, missing_position_encoding,
     prepare_mixed_typescript_javascript_project, private_indexer_directory_argument,
     private_indexer_environment, private_indexer_jvm_arguments, project_name,
-    publish_isolated_index, reject_unsupported_android_gradle,
+    publish_isolated_index, reject_unsupported_android_gradle, repository_relative_path,
     require_dependency_preparation_success, resolve_java_home_runtime, runtime_file_identities,
     sandbox_repository_argument, source_integrity_digest_at, verify_runtime_identities_unchanged,
     write_private_gradle_properties,
@@ -658,6 +658,20 @@ fn source_integrity_digest_changes_when_an_eligible_file_changes() {
 
     assert_ne!(before, after);
     std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn repository_relative_paths_canonicalize_the_root_before_containment() {
+    let repository = tempfile::tempdir().unwrap();
+    let child = repository.path().join("child");
+    std::fs::create_dir(&child).unwrap();
+    let source = repository.path().join("main.py");
+    std::fs::write(&source, "value = 1\n").unwrap();
+    let aliased_root = child.join("..");
+
+    let relative = repository_relative_path(&aliased_root, &source).unwrap();
+
+    assert_eq!(relative.0, "main.py");
 }
 
 #[test]
