@@ -60,6 +60,9 @@ const INDEXER_PROCESS_LIMIT: u32 = 512;
 const MAX_COMPACT_ERROR_OUTPUT: usize = 8 * 1024;
 const MAX_RUNTIME_IDENTITY_FILE_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_RUNTIME_IDENTITY_TOTAL_BYTES: u64 = 1024 * 1024 * 1024;
+const GO_DEPENDENCY_PREPARATION_ATTEMPTS: usize = 3;
+const GO_DEPENDENCY_RETRY_DELAYS: [Duration; GO_DEPENDENCY_PREPARATION_ATTEMPTS - 1] =
+    [Duration::from_secs(2), Duration::from_secs(8)];
 const GRADLE_INDEXER_BASE_JVM_ARGS: &str = concat!(
     "--add-opens=java.base/java.util=ALL-UNNAMED ",
     "--add-opens=java.base/java.lang=ALL-UNNAMED ",
@@ -789,6 +792,29 @@ async fn prepare_go_dependency_cache(
     root: &Path,
     installed: &InstalledIndexer,
 ) -> Result<(), SemanticIndexerRunFailure> {
+    for attempt in 1..=GO_DEPENDENCY_PREPARATION_ATTEMPTS {
+        let output = run_go_dependency_preparation(spec, root, installed).await?;
+        if output.status_code == Some(0) && !output.timed_out {
+            return Ok(());
+        }
+        if let Some(delay) = go_dependency_preparation_retry_delay(&output, attempt) {
+            tokio::time::sleep(delay).await;
+            continue;
+        }
+        let mut failure = require_dependency_preparation_success(spec, output).unwrap_err();
+        if attempt > 1 {
+            failure.detail = format!("{} after {attempt} bounded attempts", failure.detail);
+        }
+        return Err(failure);
+    }
+    unreachable!("the bounded Go dependency preparation loop always returns")
+}
+
+async fn run_go_dependency_preparation(
+    spec: PinnedIndexer,
+    root: &Path,
+    installed: &InstalledIndexer,
+) -> Result<crate::sandbox::SandboxOutput, SemanticIndexerRunFailure> {
     let mut prepared = build_indexer_sandbox_command(spec, root, installed, Vec::new(), None)
         .map_err(|detail| {
             indexer_failure(
@@ -821,7 +847,7 @@ async fn prepare_go_dependency_cache(
                 detail,
             )
         })?;
-    require_dependency_preparation_success(spec, output)
+    Ok(output)
 }
 
 fn go_dependency_arguments() -> Vec<String> {
@@ -842,6 +868,51 @@ fn go_dependency_program(installed: &InstalledIndexer) -> Result<PathBuf, String
         let _ = installed;
         resolve_runtime("go")
     }
+}
+
+fn go_dependency_preparation_has_transient_transport_failure(
+    output: &crate::sandbox::SandboxOutput,
+) -> bool {
+    if output.timed_out || output.status_code.is_none() {
+        return false;
+    }
+    let evidence = format!("{}\n{}", output.stdout, output.stderr).to_ascii_lowercase();
+    const TRANSIENT_TRANSPORT_EVIDENCE: &[&str] = &[
+        "connection reset by peer",
+        "connection refused",
+        "connection timed out",
+        "context deadline exceeded",
+        "http2: server sent goaway",
+        "i/o timeout",
+        "internal_error; received from peer",
+        "network is unreachable",
+        "no such host",
+        "proxyconnect tcp",
+        "server misbehaving",
+        "status code 429",
+        "status code 500",
+        "status code 502",
+        "status code 503",
+        "status code 504",
+        "stream error:",
+        "temporary failure in name resolution",
+        "tls handshake timeout",
+        "unexpected eof",
+    ];
+    TRANSIENT_TRANSPORT_EVIDENCE
+        .iter()
+        .any(|needle| evidence.contains(needle))
+}
+
+fn go_dependency_preparation_retry_delay(
+    output: &crate::sandbox::SandboxOutput,
+    attempt: usize,
+) -> Option<Duration> {
+    go_dependency_preparation_has_transient_transport_failure(output)
+        .then(|| attempt.checked_sub(1))
+        .flatten()
+        .and_then(|index| GO_DEPENDENCY_RETRY_DELAYS.get(index))
+        .copied()
 }
 
 fn require_dependency_preparation_success(

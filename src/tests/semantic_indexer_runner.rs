@@ -11,8 +11,10 @@ use super::run_one;
 use super::{
     GRADLE_INDEXER_BASE_JVM_ARGS, SemanticIndexerRunFailureKind, SemanticIndexerRunPhase,
     WINDOWS_SCIP_NODE_BOOTSTRAP, WINDOWS_SCIP_PYTHON_BOOTSTRAP, compact_process_output,
-    files_for_indexer, format_timeout, go_dependency_arguments, go_sandbox_environment,
-    gradle_indexer_jvm_args, gradle_script_uses_android, indexer_arguments_with_project,
+    files_for_indexer, format_timeout, go_dependency_arguments,
+    go_dependency_preparation_has_transient_transport_failure,
+    go_dependency_preparation_retry_delay, go_sandbox_environment, gradle_indexer_jvm_args,
+    gradle_script_uses_android, indexer_arguments_with_project,
     kotlin_dependency_preparation_failure, missing_position_encoding,
     prepare_mixed_typescript_javascript_project, private_indexer_directory_argument,
     private_indexer_environment, private_indexer_jvm_arguments, project_name,
@@ -392,6 +394,81 @@ fn dependency_registry_failure_is_retryable_infrastructure() {
     );
     assert_eq!(error.phase, super::SemanticIndexerRunPhase::Preparation);
     assert!(error.process.is_some());
+}
+
+#[test]
+fn go_dependency_preparation_retries_checksum_stream_failures() {
+    let output = SandboxOutput {
+        status_code: Some(1),
+        stdout: String::new(),
+        stderr: "reading https://sum.golang.org/tile: stream error: stream ID 95; \
+                 INTERNAL_ERROR; received from peer"
+            .to_string(),
+        stdout_sha256: "a".repeat(64),
+        stderr_sha256: "b".repeat(64),
+        timed_out: false,
+    };
+
+    assert!(go_dependency_preparation_has_transient_transport_failure(
+        &output
+    ));
+    assert_eq!(
+        go_dependency_preparation_retry_delay(&output, 1),
+        Some(Duration::from_secs(2))
+    );
+    assert_eq!(
+        go_dependency_preparation_retry_delay(&output, 2),
+        Some(Duration::from_secs(8))
+    );
+    assert_eq!(go_dependency_preparation_retry_delay(&output, 3), None);
+}
+
+#[test]
+fn go_dependency_preparation_does_not_retry_permanent_registry_responses() {
+    for stderr in [
+        "reading https://proxy.golang.org/example.invalid/@v/list: 404 Not Found",
+        "reading https://proxy.golang.org/private/module: 401 Unauthorized",
+        "invalid version: unknown revision missing",
+    ] {
+        let output = SandboxOutput {
+            status_code: Some(1),
+            stdout: String::new(),
+            stderr: stderr.to_string(),
+            stdout_sha256: "a".repeat(64),
+            stderr_sha256: "b".repeat(64),
+            timed_out: false,
+        };
+
+        assert!(!go_dependency_preparation_has_transient_transport_failure(
+            &output
+        ));
+    }
+}
+
+#[test]
+fn go_dependency_preparation_does_not_retry_timeouts_or_signals() {
+    for output in [
+        SandboxOutput {
+            status_code: Some(1),
+            stdout: String::new(),
+            stderr: "i/o timeout".to_string(),
+            stdout_sha256: "a".repeat(64),
+            stderr_sha256: "b".repeat(64),
+            timed_out: true,
+        },
+        SandboxOutput {
+            status_code: None,
+            stdout: String::new(),
+            stderr: "connection reset by peer".to_string(),
+            stdout_sha256: "a".repeat(64),
+            stderr_sha256: "b".repeat(64),
+            timed_out: false,
+        },
+    ] {
+        assert!(!go_dependency_preparation_has_transient_transport_failure(
+            &output
+        ));
+    }
 }
 
 #[test]
