@@ -15,7 +15,7 @@ mod ranges;
 #[path = "semantic_index_scip_symbols.rs"]
 mod symbols;
 
-const MAX_SCIP_INDEX_BYTES: u64 = 512 * 1024 * 1024;
+pub(crate) const MAX_SCIP_INDEX_BYTES: u64 = 512 * 1024 * 1024;
 
 pub fn ingest_scip_file(
     repository_root: &Path,

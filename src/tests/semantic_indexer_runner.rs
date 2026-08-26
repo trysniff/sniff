@@ -705,70 +705,95 @@ fn source_integrity_digest_reads_the_isolated_content_at_the_same_repository_pat
 #[test]
 fn isolated_compiler_index_is_the_only_artifact_published_to_the_repository() {
     let repository = tempfile::tempdir().unwrap();
-    let isolated = repository
-        .path()
-        .join(super::INDEXER_TEMP_DIR)
-        .join(super::INDEXER_REPOSITORY_WORKSPACE);
-    std::fs::create_dir_all(&isolated).unwrap();
+    let recovery = SemanticIndexerRecoveryGuard::begin(repository.path()).unwrap();
+    let isolated = recovery.prepare_indexer_run().unwrap();
+    std::fs::create_dir(&isolated).unwrap();
 
-    publish_isolated_index(&isolated, repository.path()).unwrap();
+    publish_isolated_index(&isolated, repository.path(), &recovery).unwrap();
     assert!(!repository.path().join("index.scip").exists());
 
     std::fs::write(isolated.join("index.scip"), b"scip").unwrap();
-    publish_isolated_index(&isolated, repository.path()).unwrap();
+    publish_isolated_index(&isolated, repository.path(), &recovery).unwrap();
     assert_eq!(
         std::fs::read(repository.path().join("index.scip")).unwrap(),
         b"scip"
     );
     assert!(!isolated.join("index.scip").exists());
+    recovery.finish().unwrap();
 }
 
 #[test]
 fn isolated_compiler_index_never_overwrites_repository_content() {
     let repository = tempfile::tempdir().unwrap();
-    let isolated = repository
-        .path()
-        .join(super::INDEXER_TEMP_DIR)
-        .join(super::INDEXER_REPOSITORY_WORKSPACE);
-    std::fs::create_dir_all(&isolated).unwrap();
+    let recovery = SemanticIndexerRecoveryGuard::begin(repository.path()).unwrap();
+    let isolated = recovery.prepare_indexer_run().unwrap();
+    std::fs::create_dir(&isolated).unwrap();
     std::fs::write(isolated.join("index.scip"), b"new").unwrap();
     std::fs::write(repository.path().join("index.scip"), b"existing").unwrap();
 
-    let error = publish_isolated_index(&isolated, repository.path()).unwrap_err();
+    let error = publish_isolated_index(&isolated, repository.path(), &recovery).unwrap_err();
     assert!(error.contains("refusing to overwrite"));
     assert_eq!(
         std::fs::read(repository.path().join("index.scip")).unwrap(),
         b"existing"
     );
     assert_eq!(std::fs::read(isolated.join("index.scip")).unwrap(), b"new");
+    recovery.finish().unwrap();
 }
 
 #[test]
 fn isolated_compiler_index_rejects_non_file_output() {
     let repository = tempfile::tempdir().unwrap();
-    let isolated = repository
-        .path()
-        .join(super::INDEXER_TEMP_DIR)
-        .join(super::INDEXER_REPOSITORY_WORKSPACE);
+    let recovery = SemanticIndexerRecoveryGuard::begin(repository.path()).unwrap();
+    let isolated = recovery.prepare_indexer_run().unwrap();
     std::fs::create_dir_all(isolated.join("index.scip")).unwrap();
 
-    let error = publish_isolated_index(&isolated, repository.path()).unwrap_err();
+    let error = publish_isolated_index(&isolated, repository.path(), &recovery).unwrap_err();
 
     assert!(error.contains("not a plain file"));
     assert!(!repository.path().join("index.scip").exists());
+    recovery.finish().unwrap();
 }
 
 #[test]
 fn isolated_compiler_index_rejects_an_unowned_workspace() {
     let repository = tempfile::tempdir().unwrap();
+    let recovery = SemanticIndexerRecoveryGuard::begin(repository.path()).unwrap();
+    let isolated = recovery.prepare_indexer_run().unwrap();
+    std::fs::create_dir(&isolated).unwrap();
     let unowned = repository.path().join("unowned");
     std::fs::create_dir(&unowned).unwrap();
     std::fs::write(unowned.join("index.scip"), b"scip").unwrap();
 
-    let error = publish_isolated_index(&unowned, repository.path()).unwrap_err();
+    let error = publish_isolated_index(&unowned, repository.path(), &recovery).unwrap_err();
 
-    assert!(error.contains("unexpected workspace"));
+    assert!(error.contains("unowned semantic workspace"));
     assert!(!repository.path().join("index.scip").exists());
+    recovery.finish().unwrap();
+}
+
+#[test]
+fn compiler_snapshot_has_no_repository_ancestor() {
+    let repository = tempfile::tempdir().unwrap();
+    std::fs::write(
+        repository.path().join("Cargo.toml"),
+        "[package]\nname='fixture'\n",
+    )
+    .unwrap();
+    let canonical_repository = std::fs::canonicalize(repository.path()).unwrap();
+    let recovery = SemanticIndexerRecoveryGuard::begin(repository.path()).unwrap();
+    let isolated = recovery.prepare_indexer_run().unwrap();
+
+    super::repository_snapshot::stage_repository_snapshot(repository.path(), &isolated).unwrap();
+    let canonical_isolated = std::fs::canonicalize(&isolated).unwrap();
+
+    assert!(!canonical_isolated.starts_with(&canonical_repository));
+    assert!(
+        canonical_isolated
+            .ancestors()
+            .all(|ancestor| ancestor != canonical_repository)
+    );
+    recovery.finish().unwrap();
 }
 
 #[test]

@@ -60,7 +60,6 @@ const INDEXER_PROCESS_LIMIT: u32 = 512;
 const MAX_COMPACT_ERROR_OUTPUT: usize = 8 * 1024;
 const MAX_RUNTIME_IDENTITY_FILE_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_RUNTIME_IDENTITY_TOTAL_BYTES: u64 = 1024 * 1024 * 1024;
-const INDEXER_REPOSITORY_WORKSPACE: &str = "repository-workspace";
 const GRADLE_INDEXER_BASE_JVM_ARGS: &str = concat!(
     "--add-opens=java.base/java.util=ALL-UNNAMED ",
     "--add-opens=java.base/java.lang=ALL-UNNAMED ",
@@ -429,7 +428,7 @@ async fn run_one(
     files: &[FileRecord],
     recovery: &SemanticIndexerRecoveryGuard,
 ) -> Result<SemanticIndexerProcessEvidence, SemanticIndexerRunFailure> {
-    recovery.prepare_indexer_run().map_err(|detail| {
+    let execution_root = recovery.prepare_indexer_run().map_err(|detail| {
         indexer_failure(
             spec,
             SemanticIndexerRunFailureKind::InfrastructureFailed,
@@ -437,7 +436,8 @@ async fn run_one(
             detail,
         )
     })?;
-    let run_result = run_one_in_recovery_scope(spec, root, installed, files).await;
+    let run_result =
+        run_one_in_recovery_scope(spec, root, &execution_root, installed, files, recovery).await;
     let cleanup_result = recovery.finish_indexer_run().map_err(|detail| {
         indexer_failure(
             spec,
@@ -452,34 +452,12 @@ async fn run_one(
 async fn run_one_in_recovery_scope(
     spec: PinnedIndexer,
     root: &Path,
+    execution_root: &Path,
     installed: &InstalledIndexer,
     files: &[FileRecord],
+    recovery: &SemanticIndexerRecoveryGuard,
 ) -> Result<SemanticIndexerProcessEvidence, SemanticIndexerRunFailure> {
-    let temporary_dir = root.join(INDEXER_TEMP_DIR);
-    let temporary_metadata = fs::symlink_metadata(&temporary_dir).map_err(|error| {
-        indexer_failure(
-            spec,
-            SemanticIndexerRunFailureKind::InfrastructureFailed,
-            SemanticIndexerRunPhase::Preparation,
-            format!(
-                "failed to inspect private semantic indexer temp directory {}: {error}",
-                temporary_dir.display()
-            ),
-        )
-    })?;
-    if !temporary_metadata.file_type().is_dir() {
-        return Err(indexer_failure(
-            spec,
-            SemanticIndexerRunFailureKind::InfrastructureFailed,
-            SemanticIndexerRunPhase::Preparation,
-            format!(
-                "semantic recovery lifecycle did not prepare private runtime directory {}",
-                temporary_dir.display()
-            ),
-        ));
-    }
-    let execution_root = temporary_dir.join(INDEXER_REPOSITORY_WORKSPACE);
-    repository_snapshot::stage_repository_snapshot(root, &execution_root).map_err(|detail| {
+    repository_snapshot::stage_repository_snapshot(root, execution_root).map_err(|detail| {
         indexer_failure(
             spec,
             SemanticIndexerRunFailureKind::InfrastructureFailed,
@@ -499,7 +477,7 @@ async fn run_one_in_recovery_scope(
         )
     })?;
     let source_digest_before =
-        source_integrity_digest_at(root, &execution_root, files).map_err(|detail| {
+        source_integrity_digest_at(root, execution_root, files).map_err(|detail| {
             indexer_failure(
                 spec,
                 SemanticIndexerRunFailureKind::InvalidInput,
@@ -537,14 +515,14 @@ async fn run_one_in_recovery_scope(
         }
     }
     if spec.kind == SemanticIndexerKind::Go {
-        prepare_go_dependency_cache(spec, &execution_root, installed).await?;
+        prepare_go_dependency_cache(spec, execution_root, installed).await?;
     }
     if spec.kind == SemanticIndexerKind::Kotlin {
-        prepare_kotlin_dependency_cache(spec, &execution_root, installed)
+        prepare_kotlin_dependency_cache(spec, execution_root, installed)
             .await
             .map_err(|error| kotlin_dependency_preparation_failure(spec, error))?;
     }
-    let workspace = prepare_indexer_workspace(spec, &execution_root).map_err(|detail| {
+    let workspace = prepare_indexer_workspace(spec, execution_root).map_err(|detail| {
         indexer_failure(
             spec,
             SemanticIndexerRunFailureKind::InfrastructureFailed,
@@ -553,7 +531,7 @@ async fn run_one_in_recovery_scope(
         )
     })?;
     let temporary_project = if spec.kind == SemanticIndexerKind::TypeScriptJavaScript {
-        prepare_mixed_typescript_javascript_project(spec, root, &execution_root, files).map_err(
+        prepare_mixed_typescript_javascript_project(spec, root, execution_root, files).map_err(
             |detail| {
                 indexer_failure(
                     spec,
@@ -566,7 +544,7 @@ async fn run_one_in_recovery_scope(
     } else {
         #[cfg(windows)]
         if spec.kind == SemanticIndexerKind::Python {
-            prepare_windows_python_project(root, &execution_root, files).map_err(|detail| {
+            prepare_windows_python_project(root, execution_root, files).map_err(|detail| {
                 indexer_failure(
                     spec,
                     SemanticIndexerRunFailureKind::InfrastructureFailed,
@@ -603,7 +581,7 @@ async fn run_one_in_recovery_scope(
     let python_environment: Option<PathBuf> = None;
     let mut arguments = indexer_arguments_with_workspace(
         spec,
-        &execution_root,
+        execution_root,
         root,
         temporary_project.as_deref(),
         workspace.as_ref(),
@@ -616,7 +594,7 @@ async fn run_one_in_recovery_scope(
     }
     let prepared_command = build_indexer_sandbox_command(
         spec,
-        &execution_root,
+        execution_root,
         installed,
         arguments,
         workspace.as_ref(),
@@ -647,7 +625,7 @@ async fn run_one_in_recovery_scope(
                 ),
             ));
         }
-        write_private_gradle_properties(&execution_root, cache_root).map_err(|detail| {
+        write_private_gradle_properties(execution_root, cache_root).map_err(|detail| {
             indexer_failure(
                 spec,
                 SemanticIndexerRunFailureKind::InfrastructureFailed,
@@ -709,7 +687,7 @@ async fn run_one_in_recovery_scope(
         })?;
     }
     let source_digest_after =
-        source_integrity_digest_at(root, &execution_root, files).map_err(|detail| {
+        source_integrity_digest_at(root, execution_root, files).map_err(|detail| {
             indexer_failure(
                 spec,
                 SemanticIndexerRunFailureKind::InfrastructureFailed,
@@ -737,7 +715,7 @@ async fn run_one_in_recovery_scope(
         )
     })?;
     if !output.timed_out && output.status_code == Some(0) {
-        publish_isolated_index(&execution_root, root).map_err(|detail| {
+        publish_isolated_index(execution_root, root, recovery).map_err(|detail| {
             indexer_failure(
                 spec,
                 SemanticIndexerRunFailureKind::InfrastructureFailed,
@@ -2136,16 +2114,12 @@ fn source_integrity_digest_at(
     Ok(format!("{:x}", digest.finalize()))
 }
 
-fn publish_isolated_index(isolated_root: &Path, repository_root: &Path) -> Result<(), String> {
-    let expected_root = repository_root
-        .join(INDEXER_TEMP_DIR)
-        .join(INDEXER_REPOSITORY_WORKSPACE);
-    if isolated_root != expected_root {
-        return Err(format!(
-            "refusing to publish compiler SCIP output from an unexpected workspace: {}",
-            isolated_root.display()
-        ));
-    }
+fn publish_isolated_index(
+    isolated_root: &Path,
+    repository_root: &Path,
+    recovery: &SemanticIndexerRecoveryGuard,
+) -> Result<(), String> {
+    recovery.require_owned_execution_root(isolated_root)?;
 
     let isolated_index = isolated_root.join("index.scip");
     let metadata = match fs::symlink_metadata(&isolated_index) {
@@ -2181,13 +2155,77 @@ fn publish_isolated_index(isolated_root: &Path, repository_root: &Path) -> Resul
             ));
         }
     }
-    fs::rename(&isolated_index, &repository_index).map_err(|error| {
+    copy_isolated_index(&isolated_index, &repository_index, metadata.len())?;
+    fs::remove_file(&isolated_index).map_err(|error| {
         format!(
-            "failed to publish isolated compiler SCIP output {} to {}: {error}",
-            isolated_index.display(),
-            repository_index.display()
+            "published compiler SCIP output but failed to remove isolated source {}: {error}",
+            isolated_index.display()
         )
     })
+}
+
+fn copy_isolated_index(source: &Path, destination: &Path, expected_len: u64) -> Result<(), String> {
+    use crate::semantic_index_scip::MAX_SCIP_INDEX_BYTES;
+
+    if expected_len > MAX_SCIP_INDEX_BYTES {
+        return Err(format!(
+            "isolated compiler SCIP output exceeds the {} byte safety limit: {}",
+            MAX_SCIP_INDEX_BYTES,
+            source.display()
+        ));
+    }
+    let source_file = fs::File::open(source).map_err(|error| {
+        format!(
+            "failed to open isolated compiler SCIP output {}: {error}",
+            source.display()
+        )
+    })?;
+    let mut destination_file = fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(destination)
+        .map_err(|error| {
+            format!(
+                "failed to create repository SCIP output {}: {error}",
+                destination.display()
+            )
+        })?;
+    let copy_result = (|| {
+        let copied = std::io::copy(
+            &mut source_file.take(MAX_SCIP_INDEX_BYTES + 1),
+            &mut destination_file,
+        )
+        .map_err(|error| {
+            format!(
+                "failed to copy isolated compiler SCIP output {} to {}: {error}",
+                source.display(),
+                destination.display()
+            )
+        })?;
+        if copied != expected_len || copied > MAX_SCIP_INDEX_BYTES {
+            return Err(format!(
+                "isolated compiler SCIP output changed while publishing {}; expected {expected_len} bytes, copied {copied}",
+                source.display()
+            ));
+        }
+        destination_file.sync_all().map_err(|error| {
+            format!(
+                "failed to persist repository SCIP output {}: {error}",
+                destination.display()
+            )
+        })
+    })();
+    if let Err(error) = copy_result {
+        drop(destination_file);
+        return match fs::remove_file(destination) {
+            Ok(()) => Err(error),
+            Err(cleanup_error) => Err(format!(
+                "{error}; additionally, failed to remove partial repository SCIP output {}: {cleanup_error}",
+                destination.display()
+            )),
+        };
+    }
+    Ok(())
 }
 
 #[cfg(test)]

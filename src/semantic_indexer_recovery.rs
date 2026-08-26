@@ -3,14 +3,22 @@ use sha2::{Digest, Sha256};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 
-const SCHEMA_VERSION: u32 = 2;
-const CONTRACT: &str = "sniff-semantic-indexer-recovery-v2";
+const SCHEMA_VERSION: u32 = 3;
+const CONTRACT: &str = "sniff-semantic-indexer-recovery-v3";
+const PREVIOUS_SCHEMA_VERSION: u32 = 2;
+const PREVIOUS_CONTRACT: &str = "sniff-semantic-indexer-recovery-v2";
 const LEGACY_SCHEMA_VERSION: u32 = 1;
 const LEGACY_CONTRACT: &str = "sniff-semantic-indexer-recovery-v1";
 const MARKER: &str = ".sniff-indexer-recovery.json";
+const EXTERNAL_RUNTIME_PREFIX: &str = "sniff-semantic-indexer-";
+const EXTERNAL_OWNER_FILE: &str = ".sniff-indexer-owner";
+static EXTERNAL_WORKSPACE_COUNTER: AtomicU64 = AtomicU64::new(0);
 pub(super) const INDEXER_CACHE_DIR: &str = ".sniff-indexer-cache";
 pub(super) const INDEXER_TEMP_DIR: &str = ".sniff-indexer-tmp";
+pub(super) const INDEXER_REPOSITORY_WORKSPACE: &str = "repository-workspace";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -29,10 +37,19 @@ struct RecoveryPath {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+struct ExternalWorkspaceOwnership {
+    temp_root: String,
+    token: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RecoveryMarker {
     schema_version: u32,
     recovery_contract: String,
     paths: Vec<RecoveryPath>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    external_workspace: Option<ExternalWorkspaceOwnership>,
     marker_sha256: String,
 }
 
@@ -53,6 +70,7 @@ impl SemanticIndexerRecoveryGuard {
             ));
         }
         reject_preexisting_private_runtime_paths(&root)?;
+        let external_workspace = reserve_external_workspace(&root)?;
         let mut marker = RecoveryMarker {
             schema_version: SCHEMA_VERSION,
             recovery_contract: CONTRACT.to_string(),
@@ -64,29 +82,34 @@ impl SemanticIndexerRecoveryGuard {
                     kind,
                 })
                 .collect(),
+            external_workspace: Some(external_workspace),
             marker_sha256: String::new(),
         };
         marker.marker_sha256 = marker_sha256(&marker)?;
-        write_marker(&marker_path, &marker)?;
+        if let Err(error) = write_marker(&marker_path, &marker) {
+            let cleanup = cleanup_external_workspace(&root, &marker);
+            return match cleanup {
+                Ok(()) => Err(error),
+                Err(cleanup_error) => Err(format!(
+                    "{error}; additionally, external semantic workspace cleanup failed: {cleanup_error}"
+                )),
+            };
+        }
         sync_directory(&root)?;
         Ok(Self { root, marker })
     }
 
-    pub(super) fn prepare_indexer_run(&self) -> Result<(), String> {
+    pub(super) fn prepare_indexer_run(&self) -> Result<PathBuf, String> {
         self.require_current_marker()?;
         cleanup_runtime_paths(&self.root, &self.marker)?;
-        let temporary_dir = self.root.join(INDEXER_TEMP_DIR);
-        fs::create_dir(&temporary_dir).map_err(|error| {
-            format!(
-                "failed to create private semantic indexer temp directory {}: {error}",
-                temporary_dir.display()
-            )
-        })?;
-        sync_directory(&self.root)
+        cleanup_external_workspace(&self.root, &self.marker)?;
+        create_owned_external_workspace(&self.root, &self.marker)?;
+        self.execution_root()
     }
 
     pub(super) fn finish_indexer_run(&self) -> Result<(), String> {
         self.require_current_marker()?;
+        cleanup_external_workspace(&self.root, &self.marker)?;
         cleanup_runtime_paths(&self.root, &self.marker)?;
         sync_directory(&self.root)
     }
@@ -109,6 +132,35 @@ impl SemanticIndexerRecoveryGuard {
             return Err("semantic recovery marker changed while indexing".to_string());
         }
         Ok(())
+    }
+
+    pub(super) fn require_owned_execution_root(&self, path: &Path) -> Result<(), String> {
+        self.require_current_marker()?;
+        require_external_workspace_ownership(&self.root, &self.marker)?;
+        let expected = self.execution_root()?;
+        let observed = normalize_windows_path(fs::canonicalize(path).map_err(|error| {
+            format!(
+                "failed to resolve isolated semantic workspace {}: {error}",
+                path.display()
+            )
+        })?);
+        let expected = normalize_windows_path(fs::canonicalize(&expected).map_err(|error| {
+            format!(
+                "failed to resolve owned semantic workspace {}: {error}",
+                expected.display()
+            )
+        })?);
+        if observed != expected {
+            return Err(format!(
+                "refusing to use an unowned semantic workspace: {}",
+                path.display()
+            ));
+        }
+        Ok(())
+    }
+
+    fn execution_root(&self) -> Result<PathBuf, String> {
+        Ok(external_runtime_path(&self.root, &self.marker)?.join(INDEXER_REPOSITORY_WORKSPACE))
     }
 }
 
@@ -159,6 +211,7 @@ fn cleanup_generated_paths(root: &Path, marker: &RecoveryMarker) -> Result<(), S
             root.join("tsconfig.json").display()
         ));
     }
+    cleanup_external_workspace(root, marker)?;
     for entry in &marker.paths {
         if entry.existed_before {
             continue;
@@ -166,6 +219,249 @@ fn cleanup_generated_paths(root: &Path, marker: &RecoveryMarker) -> Result<(), S
         cleanup_generated_path(root, entry)?;
     }
     Ok(())
+}
+
+fn reserve_external_workspace(root: &Path) -> Result<ExternalWorkspaceOwnership, String> {
+    let temp_root =
+        normalize_windows_path(fs::canonicalize(std::env::temp_dir()).map_err(|error| {
+            format!("failed to resolve operating-system temp directory: {error}")
+        })?);
+    reject_repository_nested_temp_root(root, &temp_root)?;
+    for _ in 0..64 {
+        let token = external_workspace_token(root);
+        let ownership = ExternalWorkspaceOwnership {
+            temp_root: temp_root.to_string_lossy().into_owned(),
+            token,
+        };
+        let runtime = external_runtime_path_from_ownership(&ownership)?;
+        match fs::create_dir(&runtime) {
+            Ok(()) => {
+                if let Err(error) = write_external_owner(&runtime, &ownership.token) {
+                    let _ = fs::remove_dir(&runtime);
+                    return Err(error);
+                }
+                sync_directory(&temp_root)?;
+                return Ok(ownership);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => {
+                return Err(format!(
+                    "failed to reserve external semantic workspace {}: {error}",
+                    runtime.display()
+                ));
+            }
+        }
+    }
+    Err("failed to reserve a unique external semantic workspace after 64 attempts".to_string())
+}
+
+fn external_workspace_token(root: &Path) -> String {
+    let mut digest = Sha256::new();
+    digest.update(root.to_string_lossy().as_bytes());
+    digest.update(std::process::id().to_le_bytes());
+    digest.update(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+            .to_le_bytes(),
+    );
+    digest.update(
+        EXTERNAL_WORKSPACE_COUNTER
+            .fetch_add(1, Ordering::Relaxed)
+            .to_le_bytes(),
+    );
+    format!("{:x}", digest.finalize())
+}
+
+fn create_owned_external_workspace(root: &Path, marker: &RecoveryMarker) -> Result<(), String> {
+    let ownership = marker.external_workspace.as_ref().ok_or_else(|| {
+        "semantic recovery marker omitted external workspace ownership".to_string()
+    })?;
+    let runtime = external_runtime_path(root, marker)?;
+    fs::create_dir(&runtime).map_err(|error| {
+        format!(
+            "failed to create external semantic workspace {}: {error}",
+            runtime.display()
+        )
+    })?;
+    if let Err(error) = write_external_owner(&runtime, &ownership.token) {
+        let _ = fs::remove_dir(&runtime);
+        return Err(error);
+    }
+    sync_directory(
+        runtime
+            .parent()
+            .ok_or_else(|| "external semantic workspace has no parent directory".to_string())?,
+    )
+}
+
+fn write_external_owner(runtime: &Path, token: &str) -> Result<(), String> {
+    let owner = runtime.join(EXTERNAL_OWNER_FILE);
+    let mut file = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&owner)
+        .map_err(|error| {
+            format!(
+                "failed to create external semantic workspace ownership marker {}: {error}",
+                owner.display()
+            )
+        })?;
+    file.write_all(token.as_bytes())
+        .and_then(|()| file.sync_all())
+        .map_err(|error| {
+            format!(
+                "failed to persist external semantic workspace ownership marker {}: {error}",
+                owner.display()
+            )
+        })?;
+    sync_directory(runtime)
+}
+
+fn cleanup_external_workspace(root: &Path, marker: &RecoveryMarker) -> Result<(), String> {
+    if marker.schema_version != SCHEMA_VERSION {
+        return Ok(());
+    }
+    let runtime = external_runtime_path(root, marker)?;
+    match fs::symlink_metadata(&runtime) {
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(format!(
+                "failed to inspect external semantic workspace {}: {error}",
+                runtime.display()
+            ));
+        }
+    }
+    require_external_workspace_ownership(root, marker)?;
+    make_generated_directory_removable(&runtime)?;
+    fs::remove_dir_all(&runtime).map_err(|error| {
+        format!(
+            "failed to remove external semantic workspace {}: {error}",
+            runtime.display()
+        )
+    })?;
+    sync_directory(
+        runtime
+            .parent()
+            .ok_or_else(|| "external semantic workspace has no parent directory".to_string())?,
+    )
+}
+
+fn require_external_workspace_ownership(
+    root: &Path,
+    marker: &RecoveryMarker,
+) -> Result<(), String> {
+    let ownership = marker.external_workspace.as_ref().ok_or_else(|| {
+        "semantic recovery marker omitted external workspace ownership".to_string()
+    })?;
+    let runtime = external_runtime_path(root, marker)?;
+    let metadata = fs::symlink_metadata(&runtime).map_err(|error| {
+        format!(
+            "failed to inspect external semantic workspace {}: {error}",
+            runtime.display()
+        )
+    })?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return Err(format!(
+            "refusing to use external semantic workspace with changed type: {}",
+            runtime.display()
+        ));
+    }
+    let owner = runtime.join(EXTERNAL_OWNER_FILE);
+    let owner_metadata = fs::symlink_metadata(&owner).map_err(|error| {
+        format!(
+            "failed to inspect external semantic workspace ownership marker {}: {error}",
+            owner.display()
+        )
+    })?;
+    if !owner_metadata.is_file() || owner_metadata.file_type().is_symlink() {
+        return Err(format!(
+            "external semantic workspace ownership marker is not a plain file: {}",
+            owner.display()
+        ));
+    }
+    let observed = fs::read_to_string(&owner).map_err(|error| {
+        format!(
+            "failed to read external semantic workspace ownership marker {}: {error}",
+            owner.display()
+        )
+    })?;
+    if observed != ownership.token {
+        return Err("external semantic workspace ownership marker changed".to_string());
+    }
+    Ok(())
+}
+
+fn external_runtime_path(root: &Path, marker: &RecoveryMarker) -> Result<PathBuf, String> {
+    validate_marker(marker)?;
+    let ownership = marker.external_workspace.as_ref().ok_or_else(|| {
+        "semantic recovery marker omitted external workspace ownership".to_string()
+    })?;
+    let declared_temp = PathBuf::from(&ownership.temp_root);
+    let current_temp =
+        normalize_windows_path(fs::canonicalize(std::env::temp_dir()).map_err(|error| {
+            format!("failed to resolve operating-system temp directory: {error}")
+        })?);
+    let declared_temp =
+        normalize_windows_path(fs::canonicalize(&declared_temp).map_err(|error| {
+            format!(
+                "failed to resolve recorded semantic temp directory {}: {error}",
+                declared_temp.display()
+            )
+        })?);
+    if declared_temp != current_temp {
+        return Err("semantic recovery temp directory changed".to_string());
+    }
+    reject_repository_nested_temp_root(root, &declared_temp)?;
+    external_runtime_path_from_ownership(ownership)
+}
+
+fn external_runtime_path_from_ownership(
+    ownership: &ExternalWorkspaceOwnership,
+) -> Result<PathBuf, String> {
+    if ownership.token.len() != 64
+        || !ownership
+            .token
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    {
+        return Err("semantic recovery marker has an invalid external workspace token".to_string());
+    }
+    let temp_root = PathBuf::from(&ownership.temp_root);
+    if !temp_root.is_absolute() {
+        return Err("semantic recovery marker has a relative external temp root".to_string());
+    }
+    Ok(temp_root.join(format!("{EXTERNAL_RUNTIME_PREFIX}{}", ownership.token)))
+}
+
+fn reject_repository_nested_temp_root(root: &Path, temp_root: &Path) -> Result<(), String> {
+    let root = normalize_windows_path(fs::canonicalize(root).map_err(|error| {
+        format!(
+            "failed to resolve semantic recovery root {}: {error}",
+            root.display()
+        )
+    })?);
+    if temp_root == root || temp_root.starts_with(&root) {
+        return Err(format!(
+            "operating-system temp directory {} is inside repository {}; compiler isolation requires an external temp root",
+            temp_root.display(),
+            root.display()
+        ));
+    }
+    Ok(())
+}
+
+fn normalize_windows_path(path: PathBuf) -> PathBuf {
+    let text = path.to_string_lossy();
+    if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+        return PathBuf::from(format!(r"\\{}", rest));
+    }
+    if let Some(rest) = text.strip_prefix(r"\\?\") {
+        return PathBuf::from(rest);
+    }
+    path
 }
 
 fn reject_preexisting_private_runtime_paths(root: &Path) -> Result<(), String> {
@@ -354,6 +650,9 @@ fn remove_marker(root: &Path) -> Result<(), String> {
 fn validate_marker(marker: &RecoveryMarker) -> Result<(), String> {
     let expected_paths = match (marker.schema_version, marker.recovery_contract.as_str()) {
         (SCHEMA_VERSION, CONTRACT) => recovery_paths().into_iter().collect::<Vec<_>>(),
+        (PREVIOUS_SCHEMA_VERSION, PREVIOUS_CONTRACT) => {
+            recovery_paths().into_iter().collect::<Vec<_>>()
+        }
         (LEGACY_SCHEMA_VERSION, LEGACY_CONTRACT) => {
             legacy_recovery_paths().into_iter().collect::<Vec<_>>()
         }
@@ -364,8 +663,19 @@ fn validate_marker(marker: &RecoveryMarker) -> Result<(), String> {
         .iter()
         .map(|path| (path.relative_path.as_str(), path.kind))
         .collect::<Vec<_>>();
-    if marker.marker_sha256 != marker_sha256(marker)? || actual_paths != expected_paths {
+    let ownership_matches_schema = match marker.schema_version {
+        SCHEMA_VERSION => marker.external_workspace.is_some(),
+        PREVIOUS_SCHEMA_VERSION | LEGACY_SCHEMA_VERSION => marker.external_workspace.is_none(),
+        _ => false,
+    };
+    if marker.marker_sha256 != marker_sha256(marker)?
+        || actual_paths != expected_paths
+        || !ownership_matches_schema
+    {
         return Err("semantic recovery marker changed".to_string());
+    }
+    if let Some(ownership) = &marker.external_workspace {
+        external_runtime_path_from_ownership(ownership)?;
     }
     Ok(())
 }
@@ -470,12 +780,15 @@ mod tests {
         fs::create_dir(&private).unwrap();
         fs::write(private.join("stale"), b"generated after marker").unwrap();
 
-        guard.prepare_indexer_run().unwrap();
+        let execution_root = guard.prepare_indexer_run().unwrap();
 
-        assert!(private.is_dir());
-        assert_eq!(fs::read_dir(&private).unwrap().count(), 0);
-        guard.finish_indexer_run().unwrap();
         assert!(!private.exists());
+        assert!(!execution_root.exists());
+        assert!(!execution_root.starts_with(root.path()));
+        let runtime = execution_root.parent().unwrap().to_path_buf();
+        assert!(runtime.join(EXTERNAL_OWNER_FILE).is_file());
+        guard.finish_indexer_run().unwrap();
+        assert!(!runtime.exists());
         guard.finish().unwrap();
     }
 
@@ -483,9 +796,8 @@ mod tests {
     fn explicit_run_cleanup_allows_another_run_after_read_only_go_modules() {
         let root = tempfile::tempdir().unwrap();
         let guard = SemanticIndexerRecoveryGuard::begin(root.path()).unwrap();
-        guard.prepare_indexer_run().unwrap();
-        let module = root
-            .path()
+        let execution_root = guard.prepare_indexer_run().unwrap();
+        let module = execution_root
             .join(INDEXER_TEMP_DIR)
             .join("go/pkg/mod/example.com/module@v1.0.0");
         fs::create_dir_all(&module).unwrap();
@@ -499,14 +811,10 @@ mod tests {
         fs::set_permissions(&module, directory_permissions).unwrap();
 
         guard.finish_indexer_run().unwrap();
-        guard.prepare_indexer_run().unwrap();
+        let next_execution_root = guard.prepare_indexer_run().unwrap();
 
-        assert_eq!(
-            fs::read_dir(root.path().join(INDEXER_TEMP_DIR))
-                .unwrap()
-                .count(),
-            0
-        );
+        assert_eq!(next_execution_root, execution_root);
+        assert!(!next_execution_root.exists());
         guard.finish_indexer_run().unwrap();
         guard.finish().unwrap();
     }
@@ -515,9 +823,8 @@ mod tests {
     fn interrupted_dependency_preparation_remains_marker_recoverable() {
         let root = tempfile::tempdir().unwrap();
         let guard = SemanticIndexerRecoveryGuard::begin(root.path()).unwrap();
-        guard.prepare_indexer_run().unwrap();
-        let module = root
-            .path()
+        let execution_root = guard.prepare_indexer_run().unwrap();
+        let module = execution_root
             .join(INDEXER_TEMP_DIR)
             .join("go/pkg/mod/example.com/module@v1.0.0/module.go");
         fs::create_dir_all(module.parent().unwrap()).unwrap();
@@ -525,7 +832,7 @@ mod tests {
         drop(guard);
 
         assert!(recover_interrupted_semantic_indexing(root.path()).unwrap());
-        assert!(!root.path().join(INDEXER_TEMP_DIR).exists());
+        assert!(!execution_root.parent().unwrap().exists());
         assert!(!root.path().join(MARKER).exists());
     }
 
@@ -594,6 +901,33 @@ mod tests {
                     existed_before: false,
                 })
                 .collect(),
+            external_workspace: None,
+            marker_sha256: String::new(),
+        };
+        marker.marker_sha256 = marker_sha256(&marker).unwrap();
+        write_marker(&root.path().join(MARKER), &marker).unwrap();
+        fs::write(root.path().join("index.scip"), b"generated").unwrap();
+
+        assert!(recover_interrupted_semantic_indexing(root.path()).unwrap());
+        assert!(!root.path().join("index.scip").exists());
+        assert!(!root.path().join(MARKER).exists());
+    }
+
+    #[test]
+    fn previous_v2_marker_remains_recoverable() {
+        let root = tempfile::tempdir().unwrap();
+        let mut marker = RecoveryMarker {
+            schema_version: PREVIOUS_SCHEMA_VERSION,
+            recovery_contract: PREVIOUS_CONTRACT.to_string(),
+            paths: recovery_paths()
+                .into_iter()
+                .map(|(relative_path, kind)| RecoveryPath {
+                    relative_path: relative_path.to_string(),
+                    kind,
+                    existed_before: false,
+                })
+                .collect(),
+            external_workspace: None,
             marker_sha256: String::new(),
         };
         marker.marker_sha256 = marker_sha256(&marker).unwrap();
@@ -619,6 +953,7 @@ mod tests {
                     existed_before: false,
                 })
                 .collect(),
+            external_workspace: None,
             marker_sha256: String::new(),
         };
         marker.marker_sha256 = marker_sha256(&marker).unwrap();
@@ -646,5 +981,28 @@ mod tests {
 
         assert!(recover_interrupted_semantic_indexing(root.path()).is_err());
         assert!(root.path().join("index.scip").exists());
+    }
+
+    #[test]
+    fn tampered_external_owner_fails_closed_without_deleting_source_copy() {
+        let root = tempfile::tempdir().unwrap();
+        let guard = SemanticIndexerRecoveryGuard::begin(root.path()).unwrap();
+        let execution_root = guard.prepare_indexer_run().unwrap();
+        fs::create_dir(&execution_root).unwrap();
+        let proof = execution_root.join("source.rs");
+        fs::write(&proof, b"fn preserved() {}").unwrap();
+        let owner = execution_root.parent().unwrap().join(EXTERNAL_OWNER_FILE);
+        let token = fs::read_to_string(&owner).unwrap();
+        fs::write(&owner, b"changed").unwrap();
+        drop(guard);
+
+        let error = recover_interrupted_semantic_indexing(root.path()).unwrap_err();
+
+        assert!(error.contains("ownership marker changed"));
+        assert!(proof.is_file());
+        assert!(root.path().join(MARKER).is_file());
+
+        fs::write(owner, token).unwrap();
+        assert!(recover_interrupted_semantic_indexing(root.path()).unwrap());
     }
 }
