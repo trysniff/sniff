@@ -459,15 +459,7 @@ impl DockerHistoricalV2TestExecutor {
         output_limit: usize,
     ) -> Result<BoundedOutput, HistoricalV2ExecutionError> {
         self.run_control_os(
-            [
-                OsString::from("exec"),
-                OsString::from("--workdir"),
-                OsString::from("/workspace"),
-                OsString::from(container),
-                OsString::from("/bin/bash"),
-                OsString::from("-lc"),
-                OsString::from(script),
-            ],
+            container_exec_args(container, script),
             timeout,
             output_limit,
         )
