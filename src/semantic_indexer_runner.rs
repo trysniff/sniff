@@ -22,6 +22,9 @@ mod outcome;
 
 pub(crate) use outcome::*;
 
+#[path = "semantic_indexer_repository_snapshot.rs"]
+mod repository_snapshot;
+
 #[path = "semantic_indexer_recovery.rs"]
 mod recovery;
 
@@ -57,6 +60,7 @@ const INDEXER_PROCESS_LIMIT: u32 = 512;
 const MAX_COMPACT_ERROR_OUTPUT: usize = 8 * 1024;
 const MAX_RUNTIME_IDENTITY_FILE_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_RUNTIME_IDENTITY_TOTAL_BYTES: u64 = 1024 * 1024 * 1024;
+const GO_INDEX_WORKSPACE: &str = "go-index-workspace";
 const GRADLE_INDEXER_BASE_JVM_ARGS: &str = concat!(
     "--add-opens=java.base/java.util=ALL-UNNAMED ",
     "--add-opens=java.base/java.lang=ALL-UNNAMED ",
@@ -172,6 +176,15 @@ pub(crate) async fn run_required_indexers_exhaustive_typed(
             detail,
         )
     })?;
+    let repository_digest_before =
+        repository_snapshot::repository_content_digest(&root).map_err(|detail| {
+            failure(
+                SemanticIndexerRunFailureKind::InvalidInput,
+                SemanticIndexerRunPhase::IntegrityVerification,
+                None,
+                detail,
+            )
+        })?;
     let recovery = recovery::SemanticIndexerRecoveryGuard::begin(&root).map_err(|detail| {
         failure(
             SemanticIndexerRunFailureKind::InfrastructureFailed,
@@ -198,6 +211,23 @@ pub(crate) async fn run_required_indexers_exhaustive_typed(
             detail,
         )
     })?;
+    let repository_digest_after =
+        repository_snapshot::repository_content_digest(&root).map_err(|detail| {
+            failure(
+                SemanticIndexerRunFailureKind::InfrastructureFailed,
+                SemanticIndexerRunPhase::IntegrityVerification,
+                None,
+                detail,
+            )
+        })?;
+    if repository_digest_after != repository_digest_before {
+        return Err(failure(
+            SemanticIndexerRunFailureKind::InfrastructureFailed,
+            SemanticIndexerRunPhase::IntegrityVerification,
+            None,
+            "semantic indexing changed repository content outside Sniff's private runtime paths",
+        ));
+    }
     Ok(SemanticIndexerBatchOutcome { indexes, failures })
 }
 
@@ -425,14 +455,6 @@ async fn run_one_in_recovery_scope(
     installed: &InstalledIndexer,
     files: &[FileRecord],
 ) -> Result<SemanticIndexerProcessEvidence, SemanticIndexerRunFailure> {
-    let source_digest_before = source_integrity_digest(files).map_err(|detail| {
-        indexer_failure(
-            spec,
-            SemanticIndexerRunFailureKind::InvalidInput,
-            SemanticIndexerRunPhase::IntegrityVerification,
-            detail,
-        )
-    })?;
     let temporary_dir = root.join(INDEXER_TEMP_DIR);
     let temporary_metadata = fs::symlink_metadata(&temporary_dir).map_err(|error| {
         indexer_failure(
@@ -456,6 +478,30 @@ async fn run_one_in_recovery_scope(
             ),
         ));
     }
+    let go_execution_root = if spec.kind == SemanticIndexerKind::Go {
+        let staged = temporary_dir.join(GO_INDEX_WORKSPACE);
+        repository_snapshot::stage_repository_snapshot(root, &staged).map_err(|detail| {
+            indexer_failure(
+                spec,
+                SemanticIndexerRunFailureKind::InfrastructureFailed,
+                SemanticIndexerRunPhase::Preparation,
+                detail,
+            )
+        })?;
+        Some(staged)
+    } else {
+        None
+    };
+    let execution_root = go_execution_root.as_deref().unwrap_or(root);
+    let source_digest_before =
+        source_integrity_digest_at(root, execution_root, files).map_err(|detail| {
+            indexer_failure(
+                spec,
+                SemanticIndexerRunFailureKind::InvalidInput,
+                SemanticIndexerRunPhase::IntegrityVerification,
+                detail,
+            )
+        })?;
     let cache_root =
         (spec.kind == SemanticIndexerKind::Kotlin).then(|| root.join(INDEXER_CACHE_DIR));
     if let Some(cache_root) = &cache_root {
@@ -486,14 +532,14 @@ async fn run_one_in_recovery_scope(
         }
     }
     if spec.kind == SemanticIndexerKind::Go {
-        prepare_go_dependency_cache(spec, root, installed).await?;
+        prepare_go_dependency_cache(spec, execution_root, installed).await?;
     }
     if spec.kind == SemanticIndexerKind::Kotlin {
         prepare_kotlin_dependency_cache(spec, root, installed)
             .await
             .map_err(|error| kotlin_dependency_preparation_failure(spec, error))?;
     }
-    let workspace = prepare_indexer_workspace(spec, root).map_err(|detail| {
+    let workspace = prepare_indexer_workspace(spec, execution_root).map_err(|detail| {
         indexer_failure(
             spec,
             SemanticIndexerRunFailureKind::InfrastructureFailed,
@@ -502,18 +548,20 @@ async fn run_one_in_recovery_scope(
         )
     })?;
     let temporary_project = if spec.kind == SemanticIndexerKind::TypeScriptJavaScript {
-        prepare_mixed_typescript_javascript_project(spec, root, files).map_err(|detail| {
-            indexer_failure(
-                spec,
-                SemanticIndexerRunFailureKind::InfrastructureFailed,
-                SemanticIndexerRunPhase::Preparation,
-                detail,
-            )
-        })?
+        prepare_mixed_typescript_javascript_project(spec, execution_root, files).map_err(
+            |detail| {
+                indexer_failure(
+                    spec,
+                    SemanticIndexerRunFailureKind::InfrastructureFailed,
+                    SemanticIndexerRunPhase::Preparation,
+                    detail,
+                )
+            },
+        )?
     } else {
         #[cfg(windows)]
         if spec.kind == SemanticIndexerKind::Python {
-            prepare_windows_python_project(root, files).map_err(|detail| {
+            prepare_windows_python_project(execution_root, files).map_err(|detail| {
                 indexer_failure(
                     spec,
                     SemanticIndexerRunFailureKind::InfrastructureFailed,
@@ -548,7 +596,7 @@ async fn run_one_in_recovery_scope(
     let python_environment: Option<PathBuf> = None;
     let mut arguments = indexer_arguments_with_workspace(
         spec,
-        root,
+        execution_root,
         temporary_project.as_deref(),
         workspace.as_ref(),
     );
@@ -558,16 +606,21 @@ async fn run_one_in_recovery_scope(
             environment.to_string_lossy().to_string(),
         ]);
     }
-    let prepared_command =
-        build_indexer_sandbox_command(spec, root, installed, arguments, workspace.as_ref())
-            .map_err(|detail| {
-                indexer_failure(
-                    spec,
-                    SemanticIndexerRunFailureKind::InfrastructureFailed,
-                    SemanticIndexerRunPhase::Preparation,
-                    detail,
-                )
-            })?;
+    let prepared_command = build_indexer_sandbox_command(
+        spec,
+        execution_root,
+        installed,
+        arguments,
+        workspace.as_ref(),
+    )
+    .map_err(|detail| {
+        indexer_failure(
+            spec,
+            SemanticIndexerRunFailureKind::InfrastructureFailed,
+            SemanticIndexerRunPhase::Preparation,
+            detail,
+        )
+    })?;
     if std::env::var_os("SNIFF_DEBUG_INDEXERS").is_some() {
         eprintln!(
             "[sniff] semantic indexer sandbox ready: {}",
@@ -647,14 +700,15 @@ async fn run_one_in_recovery_scope(
             )
         })?;
     }
-    let source_digest_after = source_integrity_digest(files).map_err(|detail| {
-        indexer_failure(
-            spec,
-            SemanticIndexerRunFailureKind::InfrastructureFailed,
-            SemanticIndexerRunPhase::IntegrityVerification,
-            detail,
-        )
-    })?;
+    let source_digest_after =
+        source_integrity_digest_at(root, execution_root, files).map_err(|detail| {
+            indexer_failure(
+                spec,
+                SemanticIndexerRunFailureKind::InfrastructureFailed,
+                SemanticIndexerRunPhase::IntegrityVerification,
+                detail,
+            )
+        })?;
     if source_digest_before != source_digest_after {
         return Err(indexer_failure(
             spec,
@@ -674,6 +728,16 @@ async fn run_one_in_recovery_scope(
             detail,
         )
     })?;
+    if spec.kind == SemanticIndexerKind::Go && !output.timed_out && output.status_code == Some(0) {
+        publish_isolated_go_index(execution_root, root).map_err(|detail| {
+            indexer_failure(
+                spec,
+                SemanticIndexerRunFailureKind::InfrastructureFailed,
+                SemanticIndexerRunPhase::OutputValidation,
+                detail,
+            )
+        })?;
+    }
     if output.timed_out {
         return Err(indexer_process_failure(
             spec,
@@ -2034,28 +2098,88 @@ fn sandbox_repository_argument(_root: &Path, argument: &str) -> String {
     argument.to_string()
 }
 
-fn source_integrity_digest(files: &[FileRecord]) -> Result<String, String> {
+fn source_integrity_digest_at(
+    repository_root: &Path,
+    content_root: &Path,
+    files: &[FileRecord],
+) -> Result<String, String> {
     let mut paths = files
         .iter()
-        .map(|file| PathBuf::from(&file.file_path))
-        .collect::<Vec<_>>();
+        .map(|file| repository_relative_path(repository_root, Path::new(&file.file_path)))
+        .collect::<Result<Vec<_>, _>>()?;
     paths.sort();
     paths.dedup();
 
     let mut digest = Sha256::new();
-    for path in paths {
+    for relative in paths {
+        let path = content_root.join(Path::new(&relative.0));
         let bytes = fs::read(&path).map_err(|error| {
             format!(
-                "failed to hash eligible source file {}: {error}",
-                path.display()
+                "failed to hash eligible source file {} from semantic content root {}: {error}",
+                relative.0,
+                content_root.display()
             )
         })?;
-        let path_text = path.to_string_lossy();
-        digest.update(path_text.as_bytes());
+        digest.update((relative.0.len() as u64).to_le_bytes());
+        digest.update(relative.0.as_bytes());
         digest.update((bytes.len() as u64).to_le_bytes());
         digest.update(bytes);
     }
     Ok(format!("{:x}", digest.finalize()))
+}
+
+fn publish_isolated_go_index(isolated_root: &Path, repository_root: &Path) -> Result<(), String> {
+    let expected_root = repository_root
+        .join(INDEXER_TEMP_DIR)
+        .join(GO_INDEX_WORKSPACE);
+    if isolated_root != expected_root {
+        return Err(format!(
+            "refusing to publish Go SCIP output from an unexpected workspace: {}",
+            isolated_root.display()
+        ));
+    }
+
+    let isolated_index = isolated_root.join("index.scip");
+    let metadata = match fs::symlink_metadata(&isolated_index) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(format!(
+                "failed to inspect isolated Go SCIP output {}: {error}",
+                isolated_index.display()
+            ));
+        }
+    };
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return Err(format!(
+            "isolated Go SCIP output is not a plain file: {}",
+            isolated_index.display()
+        ));
+    }
+
+    let repository_index = repository_root.join("index.scip");
+    match fs::symlink_metadata(&repository_index) {
+        Ok(_) => {
+            return Err(
+                "refusing to overwrite repository file index.scip while publishing isolated Go SCIP output"
+                    .to_string(),
+            );
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(format!(
+                "failed to inspect repository SCIP output path {}: {error}",
+                repository_index.display()
+            ));
+        }
+    }
+    fs::rename(&isolated_index, &repository_index).map_err(|error| {
+        format!(
+            "failed to publish isolated Go SCIP output {} to {}: {error}",
+            isolated_index.display(),
+            repository_index.display()
+        )
+    })
 }
 
 #[cfg(test)]
