@@ -40,6 +40,7 @@ type ExpectedMethodMap<'a> = BTreeMap<MethodJoinKey, &'a IntentionalBoundaryMeth
 mod validation;
 
 pub use validation::validate_intentional_boundary_semantic_census;
+pub(super) use validation::validate_intentional_boundary_semantic_census_scoped;
 
 pub async fn census_intentional_boundary_semantics(
     repository: &str,

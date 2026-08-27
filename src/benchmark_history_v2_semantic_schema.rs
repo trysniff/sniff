@@ -4,7 +4,7 @@ use super::{
 };
 use serde::{Deserialize, Serialize};
 
-pub const HISTORICAL_V2_SEMANTIC_CENSUS_SCHEMA_VERSION: u32 = 1;
+pub const HISTORICAL_V2_SEMANTIC_CENSUS_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -18,6 +18,7 @@ pub struct HistoricalV2PublicSymbol {
 pub struct HistoricalV2SemanticSnapshotCensus {
     pub revision: String,
     pub source_snapshot_census_sha256: String,
+    pub required_document_paths: Vec<String>,
     pub indexers: Vec<IntentionalBoundarySemanticIndexerCensus>,
     pub methods: Vec<IntentionalBoundarySemanticMethod>,
     pub public_symbols: Vec<HistoricalV2PublicSymbol>,
@@ -36,6 +37,7 @@ pub struct HistoricalV2SemanticCensus {
     pub canonical_repository: String,
     pub materialization_sha256: String,
     pub source_census_sha256: String,
+    pub changed_indexers: Vec<IntentionalBoundaryIndexerKind>,
     pub base: HistoricalV2SemanticSnapshotCensus,
     pub patched: HistoricalV2SemanticSnapshotCensus,
     pub semantic_census_sha256: String,

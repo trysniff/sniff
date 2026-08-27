@@ -20,7 +20,8 @@ use super::{
     private_indexer_environment, private_indexer_jvm_arguments, project_name,
     publish_isolated_index, reject_unsupported_android_gradle, repository_relative_path,
     require_dependency_preparation_success, resolve_java_home_runtime, runtime_file_identities,
-    sandbox_repository_argument, source_integrity_digest_at, verify_runtime_identities_unchanged,
+    sandbox_repository_argument, source_integrity_digest_at, validate_expected_documents,
+    validate_required_document_scope, verify_runtime_identities_unchanged,
     write_private_gradle_properties,
 };
 #[cfg(windows)]
@@ -30,11 +31,14 @@ use super::{
     push_external_read_only, system_gradle_launcher_jar,
 };
 use crate::sandbox::SandboxOutput;
-use crate::semantic_index::SemanticPositionEncoding;
+use crate::semantic_index::{
+    SemanticIndex, SemanticIndexProvenance, SemanticPositionEncoding, SemanticTextEncoding,
+};
 #[cfg(windows)]
 use crate::semantic_indexer_installation::InstalledIndexer;
 use crate::semantic_indexer_manifest::{SemanticIndexerKind, pinned_indexer};
 use crate::types::FileRecord;
+use std::collections::{BTreeMap, BTreeSet};
 #[cfg(windows)]
 use std::io::{Read, Write};
 use std::path::Path;
@@ -691,6 +695,80 @@ fn files_for_indexer_partitions_mixed_language_targets() {
             .collect::<Vec<_>>(),
         ["src/main.py"]
     );
+}
+
+#[test]
+fn required_document_scope_must_be_an_exact_subset_of_execution_files() {
+    let root = tempfile::tempdir().unwrap();
+    let first_path = root.path().join("first.py");
+    let second_path = root.path().join("second.py");
+    let unknown_path = root.path().join("unknown.py");
+    std::fs::write(&first_path, "value = 1\n").unwrap();
+    std::fs::write(&second_path, "value = 2\n").unwrap();
+    std::fs::write(&unknown_path, "value = 3\n").unwrap();
+    let record = |path: &Path| FileRecord {
+        file_path: path.to_string_lossy().into_owned(),
+        source: String::new(),
+        language: "python".to_string(),
+        methods: Vec::new(),
+    };
+    let execution = vec![record(&first_path), record(&second_path)];
+    let required = vec![record(&second_path)];
+
+    validate_required_document_scope(root.path(), &execution, &required).unwrap();
+    let error = validate_required_document_scope(root.path(), &execution, &[record(&unknown_path)])
+        .unwrap_err();
+    assert!(error.contains("outside the execution scope"));
+    let duplicate = validate_required_document_scope(
+        root.path(),
+        &execution,
+        &[record(&second_path), record(&second_path)],
+    )
+    .unwrap_err();
+    assert!(duplicate.contains("repeats source document second.py"));
+}
+
+#[test]
+fn expected_document_validation_checks_only_the_declared_required_subset() {
+    let root = tempfile::tempdir().unwrap();
+    let source_path = root.path().join("unchanged.py");
+    std::fs::write(&source_path, "value = 1\n").unwrap();
+    let source = FileRecord {
+        file_path: source_path.to_string_lossy().into_owned(),
+        source: String::new(),
+        language: "python".to_string(),
+        methods: Vec::new(),
+    };
+    let empty_index = || SemanticIndex {
+        format_version: 1,
+        repository_root: root.path().to_string_lossy().into_owned(),
+        provenance: SemanticIndexProvenance {
+            format: "scip".to_string(),
+            tool_name: "fixture".to_string(),
+            tool_version: None,
+            arguments: Vec::new(),
+            source_text_encoding: Some(SemanticTextEncoding::Utf8),
+            diagnostics: Vec::new(),
+        },
+        documents: BTreeMap::new(),
+        symbols: BTreeMap::new(),
+        relationships: BTreeSet::new(),
+        imports: BTreeSet::new(),
+        calls: BTreeSet::new(),
+        test_relationships: BTreeSet::new(),
+        unresolved_edges: BTreeSet::new(),
+    };
+
+    validate_expected_documents(root.path(), &[], SemanticIndexerKind::Python, empty_index())
+        .unwrap();
+    let error = validate_expected_documents(
+        root.path(),
+        &[source],
+        SemanticIndexerKind::Python,
+        empty_index(),
+    )
+    .unwrap_err();
+    assert!(error.contains("omitted 1 eligible source document"));
 }
 
 #[test]

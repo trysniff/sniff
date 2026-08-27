@@ -1,13 +1,14 @@
 use super::*;
 use crate::benchmark::{
     HISTORICAL_V2_ASSESSMENT_IDENTITY_SCHEMA_VERSION,
-    HISTORICAL_V2_SELECTED_PAYLOADS_SCHEMA_VERSION, HistoricalV2MaterializedRoots,
-    HistoricalV2PublicSymbol, HistoricalV2SelectedPayloads, HistoricalV2SemanticCensus,
-    HistoricalV2SemanticSnapshotCensus, HistoricalV2SourceCensus, IntentionalBoundaryIndexerKind,
-    IntentionalBoundarySemanticMethod, IntentionalBoundarySemanticMethodStatus,
-    IntentionalBoundarySemanticOrigin, IntentionalBoundarySemanticResolution,
-    IntentionalBoundarySemanticSymbolCategory, IntentionalBoundarySemanticSymbolFacts,
-    IntentionalBoundarySemanticVisibility, census_historical_v2_sources,
+    HISTORICAL_V2_SELECTED_PAYLOADS_SCHEMA_VERSION, HISTORICAL_V2_SEMANTIC_CENSUS_SCHEMA_VERSION,
+    HistoricalV2MaterializedRoots, HistoricalV2PublicSymbol, HistoricalV2SelectedPayloads,
+    HistoricalV2SemanticCensus, HistoricalV2SemanticSnapshotCensus, HistoricalV2SourceCensus,
+    IntentionalBoundaryIndexerKind, IntentionalBoundarySemanticMethod,
+    IntentionalBoundarySemanticMethodStatus, IntentionalBoundarySemanticOrigin,
+    IntentionalBoundarySemanticResolution, IntentionalBoundarySemanticSymbolCategory,
+    IntentionalBoundarySemanticSymbolFacts, IntentionalBoundarySemanticVisibility,
+    census_historical_v2_sources,
 };
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -141,11 +142,12 @@ fn rust_source(redundant: bool) -> String {
 
 fn semantic_census(source: &HistoricalV2SourceCensus) -> HistoricalV2SemanticCensus {
     HistoricalV2SemanticCensus {
-        schema_version: 1,
+        schema_version: HISTORICAL_V2_SEMANTIC_CENSUS_SCHEMA_VERSION,
         semantic_census_contract: "fixture".to_string(),
         canonical_repository: source.canonical_repository.clone(),
         materialization_sha256: source.materialization_sha256.clone(),
         source_census_sha256: source.source_census_sha256.clone(),
+        changed_indexers: vec![IntentionalBoundaryIndexerKind::Rust],
         base: semantic_snapshot(&source.base),
         patched: semantic_snapshot(&source.patched),
         semantic_census_sha256: "1".repeat(64),
@@ -197,6 +199,11 @@ fn semantic_snapshot(
     HistoricalV2SemanticSnapshotCensus {
         revision: source.revision.clone(),
         source_snapshot_census_sha256: source.snapshot_census_sha256.clone(),
+        required_document_paths: source
+            .source_files
+            .iter()
+            .map(|file| file.repository_path.clone())
+            .collect(),
         indexers: Vec::new(),
         public_symbol_count: public_symbols.len(),
         resolved_method_count: methods.len(),

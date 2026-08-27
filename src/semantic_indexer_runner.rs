@@ -158,6 +158,14 @@ pub(crate) async fn run_required_indexers_exhaustive_typed(
     repository_root: &Path,
     files: &[FileRecord],
 ) -> Result<SemanticIndexerBatchOutcome, SemanticIndexerRunFailure> {
+    run_required_indexers_exhaustive_typed_scoped(repository_root, files, files).await
+}
+
+pub(crate) async fn run_required_indexers_exhaustive_typed_scoped(
+    repository_root: &Path,
+    files: &[FileRecord],
+    required_documents: &[FileRecord],
+) -> Result<SemanticIndexerBatchOutcome, SemanticIndexerRunFailure> {
     let root =
         strip_windows_verbatim_prefix(fs::canonicalize(repository_root).map_err(|error| {
             failure(
@@ -170,6 +178,14 @@ pub(crate) async fn run_required_indexers_exhaustive_typed(
                 ),
             )
         })?);
+    validate_required_document_scope(&root, files, required_documents).map_err(|detail| {
+        failure(
+            SemanticIndexerRunFailureKind::InvalidInput,
+            SemanticIndexerRunPhase::RepositoryValidation,
+            None,
+            detail,
+        )
+    })?;
     let store = SemanticIndexerStore::for_user().map_err(|detail| {
         failure(
             SemanticIndexerRunFailureKind::InfrastructureUnavailable,
@@ -198,7 +214,9 @@ pub(crate) async fn run_required_indexers_exhaustive_typed(
     let mut indexes = BTreeMap::new();
     let mut failures = Vec::new();
     for kind in required_indexers(files) {
-        match run_required_indexer_typed(&root, files, &store, kind, &recovery).await {
+        match run_required_indexer_typed(&root, files, required_documents, &store, kind, &recovery)
+            .await
+        {
             Ok(index) => {
                 indexes.insert(kind, index);
             }
@@ -260,7 +278,7 @@ pub(crate) async fn run_required_indexer_with_store_for_test(
             detail,
         )
     })?;
-    let run_result = run_required_indexer_typed(&root, files, store, kind, &recovery).await;
+    let run_result = run_required_indexer_typed(&root, files, files, store, kind, &recovery).await;
     let cleanup_result = recovery.finish().map_err(|detail| {
         failure(
             SemanticIndexerRunFailureKind::InfrastructureFailed,
@@ -275,6 +293,7 @@ pub(crate) async fn run_required_indexer_with_store_for_test(
 async fn run_required_indexer_typed(
     root: &Path,
     files: &[FileRecord],
+    required_documents: &[FileRecord],
     store: &SemanticIndexerStore,
     kind: SemanticIndexerKind,
     recovery: &SemanticIndexerRecoveryGuard,
@@ -360,7 +379,7 @@ async fn run_required_indexer_typed(
         Some(&expected_languages),
         missing_position_encoding(kind),
     )
-    .and_then(|index| validate_expected_documents(root, files, kind, index))
+    .and_then(|index| validate_expected_documents(root, required_documents, kind, index))
     .map_err(|detail| SemanticIndexerRunFailure {
         kind: SemanticIndexerRunFailureKind::IncompleteOutput,
         phase: SemanticIndexerRunPhase::OutputValidation,
@@ -397,6 +416,48 @@ pub(crate) fn files_for_indexer(
         .filter(|file| language_kind(file) == Some(kind))
         .cloned()
         .collect()
+}
+
+fn validate_required_document_scope(
+    root: &Path,
+    files: &[FileRecord],
+    required_documents: &[FileRecord],
+) -> Result<(), String> {
+    let mut available = BTreeMap::<RepositoryPath, String>::new();
+    for file in files {
+        let path = repository_relative_path(root, Path::new(&file.file_path))?;
+        let language = file.language.to_ascii_lowercase();
+        if available.insert(path.clone(), language).is_some() {
+            return Err(format!(
+                "semantic execution scope repeats source document {}",
+                path.0
+            ));
+        }
+    }
+
+    let mut required = BTreeSet::new();
+    for file in required_documents {
+        let path = repository_relative_path(root, Path::new(&file.file_path))?;
+        if !required.insert(path.clone()) {
+            return Err(format!(
+                "semantic required-document scope repeats source document {}",
+                path.0
+            ));
+        }
+        let Some(language) = available.get(&path) else {
+            return Err(format!(
+                "semantic required document {} is outside the execution scope",
+                path.0
+            ));
+        };
+        if language != &file.language.to_ascii_lowercase() {
+            return Err(format!(
+                "semantic required document {} changed language from its execution scope",
+                path.0
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn expected_document_languages(

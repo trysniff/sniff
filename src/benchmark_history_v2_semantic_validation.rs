@@ -1,5 +1,6 @@
 use super::super::intentional_boundary_semantic::{
     SEMANTIC_CENSUS_CONTRACT as SHARED_SEMANTIC_CONTRACT, compute_semantic_census_sha256,
+    validate_intentional_boundary_semantic_census_scoped,
 };
 use super::super::{
     HISTORICAL_V2_SEMANTIC_CENSUS_SCHEMA_VERSION, HistoricalV2Materialization,
@@ -10,9 +11,12 @@ use super::super::{
     IntentionalBoundarySemanticCensus, IntentionalBoundarySemanticOrigin,
     IntentionalBoundarySemanticVisibility, IntentionalBoundarySourceCensus,
     IntentionalBoundarySourceFile, validate_historical_v2_source_census,
-    validate_intentional_boundary_semantic_census,
 };
-use super::{SEMANTIC_CENSUS_CONTRACT, semantic_census_sha256, semantic_snapshot_sha256};
+use super::{
+    SEMANTIC_CENSUS_CONTRACT, indexer_for_language, indexer_kind, semantic_census_sha256,
+    semantic_scope, semantic_snapshot_sha256,
+};
+use crate::semantic_indexer_manifest::SemanticIndexerKind;
 use std::collections::BTreeSet;
 
 pub fn validate_historical_v2_semantic_census_commitment(
@@ -22,11 +26,19 @@ pub fn validate_historical_v2_semantic_census_commitment(
     census: &HistoricalV2SemanticCensus,
 ) -> Result<(), String> {
     validate_historical_v2_source_census(materialization, roots, source_census)?;
+    let scope = semantic_scope(materialization, roots, source_census)?;
+    let changed_indexers = scope
+        .changed_indexers
+        .iter()
+        .copied()
+        .map(indexer_kind)
+        .collect::<Vec<_>>();
     if census.schema_version != HISTORICAL_V2_SEMANTIC_CENSUS_SCHEMA_VERSION
         || census.semantic_census_contract != SEMANTIC_CENSUS_CONTRACT
         || census.canonical_repository != materialization.canonical_repository
         || census.materialization_sha256 != materialization.materialization_sha256
         || census.source_census_sha256 != source_census.source_census_sha256
+        || census.changed_indexers != changed_indexers
         || census.semantic_census_sha256 != semantic_census_sha256(census)?
     {
         return Err("historical-v2 semantic census commitment changed".to_string());
@@ -35,11 +47,15 @@ pub fn validate_historical_v2_semantic_census_commitment(
         &census.canonical_repository,
         &source_census.base,
         &census.base,
+        &scope.changed_indexers,
+        &scope.base_required_paths,
     )?;
     validate_snapshot(
         &census.canonical_repository,
         &source_census.patched,
         &census.patched,
+        &scope.changed_indexers,
+        &scope.patched_required_paths,
     )?;
     Ok(())
 }
@@ -48,9 +64,13 @@ pub(super) fn validate_snapshot(
     repository: &str,
     source: &HistoricalV2SourceSnapshotCensus,
     semantic: &HistoricalV2SemanticSnapshotCensus,
+    changed_indexers: &BTreeSet<SemanticIndexerKind>,
+    required_document_paths: &BTreeSet<String>,
 ) -> Result<(), String> {
     if semantic.revision != source.revision
         || semantic.source_snapshot_census_sha256 != source.snapshot_census_sha256
+        || semantic.required_document_paths
+            != required_document_paths.iter().cloned().collect::<Vec<_>>()
         || !is_sha256(&semantic.semantic_snapshot_sha256)
         || semantic.semantic_snapshot_sha256 != semantic_snapshot_sha256(semantic)?
     {
@@ -110,8 +130,23 @@ pub(super) fn validate_snapshot(
     };
     semantic_projection.semantic_census_sha256 =
         compute_semantic_census_sha256(&semantic_projection)?;
-    validate_intentional_boundary_semantic_census(&source_projection, &semantic_projection)
-        .map_err(|error| format!("historical-v2 semantic snapshot is invalid: {error}"))
+    let expected_indexers = source
+        .source_files
+        .iter()
+        .filter(|file| file.semantic_coverage == HistoricalV2SourceSemanticCoverage::Required)
+        .map(|file| indexer_for_language(&file.language))
+        .collect::<Result<BTreeSet<_>, String>>()?
+        .intersection(changed_indexers)
+        .copied()
+        .map(indexer_kind)
+        .collect::<BTreeSet<_>>();
+    validate_intentional_boundary_semantic_census_scoped(
+        &source_projection,
+        &semantic_projection,
+        &expected_indexers,
+        true,
+    )
+    .map_err(|error| format!("historical-v2 semantic snapshot is invalid: {error}"))
 }
 
 fn validate_public_symbols(

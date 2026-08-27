@@ -122,6 +122,7 @@ fn semantic_snapshot() -> HistoricalV2SemanticSnapshotCensus {
     HistoricalV2SemanticSnapshotCensus {
         revision: "1".repeat(40),
         source_snapshot_census_sha256: "2".repeat(64),
+        required_document_paths: Vec::new(),
         indexers: Vec::new(),
         methods: Vec::new(),
         public_symbols: Vec::new(),

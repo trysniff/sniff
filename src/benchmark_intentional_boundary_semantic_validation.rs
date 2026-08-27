@@ -11,6 +11,25 @@ pub fn validate_intentional_boundary_semantic_census(
     source_census: &IntentionalBoundarySourceCensus,
     census: &IntentionalBoundarySemanticCensus,
 ) -> Result<(), String> {
+    let expected_indexers = source_census
+        .source_files
+        .iter()
+        .map(|file| indexer_for_language(&file.language).map(indexer_kind))
+        .collect::<Result<BTreeSet<_>, String>>()?;
+    validate_intentional_boundary_semantic_census_scoped(
+        source_census,
+        census,
+        &expected_indexers,
+        false,
+    )
+}
+
+pub(in crate::benchmark::release) fn validate_intentional_boundary_semantic_census_scoped(
+    source_census: &IntentionalBoundarySourceCensus,
+    census: &IntentionalBoundarySemanticCensus,
+    expected_indexers: &BTreeSet<super::IntentionalBoundaryIndexerKind>,
+    allow_unindexed_compiler_exclusions: bool,
+) -> Result<(), String> {
     if census.schema_version != INTENTIONAL_BOUNDARY_SEMANTIC_CENSUS_SCHEMA_VERSION
         || census.semantic_contract != SEMANTIC_CENSUS_CONTRACT
         || census.repository != source_census.repository
@@ -19,17 +38,12 @@ pub fn validate_intentional_boundary_semantic_census(
     {
         return Err("intentional-boundary semantic census identity changed".to_string());
     }
-    let expected_indexers = source_census
-        .source_files
-        .iter()
-        .map(|file| indexer_for_language(&file.language).map(indexer_kind))
-        .collect::<Result<BTreeSet<_>, String>>()?;
     let actual_indexers = census
         .indexers
         .iter()
         .map(|indexer| indexer.indexer)
         .collect::<BTreeSet<_>>();
-    if actual_indexers != expected_indexers || actual_indexers.len() != census.indexers.len() {
+    if &actual_indexers != expected_indexers || actual_indexers.len() != census.indexers.len() {
         return Err("intentional-boundary semantic census indexer coverage changed".to_string());
     }
     for indexer in &census.indexers {
@@ -118,6 +132,12 @@ pub fn validate_intentional_boundary_semantic_census(
             || method.start_line != expected.2
             || method.end_line != expected.3
             || Ok(method.indexer) != expected.4
+            || !(actual_indexers.contains(&method.indexer)
+                || (allow_unindexed_compiler_exclusions
+                    && matches!(
+                        method.status,
+                        IntentionalBoundarySemanticMethodStatus::CompilerExcluded { .. }
+                    )))
         {
             return Err("intentional-boundary semantic method identity changed".to_string());
         }
@@ -133,6 +153,15 @@ pub fn validate_intentional_boundary_semantic_census(
             return Err(
                 "unresolved intentional-boundary method contains invented semantic facts"
                     .to_string(),
+            );
+        }
+        if matches!(
+            &method.status,
+            IntentionalBoundarySemanticMethodStatus::CompilerExcluded { reason }
+                if reason.trim().is_empty()
+        ) {
+            return Err(
+                "compiler-excluded intentional-boundary method has no evidence".to_string(),
             );
         }
         if let IntentionalBoundarySemanticMethodStatus::Resolved {
