@@ -16,6 +16,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 const RUN: &str = "rust-analyzer cargo demo 1.0.0 run().";
 const SERVICE: &str = "rust-analyzer cargo demo 1.0.0 Service#";
+const SCIP_GO_BLANK: &str =
+    "scip-go gomod github.com/cloudflare/cloudflare-go . `github.com/cloudflare/cloudflare-go`/_.";
 
 fn root(label: &str) -> PathBuf {
     let nonce = SystemTime::now()
@@ -460,19 +462,35 @@ fn malformed_ranges_roles_symbols_and_encodings_fail_closed() {
 }
 
 #[test]
-fn conflicting_symbol_information_and_roleless_relationships_fail_closed() {
+fn conflicting_symbol_kinds_become_ambiguity_while_roleless_relationships_fail_closed() {
     let root = root("conflict");
     let mut conflict = base_index();
     let mut source = document("src/main.rs");
-    for kind in [Kind::Function, Kind::Class] {
+    for kind in [Kind::Function, Kind::Class, Kind::Variable] {
         let mut information = SymbolInformation::new();
         information.symbol = RUN.to_string();
         information.kind = EnumOrUnknown::new(kind);
         source.symbols.push(information);
     }
     conflict.documents.push(source);
-    let error = ingest(&root, &conflict).unwrap_err();
-    assert!(error.contains("conflicting SCIP symbol kinds"), "{error}");
+    let imported = ingest(&root, &conflict).unwrap();
+    let run_id = symbols::stable_symbol_id(RUN, None).unwrap();
+    let run = imported.symbols.get(&run_id).unwrap();
+    assert_eq!(run.kind.category, SemanticSymbolCategory::Unknown);
+    assert_eq!(run.kind.provider_name, "ConflictingKinds");
+    assert_eq!(
+        run.ambiguity_notes,
+        vec![
+            format!(
+                "conflicting SCIP symbol kinds for {}: Class and Function",
+                run_id.0
+            ),
+            format!(
+                "additional conflicting SCIP symbol kind for {}: Variable",
+                run_id.0
+            ),
+        ]
+    );
 
     let mut roleless = base_index();
     let mut source = document("src/main.rs");
@@ -485,6 +503,65 @@ fn conflicting_symbol_information_and_roleless_relationships_fail_closed() {
     roleless.documents.push(source);
     let error = ingest(&root, &roleless).unwrap_err();
     assert!(error.contains("no relationship role"), "{error}");
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn scip_go_blank_identifier_collisions_preserve_the_rest_of_the_index() {
+    let root = root("scip-go-blank");
+    let mut index = base_index();
+    index
+        .metadata
+        .as_mut()
+        .unwrap()
+        .tool_info
+        .as_mut()
+        .unwrap()
+        .name = "scip-go".to_string();
+    let mut source = document("cloudflare.go");
+    source.language = "go".to_string();
+
+    for (kind, signature_text) in [
+        (Kind::Variable, "var _ = assertVariable()"),
+        (Kind::Constant, "const _ = assertConstant"),
+    ] {
+        let mut information = SymbolInformation::new();
+        information.symbol = SCIP_GO_BLANK.to_string();
+        information.display_name = "_".to_string();
+        information.kind = EnumOrUnknown::new(kind);
+        let mut signature = Signature::new();
+        signature.language = "go".to_string();
+        signature.text = signature_text.to_string();
+        information.signature_documentation = MessageField::some(signature);
+        source.symbols.push(information);
+    }
+    source
+        .occurrences
+        .push(single_line(SCIP_GO_BLANK, 1, 4, 5, 1));
+    source
+        .occurrences
+        .push(single_line(SCIP_GO_BLANK, 2, 6, 7, 1));
+    index.documents.push(source);
+
+    let imported = ingest(&root, &index).unwrap();
+    let blank_id = symbols::stable_symbol_id(SCIP_GO_BLANK, None).unwrap();
+    let blank = imported.symbols.get(&blank_id).unwrap();
+    assert_eq!(blank.kind.category, SemanticSymbolCategory::Unknown);
+    assert_eq!(blank.kind.provider_name, "ConflictingKinds");
+    assert_eq!(blank.display_name.as_deref(), Some("_"));
+    assert_eq!(blank.definitions.len(), 2);
+    assert!(blank.signature.is_none());
+    assert_eq!(blank.ambiguity_notes.len(), 2);
+    assert!(
+        blank.ambiguity_notes[0].contains("conflicting SCIP symbol kinds"),
+        "{:?}",
+        blank.ambiguity_notes
+    );
+    assert!(
+        blank.ambiguity_notes[1].contains("conflicting SCIP symbol signature values"),
+        "{:?}",
+        blank.ambiguity_notes
+    );
     fs::remove_dir_all(root).ok();
 }
 

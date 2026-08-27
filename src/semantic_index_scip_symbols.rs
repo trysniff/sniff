@@ -7,6 +7,8 @@ use protobuf::Enum;
 use scip::types::{Relationship, SymbolInformation, symbol_information::Kind};
 use std::collections::BTreeSet;
 
+const CONFLICTING_KINDS: &str = "ConflictingKinds";
+
 struct ImportedSignature {
     value: Option<SemanticSignature>,
     references: Vec<(SemanticSymbolId, String)>,
@@ -262,14 +264,36 @@ fn merge_symbol(index: &mut SemanticIndex, incoming: SemanticSymbol) -> Result<(
         "display name",
     )?;
     if existing.kind.category == SemanticSymbolCategory::Unknown {
-        existing.kind = incoming.kind;
+        if existing.kind.provider_name == CONFLICTING_KINDS {
+            if incoming.kind.category != SemanticSymbolCategory::Unknown {
+                let detail = format!(
+                    "additional conflicting SCIP symbol kind for {}: {}",
+                    incoming.id.0, incoming.kind.provider_name
+                );
+                if !existing.ambiguity_notes.contains(&detail) {
+                    existing.ambiguity_notes.push(detail);
+                }
+            }
+        } else {
+            existing.kind = incoming.kind;
+        }
     } else if incoming.kind.category != SemanticSymbolCategory::Unknown
         && existing.kind != incoming.kind
     {
-        return Err(format!(
+        let mut provider_names = [
+            existing.kind.provider_name.as_str(),
+            incoming.kind.provider_name.as_str(),
+        ];
+        provider_names.sort_unstable();
+        let detail = format!(
             "conflicting SCIP symbol kinds for {}: {} and {}",
-            incoming.id.0, existing.kind.provider_name, incoming.kind.provider_name
-        ));
+            incoming.id.0, provider_names[0], provider_names[1]
+        );
+        existing.kind = SemanticSymbolKind {
+            category: SemanticSymbolCategory::Unknown,
+            provider_name: CONFLICTING_KINDS.to_string(),
+        };
+        existing.ambiguity_notes.push(detail);
     }
     if let Err(detail) = merge_optional(
         &mut existing.signature,
