@@ -13,7 +13,7 @@ use super::{
     HistoricalV2SlotStageErrorKind, HistoricalV2SourceCensus, HistoricalV2SourceSemanticCoverage,
     HistoricalV2SourceSnapshotCensus, HistoricalV2StageResult, IntentionalBoundaryIndexerKind,
     IntentionalBoundaryMethodCensusEntry, IntentionalBoundarySemanticMethod,
-    validate_historical_v2_source_census,
+    IntentionalBoundarySemanticMethodStatus, validate_historical_v2_source_census,
 };
 use crate::semantic_index::{SemanticIndex, SemanticSymbolOrigin, SemanticVisibility};
 use crate::semantic_indexer_manifest::SemanticIndexerKind;
@@ -28,10 +28,21 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-const SEMANTIC_CENSUS_CONTRACT: &str = "sniffbench-historical-v2-compiler-semantic-census-v1";
+const SEMANTIC_CENSUS_CONTRACT: &str = "sniffbench-historical-v2-compiler-semantic-census-v2";
+const UNCHANGED_DOCUMENT_EXCLUSION: &str =
+    "compiler omitted an unchanged source document outside the exact historical patch";
+const UNTOUCHED_LANGUAGE_EXCLUSION: &str =
+    "source language is untouched by the exact historical patch";
 type MethodKey = (String, String, u32, u32);
 type SemanticCensusStageResult =
     HistoricalV2StageResult<HistoricalV2SemanticCensus, HistoricalV2SemanticCensusExclusion>;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct HistoricalV2SemanticScope {
+    changed_indexers: BTreeSet<SemanticIndexerKind>,
+    base_required_paths: BTreeSet<String>,
+    patched_required_paths: BTreeSet<String>,
+}
 
 #[path = "benchmark_history_v2_semantic_validation.rs"]
 mod validation;
@@ -66,20 +77,38 @@ pub async fn census_historical_v2_semantics_typed(
     source_census: &HistoricalV2SourceCensus,
 ) -> Result<SemanticCensusStageResult, HistoricalV2SlotStageError> {
     validate_historical_v2_source_census(materialization, roots, source_census).map_err(invalid)?;
-    let base_files =
+    let scope = semantic_scope(materialization, roots, source_census).map_err(infrastructure)?;
+    let all_base_files =
         snapshot_file_records(&roots.base_root, &source_census.base).map_err(infrastructure)?;
-    let patched_files = snapshot_file_records(&roots.patched_root, &source_census.patched)
+    let all_patched_files = snapshot_file_records(&roots.patched_root, &source_census.patched)
         .map_err(infrastructure)?;
-    let base_run = crate::semantic_indexer_runner::run_required_indexers_exhaustive_typed(
+    let (base_files, base_required_documents) = scoped_file_records(
+        &roots.base_root,
+        &all_base_files,
+        &scope.changed_indexers,
+        &scope.base_required_paths,
+    )
+    .map_err(infrastructure)?;
+    let (patched_files, patched_required_documents) = scoped_file_records(
+        &roots.patched_root,
+        &all_patched_files,
+        &scope.changed_indexers,
+        &scope.patched_required_paths,
+    )
+    .map_err(infrastructure)?;
+    let base_run = crate::semantic_indexer_runner::run_required_indexers_exhaustive_typed_scoped(
         &roots.base_root,
         &base_files,
+        &base_required_documents,
     )
     .await;
-    let patched_run = crate::semantic_indexer_runner::run_required_indexers_exhaustive_typed(
-        &roots.patched_root,
-        &patched_files,
-    )
-    .await;
+    let patched_run =
+        crate::semantic_indexer_runner::run_required_indexers_exhaustive_typed_scoped(
+            &roots.patched_root,
+            &patched_files,
+            &patched_required_documents,
+        )
+        .await;
     let mut failures = Vec::new();
     let mut stage_errors = Vec::new();
     let base_indexes = resolve_indexer_run(
@@ -111,13 +140,17 @@ pub async fn census_historical_v2_semantics_typed(
     let base = build_semantic_snapshot(
         &roots.base_root,
         &source_census.base,
-        &base_files,
+        &all_base_files,
+        &scope.changed_indexers,
+        &scope.base_required_paths,
         &base_indexes,
     );
     let patched = build_semantic_snapshot(
         &roots.patched_root,
         &source_census.patched,
-        &patched_files,
+        &all_patched_files,
+        &scope.changed_indexers,
+        &scope.patched_required_paths,
         &patched_indexes,
     );
     let base = resolve_snapshot_build(
@@ -141,6 +174,12 @@ pub async fn census_historical_v2_semantics_typed(
         canonical_repository: materialization.canonical_repository.clone(),
         materialization_sha256: materialization.materialization_sha256.clone(),
         source_census_sha256: source_census.source_census_sha256.clone(),
+        changed_indexers: scope
+            .changed_indexers
+            .iter()
+            .copied()
+            .map(indexer_kind)
+            .collect(),
         base: base.ok_or_else(|| {
             infrastructure("historical-v2 completed base semantic snapshot was not retained")
         })?,
@@ -182,18 +221,128 @@ pub async fn validate_historical_v2_semantic_census(
     Ok(())
 }
 
+fn semantic_scope(
+    materialization: &HistoricalV2Materialization,
+    roots: &HistoricalV2MaterializedRoots,
+    source_census: &HistoricalV2SourceCensus,
+) -> Result<HistoricalV2SemanticScope, String> {
+    let changed = super::non_blind_history_git::changed_paths(
+        &roots.repository_root,
+        &materialization.base_revision,
+        &materialization.patched_commit_oid,
+    )?;
+    derive_semantic_scope(&changed, &source_census.base, &source_census.patched)
+}
+
+fn derive_semantic_scope(
+    changed: &[super::HistoricalChangedPath],
+    base: &HistoricalV2SourceSnapshotCensus,
+    patched: &HistoricalV2SourceSnapshotCensus,
+) -> Result<HistoricalV2SemanticScope, String> {
+    let base_sources = required_sources_by_path(base)?;
+    let patched_sources = required_sources_by_path(patched)?;
+    let mut base_required_paths = BTreeSet::new();
+    let mut patched_required_paths = BTreeSet::new();
+    let mut changed_indexers = BTreeSet::new();
+
+    for change in changed {
+        if let Some(previous_path) = &change.previous_path
+            && let Some(file) = base_sources.get(previous_path.as_str())
+        {
+            base_required_paths.insert(previous_path.clone());
+            changed_indexers.insert(indexer_for_language(&file.language)?);
+        }
+        if let Some(file) = base_sources.get(change.path.as_str()) {
+            base_required_paths.insert(change.path.clone());
+            changed_indexers.insert(indexer_for_language(&file.language)?);
+        }
+        if let Some(file) = patched_sources.get(change.path.as_str()) {
+            patched_required_paths.insert(change.path.clone());
+            changed_indexers.insert(indexer_for_language(&file.language)?);
+        }
+    }
+
+    Ok(HistoricalV2SemanticScope {
+        changed_indexers,
+        base_required_paths,
+        patched_required_paths,
+    })
+}
+
+fn required_sources_by_path(
+    source: &HistoricalV2SourceSnapshotCensus,
+) -> Result<BTreeMap<&str, &super::HistoricalV2SourceFile>, String> {
+    let mut files = BTreeMap::new();
+    for file in &source.source_files {
+        if file.semantic_coverage != HistoricalV2SourceSemanticCoverage::Required {
+            continue;
+        }
+        if files.insert(file.repository_path.as_str(), file).is_some() {
+            return Err("historical-v2 source scope repeats a repository path".to_string());
+        }
+    }
+    Ok(files)
+}
+
+fn scoped_file_records(
+    root: &Path,
+    files: &[FileRecord],
+    changed_indexers: &BTreeSet<SemanticIndexerKind>,
+    required_paths: &BTreeSet<String>,
+) -> Result<(Vec<FileRecord>, Vec<FileRecord>), String> {
+    let mut execution = Vec::new();
+    let mut required = Vec::new();
+    let mut seen_required = BTreeSet::new();
+    for file in files {
+        let kind = indexer_for_language(&file.language)?;
+        if !changed_indexers.contains(&kind) {
+            continue;
+        }
+        let path = file_repository_path(root, file)?;
+        execution.push(file.clone());
+        if required_paths.contains(&path) {
+            seen_required.insert(path);
+            required.push(file.clone());
+        }
+    }
+    if &seen_required != required_paths {
+        return Err("historical-v2 changed semantic document scope is incomplete".to_string());
+    }
+    Ok((execution, required))
+}
+
+fn file_repository_path(root: &Path, file: &FileRecord) -> Result<String, String> {
+    let path = Path::new(&file.file_path);
+    let relative = path.strip_prefix(root).map_err(|_| {
+        format!(
+            "historical-v2 semantic source {} is outside {}",
+            path.display(),
+            root.display()
+        )
+    })?;
+    let path = relative.to_string_lossy().replace('\\', "/");
+    if path.is_empty() || path.starts_with("../") || path.contains('\0') {
+        return Err("historical-v2 semantic source path is unsafe".to_string());
+    }
+    Ok(path)
+}
+
 fn build_semantic_snapshot(
     root: &Path,
     source: &HistoricalV2SourceSnapshotCensus,
     files: &[FileRecord],
+    changed_indexers: &BTreeSet<SemanticIndexerKind>,
+    required_document_paths: &BTreeSet<String>,
     indexes: &BTreeMap<SemanticIndexerKind, SemanticIndex>,
 ) -> Result<HistoricalV2SemanticSnapshotCensus, String> {
-    let expected_indexers = source
-        .source_files
+    let expected_indexers = files
         .iter()
-        .filter(|file| file.semantic_coverage == HistoricalV2SourceSemanticCoverage::Required)
         .map(|file| indexer_for_language(&file.language))
         .collect::<Result<BTreeSet<_>, String>>()?;
+    let expected_indexers = expected_indexers
+        .intersection(changed_indexers)
+        .copied()
+        .collect::<BTreeSet<_>>();
     if indexes.keys().copied().collect::<BTreeSet<_>>() != expected_indexers {
         return Err("historical-v2 semantic indexer set is incomplete".to_string());
     }
@@ -209,7 +358,31 @@ fn build_semantic_snapshot(
     let mut indexers = Vec::with_capacity(indexes.len());
     for (kind, index) in indexes {
         let files_for_indexer = crate::semantic_indexer_runner::files_for_indexer(files, *kind);
-        let join = join_methods(root, &files_for_indexer, index)?;
+        let mut indexed_files = Vec::new();
+        for file in files_for_indexer {
+            let path = file_repository_path(root, &file)?;
+            if index
+                .documents
+                .contains_key(&crate::semantic_index::RepositoryPath(path.clone()))
+            {
+                indexed_files.push(file);
+                continue;
+            }
+            if required_document_paths.contains(&path) {
+                return Err(format!(
+                    "historical-v2 compiler omitted changed source document {path}"
+                ));
+            }
+            push_compiler_excluded_file_methods(
+                &path,
+                &file,
+                indexer_kind(*kind),
+                UNCHANGED_DOCUMENT_EXCLUSION,
+                &mut expected_methods,
+                &mut methods,
+            )?;
+        }
+        let join = join_methods(root, &indexed_files, index)?;
         for binding in join.bindings.values() {
             let key = (
                 binding.method.file.0.clone(),
@@ -250,6 +423,21 @@ fn build_semantic_snapshot(
                 }),
         );
         indexers.push(summarize_index(*kind, index)?);
+    }
+    for file in files {
+        let kind = indexer_for_language(&file.language)?;
+        if indexes.contains_key(&kind) {
+            continue;
+        }
+        let path = file_repository_path(root, file)?;
+        push_compiler_excluded_file_methods(
+            &path,
+            file,
+            indexer_kind(kind),
+            UNTOUCHED_LANGUAGE_EXCLUSION,
+            &mut expected_methods,
+            &mut methods,
+        )?;
     }
     if !expected_methods.is_empty() {
         return Err(format!(
@@ -293,6 +481,7 @@ fn build_semantic_snapshot(
     let mut snapshot = HistoricalV2SemanticSnapshotCensus {
         revision: source.revision.clone(),
         source_snapshot_census_sha256: source.snapshot_census_sha256.clone(),
+        required_document_paths: required_document_paths.iter().cloned().collect(),
         indexers,
         methods,
         public_symbol_count: public_symbols.len(),
@@ -304,6 +493,54 @@ fn build_semantic_snapshot(
     };
     snapshot.semantic_snapshot_sha256 = semantic_snapshot_sha256(&snapshot)?;
     Ok(snapshot)
+}
+
+fn push_compiler_excluded_file_methods(
+    repository_path: &str,
+    file: &FileRecord,
+    indexer: IntentionalBoundaryIndexerKind,
+    reason: &str,
+    expected_methods: &mut BTreeMap<MethodKey, IntentionalBoundaryMethodCensusEntry>,
+    methods: &mut Vec<IntentionalBoundarySemanticMethod>,
+) -> Result<(), String> {
+    if reason.trim().is_empty() {
+        return Err("historical-v2 compiler exclusion has no evidence".to_string());
+    }
+    for method in &file.methods {
+        let start_line = u32::try_from(method.start_line)
+            .map_err(|_| "historical-v2 excluded method start exceeds SCIP range".to_string())?;
+        let end_line = u32::try_from(method.end_line)
+            .map_err(|_| "historical-v2 excluded method end exceeds SCIP range".to_string())?;
+        let key = (
+            repository_path.to_string(),
+            method.name.clone(),
+            start_line,
+            end_line,
+        );
+        let expected = expected_methods.remove(&key).ok_or_else(|| {
+            format!(
+                "historical-v2 compiler exclusion invented or repeated method {}::{}:{}-{}",
+                key.0, key.1, key.2, key.3
+            )
+        })?;
+        methods.push(IntentionalBoundarySemanticMethod {
+            parser_unit_id: expected.parser_unit_id,
+            repository_path: key.0,
+            symbol_name: expected.symbol_name,
+            start_line: expected.start_line,
+            end_line: expected.end_line,
+            indexer,
+            status: IntentionalBoundarySemanticMethodStatus::CompilerExcluded {
+                reason: reason.to_string(),
+            },
+            occurrences: Vec::new(),
+            calls: Vec::new(),
+            relationships: Vec::new(),
+            imports: Vec::new(),
+            test_relationships: Vec::new(),
+        });
+    }
+    Ok(())
 }
 
 fn snapshot_file_records(
@@ -420,6 +657,7 @@ pub(super) fn semantic_snapshot_sha256(
     hash_json(&(
         &value.revision,
         &value.source_snapshot_census_sha256,
+        &value.required_document_paths,
         &value.indexers,
         &value.methods,
         &value.public_symbols,
@@ -437,6 +675,7 @@ pub(super) fn semantic_census_sha256(value: &HistoricalV2SemanticCensus) -> Resu
         &value.canonical_repository,
         &value.materialization_sha256,
         &value.source_census_sha256,
+        &value.changed_indexers,
         &value.base,
         &value.patched,
     ))

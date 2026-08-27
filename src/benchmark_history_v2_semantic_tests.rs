@@ -14,6 +14,8 @@ fn commits_exact_compiler_facts_for_every_historical_method() {
         fixture.root.path(),
         &fixture.source,
         &fixture.files,
+        &fixture_changed_indexers(),
+        &fixture_required_paths(&fixture.source),
         &fixture.indexes,
     )
     .unwrap();
@@ -28,7 +30,14 @@ fn commits_exact_compiler_facts_for_every_historical_method() {
         snapshot.public_symbols[0].symbol.symbol_id,
         "rust fixture process"
     );
-    validation::validate_snapshot("example/repo", &fixture.source, &snapshot).unwrap();
+    validation::validate_snapshot(
+        "example/repo",
+        &fixture.source,
+        &snapshot,
+        &fixture_changed_indexers(),
+        &fixture_required_paths(&fixture.source),
+    )
+    .unwrap();
 }
 
 #[test]
@@ -52,13 +61,22 @@ fn generated_files_are_committed_but_not_required_from_the_compiler_index() {
         fixture.root.path(),
         &fixture.source,
         &fixture.files,
+        &fixture_changed_indexers(),
+        &fixture_required_paths(&fixture.source),
         &fixture.indexes,
     )
     .unwrap();
 
     assert_eq!(snapshot.methods.len(), 1);
     assert_eq!(snapshot.methods[0].parser_unit_id, "h2m-v1:fixture");
-    validation::validate_snapshot("example/repo", &fixture.source, &snapshot).unwrap();
+    validation::validate_snapshot(
+        "example/repo",
+        &fixture.source,
+        &snapshot,
+        &fixture_changed_indexers(),
+        &fixture_required_paths(&fixture.source),
+    )
+    .unwrap();
 }
 
 #[test]
@@ -68,6 +86,8 @@ fn semantic_validation_rejects_recommitted_invented_method() {
         fixture.root.path(),
         &fixture.source,
         &fixture.files,
+        &fixture_changed_indexers(),
+        &fixture_required_paths(&fixture.source),
         &fixture.indexes,
     )
     .unwrap();
@@ -75,9 +95,15 @@ fn semantic_validation_rejects_recommitted_invented_method() {
     snapshot.semantic_snapshot_sha256 = semantic_snapshot_sha256(&snapshot).unwrap();
 
     assert!(
-        validation::validate_snapshot("example/repo", &fixture.source, &snapshot)
-            .unwrap_err()
-            .contains("invented")
+        validation::validate_snapshot(
+            "example/repo",
+            &fixture.source,
+            &snapshot,
+            &fixture_changed_indexers(),
+            &fixture_required_paths(&fixture.source),
+        )
+        .unwrap_err()
+        .contains("invented")
     );
 }
 
@@ -88,6 +114,8 @@ fn semantic_census_requires_the_exact_language_indexer_set() {
         fixture.root.path(),
         &fixture.source,
         &fixture.files,
+        &fixture_changed_indexers(),
+        &fixture_required_paths(&fixture.source),
         &BTreeMap::new(),
     )
     .unwrap_err();
@@ -102,6 +130,8 @@ fn semantic_validation_rejects_recommitted_fake_public_surface() {
         fixture.root.path(),
         &fixture.source,
         &fixture.files,
+        &fixture_changed_indexers(),
+        &fixture_required_paths(&fixture.source),
         &fixture.indexes,
     )
     .unwrap();
@@ -110,9 +140,15 @@ fn semantic_validation_rejects_recommitted_fake_public_surface() {
     snapshot.semantic_snapshot_sha256 = semantic_snapshot_sha256(&snapshot).unwrap();
 
     assert!(
-        validation::validate_snapshot("example/repo", &fixture.source, &snapshot)
-            .unwrap_err()
-            .contains("public semantic symbol")
+        validation::validate_snapshot(
+            "example/repo",
+            &fixture.source,
+            &snapshot,
+            &fixture_changed_indexers(),
+            &fixture_required_paths(&fixture.source),
+        )
+        .unwrap_err()
+        .contains("public semantic symbol")
     );
 }
 
@@ -354,6 +390,252 @@ fn one_infrastructure_failure_prevents_mixed_batch_exclusion() {
         combine_stage_errors(stage_errors).kind,
         HistoricalV2SlotStageErrorKind::InfrastructureFailed
     );
+}
+
+fn fixture_changed_indexers() -> BTreeSet<SemanticIndexerKind> {
+    BTreeSet::from([SemanticIndexerKind::Rust])
+}
+
+#[test]
+fn unchanged_compiler_invisible_document_is_explicitly_excluded() {
+    let mut fixture = fixture();
+    let index = fixture.indexes.get_mut(&SemanticIndexerKind::Rust).unwrap();
+    index.documents.clear();
+    index.symbols.clear();
+
+    let snapshot = build_semantic_snapshot(
+        fixture.root.path(),
+        &fixture.source,
+        &fixture.files,
+        &fixture_changed_indexers(),
+        &BTreeSet::new(),
+        &fixture.indexes,
+    )
+    .unwrap();
+
+    assert_eq!(snapshot.resolved_method_count, 0);
+    assert_eq!(snapshot.compiler_excluded_method_count, 1);
+    assert!(matches!(
+        &snapshot.methods[0].status,
+        IntentionalBoundarySemanticMethodStatus::CompilerExcluded { reason }
+            if reason == UNCHANGED_DOCUMENT_EXCLUSION
+    ));
+    validation::validate_snapshot(
+        "example/repo",
+        &fixture.source,
+        &snapshot,
+        &fixture_changed_indexers(),
+        &BTreeSet::new(),
+    )
+    .unwrap();
+}
+
+#[test]
+fn changed_compiler_invisible_document_still_fails_closed() {
+    let mut fixture = fixture();
+    let index = fixture.indexes.get_mut(&SemanticIndexerKind::Rust).unwrap();
+    index.documents.clear();
+    index.symbols.clear();
+
+    let error = build_semantic_snapshot(
+        fixture.root.path(),
+        &fixture.source,
+        &fixture.files,
+        &fixture_changed_indexers(),
+        &fixture_required_paths(&fixture.source),
+        &fixture.indexes,
+    )
+    .unwrap_err();
+
+    assert!(error.contains("omitted changed source document src/lib.rs"));
+}
+
+#[test]
+fn untouched_language_methods_are_explicitly_excluded_without_an_indexer() {
+    let fixture = fixture();
+    let snapshot = build_semantic_snapshot(
+        fixture.root.path(),
+        &fixture.source,
+        &fixture.files,
+        &BTreeSet::new(),
+        &BTreeSet::new(),
+        &BTreeMap::new(),
+    )
+    .unwrap();
+
+    assert!(snapshot.indexers.is_empty());
+    assert_eq!(snapshot.compiler_excluded_method_count, 1);
+    assert!(matches!(
+        &snapshot.methods[0].status,
+        IntentionalBoundarySemanticMethodStatus::CompilerExcluded { reason }
+            if reason == UNTOUCHED_LANGUAGE_EXCLUSION
+    ));
+    validation::validate_snapshot(
+        "example/repo",
+        &fixture.source,
+        &snapshot,
+        &BTreeSet::new(),
+        &BTreeSet::new(),
+    )
+    .unwrap();
+}
+
+#[test]
+fn renamed_source_requires_the_exact_old_and_new_documents() {
+    let fixture = fixture();
+    let mut patched = fixture.source.clone();
+    patched.source_files[0].repository_path = "src/renamed.rs".to_string();
+    let scope = derive_semantic_scope(
+        &[super::super::HistoricalChangedPath {
+            status: "R100".to_string(),
+            previous_path: Some("src/lib.rs".to_string()),
+            path: "src/renamed.rs".to_string(),
+        }],
+        &fixture.source,
+        &patched,
+    )
+    .unwrap();
+
+    assert_eq!(scope.changed_indexers, fixture_changed_indexers());
+    assert_eq!(
+        scope.base_required_paths,
+        BTreeSet::from(["src/lib.rs".to_string()])
+    );
+    assert_eq!(
+        scope.patched_required_paths,
+        BTreeSet::from(["src/renamed.rs".to_string()])
+    );
+}
+
+#[test]
+fn empty_revision_does_not_require_an_indexer_for_a_changed_language() {
+    let fixture = fixture();
+    let mut source = fixture.source.clone();
+    source.source_files.clear();
+    source.source_file_count = 0;
+    source.method_counts_by_language.clear();
+    source.method_count = 0;
+
+    let snapshot = build_semantic_snapshot(
+        fixture.root.path(),
+        &source,
+        &[],
+        &fixture_changed_indexers(),
+        &BTreeSet::new(),
+        &BTreeMap::new(),
+    )
+    .unwrap();
+
+    assert!(snapshot.indexers.is_empty());
+    assert!(snapshot.methods.is_empty());
+    validation::validate_snapshot(
+        "example/repo",
+        &source,
+        &snapshot,
+        &fixture_changed_indexers(),
+        &BTreeSet::new(),
+    )
+    .unwrap();
+}
+
+#[test]
+fn cross_language_rename_scopes_each_revision_to_its_own_document() {
+    let fixture = fixture();
+    let mut patched = fixture.source.clone();
+    patched.source_files[0].repository_path = "src/process.py".to_string();
+    patched.source_files[0].language = "python".to_string();
+    let scope = derive_semantic_scope(
+        &[super::super::HistoricalChangedPath {
+            status: "R100".to_string(),
+            previous_path: Some("src/lib.rs".to_string()),
+            path: "src/process.py".to_string(),
+        }],
+        &fixture.source,
+        &patched,
+    )
+    .unwrap();
+
+    assert_eq!(
+        scope.changed_indexers,
+        BTreeSet::from([SemanticIndexerKind::Python, SemanticIndexerKind::Rust])
+    );
+    assert_eq!(
+        scope.base_required_paths,
+        BTreeSet::from(["src/lib.rs".to_string()])
+    );
+    assert_eq!(
+        scope.patched_required_paths,
+        BTreeSet::from(["src/process.py".to_string()])
+    );
+}
+
+#[test]
+fn semantic_validation_rejects_recommitted_required_document_scope_tampering() {
+    let fixture = fixture();
+    let required_paths = fixture_required_paths(&fixture.source);
+    let mut snapshot = build_semantic_snapshot(
+        fixture.root.path(),
+        &fixture.source,
+        &fixture.files,
+        &fixture_changed_indexers(),
+        &required_paths,
+        &fixture.indexes,
+    )
+    .unwrap();
+    let original_hash = snapshot.semantic_snapshot_sha256.clone();
+    snapshot.required_document_paths.clear();
+    snapshot.semantic_snapshot_sha256 = semantic_snapshot_sha256(&snapshot).unwrap();
+    assert_ne!(snapshot.semantic_snapshot_sha256, original_hash);
+
+    let error = validation::validate_snapshot(
+        "example/repo",
+        &fixture.source,
+        &snapshot,
+        &fixture_changed_indexers(),
+        &required_paths,
+    )
+    .unwrap_err();
+
+    assert!(error.contains("semantic snapshot identity changed"));
+}
+
+#[test]
+fn semantic_census_hash_binds_the_changed_indexer_scope() {
+    let fixture = fixture();
+    let snapshot = build_semantic_snapshot(
+        fixture.root.path(),
+        &fixture.source,
+        &fixture.files,
+        &fixture_changed_indexers(),
+        &fixture_required_paths(&fixture.source),
+        &fixture.indexes,
+    )
+    .unwrap();
+    let mut census = HistoricalV2SemanticCensus {
+        schema_version: HISTORICAL_V2_SEMANTIC_CENSUS_SCHEMA_VERSION,
+        semantic_census_contract: SEMANTIC_CENSUS_CONTRACT.to_string(),
+        canonical_repository: "example/repo".to_string(),
+        materialization_sha256: "a".repeat(64),
+        source_census_sha256: "b".repeat(64),
+        changed_indexers: vec![IntentionalBoundaryIndexerKind::Rust],
+        base: snapshot.clone(),
+        patched: snapshot,
+        semantic_census_sha256: String::new(),
+    };
+    let original_hash = semantic_census_sha256(&census).unwrap();
+
+    census.changed_indexers = vec![IntentionalBoundaryIndexerKind::Python];
+
+    assert_ne!(semantic_census_sha256(&census).unwrap(), original_hash);
+}
+
+fn fixture_required_paths(source: &HistoricalV2SourceSnapshotCensus) -> BTreeSet<String> {
+    source
+        .source_files
+        .iter()
+        .filter(|file| file.semantic_coverage == HistoricalV2SourceSemanticCoverage::Required)
+        .map(|file| file.repository_path.clone())
+        .collect()
 }
 
 struct Fixture {
