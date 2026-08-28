@@ -38,8 +38,11 @@ pub(crate) fn install_test_semantic_recovery_marker(root: &Path) -> Result<(), S
     Ok(())
 }
 
+#[path = "semantic_indexer_go_project.rs"]
+mod go_project;
 #[path = "semantic_indexer_gradle_preparation.rs"]
 mod gradle_preparation;
+use go_project::require_go_project_root;
 #[cfg(windows)]
 #[path = "semantic_indexer_gradle_windows.rs"]
 mod gradle_windows;
@@ -325,6 +328,9 @@ async fn run_required_indexer_typed(
             Some(kind),
             "refusing to overwrite repository file index.scip; remove or relocate it before indexing",
         ));
+    }
+    if kind == SemanticIndexerKind::Go {
+        require_go_project_root(root)?;
     }
     if std::env::var_os("SNIFF_DEBUG_INDEXERS").is_some() {
         eprintln!("[sniff] semantic indexer start: {}", spec.display_name);
