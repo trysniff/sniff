@@ -213,6 +213,54 @@ fn durable_journal_round_trips_each_completed_artifact() {
 }
 
 #[test]
+fn durable_journal_reads_the_pre_migration_pretty_artifact_representation() {
+    let temp = tempfile::tempdir().unwrap();
+    let state = temp.path().join("state");
+    let artifact = json!({
+        "methods": [
+            {"name": "first", "status": "resolved"},
+            {"name": "second", "status": "resolved"}
+        ]
+    });
+    {
+        let mut journal = HistoricalV2SlotStageJournal::open(&state, "rust", 1).unwrap();
+        journal
+            .append(
+                checkpoint_input(
+                    HistoricalV2SlotStage::Payload,
+                    completed(HistoricalV2StageArtifactKind::SelectedPayload),
+                ),
+                Some(&artifact),
+            )
+            .unwrap();
+    }
+
+    let transaction_root = state.join("rust/slot-0001/0001-payload");
+    let artifact_path = transaction_root.join("artifact.json");
+    let mut pretty_artifact = serde_json::to_vec_pretty(&artifact).unwrap();
+    pretty_artifact.push(b'\n');
+    fs::write(&artifact_path, &pretty_artifact).unwrap();
+
+    let transaction_path = transaction_root.join("_transaction.json");
+    let mut transaction: serde_json::Value =
+        serde_json::from_slice(&fs::read(&transaction_path).unwrap()).unwrap();
+    let artifact_entry = transaction["files"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|entry| entry["name"] == "artifact.json")
+        .unwrap();
+    artifact_entry["byte_count"] = serde_json::json!(pretty_artifact.len());
+    artifact_entry["sha256"] = serde_json::json!(format!("{:x}", Sha256::digest(&pretty_artifact)));
+    let mut transaction_bytes = serde_json::to_vec_pretty(&transaction).unwrap();
+    transaction_bytes.push(b'\n');
+    fs::write(transaction_path, transaction_bytes).unwrap();
+
+    let resumed = HistoricalV2SlotStageJournal::open(&state, "rust", 1).unwrap();
+    assert_eq!(resumed.history()[0].artifact.as_ref(), Some(&artifact));
+}
+
+#[test]
 fn durable_journal_recovers_torn_staging_but_rejects_committed_tampering() {
     let temp = tempfile::tempdir().unwrap();
     let state = temp.path().join("state");

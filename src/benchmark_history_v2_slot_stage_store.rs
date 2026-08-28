@@ -1,6 +1,6 @@
 use super::super::history_v2_slot_store_support::{
     SlotFileLock, canonical_directory, read_limited, require_plain_directory, sha256,
-    sync_directory, validate_slot_path, write_json_new,
+    sync_directory, validate_slot_path, write_compact_json_new, write_json_new,
 };
 use super::{
     HistoricalV2SlotStage, HistoricalV2SlotStageCheckpoint, HistoricalV2SlotStageCheckpointInput,
@@ -21,6 +21,7 @@ const ARTIFACT_FILE: &str = "artifact.json";
 const MAX_TRANSACTION_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_CHECKPOINT_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_ARTIFACT_BYTES: u64 = 128 * 1024 * 1024;
+const MAX_SEMANTIC_CENSUS_ARTIFACT_BYTES: u64 = 512 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -276,13 +277,13 @@ fn publish_stage<T: Serialize>(
         MAX_CHECKPOINT_BYTES,
     )?;
     if let Some(artifact) = artifact {
-        write_json_new(
+        write_compact_json_new(
             &staging_root.join(ARTIFACT_FILE),
             artifact,
-            MAX_ARTIFACT_BYTES,
+            artifact_limit(checkpoint.stage),
         )?;
     }
-    let files = committed_files(staging_root, artifact.is_some())?;
+    let files = committed_files(staging_root, artifact.is_some(), checkpoint.stage)?;
     let transaction = StageTransaction {
         schema_version: TRANSACTION_SCHEMA_VERSION,
         transaction_contract: TRANSACTION_CONTRACT.to_string(),
@@ -370,7 +371,7 @@ fn load_stage(root: &Path, sequence: usize) -> Result<HistoricalV2StoredSlotStag
         || transaction.transaction_contract != TRANSACTION_CONTRACT
         || transaction.sequence != sequence
         || transaction.checkpoint_sha256 != checkpoint.checkpoint_sha256
-        || transaction.files != committed_files(root, has_artifact)?
+        || transaction.files != committed_files(root, has_artifact, checkpoint.stage)?
     {
         return Err("historical-v2 stage transaction commitment changed".to_string());
     }
@@ -378,7 +379,7 @@ fn load_stage(root: &Path, sequence: usize) -> Result<HistoricalV2StoredSlotStag
         .then(|| {
             serde_json::from_slice::<Value>(&read_limited(
                 &root.join(ARTIFACT_FILE),
-                MAX_ARTIFACT_BYTES,
+                artifact_limit(checkpoint.stage),
                 "stage artifact",
             )?)
             .map_err(|error| format!("invalid historical-v2 stage artifact: {error}"))
@@ -390,10 +391,14 @@ fn load_stage(root: &Path, sequence: usize) -> Result<HistoricalV2StoredSlotStag
     })
 }
 
-fn committed_files(root: &Path, has_artifact: bool) -> Result<Vec<CommittedFile>, String> {
+fn committed_files(
+    root: &Path,
+    has_artifact: bool,
+    stage: HistoricalV2SlotStage,
+) -> Result<Vec<CommittedFile>, String> {
     let mut inputs = vec![(CHECKPOINT_FILE, MAX_CHECKPOINT_BYTES)];
     if has_artifact {
-        inputs.insert(0, (ARTIFACT_FILE, MAX_ARTIFACT_BYTES));
+        inputs.insert(0, (ARTIFACT_FILE, artifact_limit(stage)));
     }
     inputs
         .into_iter()
@@ -407,6 +412,21 @@ fn committed_files(root: &Path, has_artifact: bool) -> Result<Vec<CommittedFile>
             })
         })
         .collect()
+}
+
+fn artifact_limit(stage: HistoricalV2SlotStage) -> u64 {
+    match stage {
+        HistoricalV2SlotStage::SemanticCensus => MAX_SEMANTIC_CENSUS_ARTIFACT_BYTES,
+        HistoricalV2SlotStage::Payload
+        | HistoricalV2SlotStage::Materialization
+        | HistoricalV2SlotStage::TestMaterialization
+        | HistoricalV2SlotStage::SourceCensus
+        | HistoricalV2SlotStage::AssessmentIdentity
+        | HistoricalV2SlotStage::Qualification
+        | HistoricalV2SlotStage::TestRecipe
+        | HistoricalV2SlotStage::IdenticalTests
+        | HistoricalV2SlotStage::ReadyForReview => MAX_ARTIFACT_BYTES,
+    }
 }
 
 fn transaction_file_names(root: &Path) -> Result<Vec<&'static str>, String> {
@@ -478,4 +498,30 @@ fn remove_incomplete(language_root: &Path, staging_root: &Path) -> Result<(), St
         format!("failed to remove incomplete historical-v2 stage transaction: {error}")
     })?;
     sync_directory(language_root)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn semantic_census_has_the_only_expanded_artifact_bound() {
+        assert_eq!(
+            artifact_limit(HistoricalV2SlotStage::SemanticCensus),
+            512 * 1024 * 1024
+        );
+        for stage in [
+            HistoricalV2SlotStage::Payload,
+            HistoricalV2SlotStage::Materialization,
+            HistoricalV2SlotStage::TestMaterialization,
+            HistoricalV2SlotStage::SourceCensus,
+            HistoricalV2SlotStage::AssessmentIdentity,
+            HistoricalV2SlotStage::Qualification,
+            HistoricalV2SlotStage::TestRecipe,
+            HistoricalV2SlotStage::IdenticalTests,
+            HistoricalV2SlotStage::ReadyForReview,
+        ] {
+            assert_eq!(artifact_limit(stage), 128 * 1024 * 1024, "{stage:?}");
+        }
+    }
 }

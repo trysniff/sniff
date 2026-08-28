@@ -172,6 +172,94 @@ class ManifestTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 transport.validate_manifest(path, transport.FRAME_RUN_ID + 1)
 
+    def test_storage_migration_is_explicit_bound_and_one_way(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = pathlib.Path(temporary, "manifest.json")
+            source = transport.STORAGE_MIGRATION_FROM_COLLECTOR_SHA
+            target = "c" * 40
+            transport.initialize_manifest(path, source, transport.FRAME_RUN_ID)
+            self.assertEqual(
+                transport.migrate_manifest(
+                    path,
+                    transport.FRAME_RUN_ID,
+                    target,
+                    transport.STORAGE_MIGRATION_NAME,
+                    33_085_745_961,
+                    source,
+                    9_662_095_012,
+                    "sha256:" + "d" * 64,
+                    348_102_634,
+                ),
+                target,
+            )
+            self.assertEqual(
+                transport.validate_manifest(path, transport.FRAME_RUN_ID), target
+            )
+            value = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(value["schema_version"], 2)
+            self.assertEqual(
+                value["collector_migrations"],
+                [
+                    {
+                        "from_collector_sha": source,
+                        "migration_contract": transport.STORAGE_MIGRATION_CONTRACT,
+                        "migration_name": transport.STORAGE_MIGRATION_NAME,
+                        "source_artifact_digest": "sha256:" + "d" * 64,
+                        "source_artifact_id": 9_662_095_012,
+                        "source_artifact_size": 348_102_634,
+                        "source_head_sha": source,
+                        "source_run_id": 33_085_745_961,
+                        "to_collector_sha": target,
+                    }
+                ],
+            )
+            for field in (
+                "source_artifact_id",
+                "source_artifact_size",
+                "source_run_id",
+            ):
+                tampered = json.loads(json.dumps(value))
+                tampered["collector_migrations"][0][field] = True
+                path.write_text(json.dumps(tampered), encoding="utf-8")
+                with self.subTest(field=field), self.assertRaises(ValueError):
+                    transport.validate_manifest(path, transport.FRAME_RUN_ID)
+            path.write_text(json.dumps(value), encoding="utf-8")
+            with self.assertRaises(ValueError):
+                transport.migrate_manifest(
+                    path,
+                    transport.FRAME_RUN_ID,
+                    "e" * 40,
+                    transport.STORAGE_MIGRATION_NAME,
+                    1,
+                    target,
+                    1,
+                    "sha256:" + "f" * 64,
+                    1,
+                )
+
+    def test_storage_migration_rejects_unapproved_source_or_name(self) -> None:
+        attempts = (
+            ("a" * 40, transport.STORAGE_MIGRATION_NAME),
+            (transport.STORAGE_MIGRATION_FROM_COLLECTOR_SHA, "generic-migration"),
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            for index, (source, name) in enumerate(attempts):
+                path = root.joinpath(f"manifest-{index}.json")
+                transport.initialize_manifest(path, source, transport.FRAME_RUN_ID)
+                with self.subTest(source=source, name=name), self.assertRaises(ValueError):
+                    transport.migrate_manifest(
+                        path,
+                        transport.FRAME_RUN_ID,
+                        "b" * 40,
+                        name,
+                        1,
+                        source,
+                        1,
+                        "sha256:" + "c" * 64,
+                        1,
+                    )
+
 
 class FrameTests(unittest.TestCase):
     def test_exact_synthetic_frame_contract_passes_and_tampering_fails(self) -> None:
@@ -265,7 +353,7 @@ class WorkflowContractTests(unittest.TestCase):
     def test_marker_recovery_precedes_snapshot_archival(self) -> None:
         workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
         seal = workflow.index("- name: Seal resumable assessment state")
-        recover = workflow.index("sniffbench-frame recover-slot-work", seal)
+        recover = workflow.index("recover-slot-work", seal)
         archive = workflow.index("tar --create", recover)
         upload = workflow.index("- name: Upload immutable resumable assessment state", archive)
         seal_body = workflow[seal:upload]
@@ -273,8 +361,8 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertLess(seal, recover)
         self.assertLess(recover, archive)
         for required in (
-            "--protocol sniffbench/historical-v2-protocol.json",
-            '--artifact-root "$GITHUB_WORKSPACE"',
+            '--protocol "$COLLECTOR_ROOT/sniffbench/historical-v2-protocol.json"',
+            '--artifact-root "$COLLECTOR_ROOT"',
             '--frame "$FRAME_ROOT/frame.json"',
             '--exclusions "$FRAME_ROOT/exclusions.json"',
             '--selection "$FRAME_ROOT/selection.json"',
@@ -291,6 +379,26 @@ class WorkflowContractTests(unittest.TestCase):
             "ANTHROPIC_API_KEY",
         ):
             self.assertNotIn(provider_variable, seal_body)
+
+    def test_resume_freezes_collector_and_migration_is_explicit(self) -> None:
+        workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+        for required in (
+            "collector_migration:",
+            "COLLECTOR_MIGRATION: ${{ inputs.collector_migration }}",
+            "compact-stage-artifact-json-v1",
+            '"$transport" migrate-manifest',
+            '"$PRIOR_HEAD_SHA" "$PRIOR_ARTIFACT_ID"',
+            '"$PRIOR_ARTIFACT_DIGEST" "$PRIOR_ARTIFACT_SIZE"',
+            'collector_root="${RUNNER_TEMP}/historical-v2-assessment-collector"',
+            'git -C "$collector_root" checkout --quiet --detach FETCH_HEAD',
+            'test "$(git -C "$collector_root" rev-parse HEAD)" = "$collector_sha"',
+            'cd "$COLLECTOR_ROOT"',
+            '"$COLLECTOR_ROOT/target/release/sniffbench-frame" run-slots',
+            '--artifact-root "$COLLECTOR_ROOT"',
+        ):
+            self.assertIn(required, workflow)
+        self.assertNotIn('target/release/sniffbench-frame run-slots', workflow)
+        self.assertNotIn('--artifact-root "$GITHUB_WORKSPACE"', workflow)
 
 
 if __name__ == "__main__":
