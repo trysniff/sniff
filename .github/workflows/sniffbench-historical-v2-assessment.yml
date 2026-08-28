@@ -17,6 +17,10 @@ on:
         required: true
         default: "1"
         type: string
+      collector_migration:
+        description: "Explicit allowlisted collector migration; empty for an ordinary resume"
+        required: false
+        type: string
 
 permissions:
   actions: read
@@ -37,6 +41,7 @@ jobs:
       FRAME_RUN_ID: ${{ inputs.frame_run_id }}
       MAX_NEW_SLOTS: ${{ inputs.max_new_slots }}
       RESUME_RUN_ID: ${{ inputs.resume_run_id }}
+      COLLECTOR_MIGRATION: ${{ inputs.collector_migration }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -64,6 +69,16 @@ jobs:
           if [[ "$RESUME_RUN_ID" == "$GITHUB_RUN_ID" ]]; then
             echo 'an assessment run cannot resume itself' >&2
             exit 1
+          fi
+          if [[ -n "$COLLECTOR_MIGRATION" ]]; then
+            if [[ -z "$RESUME_RUN_ID" ]]; then
+              echo 'collector_migration requires resume_run_id' >&2
+              exit 1
+            fi
+            if [[ "$COLLECTOR_MIGRATION" != 'compact-stage-artifact-json-v1' ]]; then
+              echo 'collector_migration is not an allowlisted exact migration' >&2
+              exit 1
+            fi
           fi
           for variable in \
             SNIFF_API_KEY SNIFF_ENDPOINT SNIFF_MODEL \
@@ -160,6 +175,21 @@ jobs:
               and (.digest | test("^sha256:[0-9a-f]{64}$"))
           ' <<<"$artifacts" >/dev/null
 
+          artifact="$(jq --exit-status --compact-output '
+            .artifacts[]
+            | select(.name == "historical-v2-assessment-state")
+          ' <<<"$artifacts")"
+          prior_head_sha="$(jq --raw-output '.head_sha' <<<"$run")"
+          prior_artifact_id="$(jq --raw-output '.id' <<<"$artifact")"
+          prior_artifact_digest="$(jq --raw-output '.digest' <<<"$artifact")"
+          prior_artifact_size="$(jq --raw-output '.size_in_bytes' <<<"$artifact")"
+          {
+            printf 'PRIOR_HEAD_SHA=%s\n' "$prior_head_sha"
+            printf 'PRIOR_ARTIFACT_ID=%s\n' "$prior_artifact_id"
+            printf 'PRIOR_ARTIFACT_DIGEST=%s\n' "$prior_artifact_digest"
+            printf 'PRIOR_ARTIFACT_SIZE=%s\n' "$prior_artifact_size"
+          } >> "$GITHUB_ENV"
+
       - name: Download prior immutable assessment state
         if: inputs.resume_run_id != ''
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -230,12 +260,37 @@ jobs:
           if [[ -n "$RESUME_RUN_ID" ]]; then
             collector_sha="$(python3 "$transport" validate-manifest \
               "$manifest" "$FRAME_RUN_ID")"
+            if [[ -n "$COLLECTOR_MIGRATION" ]]; then
+              collector_sha="$(python3 "$transport" migrate-manifest \
+                "$manifest" "$FRAME_RUN_ID" "$GITHUB_SHA" \
+                "$COLLECTOR_MIGRATION" "$RESUME_RUN_ID" \
+                "$PRIOR_HEAD_SHA" "$PRIOR_ARTIFACT_ID" \
+                "$PRIOR_ARTIFACT_DIGEST" "$PRIOR_ARTIFACT_SIZE")"
+            fi
           else
             collector_sha="$GITHUB_SHA"
             python3 "$transport" initialize-manifest \
               "$manifest" "$collector_sha" "$FRAME_RUN_ID"
           fi
-          printf 'COLLECTOR_SHA=%s\n' "$collector_sha" >> "$GITHUB_ENV"
+          collector_root="$GITHUB_WORKSPACE"
+          if [[ "$collector_sha" != "$GITHUB_SHA" ]]; then
+            collector_root="${RUNNER_TEMP}/historical-v2-assessment-collector"
+            if [[ -e "$collector_root" ]]; then
+              echo 'frozen collector root already exists' >&2
+              exit 1
+            fi
+            git init --quiet "$collector_root"
+            git -C "$collector_root" -c protocol.version=2 fetch \
+              --quiet --no-tags --depth=1 \
+              "https://github.com/${GITHUB_REPOSITORY}.git" "$collector_sha"
+            git -C "$collector_root" checkout --quiet --detach FETCH_HEAD
+          fi
+          test "$(git -C "$collector_root" rev-parse HEAD)" = "$collector_sha"
+          test -z "$(git -C "$collector_root" status --porcelain=v1 --untracked-files=all)"
+          {
+            printf 'COLLECTOR_SHA=%s\n' "$collector_sha"
+            printf 'COLLECTOR_ROOT=%s\n' "$collector_root"
+          } >> "$GITHUB_ENV"
 
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
         with:
@@ -276,16 +331,16 @@ jobs:
           command -v pnpm
           command -v yarn
 
-      - name: Restore the frozen assessment collector
+      - name: Verify the exact frozen assessment collector
         shell: bash
         run: |
           set -euo pipefail
-          if [[ "$(git rev-parse HEAD)" != "$COLLECTOR_SHA" ]]; then
-            git fetch --no-tags --depth=1 origin "$COLLECTOR_SHA"
-            git checkout --detach "$COLLECTOR_SHA"
+          if [[ ! -d "$COLLECTOR_ROOT" || -L "$COLLECTOR_ROOT" ]]; then
+            echo 'frozen collector root is not a plain directory' >&2
+            exit 1
           fi
-          test "$(git rev-parse HEAD)" = "$COLLECTOR_SHA"
-          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          test "$(git -C "$COLLECTOR_ROOT" rev-parse HEAD)" = "$COLLECTOR_SHA"
+          test -z "$(git -C "$COLLECTOR_ROOT" status --porcelain=v1 --untracked-files=all)"
 
       - name: Materialize the exact execution harness
         shell: bash
@@ -345,17 +400,20 @@ jobs:
           fi
 
       - name: Build the frozen assessment tools
-        run: >-
-          cargo build --release --locked --features sniffbench-frame
-          --bin sniff --bin sniffbench-frame
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$COLLECTOR_ROOT"
+          cargo build --release --locked --features sniffbench-frame \
+            --bin sniff --bin sniffbench-frame
 
       - name: Install every pinned semantic indexer
         shell: bash
         run: |
           set -euo pipefail
           for fixture in typescript javascript python go kotlin rust; do
-            target/release/sniff indexers install \
-              "tests/semantic_gold_fixtures/${fixture}" --yes
+            "$COLLECTOR_ROOT/target/release/sniff" indexers install \
+              "$COLLECTOR_ROOT/tests/semantic_gold_fixtures/${fixture}" --yes
           done
 
       - name: Prove model-provider access remains unavailable
@@ -378,9 +436,9 @@ jobs:
         run: |
           set +e
           timeout --foreground --signal=INT --kill-after=60s 300m \
-            target/release/sniffbench-frame run-slots \
-              --protocol sniffbench/historical-v2-protocol.json \
-              --artifact-root "$GITHUB_WORKSPACE" \
+            "$COLLECTOR_ROOT/target/release/sniffbench-frame" run-slots \
+              --protocol "$COLLECTOR_ROOT/sniffbench/historical-v2-protocol.json" \
+              --artifact-root "$COLLECTOR_ROOT" \
               --frame "$FRAME_ROOT/frame.json" \
               --exclusions "$FRAME_ROOT/exclusions.json" \
               --selection "$FRAME_ROOT/selection.json" \
@@ -406,9 +464,9 @@ jobs:
               exit 1
             fi
           done
-          target/release/sniffbench-frame recover-slot-work \
-            --protocol sniffbench/historical-v2-protocol.json \
-            --artifact-root "$GITHUB_WORKSPACE" \
+          "$COLLECTOR_ROOT/target/release/sniffbench-frame" recover-slot-work \
+            --protocol "$COLLECTOR_ROOT/sniffbench/historical-v2-protocol.json" \
+            --artifact-root "$COLLECTOR_ROOT" \
             --frame "$FRAME_ROOT/frame.json" \
             --exclusions "$FRAME_ROOT/exclusions.json" \
             --selection "$FRAME_ROOT/selection.json" \

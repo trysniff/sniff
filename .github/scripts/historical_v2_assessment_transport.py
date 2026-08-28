@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import pathlib
 import re
 import sys
@@ -45,6 +46,13 @@ EXCLUSION_MANIFEST_SHA256 = (
 )
 SELECTION_SHA256 = "d37f4bef7616e5da5dd08b161e497432aa42c5eba32d633da9a9b431d65e98e3"
 PAYLOADS_SHA256 = "16b1da8b149a1ecc9d101eef05435b9d1ac504044ebbd644922d39ecc3999bd5"
+STORAGE_MIGRATION_NAME = "compact-stage-artifact-json-v1"
+STORAGE_MIGRATION_CONTRACT = (
+    "sniffbench-historical-v2-collector-storage-migration-v1"
+)
+STORAGE_MIGRATION_FROM_COLLECTOR_SHA = (
+    "655093e6d55bdcb6e85560136f07c20c35f1f4ba"
+)
 
 FRAME_FILE_SHA256 = {
     "environment.txt": "2e87f3c3e1b2005f6b6d09b1bf1b82d30a9433636c3c67f0806cc68e80ab6800",
@@ -287,7 +295,7 @@ def validate_frame(frame_root: pathlib.Path) -> None:
     )
 
 
-def _manifest(frame_run_id: int, collector_sha: str) -> dict[str, Any]:
+def _manifest_base(frame_run_id: int, collector_sha: str) -> dict[str, Any]:
     if frame_run_id != FRAME_RUN_ID:
         raise ValueError(f"frame run ID must be {FRAME_RUN_ID}")
     if re.fullmatch(r"[0-9a-f]{40}", collector_sha) is None:
@@ -309,9 +317,25 @@ def _manifest(frame_run_id: int, collector_sha: str) -> dict[str, Any]:
         "model_provider_access": False,
         "payloads_sha256": PAYLOADS_SHA256,
         "protocol_sha256": PROTOCOL_SHA256,
-        "schema_version": 1,
         "selection_sha256": SELECTION_SHA256,
     }
+
+
+def _manifest(frame_run_id: int, collector_sha: str) -> dict[str, Any]:
+    value = _manifest_base(frame_run_id, collector_sha)
+    value["schema_version"] = 1
+    return value
+
+
+def _migrated_manifest(
+    frame_run_id: int,
+    collector_sha: str,
+    migration: Mapping[str, Any],
+) -> dict[str, Any]:
+    value = _manifest_base(frame_run_id, collector_sha)
+    value["collector_migrations"] = [dict(migration)]
+    value["schema_version"] = 2
+    return value
 
 
 def initialize_manifest(
@@ -333,7 +357,20 @@ def validate_manifest(path: pathlib.Path, frame_run_id: int) -> str:
     collector_sha = value.get("collector_sha")
     if not isinstance(collector_sha, str):
         raise ValueError("transport manifest collector SHA is missing")
-    expected = _manifest(frame_run_id, collector_sha)
+    schema_version = value.get("schema_version")
+    if schema_version == 1:
+        expected = _manifest(frame_run_id, collector_sha)
+    elif schema_version == 2:
+        migrations = value.get("collector_migrations")
+        if not isinstance(migrations, list) or len(migrations) != 1:
+            raise ValueError("transport manifest collector migration is invalid")
+        migration = _require_mapping(
+            migrations[0], "transport manifest collector migration"
+        )
+        _validate_storage_migration(migration, collector_sha)
+        expected = _migrated_manifest(frame_run_id, collector_sha, migration)
+    else:
+        raise ValueError("transport manifest schema version is unsupported")
     if value != expected:
         differing = sorted(
             key
@@ -342,6 +379,97 @@ def validate_manifest(path: pathlib.Path, frame_run_id: int) -> str:
         )
         raise ValueError(f"transport manifest drifted: {differing}")
     return collector_sha
+
+
+def _validate_storage_migration(
+    migration: Mapping[str, Any], collector_sha: str
+) -> None:
+    expected_fields = {
+        "from_collector_sha",
+        "migration_contract",
+        "migration_name",
+        "source_artifact_digest",
+        "source_artifact_id",
+        "source_artifact_size",
+        "source_head_sha",
+        "source_run_id",
+        "to_collector_sha",
+    }
+    if set(migration) != expected_fields:
+        raise ValueError("transport manifest collector migration fields changed")
+    if (
+        migration.get("migration_contract") != STORAGE_MIGRATION_CONTRACT
+        or migration.get("migration_name") != STORAGE_MIGRATION_NAME
+        or migration.get("from_collector_sha")
+        != STORAGE_MIGRATION_FROM_COLLECTOR_SHA
+        or migration.get("source_head_sha")
+        != STORAGE_MIGRATION_FROM_COLLECTOR_SHA
+        or migration.get("to_collector_sha") != collector_sha
+        or collector_sha == STORAGE_MIGRATION_FROM_COLLECTOR_SHA
+        or re.fullmatch(r"[0-9a-f]{40}", collector_sha) is None
+        or type(migration.get("source_run_id")) is not int
+        or migration["source_run_id"] <= 0
+        or type(migration.get("source_artifact_id")) is not int
+        or migration["source_artifact_id"] <= 0
+        or type(migration.get("source_artifact_size")) is not int
+        or migration["source_artifact_size"] <= 0
+        or not isinstance(migration.get("source_artifact_digest"), str)
+        or re.fullmatch(
+            r"sha256:[0-9a-f]{64}", migration["source_artifact_digest"]
+        )
+        is None
+    ):
+        raise ValueError("transport manifest collector migration is invalid")
+
+
+def migrate_manifest(
+    path: pathlib.Path,
+    frame_run_id: int,
+    target_collector_sha: str,
+    migration_name: str,
+    source_run_id: int,
+    source_head_sha: str,
+    source_artifact_id: int,
+    source_artifact_digest: str,
+    source_artifact_size: int,
+) -> str:
+    value = _require_mapping(
+        _read_json(path, "transport manifest"), "transport manifest"
+    )
+    if value.get("schema_version") != 1:
+        raise ValueError("only an original collector manifest can be migrated")
+    source_collector_sha = validate_manifest(path, frame_run_id)
+    migration = {
+        "from_collector_sha": source_collector_sha,
+        "migration_contract": STORAGE_MIGRATION_CONTRACT,
+        "migration_name": migration_name,
+        "source_artifact_digest": source_artifact_digest,
+        "source_artifact_id": source_artifact_id,
+        "source_artifact_size": source_artifact_size,
+        "source_head_sha": source_head_sha,
+        "source_run_id": source_run_id,
+        "to_collector_sha": target_collector_sha,
+    }
+    _validate_storage_migration(migration, target_collector_sha)
+    migrated = _migrated_manifest(frame_run_id, target_collector_sha, migration)
+    temporary = path.with_name(f".{path.name}.migrating")
+    try:
+        with temporary.open("x", encoding="utf-8", newline="\n") as handle:
+            json.dump(migrated, handle, sort_keys=True, separators=(",", ":"))
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        if os.name == "posix":
+            directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+    except OSError as error:
+        raise ValueError(f"failed to migrate transport manifest: {error}") from error
+    validate_manifest(path, frame_run_id)
+    return target_collector_sha
 
 
 def _positive_integer(value: str) -> int:
@@ -373,6 +501,17 @@ def _parser() -> argparse.ArgumentParser:
     manifest = commands.add_parser("validate-manifest")
     manifest.add_argument("path", type=pathlib.Path)
     manifest.add_argument("frame_run_id", type=_positive_integer)
+
+    migrate = commands.add_parser("migrate-manifest")
+    migrate.add_argument("path", type=pathlib.Path)
+    migrate.add_argument("frame_run_id", type=_positive_integer)
+    migrate.add_argument("target_collector_sha")
+    migrate.add_argument("migration_name")
+    migrate.add_argument("source_run_id", type=_positive_integer)
+    migrate.add_argument("source_head_sha")
+    migrate.add_argument("source_artifact_id", type=_positive_integer)
+    migrate.add_argument("source_artifact_digest")
+    migrate.add_argument("source_artifact_size", type=_positive_integer)
     return parser
 
 
@@ -389,6 +528,20 @@ def main(arguments: Sequence[str] | None = None) -> int:
             initialize_manifest(args.path, args.collector_sha, args.frame_run_id)
         elif args.command == "validate-manifest":
             print(validate_manifest(args.path, args.frame_run_id))
+        elif args.command == "migrate-manifest":
+            print(
+                migrate_manifest(
+                    args.path,
+                    args.frame_run_id,
+                    args.target_collector_sha,
+                    args.migration_name,
+                    args.source_run_id,
+                    args.source_head_sha,
+                    args.source_artifact_id,
+                    args.source_artifact_digest,
+                    args.source_artifact_size,
+                )
+            )
         else:
             raise AssertionError(f"unhandled command: {args.command}")
     except ValueError as error:

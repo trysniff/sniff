@@ -9,13 +9,30 @@ pub(super) fn write_json_new<T: Serialize>(
     value: &T,
     limit: u64,
 ) -> Result<(), String> {
-    let mut bytes = serde_json::to_vec_pretty(value)
+    let bytes = serde_json::to_vec_pretty(value)
         .map_err(|error| format!("failed to serialize historical-v2 transaction: {error}"))?;
+    write_json_bytes_new(path, bytes, limit)
+}
+
+pub(super) fn write_compact_json_new<T: Serialize>(
+    path: &Path,
+    value: &T,
+    limit: u64,
+) -> Result<(), String> {
+    let bytes = serde_json::to_vec(value)
+        .map_err(|error| format!("failed to serialize historical-v2 transaction: {error}"))?;
+    write_json_bytes_new(path, bytes, limit)
+}
+
+fn write_json_bytes_new(path: &Path, mut bytes: Vec<u8>, limit: u64) -> Result<(), String> {
     bytes.push(b'\n');
-    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > limit {
+    let observed = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+    if observed > limit {
         return Err(format!(
-            "historical-v2 transaction file exceeds its limit: {}",
-            path.display()
+            "historical-v2 transaction file exceeds its limit: {} bytes observed, {} bytes allowed: {}",
+            observed,
+            limit,
+            path.display(),
         ));
     }
     let mut file = OpenOptions::new()
@@ -78,6 +95,36 @@ pub(super) fn validate_slot_path(language: &str, slot_number: usize) -> Result<(
 
 pub(super) fn sha256(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn compact_json_can_fit_without_removing_the_hard_bound() {
+        let root = tempfile::tempdir().unwrap();
+        let value = json!([
+            {"method": "first", "status": "resolved"},
+            {"method": "second", "status": "resolved"}
+        ]);
+        let compact_len = serde_json::to_vec(&value).unwrap().len() as u64 + 1;
+        let pretty_len = serde_json::to_vec_pretty(&value).unwrap().len() as u64 + 1;
+        assert!(compact_len < pretty_len);
+
+        let compact = root.path().join("compact.json");
+        write_compact_json_new(&compact, &value, compact_len).unwrap();
+        let mut expected = serde_json::to_vec(&value).unwrap();
+        expected.push(b'\n');
+        assert_eq!(fs::read(compact).unwrap(), expected);
+
+        let pretty = root.path().join("pretty.json");
+        let error = write_json_new(&pretty, &value, compact_len).unwrap_err();
+        assert!(error.contains(&format!("{pretty_len} bytes observed")));
+        assert!(error.contains(&format!("{compact_len} bytes allowed")));
+        assert!(!pretty.exists());
+    }
 }
 
 #[derive(Debug)]
