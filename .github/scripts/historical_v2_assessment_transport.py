@@ -53,6 +53,27 @@ STORAGE_MIGRATION_CONTRACT = (
 STORAGE_MIGRATION_FROM_COLLECTOR_SHA = (
     "655093e6d55bdcb6e85560136f07c20c35f1f4ba"
 )
+STORAGE_MIGRATION_TO_COLLECTOR_SHA = (
+    "bb658f593e144a659624c294c0db133facb29003"
+)
+STORAGE_MIGRATION_SOURCE_RUN_ID = 33_085_745_961
+STORAGE_MIGRATION_SOURCE_ARTIFACT_ID = 9_662_095_012
+STORAGE_MIGRATION_SOURCE_ARTIFACT_DIGEST = (
+    "sha256:94585d826d841663b295bcc04519d1b568ecdd98714e7ecc7dc0e03074d2c4a0"
+)
+STORAGE_MIGRATION_SOURCE_ARTIFACT_SIZE = 348_102_634
+
+GO_PREPARATION_MIGRATION_NAME = "package-scoped-go-dependency-preparation-v1"
+GO_PREPARATION_MIGRATION_CONTRACT = (
+    "sniffbench-historical-v2-go-preparation-migration-v1"
+)
+GO_PREPARATION_MIGRATION_FROM_COLLECTOR_SHA = STORAGE_MIGRATION_TO_COLLECTOR_SHA
+GO_PREPARATION_MIGRATION_SOURCE_RUN_ID = 33_138_117_044
+GO_PREPARATION_MIGRATION_SOURCE_ARTIFACT_ID = 9_674_042_205
+GO_PREPARATION_MIGRATION_SOURCE_ARTIFACT_DIGEST = (
+    "sha256:f01e1a276cef8a9204ccfd047a51bb80c30bc351beac30ff764e55c4285a8cad"
+)
+GO_PREPARATION_MIGRATION_SOURCE_ARTIFACT_SIZE = 126_829_676
 
 FRAME_FILE_SHA256 = {
     "environment.txt": "2e87f3c3e1b2005f6b6d09b1bf1b82d30a9433636c3c67f0806cc68e80ab6800",
@@ -330,11 +351,11 @@ def _manifest(frame_run_id: int, collector_sha: str) -> dict[str, Any]:
 def _migrated_manifest(
     frame_run_id: int,
     collector_sha: str,
-    migration: Mapping[str, Any],
+    migrations: Sequence[Mapping[str, Any]],
 ) -> dict[str, Any]:
     value = _manifest_base(frame_run_id, collector_sha)
-    value["collector_migrations"] = [dict(migration)]
-    value["schema_version"] = 2
+    value["collector_migrations"] = [dict(migration) for migration in migrations]
+    value["schema_version"] = len(migrations) + 1
     return value
 
 
@@ -360,15 +381,19 @@ def validate_manifest(path: pathlib.Path, frame_run_id: int) -> str:
     schema_version = value.get("schema_version")
     if schema_version == 1:
         expected = _manifest(frame_run_id, collector_sha)
-    elif schema_version == 2:
+    elif schema_version in (2, 3):
         migrations = value.get("collector_migrations")
-        if not isinstance(migrations, list) or len(migrations) != 1:
+        expected_count = schema_version - 1
+        if not isinstance(migrations, list) or len(migrations) != expected_count:
             raise ValueError("transport manifest collector migration is invalid")
-        migration = _require_mapping(
-            migrations[0], "transport manifest collector migration"
+        migration_values = [
+            _require_mapping(item, "transport manifest collector migration")
+            for item in migrations
+        ]
+        _validate_collector_migrations(migration_values, collector_sha)
+        expected = _migrated_manifest(
+            frame_run_id, collector_sha, migration_values
         )
-        _validate_storage_migration(migration, collector_sha)
-        expected = _migrated_manifest(frame_run_id, collector_sha, migration)
     else:
         raise ValueError("transport manifest schema version is unsupported")
     if value != expected:
@@ -381,45 +406,84 @@ def validate_manifest(path: pathlib.Path, frame_run_id: int) -> str:
     return collector_sha
 
 
-def _validate_storage_migration(
-    migration: Mapping[str, Any], collector_sha: str
-) -> None:
-    expected_fields = {
-        "from_collector_sha",
-        "migration_contract",
-        "migration_name",
-        "source_artifact_digest",
-        "source_artifact_id",
-        "source_artifact_size",
-        "source_head_sha",
-        "source_run_id",
-        "to_collector_sha",
+def _migration_record(
+    migration_name: str,
+    target_collector_sha: str,
+    source_run_id: int,
+    source_head_sha: str,
+    source_artifact_id: int,
+    source_artifact_digest: str,
+    source_artifact_size: int,
+) -> dict[str, Any]:
+    if migration_name == STORAGE_MIGRATION_NAME:
+        contract = STORAGE_MIGRATION_CONTRACT
+        source_collector_sha = STORAGE_MIGRATION_FROM_COLLECTOR_SHA
+    elif migration_name == GO_PREPARATION_MIGRATION_NAME:
+        contract = GO_PREPARATION_MIGRATION_CONTRACT
+        source_collector_sha = GO_PREPARATION_MIGRATION_FROM_COLLECTOR_SHA
+    else:
+        raise ValueError("transport manifest collector migration is not allowlisted")
+    return {
+        "from_collector_sha": source_collector_sha,
+        "migration_contract": contract,
+        "migration_name": migration_name,
+        "source_artifact_digest": source_artifact_digest,
+        "source_artifact_id": source_artifact_id,
+        "source_artifact_size": source_artifact_size,
+        "source_head_sha": source_head_sha,
+        "source_run_id": source_run_id,
+        "to_collector_sha": target_collector_sha,
     }
-    if set(migration) != expected_fields:
-        raise ValueError("transport manifest collector migration fields changed")
+
+
+def _expected_storage_migration() -> dict[str, Any]:
+    return _migration_record(
+        STORAGE_MIGRATION_NAME,
+        STORAGE_MIGRATION_TO_COLLECTOR_SHA,
+        STORAGE_MIGRATION_SOURCE_RUN_ID,
+        STORAGE_MIGRATION_FROM_COLLECTOR_SHA,
+        STORAGE_MIGRATION_SOURCE_ARTIFACT_ID,
+        STORAGE_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+        STORAGE_MIGRATION_SOURCE_ARTIFACT_SIZE,
+    )
+
+
+def _expected_go_preparation_migration(
+    target_collector_sha: str,
+) -> dict[str, Any]:
     if (
-        migration.get("migration_contract") != STORAGE_MIGRATION_CONTRACT
-        or migration.get("migration_name") != STORAGE_MIGRATION_NAME
-        or migration.get("from_collector_sha")
-        != STORAGE_MIGRATION_FROM_COLLECTOR_SHA
-        or migration.get("source_head_sha")
-        != STORAGE_MIGRATION_FROM_COLLECTOR_SHA
-        or migration.get("to_collector_sha") != collector_sha
-        or collector_sha == STORAGE_MIGRATION_FROM_COLLECTOR_SHA
-        or re.fullmatch(r"[0-9a-f]{40}", collector_sha) is None
-        or type(migration.get("source_run_id")) is not int
-        or migration["source_run_id"] <= 0
-        or type(migration.get("source_artifact_id")) is not int
-        or migration["source_artifact_id"] <= 0
-        or type(migration.get("source_artifact_size")) is not int
-        or migration["source_artifact_size"] <= 0
-        or not isinstance(migration.get("source_artifact_digest"), str)
-        or re.fullmatch(
-            r"sha256:[0-9a-f]{64}", migration["source_artifact_digest"]
-        )
-        is None
+        target_collector_sha == GO_PREPARATION_MIGRATION_FROM_COLLECTOR_SHA
+        or re.fullmatch(r"[0-9a-f]{40}", target_collector_sha) is None
     ):
-        raise ValueError("transport manifest collector migration is invalid")
+        raise ValueError("transport manifest collector migration target is invalid")
+    return _migration_record(
+        GO_PREPARATION_MIGRATION_NAME,
+        target_collector_sha,
+        GO_PREPARATION_MIGRATION_SOURCE_RUN_ID,
+        GO_PREPARATION_MIGRATION_FROM_COLLECTOR_SHA,
+        GO_PREPARATION_MIGRATION_SOURCE_ARTIFACT_ID,
+        GO_PREPARATION_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+        GO_PREPARATION_MIGRATION_SOURCE_ARTIFACT_SIZE,
+    )
+
+
+def _validate_collector_migrations(
+    migrations: Sequence[Mapping[str, Any]], collector_sha: str
+) -> None:
+    if len(migrations) not in (1, 2):
+        raise ValueError("transport manifest collector migration chain is invalid")
+    expected = [_expected_storage_migration()]
+    if len(migrations) == 2:
+        expected.append(_expected_go_preparation_migration(collector_sha))
+    elif collector_sha != STORAGE_MIGRATION_TO_COLLECTOR_SHA:
+        raise ValueError("transport manifest collector migration target drifted")
+    if [dict(migration) for migration in migrations] != expected:
+        raise ValueError("transport manifest collector migration chain drifted")
+    if any(
+        left["to_collector_sha"] != right["from_collector_sha"]
+        for left, right in zip(expected, expected[1:])
+    ):
+        raise ValueError("transport manifest collector migration chain is disconnected")
 
 
 def migrate_manifest(
@@ -436,22 +500,35 @@ def migrate_manifest(
     value = _require_mapping(
         _read_json(path, "transport manifest"), "transport manifest"
     )
-    if value.get("schema_version") != 1:
-        raise ValueError("only an original collector manifest can be migrated")
     source_collector_sha = validate_manifest(path, frame_run_id)
-    migration = {
-        "from_collector_sha": source_collector_sha,
-        "migration_contract": STORAGE_MIGRATION_CONTRACT,
-        "migration_name": migration_name,
-        "source_artifact_digest": source_artifact_digest,
-        "source_artifact_id": source_artifact_id,
-        "source_artifact_size": source_artifact_size,
-        "source_head_sha": source_head_sha,
-        "source_run_id": source_run_id,
-        "to_collector_sha": target_collector_sha,
-    }
-    _validate_storage_migration(migration, target_collector_sha)
-    migrated = _migrated_manifest(frame_run_id, target_collector_sha, migration)
+    schema_version = value.get("schema_version")
+    if schema_version == 1:
+        expected_name = STORAGE_MIGRATION_NAME
+        migrations: list[Mapping[str, Any]] = []
+    elif schema_version == 2:
+        expected_name = GO_PREPARATION_MIGRATION_NAME
+        migrations = [
+            _require_mapping(item, "transport manifest collector migration")
+            for item in value.get("collector_migrations", [])
+        ]
+    else:
+        raise ValueError("transport manifest collector migration chain is closed")
+    if migration_name != expected_name:
+        raise ValueError("transport manifest collector migration is out of order")
+    migration = _migration_record(
+        migration_name,
+        target_collector_sha,
+        source_run_id,
+        source_head_sha,
+        source_artifact_id,
+        source_artifact_digest,
+        source_artifact_size,
+    )
+    if migration["from_collector_sha"] != source_collector_sha:
+        raise ValueError("transport manifest collector migration source drifted")
+    migrations.append(migration)
+    _validate_collector_migrations(migrations, target_collector_sha)
+    migrated = _migrated_manifest(frame_run_id, target_collector_sha, migrations)
     temporary = path.with_name(f".{path.name}.migrating")
     try:
         with temporary.open("x", encoding="utf-8", newline="\n") as handle:
