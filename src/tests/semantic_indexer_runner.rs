@@ -372,8 +372,8 @@ fn go_indexing_uses_explicit_module_scope() {
 }
 
 #[test]
-fn go_dependency_preparation_downloads_the_complete_module_graph() {
-    assert_eq!(go_dependency_arguments(), ["mod", "download", "all"]);
+fn go_dependency_preparation_downloads_the_indexed_package_graph() {
+    assert_eq!(go_dependency_arguments(), ["list", "./..."]);
 }
 
 #[test]

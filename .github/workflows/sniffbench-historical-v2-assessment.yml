@@ -75,10 +75,13 @@ jobs:
               echo 'collector_migration requires resume_run_id' >&2
               exit 1
             fi
-            if [[ "$COLLECTOR_MIGRATION" != 'compact-stage-artifact-json-v1' ]]; then
-              echo 'collector_migration is not an allowlisted exact migration' >&2
-              exit 1
-            fi
+            case "$COLLECTOR_MIGRATION" in
+              compact-stage-artifact-json-v1|package-scoped-go-dependency-preparation-v1) ;;
+              *)
+                echo 'collector_migration is not an allowlisted exact migration' >&2
+                exit 1
+                ;;
+            esac
           fi
           for variable in \
             SNIFF_API_KEY SNIFF_ENDPOINT SNIFF_MODEL \
