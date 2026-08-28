@@ -912,10 +912,9 @@ async fn run_go_dependency_preparation(
 }
 
 fn go_dependency_arguments() -> Vec<String> {
-    // `download all` includes modules unrelated to the indexed packages and can
-    // fail on intentionally unusable tool-only requirements. `go list` asks the
-    // compiler for exactly the package graph scip-go will load offline.
-    vec!["list".to_string(), "./...".to_string()]
+    // Prepare the declared module graph without validating unrelated packages.
+    // The pinned compiler indexer remains the authority for package semantics.
+    vec!["mod".to_string(), "download".to_string()]
 }
 
 fn go_dependency_program(installed: &InstalledIndexer) -> Result<PathBuf, String> {
