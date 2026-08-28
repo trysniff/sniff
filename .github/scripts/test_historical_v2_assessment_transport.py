@@ -392,9 +392,13 @@ class WorkflowContractTests(unittest.TestCase):
             'collector_root="${RUNNER_TEMP}/historical-v2-assessment-collector"',
             'git -C "$collector_root" checkout --quiet --detach FETCH_HEAD',
             'test "$(git -C "$collector_root" rev-parse HEAD)" = "$collector_sha"',
+            'frozen_transport="$collector_root/.github/scripts/historical_v2_assessment_transport.py"',
+            'python3 "$frozen_transport" validate-manifest',
+            'test "$frozen_collector_sha" = "$collector_sha"',
             'cd "$COLLECTOR_ROOT"',
             '"$COLLECTOR_ROOT/target/release/sniffbench-frame" run-slots',
             '--artifact-root "$COLLECTOR_ROOT"',
+            'python3 "$COLLECTOR_ROOT/.github/scripts/historical_v2_assessment_transport.py"',
         ):
             self.assertIn(required, workflow)
         self.assertNotIn('target/release/sniffbench-frame run-slots', workflow)
