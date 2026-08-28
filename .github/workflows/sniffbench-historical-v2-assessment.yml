@@ -287,6 +287,14 @@ jobs:
           fi
           test "$(git -C "$collector_root" rev-parse HEAD)" = "$collector_sha"
           test -z "$(git -C "$collector_root" status --porcelain=v1 --untracked-files=all)"
+          frozen_transport="$collector_root/.github/scripts/historical_v2_assessment_transport.py"
+          if [[ ! -f "$frozen_transport" || -L "$frozen_transport" ]]; then
+            echo 'frozen collector transport is not a plain file' >&2
+            exit 1
+          fi
+          frozen_collector_sha="$(python3 "$frozen_transport" validate-manifest \
+            "$manifest" "$FRAME_RUN_ID")"
+          test "$frozen_collector_sha" = "$collector_sha"
           {
             printf 'COLLECTOR_SHA=%s\n' "$collector_sha"
             printf 'COLLECTOR_ROOT=%s\n' "$collector_root"
@@ -481,7 +489,7 @@ jobs:
             historical-v2-assessment-transport \
             | gzip -n -9 > "$SNAPSHOT_ARCHIVE"
           gzip --test "$SNAPSHOT_ARCHIVE"
-          python3 .github/scripts/historical_v2_assessment_transport.py \
+          python3 "$COLLECTOR_ROOT/.github/scripts/historical_v2_assessment_transport.py" \
             validate-archive "$SNAPSHOT_ARCHIVE"
           printf "Assessment state SHA-256: \`%s\`\n" \
             "$(sha256sum "$SNAPSHOT_ARCHIVE" | cut -d' ' -f1)" >> "$GITHUB_STEP_SUMMARY"
