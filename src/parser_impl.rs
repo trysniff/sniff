@@ -54,9 +54,11 @@ pub(in crate::parser) fn parse_tree_sitter_source_checked(
         }
     }
     .ok_or_else(|| format!("no {} parser available for {file_path}", adapter.name))?;
-    let tree = parser
-        .parse(source_bytes, None)
-        .ok_or_else(|| format!("failed to parse {file_path}: parser returned no syntax tree"))?;
+    let tree = match adapter.name.as_str() {
+        "go" => go::parse_source(&mut parser, source_bytes),
+        _ => parser.parse(source_bytes, None),
+    }
+    .ok_or_else(|| format!("failed to parse {file_path}: parser returned no syntax tree"))?;
     if tree.root_node().has_error() {
         return Err(format!(
             "failed to parse {file_path}: {} syntax tree contains error nodes",

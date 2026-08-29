@@ -211,7 +211,7 @@ fn parse_go_symbols(
         None => return symbols,
     };
 
-    if let Some(tree) = parser.parse(source_bytes, None) {
+    if let Some(tree) = go::parse_source(&mut parser, source_bytes) {
         let mut extractor = go::SymbolExtractor {
             source_bytes,
             language: &adapter.name,

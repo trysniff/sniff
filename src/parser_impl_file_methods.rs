@@ -139,8 +139,7 @@ fn parse_go_file_methods(
         None => return Err(format!("no Go parser available for {file_path}")),
     };
 
-    let tree = parser
-        .parse(record.source.as_bytes(), None)
+    let tree = go::parse_source(&mut parser, record.source.as_bytes())
         .ok_or_else(|| format!("failed to parse {file_path}: parser returned no syntax tree"))?;
     if tree.root_node().has_error() {
         return Err(format!(
