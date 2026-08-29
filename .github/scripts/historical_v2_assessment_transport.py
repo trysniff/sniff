@@ -103,6 +103,20 @@ GO_PROJECT_ROOT_MIGRATION_SOURCE_ARTIFACT_DIGEST = (
 )
 GO_PROJECT_ROOT_MIGRATION_SOURCE_ARTIFACT_SIZE = 214_017_406
 
+GO_EOF_PARSER_MIGRATION_NAME = "valid-go-eof-parser-v1"
+GO_EOF_PARSER_MIGRATION_CONTRACT = (
+    "sniffbench-historical-v2-go-eof-parser-migration-v1"
+)
+GO_EOF_PARSER_MIGRATION_FROM_COLLECTOR_SHA = (
+    "eac13353d39aa3f6b0dd0a27f6236d39637e6ce5"
+)
+GO_EOF_PARSER_MIGRATION_SOURCE_RUN_ID = 33_222_053_747
+GO_EOF_PARSER_MIGRATION_SOURCE_ARTIFACT_ID = 9_707_546_228
+GO_EOF_PARSER_MIGRATION_SOURCE_ARTIFACT_DIGEST = (
+    "sha256:c84330141739d038d247b9ab732b25474d9e6f14eddd0e66dfa6ef1307b588f2"
+)
+GO_EOF_PARSER_MIGRATION_SOURCE_ARTIFACT_SIZE = 154_813_306
+
 FRAME_FILE_SHA256 = {
     "environment.txt": "2e87f3c3e1b2005f6b6d09b1bf1b82d30a9433636c3c67f0806cc68e80ab6800",
     "exclusions.json": "74bccb100eb48ab87952bd7eec137b2285edbc68d2547715bc0e06a80e029f76",
@@ -409,7 +423,7 @@ def validate_manifest(path: pathlib.Path, frame_run_id: int) -> str:
     schema_version = value.get("schema_version")
     if schema_version == 1:
         expected = _manifest(frame_run_id, collector_sha)
-    elif schema_version in (2, 3, 4, 5):
+    elif schema_version in (2, 3, 4, 5, 6):
         migrations = value.get("collector_migrations")
         expected_count = schema_version - 1
         if not isinstance(migrations, list) or len(migrations) != expected_count:
@@ -455,6 +469,9 @@ def _migration_record(
     elif migration_name == GO_PROJECT_ROOT_MIGRATION_NAME:
         contract = GO_PROJECT_ROOT_MIGRATION_CONTRACT
         source_collector_sha = GO_PROJECT_ROOT_MIGRATION_FROM_COLLECTOR_SHA
+    elif migration_name == GO_EOF_PARSER_MIGRATION_NAME:
+        contract = GO_EOF_PARSER_MIGRATION_CONTRACT
+        source_collector_sha = GO_EOF_PARSER_MIGRATION_FROM_COLLECTOR_SHA
     else:
         raise ValueError("transport manifest collector migration is not allowlisted")
     return {
@@ -539,15 +556,34 @@ def _expected_go_project_root_migration(
     )
 
 
+def _expected_go_eof_parser_migration(
+    target_collector_sha: str,
+) -> dict[str, Any]:
+    if (
+        target_collector_sha == GO_EOF_PARSER_MIGRATION_FROM_COLLECTOR_SHA
+        or re.fullmatch(r"[0-9a-f]{40}", target_collector_sha) is None
+    ):
+        raise ValueError("transport manifest collector migration target is invalid")
+    return _migration_record(
+        GO_EOF_PARSER_MIGRATION_NAME,
+        target_collector_sha,
+        GO_EOF_PARSER_MIGRATION_SOURCE_RUN_ID,
+        GO_EOF_PARSER_MIGRATION_FROM_COLLECTOR_SHA,
+        GO_EOF_PARSER_MIGRATION_SOURCE_ARTIFACT_ID,
+        GO_EOF_PARSER_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+        GO_EOF_PARSER_MIGRATION_SOURCE_ARTIFACT_SIZE,
+    )
+
+
 def _validate_collector_migrations(
     migrations: Sequence[Mapping[str, Any]], collector_sha: str
 ) -> None:
-    if len(migrations) not in (1, 2, 3, 4):
+    if len(migrations) not in (1, 2, 3, 4, 5):
         raise ValueError("transport manifest collector migration chain is invalid")
     expected = [_expected_storage_migration()]
     if len(migrations) == 2:
         expected.append(_expected_go_preparation_migration(collector_sha))
-    elif len(migrations) in (3, 4):
+    elif len(migrations) in (3, 4, 5):
         expected.append(
             _expected_go_preparation_migration(
                 GO_MODULE_DOWNLOAD_MIGRATION_FROM_COLLECTOR_SHA
@@ -555,14 +591,21 @@ def _validate_collector_migrations(
         )
         module_download_target = (
             GO_PROJECT_ROOT_MIGRATION_FROM_COLLECTOR_SHA
-            if len(migrations) == 4
+            if len(migrations) >= 4
             else collector_sha
         )
         expected.append(
             _expected_go_module_download_migration(module_download_target)
         )
-        if len(migrations) == 4:
-            expected.append(_expected_go_project_root_migration(collector_sha))
+        if len(migrations) >= 4:
+            project_root_target = (
+                GO_EOF_PARSER_MIGRATION_FROM_COLLECTOR_SHA
+                if len(migrations) == 5
+                else collector_sha
+            )
+            expected.append(_expected_go_project_root_migration(project_root_target))
+        if len(migrations) == 5:
+            expected.append(_expected_go_eof_parser_migration(collector_sha))
     elif collector_sha != STORAGE_MIGRATION_TO_COLLECTOR_SHA:
         raise ValueError("transport manifest collector migration target drifted")
     if [dict(migration) for migration in migrations] != expected:
@@ -607,6 +650,12 @@ def migrate_manifest(
         ]
     elif schema_version == 4:
         expected_name = GO_PROJECT_ROOT_MIGRATION_NAME
+        migrations = [
+            _require_mapping(item, "transport manifest collector migration")
+            for item in value.get("collector_migrations", [])
+        ]
+    elif schema_version == 5:
+        expected_name = GO_EOF_PARSER_MIGRATION_NAME
         migrations = [
             _require_mapping(item, "transport manifest collector migration")
             for item in value.get("collector_migrations", [])
