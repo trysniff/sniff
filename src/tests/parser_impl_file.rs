@@ -1000,6 +1000,21 @@ fn checked_parse_rejects_malformed_go_instead_of_returning_zero_methods() {
 }
 
 #[test]
+fn checked_parse_accepts_valid_go_const_declarations_without_a_trailing_newline() {
+    let source = b"package ecc\n\ntype CurveType uint8\n\nconst (\n    NISTCurve CurveType = 1\n\tCurve25519 CurveType = 2\n\tBitCurve CurveType = 3\n\tBrainpoolCurve CurveType = 4\n)";
+    let (root, path) = write_invalid_fixture("go", source);
+
+    let record =
+        parse_file_checked(&path).expect("valid Go source must not be excluded from the census");
+    assert_eq!(record.source.as_bytes(), source);
+    super::super::parse_tree_sitter_source_checked(&path, source)
+        .expect("valid Go source must produce AST evidence");
+    parse_file_symbols_checked(&path).expect("valid Go source must produce symbol facts");
+
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
 fn go_symbol_scan_records_top_level_calls_without_string_or_comment_noise() {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
