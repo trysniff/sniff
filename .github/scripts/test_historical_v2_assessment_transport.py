@@ -190,6 +190,22 @@ class ManifestTests(unittest.TestCase):
             transport.GO_MODULE_DOWNLOAD_MIGRATION_SOURCE_ARTIFACT_SIZE,
         )
 
+    @staticmethod
+    def _write_go_project_root_manifest(path: pathlib.Path) -> None:
+        ManifestTests._write_go_module_download_manifest(path)
+        source = transport.GO_PROJECT_ROOT_MIGRATION_FROM_COLLECTOR_SHA
+        transport.migrate_manifest(
+            path,
+            transport.FRAME_RUN_ID,
+            transport.GO_EOF_PARSER_MIGRATION_FROM_COLLECTOR_SHA,
+            transport.GO_PROJECT_ROOT_MIGRATION_NAME,
+            transport.GO_PROJECT_ROOT_MIGRATION_SOURCE_RUN_ID,
+            source,
+            transport.GO_PROJECT_ROOT_MIGRATION_SOURCE_ARTIFACT_ID,
+            transport.GO_PROJECT_ROOT_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+            transport.GO_PROJECT_ROOT_MIGRATION_SOURCE_ARTIFACT_SIZE,
+        )
+
     def test_manifest_round_trips_and_is_create_new(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             path = pathlib.Path(temporary, "manifest.json")
@@ -581,6 +597,95 @@ class ManifestTests(unittest.TestCase):
                     transport.GO_PROJECT_ROOT_MIGRATION_SOURCE_ARTIFACT_SIZE,
                 )
 
+    def test_go_eof_parser_migration_preserves_and_closes_the_exact_chain(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = pathlib.Path(temporary, "manifest.json")
+            self._write_go_project_root_manifest(path)
+            prior_manifest = json.loads(path.read_text(encoding="utf-8"))
+            prior_records = prior_manifest["collector_migrations"]
+            source = transport.GO_EOF_PARSER_MIGRATION_FROM_COLLECTOR_SHA
+            target = "a" * 40
+
+            self.assertEqual(
+                transport.migrate_manifest(
+                    path,
+                    transport.FRAME_RUN_ID,
+                    target,
+                    transport.GO_EOF_PARSER_MIGRATION_NAME,
+                    transport.GO_EOF_PARSER_MIGRATION_SOURCE_RUN_ID,
+                    source,
+                    transport.GO_EOF_PARSER_MIGRATION_SOURCE_ARTIFACT_ID,
+                    transport.GO_EOF_PARSER_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+                    transport.GO_EOF_PARSER_MIGRATION_SOURCE_ARTIFACT_SIZE,
+                ),
+                target,
+            )
+            value = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(value["schema_version"], 6)
+            self.assertEqual(value["collector_migrations"][:4], prior_records)
+            self.assertEqual(
+                value["collector_migrations"][4],
+                {
+                    "from_collector_sha": source,
+                    "migration_contract": transport.GO_EOF_PARSER_MIGRATION_CONTRACT,
+                    "migration_name": transport.GO_EOF_PARSER_MIGRATION_NAME,
+                    "source_artifact_digest": (
+                        transport.GO_EOF_PARSER_MIGRATION_SOURCE_ARTIFACT_DIGEST
+                    ),
+                    "source_artifact_id": (
+                        transport.GO_EOF_PARSER_MIGRATION_SOURCE_ARTIFACT_ID
+                    ),
+                    "source_artifact_size": (
+                        transport.GO_EOF_PARSER_MIGRATION_SOURCE_ARTIFACT_SIZE
+                    ),
+                    "source_head_sha": source,
+                    "source_run_id": transport.GO_EOF_PARSER_MIGRATION_SOURCE_RUN_ID,
+                    "to_collector_sha": target,
+                },
+            )
+            self.assertEqual(
+                transport.validate_manifest(path, transport.FRAME_RUN_ID), target
+            )
+
+            for field in (
+                "from_collector_sha",
+                "migration_contract",
+                "migration_name",
+                "source_artifact_digest",
+                "source_artifact_id",
+                "source_artifact_size",
+                "source_head_sha",
+                "source_run_id",
+                "to_collector_sha",
+            ):
+                tampered = json.loads(json.dumps(value))
+                tampered["collector_migrations"][4][field] = True
+                path.write_text(json.dumps(tampered), encoding="utf-8")
+                with self.subTest(field=field), self.assertRaises(ValueError):
+                    transport.validate_manifest(path, transport.FRAME_RUN_ID)
+
+            reordered = json.loads(json.dumps(value))
+            reordered["collector_migrations"][3:] = reversed(
+                reordered["collector_migrations"][3:]
+            )
+            path.write_text(json.dumps(reordered), encoding="utf-8")
+            with self.assertRaises(ValueError):
+                transport.validate_manifest(path, transport.FRAME_RUN_ID)
+
+            path.write_text(json.dumps(value), encoding="utf-8")
+            with self.assertRaises(ValueError):
+                transport.migrate_manifest(
+                    path,
+                    transport.FRAME_RUN_ID,
+                    "b" * 40,
+                    transport.GO_EOF_PARSER_MIGRATION_NAME,
+                    transport.GO_EOF_PARSER_MIGRATION_SOURCE_RUN_ID,
+                    target,
+                    transport.GO_EOF_PARSER_MIGRATION_SOURCE_ARTIFACT_ID,
+                    transport.GO_EOF_PARSER_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+                    transport.GO_EOF_PARSER_MIGRATION_SOURCE_ARTIFACT_SIZE,
+                )
+
     def test_storage_migration_rejects_unapproved_source_or_name(self) -> None:
         attempts = (
             ("a" * 40, transport.STORAGE_MIGRATION_NAME),
@@ -733,6 +838,7 @@ class WorkflowContractTests(unittest.TestCase):
             "package-scoped-go-dependency-preparation-v1",
             "declared-go-module-dependency-preparation-v1",
             "strict-go-project-root-validation-v1",
+            "valid-go-eof-parser-v1",
             '"$transport" migrate-manifest',
             '"$PRIOR_HEAD_SHA" "$PRIOR_ARTIFACT_ID"',
             '"$PRIOR_ARTIFACT_DIGEST" "$PRIOR_ARTIFACT_SIZE"',
