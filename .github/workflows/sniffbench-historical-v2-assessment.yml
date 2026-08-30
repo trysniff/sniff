@@ -34,12 +34,14 @@ jobs:
   assess:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
-    timeout-minutes: 330
+    timeout-minutes: 300
     env:
+      ASSESSMENT_TIMEOUT_MINUTES: "240"
       CARGO_INCREMENTAL: "0"
       CARGO_PROFILE_RELEASE_DEBUG: "0"
       FRAME_RUN_ID: ${{ inputs.frame_run_id }}
       MAX_NEW_SLOTS: ${{ inputs.max_new_slots }}
+      NON_ASSESSMENT_RESERVE_MINUTES: "60"
       RESUME_RUN_ID: ${{ inputs.resume_run_id }}
       COLLECTOR_MIGRATION: ${{ inputs.collector_migration }}
     steps:
@@ -446,7 +448,8 @@ jobs:
         shell: bash
         run: |
           set +e
-          timeout --foreground --signal=INT --kill-after=60s 300m \
+          timeout --foreground --signal=INT --kill-after=60s \
+            "${ASSESSMENT_TIMEOUT_MINUTES}m" \
             "$COLLECTOR_ROOT/target/release/sniffbench-frame" run-slots \
               --protocol "$COLLECTOR_ROOT/sniffbench/historical-v2-protocol.json" \
               --artifact-root "$COLLECTOR_ROOT" \

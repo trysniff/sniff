@@ -1052,6 +1052,41 @@ class FrameTests(unittest.TestCase):
 
 
 class WorkflowContractTests(unittest.TestCase):
+    def test_assessment_budget_reserves_time_for_setup_sealing_and_upload(self) -> None:
+        workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+        lines = workflow.splitlines()
+        job_minutes = int(
+            next(line for line in lines if line.startswith("    timeout-minutes:"))
+            .split(":", 1)[1]
+            .strip()
+        )
+        assessment_minutes = int(
+            next(
+                line
+                for line in lines
+                if line.startswith("      ASSESSMENT_TIMEOUT_MINUTES:")
+            )
+            .split('"', 2)[1]
+        )
+        reserve_minutes = int(
+            next(
+                line
+                for line in lines
+                if line.startswith("      NON_ASSESSMENT_RESERVE_MINUTES:")
+            )
+            .split('"', 2)[1]
+        )
+
+        self.assertEqual(job_minutes, 300)
+        self.assertEqual(assessment_minutes, 240)
+        self.assertEqual(reserve_minutes, 60)
+        self.assertEqual(assessment_minutes + reserve_minutes, job_minutes)
+        self.assertIn(
+            '"${ASSESSMENT_TIMEOUT_MINUTES}m" \\',
+            workflow,
+        )
+        self.assertNotIn("--kill-after=60s 300m", workflow)
+
     def test_marker_recovery_precedes_snapshot_archival(self) -> None:
         workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
         seal = workflow.index("- name: Seal resumable assessment state")
