@@ -256,6 +256,32 @@ class ManifestTests(unittest.TestCase):
             transport.GO_PROJECT_ROOT_MIGRATION_SOURCE_ARTIFACT_SIZE,
         )
 
+    @staticmethod
+    def _write_resume_symlink_manifest(path: pathlib.Path) -> None:
+        ManifestTests._write_go_project_root_manifest(path)
+        transport.migrate_manifest(
+            path,
+            transport.FRAME_RUN_ID,
+            transport.RESUME_SYMLINK_MIGRATION_FROM_COLLECTOR_SHA,
+            transport.GO_EOF_PARSER_MIGRATION_NAME,
+            transport.GO_EOF_PARSER_MIGRATION_SOURCE_RUN_ID,
+            transport.GO_EOF_PARSER_MIGRATION_FROM_COLLECTOR_SHA,
+            transport.GO_EOF_PARSER_MIGRATION_SOURCE_ARTIFACT_ID,
+            transport.GO_EOF_PARSER_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+            transport.GO_EOF_PARSER_MIGRATION_SOURCE_ARTIFACT_SIZE,
+        )
+        transport.migrate_manifest(
+            path,
+            transport.FRAME_RUN_ID,
+            transport.GIT_BLOB_SOURCE_CENSUS_MIGRATION_FROM_COLLECTOR_SHA,
+            transport.RESUME_SYMLINK_MIGRATION_NAME,
+            transport.RESUME_SYMLINK_MIGRATION_SOURCE_RUN_ID,
+            transport.RESUME_SYMLINK_MIGRATION_FROM_COLLECTOR_SHA,
+            transport.RESUME_SYMLINK_MIGRATION_SOURCE_ARTIFACT_ID,
+            transport.RESUME_SYMLINK_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+            transport.RESUME_SYMLINK_MIGRATION_SOURCE_ARTIFACT_SIZE,
+        )
+
     def test_manifest_round_trips_and_is_create_new(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             path = pathlib.Path(temporary, "manifest.json")
@@ -736,7 +762,7 @@ class ManifestTests(unittest.TestCase):
                     transport.GO_EOF_PARSER_MIGRATION_SOURCE_ARTIFACT_SIZE,
                 )
 
-    def test_resume_symlink_migration_preserves_and_closes_the_exact_chain(self) -> None:
+    def test_resume_symlink_migration_preserves_the_exact_chain(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             path = pathlib.Path(temporary, "manifest.json")
             self._write_go_project_root_manifest(path)
@@ -826,6 +852,91 @@ class ManifestTests(unittest.TestCase):
                     transport.RESUME_SYMLINK_MIGRATION_SOURCE_ARTIFACT_ID,
                     transport.RESUME_SYMLINK_MIGRATION_SOURCE_ARTIFACT_DIGEST,
                     transport.RESUME_SYMLINK_MIGRATION_SOURCE_ARTIFACT_SIZE,
+                )
+
+    def test_git_blob_source_census_migration_is_exact_bound_and_one_way(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = pathlib.Path(temporary, "manifest.json")
+            self._write_resume_symlink_manifest(path)
+            prior_manifest = json.loads(path.read_text(encoding="utf-8"))
+            prior_records = prior_manifest["collector_migrations"]
+            source = transport.GIT_BLOB_SOURCE_CENSUS_MIGRATION_FROM_COLLECTOR_SHA
+            target = "d" * 40
+
+            self.assertEqual(
+                transport.migrate_manifest(
+                    path,
+                    transport.FRAME_RUN_ID,
+                    target,
+                    transport.GIT_BLOB_SOURCE_CENSUS_MIGRATION_NAME,
+                    transport.GIT_BLOB_SOURCE_CENSUS_MIGRATION_SOURCE_RUN_ID,
+                    source,
+                    transport.GIT_BLOB_SOURCE_CENSUS_MIGRATION_SOURCE_ARTIFACT_ID,
+                    transport.GIT_BLOB_SOURCE_CENSUS_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+                    transport.GIT_BLOB_SOURCE_CENSUS_MIGRATION_SOURCE_ARTIFACT_SIZE,
+                ),
+                target,
+            )
+            value = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(value["schema_version"], 8)
+            self.assertEqual(value["collector_migrations"][:6], prior_records)
+            self.assertEqual(
+                value["collector_migrations"][6],
+                {
+                    "from_collector_sha": source,
+                    "migration_contract": (
+                        transport.GIT_BLOB_SOURCE_CENSUS_MIGRATION_CONTRACT
+                    ),
+                    "migration_name": transport.GIT_BLOB_SOURCE_CENSUS_MIGRATION_NAME,
+                    "source_artifact_digest": (
+                        transport.GIT_BLOB_SOURCE_CENSUS_MIGRATION_SOURCE_ARTIFACT_DIGEST
+                    ),
+                    "source_artifact_id": (
+                        transport.GIT_BLOB_SOURCE_CENSUS_MIGRATION_SOURCE_ARTIFACT_ID
+                    ),
+                    "source_artifact_size": (
+                        transport.GIT_BLOB_SOURCE_CENSUS_MIGRATION_SOURCE_ARTIFACT_SIZE
+                    ),
+                    "source_head_sha": source,
+                    "source_run_id": (
+                        transport.GIT_BLOB_SOURCE_CENSUS_MIGRATION_SOURCE_RUN_ID
+                    ),
+                    "to_collector_sha": target,
+                },
+            )
+            self.assertEqual(
+                transport.validate_manifest(path, transport.FRAME_RUN_ID), target
+            )
+
+            for field in (
+                "from_collector_sha",
+                "migration_contract",
+                "migration_name",
+                "source_artifact_digest",
+                "source_artifact_id",
+                "source_artifact_size",
+                "source_head_sha",
+                "source_run_id",
+                "to_collector_sha",
+            ):
+                tampered = json.loads(json.dumps(value))
+                tampered["collector_migrations"][6][field] = True
+                path.write_text(json.dumps(tampered), encoding="utf-8")
+                with self.subTest(field=field), self.assertRaises(ValueError):
+                    transport.validate_manifest(path, transport.FRAME_RUN_ID)
+
+            path.write_text(json.dumps(value), encoding="utf-8")
+            with self.assertRaises(ValueError):
+                transport.migrate_manifest(
+                    path,
+                    transport.FRAME_RUN_ID,
+                    "e" * 40,
+                    transport.GIT_BLOB_SOURCE_CENSUS_MIGRATION_NAME,
+                    transport.GIT_BLOB_SOURCE_CENSUS_MIGRATION_SOURCE_RUN_ID,
+                    target,
+                    transport.GIT_BLOB_SOURCE_CENSUS_MIGRATION_SOURCE_ARTIFACT_ID,
+                    transport.GIT_BLOB_SOURCE_CENSUS_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+                    transport.GIT_BLOB_SOURCE_CENSUS_MIGRATION_SOURCE_ARTIFACT_SIZE,
                 )
 
     def test_storage_migration_rejects_unapproved_source_or_name(self) -> None:
@@ -982,6 +1093,7 @@ class WorkflowContractTests(unittest.TestCase):
             "strict-go-project-root-validation-v1",
             "valid-go-eof-parser-v1",
             "validated-resume-symlink-extraction-v1",
+            "committed-git-blob-source-census-v1",
             '"$transport" migrate-manifest',
             '"$PRIOR_HEAD_SHA" "$PRIOR_ARTIFACT_ID"',
             '"$PRIOR_ARTIFACT_DIGEST" "$PRIOR_ARTIFACT_SIZE"',
