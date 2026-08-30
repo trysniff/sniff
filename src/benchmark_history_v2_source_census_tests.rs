@@ -81,6 +81,87 @@ fn commits_complete_base_and_patched_source_snapshots_deterministically() {
 }
 
 #[test]
+fn committed_census_accepts_clean_ident_filtered_worktrees() {
+    let source = tempfile::tempdir().unwrap();
+    git_ok(source.path(), &["init", "-b", "main"]);
+    git_ok(
+        source.path(),
+        &["config", "user.email", "fixture@example.test"],
+    );
+    git_ok(source.path(), &["config", "user.name", "Fixture"]);
+    fs::create_dir_all(source.path().join("src")).unwrap();
+    fs::write(source.path().join(".gitattributes"), "*.rs ident\n").unwrap();
+    fs::write(
+        source.path().join("src/version.rs"),
+        "// $Id$\npub fn version() -> u8 { 1 }\n",
+    )
+    .unwrap();
+    fs::write(
+        source.path().join("src/lib.rs"),
+        "pub fn value() -> u8 {\n    let value = 1;\n    value\n}\n",
+    )
+    .unwrap();
+    git_ok(source.path(), &["add", "."]);
+    git_ok(source.path(), &["commit", "-m", "base"]);
+    let base_revision = git_text(source.path(), &["rev-parse", "HEAD"]);
+    fs::write(
+        source.path().join("src/lib.rs"),
+        "pub fn value() -> u8 {\n    1\n}\n",
+    )
+    .unwrap();
+    let historical_patch = git_text(source.path(), &["diff", "--binary", "HEAD"]) + "\n";
+    git_ok(source.path(), &["reset", "--hard", "HEAD"]);
+
+    let parent = tempfile::tempdir().unwrap();
+    let materialized = super::super::history_v2_materialization::materialize_from_url(
+        "example/repo",
+        &source.path().to_string_lossy(),
+        &base_revision,
+        &historical_patch,
+        &sha256(historical_patch.as_bytes()),
+        &parent.path().join("ident"),
+    )
+    .unwrap();
+    git_ok(
+        &materialized.1.repository_root,
+        &[
+            "remote",
+            "set-url",
+            "origin",
+            "https://github.com/example/repo.git",
+        ],
+    );
+
+    let version_path = materialized.1.base_root.join("src/version.rs");
+    let object_id = git_text(
+        &materialized.1.base_root,
+        &["rev-parse", "HEAD:src/version.rs"],
+    );
+    let committed = git_bytes(&materialized.1.base_root, &["cat-file", "blob", &object_id]);
+    let worktree = fs::read(&version_path).unwrap();
+    assert_ne!(worktree, committed);
+    assert!(String::from_utf8(worktree).unwrap().contains("$Id:"));
+    assert!(
+        git_text(
+            &materialized.1.base_root,
+            &["status", "--porcelain=v1", "--untracked-files=all"]
+        )
+        .is_empty()
+    );
+
+    let census = census_historical_v2_sources(&materialized.0, &materialized.1).unwrap();
+    assert_eq!(
+        source_hash(&census.base, "src/version.rs"),
+        sha256(&committed)
+    );
+    assert_eq!(
+        source_hash(&census.patched, "src/version.rs"),
+        sha256(&committed)
+    );
+    validate_historical_v2_source_census(&materialized.0, &materialized.1, &census).unwrap();
+}
+
+#[test]
 fn replay_rejects_source_census_tampering() {
     let fixture = Fixture::new();
     let materialized = fixture.materialize("tampered");
@@ -396,4 +477,19 @@ fn git_text(root: &Path, args: &[&str]) -> String {
         String::from_utf8_lossy(&output.stderr)
     );
     String::from_utf8(output.stdout).unwrap().trim().to_string()
+}
+
+fn git_bytes(root: &Path, args: &[&str]) -> Vec<u8> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    output.stdout
 }

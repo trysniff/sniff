@@ -7,7 +7,6 @@ use super::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
-use std::fs;
 use std::path::Path;
 
 pub const INTENTIONAL_BOUNDARY_SOURCE_CENSUS_SCHEMA_VERSION: u32 = 1;
@@ -122,19 +121,8 @@ pub(super) fn inspect_intentional_boundary_repository_sources_typed(
         })?;
         let committed_bytes =
             read_intentional_boundary_git_blob_typed(root, &entry.object_id, expected_length)?;
-        let worktree_bytes =
-            fs::read(root.join(Path::new(&entry.repository_path))).map_err(|error| {
-                failed(format!(
-                    "failed to read intentional-boundary source {}: {error}",
-                    entry.repository_path
-                ))
-            })?;
-        if worktree_bytes != committed_bytes {
-            return Err(invalid(format!(
-                "intentional-boundary source bytes differ from committed Git blob: {}",
-                entry.repository_path
-            )));
-        }
+        // The committed blob is the source identity. A Git-clean checkout may
+        // legitimately have a different representation after built-in filters.
         let source_sha256 = sha256(&committed_bytes);
         if let Err(error) = std::str::from_utf8(&committed_bytes) {
             failures.push(SourceFailureEvidence::SupportedSourceIsNotUtf8 {
@@ -401,13 +389,6 @@ fn retain_error(error: &str) -> (String, bool) {
 fn invalid(detail: impl Into<String>) -> IntentionalBoundaryInventoryError {
     IntentionalBoundaryInventoryError {
         kind: IntentionalBoundaryInventoryErrorKind::InvalidInput,
-        detail: detail.into(),
-    }
-}
-
-fn failed(detail: impl Into<String>) -> IntentionalBoundaryInventoryError {
-    IntentionalBoundaryInventoryError {
-        kind: IntentionalBoundaryInventoryErrorKind::InfrastructureFailed,
         detail: detail.into(),
     }
 }
