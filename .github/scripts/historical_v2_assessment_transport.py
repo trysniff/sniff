@@ -117,6 +117,20 @@ GO_EOF_PARSER_MIGRATION_SOURCE_ARTIFACT_DIGEST = (
 )
 GO_EOF_PARSER_MIGRATION_SOURCE_ARTIFACT_SIZE = 154_813_306
 
+RESUME_SYMLINK_MIGRATION_NAME = "validated-resume-symlink-extraction-v1"
+RESUME_SYMLINK_MIGRATION_CONTRACT = (
+    "sniffbench-historical-v2-resume-symlink-extraction-migration-v1"
+)
+RESUME_SYMLINK_MIGRATION_FROM_COLLECTOR_SHA = (
+    "e044b4cdd238b13429f9c364eb3370e3939ffef7"
+)
+RESUME_SYMLINK_MIGRATION_SOURCE_RUN_ID = 33_277_931_633
+RESUME_SYMLINK_MIGRATION_SOURCE_ARTIFACT_ID = 9_725_671_517
+RESUME_SYMLINK_MIGRATION_SOURCE_ARTIFACT_DIGEST = (
+    "sha256:1be3107f6857e785e6d5ca5316009f354464065bb8de6adeb4737d6c0c769936"
+)
+RESUME_SYMLINK_MIGRATION_SOURCE_ARTIFACT_SIZE = 390_116_536
+
 FRAME_FILE_SHA256 = {
     "environment.txt": "2e87f3c3e1b2005f6b6d09b1bf1b82d30a9433636c3c67f0806cc68e80ab6800",
     "exclusions.json": "74bccb100eb48ab87952bd7eec137b2285edbc68d2547715bc0e06a80e029f76",
@@ -168,6 +182,8 @@ def _require_exact_fields(
 
 
 def _normalized_link(path: pathlib.PurePosixPath, target_text: str) -> list[str]:
+    if "\\" in target_text:
+        raise ValueError(f"non-portable archive link: {path}")
     target = pathlib.PurePosixPath(target_text)
     if target.is_absolute():
         raise ValueError(f"absolute archive link: {path}")
@@ -195,6 +211,8 @@ def _validate_archive_members(payload: tarfile.TarFile) -> None:
     symlink_paths: set[pathlib.PurePosixPath] = set()
     extracted_bytes = 0
     for member in members:
+        if "\\" in member.name:
+            raise ValueError(f"non-portable archive member: {member.name}")
         if len(member.name.encode("utf-8")) > MAX_MEMBER_PATH_BYTES:
             raise ValueError(f"archive member path is too long: {member.name}")
         path = pathlib.PurePosixPath(member.name)
@@ -235,6 +253,18 @@ def _validate_archive_members(payload: tarfile.TarFile) -> None:
                 raise ValueError(f"archive member descends through a link: {path}")
 
 
+def _validated_archive_filter(
+    member: tarfile.TarInfo, destination: str
+) -> tarfile.TarInfo | None:
+    if member.issym():
+        # Archive-wide validation already proves that links are relative,
+        # same-root, and never parents of another member. Avoid data_filter's
+        # filesystem realpath check, which rejects valid Git worktree links
+        # whose target passes through a regular .git indirection file.
+        return member
+    return tarfile.data_filter(member, destination)
+
+
 def validate_archive(archive: pathlib.Path) -> None:
     _plain_file(archive, "assessment archive")
     try:
@@ -255,7 +285,7 @@ def extract_resume(archive: pathlib.Path, destination: pathlib.Path) -> None:
     try:
         with tarfile.open(archive, "r:gz") as payload:
             _validate_archive_members(payload)
-            payload.extractall(path=destination, filter="data")
+            payload.extractall(path=destination, filter=_validated_archive_filter)
     except (OSError, tarfile.TarError) as error:
         raise ValueError(f"failed to extract assessment archive: {error}") from error
     for root in ALLOWED_ARCHIVE_ROOTS:
@@ -423,7 +453,7 @@ def validate_manifest(path: pathlib.Path, frame_run_id: int) -> str:
     schema_version = value.get("schema_version")
     if schema_version == 1:
         expected = _manifest(frame_run_id, collector_sha)
-    elif schema_version in (2, 3, 4, 5, 6):
+    elif schema_version in (2, 3, 4, 5, 6, 7):
         migrations = value.get("collector_migrations")
         expected_count = schema_version - 1
         if not isinstance(migrations, list) or len(migrations) != expected_count:
@@ -472,6 +502,9 @@ def _migration_record(
     elif migration_name == GO_EOF_PARSER_MIGRATION_NAME:
         contract = GO_EOF_PARSER_MIGRATION_CONTRACT
         source_collector_sha = GO_EOF_PARSER_MIGRATION_FROM_COLLECTOR_SHA
+    elif migration_name == RESUME_SYMLINK_MIGRATION_NAME:
+        contract = RESUME_SYMLINK_MIGRATION_CONTRACT
+        source_collector_sha = RESUME_SYMLINK_MIGRATION_FROM_COLLECTOR_SHA
     else:
         raise ValueError("transport manifest collector migration is not allowlisted")
     return {
@@ -575,15 +608,34 @@ def _expected_go_eof_parser_migration(
     )
 
 
+def _expected_resume_symlink_migration(
+    target_collector_sha: str,
+) -> dict[str, Any]:
+    if (
+        target_collector_sha == RESUME_SYMLINK_MIGRATION_FROM_COLLECTOR_SHA
+        or re.fullmatch(r"[0-9a-f]{40}", target_collector_sha) is None
+    ):
+        raise ValueError("transport manifest collector migration target is invalid")
+    return _migration_record(
+        RESUME_SYMLINK_MIGRATION_NAME,
+        target_collector_sha,
+        RESUME_SYMLINK_MIGRATION_SOURCE_RUN_ID,
+        RESUME_SYMLINK_MIGRATION_FROM_COLLECTOR_SHA,
+        RESUME_SYMLINK_MIGRATION_SOURCE_ARTIFACT_ID,
+        RESUME_SYMLINK_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+        RESUME_SYMLINK_MIGRATION_SOURCE_ARTIFACT_SIZE,
+    )
+
+
 def _validate_collector_migrations(
     migrations: Sequence[Mapping[str, Any]], collector_sha: str
 ) -> None:
-    if len(migrations) not in (1, 2, 3, 4, 5):
+    if len(migrations) not in (1, 2, 3, 4, 5, 6):
         raise ValueError("transport manifest collector migration chain is invalid")
     expected = [_expected_storage_migration()]
     if len(migrations) == 2:
         expected.append(_expected_go_preparation_migration(collector_sha))
-    elif len(migrations) in (3, 4, 5):
+    elif len(migrations) in (3, 4, 5, 6):
         expected.append(
             _expected_go_preparation_migration(
                 GO_MODULE_DOWNLOAD_MIGRATION_FROM_COLLECTOR_SHA
@@ -600,12 +652,19 @@ def _validate_collector_migrations(
         if len(migrations) >= 4:
             project_root_target = (
                 GO_EOF_PARSER_MIGRATION_FROM_COLLECTOR_SHA
-                if len(migrations) == 5
+                if len(migrations) >= 5
                 else collector_sha
             )
             expected.append(_expected_go_project_root_migration(project_root_target))
-        if len(migrations) == 5:
-            expected.append(_expected_go_eof_parser_migration(collector_sha))
+        if len(migrations) >= 5:
+            eof_target = (
+                RESUME_SYMLINK_MIGRATION_FROM_COLLECTOR_SHA
+                if len(migrations) == 6
+                else collector_sha
+            )
+            expected.append(_expected_go_eof_parser_migration(eof_target))
+        if len(migrations) == 6:
+            expected.append(_expected_resume_symlink_migration(collector_sha))
     elif collector_sha != STORAGE_MIGRATION_TO_COLLECTOR_SHA:
         raise ValueError("transport manifest collector migration target drifted")
     if [dict(migration) for migration in migrations] != expected:
@@ -656,6 +715,12 @@ def migrate_manifest(
         ]
     elif schema_version == 5:
         expected_name = GO_EOF_PARSER_MIGRATION_NAME
+        migrations = [
+            _require_mapping(item, "transport manifest collector migration")
+            for item in value.get("collector_migrations", [])
+        ]
+    elif schema_version == 6:
+        expected_name = RESUME_SYMLINK_MIGRATION_NAME
         migrations = [
             _require_mapping(item, "transport manifest collector migration")
             for item in value.get("collector_migrations", [])

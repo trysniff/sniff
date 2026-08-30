@@ -6,6 +6,7 @@ import hashlib
 import importlib.util
 import io
 import json
+import os
 import pathlib
 import tarfile
 import tempfile
@@ -39,11 +40,30 @@ class ArchiveTests(unittest.TestCase):
                     destination.joinpath(name, "proof.txt").read_text(), "ok\n"
                 )
 
+    @unittest.skipIf(os.name == "nt", "POSIX symlink extraction regression")
+    def test_valid_in_root_symlink_through_gitfile_round_trips(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            archive = root.joinpath("state.tar.gz")
+            self._write_archive(archive, self._gitfile_symlink)
+
+            transport.validate_archive(archive)
+            destination = root.joinpath("restore")
+            destination.mkdir()
+            transport.extract_resume(archive, destination)
+
+            archive_root = sorted(transport.ALLOWED_ARCHIVE_ROOTS)[0]
+            link = destination.joinpath(archive_root, "snapshot", "kodata", "HEAD")
+            self.assertTrue(link.is_symlink())
+            self.assertEqual(link.readlink(), pathlib.Path("../.git/HEAD"))
+
     def test_traversal_hard_links_and_cross_root_links_are_rejected(self) -> None:
         attacks = {
             "traversal": self._traversal,
             "hard-link": self._hard_link,
             "cross-root-link": self._cross_root_link,
+            "backslash-member": self._backslash_member,
+            "backslash-link": self._backslash_link,
         }
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary)
@@ -126,6 +146,36 @@ class ArchiveTests(unittest.TestCase):
         item = tarfile.TarInfo(f"{first}/cross-root")
         item.type = tarfile.SYMTYPE
         item.linkname = f"../../{second}/proof.txt"
+        payload.addfile(item)
+
+    @staticmethod
+    def _backslash_member(payload: tarfile.TarFile) -> None:
+        root = sorted(transport.ALLOWED_ARCHIVE_ROOTS)[0]
+        ArchiveTests._plain_file(payload, f"{root}/..\\escape", b"bad")
+
+    @staticmethod
+    def _backslash_link(payload: tarfile.TarFile) -> None:
+        root = sorted(transport.ALLOWED_ARCHIVE_ROOTS)[0]
+        item = tarfile.TarInfo(f"{root}/backslash-link")
+        item.type = tarfile.SYMTYPE
+        item.linkname = "..\\escape"
+        payload.addfile(item)
+
+    @staticmethod
+    def _gitfile_symlink(payload: tarfile.TarFile) -> None:
+        root = sorted(transport.ALLOWED_ARCHIVE_ROOTS)[0]
+        for name in (f"{root}/snapshot", f"{root}/snapshot/kodata"):
+            directory = tarfile.TarInfo(name)
+            directory.type = tarfile.DIRTYPE
+            payload.addfile(directory)
+        ArchiveTests._plain_file(
+            payload,
+            f"{root}/snapshot/.git",
+            b"gitdir: /tmp/example.git/worktrees/snapshot\n",
+        )
+        item = tarfile.TarInfo(f"{root}/snapshot/kodata/HEAD")
+        item.type = tarfile.SYMTYPE
+        item.linkname = "../.git/HEAD"
         payload.addfile(item)
 
     @staticmethod
@@ -686,6 +736,98 @@ class ManifestTests(unittest.TestCase):
                     transport.GO_EOF_PARSER_MIGRATION_SOURCE_ARTIFACT_SIZE,
                 )
 
+    def test_resume_symlink_migration_preserves_and_closes_the_exact_chain(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = pathlib.Path(temporary, "manifest.json")
+            self._write_go_project_root_manifest(path)
+            transport.migrate_manifest(
+                path,
+                transport.FRAME_RUN_ID,
+                transport.RESUME_SYMLINK_MIGRATION_FROM_COLLECTOR_SHA,
+                transport.GO_EOF_PARSER_MIGRATION_NAME,
+                transport.GO_EOF_PARSER_MIGRATION_SOURCE_RUN_ID,
+                transport.GO_EOF_PARSER_MIGRATION_FROM_COLLECTOR_SHA,
+                transport.GO_EOF_PARSER_MIGRATION_SOURCE_ARTIFACT_ID,
+                transport.GO_EOF_PARSER_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+                transport.GO_EOF_PARSER_MIGRATION_SOURCE_ARTIFACT_SIZE,
+            )
+            prior_manifest = json.loads(path.read_text(encoding="utf-8"))
+            prior_records = prior_manifest["collector_migrations"]
+            source = transport.RESUME_SYMLINK_MIGRATION_FROM_COLLECTOR_SHA
+            target = "b" * 40
+
+            self.assertEqual(
+                transport.migrate_manifest(
+                    path,
+                    transport.FRAME_RUN_ID,
+                    target,
+                    transport.RESUME_SYMLINK_MIGRATION_NAME,
+                    transport.RESUME_SYMLINK_MIGRATION_SOURCE_RUN_ID,
+                    source,
+                    transport.RESUME_SYMLINK_MIGRATION_SOURCE_ARTIFACT_ID,
+                    transport.RESUME_SYMLINK_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+                    transport.RESUME_SYMLINK_MIGRATION_SOURCE_ARTIFACT_SIZE,
+                ),
+                target,
+            )
+            value = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(value["schema_version"], 7)
+            self.assertEqual(value["collector_migrations"][:5], prior_records)
+            self.assertEqual(
+                value["collector_migrations"][5],
+                {
+                    "from_collector_sha": source,
+                    "migration_contract": transport.RESUME_SYMLINK_MIGRATION_CONTRACT,
+                    "migration_name": transport.RESUME_SYMLINK_MIGRATION_NAME,
+                    "source_artifact_digest": (
+                        transport.RESUME_SYMLINK_MIGRATION_SOURCE_ARTIFACT_DIGEST
+                    ),
+                    "source_artifact_id": (
+                        transport.RESUME_SYMLINK_MIGRATION_SOURCE_ARTIFACT_ID
+                    ),
+                    "source_artifact_size": (
+                        transport.RESUME_SYMLINK_MIGRATION_SOURCE_ARTIFACT_SIZE
+                    ),
+                    "source_head_sha": source,
+                    "source_run_id": transport.RESUME_SYMLINK_MIGRATION_SOURCE_RUN_ID,
+                    "to_collector_sha": target,
+                },
+            )
+            self.assertEqual(
+                transport.validate_manifest(path, transport.FRAME_RUN_ID), target
+            )
+
+            for field in (
+                "from_collector_sha",
+                "migration_contract",
+                "migration_name",
+                "source_artifact_digest",
+                "source_artifact_id",
+                "source_artifact_size",
+                "source_head_sha",
+                "source_run_id",
+                "to_collector_sha",
+            ):
+                tampered = json.loads(json.dumps(value))
+                tampered["collector_migrations"][5][field] = True
+                path.write_text(json.dumps(tampered), encoding="utf-8")
+                with self.subTest(field=field), self.assertRaises(ValueError):
+                    transport.validate_manifest(path, transport.FRAME_RUN_ID)
+
+            path.write_text(json.dumps(value), encoding="utf-8")
+            with self.assertRaises(ValueError):
+                transport.migrate_manifest(
+                    path,
+                    transport.FRAME_RUN_ID,
+                    "c" * 40,
+                    transport.RESUME_SYMLINK_MIGRATION_NAME,
+                    transport.RESUME_SYMLINK_MIGRATION_SOURCE_RUN_ID,
+                    target,
+                    transport.RESUME_SYMLINK_MIGRATION_SOURCE_ARTIFACT_ID,
+                    transport.RESUME_SYMLINK_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+                    transport.RESUME_SYMLINK_MIGRATION_SOURCE_ARTIFACT_SIZE,
+                )
+
     def test_storage_migration_rejects_unapproved_source_or_name(self) -> None:
         attempts = (
             ("a" * 40, transport.STORAGE_MIGRATION_NAME),
@@ -839,6 +981,7 @@ class WorkflowContractTests(unittest.TestCase):
             "declared-go-module-dependency-preparation-v1",
             "strict-go-project-root-validation-v1",
             "valid-go-eof-parser-v1",
+            "validated-resume-symlink-extraction-v1",
             '"$transport" migrate-manifest',
             '"$PRIOR_HEAD_SHA" "$PRIOR_ARTIFACT_ID"',
             '"$PRIOR_ARTIFACT_DIGEST" "$PRIOR_ARTIFACT_SIZE"',
