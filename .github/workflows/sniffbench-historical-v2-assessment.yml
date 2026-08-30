@@ -76,7 +76,7 @@ jobs:
               exit 1
             fi
             case "$COLLECTOR_MIGRATION" in
-              compact-stage-artifact-json-v1|package-scoped-go-dependency-preparation-v1|declared-go-module-dependency-preparation-v1|strict-go-project-root-validation-v1|valid-go-eof-parser-v1) ;;
+              compact-stage-artifact-json-v1|package-scoped-go-dependency-preparation-v1|declared-go-module-dependency-preparation-v1|strict-go-project-root-validation-v1|valid-go-eof-parser-v1|validated-resume-symlink-extraction-v1) ;;
               *)
                 echo 'collector_migration is not an allowlisted exact migration' >&2
                 exit 1
