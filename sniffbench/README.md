@@ -172,6 +172,62 @@ original assessment collector and rejects runtime, frame, archive, or lineage
 drift. The assessment command receives no GitHub credential or model-provider
 configuration and does not execute Sniff's model-review pipeline.
 
+Each terminal ready slot must then be converted into a portable source-only
+bundle. This command revalidates the protocol, frozen selection, selected
+payloads, ten-stage slot journal, exact source snapshots, compiler-derived
+method census, public surface, and identical passing behavior evidence before
+creating a new output directory:
+
+```console
+sniff benchmark prepare-historical-v2-source-review \
+  sniffbench/historical-v2-protocol.json ARTIFACT_ROOT frame.json \
+  exclusions.json selection.json selected-payloads.json STATE_ROOT WORK_ROOT \
+  SWE_REBENCH_V2_REPOSITORY_ROOT rust 1 REVIEW_BUNDLE
+
+sniff benchmark validate-historical-v2-source-review \
+  sniffbench/historical-v2-protocol.json REVIEW_BUNDLE
+```
+
+Two experienced humans independently receive only that source bundle and its
+behavior evidence. Sniff output, dataset judgments, another reviewer's labels,
+and model assistance must remain hidden. Prepare one create-new worksheet for
+each reviewer, complete them independently, and validate each worksheet against
+the exact source commitment:
+
+```console
+sniff benchmark prepare-historical-v2-labels \
+  sniffbench/historical-v2-protocol.json REVIEW_BUNDLE review-a.json
+sniff benchmark prepare-historical-v2-labels \
+  sniffbench/historical-v2-protocol.json REVIEW_BUNDLE review-b.json
+
+sniff benchmark validate-historical-v2-labels \
+  sniffbench/historical-v2-protocol.json REVIEW_BUNDLE review-a.json
+sniff benchmark validate-historical-v2-labels \
+  sniffbench/historical-v2-protocol.json REVIEW_BUNDLE review-b.json
+```
+
+The audit preserves consensus or dispute without silently choosing a label. A
+dispute-resolution worksheet requires a third, distinct experienced human; a
+consensus worksheet is immutable and requires no resolver. The final command
+rehashes and validates the complete lineage before freezing one final label:
+
+```console
+sniff benchmark audit-historical-v2-labels \
+  sniffbench/historical-v2-protocol.json REVIEW_BUNDLE audit.json \
+  --review review-a.json --review review-b.json
+
+sniff benchmark prepare-historical-v2-resolution \
+  sniffbench/historical-v2-protocol.json REVIEW_BUNDLE audit.json \
+  resolution.json --review review-a.json --review review-b.json
+
+sniff benchmark resolve-historical-v2-labels \
+  sniffbench/historical-v2-protocol.json REVIEW_BUNDLE audit.json \
+  resolution.json final-label.json \
+  --review review-a.json --review review-b.json
+```
+
+These review commands are fully offline and never contact a model provider.
+
 ## Non-blind real evidence
 
 Historical simplifications, research trajectories, and intentional clean
