@@ -200,6 +200,8 @@ jobs:
           python-version: "3.13.15"
       - name: Prove historical-v2 transport rejects unsafe or drifting state
         run: python3 .github/scripts/test_historical_v2_assessment_transport.py
+      - name: Prove long assessments retain status and signal semantics
+        run: python3 .github/scripts/test_run_with_heartbeat.py
       - name: Prove forced-termination resume at the command boundary
         run: >-
           cargo test --locked --all-features

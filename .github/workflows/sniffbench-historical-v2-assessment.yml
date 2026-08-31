@@ -36,6 +36,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 300
     env:
+      ASSESSMENT_HEARTBEAT_SECONDS: "60"
       ASSESSMENT_TIMEOUT_MINUTES: "240"
       CARGO_INCREMENTAL: "0"
       CARGO_PROFILE_RELEASE_DEBUG: "0"
@@ -448,20 +449,24 @@ jobs:
         shell: bash
         run: |
           set +e
-          timeout --foreground --signal=INT --kill-after=60s \
-            "${ASSESSMENT_TIMEOUT_MINUTES}m" \
-            "$COLLECTOR_ROOT/target/release/sniffbench-frame" run-slots \
-              --protocol "$COLLECTOR_ROOT/sniffbench/historical-v2-protocol.json" \
-              --artifact-root "$COLLECTOR_ROOT" \
-              --frame "$FRAME_ROOT/frame.json" \
-              --exclusions "$FRAME_ROOT/exclusions.json" \
-              --selection "$FRAME_ROOT/selection.json" \
-              --payloads "$FRAME_ROOT/selected-payloads.json" \
-              --state-root "$STATE_ROOT" \
-              --work-root "$WORK_ROOT" \
-              --harness-repository-root "$HARNESS_ROOT" \
-              --docker-executable "$(command -v docker)" \
-              --max-new-slots "$MAX_NEW_SLOTS"
+          python3 "$GITHUB_WORKSPACE/.github/scripts/run_with_heartbeat.py" \
+            --interval-seconds "$ASSESSMENT_HEARTBEAT_SECONDS" \
+            --label historical-v2-assessment \
+            -- \
+            timeout --foreground --signal=INT --kill-after=60s \
+              "${ASSESSMENT_TIMEOUT_MINUTES}m" \
+              "$COLLECTOR_ROOT/target/release/sniffbench-frame" run-slots \
+                --protocol "$COLLECTOR_ROOT/sniffbench/historical-v2-protocol.json" \
+                --artifact-root "$COLLECTOR_ROOT" \
+                --frame "$FRAME_ROOT/frame.json" \
+                --exclusions "$FRAME_ROOT/exclusions.json" \
+                --selection "$FRAME_ROOT/selection.json" \
+                --payloads "$FRAME_ROOT/selected-payloads.json" \
+                --state-root "$STATE_ROOT" \
+                --work-root "$WORK_ROOT" \
+                --harness-repository-root "$HARNESS_ROOT" \
+                --docker-executable "$(command -v docker)" \
+                --max-new-slots "$MAX_NEW_SLOTS"
           status=$?
           set -e
           printf 'status=%s\n' "$status" >> "$GITHUB_OUTPUT"

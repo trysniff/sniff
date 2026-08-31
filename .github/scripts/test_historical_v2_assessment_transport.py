@@ -1076,15 +1076,33 @@ class WorkflowContractTests(unittest.TestCase):
             )
             .split('"', 2)[1]
         )
+        heartbeat_seconds = int(
+            next(
+                line
+                for line in lines
+                if line.startswith("      ASSESSMENT_HEARTBEAT_SECONDS:")
+            )
+            .split('"', 2)[1]
+        )
 
         self.assertEqual(job_minutes, 300)
         self.assertEqual(assessment_minutes, 240)
         self.assertEqual(reserve_minutes, 60)
+        self.assertEqual(heartbeat_seconds, 60)
         self.assertEqual(assessment_minutes + reserve_minutes, job_minutes)
         self.assertIn(
             '"${ASSESSMENT_TIMEOUT_MINUTES}m" \\',
             workflow,
         )
+        self.assertIn(
+            'python3 "$GITHUB_WORKSPACE/.github/scripts/run_with_heartbeat.py"',
+            workflow,
+        )
+        self.assertIn(
+            '--interval-seconds "$ASSESSMENT_HEARTBEAT_SECONDS"',
+            workflow,
+        )
+        self.assertIn("--label historical-v2-assessment", workflow)
         self.assertNotIn("--kill-after=60s 300m", workflow)
 
     def test_marker_recovery_precedes_snapshot_archival(self) -> None:
