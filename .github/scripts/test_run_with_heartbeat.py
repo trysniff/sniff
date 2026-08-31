@@ -1,5 +1,6 @@
 import os
 import pathlib
+import re
 import subprocess
 import sys
 import tempfile
@@ -10,7 +11,13 @@ import unittest
 HELPER = pathlib.Path(__file__).with_name("run_with_heartbeat.py")
 
 
-def invoke(*command: str, interval: str = "1", label: str = "fixture"):
+def invoke(
+    *command: str,
+    interval: str = "1",
+    label: str = "fixture",
+    linux_proc_stats: bool = False,
+):
+    diagnostics = ["--linux-proc-stats"] if linux_proc_stats else []
     return subprocess.run(
         [
             sys.executable,
@@ -19,6 +26,7 @@ def invoke(*command: str, interval: str = "1", label: str = "fixture"):
             interval,
             "--label",
             label,
+            *diagnostics,
             "--",
             *command,
         ],
@@ -53,6 +61,29 @@ class HeartbeatRunnerTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0)
         self.assertIn("heartbeat label=fixture elapsed_seconds=1", result.stderr)
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "Linux procfs regression")
+    def test_emits_bounded_linux_process_tree_resources(self) -> None:
+        result = invoke(
+            sys.executable,
+            "-c",
+            "import time; payload=bytearray(8*1024*1024); time.sleep(1.2)",
+            linux_proc_stats=True,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        match = re.search(
+            r"processes=(\d+) rss_kib=(\d+) high_water_kib=(\d+) threads=(\d+) "
+            r"host_mem_total_kib=(\d+) host_mem_available_kib=(\d+)",
+            result.stderr,
+        )
+        self.assertIsNotNone(match, result.stderr)
+        values = [int(value) for value in match.groups()]
+        self.assertGreaterEqual(values[0], 1)
+        self.assertGreater(values[1], 8 * 1024)
+        self.assertGreaterEqual(values[2], values[1])
+        self.assertGreaterEqual(values[3], 1)
+        self.assertGreater(values[4], values[5])
 
     @unittest.skipUnless(os.name == "posix", "POSIX signal-forwarding regression")
     def test_forwards_termination_and_returns_the_child_status(self) -> None:
