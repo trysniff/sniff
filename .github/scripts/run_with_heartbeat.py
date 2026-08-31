@@ -79,15 +79,23 @@ def _proc_status(pid: int) -> tuple[int, int, int] | None:
 
 def _proc_children(pid: int) -> list[int]:
     try:
-        value = pathlib.Path(f"/proc/{pid}/task/{pid}/children").read_text(
-            encoding="ascii", errors="strict"
-        )
+        tasks = list(pathlib.Path(f"/proc/{pid}/task").iterdir())
     except FileNotFoundError:
         return []
-    try:
-        return [int(child) for child in value.split()]
-    except ValueError as error:
-        raise RuntimeError(f"invalid procfs children for process {pid}") from error
+    children: set[int] = set()
+    for task in tasks:
+        if not task.name.isdigit():
+            continue
+        try:
+            value = task.joinpath("children").read_text(
+                encoding="ascii", errors="strict"
+            )
+            children.update(int(child) for child in value.split())
+        except FileNotFoundError:
+            continue
+        except ValueError as error:
+            raise RuntimeError(f"invalid procfs children for process {pid}") from error
+    return sorted(children)
 
 
 def _meminfo() -> tuple[int, int]:

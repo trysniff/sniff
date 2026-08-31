@@ -39,7 +39,12 @@ def invoke(
 
 class HeartbeatRunnerTests(unittest.TestCase):
     def test_preserves_success_without_spurious_heartbeat(self) -> None:
-        result = invoke(sys.executable, "-c", "print('complete')")
+        result = invoke(
+            sys.executable,
+            "-c",
+            "print('complete')",
+            interval="10",
+        )
 
         self.assertEqual(result.returncode, 0)
         self.assertEqual(result.stdout, "complete\n")
@@ -64,10 +69,16 @@ class HeartbeatRunnerTests(unittest.TestCase):
 
     @unittest.skipUnless(sys.platform.startswith("linux"), "Linux procfs regression")
     def test_emits_bounded_linux_process_tree_resources(self) -> None:
+        child = (
+            "import subprocess,sys,threading; "
+            "start=lambda: subprocess.run([sys.executable,'-c',"
+            "'import time; payload=bytearray(8*1024*1024); time.sleep(2)']); "
+            "worker=threading.Thread(target=start); worker.start(); worker.join()"
+        )
         result = invoke(
             sys.executable,
             "-c",
-            "import time; payload=bytearray(8*1024*1024); time.sleep(1.2)",
+            child,
             linux_proc_stats=True,
         )
 
@@ -79,7 +90,7 @@ class HeartbeatRunnerTests(unittest.TestCase):
         )
         self.assertIsNotNone(match, result.stderr)
         values = [int(value) for value in match.groups()]
-        self.assertGreaterEqual(values[0], 1)
+        self.assertGreaterEqual(values[0], 2)
         self.assertGreater(values[1], 8 * 1024)
         self.assertGreaterEqual(values[2], values[1])
         self.assertGreaterEqual(values[3], 1)
