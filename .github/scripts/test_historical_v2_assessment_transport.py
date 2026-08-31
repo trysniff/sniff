@@ -1134,6 +1134,7 @@ class WorkflowContractTests(unittest.TestCase):
             workflow,
         )
         self.assertIn("--label historical-v2-assessment", workflow)
+        self.assertIn("--linux-proc-stats", workflow)
         self.assertNotIn("--kill-after=60s 300m", workflow)
 
     def test_marker_recovery_precedes_snapshot_archival(self) -> None:

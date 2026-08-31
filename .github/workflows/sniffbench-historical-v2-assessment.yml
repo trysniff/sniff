@@ -488,6 +488,7 @@ jobs:
           python3 "$GITHUB_WORKSPACE/.github/scripts/run_with_heartbeat.py" \
             --interval-seconds "$ASSESSMENT_HEARTBEAT_SECONDS" \
             --label historical-v2-assessment \
+            --linux-proc-stats \
             -- \
             timeout --foreground --signal=INT --kill-after=60s \
               "${ASSESSMENT_TIMEOUT_MINUTES}m" \
