@@ -304,6 +304,52 @@ pub enum BenchmarkCommand {
         /// Precommitted historical-v2 protocol.
         protocol: String,
     },
+    /// Create one source-only historical-v2 review bundle from a terminal ready slot.
+    PrepareHistoricalV2SourceReview(Box<HistoricalV2SourceReviewArgs>),
+    /// Validate one portable source-only historical-v2 review bundle offline.
+    ValidateHistoricalV2SourceReview {
+        protocol: String,
+        bundle_directory: String,
+    },
+    /// Create one blank source-only historical-v2 reviewer worksheet.
+    PrepareHistoricalV2Labels {
+        protocol: String,
+        bundle_directory: String,
+        output: String,
+    },
+    /// Validate one independently completed historical-v2 reviewer worksheet.
+    ValidateHistoricalV2Labels {
+        protocol: String,
+        bundle_directory: String,
+        review: String,
+    },
+    /// Audit exactly two independent historical-v2 reviews and preserve any dispute.
+    AuditHistoricalV2Labels {
+        protocol: String,
+        bundle_directory: String,
+        output: String,
+        #[arg(long = "review", required = true)]
+        reviews: Vec<String>,
+    },
+    /// Create an immutable historical-v2 dispute-resolution worksheet.
+    PrepareHistoricalV2Resolution {
+        protocol: String,
+        bundle_directory: String,
+        audit: String,
+        output: String,
+        #[arg(long = "review", required = true)]
+        reviews: Vec<String>,
+    },
+    /// Validate resolution and freeze one historical-v2 final label.
+    ResolveHistoricalV2Labels {
+        protocol: String,
+        bundle_directory: String,
+        audit: String,
+        resolution: String,
+        output: String,
+        #[arg(long = "review", required = true)]
+        reviews: Vec<String>,
+    },
     /// Create the immutable blank task for the complete intentional-boundary frame.
     PrepareIntentionalFrameTask {
         /// Public non-blind selection policy.
@@ -495,6 +541,22 @@ pub enum BenchmarkCommand {
         /// Complete SniffBench v6 runs, adjudications, usage, and baseline ledgers.
         submission: String,
     },
+}
+
+#[derive(clap::Args, Debug)]
+pub struct HistoricalV2SourceReviewArgs {
+    protocol: String,
+    artifact_root: String,
+    frame: String,
+    exclusions: String,
+    selection: String,
+    payloads: String,
+    state_root: String,
+    work_root: String,
+    harness_repository_root: String,
+    language: String,
+    slot_number: NonZeroUsize,
+    output_directory: String,
 }
 
 #[derive(Subcommand, Debug)]
@@ -699,6 +761,83 @@ pub async fn run(args: CliArgs) -> Result<i32, Box<dyn std::error::Error>> {
             BenchmarkCommand::ValidateHistoricalV2Protocol { protocol } => {
                 pipeline::validate_historical_v2_benchmark_protocol(&protocol)
             }
+            BenchmarkCommand::PrepareHistoricalV2SourceReview(args) => {
+                pipeline::prepare_historical_v2_source_review(
+                    pipeline::HistoricalV2SourceReviewInputs {
+                        protocol_path: &args.protocol,
+                        artifact_root: &args.artifact_root,
+                        frame_path: &args.frame,
+                        exclusions_path: &args.exclusions,
+                        selection_path: &args.selection,
+                        payloads_path: &args.payloads,
+                        state_root: &args.state_root,
+                        work_root: &args.work_root,
+                        harness_repository_root: &args.harness_repository_root,
+                        language: &args.language,
+                        slot_number: args.slot_number.get(),
+                        output_directory: &args.output_directory,
+                    },
+                )
+            }
+            BenchmarkCommand::ValidateHistoricalV2SourceReview {
+                protocol,
+                bundle_directory,
+            } => pipeline::validate_historical_v2_source_review_cli(&protocol, &bundle_directory),
+            BenchmarkCommand::PrepareHistoricalV2Labels {
+                protocol,
+                bundle_directory,
+                output,
+            } => pipeline::prepare_historical_v2_labels(&protocol, &bundle_directory, &output),
+            BenchmarkCommand::ValidateHistoricalV2Labels {
+                protocol,
+                bundle_directory,
+                review,
+            } => pipeline::validate_historical_v2_labels(&protocol, &bundle_directory, &review),
+            BenchmarkCommand::AuditHistoricalV2Labels {
+                protocol,
+                bundle_directory,
+                output,
+                reviews,
+            } => pipeline::audit_historical_v2_labels(
+                pipeline::HistoricalV2LabelInputs {
+                    protocol_path: &protocol,
+                    bundle_directory: &bundle_directory,
+                    review_paths: &reviews,
+                },
+                &output,
+            ),
+            BenchmarkCommand::PrepareHistoricalV2Resolution {
+                protocol,
+                bundle_directory,
+                audit,
+                output,
+                reviews,
+            } => pipeline::prepare_historical_v2_resolution(
+                pipeline::HistoricalV2LabelInputs {
+                    protocol_path: &protocol,
+                    bundle_directory: &bundle_directory,
+                    review_paths: &reviews,
+                },
+                &audit,
+                &output,
+            ),
+            BenchmarkCommand::ResolveHistoricalV2Labels {
+                protocol,
+                bundle_directory,
+                audit,
+                resolution,
+                output,
+                reviews,
+            } => pipeline::resolve_historical_v2_labels_cli(
+                pipeline::HistoricalV2LabelInputs {
+                    protocol_path: &protocol,
+                    bundle_directory: &bundle_directory,
+                    review_paths: &reviews,
+                },
+                &audit,
+                &resolution,
+                &output,
+            ),
             BenchmarkCommand::PrepareIntentionalFrameTask {
                 policy,
                 population,
@@ -900,6 +1039,9 @@ pub async fn run(args: CliArgs) -> Result<i32, Box<dyn std::error::Error>> {
 mod tests {
     use super::{BenchmarkCommand, CliArgs, CliCommand, IndexerCommand};
     use clap::Parser;
+
+    #[path = "../cli_run_historical_v2_review_tests.rs"]
+    mod historical_v2_review;
 
     #[test]
     fn parses_doctor_with_an_explicit_paid_probe() {
