@@ -201,3 +201,6 @@ pub(crate) fn build_test_historical_v2_release_evidence(
 #[cfg(test)]
 #[path = "benchmark_history_v2_release_gate_tests.rs"]
 pub(super) mod tests;
+
+#[cfg(test)]
+pub(crate) use tests::install_test_historical_v2_empty_release_inputs;

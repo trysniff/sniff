@@ -15,6 +15,32 @@ const PARTITIONS: [&str; 6] = [
     "trim",
 ];
 
+pub(crate) fn install_test_historical_v2_empty_release_inputs(root: &std::path::Path) {
+    let fixture = GateFixture::new(Vec::new());
+    let artifact_root = root.join("artifact");
+    fs::create_dir(&artifact_root).expect("create aggregate artifact root");
+    for entry in fs::read_dir(fixture.artifacts.path()).expect("read fixture artifacts") {
+        let entry = entry.expect("read fixture artifact");
+        fs::copy(entry.path(), artifact_root.join(entry.file_name()))
+            .expect("copy fixture artifact");
+    }
+    fs::create_dir(root.join("state")).expect("create aggregate state root");
+    let corpus_root = root.join("corpus");
+    fs::create_dir(&corpus_root).expect("create aggregate corpus root");
+    fs::create_dir(corpus_root.join("reviews")).expect("create aggregate reviews root");
+    fs::create_dir(corpus_root.join("labels")).expect("create aggregate labels root");
+    fs::write(root.join("protocol.json"), PROTOCOL).expect("write aggregate protocol");
+    write_json(&root.join("frame.json"), &fixture.frame);
+    write_json(&root.join("exclusions.json"), &fixture.manifest);
+    write_json(&root.join("selection.json"), &fixture.selection);
+}
+
+fn write_json(path: &std::path::Path, value: &impl serde::Serialize) {
+    let mut bytes = serde_json::to_vec_pretty(value).expect("serialize aggregate fixture");
+    bytes.push(b'\n');
+    fs::write(path, bytes).expect("write aggregate fixture");
+}
+
 #[test]
 fn empty_fixed_selection_is_auditable_but_underfilled() {
     let fixture = GateFixture::new(Vec::new());

@@ -182,10 +182,11 @@ creating a new output directory:
 sniff benchmark prepare-historical-v2-source-review \
   sniffbench/historical-v2-protocol.json ARTIFACT_ROOT frame.json \
   exclusions.json selection.json selected-payloads.json STATE_ROOT WORK_ROOT \
-  SWE_REBENCH_V2_REPOSITORY_ROOT rust 1 REVIEW_BUNDLE
+  SWE_REBENCH_V2_REPOSITORY_ROOT rust 1 \
+  CORPUS_ROOT/reviews/rust-001
 
 sniff benchmark validate-historical-v2-source-review \
-  sniffbench/historical-v2-protocol.json REVIEW_BUNDLE
+  sniffbench/historical-v2-protocol.json CORPUS_ROOT/reviews/rust-001
 ```
 
 Two experienced humans independently receive only that source bundle and its
@@ -196,14 +197,18 @@ the exact source commitment:
 
 ```console
 sniff benchmark prepare-historical-v2-labels \
-  sniffbench/historical-v2-protocol.json REVIEW_BUNDLE review-a.json
+  sniffbench/historical-v2-protocol.json CORPUS_ROOT/reviews/rust-001 \
+  CORPUS_ROOT/labels/rust-001/review-a.json
 sniff benchmark prepare-historical-v2-labels \
-  sniffbench/historical-v2-protocol.json REVIEW_BUNDLE review-b.json
+  sniffbench/historical-v2-protocol.json CORPUS_ROOT/reviews/rust-001 \
+  CORPUS_ROOT/labels/rust-001/review-b.json
 
 sniff benchmark validate-historical-v2-labels \
-  sniffbench/historical-v2-protocol.json REVIEW_BUNDLE review-a.json
+  sniffbench/historical-v2-protocol.json CORPUS_ROOT/reviews/rust-001 \
+  CORPUS_ROOT/labels/rust-001/review-a.json
 sniff benchmark validate-historical-v2-labels \
-  sniffbench/historical-v2-protocol.json REVIEW_BUNDLE review-b.json
+  sniffbench/historical-v2-protocol.json CORPUS_ROOT/reviews/rust-001 \
+  CORPUS_ROOT/labels/rust-001/review-b.json
 ```
 
 The audit preserves consensus or dispute without silently choosing a label. A
@@ -213,20 +218,69 @@ rehashes and validates the complete lineage before freezing one final label:
 
 ```console
 sniff benchmark audit-historical-v2-labels \
-  sniffbench/historical-v2-protocol.json REVIEW_BUNDLE audit.json \
-  --review review-a.json --review review-b.json
+  sniffbench/historical-v2-protocol.json CORPUS_ROOT/reviews/rust-001 \
+  CORPUS_ROOT/labels/rust-001/audit.json \
+  --review CORPUS_ROOT/labels/rust-001/review-a.json \
+  --review CORPUS_ROOT/labels/rust-001/review-b.json
 
 sniff benchmark prepare-historical-v2-resolution \
-  sniffbench/historical-v2-protocol.json REVIEW_BUNDLE audit.json \
-  resolution.json --review review-a.json --review review-b.json
+  sniffbench/historical-v2-protocol.json CORPUS_ROOT/reviews/rust-001 \
+  CORPUS_ROOT/labels/rust-001/audit.json \
+  CORPUS_ROOT/labels/rust-001/resolution.json \
+  --review CORPUS_ROOT/labels/rust-001/review-a.json \
+  --review CORPUS_ROOT/labels/rust-001/review-b.json
 
 sniff benchmark resolve-historical-v2-labels \
-  sniffbench/historical-v2-protocol.json REVIEW_BUNDLE audit.json \
-  resolution.json final-label.json \
-  --review review-a.json --review review-b.json
+  sniffbench/historical-v2-protocol.json CORPUS_ROOT/reviews/rust-001 \
+  CORPUS_ROOT/labels/rust-001/audit.json \
+  CORPUS_ROOT/labels/rust-001/resolution.json \
+  CORPUS_ROOT/labels/rust-001/final-label.json \
+  --review CORPUS_ROOT/labels/rust-001/review-a.json \
+  --review CORPUS_ROOT/labels/rust-001/review-b.json
 ```
 
-These review commands are fully offline and never contact a model provider.
+Create the plain `CORPUS_ROOT/reviews` and `CORPUS_ROOT/labels` directories
+before review. Each reviewed slot uses the exact zero-padded identity shown
+above. The aggregate loader requires the review and label directory identities
+to match exactly and permits only `review-a.json`, `review-b.json`, `audit.json`,
+`resolution.json`, and `final-label.json` inside each label package. Missing,
+extra, symlinked, unknown-language, or out-of-range packages fail closed.
+
+After all 768 fixed slots are terminal and every ready slot has its complete
+review package, build and replay the create-new release evidence. Both commands
+revalidate the frozen selection, every terminal journal, and every independent
+final review:
+
+```console
+sniff benchmark build-historical-v2-release-evidence \
+  sniffbench/historical-v2-protocol.json ARTIFACT_ROOT frame.json \
+  exclusions.json selection.json STATE_ROOT CORPUS_ROOT \
+  CORPUS_ROOT/release-evidence.json
+
+sniff benchmark validate-historical-v2-release-evidence \
+  sniffbench/historical-v2-protocol.json ARTIFACT_ROOT frame.json \
+  exclusions.json selection.json STATE_ROOT CORPUS_ROOT \
+  CORPUS_ROOT/release-evidence.json
+```
+
+An underfilled evidence seal remains auditable but cannot publish a corpus.
+Only a passed seal with at least 40 independently accepted cases per language
+can create the immutable corpus bundle. Standalone corpus validation needs no
+mutable assessment state:
+
+```console
+sniff benchmark publish-historical-v2-corpus \
+  sniffbench/historical-v2-protocol.json ARTIFACT_ROOT frame.json \
+  exclusions.json selection.json STATE_ROOT CORPUS_ROOT \
+  CORPUS_ROOT/release-evidence.json CORPUS_ROOT/corpus-bundle.json
+
+sniff benchmark validate-historical-v2-corpus \
+  sniffbench/historical-v2-protocol.json CORPUS_ROOT \
+  CORPUS_ROOT/corpus-bundle.json
+```
+
+All review, release-evidence, and corpus commands are fully offline and never
+contact a model provider.
 
 ## Non-blind real evidence
 

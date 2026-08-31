@@ -4,6 +4,8 @@ mod benchmark_run;
 mod env;
 #[path = "cli_pipeline_graph.rs"]
 mod graph;
+#[path = "cli_pipeline_historical_v2_release.rs"]
+mod historical_v2_release;
 #[path = "cli_pipeline_historical_v2_review.rs"]
 mod historical_v2_review;
 #[path = "cli_pipeline_intentional_boundary.rs"]
@@ -36,6 +38,11 @@ pub(crate) use benchmark_run::{
     validate_benchmark_labels, validate_benchmark_source_frame,
     validate_historical_v2_benchmark_protocol, validate_intentional_boundary_benchmark_frame_task,
     validate_intentional_boundary_benchmark_protocol,
+};
+pub(crate) use historical_v2_release::{
+    HistoricalV2AggregateInputs, HistoricalV2CorpusPublishInputs,
+    build_historical_v2_release_evidence_cli, publish_historical_v2_corpus_cli,
+    validate_historical_v2_corpus_cli, validate_historical_v2_release_evidence_cli,
 };
 pub(crate) use historical_v2_review::{
     HistoricalV2LabelInputs, HistoricalV2SourceReviewInputs, audit_historical_v2_labels,

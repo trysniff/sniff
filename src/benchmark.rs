@@ -9,6 +9,8 @@ mod release;
 #[cfg(test)]
 pub(crate) use release::install_test_historical_v2_corpus;
 #[cfg(test)]
+pub(crate) use release::install_test_historical_v2_empty_release_inputs;
+#[cfg(test)]
 pub(crate) use release::write_test_non_blind_source_seal;
 #[cfg(test)]
 pub(crate) use release::write_test_source_seal;
