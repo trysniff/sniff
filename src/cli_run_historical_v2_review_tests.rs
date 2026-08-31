@@ -198,3 +198,107 @@ fn parses_historical_v2_label_lifecycle_commands() {
             && reviews == ["review-a.json", "review-b.json"]
     ));
 }
+
+#[test]
+fn parses_historical_v2_aggregate_release_commands() {
+    let arguments = [
+        "protocol.json",
+        "artifact",
+        "frame.json",
+        "exclusions.json",
+        "selection.json",
+        "state",
+        "corpus",
+        "release-evidence.json",
+    ];
+    let build = CliArgs::try_parse_from(
+        ["sniff", "benchmark", "build-historical-v2-release-evidence"]
+            .into_iter()
+            .chain(arguments),
+    )
+    .expect("historical-v2 release evidence build arguments");
+    let Some(CliCommand::Benchmark {
+        command: BenchmarkCommand::BuildHistoricalV2ReleaseEvidence(arguments),
+    }) = build.command
+    else {
+        panic!("expected historical-v2 release evidence build command");
+    };
+    assert_eq!(arguments.protocol, "protocol.json");
+    assert_eq!(arguments.artifact_root, "artifact");
+    assert_eq!(arguments.frame, "frame.json");
+    assert_eq!(arguments.exclusions, "exclusions.json");
+    assert_eq!(arguments.selection, "selection.json");
+    assert_eq!(arguments.state_root, "state");
+    assert_eq!(arguments.corpus_root, "corpus");
+    assert_eq!(arguments.evidence, "release-evidence.json");
+
+    let validate = CliArgs::try_parse_from(
+        [
+            "sniff",
+            "benchmark",
+            "validate-historical-v2-release-evidence",
+        ]
+        .into_iter()
+        .chain(arguments_for_aggregate()),
+    )
+    .expect("historical-v2 release evidence validation arguments");
+    assert!(matches!(
+        validate.command,
+        Some(CliCommand::Benchmark {
+            command: BenchmarkCommand::ValidateHistoricalV2ReleaseEvidence(_)
+        })
+    ));
+}
+
+#[test]
+fn parses_historical_v2_corpus_publication_commands() {
+    let publish = CliArgs::try_parse_from(
+        ["sniff", "benchmark", "publish-historical-v2-corpus"]
+            .into_iter()
+            .chain(arguments_for_aggregate())
+            .chain(["corpus-bundle.json"]),
+    )
+    .expect("historical-v2 corpus publication arguments");
+    let Some(CliCommand::Benchmark {
+        command: BenchmarkCommand::PublishHistoricalV2Corpus(arguments),
+    }) = publish.command
+    else {
+        panic!("expected historical-v2 corpus publication command");
+    };
+    assert_eq!(arguments.output, "corpus-bundle.json");
+
+    let validate = CliArgs::try_parse_from([
+        "sniff",
+        "benchmark",
+        "validate-historical-v2-corpus",
+        "protocol.json",
+        "corpus",
+        "corpus-bundle.json",
+    ])
+    .expect("historical-v2 corpus validation arguments");
+    assert!(matches!(
+        validate.command,
+        Some(CliCommand::Benchmark {
+            command: BenchmarkCommand::ValidateHistoricalV2Corpus {
+                protocol,
+                corpus_root,
+                bundle,
+            }
+        }) if protocol == "protocol.json"
+            && corpus_root == "corpus"
+            && bundle == "corpus-bundle.json"
+    ));
+}
+
+fn arguments_for_aggregate() -> [&'static str; 8] {
+    [
+        "protocol.json",
+        "artifact",
+        "frame.json",
+        "exclusions.json",
+        "selection.json",
+        "state",
+        "corpus",
+        "release-evidence.json",
+    ]
+}

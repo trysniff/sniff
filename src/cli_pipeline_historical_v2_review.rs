@@ -17,8 +17,8 @@ use std::fs;
 use std::io::{Error as IoError, ErrorKind};
 use std::path::{Path, PathBuf};
 
-const MAX_PROTOCOL_BYTES: u64 = 1024 * 1024;
-const MAX_JSON_BYTES: u64 = 512 * 1024 * 1024;
+pub(super) const MAX_PROTOCOL_BYTES: u64 = 1024 * 1024;
+pub(super) const MAX_JSON_BYTES: u64 = 512 * 1024 * 1024;
 const REVIEW_MANIFEST: &str = "manifest.json";
 
 pub(crate) struct HistoricalV2SourceReviewInputs<'a> {
@@ -261,10 +261,10 @@ pub(crate) fn resolve_historical_v2_labels_cli(
     Ok(0)
 }
 
-struct LoadedReview {
-    protocol: ValidatedHistoricalV2Protocol,
-    root: PathBuf,
-    bundle: HistoricalV2SourceReviewBundle,
+pub(super) struct LoadedReview {
+    pub(super) protocol: ValidatedHistoricalV2Protocol,
+    pub(super) root: PathBuf,
+    pub(super) bundle: HistoricalV2SourceReviewBundle,
 }
 
 struct LoadedLabelInputs {
@@ -289,7 +289,7 @@ fn load_label_inputs(
     Ok(LoadedLabelInputs { review, worksheets })
 }
 
-fn load_review(
+pub(super) fn load_review(
     protocol_path: &str,
     bundle_directory: &str,
 ) -> Result<LoadedReview, Box<dyn Error>> {
@@ -321,13 +321,20 @@ fn load_review(
     })
 }
 
-fn read_json<T: DeserializeOwned>(path: &Path, label: &str) -> Result<T, Box<dyn Error>> {
+pub(super) fn read_json<T: DeserializeOwned>(
+    path: &Path,
+    label: &str,
+) -> Result<T, Box<dyn Error>> {
     let bytes = read_plain_file(path, label, MAX_JSON_BYTES)?;
     serde_json::from_slice(&bytes)
         .map_err(|error| invalid_data(&format!("{label} is invalid"), error).into())
 }
 
-fn read_plain_file(path: &Path, label: &str, maximum_bytes: u64) -> Result<Vec<u8>, IoError> {
+pub(super) fn read_plain_file(
+    path: &Path,
+    label: &str,
+    maximum_bytes: u64,
+) -> Result<Vec<u8>, IoError> {
     let metadata = fs::symlink_metadata(path).map_err(|error| {
         IoError::new(
             error.kind(),
@@ -355,7 +362,7 @@ fn read_plain_file(path: &Path, label: &str, maximum_bytes: u64) -> Result<Vec<u
     Ok(bytes)
 }
 
-fn existing_plain_directory(path: &str, label: &str) -> Result<PathBuf, IoError> {
+pub(super) fn existing_plain_directory(path: &str, label: &str) -> Result<PathBuf, IoError> {
     let input = Path::new(path);
     require_plain_directory(input, label)?;
     let canonical = fs::canonicalize(input).map_err(|error| {
@@ -368,7 +375,7 @@ fn existing_plain_directory(path: &str, label: &str) -> Result<PathBuf, IoError>
     normalize_platform_path(canonical)
 }
 
-fn require_plain_directory(path: &Path, label: &str) -> Result<(), IoError> {
+pub(super) fn require_plain_directory(path: &Path, label: &str) -> Result<(), IoError> {
     let metadata = fs::symlink_metadata(path).map_err(|error| {
         IoError::new(
             error.kind(),
@@ -428,7 +435,7 @@ fn write_json_new(path: &str, value: &impl serde::Serialize) -> Result<(), Box<d
     Ok(())
 }
 
-fn invalid_data(context: &str, detail: impl std::fmt::Display) -> IoError {
+pub(super) fn invalid_data(context: &str, detail: impl std::fmt::Display) -> IoError {
     IoError::new(ErrorKind::InvalidData, format!("{context}: {detail}"))
 }
 

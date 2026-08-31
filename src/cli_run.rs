@@ -350,6 +350,18 @@ pub enum BenchmarkCommand {
         #[arg(long = "review", required = true)]
         reviews: Vec<String>,
     },
+    /// Replay every fixed slot and create immutable aggregate release evidence.
+    BuildHistoricalV2ReleaseEvidence(Box<HistoricalV2AggregateArgs>),
+    /// Replay every fixed slot against existing aggregate release evidence.
+    ValidateHistoricalV2ReleaseEvidence(Box<HistoricalV2AggregateArgs>),
+    /// Publish the accepted historical-v2 corpus from a passed release seal.
+    PublishHistoricalV2Corpus(Box<HistoricalV2CorpusPublishArgs>),
+    /// Validate a published historical-v2 corpus without mutable assessment state.
+    ValidateHistoricalV2Corpus {
+        protocol: String,
+        corpus_root: String,
+        bundle: String,
+    },
     /// Create the immutable blank task for the complete intentional-boundary frame.
     PrepareIntentionalFrameTask {
         /// Public non-blind selection policy.
@@ -557,6 +569,31 @@ pub struct HistoricalV2SourceReviewArgs {
     language: String,
     slot_number: NonZeroUsize,
     output_directory: String,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct HistoricalV2AggregateArgs {
+    protocol: String,
+    artifact_root: String,
+    frame: String,
+    exclusions: String,
+    selection: String,
+    state_root: String,
+    corpus_root: String,
+    evidence: String,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct HistoricalV2CorpusPublishArgs {
+    protocol: String,
+    artifact_root: String,
+    frame: String,
+    exclusions: String,
+    selection: String,
+    state_root: String,
+    corpus_root: String,
+    evidence: String,
+    output: String,
 }
 
 #[derive(Subcommand, Debug)]
@@ -838,6 +875,56 @@ pub async fn run(args: CliArgs) -> Result<i32, Box<dyn std::error::Error>> {
                 &resolution,
                 &output,
             ),
+            BenchmarkCommand::BuildHistoricalV2ReleaseEvidence(args) => {
+                pipeline::build_historical_v2_release_evidence_cli(
+                    pipeline::HistoricalV2AggregateInputs {
+                        protocol_path: &args.protocol,
+                        artifact_root: &args.artifact_root,
+                        frame_path: &args.frame,
+                        exclusions_path: &args.exclusions,
+                        selection_path: &args.selection,
+                        state_root: &args.state_root,
+                        corpus_root: &args.corpus_root,
+                        evidence_path: &args.evidence,
+                    },
+                )
+            }
+            BenchmarkCommand::ValidateHistoricalV2ReleaseEvidence(args) => {
+                pipeline::validate_historical_v2_release_evidence_cli(
+                    pipeline::HistoricalV2AggregateInputs {
+                        protocol_path: &args.protocol,
+                        artifact_root: &args.artifact_root,
+                        frame_path: &args.frame,
+                        exclusions_path: &args.exclusions,
+                        selection_path: &args.selection,
+                        state_root: &args.state_root,
+                        corpus_root: &args.corpus_root,
+                        evidence_path: &args.evidence,
+                    },
+                )
+            }
+            BenchmarkCommand::PublishHistoricalV2Corpus(args) => {
+                pipeline::publish_historical_v2_corpus_cli(
+                    pipeline::HistoricalV2CorpusPublishInputs {
+                        aggregate: pipeline::HistoricalV2AggregateInputs {
+                            protocol_path: &args.protocol,
+                            artifact_root: &args.artifact_root,
+                            frame_path: &args.frame,
+                            exclusions_path: &args.exclusions,
+                            selection_path: &args.selection,
+                            state_root: &args.state_root,
+                            corpus_root: &args.corpus_root,
+                            evidence_path: &args.evidence,
+                        },
+                        output_path: &args.output,
+                    },
+                )
+            }
+            BenchmarkCommand::ValidateHistoricalV2Corpus {
+                protocol,
+                corpus_root,
+                bundle,
+            } => pipeline::validate_historical_v2_corpus_cli(&protocol, &corpus_root, &bundle),
             BenchmarkCommand::PrepareIntentionalFrameTask {
                 policy,
                 population,
