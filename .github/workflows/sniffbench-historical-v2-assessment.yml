@@ -17,6 +17,27 @@ on:
         required: true
         default: "1"
         type: string
+      max_new_stages_per_slot:
+        description: "Maximum stages to commit for each admitted or resumed slot"
+        required: true
+        default: "10"
+        type: string
+      through_stage:
+        description: "Last stage this run may execute"
+        required: true
+        default: ready-for-review
+        type: choice
+        options:
+          - payload
+          - materialization
+          - test-materialization
+          - source-census
+          - semantic-census
+          - assessment-identity
+          - qualification
+          - test-recipe
+          - identical-tests
+          - ready-for-review
       collector_migration:
         description: "Explicit allowlisted collector migration; empty for an ordinary resume"
         required: false
@@ -42,8 +63,10 @@ jobs:
       CARGO_PROFILE_RELEASE_DEBUG: "0"
       FRAME_RUN_ID: ${{ inputs.frame_run_id }}
       MAX_NEW_SLOTS: ${{ inputs.max_new_slots }}
+      MAX_NEW_STAGES_PER_SLOT: ${{ inputs.max_new_stages_per_slot }}
       NON_ASSESSMENT_RESERVE_MINUTES: "60"
       RESUME_RUN_ID: ${{ inputs.resume_run_id }}
+      THROUGH_STAGE: ${{ inputs.through_stage }}
       COLLECTOR_MIGRATION: ${{ inputs.collector_migration }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -65,6 +88,19 @@ jobs:
             echo 'max_new_slots must be an integer from 1 through 768' >&2
             exit 1
           fi
+          if [[ ! "$MAX_NEW_STAGES_PER_SLOT" =~ ^[1-9][0-9]*$ ]] \
+            || (( MAX_NEW_STAGES_PER_SLOT > 10 )); then
+            echo 'max_new_stages_per_slot must be an integer from 1 through 10' >&2
+            exit 1
+          fi
+          case "$THROUGH_STAGE" in
+            payload|materialization|test-materialization|source-census|semantic-census) ;;
+            assessment-identity|qualification|test-recipe|identical-tests|ready-for-review) ;;
+            *)
+              echo 'through_stage is not a historical-v2 slot stage' >&2
+              exit 1
+              ;;
+          esac
           if [[ -n "$RESUME_RUN_ID" && ! "$RESUME_RUN_ID" =~ ^[1-9][0-9]*$ ]]; then
             echo 'resume_run_id must be an unsigned GitHub Actions run ID' >&2
             exit 1
@@ -466,7 +502,9 @@ jobs:
                 --work-root "$WORK_ROOT" \
                 --harness-repository-root "$HARNESS_ROOT" \
                 --docker-executable "$(command -v docker)" \
-                --max-new-slots "$MAX_NEW_SLOTS"
+                --max-new-slots "$MAX_NEW_SLOTS" \
+                --max-new-stages-per-slot "$MAX_NEW_STAGES_PER_SLOT" \
+                --through-stage "$THROUGH_STAGE"
           status=$?
           set -e
           printf 'status=%s\n' "$status" >> "$GITHUB_OUTPUT"
