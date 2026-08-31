@@ -1052,6 +1052,37 @@ class FrameTests(unittest.TestCase):
 
 
 class WorkflowContractTests(unittest.TestCase):
+    def test_dispatch_exposes_exact_stage_bounds(self) -> None:
+        workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+
+        for stage in (
+            "payload",
+            "materialization",
+            "test-materialization",
+            "source-census",
+            "semantic-census",
+            "assessment-identity",
+            "qualification",
+            "test-recipe",
+            "identical-tests",
+            "ready-for-review",
+        ):
+            self.assertIn(f"          - {stage}\n", workflow)
+        self.assertIn(
+            "      MAX_NEW_STAGES_PER_SLOT: ${{ inputs.max_new_stages_per_slot }}",
+            workflow,
+        )
+        self.assertIn("      THROUGH_STAGE: ${{ inputs.through_stage }}", workflow)
+        self.assertIn(
+            '--max-new-stages-per-slot "$MAX_NEW_STAGES_PER_SLOT"', workflow
+        )
+        self.assertIn("--through-stage \"$THROUGH_STAGE\"", workflow)
+        self.assertIn(
+            "max_new_stages_per_slot must be an integer from 1 through 10",
+            workflow,
+        )
+        self.assertIn("through_stage is not a historical-v2 slot stage", workflow)
+
     def test_assessment_budget_reserves_time_for_setup_sealing_and_upload(self) -> None:
         workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
         lines = workflow.splitlines()
