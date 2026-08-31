@@ -52,11 +52,12 @@ fn aggregate_output_must_be_create_new_inside_corpus_root() {
     fs::create_dir(root.path().join("nested")).expect("create noncanonical root fixture");
     let noncanonical_root = root.path().join("nested").join("..");
     let output = root.path().join("release-evidence.json");
+    let resolved = new_file_under_root(&noncanonical_root, &output, "release evidence").unwrap();
     assert_eq!(
-        new_file_under_root(&noncanonical_root, &output, "release evidence").unwrap(),
-        output
+        resolved,
+        new_file_under_root(root.path(), &output, "release evidence").unwrap()
     );
-    fs::write(&output, b"{}").expect("write release evidence fixture");
+    fs::write(&resolved, b"{}").expect("write release evidence fixture");
     assert!(new_file_under_root(root.path(), &output, "release evidence").is_err());
 
     let outside = root.path().parent().unwrap().join("outside-release.json");
