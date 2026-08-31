@@ -461,6 +461,10 @@ fn resolved_file_under_root(
     label: &str,
     must_exist: bool,
 ) -> Result<PathBuf, IoError> {
+    let root_text = root
+        .to_str()
+        .ok_or_else(|| invalid_data(label, "corpus root is not UTF-8"))?;
+    let root = existing_plain_directory(root_text, "historical-v2 corpus root")?;
     let absolute = std::path::absolute(path)?;
     let parent = absolute
         .parent()
@@ -479,7 +483,7 @@ fn resolved_file_under_root(
         return Err(invalid_data(label, "path has an unsafe final component"));
     }
     let resolved = parent.join(file_name);
-    if !resolved.starts_with(root) {
+    if !resolved.starts_with(&root) {
         return Err(invalid_data(label, "path is outside the corpus root"));
     }
     if must_exist {
