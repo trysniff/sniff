@@ -145,6 +145,20 @@ GIT_BLOB_SOURCE_CENSUS_MIGRATION_SOURCE_ARTIFACT_DIGEST = (
 )
 GIT_BLOB_SOURCE_CENSUS_MIGRATION_SOURCE_ARTIFACT_SIZE = 435_876_651
 
+BOUNDED_GO_SEMANTIC_MIGRATION_NAME = "bounded-go-semantic-indexing-v1"
+BOUNDED_GO_SEMANTIC_MIGRATION_CONTRACT = (
+    "sniffbench-historical-v2-bounded-go-semantic-indexing-migration-v1"
+)
+BOUNDED_GO_SEMANTIC_MIGRATION_FROM_COLLECTOR_SHA = (
+    "ce0854638539d3862176abfd74b0d7e854eeaf0e"
+)
+BOUNDED_GO_SEMANTIC_MIGRATION_SOURCE_RUN_ID = 33_367_134_527
+BOUNDED_GO_SEMANTIC_MIGRATION_SOURCE_ARTIFACT_ID = 9_755_742_430
+BOUNDED_GO_SEMANTIC_MIGRATION_SOURCE_ARTIFACT_DIGEST = (
+    "sha256:fc4d21bf9780f2489e562bf3fa598d7e09530736f4b4e628b71a95f3251de17e"
+)
+BOUNDED_GO_SEMANTIC_MIGRATION_SOURCE_ARTIFACT_SIZE = 328_326_113
+
 FRAME_FILE_SHA256 = {
     "environment.txt": "2e87f3c3e1b2005f6b6d09b1bf1b82d30a9433636c3c67f0806cc68e80ab6800",
     "exclusions.json": "74bccb100eb48ab87952bd7eec137b2285edbc68d2547715bc0e06a80e029f76",
@@ -467,7 +481,7 @@ def validate_manifest(path: pathlib.Path, frame_run_id: int) -> str:
     schema_version = value.get("schema_version")
     if schema_version == 1:
         expected = _manifest(frame_run_id, collector_sha)
-    elif schema_version in (2, 3, 4, 5, 6, 7, 8):
+    elif schema_version in (2, 3, 4, 5, 6, 7, 8, 9):
         migrations = value.get("collector_migrations")
         expected_count = schema_version - 1
         if not isinstance(migrations, list) or len(migrations) != expected_count:
@@ -522,6 +536,9 @@ def _migration_record(
     elif migration_name == GIT_BLOB_SOURCE_CENSUS_MIGRATION_NAME:
         contract = GIT_BLOB_SOURCE_CENSUS_MIGRATION_CONTRACT
         source_collector_sha = GIT_BLOB_SOURCE_CENSUS_MIGRATION_FROM_COLLECTOR_SHA
+    elif migration_name == BOUNDED_GO_SEMANTIC_MIGRATION_NAME:
+        contract = BOUNDED_GO_SEMANTIC_MIGRATION_CONTRACT
+        source_collector_sha = BOUNDED_GO_SEMANTIC_MIGRATION_FROM_COLLECTOR_SHA
     else:
         raise ValueError("transport manifest collector migration is not allowlisted")
     return {
@@ -663,15 +680,34 @@ def _expected_git_blob_source_census_migration(
     )
 
 
+def _expected_bounded_go_semantic_migration(
+    target_collector_sha: str,
+) -> dict[str, Any]:
+    if (
+        target_collector_sha == BOUNDED_GO_SEMANTIC_MIGRATION_FROM_COLLECTOR_SHA
+        or re.fullmatch(r"[0-9a-f]{40}", target_collector_sha) is None
+    ):
+        raise ValueError("transport manifest collector migration target is invalid")
+    return _migration_record(
+        BOUNDED_GO_SEMANTIC_MIGRATION_NAME,
+        target_collector_sha,
+        BOUNDED_GO_SEMANTIC_MIGRATION_SOURCE_RUN_ID,
+        BOUNDED_GO_SEMANTIC_MIGRATION_FROM_COLLECTOR_SHA,
+        BOUNDED_GO_SEMANTIC_MIGRATION_SOURCE_ARTIFACT_ID,
+        BOUNDED_GO_SEMANTIC_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+        BOUNDED_GO_SEMANTIC_MIGRATION_SOURCE_ARTIFACT_SIZE,
+    )
+
+
 def _validate_collector_migrations(
     migrations: Sequence[Mapping[str, Any]], collector_sha: str
 ) -> None:
-    if len(migrations) not in (1, 2, 3, 4, 5, 6, 7):
+    if len(migrations) not in (1, 2, 3, 4, 5, 6, 7, 8):
         raise ValueError("transport manifest collector migration chain is invalid")
     expected = [_expected_storage_migration()]
     if len(migrations) == 2:
         expected.append(_expected_go_preparation_migration(collector_sha))
-    elif len(migrations) in (3, 4, 5, 6, 7):
+    elif len(migrations) in (3, 4, 5, 6, 7, 8):
         expected.append(
             _expected_go_preparation_migration(
                 GO_MODULE_DOWNLOAD_MIGRATION_FROM_COLLECTOR_SHA
@@ -702,12 +738,19 @@ def _validate_collector_migrations(
         if len(migrations) >= 6:
             resume_target = (
                 GIT_BLOB_SOURCE_CENSUS_MIGRATION_FROM_COLLECTOR_SHA
-                if len(migrations) == 7
+                if len(migrations) >= 7
                 else collector_sha
             )
             expected.append(_expected_resume_symlink_migration(resume_target))
-        if len(migrations) == 7:
-            expected.append(_expected_git_blob_source_census_migration(collector_sha))
+        if len(migrations) >= 7:
+            git_blob_target = (
+                BOUNDED_GO_SEMANTIC_MIGRATION_FROM_COLLECTOR_SHA
+                if len(migrations) == 8
+                else collector_sha
+            )
+            expected.append(_expected_git_blob_source_census_migration(git_blob_target))
+        if len(migrations) == 8:
+            expected.append(_expected_bounded_go_semantic_migration(collector_sha))
     elif collector_sha != STORAGE_MIGRATION_TO_COLLECTOR_SHA:
         raise ValueError("transport manifest collector migration target drifted")
     if [dict(migration) for migration in migrations] != expected:
@@ -770,6 +813,12 @@ def migrate_manifest(
         ]
     elif schema_version == 7:
         expected_name = GIT_BLOB_SOURCE_CENSUS_MIGRATION_NAME
+        migrations = [
+            _require_mapping(item, "transport manifest collector migration")
+            for item in value.get("collector_migrations", [])
+        ]
+    elif schema_version == 8:
+        expected_name = BOUNDED_GO_SEMANTIC_MIGRATION_NAME
         migrations = [
             _require_mapping(item, "transport manifest collector migration")
             for item in value.get("collector_migrations", [])
