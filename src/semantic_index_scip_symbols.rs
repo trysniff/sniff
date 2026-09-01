@@ -3,11 +3,10 @@ use crate::semantic_index::{
     SemanticResolution, SemanticSignature, SemanticSymbol, SemanticSymbolCategory,
     SemanticSymbolId, SemanticSymbolKind, SemanticSymbolOrigin, SemanticVisibility,
 };
+use crate::semantic_index_merge::merge_symbol;
 use protobuf::Enum;
 use scip::types::{Relationship, SymbolInformation, symbol_information::Kind};
 use std::collections::BTreeSet;
-
-const CONFLICTING_KINDS: &str = "ConflictingKinds";
 
 struct ImportedSignature {
     value: Option<SemanticSignature>,
@@ -239,106 +238,6 @@ pub(super) fn ensure_placeholder(
             origin,
             ambiguity_notes: Vec::new(),
         });
-}
-
-fn merge_symbol(index: &mut SemanticIndex, incoming: SemanticSymbol) -> Result<(), String> {
-    let Some(existing) = index.symbols.get_mut(&incoming.id) else {
-        index.symbols.insert(incoming.id.clone(), incoming);
-        return Ok(());
-    };
-    if !existing.provider_identity.is_empty()
-        && existing.provider_identity != incoming.provider_identity
-    {
-        return Err(format!(
-            "semantic symbol identity collision for {}",
-            incoming.id.0
-        ));
-    }
-    if existing.provider_identity.is_empty() {
-        existing.provider_identity = incoming.provider_identity;
-    }
-    merge_optional(
-        &mut existing.display_name,
-        incoming.display_name,
-        &incoming.id,
-        "display name",
-    )?;
-    if existing.kind.category == SemanticSymbolCategory::Unknown {
-        if existing.kind.provider_name == CONFLICTING_KINDS {
-            if incoming.kind.category != SemanticSymbolCategory::Unknown {
-                let detail = format!(
-                    "additional conflicting SCIP symbol kind for {}: {}",
-                    incoming.id.0, incoming.kind.provider_name
-                );
-                if !existing.ambiguity_notes.contains(&detail) {
-                    existing.ambiguity_notes.push(detail);
-                }
-            }
-        } else {
-            existing.kind = incoming.kind;
-        }
-    } else if incoming.kind.category != SemanticSymbolCategory::Unknown
-        && existing.kind != incoming.kind
-    {
-        let mut provider_names = [
-            existing.kind.provider_name.as_str(),
-            incoming.kind.provider_name.as_str(),
-        ];
-        provider_names.sort_unstable();
-        let detail = format!(
-            "conflicting SCIP symbol kinds for {}: {} and {}",
-            incoming.id.0, provider_names[0], provider_names[1]
-        );
-        existing.kind = SemanticSymbolKind {
-            category: SemanticSymbolCategory::Unknown,
-            provider_name: CONFLICTING_KINDS.to_string(),
-        };
-        existing.ambiguity_notes.push(detail);
-    }
-    if let Err(detail) = merge_optional(
-        &mut existing.signature,
-        incoming.signature,
-        &incoming.id,
-        "signature",
-    ) {
-        existing.signature = None;
-        existing.ambiguity_notes.push(detail);
-    }
-    merge_optional(&mut existing.owner, incoming.owner, &incoming.id, "owner")?;
-    for documentation in incoming.documentation {
-        if !existing.documentation.contains(&documentation) {
-            existing.documentation.push(documentation);
-        }
-    }
-    if existing.origin == SemanticSymbolOrigin::Unknown {
-        existing.origin = incoming.origin;
-    } else if incoming.origin != SemanticSymbolOrigin::Unknown && existing.origin != incoming.origin
-    {
-        return Err(format!(
-            "conflicting SCIP symbol origins for {}",
-            incoming.id.0
-        ));
-    }
-    Ok(())
-}
-
-fn merge_optional<T: PartialEq + std::fmt::Debug>(
-    existing: &mut Option<T>,
-    incoming: Option<T>,
-    id: &SemanticSymbolId,
-    field: &str,
-) -> Result<(), String> {
-    match (&existing, incoming) {
-        (None, Some(value)) => *existing = Some(value),
-        (Some(left), Some(right)) if left != &right => {
-            return Err(format!(
-                "conflicting SCIP symbol {field} values for {}: existing={left:?}, incoming={right:?}",
-                id.0,
-            ));
-        }
-        _ => {}
-    }
-    Ok(())
 }
 
 fn symbol_kind(raw: i32, provider_identity: &str) -> Result<SemanticSymbolKind, String> {

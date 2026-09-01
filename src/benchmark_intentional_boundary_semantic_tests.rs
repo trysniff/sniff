@@ -135,7 +135,7 @@ fn fixture() -> (
     external_type_symbol.id = external_type_id.clone();
     external_type_symbol.provider_identity = external_type_id.0.clone();
     let index = SemanticIndex {
-        format_version: 1,
+        format_version: crate::semantic_index::SEMANTIC_INDEX_FORMAT_VERSION,
         repository_root: root.path().to_string_lossy().replace('\\', "/"),
         provenance: SemanticIndexProvenance {
             format: "scip".to_string(),
@@ -143,6 +143,12 @@ fn fixture() -> (
             tool_version: Some("1.0.0".to_string()),
             arguments: vec![root.path().to_string_lossy().into_owned()],
             source_text_encoding: Some(SemanticTextEncoding::Utf8),
+            invocations: vec![crate::semantic_index::SemanticIndexerInvocation {
+                arguments: vec![root.path().to_string_lossy().into_owned()],
+                context: Default::default(),
+                contribution: crate::semantic_index::SemanticIndexerContribution::CompleteIndex,
+                output_sha256: "0".repeat(64),
+            }],
             diagnostics: Vec::new(),
         },
         documents: BTreeMap::from([(

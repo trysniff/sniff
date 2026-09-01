@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
-pub const SEMANTIC_INDEX_FORMAT_VERSION: u32 = 1;
+pub const SEMANTIC_INDEX_FORMAT_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -32,8 +32,27 @@ pub struct SemanticIndexProvenance {
     pub tool_version: Option<String>,
     pub arguments: Vec<String>,
     pub source_text_encoding: Option<SemanticTextEncoding>,
+    pub invocations: Vec<SemanticIndexerInvocation>,
     #[serde(default)]
     pub diagnostics: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SemanticIndexerInvocation {
+    pub arguments: Vec<String>,
+    pub context: BTreeMap<String, String>,
+    pub contribution: SemanticIndexerContribution,
+    pub output_sha256: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SemanticIndexerContribution {
+    CompleteIndex,
+    BuildContextDiscovery,
+    PackageInventory,
+    DocumentShard,
+    ImplementationPair,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
