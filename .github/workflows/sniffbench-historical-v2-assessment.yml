@@ -52,19 +52,63 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  assess:
+  build-tools:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
-    timeout-minutes: 300
+    timeout-minutes: 45
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_RELEASE_DEBUG: "0"
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
+        with:
+          toolchain: "1.96.0"
+      - name: Build the exact assessment tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --release --locked --features sniffbench-frame \
+            --bin sniff --bin sniffbench-frame
+
+      - name: Seal the exact assessment tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="${RUNNER_TEMP}/historical-v2-assessment-tools"
+          mkdir "$root"
+          install -m 0755 target/release/sniff target/release/sniffbench-frame "$root/"
+          printf '%s\n' "$GITHUB_SHA" > "$root/collector-sha256"
+          (
+            cd "$root"
+            sha256sum sniff sniffbench-frame > SHA256SUMS
+          )
+
+      - name: Upload the exact assessment tools
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: historical-v2-assessment-tools-${{ github.sha }}
+          path: ${{ runner.temp }}/historical-v2-assessment-tools
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+
+  assess:
+    if: github.ref == 'refs/heads/main'
+    needs: build-tools
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
     env:
       ASSESSMENT_HEARTBEAT_SECONDS: "60"
-      ASSESSMENT_TIMEOUT_MINUTES: "240"
+      ASSESSMENT_TIMEOUT_MINUTES: "13"
       CARGO_INCREMENTAL: "0"
       CARGO_PROFILE_RELEASE_DEBUG: "0"
       FRAME_RUN_ID: ${{ inputs.frame_run_id }}
       MAX_NEW_SLOTS: ${{ inputs.max_new_slots }}
       MAX_NEW_STAGES_PER_SLOT: ${{ inputs.max_new_stages_per_slot }}
-      NON_ASSESSMENT_RESERVE_MINUTES: "60"
+      NON_ASSESSMENT_RESERVE_MINUTES: "17"
       RESUME_RUN_ID: ${{ inputs.resume_run_id }}
       THROUGH_STAGE: ${{ inputs.through_stage }}
       COLLECTOR_MIGRATION: ${{ inputs.collector_migration }}
@@ -75,6 +119,11 @@ jobs:
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.13.15"
+      - name: Download the exact assessment tools
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: historical-v2-assessment-tools-${{ github.sha }}
+          path: ${{ runner.temp }}/historical-v2-assessment-tools-download
 
       - name: Validate the bounded dispatch
         shell: bash
@@ -449,13 +498,37 @@ jobs:
             install -m 0644 "$observed" "$frozen"
           fi
 
-      - name: Build the frozen assessment tools
+      - name: Materialize the frozen assessment tools
         shell: bash
         run: |
           set -euo pipefail
-          cd "$COLLECTOR_ROOT"
-          cargo build --release --locked --features sniffbench-frame \
-            --bin sniff --bin sniffbench-frame
+          if [[ "$COLLECTOR_SHA" == "$GITHUB_SHA" ]]; then
+            tools="${RUNNER_TEMP}/historical-v2-assessment-tools-download"
+            expected="${RUNNER_TEMP}/historical-v2-assessment-tools.entries"
+            printf '%s\n' \
+              'SHA256SUMS' \
+              'collector-sha256' \
+              'sniff' \
+              'sniffbench-frame' \
+              > "$expected"
+            find "$tools" -mindepth 1 -maxdepth 1 -type f -printf '%f\n' \
+              | LC_ALL=C sort | cmp --silent - "$expected"
+            while IFS= read -r name; do
+              test -f "$tools/$name" && test ! -L "$tools/$name"
+            done < "$expected"
+            test "$(cat "$tools/collector-sha256")" = "$COLLECTOR_SHA"
+            (
+              cd "$tools"
+              sha256sum --check SHA256SUMS
+            )
+            mkdir -p "$COLLECTOR_ROOT/target/release"
+            install -m 0755 "$tools/sniff" "$tools/sniffbench-frame" \
+              "$COLLECTOR_ROOT/target/release/"
+          else
+            cd "$COLLECTOR_ROOT"
+            cargo build --release --locked --features sniffbench-frame \
+              --bin sniff --bin sniffbench-frame
+          fi
 
       - name: Install every pinned semantic indexer
         shell: bash
