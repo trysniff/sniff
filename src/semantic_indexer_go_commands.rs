@@ -42,22 +42,20 @@ pub(super) async fn discover_go_build_context(
     )
     .await?;
     let context: GoBuildContext = serde_json::from_str(&output.stdout).map_err(|error| {
-        indexer_failure(
+        go_output_validation_failure(
             spec,
-            SemanticIndexerRunFailureKind::IncompleteOutput,
-            SemanticIndexerRunPhase::OutputValidation,
             format!("Go build-context discovery returned invalid JSON: {error}"),
+            &output,
         )
     })?;
     if context.GOOS.trim().is_empty()
         || context.GOARCH.trim().is_empty()
         || context.CGO_ENABLED.trim().is_empty()
     {
-        return Err(indexer_failure(
+        return Err(go_output_validation_failure(
             spec,
-            SemanticIndexerRunFailureKind::IncompleteOutput,
-            SemanticIndexerRunPhase::OutputValidation,
             "Go build-context discovery omitted required values".to_string(),
+            &output,
         ));
     }
     let context = BTreeMap::from([
@@ -157,17 +155,16 @@ pub(super) async fn run_go_scip(
                 detail,
             )
         })?;
-    require_go_command_success(spec, output, spec.display_name)?;
+    let output = require_go_command_success(spec, output, spec.display_name)?;
     if !index_path.is_file() {
-        return Err(indexer_failure(
+        return Err(go_output_validation_failure(
             spec,
-            SemanticIndexerRunFailureKind::IncompleteOutput,
-            SemanticIndexerRunPhase::OutputValidation,
             format!(
                 "{} exited successfully but did not emit {}",
                 spec.display_name,
                 index_path.display()
             ),
+            &output,
         ));
     }
     let result = crate::semantic_index_scip::ingest_scip_file_with_expected_languages(
@@ -193,14 +190,7 @@ pub(super) async fn run_go_scip(
         invocation.context = execution.context.clone();
         Ok(index)
     })
-    .map_err(|detail| {
-        indexer_failure(
-            spec,
-            SemanticIndexerRunFailureKind::IncompleteOutput,
-            SemanticIndexerRunPhase::OutputValidation,
-            detail,
-        )
-    });
+    .map_err(|detail| go_output_validation_failure(spec, detail, &output));
     let cleanup = fs::remove_file(&index_path).map_err(|error| {
         indexer_failure(
             spec,
@@ -213,6 +203,20 @@ pub(super) async fn run_go_scip(
         )
     });
     combine_typed_run_and_integrity(result, cleanup)
+}
+
+pub(super) fn go_output_validation_failure(
+    spec: PinnedIndexer,
+    detail: impl Into<String>,
+    output: &crate::sandbox::SandboxOutput,
+) -> SemanticIndexerRunFailure {
+    indexer_process_failure(
+        spec,
+        SemanticIndexerRunFailureKind::IncompleteOutput,
+        SemanticIndexerRunPhase::OutputValidation,
+        detail,
+        output.clone(),
+    )
 }
 
 fn validate_go_documents(
@@ -390,6 +394,35 @@ mod tests {
             test_relationships: BTreeSet::new(),
             unresolved_edges: BTreeSet::new(),
         }
+    }
+
+    #[test]
+    fn output_validation_failure_retains_successful_process_evidence() {
+        let spec = pinned_indexer(SemanticIndexerKind::Go).unwrap();
+        let failure = go_output_validation_failure(
+            spec,
+            "compiler output omitted a required document",
+            &crate::sandbox::SandboxOutput {
+                status_code: Some(0),
+                stdout: "compiler stdout".to_string(),
+                stderr: "compiler stderr".to_string(),
+                stdout_sha256: "stdout-sha256".to_string(),
+                stderr_sha256: "stderr-sha256".to_string(),
+                timed_out: false,
+                memory_limit_exceeded: false,
+                process_limit_exceeded: false,
+            },
+        );
+
+        assert_eq!(
+            failure.kind,
+            SemanticIndexerRunFailureKind::IncompleteOutput
+        );
+        assert_eq!(failure.phase, SemanticIndexerRunPhase::OutputValidation);
+        let process = failure.process.unwrap();
+        assert_eq!(process.status_code, Some(0));
+        assert_eq!(process.stdout, "compiler stdout");
+        assert_eq!(process.stderr, "compiler stderr");
     }
 
     #[test]

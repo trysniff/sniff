@@ -255,6 +255,50 @@ fn processless_execution_rejection_cannot_be_sealed() {
 }
 
 #[test]
+fn processless_output_validation_failure_cannot_be_sealed() {
+    let evidence = indexer_failure_evidence(
+        HistoricalV2SemanticSnapshotSide::Base,
+        &"a".repeat(40),
+        SemanticIndexerRunFailure {
+            kind: SemanticIndexerRunFailureKind::IncompleteOutput,
+            phase: SemanticIndexerRunPhase::OutputValidation,
+            indexer: Some(SemanticIndexerKind::Go),
+            detail: "successful compiler output was not retained".to_string(),
+            process: None,
+        },
+    )
+    .unwrap();
+
+    let error = seal_semantic_census_exclusion(&"b".repeat(64), &"c".repeat(64), vec![evidence])
+        .unwrap_err();
+    assert!(error.detail.contains("incomplete output process status"));
+}
+
+#[test]
+fn processless_snapshot_assembly_failure_is_terminal_evidence() {
+    let evidence = indexer_failure_evidence(
+        HistoricalV2SemanticSnapshotSide::Patched,
+        &"a".repeat(40),
+        SemanticIndexerRunFailure {
+            kind: SemanticIndexerRunFailureKind::IncompleteOutput,
+            phase: SemanticIndexerRunPhase::SnapshotAssembly,
+            indexer: Some(SemanticIndexerKind::Go),
+            detail: "bounded Go shard merge omitted a required document".to_string(),
+            process: None,
+        },
+    )
+    .unwrap();
+
+    let exclusion =
+        seal_semantic_census_exclusion(&"b".repeat(64), &"c".repeat(64), vec![evidence]).unwrap();
+    assert_eq!(
+        exclusion.failures[0].phase,
+        HistoricalV2SemanticCensusFailurePhase::SnapshotAssembly
+    );
+    assert!(exclusion.failures[0].process.is_none());
+}
+
+#[test]
 fn infrastructure_failure_cannot_be_sealed_as_candidate_exclusion() {
     let error = indexer_failure_evidence(
         HistoricalV2SemanticSnapshotSide::Patched,

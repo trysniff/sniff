@@ -161,6 +161,9 @@ fn phase(value: SemanticIndexerRunPhase) -> IntentionalBoundarySemanticCensusFai
         SemanticIndexerRunPhase::OutputValidation => {
             IntentionalBoundarySemanticCensusFailurePhase::OutputValidation
         }
+        SemanticIndexerRunPhase::SnapshotAssembly => {
+            IntentionalBoundarySemanticCensusFailurePhase::CensusAssembly
+        }
         SemanticIndexerRunPhase::Cleanup => IntentionalBoundarySemanticCensusFailurePhase::Cleanup,
         SemanticIndexerRunPhase::IntegrityVerification => {
             IntentionalBoundarySemanticCensusFailurePhase::IntegrityVerification

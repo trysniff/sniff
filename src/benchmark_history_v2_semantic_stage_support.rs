@@ -174,6 +174,9 @@ fn semantic_phase(phase: SemanticIndexerRunPhase) -> HistoricalV2SemanticCensusF
         SemanticIndexerRunPhase::OutputValidation => {
             HistoricalV2SemanticCensusFailurePhase::OutputValidation
         }
+        SemanticIndexerRunPhase::SnapshotAssembly => {
+            HistoricalV2SemanticCensusFailurePhase::SnapshotAssembly
+        }
         SemanticIndexerRunPhase::Cleanup => HistoricalV2SemanticCensusFailurePhase::Cleanup,
         SemanticIndexerRunPhase::IntegrityVerification => {
             HistoricalV2SemanticCensusFailurePhase::IntegrityVerification

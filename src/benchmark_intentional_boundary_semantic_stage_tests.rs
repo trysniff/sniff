@@ -219,6 +219,26 @@ fn retains_bounded_process_evidence_with_complete_hashes() {
 }
 
 #[test]
+fn maps_processless_indexer_snapshot_assembly_to_census_assembly() {
+    let mut run_failure = failure(
+        SemanticIndexerRunFailureKind::IncompleteOutput,
+        Some(SemanticIndexerKind::Go),
+        "bounded shard merge omitted a compiler document",
+    );
+    run_failure.phase = SemanticIndexerRunPhase::SnapshotAssembly;
+    let resolved = resolve_semantic_run(Err(run_failure)).unwrap();
+    let ResolvedSemanticRun::Excluded(failures) = resolved else {
+        panic!("snapshot assembly failure must exclude");
+    };
+
+    assert_eq!(
+        failures[0].phase,
+        super::super::IntentionalBoundarySemanticCensusFailurePhase::CensusAssembly
+    );
+    assert!(failures[0].process.is_none());
+}
+
+#[test]
 fn seals_completed_and_excluded_lineage_and_exposes_tampering() {
     let (task, materialization, inventory, source, license) = fixture();
     let semantic = super::super::IntentionalBoundarySemanticCensus {

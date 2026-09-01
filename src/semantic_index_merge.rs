@@ -58,12 +58,7 @@ pub(crate) fn merge_implementation_pair(
                 path.0
             )
         })?;
-        if existing != document {
-            return Err(format!(
-                "implementation-pair index disagrees with document shard {}",
-                path.0
-            ));
-        }
+        validate_pair_document_identity(existing, document)?;
     }
     let implementations = pair
         .relationships
@@ -133,22 +128,30 @@ fn merge_missing_implementation_endpoint(
                 endpoint.0
             )
         })?;
-        if pair_document != merged_document {
-            return Err(format!(
-                "implementation-pair symbol {} has a definition in a document that disagrees with its accepted shard",
-                endpoint.0
-            ));
-        }
-        let exact_definition = pair_document.occurrences.iter().any(|occurrence| {
+        validate_pair_document_identity(merged_document, pair_document)?;
+        let pair_has_definition = pair_document.occurrences.iter().any(|occurrence| {
             occurrence.symbol.as_ref() == Some(endpoint)
                 && occurrence.range == definition.range
                 && occurrence
                     .roles
                     .contains(&SemanticOccurrenceRole::Definition)
         });
-        if !exact_definition {
+        if !pair_has_definition {
             return Err(format!(
                 "implementation-pair symbol {} lacks an exact compiler definition occurrence",
+                endpoint.0
+            ));
+        }
+        let shard_has_definition = merged_document.occurrences.iter().any(|occurrence| {
+            occurrence.symbol.as_ref() == Some(endpoint)
+                && occurrence.range == definition.range
+                && occurrence
+                    .roles
+                    .contains(&SemanticOccurrenceRole::Definition)
+        });
+        if !shard_has_definition {
+            return Err(format!(
+                "implementation-pair symbol {} lacks the same exact definition occurrence in its accepted document shard",
                 endpoint.0
             ));
         }
@@ -173,6 +176,23 @@ fn merge_missing_implementation_endpoint(
         ));
     }
     merge_symbol(merged, symbol.clone())
+}
+
+fn validate_pair_document_identity(
+    accepted: &crate::semantic_index::SemanticDocument,
+    pair: &crate::semantic_index::SemanticDocument,
+) -> Result<(), String> {
+    if accepted.path != pair.path
+        || accepted.language != pair.language
+        || accepted.position_encoding != pair.position_encoding
+        || accepted.embedded_text != pair.embedded_text
+    {
+        return Err(format!(
+            "implementation-pair document identity disagrees with accepted shard {}",
+            accepted.path.0
+        ));
+    }
+    Ok(())
 }
 
 fn validate_compatible_provenance(
@@ -602,6 +622,47 @@ mod tests {
     }
 
     #[test]
+    fn implementation_pair_allows_context_dependent_occurrence_differences() {
+        let symbol_id = SemanticSymbolId("scip-global:context-dependent".to_string());
+        let mut merged = merge_document_shards([index("a.go", "./a", 'a')]).unwrap();
+        let mut pair = index("a.go", "./a+./b", 'b');
+        pair.documents
+            .get_mut(&RepositoryPath("a.go".to_string()))
+            .unwrap()
+            .occurrences
+            .push(SemanticOccurrence {
+                range: definition("a.go").range,
+                symbol: Some(symbol_id),
+                roles: BTreeSet::new(),
+                override_documentation: Vec::new(),
+            });
+
+        merge_implementation_pair(&mut merged, pair).unwrap();
+
+        assert!(
+            merged.documents[&RepositoryPath("a.go".to_string())]
+                .occurrences
+                .is_empty()
+        );
+        assert_eq!(merged.provenance.invocations.len(), 2);
+    }
+
+    #[test]
+    fn implementation_pair_rejects_changed_document_identity() {
+        let mut merged = merge_document_shards([index("a.go", "./a", 'a')]).unwrap();
+        let mut pair = index("a.go", "./a+./b", 'b');
+        pair.documents
+            .get_mut(&RepositoryPath("a.go".to_string()))
+            .unwrap()
+            .embedded_text = Some("different source world".to_string());
+
+        let error = merge_implementation_pair(&mut merged, pair).unwrap_err();
+
+        assert!(error.contains("document identity disagrees"));
+        assert_eq!(merged.provenance.invocations.len(), 1);
+    }
+
+    #[test]
     fn duplicate_document_shards_fail_closed() {
         let error =
             merge_document_shards([index("same.go", "./a", 'a'), index("same.go", "./b", 'b')])
@@ -677,6 +738,42 @@ mod tests {
             target,
             kind: SemanticRelationshipKind::Implementation,
         }));
+    }
+
+    #[test]
+    fn implementation_pair_cannot_supply_definition_absent_from_accepted_shard() {
+        let source = SemanticSymbolId("scip-global:source".to_string());
+        let target = SemanticSymbolId("scip-global:target".to_string());
+        let mut diagonal = index("a.go", "./a", 'a');
+        diagonal.symbols.insert(
+            source.clone(),
+            symbol(
+                &source.0,
+                SemanticSymbolCategory::Type,
+                SemanticSymbolOrigin::Repository,
+            ),
+        );
+        let mut merged = merge_document_shards([diagonal]).unwrap();
+
+        let mut pair = index("a.go", "./a+./b", 'b');
+        let definition = add_definition(&mut pair, "a.go", &target);
+        let mut target_symbol = symbol(
+            &target.0,
+            SemanticSymbolCategory::TraitOrInterface,
+            SemanticSymbolOrigin::Repository,
+        );
+        target_symbol.definitions.insert(definition);
+        pair.symbols.insert(target.clone(), target_symbol);
+        pair.relationships.insert(SemanticRelationship {
+            source,
+            target,
+            kind: SemanticRelationshipKind::Implementation,
+        });
+
+        let error = merge_implementation_pair(&mut merged, pair).unwrap_err();
+
+        assert!(error.contains("accepted document shard"));
+        assert_eq!(merged.provenance.invocations.len(), 1);
     }
 
     #[test]

@@ -6,8 +6,8 @@ use super::*;
 use crate::semantic_index_merge::{merge_document_shards, merge_implementation_pair};
 
 use super::go_commands::{
-    GoScipExecution, discover_go_build_context, package_inventory_invocation, run_go_scip,
-    run_go_tool,
+    GoScipExecution, discover_go_build_context, go_output_validation_failure,
+    package_inventory_invocation, run_go_scip, run_go_tool,
 };
 
 const GO_LIST_FIELDS: &str = "ImportPath,Dir,GoFiles,CgoFiles,TestGoFiles,XTestGoFiles";
@@ -130,30 +130,17 @@ async fn run_go_in_recovery_scope(
         context.clone(),
         inventory_output.stdout_sha256.clone(),
     );
-    let packages =
-        parse_go_package_inventory(execution_root, &inventory_output.stdout).map_err(|detail| {
-            indexer_failure(
-                spec,
-                SemanticIndexerRunFailureKind::IncompleteOutput,
-                SemanticIndexerRunPhase::OutputValidation,
-                detail,
-            )
-        })?;
-    let shards = plan_go_package_shards_with_limits(packages, shard_limits).map_err(|detail| {
-        indexer_failure(
-            spec,
-            SemanticIndexerRunFailureKind::IncompleteOutput,
-            SemanticIndexerRunPhase::OutputValidation,
-            detail,
-        )
-    })?;
+    let packages = parse_go_package_inventory(execution_root, &inventory_output.stdout)
+        .map_err(|detail| go_output_validation_failure(spec, detail, &inventory_output))?;
+    let shards = plan_go_package_shards_with_limits(packages, shard_limits)
+        .map_err(|detail| go_snapshot_assembly_failure(spec, detail))?;
     let expected_languages =
         expected_document_languages(root, &files_for_indexer(files, spec.kind)).map_err(
             |detail| {
                 indexer_failure(
                     spec,
                     SemanticIndexerRunFailureKind::InvalidInput,
-                    SemanticIndexerRunPhase::OutputValidation,
+                    SemanticIndexerRunPhase::SnapshotAssembly,
                     detail,
                 )
             },
@@ -172,14 +159,8 @@ async fn run_go_in_recovery_scope(
         document_indexes
             .push(run_go_scip(&scip, shard.patterns(), &shard.source_documents(), true).await?);
     }
-    let mut merged = merge_document_shards(document_indexes).map_err(|detail| {
-        indexer_failure(
-            spec,
-            SemanticIndexerRunFailureKind::IncompleteOutput,
-            SemanticIndexerRunPhase::OutputValidation,
-            detail,
-        )
-    })?;
+    let mut merged = merge_document_shards(document_indexes)
+        .map_err(|detail| go_snapshot_assembly_failure(spec, detail))?;
     for (left, right) in shard_pairs(shards.len()) {
         let patterns = shards[left]
             .patterns()
@@ -192,14 +173,8 @@ async fn run_go_in_recovery_scope(
             .chain(shards[right].source_documents())
             .collect();
         let pair = run_go_scip(&scip, patterns, &expected_documents, false).await?;
-        merge_implementation_pair(&mut merged, pair).map_err(|detail| {
-            indexer_failure(
-                spec,
-                SemanticIndexerRunFailureKind::IncompleteOutput,
-                SemanticIndexerRunPhase::OutputValidation,
-                detail,
-            )
-        })?;
+        merge_implementation_pair(&mut merged, pair)
+            .map_err(|detail| go_snapshot_assembly_failure(spec, detail))?;
     }
     merged
         .provenance
@@ -226,14 +201,20 @@ async fn run_go_in_recovery_scope(
             ),
         ));
     }
-    validate_expected_documents(root, required_documents, spec.kind, merged).map_err(|detail| {
-        indexer_failure(
-            spec,
-            SemanticIndexerRunFailureKind::IncompleteOutput,
-            SemanticIndexerRunPhase::OutputValidation,
-            detail,
-        )
-    })
+    validate_expected_documents(root, required_documents, spec.kind, merged)
+        .map_err(|detail| go_snapshot_assembly_failure(spec, detail))
+}
+
+fn go_snapshot_assembly_failure(
+    spec: PinnedIndexer,
+    detail: impl Into<String>,
+) -> SemanticIndexerRunFailure {
+    indexer_failure(
+        spec,
+        SemanticIndexerRunFailureKind::IncompleteOutput,
+        SemanticIndexerRunPhase::SnapshotAssembly,
+        detail,
+    )
 }
 
 #[cfg(test)]
@@ -270,6 +251,19 @@ mod tests {
             "expected exactly one compiler symbol named {display_name}: {matches:?}"
         );
         matches.into_iter().next().unwrap()
+    }
+
+    #[test]
+    fn bounded_merge_failure_is_processless_snapshot_assembly() {
+        let spec = pinned_indexer(SemanticIndexerKind::Go).unwrap();
+        let failure = go_snapshot_assembly_failure(spec, "document shards overlap");
+
+        assert_eq!(
+            failure.kind,
+            SemanticIndexerRunFailureKind::IncompleteOutput
+        );
+        assert_eq!(failure.phase, SemanticIndexerRunPhase::SnapshotAssembly);
+        assert!(failure.process.is_none());
     }
 
     #[tokio::test]

@@ -19,6 +19,7 @@ pub(crate) enum SemanticIndexerRunPhase {
     Preparation,
     Execution,
     OutputValidation,
+    SnapshotAssembly,
     Cleanup,
     IntegrityVerification,
 }
