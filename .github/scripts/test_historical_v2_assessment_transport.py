@@ -1268,7 +1268,14 @@ class WorkflowContractTests(unittest.TestCase):
         )
         self.assertIn("sha256sum --check", assess_job)
         self.assertIn(
+            'find "$tools" -mindepth 1 -maxdepth 1 -printf', assess_job
+        )
+        self.assertNotIn(
             'find "$tools" -mindepth 1 -maxdepth 1 -type f', assess_job
+        )
+        self.assertIn(
+            "sha256sum collector-sha256 sniff sniffbench-frame > SHA256SUMS",
+            build_job,
         )
         self.assertIn('test -f "$tools/$name" && test ! -L "$tools/$name"', assess_job)
         self.assertIn("cargo build --release --locked --features sniffbench-frame", assess_job)

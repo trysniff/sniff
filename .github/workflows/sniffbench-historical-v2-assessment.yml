@@ -83,7 +83,7 @@ jobs:
           printf '%s\n' "$GITHUB_SHA" > "$root/collector-sha256"
           (
             cd "$root"
-            sha256sum sniff sniffbench-frame > SHA256SUMS
+            sha256sum collector-sha256 sniff sniffbench-frame > SHA256SUMS
           )
 
       - name: Upload the exact assessment tools
@@ -511,7 +511,7 @@ jobs:
               'sniff' \
               'sniffbench-frame' \
               > "$expected"
-            find "$tools" -mindepth 1 -maxdepth 1 -type f -printf '%f\n' \
+            find "$tools" -mindepth 1 -maxdepth 1 -printf '%f\n' \
               | LC_ALL=C sort | cmp --silent - "$expected"
             while IFS= read -r name; do
               test -f "$tools/$name" && test ! -L "$tools/$name"
