@@ -1,7 +1,8 @@
 use crate::semantic_index::{
     SEMANTIC_INDEX_FORMAT_VERSION, SemanticIndex, SemanticIndexerContribution,
-    SemanticRelationshipKind, SemanticSymbol, SemanticSymbolCategory, SemanticSymbolId,
-    SemanticSymbolKind, SemanticSymbolOrigin, SemanticUnresolvedEdgeKind,
+    SemanticOccurrenceRole, SemanticRelationshipKind, SemanticResolution, SemanticSymbol,
+    SemanticSymbolCategory, SemanticSymbolId, SemanticSymbolKind, SemanticSymbolOrigin,
+    SemanticUnresolvedEdgeKind,
 };
 
 const CONFLICTING_KINDS: &str = "ConflictingKinds";
@@ -72,12 +73,7 @@ pub(crate) fn merge_implementation_pair(
         .collect::<Vec<_>>();
     for relationship in &implementations {
         for endpoint in [&relationship.source, &relationship.target] {
-            if !merged.symbols.contains_key(endpoint) {
-                return Err(format!(
-                    "implementation-pair relationship references symbol {} absent from document shards",
-                    endpoint.0
-                ));
-            }
+            merge_missing_implementation_endpoint(merged, &pair, endpoint)?;
         }
     }
     let unresolved = pair
@@ -96,6 +92,87 @@ pub(crate) fn merge_implementation_pair(
     merged.relationships.extend(implementations);
     merged.unresolved_edges.extend(unresolved);
     Ok(())
+}
+
+fn merge_missing_implementation_endpoint(
+    merged: &mut SemanticIndex,
+    pair: &SemanticIndex,
+    endpoint: &SemanticSymbolId,
+) -> Result<(), String> {
+    if merged.symbols.contains_key(endpoint) {
+        return Ok(());
+    }
+    let symbol = pair.symbols.get(endpoint).ok_or_else(|| {
+        format!(
+            "implementation-pair relationship references symbol {} absent from document shards and pair symbol evidence",
+            endpoint.0
+        )
+    })?;
+    if symbol.origin == SemanticSymbolOrigin::Repository && symbol.definitions.is_empty() {
+        return Err(format!(
+            "implementation-pair relationship references symbol {} absent from document shards without an exact repository definition",
+            endpoint.0
+        ));
+    }
+    if symbol.origin != SemanticSymbolOrigin::Repository && !symbol.definitions.is_empty() {
+        return Err(format!(
+            "implementation-pair relationship references non-repository symbol {} with repository definitions",
+            endpoint.0
+        ));
+    }
+    for definition in &symbol.definitions {
+        let pair_document = pair.documents.get(&definition.document).ok_or_else(|| {
+            format!(
+                "implementation-pair symbol {} has a definition outside its emitted documents",
+                endpoint.0
+            )
+        })?;
+        let merged_document = merged.documents.get(&definition.document).ok_or_else(|| {
+            format!(
+                "implementation-pair symbol {} has a definition outside the accepted document shards",
+                endpoint.0
+            )
+        })?;
+        if pair_document != merged_document {
+            return Err(format!(
+                "implementation-pair symbol {} has a definition in a document that disagrees with its accepted shard",
+                endpoint.0
+            ));
+        }
+        let exact_definition = pair_document.occurrences.iter().any(|occurrence| {
+            occurrence.symbol.as_ref() == Some(endpoint)
+                && occurrence.range == definition.range
+                && occurrence
+                    .roles
+                    .contains(&SemanticOccurrenceRole::Definition)
+        });
+        if !exact_definition {
+            return Err(format!(
+                "implementation-pair symbol {} lacks an exact compiler definition occurrence",
+                endpoint.0
+            ));
+        }
+    }
+    if let Some(SemanticResolution::Resolved { value: owner }) = &symbol.owner
+        && !merged.symbols.contains_key(owner)
+    {
+        return Err(format!(
+            "implementation-pair symbol {} has owner {} absent from document shards",
+            endpoint.0, owner.0
+        ));
+    }
+    if let Some(signature) = &symbol.signature
+        && let Some(missing) = signature
+            .referenced_symbols
+            .iter()
+            .find(|referenced| !merged.symbols.contains_key(*referenced))
+    {
+        return Err(format!(
+            "implementation-pair symbol {} has signature dependency {} absent from document shards",
+            endpoint.0, missing.0
+        ));
+    }
+    merge_symbol(merged, symbol.clone())
 }
 
 fn validate_compatible_provenance(
@@ -281,9 +358,10 @@ mod tests {
     use super::*;
     use crate::semantic_index::{
         RepositoryPath, SemanticCallEdge, SemanticDispatch, SemanticDocument,
-        SemanticIndexProvenance, SemanticIndexerInvocation, SemanticLocation, SemanticPosition,
-        SemanticPositionEncoding, SemanticRelationship, SemanticResolution, SemanticSourceRange,
-        SemanticSymbolCategory, SemanticSymbolKind, SemanticTextEncoding, SemanticVisibility,
+        SemanticIndexProvenance, SemanticIndexerInvocation, SemanticLocation, SemanticOccurrence,
+        SemanticPosition, SemanticPositionEncoding, SemanticRelationship, SemanticResolution,
+        SemanticSourceRange, SemanticSymbolCategory, SemanticSymbolKind, SemanticTextEncoding,
+        SemanticVisibility,
     };
     use std::collections::{BTreeMap, BTreeSet};
 
@@ -304,6 +382,42 @@ mod tests {
             embedded_text: None,
             occurrences: Vec::new(),
         }
+    }
+
+    fn definition(path: &str) -> SemanticLocation {
+        SemanticLocation {
+            document: RepositoryPath(path.to_string()),
+            range: SemanticSourceRange {
+                start: SemanticPosition {
+                    line: 1,
+                    character: 0,
+                },
+                end: SemanticPosition {
+                    line: 1,
+                    character: 5,
+                },
+            },
+        }
+    }
+
+    fn add_definition(
+        index: &mut SemanticIndex,
+        path: &str,
+        symbol: &SemanticSymbolId,
+    ) -> SemanticLocation {
+        let definition = definition(path);
+        index
+            .documents
+            .get_mut(&definition.document)
+            .unwrap()
+            .occurrences
+            .push(SemanticOccurrence {
+                range: definition.range,
+                symbol: Some(symbol.clone()),
+                roles: BTreeSet::from([SemanticOccurrenceRole::Definition]),
+                override_documentation: Vec::new(),
+            });
+        definition
     }
 
     fn symbol(
@@ -510,6 +624,102 @@ mod tests {
 
         assert!(error.contains("absent from document shards"));
         assert_eq!(merged.provenance.invocations.len(), 1);
+    }
+
+    #[test]
+    fn implementation_pair_can_supply_exact_missing_endpoint_definition() {
+        let source = SemanticSymbolId("scip-global:source".to_string());
+        let target = SemanticSymbolId("scip-global:target-method".to_string());
+        let owner = SemanticSymbolId("scip-global:target-owner".to_string());
+        let mut diagonal = index("a.go", "./a", 'a');
+        add_definition(&mut diagonal, "a.go", &target);
+        diagonal.symbols.insert(
+            source.clone(),
+            symbol(
+                &source.0,
+                SemanticSymbolCategory::Method,
+                SemanticSymbolOrigin::Repository,
+            ),
+        );
+        diagonal.symbols.insert(
+            owner.clone(),
+            symbol(
+                &owner.0,
+                SemanticSymbolCategory::TraitOrInterface,
+                SemanticSymbolOrigin::Repository,
+            ),
+        );
+        let mut merged = merge_document_shards([diagonal]).unwrap();
+
+        let mut pair = index("a.go", "./a+./b", 'b');
+        let definition = add_definition(&mut pair, "a.go", &target);
+        let mut target_symbol = symbol(
+            &target.0,
+            SemanticSymbolCategory::Method,
+            SemanticSymbolOrigin::Repository,
+        );
+        target_symbol.owner = Some(SemanticResolution::Resolved {
+            value: owner.clone(),
+        });
+        target_symbol.definitions.insert(definition);
+        pair.symbols.insert(target.clone(), target_symbol);
+        pair.relationships.insert(SemanticRelationship {
+            source: source.clone(),
+            target: target.clone(),
+            kind: SemanticRelationshipKind::Implementation,
+        });
+
+        merge_implementation_pair(&mut merged, pair).unwrap();
+
+        assert!(merged.symbols.contains_key(&target));
+        assert!(merged.relationships.contains(&SemanticRelationship {
+            source,
+            target,
+            kind: SemanticRelationshipKind::Implementation,
+        }));
+    }
+
+    #[test]
+    fn implementation_pair_can_supply_exact_compiler_placeholder_endpoint() {
+        let source = SemanticSymbolId("scip-global:source".to_string());
+        let target = SemanticSymbolId("scip-global:compiler-only-target".to_string());
+        let mut diagonal = index("a.go", "./a", 'a');
+        diagonal.symbols.insert(
+            source.clone(),
+            symbol(
+                &source.0,
+                SemanticSymbolCategory::Method,
+                SemanticSymbolOrigin::Repository,
+            ),
+        );
+        let mut merged = merge_document_shards([diagonal]).unwrap();
+
+        let mut pair = index("a.go", "./a+./b", 'b');
+        pair.symbols.insert(
+            target.clone(),
+            symbol(
+                &target.0,
+                SemanticSymbolCategory::Unknown,
+                SemanticSymbolOrigin::Unknown,
+            ),
+        );
+        pair.relationships.insert(SemanticRelationship {
+            source: source.clone(),
+            target: target.clone(),
+            kind: SemanticRelationshipKind::Implementation,
+        });
+
+        merge_implementation_pair(&mut merged, pair).unwrap();
+
+        assert_eq!(
+            merged.symbols[&target].origin,
+            SemanticSymbolOrigin::Unknown
+        );
+        assert!(merged.relationships.contains(&SemanticRelationship {
+            source,
+            target,
+            kind: SemanticRelationshipKind::Implementation,
+        }));
     }
 
     #[test]
