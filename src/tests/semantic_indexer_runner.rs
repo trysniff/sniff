@@ -388,6 +388,8 @@ fn dependency_registry_failure_is_retryable_infrastructure() {
             stdout_sha256: "a".repeat(64),
             stderr_sha256: "b".repeat(64),
             timed_out: false,
+            memory_limit_exceeded: false,
+            process_limit_exceeded: false,
         },
     )
     .unwrap_err();
@@ -401,6 +403,38 @@ fn dependency_registry_failure_is_retryable_infrastructure() {
 }
 
 #[test]
+fn dependency_resource_limit_is_a_typed_repository_rejection() {
+    let spec = pinned_indexer(SemanticIndexerKind::Go).unwrap();
+    let error = require_dependency_preparation_success(
+        spec,
+        SandboxOutput {
+            status_code: None,
+            stdout: String::new(),
+            stderr:
+                "Sniff terminated the sandbox after its aggregate resident memory limit was exceeded"
+                    .to_string(),
+            stdout_sha256: "a".repeat(64),
+            stderr_sha256: "b".repeat(64),
+            timed_out: false,
+            memory_limit_exceeded: true,
+            process_limit_exceeded: false,
+        },
+    )
+    .unwrap_err();
+
+    assert_eq!(
+        error.kind,
+        super::SemanticIndexerRunFailureKind::RepositoryRejected
+    );
+    assert_eq!(error.phase, super::SemanticIndexerRunPhase::Preparation);
+    let process = error
+        .process
+        .expect("resource failure should retain process evidence");
+    assert!(process.memory_limit_exceeded);
+    assert!(!process.process_limit_exceeded);
+}
+
+#[test]
 fn go_dependency_preparation_retries_checksum_stream_failures() {
     let output = SandboxOutput {
         status_code: Some(1),
@@ -411,6 +445,8 @@ fn go_dependency_preparation_retries_checksum_stream_failures() {
         stdout_sha256: "a".repeat(64),
         stderr_sha256: "b".repeat(64),
         timed_out: false,
+        memory_limit_exceeded: false,
+        process_limit_exceeded: false,
     };
 
     assert!(go_dependency_preparation_has_transient_transport_failure(
@@ -441,6 +477,8 @@ fn go_dependency_preparation_does_not_retry_permanent_registry_responses() {
             stdout_sha256: "a".repeat(64),
             stderr_sha256: "b".repeat(64),
             timed_out: false,
+            memory_limit_exceeded: false,
+            process_limit_exceeded: false,
         };
 
         assert!(!go_dependency_preparation_has_transient_transport_failure(
@@ -450,7 +488,7 @@ fn go_dependency_preparation_does_not_retry_permanent_registry_responses() {
 }
 
 #[test]
-fn go_dependency_preparation_does_not_retry_timeouts_or_signals() {
+fn go_dependency_preparation_does_not_retry_timeouts_signals_or_resource_limits() {
     for output in [
         SandboxOutput {
             status_code: Some(1),
@@ -459,6 +497,8 @@ fn go_dependency_preparation_does_not_retry_timeouts_or_signals() {
             stdout_sha256: "a".repeat(64),
             stderr_sha256: "b".repeat(64),
             timed_out: true,
+            memory_limit_exceeded: false,
+            process_limit_exceeded: false,
         },
         SandboxOutput {
             status_code: None,
@@ -467,6 +507,18 @@ fn go_dependency_preparation_does_not_retry_timeouts_or_signals() {
             stdout_sha256: "a".repeat(64),
             stderr_sha256: "b".repeat(64),
             timed_out: false,
+            memory_limit_exceeded: false,
+            process_limit_exceeded: false,
+        },
+        SandboxOutput {
+            status_code: None,
+            stdout: String::new(),
+            stderr: "connection reset by peer".to_string(),
+            stdout_sha256: "a".repeat(64),
+            stderr_sha256: "b".repeat(64),
+            timed_out: false,
+            memory_limit_exceeded: true,
+            process_limit_exceeded: false,
         },
     ] {
         assert!(!go_dependency_preparation_has_transient_transport_failure(

@@ -784,6 +784,30 @@ async fn run_one_in_recovery_scope(
             detail,
         )
     })?;
+    if output.memory_limit_exceeded {
+        return Err(indexer_process_failure(
+            spec,
+            SemanticIndexerRunFailureKind::RepositoryRejected,
+            SemanticIndexerRunPhase::Execution,
+            format!(
+                "{} exceeded Sniff's {} byte aggregate process-tree memory limit; no weaker semantic provider was used",
+                spec.display_name, INDEXER_MEMORY_LIMIT
+            ),
+            output,
+        ));
+    }
+    if output.process_limit_exceeded {
+        return Err(indexer_process_failure(
+            spec,
+            SemanticIndexerRunFailureKind::RepositoryRejected,
+            SemanticIndexerRunPhase::Execution,
+            format!(
+                "{} exceeded Sniff's {} process limit; no weaker semantic provider was used",
+                spec.display_name, INDEXER_PROCESS_LIMIT
+            ),
+            output,
+        ));
+    }
     if !output.timed_out && output.status_code == Some(0) {
         publish_isolated_index(execution_root, root, recovery).map_err(|detail| {
             indexer_failure(
@@ -942,7 +966,11 @@ fn go_dependency_program(installed: &InstalledIndexer) -> Result<PathBuf, String
 fn go_dependency_preparation_has_transient_transport_failure(
     output: &crate::sandbox::SandboxOutput,
 ) -> bool {
-    if output.timed_out || output.status_code.is_none() {
+    if output.timed_out
+        || output.memory_limit_exceeded
+        || output.process_limit_exceeded
+        || output.status_code.is_none()
+    {
         return false;
     }
     let evidence = format!("{}\n{}", output.stdout, output.stderr).to_ascii_lowercase();
@@ -988,6 +1016,30 @@ fn require_dependency_preparation_success(
     spec: PinnedIndexer,
     output: crate::sandbox::SandboxOutput,
 ) -> Result<(), SemanticIndexerRunFailure> {
+    if output.memory_limit_exceeded {
+        return Err(indexer_process_failure(
+            spec,
+            SemanticIndexerRunFailureKind::RepositoryRejected,
+            SemanticIndexerRunPhase::Preparation,
+            format!(
+                "{} dependency preparation exceeded Sniff's {} byte aggregate process-tree memory limit",
+                spec.display_name, INDEXER_MEMORY_LIMIT
+            ),
+            output,
+        ));
+    }
+    if output.process_limit_exceeded {
+        return Err(indexer_process_failure(
+            spec,
+            SemanticIndexerRunFailureKind::RepositoryRejected,
+            SemanticIndexerRunPhase::Preparation,
+            format!(
+                "{} dependency preparation exceeded Sniff's {} process limit",
+                spec.display_name, INDEXER_PROCESS_LIMIT
+            ),
+            output,
+        ));
+    }
     if output.timed_out {
         return Err(indexer_process_failure(
             spec,

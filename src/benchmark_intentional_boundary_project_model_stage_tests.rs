@@ -117,6 +117,8 @@ fn terminal_provider_failures_become_hash_bound_exclusion_evidence() {
         stdout_sha256: sha256(b"partial model"),
         stderr_sha256: sha256(b"repository rejected"),
         timed_out: false,
+        memory_limit_exceeded: false,
+        process_limit_exceeded: false,
     };
     let error = project_model_process_error(
         ProjectModelDerivationErrorKind::ProviderRejectedRepository,

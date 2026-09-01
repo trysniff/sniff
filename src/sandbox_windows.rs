@@ -694,6 +694,8 @@ fn run_process(
         stdout_sha256: stdout.sha256,
         stderr_sha256: stderr.sha256,
         timed_out,
+        memory_limit_exceeded: false,
+        process_limit_exceeded: false,
     })
 }
 
