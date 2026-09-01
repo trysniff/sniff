@@ -1186,8 +1186,14 @@ class WorkflowContractTests(unittest.TestCase):
     def test_assessment_budget_reserves_time_for_setup_sealing_and_upload(self) -> None:
         workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
         lines = workflow.splitlines()
+        assess = workflow.index("  assess:\n")
+        assess_lines = workflow[assess:].splitlines()
         job_minutes = int(
-            next(line for line in lines if line.startswith("    timeout-minutes:"))
+            next(
+                line
+                for line in assess_lines
+                if line.startswith("    timeout-minutes:")
+            )
             .split(":", 1)[1]
             .strip()
         )
@@ -1216,9 +1222,9 @@ class WorkflowContractTests(unittest.TestCase):
             .split('"', 2)[1]
         )
 
-        self.assertEqual(job_minutes, 300)
-        self.assertEqual(assessment_minutes, 240)
-        self.assertEqual(reserve_minutes, 60)
+        self.assertEqual(job_minutes, 30)
+        self.assertEqual(assessment_minutes, 13)
+        self.assertEqual(reserve_minutes, 17)
         self.assertEqual(heartbeat_seconds, 60)
         self.assertEqual(assessment_minutes + reserve_minutes, job_minutes)
         self.assertIn(
@@ -1236,6 +1242,40 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("--label historical-v2-assessment", workflow)
         self.assertIn("--linux-proc-stats", workflow)
         self.assertNotIn("--kill-after=60s 300m", workflow)
+
+    def test_exact_collector_tools_are_built_outside_the_assessment_job(self) -> None:
+        workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+        build = workflow.index("  build-tools:\n")
+        assess = workflow.index("  assess:\n")
+        build_job = workflow[build:assess]
+        assess_job = workflow[assess:]
+
+        self.assertIn("    needs: build-tools\n", assess_job)
+        self.assertIn("cargo build --release --locked --features sniffbench-frame", build_job)
+        self.assertNotIn("run-slots", build_job)
+        self.assertIn(
+            "name: historical-v2-assessment-tools-${{ github.sha }}", build_job
+        )
+        self.assertIn(
+            "name: historical-v2-assessment-tools-${{ github.sha }}", assess_job
+        )
+        self.assertIn(
+            'if [[ "$COLLECTOR_SHA" == "$GITHUB_SHA" ]]; then', assess_job
+        )
+        self.assertIn(
+            'test "$(cat "$tools/collector-sha256")" = "$COLLECTOR_SHA"',
+            assess_job,
+        )
+        self.assertIn("sha256sum --check", assess_job)
+        self.assertIn(
+            'find "$tools" -mindepth 1 -maxdepth 1 -type f', assess_job
+        )
+        self.assertIn('test -f "$tools/$name" && test ! -L "$tools/$name"', assess_job)
+        self.assertIn("cargo build --release --locked --features sniffbench-frame", assess_job)
+        self.assertLess(
+            assess_job.index("Materialize the frozen assessment tools"),
+            assess_job.index("Install every pinned semantic indexer"),
+        )
 
     def test_marker_recovery_precedes_snapshot_archival(self) -> None:
         workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
