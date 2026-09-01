@@ -172,6 +172,8 @@ fn repository_rejection_becomes_hash_bound_terminal_evidence() {
                 stdout_sha256: sha256(stdout.as_bytes()),
                 stderr_sha256: sha256(stderr.as_bytes()),
                 timed_out: false,
+                memory_limit_exceeded: false,
+                process_limit_exceeded: false,
             })),
         },
     )
@@ -331,6 +333,8 @@ fn mixed_language_snapshot_retains_every_indexer_failure() {
                         stdout_sha256: sha256(b""),
                         stderr_sha256: sha256(b""),
                         timed_out: false,
+                        memory_limit_exceeded: false,
+                        process_limit_exceeded: false,
                     })),
                 },
             ],

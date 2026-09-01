@@ -625,6 +625,8 @@ mod tests {
                 stdout_sha256: "a".repeat(64),
                 stderr_sha256: "b".repeat(64),
                 timed_out: false,
+                memory_limit_exceeded: false,
+                process_limit_exceeded: false,
             },
         );
         let result = step_result(&["tool".to_string()], &raw).unwrap();

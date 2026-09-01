@@ -31,6 +31,8 @@ pub(crate) struct SemanticIndexerProcessEvidence {
     pub(crate) stdout_sha256: String,
     pub(crate) stderr_sha256: String,
     pub(crate) timed_out: bool,
+    pub(crate) memory_limit_exceeded: bool,
+    pub(crate) process_limit_exceeded: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -98,6 +100,8 @@ pub(super) fn process_evidence(
         stdout_sha256: output.stdout_sha256,
         stderr_sha256: output.stderr_sha256,
         timed_out: output.timed_out,
+        memory_limit_exceeded: output.memory_limit_exceeded,
+        process_limit_exceeded: output.process_limit_exceeded,
     }
 }
 

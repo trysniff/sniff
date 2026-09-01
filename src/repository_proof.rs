@@ -523,6 +523,8 @@ mod tests {
             stdout_sha256: "0".repeat(64),
             stderr_sha256: "0".repeat(64),
             timed_out: false,
+            memory_limit_exceeded: false,
+            process_limit_exceeded: false,
         }
     }
 
@@ -684,6 +686,8 @@ mod tests {
                     stdout_sha256: "0".repeat(64),
                     stderr_sha256: "0".repeat(64),
                     timed_out: false,
+                    memory_limit_exceeded: false,
+                    process_limit_exceeded: false,
                 })
             });
         assert!(

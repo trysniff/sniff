@@ -82,6 +82,8 @@ pub(crate) struct SandboxOutput {
     pub(crate) stdout_sha256: String,
     pub(crate) stderr_sha256: String,
     pub(crate) timed_out: bool,
+    pub(crate) memory_limit_exceeded: bool,
+    pub(crate) process_limit_exceeded: bool,
 }
 
 #[derive(Debug)]
@@ -154,10 +156,14 @@ fn run_external(spec: &SandboxCommand) -> Result<SandboxOutput, SandboxError> {
 
     let started = Instant::now();
     let mut timed_out = false;
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     let mut memory_exceeded = false;
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    let memory_exceeded = false;
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     let mut process_limit_exceeded = false;
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    let process_limit_exceeded = false;
     let status = loop {
         #[cfg(target_os = "linux")]
         {
@@ -167,9 +173,23 @@ fn run_external(spec: &SandboxCommand) -> Result<SandboxOutput, SandboxError> {
                 .ok_or_else(|| {
                     SandboxError::Invalid("sandbox process limit overflowed".to_string())
                 })?;
-            let processes = linux_process_tree_count(child.id())?;
-            if processes > process_limit {
+            let usage = match linux_process_tree_usage(child.id()) {
+                Ok(usage) => usage,
+                Err(error) => {
+                    let _ = terminate(&mut child);
+                    let _ = child.wait();
+                    return Err(error);
+                }
+            };
+            if usage.processes > process_limit {
                 process_limit_exceeded = true;
+                terminate(&mut child)?;
+                break child.wait().map(Some).map_err(|error| {
+                    SandboxError::Failed(format!("sandbox worker wait failed: {error}"))
+                })?;
+            }
+            if usage.resident_bytes > spec.memory_limit {
+                memory_exceeded = true;
                 terminate(&mut child)?;
                 break child.wait().map(Some).map_err(|error| {
                     SandboxError::Failed(format!("sandbox worker wait failed: {error}"))
@@ -203,8 +223,8 @@ fn run_external(spec: &SandboxCommand) -> Result<SandboxOutput, SandboxError> {
         }
         match child.try_wait() {
             Ok(Some(status)) => {
-                #[cfg(target_os = "macos")]
-                let _ = terminate_macos_process_group(child.id());
+                #[cfg(any(target_os = "linux", target_os = "macos"))]
+                let _ = terminate_process_group(child.id());
                 break Some(status);
             }
             Ok(None) => {
@@ -239,18 +259,15 @@ fn run_external(spec: &SandboxCommand) -> Result<SandboxOutput, SandboxError> {
         .join()
         .map_err(|_| SandboxError::Failed("sandbox stderr reader panicked".to_string()))?
         .map_err(|error| SandboxError::Failed(format!("sandbox stderr read failed: {error}")))?;
-    let stderr_text = stderr.text;
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    let mut stderr_text = stderr_text;
-    #[cfg(target_os = "macos")]
+    let mut stderr_text = stderr.text;
     if memory_exceeded {
         if !stderr_text.is_empty() && !stderr_text.ends_with('\n') {
             stderr_text.push('\n');
         }
-        stderr_text
-            .push_str("Sniff terminated the sandbox after its physical memory limit was exceeded");
+        stderr_text.push_str(
+            "Sniff terminated the sandbox after its aggregate resident memory limit was exceeded",
+        );
     }
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
     if process_limit_exceeded {
         if !stderr_text.is_empty() && !stderr_text.ends_with('\n') {
             stderr_text.push('\n');
@@ -277,6 +294,8 @@ fn run_external(spec: &SandboxCommand) -> Result<SandboxOutput, SandboxError> {
         stdout_sha256: stdout.sha256,
         stderr_sha256: stderr.sha256,
         timed_out,
+        memory_limit_exceeded: memory_exceeded,
+        process_limit_exceeded,
     })
 }
 
@@ -306,9 +325,20 @@ fn bubblewrap_startup_failure(
 }
 
 #[cfg(target_os = "linux")]
-fn linux_process_tree_count(root: u32) -> Result<u32, SandboxError> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct LinuxProcessTreeUsage {
+    processes: u32,
+    resident_bytes: u64,
+}
+
+#[cfg(target_os = "linux")]
+fn linux_process_tree_usage(root: u32) -> Result<LinuxProcessTreeUsage, SandboxError> {
     let root = libc::pid_t::try_from(root)
         .map_err(|_| SandboxError::Failed("sandbox process id overflowed".to_string()))?;
+    let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
+    let page_size = u64::try_from(page_size).map_err(|_| {
+        SandboxError::Failed("failed to establish the Linux memory page size".to_string())
+    })?;
     let mut relationships = Vec::new();
     for entry in std::fs::read_dir("/proc").map_err(|error| {
         SandboxError::Failed(format!(
@@ -331,9 +361,12 @@ fn linux_process_tree_count(root: u32) -> Result<u32, SandboxError> {
             // Processes may disappear between listing /proc and reading stat.
             continue;
         };
-        if let Some(parent) = linux_proc_stat_parent(&stat) {
-            relationships.push((pid, parent));
-        }
+        let parent = linux_proc_stat_parent(&stat).ok_or_else(|| {
+            SandboxError::Failed(format!(
+                "Linux returned malformed process accounting for sandbox process {pid}"
+            ))
+        })?;
+        relationships.push((pid, parent));
     }
 
     let mut descendants = std::collections::HashSet::from([root]);
@@ -348,8 +381,36 @@ fn linux_process_tree_count(root: u32) -> Result<u32, SandboxError> {
             break;
         }
     }
-    u32::try_from(descendants.len())
-        .map_err(|_| SandboxError::Failed("sandbox process count overflowed".to_string()))
+    let process_count = u32::try_from(descendants.len())
+        .map_err(|_| SandboxError::Failed("sandbox process count overflowed".to_string()))?;
+    let resident_pages = descendants.iter().try_fold(0u64, |total, pid| {
+        let resident_pages = match std::fs::read_to_string(format!("/proc/{pid}/statm")) {
+            Ok(statm) => linux_proc_statm_resident_pages(&statm).ok_or_else(|| {
+                SandboxError::Failed(format!(
+                    "Linux returned malformed memory accounting for sandbox process {pid}"
+                ))
+            })?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                // Processes may disappear between the tree and memory snapshots.
+                0
+            }
+            Err(error) => {
+                return Err(SandboxError::Failed(format!(
+                    "failed to inspect memory for sandbox process {pid}: {error}"
+                )));
+            }
+        };
+        total.checked_add(resident_pages).ok_or_else(|| {
+            SandboxError::Failed("sandbox resident memory count overflowed".to_string())
+        })
+    })?;
+    let resident_bytes = resident_pages.checked_mul(page_size).ok_or_else(|| {
+        SandboxError::Failed("sandbox resident memory byte count overflowed".to_string())
+    })?;
+    Ok(LinuxProcessTreeUsage {
+        processes: process_count,
+        resident_bytes,
+    })
 }
 
 #[cfg(target_os = "linux")]
@@ -362,6 +423,11 @@ fn linux_proc_stat_parent(stat: &str) -> Option<libc::pid_t> {
         .nth(1)?
         .parse()
         .ok()
+}
+
+#[cfg(target_os = "linux")]
+fn linux_proc_statm_resident_pages(statm: &str) -> Option<u64> {
+    statm.split_ascii_whitespace().nth(1)?.parse().ok()
 }
 
 fn validate_spec(spec: &SandboxCommand) -> Result<(), SandboxError> {
@@ -548,6 +614,9 @@ fn configure_linux_resource_limits(
     // the sandbox backend and every repository-controlled descendant.
     unsafe {
         command.pre_exec(move || {
+            if libc::setsid() < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
             set_unix_memory_limit(memory_limit)?;
             set_unix_resource_limit(libc::RLIMIT_NPROC, process_limit)?;
             Ok(())
@@ -870,7 +939,9 @@ fn build_bubblewrap_command(spec: &SandboxCommand) -> Result<Command, SandboxErr
         )
     })?;
     let mut command = Command::new(bwrap);
-    command.args(["--die-with-parent", "--new-session", "--clearenv"]);
+    // The pre-exec sandbox setup already creates a new session so Sniff can
+    // account for and terminate the complete process group from the host.
+    command.args(["--die-with-parent", "--clearenv"]);
     if !spec.allow_network {
         command.arg("--unshare-all");
     } else {
@@ -1136,17 +1207,17 @@ where
 }
 
 fn terminate(child: &mut Child) -> Result<(), SandboxError> {
-    #[cfg(target_os = "macos")]
-    return terminate_macos_process_group(child.id());
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    return terminate_process_group(child.id());
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     child.kill().map_err(|error| {
         SandboxError::Failed(format!("failed to terminate sandbox worker: {error}"))
     })
 }
 
-#[cfg(target_os = "macos")]
-fn terminate_macos_process_group(process_group: u32) -> Result<(), SandboxError> {
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn terminate_process_group(process_group: u32) -> Result<(), SandboxError> {
     if unsafe { libc::killpg(process_group as libc::pid_t, libc::SIGKILL) } == 0 {
         return Ok(());
     }
@@ -1168,7 +1239,7 @@ mod tests {
         read_limited_hashed, read_limited_with_observer, validate_external_runner, validate_spec,
     };
     #[cfg(target_os = "linux")]
-    use super::{linux_proc_stat_parent, linux_sandbox_program};
+    use super::{linux_proc_stat_parent, linux_proc_statm_resident_pages, linux_sandbox_program};
     use std::path::PathBuf;
     use std::time::Duration;
 
@@ -1302,6 +1373,16 @@ mod tests {
 
         assert_eq!(linux_proc_stat_parent(stat), Some(17));
         assert_eq!(linux_proc_stat_parent("malformed"), None);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_proc_statm_parser_reads_resident_pages() {
+        assert_eq!(
+            linux_proc_statm_resident_pages("100 42 10 0 0 0 0"),
+            Some(42)
+        );
+        assert_eq!(linux_proc_statm_resident_pages("malformed"), None);
     }
 
     #[test]
@@ -1834,6 +1915,86 @@ mod tests {
             "timed-out worker unexpectedly passed"
         );
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_backend_enforces_aggregate_process_tree_memory() {
+        const WORKER_ENV: &str = "SNIFF_LINUX_AGGREGATE_MEMORY_WORKER";
+        const DESCENDANT_ENV: &str = "SNIFF_LINUX_AGGREGATE_MEMORY_DESCENDANT";
+        const ALLOCATION_BYTES: usize = 192 * 1024 * 1024;
+
+        fn hold_resident_memory() {
+            let mut allocation = vec![0u8; ALLOCATION_BYTES];
+            for byte in allocation.iter_mut().step_by(4096) {
+                *byte = 1;
+            }
+            std::hint::black_box(&allocation);
+            std::thread::sleep(Duration::from_secs(20));
+        }
+
+        if std::env::var_os(DESCENDANT_ENV).is_some() {
+            hold_resident_memory();
+            return;
+        }
+        if std::env::var_os(WORKER_ENV).is_some() {
+            let executable = std::env::current_exe().expect("locate Linux memory worker");
+            let mut descendant = std::process::Command::new(executable)
+                .arg("sandbox::tests::linux_backend_enforces_aggregate_process_tree_memory")
+                .arg("--exact")
+                .arg("--nocapture")
+                .env(DESCENDANT_ENV, "1")
+                .spawn()
+                .expect("start Linux memory descendant");
+            hold_resident_memory();
+            let _ = descendant.wait();
+            return;
+        }
+
+        let root = std::env::temp_dir().join(format!(
+            "sniff-sandbox-memory-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock should be after the Unix epoch")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).expect("create Linux memory sandbox root");
+        let executable = std::env::current_exe().expect("locate Linux memory test executable");
+        let command = SandboxCommand {
+            root: root.clone(),
+            workdir: PathBuf::from("."),
+            program: executable.to_string_lossy().into_owned(),
+            args: vec![
+                "sandbox::tests::linux_backend_enforces_aggregate_process_tree_memory".to_string(),
+                "--exact".to_string(),
+                "--nocapture".to_string(),
+            ],
+            read_only_paths: Vec::new(),
+            writable_paths: Vec::new(),
+            persistent_read_only_paths: Vec::new(),
+            executable_paths: vec![executable],
+            #[cfg(windows)]
+            windows_virtualized_paths: Vec::new(),
+            env: vec![(WORKER_ENV.to_string(), "1".to_string())],
+            allow_network: false,
+            #[cfg(target_os = "macos")]
+            allow_local_network: false,
+            timeout: Duration::from_secs(15),
+            output_limit: 4096,
+            memory_limit: 384 * 1024 * 1024,
+            process_limit: DEFAULT_PROCESS_LIMIT,
+        };
+
+        let output = super::run(&command).expect("Linux sandbox should enforce aggregate memory");
+        let _ = std::fs::remove_dir_all(root);
+        assert!(output.memory_limit_exceeded, "stderr={:?}", output.stderr);
+        assert!(!output.timed_out);
+        assert!(
+            output
+                .stderr
+                .contains("aggregate resident memory limit was exceeded")
+        );
     }
 }
 

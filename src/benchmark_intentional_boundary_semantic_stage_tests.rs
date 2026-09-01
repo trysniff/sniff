@@ -200,6 +200,8 @@ fn retains_bounded_process_evidence_with_complete_hashes() {
         stdout,
         stderr,
         timed_out: false,
+        memory_limit_exceeded: false,
+        process_limit_exceeded: false,
     }));
     let resolved = resolve_semantic_run(Err(run_failure)).unwrap();
     let ResolvedSemanticRun::Excluded(failures) = resolved else {
