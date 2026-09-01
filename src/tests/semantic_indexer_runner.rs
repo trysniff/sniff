@@ -254,7 +254,8 @@ fn python_arguments_include_stable_project_identity() {
         synthetic_python_root(),
         synthetic_python_root(),
         None,
-    );
+    )
+    .unwrap();
     assert_eq!(
         arguments,
         [
@@ -272,7 +273,8 @@ fn python_arguments_include_stable_project_identity() {
 fn python_arguments_keep_canonical_identity_inside_an_isolated_checkout() {
     let spec = pinned_indexer(SemanticIndexerKind::Python).unwrap();
     let isolated = Path::new("repository-workspace");
-    let arguments = indexer_arguments_with_project(spec, isolated, synthetic_python_root(), None);
+    let arguments =
+        indexer_arguments_with_project(spec, isolated, synthetic_python_root(), None).unwrap();
 
     assert_eq!(arguments[3], "bumpkin");
 }
@@ -283,7 +285,7 @@ fn javascript_projects_without_tsconfig_use_inference() {
     std::fs::create_dir_all(&temp).unwrap();
     let spec = pinned_indexer(SemanticIndexerKind::TypeScriptJavaScript).unwrap();
     assert_eq!(
-        indexer_arguments_with_project(spec, &temp, &temp, None),
+        indexer_arguments_with_project(spec, &temp, &temp, None).unwrap(),
         ["index", "--infer-tsconfig"]
     );
     let _ = std::fs::remove_dir_all(temp);
@@ -357,18 +359,19 @@ fn python_project_config_is_written_only_to_the_isolated_checkout() {
 }
 
 #[test]
-fn go_indexing_uses_explicit_module_scope() {
+fn generic_indexer_path_cannot_fall_back_to_go_module_wide_indexing() {
     let spec = pinned_indexer(SemanticIndexerKind::Go).unwrap();
 
-    assert_eq!(
-        indexer_arguments_with_project(
-            spec,
-            synthetic_python_root(),
-            synthetic_python_root(),
-            None,
-        ),
-        ["--module-root", ".", "./..."]
-    );
+    let error = indexer_arguments_with_project(
+        spec,
+        synthetic_python_root(),
+        synthetic_python_root(),
+        None,
+    )
+    .unwrap_err();
+
+    assert!(error.contains("bounded shard runner"));
+    assert!(!error.contains("./..."));
 }
 
 #[test]
@@ -792,7 +795,7 @@ fn expected_document_validation_checks_only_the_declared_required_subset() {
         methods: Vec::new(),
     };
     let empty_index = || SemanticIndex {
-        format_version: 1,
+        format_version: crate::semantic_index::SEMANTIC_INDEX_FORMAT_VERSION,
         repository_root: root.path().to_string_lossy().into_owned(),
         provenance: SemanticIndexProvenance {
             format: "scip".to_string(),
@@ -800,6 +803,12 @@ fn expected_document_validation_checks_only_the_declared_required_subset() {
             tool_version: None,
             arguments: Vec::new(),
             source_text_encoding: Some(SemanticTextEncoding::Utf8),
+            invocations: vec![crate::semantic_index::SemanticIndexerInvocation {
+                arguments: Vec::new(),
+                context: Default::default(),
+                contribution: crate::semantic_index::SemanticIndexerContribution::CompleteIndex,
+                output_sha256: "0".repeat(64),
+            }],
             diagnostics: Vec::new(),
         },
         documents: BTreeMap::new(),
@@ -1161,7 +1170,8 @@ fn windows_kotlin_workspace_launches_the_project_wrapper_jar_directly() {
         "org.gradle.wrapper.GradleWrapperMain"
     );
 
-    let arguments = indexer_arguments_with_workspace(spec, &root, &root, None, Some(&workspace));
+    let arguments =
+        indexer_arguments_with_workspace(spec, &root, &root, None, Some(&workspace)).unwrap();
     assert_eq!(arguments[0], "--cwd");
     assert_eq!(arguments[2], "index");
     assert!(

@@ -38,8 +38,16 @@ pub(crate) fn install_test_semantic_recovery_marker(root: &Path) -> Result<(), S
     Ok(())
 }
 
+#[path = "semantic_index_go_calls.rs"]
+mod go_calls;
+#[path = "semantic_indexer_go_commands.rs"]
+mod go_commands;
 #[path = "semantic_indexer_go_project.rs"]
 mod go_project;
+#[path = "semantic_indexer_go_runner.rs"]
+mod go_runner;
+#[path = "semantic_indexer_go_shards.rs"]
+mod go_shards;
 #[path = "semantic_indexer_gradle_preparation.rs"]
 mod gradle_preparation;
 use go_project::require_go_project_root;
@@ -334,6 +342,33 @@ async fn run_required_indexer_typed(
     }
     if std::env::var_os("SNIFF_DEBUG_INDEXERS").is_some() {
         eprintln!("[sniff] semantic indexer start: {}", spec.display_name);
+    }
+    if kind == SemanticIndexerKind::Go {
+        let run_result = go_runner::run_required_go_indexer(
+            spec,
+            root,
+            &installed,
+            files,
+            required_documents,
+            recovery,
+        )
+        .await;
+        let installation_result = store.verify(spec).map(|_| ()).map_err(|error| {
+            failure(
+                SemanticIndexerRunFailureKind::InfrastructureFailed,
+                SemanticIndexerRunPhase::IntegrityVerification,
+                Some(kind),
+                format!(
+                    "{} installation changed while it was running: {error}",
+                    spec.display_name
+                ),
+            )
+        });
+        let result = combine_typed_run_and_integrity(run_result, installation_result);
+        if result.is_ok() && std::env::var_os("SNIFF_DEBUG_INDEXERS").is_some() {
+            eprintln!("[sniff] semantic indexer complete: {}", spec.display_name);
+        }
+        return result;
     }
     let run_result = run_one(spec, root, &installed, files, recovery).await;
     let installation_result = store.verify(spec).map(|_| ()).map_err(|error| {
@@ -655,7 +690,15 @@ async fn run_one_in_recovery_scope(
         root,
         temporary_project.as_deref(),
         workspace.as_ref(),
-    );
+    )
+    .map_err(|detail| {
+        indexer_failure(
+            spec,
+            SemanticIndexerRunFailureKind::InfrastructureFailed,
+            SemanticIndexerRunPhase::Preparation,
+            detail,
+        )
+    })?;
     if let Some(environment) = python_environment {
         arguments.extend([
             "--environment".to_string(),
@@ -1886,7 +1929,7 @@ async fn prepare_kotlin_dependency_cache(
 
     let workspace = prepare_indexer_workspace(spec, &preparation_root)?;
     let arguments =
-        indexer_arguments_with_workspace(spec, &preparation_root, root, None, workspace.as_ref());
+        indexer_arguments_with_workspace(spec, &preparation_root, root, None, workspace.as_ref())?;
     let command = build_indexer_sandbox_command(
         spec,
         &preparation_root,
@@ -2535,8 +2578,8 @@ fn indexer_arguments_with_project(
     root: &Path,
     project_identity_root: &Path,
     extra_project: Option<&Path>,
-) -> Vec<String> {
-    match spec.kind {
+) -> Result<Vec<String>, String> {
+    Ok(match spec.kind {
         SemanticIndexerKind::TypeScriptJavaScript => {
             let mut arguments = vec!["index".to_string()];
             let has_typescript = root.join("tsconfig.json").is_file();
@@ -2563,16 +2606,15 @@ fn indexer_arguments_with_project(
             "--project-version".to_string(),
             "_".to_string(),
         ],
-        // Avoid scip-go's git-dependent module-root inference inside the
-        // sandbox. The compiler still resolves the complete module graph.
-        SemanticIndexerKind::Go => vec![
-            "--module-root".to_string(),
-            ".".to_string(),
-            "./...".to_string(),
-        ],
+        SemanticIndexerKind::Go => {
+            return Err(
+                "Go indexing requires the compiler package inventory and bounded shard runner"
+                    .to_string(),
+            );
+        }
         SemanticIndexerKind::Kotlin => vec!["index".to_string()],
         SemanticIndexerKind::Rust => vec!["scip".to_string(), ".".to_string()],
-    }
+    })
 }
 
 fn go_sandbox_environment(root: &Path, go_root: &Path) -> Vec<(String, String)> {
@@ -2658,11 +2700,11 @@ fn indexer_arguments_with_workspace(
     project_identity_root: &Path,
     extra_project: Option<&Path>,
     workspace: Option<&TemporaryIndexerWorkspace>,
-) -> Vec<String> {
+) -> Result<Vec<String>, String> {
     let arguments =
-        indexer_arguments_with_project(spec, root, project_identity_root, extra_project);
+        indexer_arguments_with_project(spec, root, project_identity_root, extra_project)?;
     let Some(workspace) = workspace else {
-        return arguments;
+        return Ok(arguments);
     };
 
     let mut wrapped = vec![
@@ -2675,7 +2717,7 @@ fn indexer_arguments_with_workspace(
         root.join("index.scip").to_string_lossy().to_string(),
     ];
     wrapped.extend(arguments.into_iter().skip(1));
-    wrapped
+    Ok(wrapped)
 }
 
 fn prepare_indexer_workspace(
