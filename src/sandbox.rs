@@ -264,8 +264,13 @@ fn run_external(spec: &SandboxCommand) -> Result<SandboxOutput, SandboxError> {
         if !stderr_text.is_empty() && !stderr_text.ends_with('\n') {
             stderr_text.push('\n');
         }
+        #[cfg(target_os = "linux")]
         stderr_text.push_str(
             "Sniff terminated the sandbox after its aggregate resident memory limit was exceeded",
+        );
+        #[cfg(target_os = "macos")]
+        stderr_text.push_str(
+            "Sniff terminated the sandbox after its aggregate physical memory footprint limit was exceeded",
         );
     }
     if process_limit_exceeded {
