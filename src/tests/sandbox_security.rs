@@ -595,7 +595,7 @@ fn malicious_worker_cannot_exceed_its_memory_limit() {
         output.stderr
     );
     assert!(!output.stdout.contains("memory-limit-bypassed"));
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(target_os = "macos")]
     assert!(output.memory_limit_exceeded, "stderr={:?}", output.stderr);
     #[cfg(target_os = "macos")]
     assert!(

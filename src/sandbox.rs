@@ -395,7 +395,10 @@ fn linux_process_tree_usage(root: u32) -> Result<LinuxProcessTreeUsage, SandboxE
                     "Linux returned malformed memory accounting for sandbox process {pid}"
                 ))
             })?,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            Err(error)
+                if error.kind() == std::io::ErrorKind::NotFound
+                    || error.raw_os_error() == Some(libc::ESRCH) =>
+            {
                 // Processes may disappear between the tree and memory snapshots.
                 0
             }
