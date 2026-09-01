@@ -1,10 +1,11 @@
 use crate::semantic_index::{
     RepositoryPath, SEMANTIC_INDEX_FORMAT_VERSION, SemanticDocument, SemanticImportEdge,
-    SemanticIndex, SemanticIndexProvenance, SemanticLocation, SemanticOccurrence,
-    SemanticResolution, SemanticUnresolvedEdge,
+    SemanticIndex, SemanticIndexProvenance, SemanticIndexerContribution, SemanticIndexerInvocation,
+    SemanticLocation, SemanticOccurrence, SemanticResolution, SemanticUnresolvedEdge,
 };
 use protobuf::Message;
 use scip::types::{Document, Index, Metadata, Occurrence};
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
 use std::io::{Read, Take};
@@ -89,7 +90,14 @@ fn ingest_scip_bytes_with_expected_languages(
     }
     let source = Index::parse_from_bytes(bytes)
         .map_err(|error| format!("failed to decode SCIP protobuf: {error}"))?;
-    ingest_index(&root, source, expected_languages, missing_position_encoding)
+    let output_sha256 = format!("{:x}", Sha256::digest(bytes));
+    ingest_index(
+        &root,
+        source,
+        expected_languages,
+        missing_position_encoding,
+        output_sha256,
+    )
 }
 
 fn read_bounded(mut reader: Take<File>, bytes: &mut Vec<u8>, path: &Path) -> Result<(), String> {
@@ -111,12 +119,13 @@ fn ingest_index(
     source: Index,
     expected_languages: Option<&BTreeMap<RepositoryPath, String>>,
     missing_position_encoding: Option<crate::semantic_index::SemanticPositionEncoding>,
+    output_sha256: String,
 ) -> Result<SemanticIndex, String> {
     let metadata = source
         .metadata
         .as_ref()
         .ok_or_else(|| "SCIP index is missing required metadata".to_string())?;
-    let mut index = empty_index(repository_root, metadata)?;
+    let mut index = empty_index(repository_root, metadata, output_sha256)?;
     let provider_name = index.provenance.tool_name.clone();
     for information in &source.external_symbols {
         if is_known_malformed_local_external_symbol(metadata, information) {
@@ -147,7 +156,11 @@ fn ingest_index(
     Ok(index)
 }
 
-fn empty_index(repository_root: &Path, metadata: &Metadata) -> Result<SemanticIndex, String> {
+fn empty_index(
+    repository_root: &Path,
+    metadata: &Metadata,
+    output_sha256: String,
+) -> Result<SemanticIndex, String> {
     if metadata.version.value() != 0 {
         return Err(format!(
             "SCIP metadata uses unsupported protocol version {}",
@@ -170,6 +183,12 @@ fn empty_index(repository_root: &Path, metadata: &Metadata) -> Result<SemanticIn
             tool_version: (!tool.version.trim().is_empty()).then(|| tool.version.clone()),
             arguments: tool.arguments.clone(),
             source_text_encoding: ranges::metadata_text_encoding(metadata)?,
+            invocations: vec![SemanticIndexerInvocation {
+                arguments: tool.arguments.clone(),
+                context: BTreeMap::new(),
+                contribution: SemanticIndexerContribution::CompleteIndex,
+                output_sha256,
+            }],
             diagnostics: Vec::new(),
         },
         documents: BTreeMap::new(),

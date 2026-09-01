@@ -711,7 +711,7 @@ fn fixture() -> Fixture {
         ambiguity_notes: Vec::new(),
     };
     let index = SemanticIndex {
-        format_version: 1,
+        format_version: crate::semantic_index::SEMANTIC_INDEX_FORMAT_VERSION,
         repository_root: root.path().to_string_lossy().replace('\\', "/"),
         provenance: SemanticIndexProvenance {
             format: "scip".to_string(),
@@ -719,6 +719,12 @@ fn fixture() -> Fixture {
             tool_version: Some("1.0.0".to_string()),
             arguments: Vec::new(),
             source_text_encoding: Some(SemanticTextEncoding::Utf8),
+            invocations: vec![crate::semantic_index::SemanticIndexerInvocation {
+                arguments: Vec::new(),
+                context: Default::default(),
+                contribution: crate::semantic_index::SemanticIndexerContribution::CompleteIndex,
+                output_sha256: "0".repeat(64),
+            }],
             diagnostics: Vec::new(),
         },
         documents: BTreeMap::from([(

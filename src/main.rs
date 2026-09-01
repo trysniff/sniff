@@ -21,6 +21,7 @@ pub mod roles;
 pub mod scorer;
 pub(crate) mod semantic_cache;
 pub mod semantic_index;
+pub(crate) mod semantic_index_merge;
 pub mod semantic_index_scip;
 pub(crate) mod semantic_indexer_doctor;
 pub(crate) mod semantic_indexer_installation;

@@ -9,6 +9,7 @@ use scip::types::{
     Relationship, Signature, SingleLineRange, SymbolInformation, TextEncoding, ToolInfo,
     symbol_information::Kind,
 };
+use sha2::Digest;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
@@ -571,13 +572,19 @@ fn file_ingestion_uses_the_same_strict_contract() {
     let mut index = base_index();
     index.documents.push(document("src/main.rs"));
     let path = root.join("index.scip");
-    fs::write(&path, index.write_to_bytes().unwrap()).unwrap();
+    let bytes = index.write_to_bytes().unwrap();
+    fs::write(&path, &bytes).unwrap();
 
     let imported = ingest_scip_file(&root, &path).unwrap();
     assert_eq!(imported.provenance.tool_name, "rust-analyzer");
     assert_eq!(
         imported.provenance.source_text_encoding,
         Some(crate::semantic_index::SemanticTextEncoding::Utf8)
+    );
+    assert_eq!(imported.provenance.invocations.len(), 1);
+    assert_eq!(
+        imported.provenance.invocations[0].output_sha256,
+        format!("{:x}", sha2::Sha256::digest(&bytes))
     );
     assert_eq!(imported.documents.len(), 1);
     fs::remove_dir_all(root).ok();
