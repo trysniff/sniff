@@ -119,6 +119,18 @@ def _meminfo() -> tuple[int, int]:
         raise RuntimeError("Linux procfs memory data is incomplete") from error
 
 
+def _filesystem_info() -> tuple[int, int]:
+    try:
+        values = os.statvfs("/")
+    except OSError as error:
+        raise RuntimeError("could not read Linux filesystem data") from error
+    block_size = values.f_frsize or values.f_bsize
+    return (
+        block_size * values.f_blocks // 1024,
+        block_size * values.f_bavail // 1024,
+    )
+
+
 def _linux_proc_stats(root_pid: int) -> str:
     pending = [root_pid]
     seen: set[int] = set()
@@ -140,10 +152,13 @@ def _linux_proc_stats(root_pid: int) -> str:
         thread_count += status[2]
         pending.extend(_proc_children(pid))
     total_kib, available_kib = _meminfo()
+    filesystem_total_kib, filesystem_available_kib = _filesystem_info()
     return (
         f"processes={process_count} rss_kib={rss_kib} "
         f"high_water_kib={high_water_kib} threads={thread_count} "
-        f"host_mem_total_kib={total_kib} host_mem_available_kib={available_kib}"
+        f"host_mem_total_kib={total_kib} host_mem_available_kib={available_kib} "
+        f"host_fs_total_kib={filesystem_total_kib} "
+        f"host_fs_available_kib={filesystem_available_kib}"
     )
 
 
