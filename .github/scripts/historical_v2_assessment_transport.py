@@ -25,6 +25,10 @@ ALLOWED_ARCHIVE_ROOTS = frozenset(
 MAX_ARCHIVE_MEMBERS = 2_000_000
 MAX_EXTRACTED_BYTES = 20 * 1024 * 1024 * 1024
 MAX_MEMBER_PATH_BYTES = 4096
+TOOLS_WORKFLOW = ".github/workflows/sniffbench-historical-v2-tools.yml"
+TOOLS_ARTIFACT_PREFIX = "historical-v2-assessment-tools-"
+TOOLS_ARTIFACT_MAX_BYTES = 128 * 1024 * 1024
+TOOLS_PROVENANCE_SCHEMA = "sniffbench-historical-v2-tools-provenance-v1"
 
 FRAME_RUN_ID = 32_804_623_556
 FRAME_RUN_ATTEMPT = 1
@@ -207,6 +211,112 @@ def _require_exact_fields(
     for key, expected_value in expected.items():
         if value.get(key) != expected_value:
             raise ValueError(f"{label} field drifted: {key}")
+
+
+def _positive_json_integer(value: Any, label: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ValueError(f"{label} must be a positive integer")
+    return value
+
+
+def validate_tools_provenance(
+    run_path: pathlib.Path,
+    artifacts_path: pathlib.Path,
+    repository: str,
+    head_sha: str,
+    tools_run_id: int,
+    assessment_run_id: int,
+    assessment_run_attempt: int,
+    output_path: pathlib.Path,
+) -> dict[str, Any]:
+    if re.fullmatch(r"[0-9a-f]{40}", head_sha) is None:
+        raise ValueError("assessment tools head SHA is invalid")
+    if not repository or "\n" in repository or "\r" in repository:
+        raise ValueError("assessment tools repository is invalid")
+
+    run = _require_mapping(_read_json(run_path, "tools workflow run"), "tools workflow run")
+    _require_exact_fields(
+        run,
+        {
+            "event": "workflow_dispatch",
+            "head_branch": "main",
+            "path": TOOLS_WORKFLOW,
+            "status": "completed",
+            "conclusion": "success",
+            "head_sha": head_sha,
+        },
+        "tools workflow run",
+    )
+    if _positive_json_integer(run.get("id"), "tools workflow run ID") != tools_run_id:
+        raise ValueError("tools workflow run ID drifted")
+    run_attempt = _positive_json_integer(
+        run.get("run_attempt"), "tools workflow run attempt"
+    )
+    if run_attempt != 1:
+        raise ValueError("tools workflow run attempt drifted")
+    head_repository = _require_mapping(
+        run.get("head_repository"), "tools workflow head repository"
+    )
+    if head_repository.get("full_name") != repository:
+        raise ValueError("tools workflow repository drifted")
+
+    listing = _require_mapping(
+        _read_json(artifacts_path, "tools artifact listing"),
+        "tools artifact listing",
+    )
+    if _positive_json_integer(
+        listing.get("total_count"), "tools artifact total count"
+    ) != 1:
+        raise ValueError("tools workflow must publish exactly one artifact")
+    artifacts = listing.get("artifacts")
+    if not isinstance(artifacts, list) or len(artifacts) != 1:
+        raise ValueError("tools artifact listing must contain exactly one artifact")
+    artifact = _require_mapping(artifacts[0], "tools artifact")
+    expected_name = f"{TOOLS_ARTIFACT_PREFIX}{head_sha}"
+    _require_exact_fields(
+        artifact,
+        {"name": expected_name},
+        "tools artifact",
+    )
+    if artifact.get("expired") is not False:
+        raise ValueError("tools artifact is expired or has invalid expiry state")
+    artifact_id = _positive_json_integer(artifact.get("id"), "tools artifact ID")
+    artifact_size = _positive_json_integer(
+        artifact.get("size_in_bytes"), "tools artifact size"
+    )
+    if artifact_size > TOOLS_ARTIFACT_MAX_BYTES:
+        raise ValueError("tools artifact exceeds the size limit")
+    artifact_digest = artifact.get("digest")
+    if not isinstance(artifact_digest, str) or re.fullmatch(
+        r"sha256:[0-9a-f]{64}", artifact_digest
+    ) is None:
+        raise ValueError("tools artifact digest is invalid")
+
+    provenance = {
+        "artifact_digest": artifact_digest,
+        "artifact_id": artifact_id,
+        "artifact_name": expected_name,
+        "artifact_size": artifact_size,
+        "assessment_run_attempt": assessment_run_attempt,
+        "assessment_run_id": assessment_run_id,
+        "schema": TOOLS_PROVENANCE_SCHEMA,
+        "tools_head_sha": head_sha,
+        "tools_run_attempt": run_attempt,
+        "tools_run_id": tools_run_id,
+        "tools_workflow": TOOLS_WORKFLOW,
+    }
+    _positive_json_integer(assessment_run_id, "assessment workflow run ID")
+    _positive_json_integer(assessment_run_attempt, "assessment workflow run attempt")
+    _plain_directory(output_path.parent, "tools provenance parent")
+    try:
+        with output_path.open("x", encoding="utf-8", newline="\n") as handle:
+            json.dump(provenance, handle, sort_keys=True, separators=(",", ":"))
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+    except OSError as error:
+        raise ValueError(f"failed to create tools provenance: {error}") from error
+    return provenance
 
 
 def _normalized_link(path: pathlib.PurePosixPath, target_text: str) -> list[str]:
@@ -901,6 +1011,16 @@ def _parser() -> argparse.ArgumentParser:
     migrate.add_argument("source_artifact_id", type=_positive_integer)
     migrate.add_argument("source_artifact_digest")
     migrate.add_argument("source_artifact_size", type=_positive_integer)
+
+    tools = commands.add_parser("validate-tools-provenance")
+    tools.add_argument("run", type=pathlib.Path)
+    tools.add_argument("artifacts", type=pathlib.Path)
+    tools.add_argument("repository")
+    tools.add_argument("head_sha")
+    tools.add_argument("tools_run_id", type=_positive_integer)
+    tools.add_argument("assessment_run_id", type=_positive_integer)
+    tools.add_argument("assessment_run_attempt", type=_positive_integer)
+    tools.add_argument("output", type=pathlib.Path)
     return parser
 
 
@@ -931,6 +1051,20 @@ def main(arguments: Sequence[str] | None = None) -> int:
                     args.source_artifact_size,
                 )
             )
+        elif args.command == "validate-tools-provenance":
+            provenance = validate_tools_provenance(
+                args.run,
+                args.artifacts,
+                args.repository,
+                args.head_sha,
+                args.tools_run_id,
+                args.assessment_run_id,
+                args.assessment_run_attempt,
+                args.output,
+            )
+            print(f"TOOLS_ARTIFACT_ID={provenance['artifact_id']}")
+            print(f"TOOLS_ARTIFACT_DIGEST={provenance['artifact_digest']}")
+            print(f"TOOLS_ARTIFACT_SIZE={provenance['artifact_size']}")
         else:
             raise AssertionError(f"unhandled command: {args.command}")
     except ValueError as error:
