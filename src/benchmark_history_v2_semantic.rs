@@ -50,147 +50,34 @@ mod validation;
 #[path = "benchmark_history_v2_semantic_stage_support.rs"]
 mod stage_support;
 
+#[path = "benchmark_history_v2_semantic_progress.rs"]
+mod progress;
+
 use stage_support::*;
 
 pub use validation::validate_historical_v2_semantic_census_commitment;
 
-pub async fn census_historical_v2_semantics(
-    materialization: &HistoricalV2Materialization,
-    roots: &HistoricalV2MaterializedRoots,
-    source_census: &HistoricalV2SourceCensus,
-) -> Result<HistoricalV2SemanticCensus, String> {
-    match census_historical_v2_semantics_typed(materialization, roots, source_census)
-        .await
-        .map_err(|error| error.detail)?
-    {
-        HistoricalV2StageResult::Completed(census) => Ok(census),
-        HistoricalV2StageResult::Excluded(exclusion) => Err(format!(
-            "historical-v2 semantic census excluded: {:?}",
-            exclusion.reasons
-        )),
-    }
+pub fn recover_historical_v2_semantic_progress(root: &Path) -> Result<(), String> {
+    progress::HistoricalV2SemanticProgress::recover_existing(root)
 }
 
-pub async fn census_historical_v2_semantics_typed(
-    materialization: &HistoricalV2Materialization,
-    roots: &HistoricalV2MaterializedRoots,
-    source_census: &HistoricalV2SourceCensus,
-) -> Result<SemanticCensusStageResult, HistoricalV2SlotStageError> {
-    validate_historical_v2_source_census(materialization, roots, source_census).map_err(invalid)?;
-    let scope = semantic_scope(materialization, roots, source_census).map_err(infrastructure)?;
-    let all_base_files =
-        snapshot_file_records(&roots.base_root, &source_census.base).map_err(infrastructure)?;
-    let all_patched_files = snapshot_file_records(&roots.patched_root, &source_census.patched)
-        .map_err(infrastructure)?;
-    let (base_files, base_required_documents) = scoped_file_records(
-        &roots.base_root,
-        &all_base_files,
-        &scope.changed_indexers,
-        &scope.base_required_paths,
-    )
-    .map_err(infrastructure)?;
-    let (patched_files, patched_required_documents) = scoped_file_records(
-        &roots.patched_root,
-        &all_patched_files,
-        &scope.changed_indexers,
-        &scope.patched_required_paths,
-    )
-    .map_err(infrastructure)?;
-    let base_run = crate::semantic_indexer_runner::run_required_indexers_exhaustive_typed_scoped(
-        &roots.base_root,
-        &base_files,
-        &base_required_documents,
-    )
-    .await;
-    let patched_run =
-        crate::semantic_indexer_runner::run_required_indexers_exhaustive_typed_scoped(
-            &roots.patched_root,
-            &patched_files,
-            &patched_required_documents,
-        )
-        .await;
-    let mut failures = Vec::new();
-    let mut stage_errors = Vec::new();
-    let base_indexes = resolve_indexer_run(
-        HistoricalV2SemanticSnapshotSide::Base,
-        &source_census.base.revision,
-        base_run,
-        &mut failures,
-        &mut stage_errors,
-    );
-    let patched_indexes = resolve_indexer_run(
-        HistoricalV2SemanticSnapshotSide::Patched,
-        &source_census.patched.revision,
-        patched_run,
-        &mut failures,
-        &mut stage_errors,
-    );
-    if !stage_errors.is_empty() {
-        return Err(combine_stage_errors(stage_errors));
-    }
-    if !failures.is_empty() {
-        return terminal_exclusion(materialization, source_census, failures);
-    }
-    let base_indexes = base_indexes.ok_or_else(|| {
-        infrastructure("historical-v2 completed base indexer result lost its indexes")
-    })?;
-    let patched_indexes = patched_indexes.ok_or_else(|| {
-        infrastructure("historical-v2 completed patched indexer result lost its indexes")
-    })?;
-    let base = build_semantic_snapshot(
-        &roots.base_root,
-        &source_census.base,
-        &all_base_files,
-        &scope.changed_indexers,
-        &scope.base_required_paths,
-        &base_indexes,
-    );
-    let patched = build_semantic_snapshot(
-        &roots.patched_root,
-        &source_census.patched,
-        &all_patched_files,
-        &scope.changed_indexers,
-        &scope.patched_required_paths,
-        &patched_indexes,
-    );
-    let base = resolve_snapshot_build(
-        HistoricalV2SemanticSnapshotSide::Base,
-        &source_census.base.revision,
-        base,
-        &mut failures,
-    );
-    let patched = resolve_snapshot_build(
-        HistoricalV2SemanticSnapshotSide::Patched,
-        &source_census.patched.revision,
-        patched,
-        &mut failures,
-    );
-    if !failures.is_empty() {
-        return terminal_exclusion(materialization, source_census, failures);
-    }
-    let mut census = HistoricalV2SemanticCensus {
-        schema_version: HISTORICAL_V2_SEMANTIC_CENSUS_SCHEMA_VERSION,
-        semantic_census_contract: SEMANTIC_CENSUS_CONTRACT.to_string(),
-        canonical_repository: materialization.canonical_repository.clone(),
-        materialization_sha256: materialization.materialization_sha256.clone(),
-        source_census_sha256: source_census.source_census_sha256.clone(),
-        changed_indexers: scope
-            .changed_indexers
-            .iter()
-            .copied()
-            .map(indexer_kind)
-            .collect(),
-        base: base.ok_or_else(|| {
-            infrastructure("historical-v2 completed base semantic snapshot was not retained")
-        })?,
-        patched: patched.ok_or_else(|| {
-            infrastructure("historical-v2 completed patched semantic snapshot was not retained")
-        })?,
-        semantic_census_sha256: String::new(),
-    };
-    census.semantic_census_sha256 = semantic_census_sha256(&census).map_err(infrastructure)?;
-    Ok(HistoricalV2StageResult::Completed(census))
+struct HistoricalV2SemanticSnapshotInputs<'a> {
+    side: HistoricalV2SemanticSnapshotSide,
+    root: &'a Path,
+    source: &'a HistoricalV2SourceSnapshotCensus,
+    all_files: &'a [FileRecord],
+    scoped_files: &'a [FileRecord],
+    required_documents: &'a [FileRecord],
+    required_paths: &'a BTreeSet<String>,
 }
+
+#[path = "benchmark_history_v2_semantic_execution.rs"]
+mod execution;
+
+pub use execution::{
+    census_historical_v2_semantics, census_historical_v2_semantics_typed,
+    census_historical_v2_semantics_typed_resumable,
+};
 
 pub async fn validate_historical_v2_semantic_census(
     materialization: &HistoricalV2Materialization,

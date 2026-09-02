@@ -1,10 +1,10 @@
 use crate::semantic_index::RepositoryPath;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub(super) struct GoShardLimits {
     pub(super) target_source_bytes: u64,
     pub(super) max_packages: usize,
@@ -15,14 +15,14 @@ pub(super) const GO_SHARD_LIMITS: GoShardLimits = GoShardLimits {
     max_packages: 48,
 };
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(super) struct GoPackage {
     pub(super) import_path: String,
     pub(super) source_documents: BTreeSet<RepositoryPath>,
     pub(super) source_bytes: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(super) struct GoPackageShard {
     pub(super) packages: Vec<GoPackage>,
     pub(super) source_bytes: u64,

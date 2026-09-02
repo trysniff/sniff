@@ -32,6 +32,7 @@ struct IndexerInstallationRecord {
 pub(crate) struct InstalledIndexer {
     pub(crate) root: PathBuf,
     pub(crate) entrypoint: PathBuf,
+    pub(crate) tree_sha256: String,
 }
 
 #[derive(Debug, Clone)]
@@ -82,6 +83,7 @@ impl SemanticIndexerStore {
         Ok(InstalledIndexer {
             root: root.to_path_buf(),
             entrypoint,
+            tree_sha256: record.tree_sha256,
         })
     }
 
