@@ -1,0 +1,159 @@
+use super::*;
+use std::fs;
+
+fn digest(character: char) -> String {
+    character.to_string().repeat(64)
+}
+
+fn source_snapshot(revision: &str, digest_character: char) -> HistoricalV2SourceSnapshotCensus {
+    HistoricalV2SourceSnapshotCensus {
+        revision: revision.to_string(),
+        inventory_sha256: digest('1'),
+        parser_census_sha256: digest('2'),
+        tracked_entry_count: 0,
+        source_files: Vec::new(),
+        source_file_count: 0,
+        method_counts_by_language: BTreeMap::new(),
+        method_count: 0,
+        snapshot_census_sha256: digest(digest_character),
+    }
+}
+
+fn materialization() -> HistoricalV2Materialization {
+    HistoricalV2Materialization {
+        schema_version: 1,
+        materialization_contract: "fixture".to_string(),
+        canonical_repository: "example/repository".to_string(),
+        base_revision: "a".repeat(40),
+        object_format: "sha1".to_string(),
+        base_tree_oid: "b".repeat(40),
+        historical_patch_sha256: digest('3'),
+        patched_tree_oid: "c".repeat(40),
+        patched_commit_oid: "d".repeat(40),
+        materialization_sha256: digest('4'),
+    }
+}
+
+fn source_census() -> HistoricalV2SourceCensus {
+    HistoricalV2SourceCensus {
+        schema_version: 2,
+        source_census_contract: "fixture".to_string(),
+        canonical_repository: "example/repository".to_string(),
+        materialization_sha256: digest('4'),
+        base: source_snapshot(&"a".repeat(40), '5'),
+        patched: source_snapshot(&"d".repeat(40), '6'),
+        source_census_sha256: digest('7'),
+    }
+}
+
+fn semantic_snapshot(
+    source: &HistoricalV2SourceSnapshotCensus,
+) -> HistoricalV2SemanticSnapshotCensus {
+    HistoricalV2SemanticSnapshotCensus {
+        revision: source.revision.clone(),
+        source_snapshot_census_sha256: source.snapshot_census_sha256.clone(),
+        required_document_paths: Vec::new(),
+        indexers: Vec::new(),
+        methods: Vec::new(),
+        public_symbols: Vec::new(),
+        public_symbol_count: 0,
+        resolved_method_count: 0,
+        compiler_excluded_method_count: 0,
+        unresolved_method_count: 0,
+        semantic_snapshot_sha256: digest('8'),
+    }
+}
+
+#[test]
+fn completed_snapshot_resumes_only_under_the_exact_identity() {
+    let state = tempfile::tempdir().unwrap();
+    let root = state.path().join("progress");
+    let progress = HistoricalV2SemanticProgress::open(&root).unwrap();
+    let materialization = materialization();
+    let source_census = source_census();
+    let changed = BTreeSet::from([SemanticIndexerKind::Go]);
+    let required = BTreeSet::new();
+    let snapshot = semantic_snapshot(&source_census.base);
+    progress
+        .publish_snapshot(
+            &materialization,
+            &source_census,
+            HistoricalV2SemanticSnapshotSide::Base,
+            &source_census.base,
+            &changed,
+            &required,
+            &snapshot,
+        )
+        .unwrap();
+
+    assert_eq!(
+        progress
+            .load_snapshot(
+                &materialization,
+                &source_census,
+                HistoricalV2SemanticSnapshotSide::Base,
+                &source_census.base,
+                &changed,
+                &required,
+            )
+            .unwrap(),
+        Some(snapshot)
+    );
+    let mut changed_source = source_census.clone();
+    changed_source.source_census_sha256 = digest('9');
+    assert!(
+        progress
+            .load_snapshot(
+                &materialization,
+                &changed_source,
+                HistoricalV2SemanticSnapshotSide::Base,
+                &changed_source.base,
+                &changed,
+                &required,
+            )
+            .is_err()
+    );
+}
+
+#[test]
+fn corrupt_extra_and_incomplete_snapshot_entries_are_not_trusted() {
+    let state = tempfile::tempdir().unwrap();
+    let root = state.path().join("progress");
+    let progress = HistoricalV2SemanticProgress::open(&root).unwrap();
+    fs::write(
+        progress
+            .side_root(HistoricalV2SemanticSnapshotSide::Base)
+            .join(SNAPSHOT_TEMP_FILE),
+        b"partial",
+    )
+    .unwrap();
+    HistoricalV2SemanticProgress::recover_existing(&root).unwrap();
+    assert!(
+        !progress
+            .side_root(HistoricalV2SemanticSnapshotSide::Base)
+            .join(SNAPSHOT_TEMP_FILE)
+            .exists()
+    );
+
+    fs::write(
+        progress
+            .side_root(HistoricalV2SemanticSnapshotSide::Base)
+            .join("unexpected.json"),
+        b"{}\n",
+    )
+    .unwrap();
+    assert!(HistoricalV2SemanticProgress::open(&root).is_err());
+}
+
+#[cfg(unix)]
+#[test]
+fn dangling_progress_root_symlink_fails_closed() {
+    use std::os::unix::fs::symlink;
+
+    let state = tempfile::tempdir().unwrap();
+    let missing = state.path().join("missing");
+    let progress = state.path().join("progress");
+    symlink(&missing, &progress).unwrap();
+
+    assert!(HistoricalV2SemanticProgress::recover_existing(&progress).is_err());
+}

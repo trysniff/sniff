@@ -4,6 +4,10 @@ use super::go_shards::{
 };
 use super::*;
 use crate::semantic_index_merge::{merge_document_shards, merge_implementation_pair};
+use crate::semantic_indexer_runner::progress::{
+    SemanticProgressScope, SemanticProgressScopeInputs, SemanticProgressStore, SemanticProgressUnit,
+};
+use serde::Serialize;
 
 use super::go_commands::{
     GoScipExecution, discover_go_build_context, go_output_validation_failure,
@@ -12,56 +16,39 @@ use super::go_commands::{
 
 const GO_LIST_FIELDS: &str = "ImportPath,Dir,GoFiles,CgoFiles,TestGoFiles,XTestGoFiles";
 
+pub(super) struct GoIndexerRunInputs<'a> {
+    pub(super) spec: PinnedIndexer,
+    pub(super) root: &'a Path,
+    pub(super) installed: &'a InstalledIndexer,
+    pub(super) files: &'a [FileRecord],
+    pub(super) required_documents: &'a [FileRecord],
+    pub(super) recovery: &'a SemanticIndexerRecoveryGuard,
+    pub(super) repository_content_sha256: &'a str,
+    pub(super) progress_root: Option<&'a Path>,
+}
+
 pub(super) async fn run_required_go_indexer(
-    spec: PinnedIndexer,
-    root: &Path,
-    installed: &InstalledIndexer,
-    files: &[FileRecord],
-    required_documents: &[FileRecord],
-    recovery: &SemanticIndexerRecoveryGuard,
+    inputs: GoIndexerRunInputs<'_>,
 ) -> Result<SemanticIndex, SemanticIndexerRunFailure> {
-    run_required_go_indexer_with_limits(
-        spec,
-        root,
-        installed,
-        files,
-        required_documents,
-        recovery,
-        GO_SHARD_LIMITS,
-    )
-    .await
+    run_required_go_indexer_with_limits(&inputs, GO_SHARD_LIMITS).await
 }
 
 async fn run_required_go_indexer_with_limits(
-    spec: PinnedIndexer,
-    root: &Path,
-    installed: &InstalledIndexer,
-    files: &[FileRecord],
-    required_documents: &[FileRecord],
-    recovery: &SemanticIndexerRecoveryGuard,
+    inputs: &GoIndexerRunInputs<'_>,
     shard_limits: GoShardLimits,
 ) -> Result<SemanticIndex, SemanticIndexerRunFailure> {
-    let execution_root = recovery.prepare_indexer_run().map_err(|detail| {
+    let execution_root = inputs.recovery.prepare_indexer_run().map_err(|detail| {
         indexer_failure(
-            spec,
+            inputs.spec,
             SemanticIndexerRunFailureKind::InfrastructureFailed,
             SemanticIndexerRunPhase::Preparation,
             detail,
         )
     })?;
-    let run_result = run_go_in_recovery_scope(
-        spec,
-        root,
-        &execution_root,
-        installed,
-        files,
-        required_documents,
-        shard_limits,
-    )
-    .await;
-    let cleanup_result = recovery.finish_indexer_run().map_err(|detail| {
+    let run_result = run_go_in_recovery_scope(inputs, &execution_root, shard_limits).await;
+    let cleanup_result = inputs.recovery.finish_indexer_run().map_err(|detail| {
         indexer_failure(
-            spec,
+            inputs.spec,
             SemanticIndexerRunFailureKind::InfrastructureFailed,
             SemanticIndexerRunPhase::Cleanup,
             detail,
@@ -71,14 +58,20 @@ async fn run_required_go_indexer_with_limits(
 }
 
 async fn run_go_in_recovery_scope(
-    spec: PinnedIndexer,
-    root: &Path,
+    inputs: &GoIndexerRunInputs<'_>,
     execution_root: &Path,
-    installed: &InstalledIndexer,
-    files: &[FileRecord],
-    required_documents: &[FileRecord],
     shard_limits: GoShardLimits,
 ) -> Result<SemanticIndex, SemanticIndexerRunFailure> {
+    let GoIndexerRunInputs {
+        spec,
+        root,
+        installed,
+        files,
+        required_documents,
+        repository_content_sha256,
+        progress_root,
+        ..
+    } = *inputs;
     repository_snapshot::stage_repository_snapshot(root, execution_root).map_err(|detail| {
         indexer_failure(
             spec,
@@ -132,6 +125,8 @@ async fn run_go_in_recovery_scope(
     );
     let packages = parse_go_package_inventory(execution_root, &inventory_output.stdout)
         .map_err(|detail| go_output_validation_failure(spec, detail, &inventory_output))?;
+    let package_inventory_sha256 =
+        canonical_sha256(&packages).map_err(|detail| go_progress_failure(spec, detail))?;
     let shards = plan_go_package_shards_with_limits(packages, shard_limits)
         .map_err(|detail| go_snapshot_assembly_failure(spec, detail))?;
     let expected_languages =
@@ -146,6 +141,76 @@ async fn run_go_in_recovery_scope(
             },
         )?;
 
+    let document_units = shards
+        .iter()
+        .enumerate()
+        .map(|(index, shard)| {
+            SemanticProgressUnit::new(
+                format!("document-{index:08}"),
+                "document-shard",
+                shard.patterns(),
+                &shard.source_documents(),
+                true,
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|detail| go_progress_failure(spec, detail))?;
+    let pairs = shard_pairs(shards.len());
+    let pair_units = pairs
+        .iter()
+        .map(|&(left, right)| {
+            let patterns = shards[left]
+                .patterns()
+                .into_iter()
+                .chain(shards[right].patterns())
+                .collect();
+            let expected_documents = shards[left]
+                .source_documents()
+                .into_iter()
+                .chain(shards[right].source_documents())
+                .collect();
+            SemanticProgressUnit::new(
+                format!("pair-{left:08}-{right:08}"),
+                "implementation-pair",
+                patterns,
+                &expected_documents,
+                false,
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|detail| go_progress_failure(spec, detail))?;
+    let progress = match progress_root {
+        Some(progress_root) => {
+            let runtime_sha256 = runtime_identity_sha256(spec, execution_root, installed)
+                .map_err(|detail| go_progress_failure(spec, detail))?;
+            let file_scope_sha256 = file_scope_sha256(root, files, required_documents)
+                .map_err(|detail| go_progress_failure(spec, detail))?;
+            let shard_plan_sha256 = canonical_sha256(&(shard_limits, &shards))
+                .map_err(|detail| go_progress_failure(spec, detail))?;
+            let mut units = document_units.clone();
+            units.extend(pair_units.clone());
+            let scope = SemanticProgressScope::new(SemanticProgressScopeInputs {
+                indexer: spec.kind,
+                indexer_version: spec.version.to_string(),
+                installation_tree_sha256: installed.tree_sha256.clone(),
+                runtime_sha256,
+                repository_content_sha256: repository_content_sha256.to_string(),
+                file_scope_sha256,
+                build_context: context.clone(),
+                build_context_output_sha256: context_invocation.output_sha256.clone(),
+                package_inventory_sha256,
+                shard_plan_sha256,
+                units,
+            })
+            .map_err(|detail| go_progress_failure(spec, detail))?;
+            Some(
+                SemanticProgressStore::open(&progress_root.join("go"), scope)
+                    .map_err(|detail| go_progress_failure(spec, detail))?,
+            )
+        }
+        None => None,
+    };
+
     let scip = GoScipExecution {
         spec,
         repository_root: root,
@@ -155,24 +220,27 @@ async fn run_go_in_recovery_scope(
         context: &context,
     };
     let mut document_indexes = Vec::with_capacity(shards.len());
-    for shard in &shards {
-        document_indexes
-            .push(run_go_scip(&scip, shard.patterns(), &shard.source_documents(), true).await?);
+    for (shard, unit) in shards.iter().zip(&document_units) {
+        let expected_documents = shard.source_documents();
+        document_indexes.push(
+            run_or_resume_go_unit(progress.as_ref(), unit, root, spec, || {
+                run_go_scip(&scip, shard.patterns(), &expected_documents, true)
+            })
+            .await?,
+        );
     }
     let mut merged = merge_document_shards(document_indexes)
         .map_err(|detail| go_snapshot_assembly_failure(spec, detail))?;
-    for (left, right) in shard_pairs(shards.len()) {
-        let patterns = shards[left]
-            .patterns()
-            .into_iter()
-            .chain(shards[right].patterns())
-            .collect();
+    for ((left, right), unit) in pairs.into_iter().zip(&pair_units) {
         let expected_documents = shards[left]
             .source_documents()
             .into_iter()
             .chain(shards[right].source_documents())
             .collect();
-        let pair = run_go_scip(&scip, patterns, &expected_documents, false).await?;
+        let pair = run_or_resume_go_unit(progress.as_ref(), unit, root, spec, || {
+            run_go_scip(&scip, unit.patterns.clone(), &expected_documents, false)
+        })
+        .await?;
         merge_implementation_pair(&mut merged, pair)
             .map_err(|detail| go_snapshot_assembly_failure(spec, detail))?;
     }
@@ -205,6 +273,91 @@ async fn run_go_in_recovery_scope(
         .map_err(|detail| go_snapshot_assembly_failure(spec, detail))
 }
 
+async fn run_or_resume_go_unit<F, Future>(
+    progress: Option<&SemanticProgressStore>,
+    unit: &SemanticProgressUnit,
+    repository_root: &Path,
+    spec: PinnedIndexer,
+    run: F,
+) -> Result<SemanticIndex, SemanticIndexerRunFailure>
+where
+    F: FnOnce() -> Future,
+    Future: std::future::Future<Output = Result<SemanticIndex, SemanticIndexerRunFailure>>,
+{
+    if let Some(progress) = progress
+        && let Some(index) = progress
+            .load(unit, repository_root)
+            .map_err(|detail| go_progress_failure(spec, detail))?
+    {
+        return Ok(index);
+    }
+    let index = run().await?;
+    if let Some(progress) = progress {
+        progress
+            .publish(unit, repository_root, &index)
+            .map_err(|detail| go_progress_failure(spec, detail))?;
+    }
+    Ok(index)
+}
+
+fn go_progress_failure(
+    spec: PinnedIndexer,
+    detail: impl Into<String>,
+) -> SemanticIndexerRunFailure {
+    indexer_failure(
+        spec,
+        SemanticIndexerRunFailureKind::InfrastructureFailed,
+        SemanticIndexerRunPhase::IntegrityVerification,
+        detail,
+    )
+}
+
+fn runtime_identity_sha256(
+    spec: PinnedIndexer,
+    execution_root: &Path,
+    installed: &InstalledIndexer,
+) -> Result<String, String> {
+    let prepared =
+        build_indexer_sandbox_command(spec, execution_root, installed, Vec::new(), None)?;
+    let mut identities = runtime_file_identities(&prepared.runtime_files)?
+        .into_iter()
+        .map(|identity| (identity.length, identity.sha256))
+        .collect::<Vec<_>>();
+    identities.sort();
+    canonical_sha256(&(spec.version, &installed.tree_sha256, identities))
+}
+
+fn file_scope_sha256(
+    root: &Path,
+    files: &[FileRecord],
+    required_documents: &[FileRecord],
+) -> Result<String, String> {
+    fn records(
+        root: &Path,
+        files: &[FileRecord],
+    ) -> Result<Vec<(RepositoryPath, String, String)>, String> {
+        let mut records = files
+            .iter()
+            .map(|file| {
+                Ok((
+                    repository_relative_path(root, Path::new(&file.file_path))?,
+                    file.language.clone(),
+                    format!("{:x}", Sha256::digest(file.source.as_bytes())),
+                ))
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        records.sort();
+        Ok(records)
+    }
+    canonical_sha256(&(records(root, files)?, records(root, required_documents)?))
+}
+
+fn canonical_sha256<T: Serialize>(value: &T) -> Result<String, String> {
+    serde_json::to_vec(value)
+        .map(|bytes| format!("{:x}", Sha256::digest(bytes)))
+        .map_err(|error| format!("failed to serialize Go semantic progress identity: {error}"))
+}
+
 fn go_snapshot_assembly_failure(
     spec: PinnedIndexer,
     detail: impl Into<String>,
@@ -218,150 +371,5 @@ fn go_snapshot_assembly_failure(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::semantic_index::{
-        RepositoryPath, SemanticIndexerContribution, SemanticRelationshipKind, SemanticResolution,
-        SemanticSymbolId,
-    };
-    use crate::semantic_indexer_installation::SemanticIndexerStore;
-
-    fn write_go_file(root: &Path, relative: &str, source: &str) -> FileRecord {
-        let path = root.join(relative);
-        fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(&path, source).unwrap();
-        FileRecord {
-            file_path: path.to_string_lossy().into_owned(),
-            source: source.to_string(),
-            language: "go".to_string(),
-            methods: Vec::new(),
-        }
-    }
-
-    fn symbol_id(index: &SemanticIndex, display_name: &str) -> SemanticSymbolId {
-        let matches = index
-            .symbols
-            .values()
-            .filter(|symbol| symbol.display_name.as_deref() == Some(display_name))
-            .map(|symbol| symbol.id.clone())
-            .collect::<Vec<_>>();
-        assert_eq!(
-            matches.len(),
-            1,
-            "expected exactly one compiler symbol named {display_name}: {matches:?}"
-        );
-        matches.into_iter().next().unwrap()
-    }
-
-    #[test]
-    fn bounded_merge_failure_is_processless_snapshot_assembly() {
-        let spec = pinned_indexer(SemanticIndexerKind::Go).unwrap();
-        let failure = go_snapshot_assembly_failure(spec, "document shards overlap");
-
-        assert_eq!(
-            failure.kind,
-            SemanticIndexerRunFailureKind::IncompleteOutput
-        );
-        assert_eq!(failure.phase, SemanticIndexerRunPhase::SnapshotAssembly);
-        assert!(failure.process.is_none());
-    }
-
-    #[tokio::test]
-    #[ignore = "requires the installed pinned Go semantic indexer"]
-    async fn live_multi_shard_go_index_preserves_calls_and_structural_implementations() {
-        let repository = tempfile::tempdir().unwrap();
-        fs::write(
-            repository.path().join("go.mod"),
-            "module example.test/sharded\n\ngo 1.22\n",
-        )
-        .unwrap();
-        let files = vec![
-            write_go_file(
-                repository.path(),
-                "contract/contract.go",
-                "package contract\n\ntype Speaker interface { Speak() string }\n\nfunc Invoke(s Speaker) string { return s.Speak() }\n",
-            ),
-            write_go_file(
-                repository.path(),
-                "impl/impl.go",
-                "package impl\n\ntype Dog struct{}\n\nfunc (Dog) Speak() string { return \"woof\" }\n",
-            ),
-            write_go_file(
-                repository.path(),
-                "app/app.go",
-                "package app\n\nimport (\n    \"example.test/sharded/contract\"\n    \"example.test/sharded/impl\"\n)\n\nfunc Run() string { return contract.Invoke(impl.Dog{}) }\n",
-            ),
-        ];
-        let spec = pinned_indexer(SemanticIndexerKind::Go).unwrap();
-        let store = SemanticIndexerStore::for_user().unwrap();
-        let installed = store.verify(spec).unwrap();
-        let recovery = SemanticIndexerRecoveryGuard::begin(repository.path()).unwrap();
-
-        let result = run_required_go_indexer_with_limits(
-            spec,
-            repository.path(),
-            &installed,
-            &files,
-            &files,
-            &recovery,
-            GoShardLimits {
-                target_source_bytes: u64::MAX,
-                max_packages: 1,
-            },
-        )
-        .await;
-        recovery.finish().unwrap();
-        let index = result.unwrap();
-
-        assert_eq!(
-            index.documents.keys().cloned().collect::<BTreeSet<_>>(),
-            BTreeSet::from([
-                RepositoryPath("app/app.go".to_string()),
-                RepositoryPath("contract/contract.go".to_string()),
-                RepositoryPath("impl/impl.go".to_string()),
-            ])
-        );
-        let contribution_count = |contribution| {
-            index
-                .provenance
-                .invocations
-                .iter()
-                .filter(|invocation| invocation.contribution == contribution)
-                .count()
-        };
-        assert_eq!(
-            contribution_count(SemanticIndexerContribution::BuildContextDiscovery),
-            1
-        );
-        assert_eq!(
-            contribution_count(SemanticIndexerContribution::PackageInventory),
-            1
-        );
-        assert_eq!(
-            contribution_count(SemanticIndexerContribution::DocumentShard),
-            3
-        );
-        assert_eq!(
-            contribution_count(SemanticIndexerContribution::ImplementationPair),
-            3
-        );
-
-        let run = symbol_id(&index, "Run");
-        let invoke = symbol_id(&index, "Invoke");
-        assert!(index.calls.iter().any(|call| {
-            call.caller == run
-                && call.callee
-                    == SemanticResolution::Resolved {
-                        value: invoke.clone(),
-                    }
-        }));
-
-        let dog = symbol_id(&index, "Dog");
-        let speaker = symbol_id(&index, "Speaker");
-        assert!(index.relationships.iter().any(|relationship| {
-            relationship.kind == SemanticRelationshipKind::Implementation
-                && relationship.source == dog
-                && relationship.target == speaker
-        }));
-    }
-}
+#[path = "semantic_indexer_go_runner_tests.rs"]
+mod tests;

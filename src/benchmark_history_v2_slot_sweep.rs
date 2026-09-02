@@ -58,19 +58,23 @@ pub fn recover_historical_v2_selected_slot_work(
     }
 
     let expected = expected_selected_slot_work(inputs.selection, inputs.payloads)?;
-    let semantic_roots = validate_selected_slot_work_layout(&work_root, &expected)?;
+    let layout = validate_selected_slot_work_layout(&work_root, &expected)?;
     let mut recovered_semantic_root_count = 0;
-    for root in &semantic_roots {
+    for root in &layout.semantic_roots {
         if crate::semantic_indexer_runner::recover_interrupted_semantic_indexing(root)
             .map_err(recovery_infrastructure)?
         {
             recovered_semantic_root_count += 1;
         }
     }
+    for root in &layout.semantic_progress_roots {
+        super::history_v2_semantic::recover_historical_v2_semantic_progress(root)
+            .map_err(recovery_infrastructure)?;
+    }
 
     Ok(HistoricalV2SelectedSlotWorkRecoverySummary {
         selected_slot_count: inputs.payloads.records.len(),
-        materialized_semantic_root_count: semantic_roots.len(),
+        materialized_semantic_root_count: layout.semantic_roots.len(),
         recovered_semantic_root_count,
     })
 }
@@ -101,8 +105,9 @@ fn expected_selected_slot_work(
 fn validate_selected_slot_work_layout(
     work_root: &Path,
     expected: &BTreeMap<String, BTreeSet<String>>,
-) -> Result<Vec<PathBuf>, HistoricalV2SlotStageError> {
+) -> Result<SelectedSlotWorkLayout, HistoricalV2SlotStageError> {
     let mut semantic_roots = Vec::new();
+    let mut semantic_progress_roots = Vec::new();
     for language_entry in read_plain_directory(work_root, "historical-v2 work root")? {
         let language = plain_entry_name(&language_entry, "historical-v2 language work root")?;
         let expected_slots = expected.get(&language).ok_or_else(|| {
@@ -144,10 +149,33 @@ fn validate_selected_slot_work_layout(
                     }
                 }
             }
+            let progress_root = slot_root.join("semantic-progress");
+            match fs::symlink_metadata(&progress_root) {
+                Ok(_) => semantic_progress_roots.push(exact_plain_child(
+                    &slot_root,
+                    &progress_root,
+                    "historical-v2 semantic progress root",
+                )?),
+                Err(error) if error.kind() == ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(recovery_infrastructure(format!(
+                        "failed to inspect historical-v2 semantic progress root: {error}"
+                    )));
+                }
+            }
         }
     }
     semantic_roots.sort();
-    Ok(semantic_roots)
+    semantic_progress_roots.sort();
+    Ok(SelectedSlotWorkLayout {
+        semantic_roots,
+        semantic_progress_roots,
+    })
+}
+
+struct SelectedSlotWorkLayout {
+    semantic_roots: Vec<PathBuf>,
+    semantic_progress_roots: Vec<PathBuf>,
 }
 
 fn read_plain_directory(

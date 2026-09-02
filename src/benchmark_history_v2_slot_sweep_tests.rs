@@ -293,6 +293,12 @@ fn selected_slot_work_recovery_removes_only_marker_proven_semantic_state() {
         fs::create_dir(root.join(".sniff-indexer-tmp")).unwrap();
         fs::write(root.join(".sniff-indexer-tmp/cache"), b"transient").unwrap();
     }
+    let semantic_progress = slot_root.join("semantic-progress");
+    for side in ["base", "patched"] {
+        fs::create_dir_all(semantic_progress.join(side)).unwrap();
+    }
+    let interrupted_snapshot = semantic_progress.join("base/snapshot.json.tmp");
+    fs::write(&interrupted_snapshot, b"partial").unwrap();
     fs::create_dir(slot_root.join("base-tested")).unwrap();
 
     let summary =
@@ -314,6 +320,8 @@ fn selected_slot_work_recovery_removes_only_marker_proven_semantic_state() {
         assert!(!root.join(".sniff-indexer-recovery.json").exists());
         assert!(!root.join(".sniff-indexer-tmp").exists());
     }
+    assert!(semantic_progress.is_dir());
+    assert!(!interrupted_snapshot.exists());
     assert!(slot_root.join("base-tested").is_dir());
 }
 

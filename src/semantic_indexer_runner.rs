@@ -28,8 +28,15 @@ mod repository_snapshot;
 #[path = "semantic_indexer_recovery.rs"]
 mod recovery;
 
+#[path = "semantic_indexer_progress.rs"]
+mod progress;
+
 pub(crate) use recovery::recover_interrupted_semantic_indexing;
 use recovery::{INDEXER_CACHE_DIR, INDEXER_TEMP_DIR, SemanticIndexerRecoveryGuard};
+
+pub(crate) fn recover_semantic_indexer_progress(progress_root: &Path) -> Result<(), String> {
+    progress::SemanticProgressStore::recover_existing(&progress_root.join("go"))
+}
 
 #[cfg(test)]
 pub(crate) fn install_test_semantic_recovery_marker(root: &Path) -> Result<(), String> {
@@ -101,6 +108,16 @@ struct TemporaryIndexerWorkspace {
 struct PreparedIndexerCommand {
     command: SandboxCommand,
     runtime_files: Vec<PathBuf>,
+}
+
+struct RequiredIndexerRunContext<'a> {
+    root: &'a Path,
+    files: &'a [FileRecord],
+    required_documents: &'a [FileRecord],
+    store: &'a SemanticIndexerStore,
+    recovery: &'a SemanticIndexerRecoveryGuard,
+    repository_content_sha256: &'a str,
+    progress_root: Option<&'a Path>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -177,6 +194,36 @@ pub(crate) async fn run_required_indexers_exhaustive_typed_scoped(
     files: &[FileRecord],
     required_documents: &[FileRecord],
 ) -> Result<SemanticIndexerBatchOutcome, SemanticIndexerRunFailure> {
+    run_required_indexers_exhaustive_typed_scoped_internal(
+        repository_root,
+        files,
+        required_documents,
+        None,
+    )
+    .await
+}
+
+pub(crate) async fn run_required_indexers_exhaustive_typed_scoped_resumable(
+    repository_root: &Path,
+    files: &[FileRecord],
+    required_documents: &[FileRecord],
+    progress_root: &Path,
+) -> Result<SemanticIndexerBatchOutcome, SemanticIndexerRunFailure> {
+    run_required_indexers_exhaustive_typed_scoped_internal(
+        repository_root,
+        files,
+        required_documents,
+        Some(progress_root),
+    )
+    .await
+}
+
+async fn run_required_indexers_exhaustive_typed_scoped_internal(
+    repository_root: &Path,
+    files: &[FileRecord],
+    required_documents: &[FileRecord],
+    progress_root: Option<&Path>,
+) -> Result<SemanticIndexerBatchOutcome, SemanticIndexerRunFailure> {
     let root =
         strip_windows_verbatim_prefix(fs::canonicalize(repository_root).map_err(|error| {
             failure(
@@ -224,10 +271,17 @@ pub(crate) async fn run_required_indexers_exhaustive_typed_scoped(
     })?;
     let mut indexes = BTreeMap::new();
     let mut failures = Vec::new();
+    let context = RequiredIndexerRunContext {
+        root: &root,
+        files,
+        required_documents,
+        store: &store,
+        recovery: &recovery,
+        repository_content_sha256: &repository_digest_before,
+        progress_root,
+    };
     for kind in required_indexers(files) {
-        match run_required_indexer_typed(&root, files, required_documents, &store, kind, &recovery)
-            .await
-        {
+        match run_required_indexer_typed(&context, kind).await {
             Ok(index) => {
                 indexes.insert(kind, index);
             }
@@ -289,7 +343,25 @@ pub(crate) async fn run_required_indexer_with_store_for_test(
             detail,
         )
     })?;
-    let run_result = run_required_indexer_typed(&root, files, files, store, kind, &recovery).await;
+    let repository_digest =
+        repository_snapshot::repository_content_digest(&root).map_err(|detail| {
+            failure(
+                SemanticIndexerRunFailureKind::InvalidInput,
+                SemanticIndexerRunPhase::IntegrityVerification,
+                Some(kind),
+                detail,
+            )
+        })?;
+    let context = RequiredIndexerRunContext {
+        root: &root,
+        files,
+        required_documents: files,
+        store,
+        recovery: &recovery,
+        repository_content_sha256: &repository_digest,
+        progress_root: None,
+    };
+    let run_result = run_required_indexer_typed(&context, kind).await;
     let cleanup_result = recovery.finish().map_err(|detail| {
         failure(
             SemanticIndexerRunFailureKind::InfrastructureFailed,
@@ -302,13 +374,18 @@ pub(crate) async fn run_required_indexer_with_store_for_test(
 }
 
 async fn run_required_indexer_typed(
-    root: &Path,
-    files: &[FileRecord],
-    required_documents: &[FileRecord],
-    store: &SemanticIndexerStore,
+    context: &RequiredIndexerRunContext<'_>,
     kind: SemanticIndexerKind,
-    recovery: &SemanticIndexerRecoveryGuard,
 ) -> Result<SemanticIndex, SemanticIndexerRunFailure> {
+    let RequiredIndexerRunContext {
+        root,
+        files,
+        required_documents,
+        store,
+        recovery,
+        repository_content_sha256,
+        progress_root,
+    } = *context;
     let spec = pinned_indexer(kind).map_err(|detail| {
         failure(
             SemanticIndexerRunFailureKind::InfrastructureUnavailable,
@@ -344,14 +421,16 @@ async fn run_required_indexer_typed(
         eprintln!("[sniff] semantic indexer start: {}", spec.display_name);
     }
     if kind == SemanticIndexerKind::Go {
-        let run_result = go_runner::run_required_go_indexer(
+        let run_result = go_runner::run_required_go_indexer(go_runner::GoIndexerRunInputs {
             spec,
             root,
-            &installed,
+            installed: &installed,
             files,
             required_documents,
             recovery,
-        )
+            repository_content_sha256,
+            progress_root,
+        })
         .await;
         let installation_result = store.verify(spec).map(|_| ()).map_err(|error| {
             failure(

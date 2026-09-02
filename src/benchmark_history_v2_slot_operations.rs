@@ -14,7 +14,7 @@ use super::{
     HistoricalV2SourceCensus, HistoricalV2StageArtifactKind, HistoricalV2StageResult,
     HistoricalV2TerminalExclusionReason, HistoricalV2TestMaterializedRoots, HistoricalV2TestRecipe,
     HistoricalV2TestRecipeOutcome, bind_historical_v2_assessment_identity,
-    census_historical_v2_semantics_typed, census_historical_v2_sources_typed,
+    census_historical_v2_semantics_typed_resumable, census_historical_v2_sources_typed,
     execute_historical_v2_identical_tests, materialize_historical_v2_repository_typed,
     materialize_historical_v2_test_snapshots_typed, prepare_historical_v2_identical_test_plan,
     prepare_historical_v2_test_recipe, qualify_historical_v2_assessment,
@@ -99,6 +99,10 @@ impl<'a, E: HistoricalV2RecoverableTestExecutor> HistoricalV2SlotOperations<'a, 
                     crate::semantic_indexer_runner::recover_interrupted_semantic_indexing(root)
                         .map_err(|detail| infrastructure(context.stage, detail))?;
                 }
+                super::history_v2_semantic::recover_historical_v2_semantic_progress(
+                    &self.semantic_progress_root(),
+                )
+                .map_err(|detail| infrastructure(context.stage, detail))?;
                 Ok(())
             }
             HistoricalV2SlotStage::IdenticalTests => {
@@ -224,10 +228,11 @@ impl<'a, E: HistoricalV2RecoverableTestExecutor> HistoricalV2SlotOperations<'a, 
     ) -> Result<HistoricalV2PreparedStage, HistoricalV2SlotStageError> {
         let materialization: HistoricalV2Materialization = artifact(context, 1)?;
         let source: HistoricalV2SourceCensus = artifact(context, 3)?;
-        match census_historical_v2_semantics_typed(
+        match census_historical_v2_semantics_typed_resumable(
             &materialization,
             &self.materialized_roots(),
             &source,
+            &self.semantic_progress_root(),
         )
         .await?
         {
@@ -446,6 +451,10 @@ impl<'a, E: HistoricalV2RecoverableTestExecutor> HistoricalV2SlotOperations<'a, 
         self.work_root
             .join(self.payload_inputs.language)
             .join(format!("slot-{:04}", self.payload_inputs.slot_number))
+    }
+
+    fn semantic_progress_root(&self) -> PathBuf {
+        self.slot_root().join("semantic-progress")
     }
 
     fn materialized_roots(&self) -> HistoricalV2MaterializedRoots {

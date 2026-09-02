@@ -78,6 +78,7 @@ async fn windows_compatible_rust_analyzer_emits_scip_inside_appcontainer() {
     let installed = InstalledIndexer {
         root: installation_root,
         entrypoint,
+        tree_sha256: "0".repeat(64),
     };
     let recovery = SemanticIndexerRecoveryGuard::begin(repository.path())
         .expect("start semantic recovery lifecycle");
