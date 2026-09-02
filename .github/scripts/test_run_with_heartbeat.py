@@ -85,7 +85,8 @@ class HeartbeatRunnerTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         match = re.search(
             r"processes=(\d+) rss_kib=(\d+) high_water_kib=(\d+) threads=(\d+) "
-            r"host_mem_total_kib=(\d+) host_mem_available_kib=(\d+)",
+            r"host_mem_total_kib=(\d+) host_mem_available_kib=(\d+) "
+            r"host_fs_total_kib=(\d+) host_fs_available_kib=(\d+)",
             result.stderr,
         )
         self.assertIsNotNone(match, result.stderr)
@@ -95,6 +96,7 @@ class HeartbeatRunnerTests(unittest.TestCase):
         self.assertGreaterEqual(values[2], values[1])
         self.assertGreaterEqual(values[3], 1)
         self.assertGreater(values[4], values[5])
+        self.assertGreater(values[6], values[7])
 
     @unittest.skipUnless(os.name == "posix", "POSIX signal-forwarding regression")
     def test_forwards_termination_and_returns_the_child_status(self) -> None:

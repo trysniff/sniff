@@ -1417,8 +1417,8 @@ class WorkflowContractTests(unittest.TestCase):
         )
 
         self.assertEqual(job_minutes, 30)
-        self.assertEqual(assessment_minutes, 8)
-        self.assertEqual(reserve_minutes, 22)
+        self.assertEqual(assessment_minutes, 5)
+        self.assertEqual(reserve_minutes, 25)
         self.assertEqual(heartbeat_seconds, 60)
         self.assertEqual(assessment_minutes + reserve_minutes, job_minutes)
         self.assertIn(

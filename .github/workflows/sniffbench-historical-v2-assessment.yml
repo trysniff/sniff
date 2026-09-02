@@ -62,13 +62,13 @@ jobs:
     timeout-minutes: 30
     env:
       ASSESSMENT_HEARTBEAT_SECONDS: "60"
-      ASSESSMENT_TIMEOUT_MINUTES: "8"
+      ASSESSMENT_TIMEOUT_MINUTES: "5"
       CARGO_INCREMENTAL: "0"
       CARGO_PROFILE_RELEASE_DEBUG: "0"
       FRAME_RUN_ID: ${{ inputs.frame_run_id }}
       MAX_NEW_SLOTS: ${{ inputs.max_new_slots }}
       MAX_NEW_STAGES_PER_SLOT: ${{ inputs.max_new_stages_per_slot }}
-      NON_ASSESSMENT_RESERVE_MINUTES: "22"
+      NON_ASSESSMENT_RESERVE_MINUTES: "25"
       RESUME_RUN_ID: ${{ inputs.resume_run_id }}
       TOOLS_RUN_ID: ${{ inputs.tools_run_id }}
       THROUGH_STAGE: ${{ inputs.through_stage }}
