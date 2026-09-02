@@ -1,0 +1,55 @@
+name: SniffBench historical-v2 tools
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sniffbench-historical-v2-tools-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  build-tools:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_RELEASE_DEBUG: "0"
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
+        with:
+          toolchain: "1.96.0"
+      - name: Build the exact assessment tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --release --locked --features sniffbench-frame \
+            --bin sniff --bin sniffbench-frame
+
+      - name: Seal the exact assessment tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="${RUNNER_TEMP}/historical-v2-assessment-tools"
+          mkdir "$root"
+          install -m 0755 target/release/sniff target/release/sniffbench-frame "$root/"
+          printf '%s\n' "$GITHUB_SHA" > "$root/collector-sha256"
+          (
+            cd "$root"
+            sha256sum collector-sha256 sniff sniffbench-frame > SHA256SUMS
+          )
+
+      - name: Upload the exact assessment tools
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: historical-v2-assessment-tools-${{ github.sha }}
+          path: ${{ runner.temp }}/historical-v2-assessment-tools
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0

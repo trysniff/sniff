@@ -12,6 +12,10 @@ on:
         description: "Prior assessment run ID whose immutable state should be resumed"
         required: false
         type: string
+      tools_run_id:
+        description: "Successful exact-commit historical-v2 tools workflow run ID"
+        required: true
+        type: string
       max_new_slots:
         description: "Maximum untouched selected slots to admit"
         required: true
@@ -52,52 +56,8 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  build-tools:
-    if: github.ref == 'refs/heads/main'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 45
-    env:
-      CARGO_INCREMENTAL: "0"
-      CARGO_PROFILE_RELEASE_DEBUG: "0"
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        with:
-          persist-credentials: false
-      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
-        with:
-          toolchain: "1.96.0"
-      - name: Build the exact assessment tools
-        shell: bash
-        run: |
-          set -euo pipefail
-          cargo build --release --locked --features sniffbench-frame \
-            --bin sniff --bin sniffbench-frame
-
-      - name: Seal the exact assessment tools
-        shell: bash
-        run: |
-          set -euo pipefail
-          root="${RUNNER_TEMP}/historical-v2-assessment-tools"
-          mkdir "$root"
-          install -m 0755 target/release/sniff target/release/sniffbench-frame "$root/"
-          printf '%s\n' "$GITHUB_SHA" > "$root/collector-sha256"
-          (
-            cd "$root"
-            sha256sum collector-sha256 sniff sniffbench-frame > SHA256SUMS
-          )
-
-      - name: Upload the exact assessment tools
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: historical-v2-assessment-tools-${{ github.sha }}
-          path: ${{ runner.temp }}/historical-v2-assessment-tools
-          if-no-files-found: error
-          retention-days: 7
-          compression-level: 0
-
   assess:
     if: github.ref == 'refs/heads/main'
-    needs: build-tools
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
@@ -110,6 +70,7 @@ jobs:
       MAX_NEW_STAGES_PER_SLOT: ${{ inputs.max_new_stages_per_slot }}
       NON_ASSESSMENT_RESERVE_MINUTES: "17"
       RESUME_RUN_ID: ${{ inputs.resume_run_id }}
+      TOOLS_RUN_ID: ${{ inputs.tools_run_id }}
       THROUGH_STAGE: ${{ inputs.through_stage }}
       COLLECTOR_MIGRATION: ${{ inputs.collector_migration }}
     steps:
@@ -119,12 +80,6 @@ jobs:
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.13.15"
-      - name: Download the exact assessment tools
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
-        with:
-          name: historical-v2-assessment-tools-${{ github.sha }}
-          path: ${{ runner.temp }}/historical-v2-assessment-tools-download
-
       - name: Validate the bounded dispatch
         shell: bash
         run: |
@@ -158,6 +113,14 @@ jobs:
             echo 'an assessment run cannot resume itself' >&2
             exit 1
           fi
+          if [[ ! "$TOOLS_RUN_ID" =~ ^[1-9][0-9]*$ ]]; then
+            echo 'tools_run_id must be an unsigned GitHub Actions run ID' >&2
+            exit 1
+          fi
+          if [[ "$TOOLS_RUN_ID" == "$GITHUB_RUN_ID" ]]; then
+            echo 'an assessment run cannot obtain tools from itself' >&2
+            exit 1
+          fi
           if [[ -n "$COLLECTOR_MIGRATION" ]]; then
             if [[ -z "$RESUME_RUN_ID" ]]; then
               echo 'collector_migration requires resume_run_id' >&2
@@ -180,6 +143,41 @@ jobs:
               exit 1
             fi
           done
+
+      - name: Validate exact assessment tools provenance
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          run_json="${RUNNER_TEMP}/historical-v2-assessment-tools-run.json"
+          artifacts_json="${RUNNER_TEMP}/historical-v2-assessment-tools-artifacts.json"
+          provenance="${RUNNER_TEMP}/historical-v2-assessment-tools-provenance.json"
+          environment="${RUNNER_TEMP}/historical-v2-assessment-tools.env"
+          for path in "$run_json" "$artifacts_json" "$provenance" "$environment"; do
+            test ! -e "$path"
+          done
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${TOOLS_RUN_ID}" > "$run_json"
+          gh api \
+            "repos/${GITHUB_REPOSITORY}/actions/runs/${TOOLS_RUN_ID}/artifacts?per_page=100" \
+            > "$artifacts_json"
+          python3 .github/scripts/historical_v2_assessment_transport.py \
+            validate-tools-provenance \
+            "$run_json" "$artifacts_json" "$GITHUB_REPOSITORY" "$GITHUB_SHA" \
+            "$TOOLS_RUN_ID" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$provenance" \
+            > "$environment"
+          test -f "$environment" && test ! -L "$environment"
+          cat "$environment" >> "$GITHUB_ENV"
+
+      - name: Download the exact assessment tools
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          artifact-ids: ${{ env.TOOLS_ARTIFACT_ID }}
+          path: ${{ runner.temp }}/historical-v2-assessment-tools-download
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.tools_run_id }}
+          digest-mismatch: error
 
       - name: Validate the frozen frame provenance
         if: inputs.resume_run_id == ''
@@ -340,6 +338,15 @@ jobs:
             printf 'HARNESS_ROOT=%s\n' "$harness_root"
             printf 'SNAPSHOT_ARCHIVE=%s\n' "$archive"
           } >> "$GITHUB_ENV"
+
+          tools_provenance="${RUNNER_TEMP}/historical-v2-assessment-tools-provenance.json"
+          if [[ ! -f "$tools_provenance" || -L "$tools_provenance" ]]; then
+            echo 'assessment tools provenance is not a plain file' >&2
+            exit 1
+          fi
+          tools_provenance_target="$transport_root/tools-provenance-${GITHUB_RUN_ID}.json"
+          test ! -e "$tools_provenance_target"
+          install -m 0644 "$tools_provenance" "$tools_provenance_target"
 
       - name: Validate the frozen frame and transport
         shell: bash

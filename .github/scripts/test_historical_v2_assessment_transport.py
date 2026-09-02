@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import importlib.util
 import io
@@ -17,11 +18,204 @@ MODULE_PATH = pathlib.Path(__file__).with_name("historical_v2_assessment_transpo
 WORKFLOW_PATH = pathlib.Path(__file__).parents[1].joinpath(
     "workflows", "sniffbench-historical-v2-assessment.yml"
 )
+TOOLS_WORKFLOW_PATH = pathlib.Path(__file__).parents[1].joinpath(
+    "workflows", "sniffbench-historical-v2-tools.yml"
+)
 SPEC = importlib.util.spec_from_file_location("assessment_transport", MODULE_PATH)
 if SPEC is None or SPEC.loader is None:
     raise RuntimeError("could not load assessment transport helper")
 transport = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(transport)
+
+
+class ToolsProvenanceTests(unittest.TestCase):
+    HEAD_SHA = "a" * 40
+    REPOSITORY = "trysniff/sniff"
+    TOOLS_RUN_ID = 123456
+    ASSESSMENT_RUN_ID = 123789
+
+    @classmethod
+    def _run(cls) -> dict:
+        return {
+            "id": cls.TOOLS_RUN_ID,
+            "event": "workflow_dispatch",
+            "head_branch": "main",
+            "head_repository": {"full_name": cls.REPOSITORY},
+            "path": transport.TOOLS_WORKFLOW,
+            "status": "completed",
+            "conclusion": "success",
+            "head_sha": cls.HEAD_SHA,
+            "run_attempt": 1,
+        }
+
+    @classmethod
+    def _artifacts(cls) -> dict:
+        return {
+            "total_count": 1,
+            "artifacts": [
+                {
+                    "id": 987654,
+                    "name": f"{transport.TOOLS_ARTIFACT_PREFIX}{cls.HEAD_SHA}",
+                    "expired": False,
+                    "size_in_bytes": 69_709_459,
+                    "digest": f"sha256:{'b' * 64}",
+                }
+            ],
+        }
+
+    @staticmethod
+    def _write(path: pathlib.Path, value: object) -> None:
+        path.write_text(json.dumps(value), encoding="utf-8")
+
+    def test_exact_tools_run_writes_canonical_create_new_provenance(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            run_path = root.joinpath("run.json")
+            artifacts_path = root.joinpath("artifacts.json")
+            output = root.joinpath("provenance.json")
+            self._write(run_path, self._run())
+            self._write(artifacts_path, self._artifacts())
+
+            result = transport.validate_tools_provenance(
+                run_path,
+                artifacts_path,
+                self.REPOSITORY,
+                self.HEAD_SHA,
+                self.TOOLS_RUN_ID,
+                self.ASSESSMENT_RUN_ID,
+                1,
+                output,
+            )
+
+            self.assertEqual(json.loads(output.read_text(encoding="utf-8")), result)
+            self.assertEqual(result["schema"], transport.TOOLS_PROVENANCE_SCHEMA)
+            self.assertEqual(result["artifact_id"], 987654)
+            self.assertEqual(result["assessment_run_id"], self.ASSESSMENT_RUN_ID)
+            self.assertEqual(
+                output.read_text(encoding="utf-8"),
+                json.dumps(result, sort_keys=True, separators=(",", ":")) + "\n",
+            )
+            with self.assertRaises(ValueError):
+                transport.validate_tools_provenance(
+                    run_path,
+                    artifacts_path,
+                    self.REPOSITORY,
+                    self.HEAD_SHA,
+                    self.TOOLS_RUN_ID,
+                    self.ASSESSMENT_RUN_ID,
+                    1,
+                    output,
+                )
+
+    def test_tools_run_or_artifact_drift_is_rejected(self) -> None:
+        cases = (
+            ("run-id", lambda run, _: run.__setitem__("id", 999)),
+            ("event", lambda run, _: run.__setitem__("event", "push")),
+            ("branch", lambda run, _: run.__setitem__("head_branch", "other")),
+            (
+                "repository",
+                lambda run, _: run["head_repository"].__setitem__(
+                    "full_name", "other/sniff"
+                ),
+            ),
+            ("workflow", lambda run, _: run.__setitem__("path", "other.yml")),
+            ("status", lambda run, _: run.__setitem__("status", "in_progress")),
+            ("conclusion", lambda run, _: run.__setitem__("conclusion", "failure")),
+            ("head-sha", lambda run, _: run.__setitem__("head_sha", "c" * 40)),
+            ("attempt", lambda run, _: run.__setitem__("run_attempt", 2)),
+            ("count", lambda _, artifacts: artifacts.__setitem__("total_count", 2)),
+            ("extra", lambda _, artifacts: artifacts["artifacts"].append({})),
+            (
+                "name",
+                lambda _, artifacts: artifacts["artifacts"][0].__setitem__(
+                    "name", "replacement"
+                ),
+            ),
+            (
+                "expired",
+                lambda _, artifacts: artifacts["artifacts"][0].__setitem__(
+                    "expired", True
+                ),
+            ),
+            (
+                "non-boolean-expiry",
+                lambda _, artifacts: artifacts["artifacts"][0].__setitem__(
+                    "expired", 0
+                ),
+            ),
+            ("boolean-count", lambda _, artifacts: artifacts.__setitem__("total_count", True)),
+            (
+                "size",
+                lambda _, artifacts: artifacts["artifacts"][0].__setitem__(
+                    "size_in_bytes", transport.TOOLS_ARTIFACT_MAX_BYTES + 1
+                ),
+            ),
+            (
+                "digest",
+                lambda _, artifacts: artifacts["artifacts"][0].__setitem__(
+                    "digest", "sha256:not-a-digest"
+                ),
+            ),
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            for name, mutate in cases:
+                run = copy.deepcopy(self._run())
+                artifacts = copy.deepcopy(self._artifacts())
+                mutate(run, artifacts)
+                run_path = root.joinpath(f"{name}-run.json")
+                artifacts_path = root.joinpath(f"{name}-artifacts.json")
+                output = root.joinpath(f"{name}-provenance.json")
+                self._write(run_path, run)
+                self._write(artifacts_path, artifacts)
+                with self.subTest(name=name), self.assertRaises(ValueError):
+                    transport.validate_tools_provenance(
+                        run_path,
+                        artifacts_path,
+                        self.REPOSITORY,
+                        self.HEAD_SHA,
+                        self.TOOLS_RUN_ID,
+                        self.ASSESSMENT_RUN_ID,
+                        1,
+                        output,
+                    )
+                self.assertFalse(output.exists())
+
+    def test_tools_provenance_cli_emits_only_validated_environment(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            run_path = root.joinpath("run.json")
+            artifacts_path = root.joinpath("artifacts.json")
+            output = root.joinpath("provenance.json")
+            self._write(run_path, self._run())
+            self._write(artifacts_path, self._artifacts())
+            stdout = io.StringIO()
+
+            with mock.patch("sys.stdout", stdout):
+                status = transport.main(
+                    [
+                        "validate-tools-provenance",
+                        str(run_path),
+                        str(artifacts_path),
+                        self.REPOSITORY,
+                        self.HEAD_SHA,
+                        str(self.TOOLS_RUN_ID),
+                        str(self.ASSESSMENT_RUN_ID),
+                        "1",
+                        str(output),
+                    ]
+                )
+
+            self.assertEqual(status, 0)
+            self.assertEqual(
+                stdout.getvalue().splitlines(),
+                [
+                    "TOOLS_ARTIFACT_ID=987654",
+                    f"TOOLS_ARTIFACT_DIGEST=sha256:{'b' * 64}",
+                    "TOOLS_ARTIFACT_SIZE=69709459",
+                ],
+            )
+            self.assertTrue(output.is_file())
 
 
 class ArchiveTests(unittest.TestCase):
@@ -1243,45 +1437,94 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("--linux-proc-stats", workflow)
         self.assertNotIn("--kill-after=60s 300m", workflow)
 
-    def test_exact_collector_tools_are_built_outside_the_assessment_job(self) -> None:
+    def test_exact_collector_tools_are_built_in_a_prior_workflow_run(self) -> None:
         workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
-        build = workflow.index("  build-tools:\n")
-        assess = workflow.index("  assess:\n")
-        build_job = workflow[build:assess]
-        assess_job = workflow[assess:]
+        tools_workflow = TOOLS_WORKFLOW_PATH.read_text(encoding="utf-8")
+        transport_source = MODULE_PATH.read_text(encoding="utf-8")
+        tools_input = workflow[
+            workflow.index("      tools_run_id:\n") : workflow.index(
+                "      max_new_slots:\n"
+            )
+        ]
 
-        self.assertIn("    needs: build-tools\n", assess_job)
-        self.assertIn("cargo build --release --locked --features sniffbench-frame", build_job)
-        self.assertNotIn("run-slots", build_job)
+        self.assertNotIn("  build-tools:\n", workflow)
+        self.assertNotIn("    needs: build-tools\n", workflow)
+        self.assertIn("permissions:\n  actions: read\n  contents: read\n", workflow)
+        self.assertIn("required: true", tools_input)
+        self.assertIn("TOOLS_RUN_ID: ${{ inputs.tools_run_id }}", workflow)
         self.assertIn(
-            "name: historical-v2-assessment-tools-${{ github.sha }}", build_job
+            "cargo build --release --locked --features sniffbench-frame",
+            tools_workflow,
+        )
+        self.assertNotIn("run-slots", tools_workflow)
+        self.assertIn(
+            "name: historical-v2-assessment-tools-${{ github.sha }}",
+            tools_workflow,
         )
         self.assertIn(
-            "name: historical-v2-assessment-tools-${{ github.sha }}", assess_job
+            "validate-tools-provenance",
+            workflow,
         )
+        for required in (
+            'gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${TOOLS_RUN_ID}"',
+            'actions/runs/${TOOLS_RUN_ID}/artifacts?per_page=100',
+            'artifact-ids: ${{ env.TOOLS_ARTIFACT_ID }}',
+            'run-id: ${{ inputs.tools_run_id }}',
+            'digest-mismatch: error',
+            'tools_provenance_target="$transport_root/tools-provenance-${GITHUB_RUN_ID}.json"',
+        ):
+            self.assertIn(required, workflow)
+        for required in (
+            '.github/workflows/sniffbench-historical-v2-tools.yml',
+            'sniffbench-historical-v2-tools-provenance-v1',
+            'TOOLS_ARTIFACT_MAX_BYTES = 128 * 1024 * 1024',
+            'run.get("run_attempt"), "tools workflow run attempt"',
+            'tools workflow must publish exactly one artifact',
+            'artifact.get("expired") is not False',
+            'r"sha256:[0-9a-f]{64}"',
+        ):
+            self.assertIn(required, transport_source)
+        self.assertIn("github-token: ${{ github.token }}", workflow)
+        self.assertIn("repository: ${{ github.repository }}", workflow)
         self.assertIn(
-            'if [[ "$COLLECTOR_SHA" == "$GITHUB_SHA" ]]; then', assess_job
+            'if [[ "$COLLECTOR_SHA" == "$GITHUB_SHA" ]]; then', workflow
         )
         self.assertIn(
             'test "$(cat "$tools/collector-sha256")" = "$COLLECTOR_SHA"',
-            assess_job,
+            workflow,
         )
-        self.assertIn("sha256sum --check", assess_job)
+        self.assertIn("sha256sum --check", workflow)
         self.assertIn(
-            'find "$tools" -mindepth 1 -maxdepth 1 -printf', assess_job
+            'find "$tools" -mindepth 1 -maxdepth 1 -printf', workflow
         )
         self.assertNotIn(
-            'find "$tools" -mindepth 1 -maxdepth 1 -type f', assess_job
+            'find "$tools" -mindepth 1 -maxdepth 1 -type f', workflow
         )
         self.assertIn(
             "sha256sum collector-sha256 sniff sniffbench-frame > SHA256SUMS",
-            build_job,
+            tools_workflow,
         )
-        self.assertIn('test -f "$tools/$name" && test ! -L "$tools/$name"', assess_job)
-        self.assertIn("cargo build --release --locked --features sniffbench-frame", assess_job)
+        self.assertIn(
+            'test -f "$tools/$name" && test ! -L "$tools/$name"', workflow
+        )
+        self.assertIn(
+            "cargo build --release --locked --features sniffbench-frame", workflow
+        )
         self.assertLess(
-            assess_job.index("Materialize the frozen assessment tools"),
-            assess_job.index("Install every pinned semantic indexer"),
+            workflow.index("Validate exact assessment tools provenance"),
+            workflow.index("Download the exact assessment tools"),
+        )
+        self.assertLess(
+            workflow.index("Initialize or restore assessment roots"),
+            workflow.index("tools_provenance_target="),
+        )
+        self.assertLess(
+            workflow.index("tools_provenance_target="),
+            workflow.index("Validate the frozen frame and transport"),
+        )
+        self.assertLess(
+            workflow.index("Materialize the frozen assessment tools"),
+            workflow.index("Install every pinned semantic indexer"),
         )
 
     def test_marker_recovery_precedes_snapshot_archival(self) -> None:
