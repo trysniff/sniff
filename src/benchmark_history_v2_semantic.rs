@@ -2,7 +2,9 @@ use super::history_v2_semantic_exclusion::{
     RETAINED_EVIDENCE_LIMIT, seal_semantic_census_exclusion,
 };
 use super::intentional_boundary_inventory::read_intentional_boundary_git_blob;
-use super::intentional_boundary_semantic::{flatten_method, flatten_symbol, summarize_index};
+use super::intentional_boundary_semantic::{
+    SemanticProjectionIndex, flatten_method, flatten_symbol, summarize_index,
+};
 use super::{
     HISTORICAL_V2_SEMANTIC_CENSUS_SCHEMA_VERSION, HistoricalV2Materialization,
     HistoricalV2MaterializedRoots, HistoricalV2PublicSymbol, HistoricalV2SemanticCensus,
@@ -270,6 +272,7 @@ fn build_semantic_snapshot(
             )?;
         }
         let join = join_methods(root, &indexed_files, index)?;
+        let projection = SemanticProjectionIndex::new(index);
         for binding in join.bindings.values() {
             let key = (
                 binding.method.file.0.clone(),
@@ -288,6 +291,7 @@ fn build_semantic_snapshot(
                 &expected,
                 binding,
                 index,
+                &projection,
             )?);
         }
         public_symbols.extend(

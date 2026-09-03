@@ -1,10 +1,204 @@
 use super::*;
 
+pub(in crate::benchmark::release) struct SemanticProjectionIndex<'a> {
+    occurrences: BTreeMap<
+        SemanticSymbolId,
+        Vec<(
+            &'a crate::semantic_index::RepositoryPath,
+            &'a crate::semantic_index::SemanticOccurrence,
+        )>,
+    >,
+    calls: BTreeMap<SemanticSymbolId, Vec<&'a crate::semantic_index::SemanticCallEdge>>,
+    relationships: BTreeMap<SemanticSymbolId, Vec<&'a crate::semantic_index::SemanticRelationship>>,
+    imports: BTreeMap<SemanticSymbolId, Vec<&'a crate::semantic_index::SemanticImportEdge>>,
+    test_relationships:
+        BTreeMap<SemanticSymbolId, Vec<&'a crate::semantic_index::SemanticTestRelationship>>,
+}
+
+impl<'a> SemanticProjectionIndex<'a> {
+    pub(in crate::benchmark::release) fn new(index: &'a SemanticIndex) -> Self {
+        let mut projection = Self {
+            occurrences: BTreeMap::new(),
+            calls: BTreeMap::new(),
+            relationships: BTreeMap::new(),
+            imports: BTreeMap::new(),
+            test_relationships: BTreeMap::new(),
+        };
+        for document in index.documents.values() {
+            for occurrence in &document.occurrences {
+                let Some(symbol) = &occurrence.symbol else {
+                    continue;
+                };
+                projection
+                    .occurrences
+                    .entry(symbol.clone())
+                    .or_default()
+                    .push((&document.path, occurrence));
+            }
+        }
+        for call in &index.calls {
+            projection
+                .calls
+                .entry(call.caller.clone())
+                .or_default()
+                .push(call);
+            if let SemanticResolution::Resolved { value } = &call.callee
+                && value != &call.caller
+            {
+                projection
+                    .calls
+                    .entry(value.clone())
+                    .or_default()
+                    .push(call);
+            }
+        }
+        for relationship in &index.relationships {
+            projection
+                .relationships
+                .entry(relationship.source.clone())
+                .or_default()
+                .push(relationship);
+            if relationship.target != relationship.source {
+                projection
+                    .relationships
+                    .entry(relationship.target.clone())
+                    .or_default()
+                    .push(relationship);
+            }
+        }
+        for import in &index.imports {
+            if let SemanticResolution::Resolved { value } = &import.target {
+                projection
+                    .imports
+                    .entry(value.clone())
+                    .or_default()
+                    .push(import);
+            }
+        }
+        for relationship in &index.test_relationships {
+            projection
+                .test_relationships
+                .entry(relationship.test.clone())
+                .or_default()
+                .push(relationship);
+            if let SemanticResolution::Resolved { value } = &relationship.production
+                && value != &relationship.test
+            {
+                projection
+                    .test_relationships
+                    .entry(value.clone())
+                    .or_default()
+                    .push(relationship);
+            }
+        }
+        projection
+    }
+
+    fn occurrences_for(
+        &self,
+        symbol: &SemanticSymbolId,
+    ) -> Vec<IntentionalBoundarySemanticOccurrenceFacts> {
+        self.occurrences
+            .get(symbol)
+            .into_iter()
+            .flatten()
+            .map(
+                |(document, occurrence)| IntentionalBoundarySemanticOccurrenceFacts {
+                    location: flatten_range(&document.0, &occurrence.range),
+                    roles: occurrence
+                        .roles
+                        .iter()
+                        .copied()
+                        .map(occurrence_role)
+                        .collect(),
+                    override_documentation: occurrence.override_documentation.clone(),
+                },
+            )
+            .collect()
+    }
+
+    fn calls_for(&self, symbol: &SemanticSymbolId) -> Vec<IntentionalBoundarySemanticCallFacts> {
+        self.calls
+            .get(symbol)
+            .into_iter()
+            .flatten()
+            .map(|call| IntentionalBoundarySemanticCallFacts {
+                caller: call.caller.0.clone(),
+                callee: flatten_symbol_resolution(&call.callee),
+                callsite: flatten_location(&call.callsite),
+                dispatch: dispatch(call.dispatch),
+            })
+            .collect()
+    }
+
+    fn relationships_for(
+        &self,
+        symbol: &SemanticSymbolId,
+    ) -> Vec<IntentionalBoundarySemanticRelationshipFacts> {
+        self.relationships
+            .get(symbol)
+            .into_iter()
+            .flatten()
+            .map(
+                |relationship| IntentionalBoundarySemanticRelationshipFacts {
+                    source: relationship.source.0.clone(),
+                    target: relationship.target.0.clone(),
+                    kind: relationship_kind(relationship.kind),
+                },
+            )
+            .collect()
+    }
+
+    fn imports_for(
+        &self,
+        symbol: &SemanticSymbolId,
+    ) -> Vec<IntentionalBoundarySemanticImportFacts> {
+        self.imports
+            .get(symbol)
+            .into_iter()
+            .flatten()
+            .map(|import| IntentionalBoundarySemanticImportFacts {
+                location: flatten_range(&import.document.0, &import.range),
+                target: flatten_symbol_resolution(&import.target),
+                reexport: flatten_bool_resolution(&import.reexport),
+            })
+            .collect()
+    }
+
+    fn test_relationships_for(
+        &self,
+        symbol: &SemanticSymbolId,
+    ) -> Vec<IntentionalBoundarySemanticTestFacts> {
+        self.test_relationships
+            .get(symbol)
+            .into_iter()
+            .flatten()
+            .map(|relationship| IntentionalBoundarySemanticTestFacts {
+                test_symbol: relationship.test.0.clone(),
+                production: flatten_symbol_resolution(&relationship.production),
+                kind: test_kind(relationship.kind),
+            })
+            .collect()
+    }
+}
+
+#[cfg(test)]
+#[path = "benchmark_intentional_boundary_semantic_projection_reference.rs"]
+mod reference;
+
+#[cfg(test)]
+impl SemanticProjectionIndex<'_> {
+    pub(super) fn assert_matches_reference(&self, index: &SemanticIndex) {
+        reference::assert_matches_reference(self, index);
+    }
+}
+
 pub(in crate::benchmark::release) fn flatten_method(
     indexer: IntentionalBoundaryIndexerKind,
     expected: &IntentionalBoundaryMethodCensusEntry,
     binding: &crate::semantic_method_join::SemanticMethodBinding,
     index: &SemanticIndex,
+    projection: &SemanticProjectionIndex<'_>,
 ) -> Result<IntentionalBoundarySemanticMethod, String> {
     let (status, symbol_id) = match (&binding.coverage, &binding.symbol) {
         (SemanticMethodCoverage::CompilerExcluded { reason }, _) => (
@@ -45,19 +239,19 @@ pub(in crate::benchmark::release) fn flatten_method(
         }
     };
     let occurrences = symbol_id
-        .map(|symbol| flatten_occurrences(index, symbol))
+        .map(|symbol| projection.occurrences_for(symbol))
         .unwrap_or_default();
     let calls = symbol_id
-        .map(|symbol| flatten_calls(index, symbol))
+        .map(|symbol| projection.calls_for(symbol))
         .unwrap_or_default();
     let relationships = symbol_id
-        .map(|symbol| flatten_relationships(index, symbol))
+        .map(|symbol| projection.relationships_for(symbol))
         .unwrap_or_default();
     let imports = symbol_id
-        .map(|symbol| flatten_imports(index, symbol))
+        .map(|symbol| projection.imports_for(symbol))
         .unwrap_or_default();
     let test_relationships = symbol_id
-        .map(|symbol| flatten_test_relationships(index, symbol))
+        .map(|symbol| projection.test_relationships_for(symbol))
         .unwrap_or_default();
     Ok(IntentionalBoundarySemanticMethod {
         parser_unit_id: expected.parser_unit_id.clone(),
@@ -107,107 +301,6 @@ pub(in crate::benchmark::release) fn flatten_symbol(
         origin: origin(symbol.origin),
         ambiguity_notes: symbol.ambiguity_notes.clone(),
     }
-}
-
-fn flatten_occurrences(
-    index: &SemanticIndex,
-    symbol: &SemanticSymbolId,
-) -> Vec<IntentionalBoundarySemanticOccurrenceFacts> {
-    index
-        .documents
-        .values()
-        .flat_map(|document| {
-            document
-                .occurrences
-                .iter()
-                .filter(|occurrence| occurrence.symbol.as_ref() == Some(symbol))
-                .map(|occurrence| IntentionalBoundarySemanticOccurrenceFacts {
-                    location: flatten_range(&document.path.0, &occurrence.range),
-                    roles: occurrence
-                        .roles
-                        .iter()
-                        .copied()
-                        .map(occurrence_role)
-                        .collect(),
-                    override_documentation: occurrence.override_documentation.clone(),
-                })
-        })
-        .collect()
-}
-
-fn flatten_calls(
-    index: &SemanticIndex,
-    symbol: &SemanticSymbolId,
-) -> Vec<IntentionalBoundarySemanticCallFacts> {
-    index
-        .calls
-        .iter()
-        .filter(|call| {
-            call.caller == *symbol
-                || matches!(&call.callee, SemanticResolution::Resolved { value } if value == symbol)
-        })
-        .map(|call| IntentionalBoundarySemanticCallFacts {
-            caller: call.caller.0.clone(),
-            callee: flatten_symbol_resolution(&call.callee),
-            callsite: flatten_location(&call.callsite),
-            dispatch: dispatch(call.dispatch),
-        })
-        .collect()
-}
-
-fn flatten_relationships(
-    index: &SemanticIndex,
-    symbol: &SemanticSymbolId,
-) -> Vec<IntentionalBoundarySemanticRelationshipFacts> {
-    index
-        .relationships
-        .iter()
-        .filter(|relationship| relationship.source == *symbol || relationship.target == *symbol)
-        .map(
-            |relationship| IntentionalBoundarySemanticRelationshipFacts {
-                source: relationship.source.0.clone(),
-                target: relationship.target.0.clone(),
-                kind: relationship_kind(relationship.kind),
-            },
-        )
-        .collect()
-}
-
-fn flatten_imports(
-    index: &SemanticIndex,
-    symbol: &SemanticSymbolId,
-) -> Vec<IntentionalBoundarySemanticImportFacts> {
-    index
-        .imports
-        .iter()
-        .filter(|import| {
-            matches!(&import.target, SemanticResolution::Resolved { value } if value == symbol)
-        })
-        .map(|import| IntentionalBoundarySemanticImportFacts {
-            location: flatten_range(&import.document.0, &import.range),
-            target: flatten_symbol_resolution(&import.target),
-            reexport: flatten_bool_resolution(&import.reexport),
-        })
-        .collect()
-}
-
-fn flatten_test_relationships(
-    index: &SemanticIndex,
-    symbol: &SemanticSymbolId,
-) -> Vec<IntentionalBoundarySemanticTestFacts> {
-    index
-        .test_relationships
-        .iter()
-        .filter(|relationship| {
-            relationship.test == *symbol
-                || matches!(&relationship.production, SemanticResolution::Resolved { value } if value == symbol)
-        })
-        .map(|relationship| IntentionalBoundarySemanticTestFacts {
-            test_symbol: relationship.test.0.clone(),
-            production: flatten_symbol_resolution(&relationship.production),
-            kind: test_kind(relationship.kind),
-        })
-        .collect()
 }
 
 pub(in crate::benchmark::release) fn summarize_index(
