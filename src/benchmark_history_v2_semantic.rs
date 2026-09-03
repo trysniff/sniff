@@ -1,7 +1,7 @@
 use super::history_v2_semantic_exclusion::{
     RETAINED_EVIDENCE_LIMIT, seal_semantic_census_exclusion,
 };
-use super::intentional_boundary_inventory::read_intentional_boundary_git_blob;
+use super::intentional_boundary_inventory::read_intentional_boundary_git_blobs;
 use super::intentional_boundary_semantic::{
     SemanticProjectionIndex, flatten_method, flatten_symbol, summarize_index,
 };
@@ -67,9 +67,6 @@ struct HistoricalV2SemanticSnapshotInputs<'a> {
     side: HistoricalV2SemanticSnapshotSide,
     root: &'a Path,
     source: &'a HistoricalV2SourceSnapshotCensus,
-    all_files: &'a [FileRecord],
-    scoped_files: &'a [FileRecord],
-    required_documents: &'a [FileRecord],
     required_paths: &'a BTreeSet<String>,
 }
 
@@ -439,11 +436,17 @@ fn snapshot_file_records(
     source: &HistoricalV2SourceSnapshotCensus,
 ) -> Result<Vec<FileRecord>, String> {
     let mut records = Vec::with_capacity(source.source_files.len());
-    for file in &source.source_files {
-        if file.semantic_coverage != HistoricalV2SourceSemanticCoverage::Required {
-            continue;
-        }
-        let bytes = read_intentional_boundary_git_blob(root, &file.object_id, file.byte_length)?;
+    let required_files = source
+        .source_files
+        .iter()
+        .filter(|file| file.semantic_coverage == HistoricalV2SourceSemanticCoverage::Required)
+        .collect::<Vec<_>>();
+    let requests = required_files
+        .iter()
+        .map(|file| (file.object_id.as_str(), file.byte_length))
+        .collect::<Vec<_>>();
+    let blobs = read_intentional_boundary_git_blobs(root, &requests)?;
+    for (file, bytes) in required_files.into_iter().zip(blobs) {
         if sha256(&bytes) != file.source_sha256 {
             return Err(format!(
                 "historical-v2 semantic source bytes changed: {}",

@@ -1,7 +1,7 @@
 use super::{
     BoundaryGitEntryKind, IntentionalBoundaryInventoryError, IntentionalBoundaryInventoryErrorKind,
     IntentionalBoundaryRepositoryInventory, IntentionalBoundarySourceCensusFailureEvidence,
-    read_intentional_boundary_git_blob_typed,
+    read_intentional_boundary_git_blobs_typed, supported_source_git_blob_requests_typed,
     validate_intentional_boundary_repository_inventory_typed,
 };
 use serde::{Deserialize, Serialize};
@@ -88,6 +88,8 @@ pub(super) fn inspect_intentional_boundary_repository_sources_typed(
 
     let mut source_files = Vec::new();
     let mut failures = Vec::new();
+    let requests = supported_source_git_blob_requests_typed(inventory)?;
+    let mut blobs = read_intentional_boundary_git_blobs_typed(root, &requests)?.into_iter();
     for entry in &inventory.tracked_entries {
         if entry.kind == BoundaryGitEntryKind::Gitlink {
             failures.push(SourceFailureEvidence::RepositoryContainsGitlink {
@@ -119,8 +121,9 @@ pub(super) fn inspect_intentional_boundary_repository_sources_typed(
                 entry.repository_path
             ))
         })?;
-        let committed_bytes =
-            read_intentional_boundary_git_blob_typed(root, &entry.object_id, expected_length)?;
+        let committed_bytes = blobs.next().ok_or_else(|| {
+            invalid("intentional-boundary source blob batch ended before its inventory")
+        })?;
         // The committed blob is the source identity. A Git-clean checkout may
         // legitimately have a different representation after built-in filters.
         let source_sha256 = sha256(&committed_bytes);
@@ -199,6 +202,11 @@ pub(super) fn inspect_intentional_boundary_repository_sources_typed(
             methods,
         });
     }
+    if blobs.next().is_some() {
+        return Err(invalid(
+            "intentional-boundary source blob batch exceeded its inventory",
+        ));
+    }
     failures.sort_by(|left, right| failure_key(left).cmp(&failure_key(right)));
     if !failures.is_empty() {
         return Ok(IntentionalBoundarySourceInspection::Excluded(failures));
@@ -253,7 +261,13 @@ pub(super) fn intentional_boundary_file_records_typed(
     census: &IntentionalBoundarySourceCensus,
 ) -> Result<Vec<crate::types::FileRecord>, IntentionalBoundaryInventoryError> {
     let mut records = Vec::with_capacity(census.source_files.len());
-    for source_file in &census.source_files {
+    let requests = census
+        .source_files
+        .iter()
+        .map(|source| (source.object_id.as_str(), source.byte_length))
+        .collect::<Vec<_>>();
+    let blobs = read_intentional_boundary_git_blobs_typed(root, &requests)?;
+    for (source_file, bytes) in census.source_files.iter().zip(blobs) {
         let inventory_entry = inventory
             .tracked_entries
             .iter()
@@ -272,11 +286,6 @@ pub(super) fn intentional_boundary_file_records_typed(
                 source_file.repository_path
             )));
         }
-        let bytes = read_intentional_boundary_git_blob_typed(
-            root,
-            &source_file.object_id,
-            source_file.byte_length,
-        )?;
         let absolute_path = root.join(Path::new(&source_file.repository_path));
         let absolute_path = absolute_path.to_str().ok_or_else(|| {
             invalid(format!(

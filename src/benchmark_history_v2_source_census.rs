@@ -1,5 +1,7 @@
 use super::history_v2_source_census_exclusion::seal_source_census_exclusion;
-use super::intentional_boundary_inventory::read_intentional_boundary_git_blob;
+use super::intentional_boundary_inventory::{
+    read_intentional_boundary_git_blobs, supported_source_git_blob_requests,
+};
 use super::{
     BoundaryGitEntryKind, HISTORICAL_V2_SOURCE_CENSUS_SCHEMA_VERSION, HistoricalV2Materialization,
     HistoricalV2MaterializedRoots, HistoricalV2SlotStage, HistoricalV2SlotStageError,
@@ -129,6 +131,10 @@ fn inspect_snapshot_sources(
     inventory: &IntentionalBoundaryRepositoryInventory,
 ) -> Result<Vec<HistoricalV2SourceCensusFailureEvidence>, HistoricalV2SlotStageError> {
     let mut failures = Vec::new();
+    let requests = supported_source_git_blob_requests(inventory).map_err(infrastructure)?;
+    let mut blobs = read_intentional_boundary_git_blobs(root, &requests)
+        .map_err(infrastructure)?
+        .into_iter();
     for entry in &inventory.tracked_entries {
         if entry.kind == BoundaryGitEntryKind::Gitlink {
             failures.push(
@@ -168,8 +174,9 @@ fn inspect_snapshot_sources(
                 entry.repository_path
             ))
         })?;
-        let bytes = read_intentional_boundary_git_blob(root, &entry.object_id, expected_length)
-            .map_err(infrastructure)?;
+        let bytes = blobs.next().ok_or_else(|| {
+            infrastructure("historical-v2 source blob batch ended before its inventory")
+        })?;
         let source_sha256 = sha256(&bytes);
         if let Err(error) = std::str::from_utf8(&bytes) {
             failures.push(
@@ -205,6 +212,11 @@ fn inspect_snapshot_sources(
             );
         }
     }
+    if blobs.next().is_some() {
+        return Err(infrastructure(
+            "historical-v2 source blob batch exceeded its inventory",
+        ));
+    }
     Ok(failures)
 }
 
@@ -232,7 +244,13 @@ fn project_snapshot(
     }
     let mut source_files = Vec::with_capacity(parser_census.source_files.len());
     let mut method_counts_by_language = BTreeMap::<String, usize>::new();
-    for source in &parser_census.source_files {
+    let requests = parser_census
+        .source_files
+        .iter()
+        .map(|source| (source.object_id.as_str(), source.byte_length))
+        .collect::<Vec<_>>();
+    let blobs = read_intentional_boundary_git_blobs(root, &requests)?;
+    for (source, bytes) in parser_census.source_files.iter().zip(blobs) {
         let entry = inventory
             .tracked_entries
             .iter()
@@ -249,8 +267,6 @@ fn project_snapshot(
                 source.repository_path
             ));
         }
-        let bytes =
-            read_intentional_boundary_git_blob(root, &source.object_id, source.byte_length)?;
         if sha256(&bytes) != source.source_sha256 {
             return Err(format!(
                 "historical-v2 source bytes changed: {}",
