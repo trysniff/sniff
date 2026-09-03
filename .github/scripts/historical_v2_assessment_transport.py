@@ -207,6 +207,22 @@ FINALIZED_GO_SEMANTIC_COMPACTION_MIGRATION_SOURCE_ARTIFACT_DIGEST = (
 )
 FINALIZED_GO_SEMANTIC_COMPACTION_MIGRATION_SOURCE_ARTIFACT_SIZE = 382_505_430
 
+INDEXED_SEMANTIC_SNAPSHOT_PROJECTION_MIGRATION_NAME = (
+    "indexed-semantic-snapshot-projection-v1"
+)
+INDEXED_SEMANTIC_SNAPSHOT_PROJECTION_MIGRATION_CONTRACT = (
+    "sniffbench-historical-v2-indexed-semantic-snapshot-projection-migration-v1"
+)
+INDEXED_SEMANTIC_SNAPSHOT_PROJECTION_MIGRATION_FROM_COLLECTOR_SHA = (
+    "311c6f087c4145ba3c6d1841c4dd58ff92cf21e4"
+)
+INDEXED_SEMANTIC_SNAPSHOT_PROJECTION_MIGRATION_SOURCE_RUN_ID = 33_730_932_228
+INDEXED_SEMANTIC_SNAPSHOT_PROJECTION_MIGRATION_SOURCE_ARTIFACT_ID = 9_884_076_774
+INDEXED_SEMANTIC_SNAPSHOT_PROJECTION_MIGRATION_SOURCE_ARTIFACT_DIGEST = (
+    "sha256:9c34131a7d2ca09b647795aede94c909350bdaf455cb413db5ebca7783910587"
+)
+INDEXED_SEMANTIC_SNAPSHOT_PROJECTION_MIGRATION_SOURCE_ARTIFACT_SIZE = 337_799_271
+
 FRAME_FILE_SHA256 = {
     "environment.txt": "2e87f3c3e1b2005f6b6d09b1bf1b82d30a9433636c3c67f0806cc68e80ab6800",
     "exclusions.json": "74bccb100eb48ab87952bd7eec137b2285edbc68d2547715bc0e06a80e029f76",
@@ -635,7 +651,7 @@ def validate_manifest(path: pathlib.Path, frame_run_id: int) -> str:
     schema_version = value.get("schema_version")
     if schema_version == 1:
         expected = _manifest(frame_run_id, collector_sha)
-    elif schema_version in (2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12):
+    elif schema_version in (2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13):
         migrations = value.get("collector_migrations")
         expected_count = schema_version - 1
         if not isinstance(migrations, list) or len(migrations) != expected_count:
@@ -703,6 +719,11 @@ def _migration_record(
         contract = FINALIZED_GO_SEMANTIC_COMPACTION_MIGRATION_CONTRACT
         source_collector_sha = (
             FINALIZED_GO_SEMANTIC_COMPACTION_MIGRATION_FROM_COLLECTOR_SHA
+        )
+    elif migration_name == INDEXED_SEMANTIC_SNAPSHOT_PROJECTION_MIGRATION_NAME:
+        contract = INDEXED_SEMANTIC_SNAPSHOT_PROJECTION_MIGRATION_CONTRACT
+        source_collector_sha = (
+            INDEXED_SEMANTIC_SNAPSHOT_PROJECTION_MIGRATION_FROM_COLLECTOR_SHA
         )
     else:
         raise ValueError("transport manifest collector migration is not allowlisted")
@@ -922,15 +943,35 @@ def _expected_finalized_go_semantic_compaction_migration(
     )
 
 
+def _expected_indexed_semantic_snapshot_projection_migration(
+    target_collector_sha: str,
+) -> dict[str, Any]:
+    if (
+        target_collector_sha
+        == INDEXED_SEMANTIC_SNAPSHOT_PROJECTION_MIGRATION_FROM_COLLECTOR_SHA
+        or re.fullmatch(r"[0-9a-f]{40}", target_collector_sha) is None
+    ):
+        raise ValueError("transport manifest collector migration target is invalid")
+    return _migration_record(
+        INDEXED_SEMANTIC_SNAPSHOT_PROJECTION_MIGRATION_NAME,
+        target_collector_sha,
+        INDEXED_SEMANTIC_SNAPSHOT_PROJECTION_MIGRATION_SOURCE_RUN_ID,
+        INDEXED_SEMANTIC_SNAPSHOT_PROJECTION_MIGRATION_FROM_COLLECTOR_SHA,
+        INDEXED_SEMANTIC_SNAPSHOT_PROJECTION_MIGRATION_SOURCE_ARTIFACT_ID,
+        INDEXED_SEMANTIC_SNAPSHOT_PROJECTION_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+        INDEXED_SEMANTIC_SNAPSHOT_PROJECTION_MIGRATION_SOURCE_ARTIFACT_SIZE,
+    )
+
+
 def _validate_collector_migrations(
     migrations: Sequence[Mapping[str, Any]], collector_sha: str
 ) -> None:
-    if len(migrations) not in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11):
+    if len(migrations) not in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12):
         raise ValueError("transport manifest collector migration chain is invalid")
     expected = [_expected_storage_migration()]
     if len(migrations) == 2:
         expected.append(_expected_go_preparation_migration(collector_sha))
-    elif len(migrations) in (3, 4, 5, 6, 7, 8, 9, 10, 11):
+    elif len(migrations) in (3, 4, 5, 6, 7, 8, 9, 10, 11, 12):
         expected.append(
             _expected_go_preparation_migration(
                 GO_MODULE_DOWNLOAD_MIGRATION_FROM_COLLECTOR_SHA
@@ -991,15 +1032,28 @@ def _validate_collector_migrations(
         if len(migrations) >= 10:
             semantic_assembly_target = (
                 FINALIZED_GO_SEMANTIC_COMPACTION_MIGRATION_FROM_COLLECTOR_SHA
-                if len(migrations) == 11
+                if len(migrations) >= 11
                 else collector_sha
             )
             expected.append(
                 _expected_go_semantic_assembly_migration(semantic_assembly_target)
             )
-        if len(migrations) == 11:
+        if len(migrations) >= 11:
+            finalized_compaction_target = (
+                INDEXED_SEMANTIC_SNAPSHOT_PROJECTION_MIGRATION_FROM_COLLECTOR_SHA
+                if len(migrations) == 12
+                else collector_sha
+            )
             expected.append(
-                _expected_finalized_go_semantic_compaction_migration(collector_sha)
+                _expected_finalized_go_semantic_compaction_migration(
+                    finalized_compaction_target
+                )
+            )
+        if len(migrations) == 12:
+            expected.append(
+                _expected_indexed_semantic_snapshot_projection_migration(
+                    collector_sha
+                )
             )
     elif collector_sha != STORAGE_MIGRATION_TO_COLLECTOR_SHA:
         raise ValueError("transport manifest collector migration target drifted")
@@ -1087,6 +1141,12 @@ def migrate_manifest(
         ]
     elif schema_version == 11:
         expected_name = FINALIZED_GO_SEMANTIC_COMPACTION_MIGRATION_NAME
+        migrations = [
+            _require_mapping(item, "transport manifest collector migration")
+            for item in value.get("collector_migrations", [])
+        ]
+    elif schema_version == 12:
+        expected_name = INDEXED_SEMANTIC_SNAPSHOT_PROJECTION_MIGRATION_NAME
         migrations = [
             _require_mapping(item, "transport manifest collector migration")
             for item in value.get("collector_migrations", [])
