@@ -3,7 +3,9 @@ use super::go_shards::{
     shard_pairs,
 };
 use super::*;
-use crate::semantic_index_merge::{merge_document_shards, merge_implementation_pair};
+use crate::semantic_index_merge::{
+    begin_document_shard, merge_document_shard, merge_implementation_pair,
+};
 use crate::semantic_indexer_runner::progress::{
     SemanticProgressScope, SemanticProgressScopeInputs, SemanticProgressStore, SemanticProgressUnit,
 };
@@ -179,6 +181,11 @@ async fn run_go_in_recovery_scope(
         })
         .collect::<Result<Vec<_>, _>>()
         .map_err(|detail| go_progress_failure(spec, detail))?;
+    let assembly_units = document_units
+        .iter()
+        .chain(&pair_units)
+        .cloned()
+        .collect::<Vec<_>>();
     let progress = match progress_root {
         Some(progress_root) => {
             let runtime_sha256 = runtime_identity_sha256(spec, execution_root, installed)
@@ -187,8 +194,6 @@ async fn run_go_in_recovery_scope(
                 .map_err(|detail| go_progress_failure(spec, detail))?;
             let shard_plan_sha256 = canonical_sha256(&(shard_limits, &shards))
                 .map_err(|detail| go_progress_failure(spec, detail))?;
-            let mut units = document_units.clone();
-            units.extend(pair_units.clone());
             let scope = SemanticProgressScope::new(SemanticProgressScopeInputs {
                 indexer: spec.kind,
                 indexer_version: spec.version.to_string(),
@@ -200,7 +205,7 @@ async fn run_go_in_recovery_scope(
                 build_context_output_sha256: context_invocation.output_sha256.clone(),
                 package_inventory_sha256,
                 shard_plan_sha256,
-                units,
+                units: assembly_units.clone(),
             })
             .map_err(|detail| go_progress_failure(spec, detail))?;
             Some(
@@ -219,19 +224,43 @@ async fn run_go_in_recovery_scope(
         expected_languages: &expected_languages,
         context: &context,
     };
-    let mut document_indexes = Vec::with_capacity(shards.len());
-    for (shard, unit) in shards.iter().zip(&document_units) {
-        let expected_documents = shard.source_documents();
-        document_indexes.push(
-            run_or_resume_go_unit(progress.as_ref(), unit, root, spec, || {
-                run_go_scip(&scip, shard.patterns(), &expected_documents, true)
-            })
-            .await?,
-        );
+    let mut completed_unit_count = 0;
+    let mut merged = None;
+    if let Some(progress) = &progress
+        && let Some(assembly) = progress
+            .load_assembly(root)
+            .map_err(|detail| go_progress_failure(spec, detail))?
+    {
+        completed_unit_count = assembly.completed_unit_count;
+        merged = Some(assembly.payload);
     }
-    let mut merged = merge_document_shards(document_indexes)
+    for (unit_index, (shard, unit)) in shards.iter().zip(&document_units).enumerate() {
+        if unit_index < completed_unit_count {
+            continue;
+        }
+        let expected_documents = shard.source_documents();
+        let index = run_or_resume_go_unit(progress.as_ref(), unit, root, spec, || {
+            run_go_scip(&scip, shard.patterns(), &expected_documents, true)
+        })
+        .await?;
+        match &mut merged {
+            Some(merged) => merge_document_shard(merged, index),
+            None => begin_document_shard(index).map(|index| merged = Some(index)),
+        }
         .map_err(|detail| go_snapshot_assembly_failure(spec, detail))?;
-    for ((left, right), unit) in pairs.into_iter().zip(&pair_units) {
+        completed_unit_count += 1;
+        if let (Some(progress), Some(merged)) = (&progress, &merged) {
+            progress
+                .publish_assembly(&assembly_units[..completed_unit_count], root, merged)
+                .map_err(|detail| go_progress_failure(spec, detail))?;
+        }
+    }
+    let document_unit_count = document_units.len();
+    for (pair_index, ((left, right), unit)) in pairs.into_iter().zip(&pair_units).enumerate() {
+        let unit_index = document_unit_count + pair_index;
+        if unit_index < completed_unit_count {
+            continue;
+        }
         let expected_documents = shards[left]
             .source_documents()
             .into_iter()
@@ -241,9 +270,26 @@ async fn run_go_in_recovery_scope(
             run_go_scip(&scip, unit.patterns.clone(), &expected_documents, false)
         })
         .await?;
-        merge_implementation_pair(&mut merged, pair)
-            .map_err(|detail| go_snapshot_assembly_failure(spec, detail))?;
+        merge_implementation_pair(
+            merged.as_mut().ok_or_else(|| {
+                go_snapshot_assembly_failure(
+                    spec,
+                    "implementation-pair assembly omitted every document shard",
+                )
+            })?,
+            pair,
+        )
+        .map_err(|detail| go_snapshot_assembly_failure(spec, detail))?;
+        completed_unit_count += 1;
+        if let (Some(progress), Some(merged)) = (&progress, &merged) {
+            progress
+                .publish_assembly(&assembly_units[..completed_unit_count], root, merged)
+                .map_err(|detail| go_progress_failure(spec, detail))?;
+        }
     }
+    let mut merged = merged.ok_or_else(|| {
+        go_snapshot_assembly_failure(spec, "Go semantic assembly omitted every document shard")
+    })?;
     merged
         .provenance
         .invocations
