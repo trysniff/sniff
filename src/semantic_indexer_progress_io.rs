@@ -1,12 +1,13 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 #[cfg(unix)]
 use std::fs::File;
 use std::fs::{self, OpenOptions};
+use std::io::BufWriter;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-const MAX_CHECKPOINT_BYTES: u64 = 512 * 1024 * 1024;
+pub(super) const MAX_CHECKPOINT_BYTES: u64 = 512 * 1024 * 1024;
 
 pub(super) fn ensure_plain_directory(path: &Path) -> Result<(), String> {
     match fs::symlink_metadata(path) {
@@ -78,6 +79,50 @@ pub(super) fn write_atomic_new(path: &Path, bytes: &[u8]) -> Result<(), String> 
                 temp.display()
             )
         })?;
+    require_absent(path, "semantic progress destination")?;
+    fs::rename(&temp, path).map_err(|error| {
+        format!(
+            "failed to publish semantic progress file {}: {error}",
+            path.display()
+        )
+    })?;
+    sync_directory(parent)
+}
+
+pub(super) fn write_json_atomic_new<T: Serialize>(path: &Path, value: &T) -> Result<(), String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| format!("semantic progress path has no parent: {}", path.display()))?;
+    let temp = PathBuf::from(format!("{}.tmp", path.to_string_lossy()));
+    remove_incomplete_file(&temp)?;
+    let file = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&temp)
+        .map_err(|error| {
+            format!(
+                "failed to create semantic progress temporary file {}: {error}",
+                temp.display()
+            )
+        })?;
+    let mut writer = BufWriter::new(file);
+    serde_json::to_writer(&mut writer, value)
+        .map_err(|error| format!("failed to serialize semantic progress JSON: {error}"))?;
+    writer
+        .write_all(b"\n")
+        .and_then(|()| writer.flush())
+        .map_err(|error| {
+            format!(
+                "failed to persist semantic progress temporary file {}: {error}",
+                temp.display()
+            )
+        })?;
+    writer.get_ref().sync_all().map_err(|error| {
+        format!(
+            "failed to synchronize semantic progress temporary file {}: {error}",
+            temp.display()
+        )
+    })?;
     require_absent(path, "semantic progress destination")?;
     fs::rename(&temp, path).map_err(|error| {
         format!(

@@ -191,6 +191,7 @@ impl SemanticProgressStore {
         ensure_plain_directory(root)?;
         let units_root = root.join(UNITS_DIRECTORY);
         ensure_plain_directory(&units_root)?;
+        ensure_plain_directory(&root.join(ASSEMBLIES_DIRECTORY))?;
         remove_incomplete_file(&root.join(SCOPE_TEMP_FILE))?;
         let scope_path = root.join(SCOPE_FILE);
         if scope_path.exists() {
@@ -238,12 +239,14 @@ impl SemanticProgressStore {
         ensure_plain_directory(root)?;
         let units_root = root.join(UNITS_DIRECTORY);
         ensure_plain_directory(&units_root)?;
+        let assemblies_root = root.join(ASSEMBLIES_DIRECTORY);
+        ensure_plain_directory(&assemblies_root)?;
         remove_incomplete_file(&root.join(SCOPE_TEMP_FILE))?;
         let scope_path = root.join(SCOPE_FILE);
         if !scope_path.exists() {
             require_exact_entries(
                 root,
-                &BTreeSet::from([UNITS_DIRECTORY]),
+                &BTreeSet::from([ASSEMBLIES_DIRECTORY, UNITS_DIRECTORY]),
                 "semantic progress root",
             )?;
             if fs::read_dir(&units_root)
@@ -252,6 +255,17 @@ impl SemanticProgressStore {
                 .is_some()
             {
                 return Err("semantic progress units exist without a committed scope".to_string());
+            }
+            if fs::read_dir(&assemblies_root)
+                .map_err(|error| {
+                    format!("failed to inspect semantic progress assemblies: {error}")
+                })?
+                .next()
+                .is_some()
+            {
+                return Err(
+                    "semantic progress assemblies exist without a committed scope".to_string(),
+                );
             }
             return Ok(());
         }
@@ -264,6 +278,11 @@ impl SemanticProgressStore {
         store.validate_directory_entries()?;
         for unit in &store.scope.units {
             store.remove_unit_temp(unit)?;
+        }
+        store.remove_assembly_temps()?;
+        store.validate_directory_entries()?;
+        if let Some(latest) = store.load_assembly_normalized()? {
+            store.prune_assemblies(latest.completed_unit_count)?;
         }
         store.validate_directory_entries()
     }
@@ -353,7 +372,7 @@ impl SemanticProgressStore {
     }
 
     fn validate_directory_entries(&self) -> Result<(), String> {
-        let expected_root = BTreeSet::from([SCOPE_FILE, UNITS_DIRECTORY]);
+        let expected_root = BTreeSet::from([ASSEMBLIES_DIRECTORY, SCOPE_FILE, UNITS_DIRECTORY]);
         require_exact_entries(&self.root, &expected_root, "semantic progress root")?;
         let expected_units = self
             .scope
@@ -370,6 +389,11 @@ impl SemanticProgressStore {
             &self.root.join(UNITS_DIRECTORY),
             &expected_units,
             "semantic progress units",
+        )?;
+        require_allowed_entries(
+            &self.root.join(ASSEMBLIES_DIRECTORY),
+            &assembly::allowed_entry_names(self.scope.units.len()),
+            "semantic progress assemblies",
         )
     }
 }
@@ -441,12 +465,17 @@ fn canonical_root_text(root: &Path) -> Result<String, String> {
         })
 }
 
+#[path = "semantic_indexer_progress_assembly.rs"]
+mod assembly;
+
+use assembly::ASSEMBLIES_DIRECTORY;
+
 #[path = "semantic_indexer_progress_io.rs"]
 mod io;
 
 use io::{
     ensure_plain_directory, read_json, remove_incomplete_file, require_allowed_entries,
-    require_exact_entries, write_atomic_new,
+    require_exact_entries, write_atomic_new, write_json_atomic_new,
 };
 
 fn canonical_sha256<T: Serialize>(value: &T) -> Result<String, String> {

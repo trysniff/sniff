@@ -7,43 +7,58 @@ use crate::semantic_index::{
 
 const CONFLICTING_KINDS: &str = "ConflictingKinds";
 
+#[cfg(test)]
 pub(crate) fn merge_document_shards(
     shards: impl IntoIterator<Item = SemanticIndex>,
 ) -> Result<SemanticIndex, String> {
     let mut shards = shards.into_iter();
-    let mut merged = shards
-        .next()
-        .ok_or_else(|| "semantic document-shard merge requires at least one index".to_string())?;
-    validate_index(&merged)?;
-    mark_invocations(&mut merged, SemanticIndexerContribution::DocumentShard);
-    merged.provenance.arguments.clear();
+    let mut merged =
+        begin_document_shard(shards.next().ok_or_else(|| {
+            "semantic document-shard merge requires at least one index".to_string()
+        })?)?;
 
-    for mut shard in shards {
-        validate_compatible_provenance(&merged, &shard)?;
-        mark_invocations(&mut shard, SemanticIndexerContribution::DocumentShard);
-        merge_diagnostics(&mut merged, &shard);
-        merged
-            .provenance
-            .invocations
-            .extend(shard.provenance.invocations);
-
-        for (path, document) in shard.documents {
-            if merged.documents.insert(path.clone(), document).is_some() {
-                return Err(format!(
-                    "semantic document {path:?} appeared in more than one document shard"
-                ));
-            }
-        }
-        for (_, symbol) in shard.symbols {
-            merge_symbol(&mut merged, symbol)?;
-        }
-        merged.relationships.extend(shard.relationships);
-        merged.imports.extend(shard.imports);
-        merged.calls.extend(shard.calls);
-        merged.test_relationships.extend(shard.test_relationships);
-        merged.unresolved_edges.extend(shard.unresolved_edges);
+    for shard in shards {
+        merge_document_shard(&mut merged, shard)?;
     }
     Ok(merged)
+}
+
+pub(crate) fn begin_document_shard(mut shard: SemanticIndex) -> Result<SemanticIndex, String> {
+    validate_index(&shard)?;
+    mark_invocations(&mut shard, SemanticIndexerContribution::DocumentShard);
+    shard.provenance.arguments.clear();
+    Ok(shard)
+}
+
+pub(crate) fn merge_document_shard(
+    merged: &mut SemanticIndex,
+    mut shard: SemanticIndex,
+) -> Result<(), String> {
+    validate_index(merged)?;
+    validate_compatible_provenance(merged, &shard)?;
+    mark_invocations(&mut shard, SemanticIndexerContribution::DocumentShard);
+    merge_diagnostics(merged, &shard);
+    merged
+        .provenance
+        .invocations
+        .extend(shard.provenance.invocations);
+
+    for (path, document) in shard.documents {
+        if merged.documents.insert(path.clone(), document).is_some() {
+            return Err(format!(
+                "semantic document {path:?} appeared in more than one document shard"
+            ));
+        }
+    }
+    for (_, symbol) in shard.symbols {
+        merge_symbol(merged, symbol)?;
+    }
+    merged.relationships.extend(shard.relationships);
+    merged.imports.extend(shard.imports);
+    merged.calls.extend(shard.calls);
+    merged.test_relationships.extend(shard.test_relationships);
+    merged.unresolved_edges.extend(shard.unresolved_edges);
+    Ok(())
 }
 
 pub(crate) fn merge_implementation_pair(

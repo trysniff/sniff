@@ -1,5 +1,8 @@
 use super::*;
-use crate::semantic_index::{SEMANTIC_INDEX_FORMAT_VERSION, SemanticIndexProvenance};
+use crate::semantic_index::{
+    SEMANTIC_INDEX_FORMAT_VERSION, SemanticIndexProvenance, SemanticIndexerContribution,
+    SemanticIndexerInvocation,
+};
 
 fn digest(character: char) -> String {
     character.to_string().repeat(64)
@@ -16,7 +19,22 @@ fn unit() -> SemanticProgressUnit {
     .unwrap()
 }
 
+fn second_unit() -> SemanticProgressUnit {
+    SemanticProgressUnit::new(
+        "document-0001".to_string(),
+        "document-shard",
+        vec!["example.test/other".to_string()],
+        &BTreeSet::from([RepositoryPath("other/other.go".to_string())]),
+        true,
+    )
+    .unwrap()
+}
+
 fn scope(unit: SemanticProgressUnit) -> SemanticProgressScope {
+    scope_with_units(vec![unit])
+}
+
+fn scope_with_units(units: Vec<SemanticProgressUnit>) -> SemanticProgressScope {
     SemanticProgressScope::new(SemanticProgressScopeInputs {
         indexer: SemanticIndexerKind::Go,
         indexer_version: "v1".to_string(),
@@ -28,7 +46,7 @@ fn scope(unit: SemanticProgressUnit) -> SemanticProgressScope {
         build_context_output_sha256: digest('5'),
         package_inventory_sha256: digest('6'),
         shard_plan_sha256: digest('7'),
-        units: vec![unit],
+        units,
     })
     .unwrap()
 }
@@ -43,7 +61,12 @@ fn index(root: &Path) -> SemanticIndex {
             tool_version: Some("v1".to_string()),
             arguments: Vec::new(),
             source_text_encoding: None,
-            invocations: Vec::new(),
+            invocations: vec![SemanticIndexerInvocation {
+                arguments: vec!["fixture".to_string()],
+                context: BTreeMap::new(),
+                contribution: SemanticIndexerContribution::CompleteIndex,
+                output_sha256: digest('a'),
+            }],
             diagnostics: Vec::new(),
         },
         documents: BTreeMap::new(),
@@ -133,6 +156,131 @@ fn recovery_preserves_completed_units_and_removes_only_incomplete_transactions()
     assert!(store.unit_path(&unit).is_file());
     assert!(!store.unit_temp_path(&unit).exists());
     assert!(store.load(&unit, repository.path()).unwrap().is_some());
+}
+
+#[test]
+fn assembled_prefix_survives_relocation_and_supersedes_older_prefix() {
+    use crate::semantic_index_merge::{begin_document_shard, merge_document_shard};
+
+    let first = tempfile::tempdir().unwrap();
+    let second = tempfile::tempdir().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let units = vec![unit(), second_unit()];
+    let store = SemanticProgressStore::open(state.path(), scope_with_units(units.clone())).unwrap();
+    for unit in &units {
+        store
+            .publish(unit, first.path(), &index(first.path()))
+            .unwrap();
+    }
+
+    let first_unit = store.load(&units[0], first.path()).unwrap().unwrap();
+    let assembled = begin_document_shard(first_unit).unwrap();
+    store
+        .publish_assembly(&units[..1], first.path(), &assembled)
+        .unwrap();
+    let mut resumed = store.load_assembly(second.path()).unwrap().unwrap();
+    assert_eq!(resumed.completed_unit_count, 1);
+    assert_eq!(
+        resumed.payload.repository_root,
+        canonical_root_text(second.path()).unwrap()
+    );
+
+    let second_unit = store.load(&units[1], second.path()).unwrap().unwrap();
+    merge_document_shard(&mut resumed.payload, second_unit).unwrap();
+    store
+        .publish_assembly(&units, second.path(), &resumed.payload)
+        .unwrap();
+    assert!(!store.assembly_path(1).exists());
+    assert!(store.assembly_path(2).is_file());
+    SemanticProgressStore::recover_existing(state.path()).unwrap();
+    let completed = store.load_assembly(second.path()).unwrap().unwrap();
+    assert_eq!(completed.completed_unit_count, 2);
+    assert_eq!(completed.payload.provenance.invocations.len(), 2);
+}
+
+#[test]
+fn assembly_rejects_non_prefix_and_changed_unit_evidence() {
+    let repository = tempfile::tempdir().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let units = vec![unit(), second_unit()];
+    let store = SemanticProgressStore::open(state.path(), scope_with_units(units.clone())).unwrap();
+    for unit in &units {
+        store
+            .publish(unit, repository.path(), &index(repository.path()))
+            .unwrap();
+    }
+    assert!(
+        store
+            .publish_assembly(&units[1..], repository.path(), &index(repository.path()))
+            .is_err()
+    );
+    store
+        .publish_assembly(&units[..1], repository.path(), &index(repository.path()))
+        .unwrap();
+    fs::write(store.unit_path(&units[0]), b"changed\n").unwrap();
+    assert!(store.load_assembly(repository.path()).is_err());
+}
+
+#[test]
+fn recovery_removes_incomplete_assembly_transaction() {
+    let state = tempfile::tempdir().unwrap();
+    let unit = unit();
+    let store = SemanticProgressStore::open(state.path(), scope(unit)).unwrap();
+    fs::write(store.assembly_temp_path(1), b"partial").unwrap();
+    fs::write(store.assembly_payload_temp_path(1), b"partial").unwrap();
+
+    SemanticProgressStore::recover_existing(state.path()).unwrap();
+
+    assert!(!store.assembly_temp_path(1).exists());
+    assert!(!store.assembly_payload_temp_path(1).exists());
+}
+
+#[test]
+fn recovery_removes_uncommitted_payload_and_payload_tampering_fails_closed() {
+    let repository = tempfile::tempdir().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let unit = unit();
+    let store = SemanticProgressStore::open(state.path(), scope(unit.clone())).unwrap();
+    fs::write(store.assembly_payload_path(1), b"uncommitted\n").unwrap();
+    SemanticProgressStore::recover_existing(state.path()).unwrap();
+    assert!(!store.assembly_payload_path(1).exists());
+
+    store
+        .publish(&unit, repository.path(), &index(repository.path()))
+        .unwrap();
+    store
+        .publish_assembly(&[unit], repository.path(), &index(repository.path()))
+        .unwrap();
+    fs::write(store.assembly_payload_path(1), b"changed\n").unwrap();
+    assert!(store.load_assembly(repository.path()).is_err());
+}
+
+#[test]
+fn recovery_validates_overlapping_commits_before_pruning_the_older_prefix() {
+    let repository = tempfile::tempdir().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let units = vec![unit(), second_unit()];
+    let store = SemanticProgressStore::open(state.path(), scope_with_units(units.clone())).unwrap();
+    for unit in &units {
+        store
+            .publish(unit, repository.path(), &index(repository.path()))
+            .unwrap();
+    }
+    store
+        .publish_assembly(&units[..1], repository.path(), &index(repository.path()))
+        .unwrap();
+    let older = fs::read(store.assembly_path(1)).unwrap();
+    let older_payload = fs::read(store.assembly_payload_path(1)).unwrap();
+    store
+        .publish_assembly(&units, repository.path(), &index(repository.path()))
+        .unwrap();
+    fs::write(store.assembly_payload_path(1), older_payload).unwrap();
+    fs::write(store.assembly_path(1), older).unwrap();
+
+    SemanticProgressStore::recover_existing(state.path()).unwrap();
+
+    assert!(!store.assembly_path(1).exists());
+    assert!(store.assembly_path(2).is_file());
 }
 
 #[cfg(unix)]
