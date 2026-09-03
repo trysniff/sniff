@@ -127,7 +127,7 @@ jobs:
               exit 1
             fi
             case "$COLLECTOR_MIGRATION" in
-              compact-stage-artifact-json-v1|package-scoped-go-dependency-preparation-v1|declared-go-module-dependency-preparation-v1|strict-go-project-root-validation-v1|valid-go-eof-parser-v1|validated-resume-symlink-extraction-v1|committed-git-blob-source-census-v1|bounded-go-semantic-indexing-v1|hosted-semantic-seal-margin-v1|resumable-go-semantic-assembly-v1|finalized-go-semantic-compaction-v1) ;;
+              compact-stage-artifact-json-v1|package-scoped-go-dependency-preparation-v1|declared-go-module-dependency-preparation-v1|strict-go-project-root-validation-v1|valid-go-eof-parser-v1|validated-resume-symlink-extraction-v1|committed-git-blob-source-census-v1|bounded-go-semantic-indexing-v1|hosted-semantic-seal-margin-v1|resumable-go-semantic-assembly-v1|finalized-go-semantic-compaction-v1|indexed-semantic-snapshot-projection-v1) ;;
               *)
                 echo 'collector_migration is not an allowlisted exact migration' >&2
                 exit 1
