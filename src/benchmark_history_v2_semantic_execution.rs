@@ -48,24 +48,6 @@ async fn census_historical_v2_semantics_typed_internal(
 ) -> Result<SemanticCensusStageResult, HistoricalV2SlotStageError> {
     validate_historical_v2_source_census(materialization, roots, source_census).map_err(invalid)?;
     let scope = semantic_scope(materialization, roots, source_census).map_err(infrastructure)?;
-    let all_base_files =
-        snapshot_file_records(&roots.base_root, &source_census.base).map_err(infrastructure)?;
-    let all_patched_files = snapshot_file_records(&roots.patched_root, &source_census.patched)
-        .map_err(infrastructure)?;
-    let (base_files, base_required_documents) = scoped_file_records(
-        &roots.base_root,
-        &all_base_files,
-        &scope.changed_indexers,
-        &scope.base_required_paths,
-    )
-    .map_err(infrastructure)?;
-    let (patched_files, patched_required_documents) = scoped_file_records(
-        &roots.patched_root,
-        &all_patched_files,
-        &scope.changed_indexers,
-        &scope.patched_required_paths,
-    )
-    .map_err(infrastructure)?;
     let mut failures = Vec::new();
     let mut stage_errors = Vec::new();
     let progress = progress_root
@@ -77,9 +59,6 @@ async fn census_historical_v2_semantics_typed_internal(
             side: HistoricalV2SemanticSnapshotSide::Base,
             root: &roots.base_root,
             source: &source_census.base,
-            all_files: &all_base_files,
-            scoped_files: &base_files,
-            required_documents: &base_required_documents,
             required_paths: &scope.base_required_paths,
         },
         materialization,
@@ -95,9 +74,6 @@ async fn census_historical_v2_semantics_typed_internal(
             side: HistoricalV2SemanticSnapshotSide::Patched,
             root: &roots.patched_root,
             source: &source_census.patched,
-            all_files: &all_patched_files,
-            scoped_files: &patched_files,
-            required_documents: &patched_required_documents,
             required_paths: &scope.patched_required_paths,
         },
         materialization,
@@ -139,7 +115,7 @@ async fn census_historical_v2_semantics_typed_internal(
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn census_semantic_snapshot(
+pub(super) async fn census_semantic_snapshot(
     inputs: HistoricalV2SemanticSnapshotInputs<'_>,
     materialization: &HistoricalV2Materialization,
     source_census: &HistoricalV2SourceCensus,
@@ -173,11 +149,19 @@ async fn census_semantic_snapshot(
         .map_err(infrastructure)?;
         return Ok(Some(snapshot));
     }
+    let all_files = snapshot_file_records(inputs.root, inputs.source).map_err(infrastructure)?;
+    let (scoped_files, required_documents) = scoped_file_records(
+        inputs.root,
+        &all_files,
+        changed_indexers,
+        inputs.required_paths,
+    )
+    .map_err(infrastructure)?;
     let indexer_root = progress.map(|progress| progress.indexer_root(inputs.side));
     let run = run_scoped_indexers(
         inputs.root,
-        inputs.scoped_files,
-        inputs.required_documents,
+        &scoped_files,
+        &required_documents,
         indexer_root.as_deref(),
     )
     .await;
@@ -196,7 +180,7 @@ async fn census_semantic_snapshot(
         build_semantic_snapshot(
             inputs.root,
             inputs.source,
-            inputs.all_files,
+            &all_files,
             changed_indexers,
             inputs.required_paths,
             &indexes,

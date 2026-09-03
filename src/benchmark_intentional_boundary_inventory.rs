@@ -11,6 +11,7 @@ pub const INTENTIONAL_BOUNDARY_INVENTORY_SCHEMA_VERSION: u32 = 1;
 pub(super) const INVENTORY_CONTRACT: &str = "sniffbench-intentional-boundary-git-inventory-v1";
 const GIT_TIMEOUT: Duration = Duration::from_secs(300);
 const GIT_OUTPUT_LIMIT: usize = 128 * 1024 * 1024;
+const GIT_BATCH_ENTRY_BUDGET: usize = 128;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -158,6 +159,187 @@ pub(super) fn read_intentional_boundary_git_blob_typed(
         )));
     }
     Ok(bytes)
+}
+
+pub(super) fn read_intentional_boundary_git_blobs(
+    root: &Path,
+    objects: &[(&str, u64)],
+) -> Result<Vec<Vec<u8>>, String> {
+    read_intentional_boundary_git_blobs_typed(root, objects).map_err(|error| error.detail)
+}
+
+pub(super) fn read_intentional_boundary_git_blobs_typed(
+    root: &Path,
+    objects: &[(&str, u64)],
+) -> Result<Vec<Vec<u8>>, IntentionalBoundaryInventoryError> {
+    let mut blobs = Vec::with_capacity(objects.len());
+    let mut offset = 0;
+    while offset < objects.len() {
+        let mut end = offset;
+        let mut output_limit = 0_usize;
+        while let Some((_, expected_length)) = objects.get(end) {
+            let expected_length = usize::try_from(*expected_length).map_err(|_| {
+                invalid("intentional-boundary Git blob length exceeds this platform")
+            })?;
+            let entry_limit = expected_length
+                .checked_add(GIT_BATCH_ENTRY_BUDGET)
+                .ok_or_else(|| invalid("intentional-boundary Git batch length overflowed"))?;
+            let Some(next_limit) = output_limit.checked_add(entry_limit) else {
+                break;
+            };
+            if next_limit > GIT_OUTPUT_LIMIT {
+                break;
+            }
+            output_limit = next_limit;
+            end += 1;
+        }
+        if end == offset {
+            let (object_id, expected_length) = objects[offset];
+            blobs.push(read_intentional_boundary_git_blob_typed(
+                root,
+                object_id,
+                expected_length,
+            )?);
+            offset += 1;
+            continue;
+        }
+        blobs.extend(read_git_blob_batch(
+            root,
+            &objects[offset..end],
+            output_limit,
+        )?);
+        offset = end;
+    }
+    Ok(blobs)
+}
+
+pub(super) fn supported_source_git_blob_requests(
+    inventory: &IntentionalBoundaryRepositoryInventory,
+) -> Result<Vec<(&str, u64)>, String> {
+    supported_source_git_blob_requests_typed(inventory).map_err(|error| error.detail)
+}
+
+pub(super) fn supported_source_git_blob_requests_typed(
+    inventory: &IntentionalBoundaryRepositoryInventory,
+) -> Result<Vec<(&str, u64)>, IntentionalBoundaryInventoryError> {
+    inventory
+        .tracked_entries
+        .iter()
+        .filter_map(|entry| {
+            let supported = Path::new(&entry.repository_path)
+                .extension()
+                .and_then(|value| value.to_str())
+                .and_then(crate::languages::get_adapter)
+                .is_some();
+            if entry.kind == BoundaryGitEntryKind::Gitlink
+                || !supported
+                || !matches!(
+                    entry.kind,
+                    BoundaryGitEntryKind::RegularBlob | BoundaryGitEntryKind::ExecutableBlob
+                )
+            {
+                return None;
+            }
+            Some(
+                entry
+                    .byte_length
+                    .map(|length| (entry.object_id.as_str(), length))
+                    .ok_or_else(|| {
+                        invalid(format!(
+                            "intentional-boundary source has no committed byte length: {}",
+                            entry.repository_path
+                        ))
+                    }),
+            )
+        })
+        .collect()
+}
+
+fn read_git_blob_batch(
+    root: &Path,
+    objects: &[(&str, u64)],
+    output_limit: usize,
+) -> Result<Vec<Vec<u8>>, IntentionalBoundaryInventoryError> {
+    let mut input = Vec::new();
+    for (object_id, _) in objects {
+        if !matches!(object_id.len(), 40 | 64)
+            || !object_id
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+        {
+            return Err(invalid(
+                "intentional-boundary Git batch object is not a complete lowercase object ID",
+            ));
+        }
+        input.extend_from_slice(object_id.as_bytes());
+        input.push(b'\n');
+    }
+    let output = run_git_with_input(root, &["cat-file", "--batch"], &input, output_limit)?;
+    if !output.status.success() {
+        return Err(invalid(git_command_failure(
+            root,
+            &["cat-file", "--batch"],
+            &output,
+        )));
+    }
+    parse_git_blob_batch(&output.stdout, objects)
+}
+
+fn parse_git_blob_batch(
+    output: &[u8],
+    objects: &[(&str, u64)],
+) -> Result<Vec<Vec<u8>>, IntentionalBoundaryInventoryError> {
+    let mut cursor = 0_usize;
+    let mut blobs = Vec::with_capacity(objects.len());
+    for (object_id, expected_length) in objects {
+        let header_end = output[cursor..]
+            .iter()
+            .position(|byte| *byte == b'\n')
+            .and_then(|relative| cursor.checked_add(relative))
+            .ok_or_else(|| invalid("intentional-boundary Git batch omitted a blob header"))?;
+        let header = std::str::from_utf8(&output[cursor..header_end])
+            .map_err(|_| invalid("intentional-boundary Git batch returned a non-UTF-8 header"))?;
+        let mut fields = header.split(' ');
+        let actual_object_id = fields.next().unwrap_or_default();
+        let object_kind = fields.next().unwrap_or_default();
+        let actual_length = fields
+            .next()
+            .ok_or_else(|| invalid("intentional-boundary Git batch returned a malformed header"))?
+            .parse::<u64>()
+            .map_err(|_| {
+                invalid("intentional-boundary Git batch returned an invalid blob length")
+            })?;
+        if fields.next().is_some()
+            || actual_object_id != *object_id
+            || object_kind != "blob"
+            || actual_length != *expected_length
+        {
+            return Err(invalid(format!(
+                "intentional-boundary Git batch changed blob identity {object_id}"
+            )));
+        }
+        let body_start = header_end
+            .checked_add(1)
+            .ok_or_else(|| invalid("intentional-boundary Git batch offset overflowed"))?;
+        let body_length = usize::try_from(actual_length)
+            .map_err(|_| invalid("intentional-boundary Git batch blob exceeds this platform"))?;
+        let body_end = body_start
+            .checked_add(body_length)
+            .ok_or_else(|| invalid("intentional-boundary Git batch offset overflowed"))?;
+        if output.get(body_end) != Some(&b'\n') {
+            return Err(invalid(format!(
+                "intentional-boundary Git batch truncated blob {object_id}"
+            )));
+        }
+        blobs.push(output[body_start..body_end].to_vec());
+        cursor = body_end + 1;
+    }
+    if cursor != output.len() {
+        return Err(invalid(
+            "intentional-boundary Git batch returned unrequested output",
+        ));
+    }
+    Ok(blobs)
 }
 
 fn require_complete_checkout(
@@ -384,6 +566,41 @@ fn run_git(
     run_git_program(root, args, "git")
 }
 
+fn run_git_with_input(
+    root: &Path,
+    args: &[&str],
+    input: &[u8],
+    output_limit: usize,
+) -> Result<crate::bounded_process::BoundedOutput, IntentionalBoundaryInventoryError> {
+    let mut command = Command::new("git");
+    command.arg("-C").arg(root).args(args);
+    let output = crate::bounded_process::run_with_input_and_output_limit(
+        &mut command,
+        input,
+        GIT_TIMEOUT,
+        output_limit,
+    )
+    .map_err(|error| {
+        unavailable(format!(
+            "intentional-boundary inventory requires git: {error}"
+        ))
+    })?;
+    if output.timed_out {
+        return Err(failed(format!(
+            "git {} exceeded its {}-second deadline",
+            args.join(" "),
+            GIT_TIMEOUT.as_secs()
+        )));
+    }
+    if output.stdout_truncated || output.stderr_truncated {
+        return Err(failed(format!(
+            "git {} exceeded its {output_limit}-byte batch limit",
+            args.join(" ")
+        )));
+    }
+    Ok(output)
+}
+
 fn run_git_program(
     root: &Path,
     args: &[&str],
@@ -560,6 +777,45 @@ mod tests {
             &inventory,
         )
         .unwrap();
+    }
+
+    #[test]
+    fn batch_blob_reader_preserves_requested_order_content_and_duplicates() {
+        let (root, _) = repository();
+        let cargo_oid = git(root.path(), &["rev-parse", "HEAD:Cargo.toml"]);
+        let source_oid = git(root.path(), &["rev-parse", "HEAD:src/lib.rs"]);
+        let cargo = fs::read(root.path().join("Cargo.toml")).unwrap();
+        let source = fs::read(root.path().join("src/lib.rs")).unwrap();
+        let objects = [
+            (source_oid.as_str(), source.len() as u64),
+            (cargo_oid.as_str(), cargo.len() as u64),
+            (source_oid.as_str(), source.len() as u64),
+        ];
+
+        let blobs = read_intentional_boundary_git_blobs_typed(root.path(), &objects).unwrap();
+
+        assert_eq!(blobs, [source.clone(), cargo, source]);
+    }
+
+    #[test]
+    fn batch_blob_reader_rejects_invalid_and_missing_object_ids() {
+        let (root, _) = repository();
+        let invalid = [("ABC", 1)];
+        assert!(
+            read_intentional_boundary_git_blobs_typed(root.path(), &invalid)
+                .unwrap_err()
+                .detail
+                .contains("complete lowercase object ID")
+        );
+
+        let missing_oid = "f".repeat(40);
+        let missing = [(missing_oid.as_str(), 1)];
+        assert!(
+            read_intentional_boundary_git_blobs_typed(root.path(), &missing)
+                .unwrap_err()
+                .detail
+                .contains("malformed header")
+        );
     }
 
     #[test]

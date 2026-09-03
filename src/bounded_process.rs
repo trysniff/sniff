@@ -1,5 +1,5 @@
 use sha2::{Digest, Sha256};
-use std::io::{self, Read};
+use std::io::{self, Read, Write};
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
 #[cfg(windows)]
@@ -30,14 +30,46 @@ pub(crate) fn run_with_output_limit(
     timeout: Duration,
     output_limit: usize,
 ) -> io::Result<BoundedOutput> {
+    run_with_optional_input(command, None, timeout, output_limit)
+}
+
+pub(crate) fn run_with_input_and_output_limit(
+    command: &mut Command,
+    input: &[u8],
+    timeout: Duration,
+    output_limit: usize,
+) -> io::Result<BoundedOutput> {
+    run_with_optional_input(command, Some(input), timeout, output_limit)
+}
+
+fn run_with_optional_input(
+    command: &mut Command,
+    input: Option<&[u8]>,
+    timeout: Duration,
+    output_limit: usize,
+) -> io::Result<BoundedOutput> {
     configure_process_group(command);
     command
-        .stdin(Stdio::null())
+        .stdin(if input.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     let mut child = command.spawn()?;
     #[cfg(windows)]
     let job = WindowsJob::attach(&mut child)?;
+    let stdin = if input.is_some() {
+        Some(
+            child
+                .stdin
+                .take()
+                .ok_or_else(|| io::Error::other("bounded child stdin was not captured"))?,
+        )
+    } else {
+        None
+    };
     let stdout = child
         .stdout
         .take()
@@ -48,6 +80,10 @@ pub(crate) fn run_with_output_limit(
         .ok_or_else(|| io::Error::other("bounded child stderr was not captured"))?;
     let stdout_reader = thread::spawn(move || read_limited(stdout, output_limit));
     let stderr_reader = thread::spawn(move || read_limited(stderr, output_limit));
+    let stdin_writer = input.zip(stdin).map(|(input, mut stdin)| {
+        let input = input.to_vec();
+        thread::spawn(move || stdin.write_all(&input))
+    });
     let started = Instant::now();
     let (status, timed_out) = loop {
         match child.try_wait()? {
@@ -72,6 +108,11 @@ pub(crate) fn run_with_output_limit(
     }
     let (stdout, stdout_truncated, stdout_sha256) = join_reader(stdout_reader, "stdout")?;
     let (stderr, stderr_truncated, stderr_sha256) = join_reader(stderr_reader, "stderr")?;
+    if let Some(writer) = stdin_writer {
+        writer
+            .join()
+            .map_err(|_| io::Error::other("bounded child stdin writer panicked"))??;
+    }
     Ok(BoundedOutput {
         status,
         stdout,
@@ -258,6 +299,35 @@ mod tests {
         );
         assert!(output.stdout_truncated);
         assert!(!output.stderr_truncated);
+    }
+
+    #[test]
+    fn bounded_input_is_written_without_deadlocking_large_output() {
+        let input = vec![b'x'; 2 * 1024 * 1024];
+        #[cfg(windows)]
+        let mut command = {
+            let mut command = Command::new("powershell.exe");
+            command.args([
+                "-NoProfile",
+                "-Command",
+                "[Console]::OpenStandardInput().CopyTo([Console]::OpenStandardOutput())",
+            ]);
+            command
+        };
+        #[cfg(not(windows))]
+        let mut command = Command::new("cat");
+
+        let output = run_with_input_and_output_limit(
+            &mut command,
+            &input,
+            Duration::from_secs(10),
+            input.len(),
+        )
+        .unwrap();
+
+        assert!(output.status.success());
+        assert_eq!(output.stdout, input);
+        assert!(!output.stdout_truncated);
     }
 
     #[test]

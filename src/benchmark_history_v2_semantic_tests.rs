@@ -40,6 +40,81 @@ fn commits_exact_compiler_facts_for_every_historical_method() {
     .unwrap();
 }
 
+#[tokio::test]
+async fn completed_snapshot_is_loaded_before_source_reconstruction() {
+    let fixture = fixture();
+    let changed_indexers = fixture_changed_indexers();
+    let required_paths = fixture_required_paths(&fixture.source);
+    let snapshot = build_semantic_snapshot(
+        fixture.root.path(),
+        &fixture.source,
+        &fixture.files,
+        &changed_indexers,
+        &required_paths,
+        &fixture.indexes,
+    )
+    .unwrap();
+    let materialization = HistoricalV2Materialization {
+        schema_version: 1,
+        materialization_contract: "fixture".to_string(),
+        canonical_repository: "example/repo".to_string(),
+        base_revision: fixture.source.revision.clone(),
+        object_format: "sha1".to_string(),
+        base_tree_oid: "1".repeat(40),
+        historical_patch_sha256: "2".repeat(64),
+        patched_tree_oid: "3".repeat(40),
+        patched_commit_oid: "4".repeat(40),
+        materialization_sha256: "5".repeat(64),
+    };
+    let source_census = HistoricalV2SourceCensus {
+        schema_version: 2,
+        source_census_contract: "fixture".to_string(),
+        canonical_repository: "example/repo".to_string(),
+        materialization_sha256: materialization.materialization_sha256.clone(),
+        base: fixture.source.clone(),
+        patched: fixture.source.clone(),
+        source_census_sha256: "6".repeat(64),
+    };
+    let state = tempfile::tempdir().unwrap();
+    let progress =
+        progress::HistoricalV2SemanticProgress::open(&state.path().join("progress")).unwrap();
+    progress
+        .publish_snapshot(
+            &materialization,
+            &source_census,
+            HistoricalV2SemanticSnapshotSide::Base,
+            &source_census.base,
+            &changed_indexers,
+            &required_paths,
+            &snapshot,
+        )
+        .unwrap();
+    let unavailable_root = state.path().join("source-does-not-exist");
+    let mut failures = Vec::new();
+    let mut stage_errors = Vec::new();
+
+    let resumed = execution::census_semantic_snapshot(
+        HistoricalV2SemanticSnapshotInputs {
+            side: HistoricalV2SemanticSnapshotSide::Base,
+            root: &unavailable_root,
+            source: &source_census.base,
+            required_paths: &required_paths,
+        },
+        &materialization,
+        &source_census,
+        &changed_indexers,
+        Some(&progress),
+        &mut failures,
+        &mut stage_errors,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(resumed, Some(snapshot));
+    assert!(failures.is_empty());
+    assert!(stage_errors.is_empty());
+}
+
 #[test]
 fn generated_files_are_committed_but_not_required_from_the_compiler_index() {
     let mut fixture = fixture();
