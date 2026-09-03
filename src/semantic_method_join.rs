@@ -38,6 +38,9 @@ pub struct SemanticMethodJoin {
     pub bindings: BTreeMap<SemanticMethodKey, SemanticMethodBinding>,
 }
 
+type DefinitionLineIndex<'a> =
+    BTreeMap<RepositoryPath, BTreeMap<u32, Vec<(&'a SemanticSymbolId, &'a SemanticLocation)>>>;
+
 /// Compiler-resolved facts keyed by the exact AST method identity used by the
 /// analyzer. The text is deliberately rendered from typed SCIP data here so
 /// prompts cannot silently replace compiler facts with name-based guesses.
@@ -267,12 +270,13 @@ pub fn join_methods(
             repository_root.display()
         )
     })?;
+    let definition_lines = definition_line_index(index);
     let mut bindings = BTreeMap::new();
     for file in files {
         let path = repository_relative_path(&root, Path::new(&file.file_path))?;
         for method in &file.methods {
             let key = method_key(path.clone(), method)?;
-            let binding = bind_method(&key, file, method, index);
+            let binding = bind_method(&key, file, method, index, &definition_lines);
             if bindings.insert(key.clone(), binding).is_some() {
                 return Err(format!(
                     "duplicate AST method identity in semantic join: {}::{}:{}-{}",
@@ -282,6 +286,21 @@ pub fn join_methods(
         }
     }
     Ok(SemanticMethodJoin { bindings })
+}
+
+fn definition_line_index(index: &SemanticIndex) -> DefinitionLineIndex<'_> {
+    let mut lines = DefinitionLineIndex::new();
+    for (symbol_id, symbol) in &index.symbols {
+        for definition in &symbol.definitions {
+            lines
+                .entry(definition.document.clone())
+                .or_default()
+                .entry(definition.range.start.line)
+                .or_default()
+                .push((symbol_id, definition));
+        }
+    }
+    lines
 }
 
 fn method_key(path: RepositoryPath, method: &MethodRecord) -> Result<SemanticMethodKey, String> {
@@ -316,6 +335,7 @@ fn bind_method(
     file: &FileRecord,
     method: &MethodRecord,
     index: &SemanticIndex,
+    definition_lines: &DefinitionLineIndex<'_>,
 ) -> SemanticMethodBinding {
     let unresolved = |reason: SemanticUnresolvedReason, detail: String| SemanticMethodBinding {
         method: key.clone(),
@@ -340,7 +360,16 @@ fn bind_method(
         || file.language.eq_ignore_ascii_case("typescript");
     let source_name_range = js_like.then(|| method_name_range(file, method));
     let mut candidates = BTreeMap::<SemanticSymbolId, SemanticLocation>::new();
-    for symbol in index.symbols.values() {
+    for (symbol_id, definition) in definition_lines
+        .get(&document.path)
+        .and_then(|lines| lines.get(&definition_line))
+        .into_iter()
+        .flatten()
+    {
+        let symbol = index
+            .symbols
+            .get(symbol_id)
+            .expect("definition index references an indexed symbol");
         let callable = matches!(
             symbol.kind.category,
             SemanticSymbolCategory::Callable
@@ -363,13 +392,7 @@ fn bind_method(
         if !callable && !named_javascript_definition {
             continue;
         }
-        for definition in &symbol.definitions {
-            if definition.document == document.path
-                && definition.range.start.line == definition_line
-            {
-                candidates.insert(symbol.id.clone(), definition.clone());
-            }
-        }
+        candidates.insert(symbol.id.clone(), (*definition).clone());
     }
 
     if candidates.is_empty() {

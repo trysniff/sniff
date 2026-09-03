@@ -400,6 +400,77 @@ fn commits_exact_compiler_facts_for_every_census_method() {
 }
 
 #[test]
+fn indexed_projection_matches_the_exhaustive_reference_for_all_edge_shapes() {
+    let (_, _, _, mut indexes) = fixture();
+    let index = indexes.get_mut(&SemanticIndexerKind::Rust).unwrap();
+    let symbol = SemanticSymbolId("rust fixture process".to_string());
+    let document = RepositoryPath("src/lib.rs".to_string());
+    index.calls.extend([
+        SemanticCallEdge {
+            caller: symbol.clone(),
+            callsite: SemanticLocation {
+                document: document.clone(),
+                range: range(0, 25, 32),
+            },
+            callee: SemanticResolution::Resolved {
+                value: symbol.clone(),
+            },
+            dispatch: SemanticDispatch::Static,
+        },
+        SemanticCallEdge {
+            caller: symbol.clone(),
+            callsite: SemanticLocation {
+                document: document.clone(),
+                range: range(0, 33, 40),
+            },
+            callee: SemanticResolution::Unresolved {
+                reason: SemanticUnresolvedReason::DynamicDispatch,
+                raw_target: Some("runtime_call".to_string()),
+                detail: "fixture unresolved call".to_string(),
+            },
+            dispatch: SemanticDispatch::Dynamic,
+        },
+    ]);
+    index.relationships.insert(SemanticRelationship {
+        source: symbol.clone(),
+        target: symbol.clone(),
+        kind: SemanticRelationshipKind::Definition,
+    });
+    index.test_relationships.extend([
+        SemanticTestRelationship {
+            test: symbol.clone(),
+            production: SemanticResolution::Resolved {
+                value: symbol.clone(),
+            },
+            kind: SemanticTestRelationshipKind::AssertsContract,
+        },
+        SemanticTestRelationship {
+            test: symbol,
+            production: SemanticResolution::Unresolved {
+                reason: SemanticUnresolvedReason::MissingIndexerFact,
+                raw_target: Some("fixture production".to_string()),
+                detail: "fixture unresolved production".to_string(),
+            },
+            kind: SemanticTestRelationshipKind::Exercises,
+        },
+    ]);
+    index.imports.insert(SemanticImportEdge {
+        document,
+        range: range(0, 3, 6),
+        target: SemanticResolution::Unresolved {
+            reason: SemanticUnresolvedReason::MissingDefinition,
+            raw_target: Some("fixture import".to_string()),
+            detail: "fixture unresolved import".to_string(),
+        },
+        reexport: SemanticResolution::Resolved { value: false },
+    });
+
+    let projection = SemanticProjectionIndex::new(index);
+
+    projection.assert_matches_reference(index);
+}
+
+#[test]
 fn preserves_missing_compiler_facts_as_unresolved_instead_of_falling_back() {
     let (root, source_census, files, mut indexes) = fixture();
     indexes

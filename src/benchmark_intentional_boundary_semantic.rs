@@ -124,6 +124,7 @@ pub(super) fn build_semantic_census(
     for (kind, index) in indexes {
         let files_for_indexer = crate::semantic_indexer_runner::files_for_indexer(files, *kind);
         let join = join_methods(root, &files_for_indexer, index)?;
+        let projection = SemanticProjectionIndex::new(index);
         for binding in join.bindings.values() {
             let key = (
                 binding.method.file.0.clone(),
@@ -142,6 +143,7 @@ pub(super) fn build_semantic_census(
                 expected,
                 binding,
                 index,
+                &projection,
             )?);
         }
         source_references.extend(flatten_source_references(
@@ -233,7 +235,9 @@ fn method_identity_map(
 #[path = "benchmark_intentional_boundary_semantic_projection.rs"]
 mod projection;
 
-pub(super) use projection::{flatten_method, flatten_symbol, summarize_index};
+pub(super) use projection::{
+    SemanticProjectionIndex, flatten_method, flatten_symbol, summarize_index,
+};
 
 pub(super) fn compute_semantic_census_sha256(
     census: &IntentionalBoundarySemanticCensus,
