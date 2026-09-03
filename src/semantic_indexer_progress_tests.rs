@@ -192,10 +192,45 @@ fn assembled_prefix_survives_relocation_and_supersedes_older_prefix() {
         .unwrap();
     assert!(!store.assembly_path(1).exists());
     assert!(store.assembly_path(2).is_file());
+    for unit in &units {
+        assert!(!store.unit_path(unit).exists());
+    }
     SemanticProgressStore::recover_existing(state.path()).unwrap();
     let completed = store.load_assembly(second.path()).unwrap().unwrap();
     assert_eq!(completed.completed_unit_count, 2);
     assert_eq!(completed.payload.provenance.invocations.len(), 2);
+}
+
+#[test]
+fn recovery_finishes_interrupted_final_unit_pruning() {
+    let repository = tempfile::tempdir().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let units = vec![unit(), second_unit()];
+    let store = SemanticProgressStore::open(state.path(), scope_with_units(units.clone())).unwrap();
+    for unit in &units {
+        store
+            .publish(unit, repository.path(), &index(repository.path()))
+            .unwrap();
+    }
+    let first_checkpoint = fs::read(store.unit_path(&units[0])).unwrap();
+    store
+        .publish_assembly(&units, repository.path(), &index(repository.path()))
+        .unwrap();
+    fs::write(store.unit_path(&units[0]), first_checkpoint).unwrap();
+
+    SemanticProgressStore::recover_existing(state.path()).unwrap();
+
+    for unit in &units {
+        assert!(!store.unit_path(unit).exists());
+    }
+    assert_eq!(
+        store
+            .load_assembly(repository.path())
+            .unwrap()
+            .unwrap()
+            .completed_unit_count,
+        2
+    );
 }
 
 #[test]
@@ -271,9 +306,16 @@ fn recovery_validates_overlapping_commits_before_pruning_the_older_prefix() {
         .unwrap();
     let older = fs::read(store.assembly_path(1)).unwrap();
     let older_payload = fs::read(store.assembly_payload_path(1)).unwrap();
+    let unit_checkpoints = units
+        .iter()
+        .map(|unit| fs::read(store.unit_path(unit)).unwrap())
+        .collect::<Vec<_>>();
     store
         .publish_assembly(&units, repository.path(), &index(repository.path()))
         .unwrap();
+    for (unit, checkpoint) in units.iter().zip(unit_checkpoints) {
+        fs::write(store.unit_path(unit), checkpoint).unwrap();
+    }
     fs::write(store.assembly_payload_path(1), older_payload).unwrap();
     fs::write(store.assembly_path(1), older).unwrap();
 
