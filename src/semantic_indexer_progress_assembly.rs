@@ -88,7 +88,11 @@ impl SemanticProgressStore {
                 format!("failed to serialize semantic assembly checkpoint: {error}")
             })?,
         )?;
-        self.prune_assemblies(completed_unit_count)
+        self.prune_assemblies(completed_unit_count)?;
+        if completed_unit_count == self.scope.units.len() {
+            self.prune_completed_unit_checkpoints()?;
+        }
+        Ok(())
     }
 
     fn require_assembly_prefix(
@@ -164,14 +168,42 @@ impl SemanticProgressStore {
                 completed_unit_count,
                 &checkpoint,
                 &self.assembly_payload_path(completed_unit_count),
-                |unit| plain_file_sha256(&self.unit_path(unit)),
+                |unit| {
+                    (completed_unit_count != self.scope.units.len())
+                        .then(|| plain_file_sha256(&self.unit_path(unit)))
+                        .transpose()
+                },
             )?;
             latest = Some(SemanticProgressAssembly {
                 completed_unit_count,
                 payload,
             });
         }
+        if latest
+            .as_ref()
+            .is_some_and(|assembly| assembly.completed_unit_count == self.scope.units.len())
+        {
+            self.prune_completed_unit_checkpoints()?;
+        }
         Ok(latest)
+    }
+
+    fn prune_completed_unit_checkpoints(&self) -> Result<(), String> {
+        let units_root = self.root.join(UNITS_DIRECTORY);
+        for unit in &self.scope.units {
+            let path = self.unit_path(unit);
+            match fs::symlink_metadata(&path) {
+                Ok(_) => remove_plain_file(&path, "superseded semantic unit checkpoint")?,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(format!(
+                        "failed to inspect superseded semantic unit checkpoint {}: {error}",
+                        path.display()
+                    ));
+                }
+            }
+        }
+        io::sync_directory(&units_root)
     }
 
     pub(super) fn prune_assemblies(&self, keep_completed_unit_count: usize) -> Result<(), String> {
@@ -238,7 +270,7 @@ fn validate_assembly_checkpoint<F>(
     mut unit_file_sha256: F,
 ) -> Result<SemanticIndex, String>
 where
-    F: FnMut(&SemanticProgressUnit) -> Result<String, String>,
+    F: FnMut(&SemanticProgressUnit) -> Result<Option<String>, String>,
 {
     if completed_unit_count == 0 || completed_unit_count > scope.units.len() {
         return Err("semantic assembly checkpoint has an invalid prefix length".to_string());
@@ -261,7 +293,8 @@ where
         if commitment.unit_id != unit.unit_id
             || commitment.unit_input_sha256 != unit.input_sha256
             || !is_sha256(&commitment.checkpoint_file_sha256)
-            || commitment.checkpoint_file_sha256 != unit_file_sha256(unit)?
+            || unit_file_sha256(unit)?
+                .is_some_and(|sha256| commitment.checkpoint_file_sha256 != sha256)
         {
             return Err(format!(
                 "semantic assembly checkpoint {completed_unit_count} changed unit {} evidence",

@@ -212,7 +212,7 @@ fn directory_entry_names(root: &Path, label: &str) -> Result<BTreeSet<String>, S
 }
 
 #[cfg(unix)]
-fn sync_directory(path: &Path) -> Result<(), String> {
+pub(super) fn sync_directory(path: &Path) -> Result<(), String> {
     File::open(path)
         .and_then(|directory| directory.sync_all())
         .map_err(|error| {
@@ -224,6 +224,6 @@ fn sync_directory(path: &Path) -> Result<(), String> {
 }
 
 #[cfg(not(unix))]
-fn sync_directory(_path: &Path) -> Result<(), String> {
+pub(super) fn sync_directory(_path: &Path) -> Result<(), String> {
     Ok(())
 }
