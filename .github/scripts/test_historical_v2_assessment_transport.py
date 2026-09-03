@@ -506,6 +506,21 @@ class ManifestTests(unittest.TestCase):
             transport.BOUNDED_GO_SEMANTIC_MIGRATION_SOURCE_ARTIFACT_SIZE,
         )
 
+    @staticmethod
+    def _write_hosted_seal_margin_manifest(path: pathlib.Path) -> None:
+        ManifestTests._write_bounded_go_semantic_manifest(path)
+        transport.migrate_manifest(
+            path,
+            transport.FRAME_RUN_ID,
+            transport.GO_SEMANTIC_ASSEMBLY_MIGRATION_FROM_COLLECTOR_SHA,
+            transport.HOSTED_SEAL_MARGIN_MIGRATION_NAME,
+            transport.HOSTED_SEAL_MARGIN_MIGRATION_SOURCE_RUN_ID,
+            transport.HOSTED_SEAL_MARGIN_MIGRATION_FROM_COLLECTOR_SHA,
+            transport.HOSTED_SEAL_MARGIN_MIGRATION_SOURCE_ARTIFACT_ID,
+            transport.HOSTED_SEAL_MARGIN_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+            transport.HOSTED_SEAL_MARGIN_MIGRATION_SOURCE_ARTIFACT_SIZE,
+        )
+
     def test_manifest_round_trips_and_is_create_new(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             path = pathlib.Path(temporary, "manifest.json")
@@ -1331,6 +1346,93 @@ class ManifestTests(unittest.TestCase):
                     transport.HOSTED_SEAL_MARGIN_MIGRATION_SOURCE_ARTIFACT_SIZE,
                 )
 
+    def test_go_semantic_assembly_migration_is_bound_to_the_accepted_parent(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = pathlib.Path(temporary, "manifest.json")
+            self._write_hosted_seal_margin_manifest(path)
+            prior_manifest = json.loads(path.read_text(encoding="utf-8"))
+            prior_records = prior_manifest["collector_migrations"]
+            source = transport.GO_SEMANTIC_ASSEMBLY_MIGRATION_FROM_COLLECTOR_SHA
+            target = "1" * 40
+
+            self.assertEqual(
+                transport.migrate_manifest(
+                    path,
+                    transport.FRAME_RUN_ID,
+                    target,
+                    transport.GO_SEMANTIC_ASSEMBLY_MIGRATION_NAME,
+                    transport.GO_SEMANTIC_ASSEMBLY_MIGRATION_SOURCE_RUN_ID,
+                    source,
+                    transport.GO_SEMANTIC_ASSEMBLY_MIGRATION_SOURCE_ARTIFACT_ID,
+                    transport.GO_SEMANTIC_ASSEMBLY_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+                    transport.GO_SEMANTIC_ASSEMBLY_MIGRATION_SOURCE_ARTIFACT_SIZE,
+                ),
+                target,
+            )
+            value = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(value["schema_version"], 11)
+            self.assertEqual(value["collector_migrations"][:9], prior_records)
+            self.assertEqual(
+                value["collector_migrations"][9],
+                {
+                    "from_collector_sha": source,
+                    "migration_contract": (
+                        transport.GO_SEMANTIC_ASSEMBLY_MIGRATION_CONTRACT
+                    ),
+                    "migration_name": transport.GO_SEMANTIC_ASSEMBLY_MIGRATION_NAME,
+                    "source_artifact_digest": (
+                        transport.GO_SEMANTIC_ASSEMBLY_MIGRATION_SOURCE_ARTIFACT_DIGEST
+                    ),
+                    "source_artifact_id": (
+                        transport.GO_SEMANTIC_ASSEMBLY_MIGRATION_SOURCE_ARTIFACT_ID
+                    ),
+                    "source_artifact_size": (
+                        transport.GO_SEMANTIC_ASSEMBLY_MIGRATION_SOURCE_ARTIFACT_SIZE
+                    ),
+                    "source_head_sha": source,
+                    "source_run_id": (
+                        transport.GO_SEMANTIC_ASSEMBLY_MIGRATION_SOURCE_RUN_ID
+                    ),
+                    "to_collector_sha": target,
+                },
+            )
+            self.assertEqual(
+                transport.validate_manifest(path, transport.FRAME_RUN_ID), target
+            )
+
+            for field in (
+                "from_collector_sha",
+                "migration_contract",
+                "migration_name",
+                "source_artifact_digest",
+                "source_artifact_id",
+                "source_artifact_size",
+                "source_head_sha",
+                "source_run_id",
+                "to_collector_sha",
+            ):
+                tampered = json.loads(json.dumps(value))
+                tampered["collector_migrations"][9][field] = True
+                path.write_text(json.dumps(tampered), encoding="utf-8")
+                with self.subTest(field=field), self.assertRaises(ValueError):
+                    transport.validate_manifest(path, transport.FRAME_RUN_ID)
+
+            path.write_text(json.dumps(value), encoding="utf-8")
+            with self.assertRaises(ValueError):
+                transport.migrate_manifest(
+                    path,
+                    transport.FRAME_RUN_ID,
+                    "2" * 40,
+                    transport.GO_SEMANTIC_ASSEMBLY_MIGRATION_NAME,
+                    transport.GO_SEMANTIC_ASSEMBLY_MIGRATION_SOURCE_RUN_ID,
+                    target,
+                    transport.GO_SEMANTIC_ASSEMBLY_MIGRATION_SOURCE_ARTIFACT_ID,
+                    transport.GO_SEMANTIC_ASSEMBLY_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+                    transport.GO_SEMANTIC_ASSEMBLY_MIGRATION_SOURCE_ARTIFACT_SIZE,
+                )
+
     def test_storage_migration_rejects_unapproved_source_or_name(self) -> None:
         attempts = (
             ("a" * 40, transport.STORAGE_MIGRATION_NAME),
@@ -1669,6 +1771,7 @@ class WorkflowContractTests(unittest.TestCase):
             "committed-git-blob-source-census-v1",
             "bounded-go-semantic-indexing-v1",
             "hosted-semantic-seal-margin-v1",
+            "resumable-go-semantic-assembly-v1",
             '"$transport" migrate-manifest',
             '"$PRIOR_HEAD_SHA" "$PRIOR_ARTIFACT_ID"',
             '"$PRIOR_ARTIFACT_DIGEST" "$PRIOR_ARTIFACT_SIZE"',
