@@ -3,15 +3,35 @@ use serde::{Deserialize, Serialize};
 #[path = "source_public_surface_go.rs"]
 mod go;
 
+#[path = "source_public_surface_js_ts.rs"]
+mod js_ts;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum SourcePublicSymbolKind {
+    CompilerDefined,
     Callable,
     Method,
     Type,
+    Module,
     Field,
     Variable,
     Constant,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum SourcePublicBindingKind {
+    Definition,
+    Reference,
+    Unsupported,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum SourcePublicReexportKind {
+    Wildcard,
+    Namespace,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -25,15 +45,31 @@ pub(crate) struct SourceByteRange {
 #[serde(deny_unknown_fields)]
 pub(crate) struct SourcePublicDeclaration {
     pub name: String,
+    pub target_name: String,
     pub owner: Option<String>,
     pub kind: SourcePublicSymbolKind,
-    pub identifier: SourceByteRange,
+    pub exposed_identifier: SourceByteRange,
+    pub compiler_anchor: SourceByteRange,
+    pub binding: SourcePublicBindingKind,
+    pub source_module: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SourcePublicReexport {
+    pub kind: SourcePublicReexportKind,
+    pub name: Option<String>,
+    pub source_module: String,
+    pub directive: SourceByteRange,
+    pub exposed_identifier: Option<SourceByteRange>,
+    pub compiler_anchor: SourceByteRange,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SourcePublicSurface {
     pub declarations: Vec<SourcePublicDeclaration>,
+    pub reexports: Vec<SourcePublicReexport>,
 }
 
 pub(crate) fn census_source_public_surface(
@@ -49,6 +85,7 @@ pub(crate) fn census_source_public_surface(
         .name;
     let mut surface = match language.as_str() {
         "go" => go::census(file_path, source)?,
+        "typescript" | "javascript" => js_ts::census(file_path, source)?,
         _ => {
             return Err(format!(
                 "public-surface census is not implemented for {language}: {file_path}"
@@ -56,6 +93,7 @@ pub(crate) fn census_source_public_surface(
         }
     };
     surface.declarations.sort();
+    surface.reexports.sort();
     if surface
         .declarations
         .windows(2)
@@ -63,6 +101,11 @@ pub(crate) fn census_source_public_surface(
     {
         return Err(format!(
             "public-surface census repeated a declaration in {file_path}"
+        ));
+    }
+    if surface.reexports.windows(2).any(|pair| pair[0] == pair[1]) {
+        return Err(format!(
+            "public-surface census repeated a re-export in {file_path}"
         ));
     }
     Ok(surface)

@@ -1,5 +1,6 @@
 use super::{
-    SourceByteRange, SourcePublicDeclaration, SourcePublicSurface, SourcePublicSymbolKind,
+    SourceByteRange, SourcePublicBindingKind, SourcePublicDeclaration, SourcePublicSurface,
+    SourcePublicSymbolKind,
 };
 use tree_sitter::Node;
 
@@ -7,7 +8,10 @@ pub(super) fn census(file_path: &str, source: &[u8]) -> Result<SourcePublicSurfa
     let tree = crate::parser::parse_tree_sitter_source_checked(file_path, source)?;
     let mut declarations = Vec::new();
     collect(tree.root_node(), source, None, &mut declarations)?;
-    Ok(SourcePublicSurface { declarations })
+    Ok(SourcePublicSurface {
+        declarations,
+        reexports: Vec::new(),
+    })
 }
 
 fn collect(
@@ -157,12 +161,19 @@ fn declaration(
 ) -> SourcePublicDeclaration {
     SourcePublicDeclaration {
         name: text.to_string(),
+        target_name: text.to_string(),
         owner: owner.map(str::to_string),
         kind,
-        identifier: SourceByteRange {
+        exposed_identifier: SourceByteRange {
             start: name.start_byte(),
             end: name.end_byte(),
         },
+        compiler_anchor: SourceByteRange {
+            start: name.start_byte(),
+            end: name.end_byte(),
+        },
+        binding: SourcePublicBindingKind::Definition,
+        source_module: None,
     }
 }
 
