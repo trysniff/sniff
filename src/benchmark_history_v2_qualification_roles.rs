@@ -95,13 +95,14 @@ fn decision(
 }
 
 fn has_runtime_surface(path: &str, semantic: &HistoricalV2SemanticSnapshotCensus) -> bool {
-    semantic.public_symbols.iter().any(|public| {
-        public
-            .symbol
-            .definitions
-            .iter()
-            .any(|definition| definition.repository_path == path)
-            && public
+    semantic.symbols.iter().any(|entry| {
+        entry.is_public_surface
+            && entry
+                .symbol
+                .definitions
+                .iter()
+                .any(|definition| definition.repository_path == path)
+            && entry
                 .symbol
                 .surfaces
                 .iter()

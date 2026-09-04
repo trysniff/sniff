@@ -2,10 +2,10 @@ use super::*;
 use crate::benchmark::{
     HISTORICAL_V2_ASSESSMENT_IDENTITY_SCHEMA_VERSION,
     HISTORICAL_V2_SELECTED_PAYLOADS_SCHEMA_VERSION, HISTORICAL_V2_SEMANTIC_CENSUS_SCHEMA_VERSION,
-    HistoricalV2MaterializedRoots, HistoricalV2PublicSymbol, HistoricalV2SelectedPayloads,
-    HistoricalV2SemanticCensus, HistoricalV2SemanticSnapshotCensus, HistoricalV2SourceCensus,
-    IntentionalBoundaryIndexerKind, IntentionalBoundarySemanticMethod,
-    IntentionalBoundarySemanticMethodStatus, IntentionalBoundarySemanticOrigin,
+    HistoricalV2MaterializedRoots, HistoricalV2SelectedPayloads, HistoricalV2SemanticCensus,
+    HistoricalV2SemanticMethod, HistoricalV2SemanticMethodStatus,
+    HistoricalV2SemanticSnapshotCensus, HistoricalV2SemanticSymbol, HistoricalV2SourceCensus,
+    IntentionalBoundaryIndexerKind, IntentionalBoundarySemanticOrigin,
     IntentionalBoundarySemanticResolution, IntentionalBoundarySemanticSymbolCategory,
     IntentionalBoundarySemanticSymbolFacts, IntentionalBoundarySemanticVisibility,
     census_historical_v2_sources,
@@ -157,45 +157,30 @@ fn semantic_census(source: &HistoricalV2SourceCensus) -> HistoricalV2SemanticCen
 fn semantic_snapshot(
     source: &crate::benchmark::HistoricalV2SourceSnapshotCensus,
 ) -> HistoricalV2SemanticSnapshotCensus {
-    let methods = source
-        .source_files
-        .iter()
-        .flat_map(|file| {
-            file.methods.iter().map(move |method| {
-                let symbol = symbol_facts(&file.repository_path, &method.symbol_name);
-                IntentionalBoundarySemanticMethod {
-                    parser_unit_id: method.parser_unit_id.clone(),
-                    repository_path: file.repository_path.clone(),
-                    symbol_name: method.symbol_name.clone(),
-                    start_line: method.start_line,
-                    end_line: method.end_line,
-                    indexer: IntentionalBoundaryIndexerKind::Rust,
-                    status: IntentionalBoundarySemanticMethodStatus::Resolved {
-                        symbol: Box::new(symbol),
-                        joined_definition: None,
-                    },
-                    occurrences: Vec::new(),
-                    calls: Vec::new(),
-                    relationships: Vec::new(),
-                    imports: Vec::new(),
-                    test_relationships: Vec::new(),
-                }
-            })
-        })
-        .collect::<Vec<_>>();
-    let public_symbols = methods
-        .iter()
-        .map(|method| {
-            let IntentionalBoundarySemanticMethodStatus::Resolved { symbol, .. } = &method.status
-            else {
-                unreachable!("fixture methods are resolved")
-            };
-            HistoricalV2PublicSymbol {
+    let mut methods = Vec::new();
+    let mut symbols = Vec::new();
+    for file in &source.source_files {
+        for method in &file.methods {
+            let symbol = symbol_facts(&file.repository_path, &method.symbol_name);
+            methods.push(HistoricalV2SemanticMethod {
+                parser_unit_id: method.parser_unit_id.clone(),
+                repository_path: file.repository_path.clone(),
+                symbol_name: method.symbol_name.clone(),
+                start_line: method.start_line,
+                end_line: method.end_line,
                 indexer: IntentionalBoundaryIndexerKind::Rust,
-                symbol: (**symbol).clone(),
-            }
-        })
-        .collect::<Vec<_>>();
+                status: HistoricalV2SemanticMethodStatus::Resolved {
+                    symbol_id: symbol.symbol_id.clone(),
+                    joined_definition: None,
+                },
+            });
+            symbols.push(HistoricalV2SemanticSymbol {
+                indexer: IntentionalBoundaryIndexerKind::Rust,
+                is_public_surface: true,
+                symbol,
+            });
+        }
+    }
     HistoricalV2SemanticSnapshotCensus {
         revision: source.revision.clone(),
         source_snapshot_census_sha256: source.snapshot_census_sha256.clone(),
@@ -205,12 +190,13 @@ fn semantic_snapshot(
             .map(|file| file.repository_path.clone())
             .collect(),
         indexers: Vec::new(),
-        public_symbol_count: public_symbols.len(),
+        symbol_count: symbols.len(),
+        public_symbol_count: symbols.len(),
         resolved_method_count: methods.len(),
         compiler_excluded_method_count: 0,
         unresolved_method_count: 0,
         methods,
-        public_symbols,
+        symbols,
         semantic_snapshot_sha256: "2".repeat(64),
     }
 }

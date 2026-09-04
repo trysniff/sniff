@@ -1,6 +1,6 @@
 use super::{
     HistoricalV2PublicSurfaceChange, HistoricalV2PublicSurfaceDelta,
-    HistoricalV2PublicSurfaceEntry, HistoricalV2PublicSymbol, HistoricalV2SemanticSnapshotCensus,
+    HistoricalV2PublicSurfaceEntry, HistoricalV2SemanticSnapshotCensus,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -10,18 +10,20 @@ pub(super) fn public_surface_delta(
     base: &HistoricalV2SemanticSnapshotCensus,
     patched: &HistoricalV2SemanticSnapshotCensus,
 ) -> Result<HistoricalV2PublicSurfaceDelta, String> {
-    let base_entries = surface_entries(&base.public_symbols)?;
-    let patched_entries = surface_entries(&patched.public_symbols)?;
+    let base_entries = surface_entries(base)?;
+    let patched_entries = surface_entries(patched)?;
     diff_entries(base_entries, patched_entries)
 }
 
 fn surface_entries(
-    symbols: &[HistoricalV2PublicSymbol],
+    semantic: &HistoricalV2SemanticSnapshotCensus,
 ) -> Result<Vec<HistoricalV2PublicSurfaceEntry>, String> {
-    let mut entries = symbols
+    let mut entries = semantic
+        .symbols
         .iter()
-        .map(|public| {
-            let symbol = &public.symbol;
+        .filter(|entry| entry.is_public_surface)
+        .map(|entry| {
+            let symbol = &entry.symbol;
             let semantic_fingerprint_sha256 = hash_json(&(
                 &symbol.provider_identity,
                 &symbol.display_name,
@@ -35,7 +37,7 @@ fn surface_entries(
                 symbol.origin,
             ))?;
             Ok(HistoricalV2PublicSurfaceEntry {
-                indexer: public.indexer,
+                indexer: entry.indexer,
                 symbol_id: symbol.symbol_id.clone(),
                 semantic_fingerprint_sha256,
             })

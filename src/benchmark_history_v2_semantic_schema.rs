@@ -1,16 +1,47 @@
 use super::{
     IntentionalBoundaryIndexerKind, IntentionalBoundarySemanticIndexerCensus,
-    IntentionalBoundarySemanticMethod, IntentionalBoundarySemanticSymbolFacts,
+    IntentionalBoundarySemanticRange, IntentionalBoundarySemanticSymbolFacts,
+    IntentionalBoundarySemanticUnresolvedReason,
 };
 use serde::{Deserialize, Serialize};
 
-pub const HISTORICAL_V2_SEMANTIC_CENSUS_SCHEMA_VERSION: u32 = 2;
+pub const HISTORICAL_V2_SEMANTIC_CENSUS_SCHEMA_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct HistoricalV2PublicSymbol {
+pub struct HistoricalV2SemanticSymbol {
     pub indexer: IntentionalBoundaryIndexerKind,
+    pub is_public_surface: bool,
     pub symbol: IntentionalBoundarySemanticSymbolFacts,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum HistoricalV2SemanticMethodStatus {
+    Resolved {
+        symbol_id: String,
+        joined_definition: Option<IntentionalBoundarySemanticRange>,
+    },
+    CompilerExcluded {
+        reason: String,
+    },
+    Unresolved {
+        reason: IntentionalBoundarySemanticUnresolvedReason,
+        raw_target: Option<String>,
+        detail: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HistoricalV2SemanticMethod {
+    pub parser_unit_id: String,
+    pub repository_path: String,
+    pub symbol_name: String,
+    pub start_line: usize,
+    pub end_line: usize,
+    pub indexer: IntentionalBoundaryIndexerKind,
+    pub status: HistoricalV2SemanticMethodStatus,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -20,8 +51,9 @@ pub struct HistoricalV2SemanticSnapshotCensus {
     pub source_snapshot_census_sha256: String,
     pub required_document_paths: Vec<String>,
     pub indexers: Vec<IntentionalBoundarySemanticIndexerCensus>,
-    pub methods: Vec<IntentionalBoundarySemanticMethod>,
-    pub public_symbols: Vec<HistoricalV2PublicSymbol>,
+    pub methods: Vec<HistoricalV2SemanticMethod>,
+    pub symbols: Vec<HistoricalV2SemanticSymbol>,
+    pub symbol_count: usize,
     pub public_symbol_count: usize,
     pub resolved_method_count: usize,
     pub compiler_excluded_method_count: usize,
