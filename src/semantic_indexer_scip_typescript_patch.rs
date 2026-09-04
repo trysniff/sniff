@@ -6,7 +6,7 @@ use std::path::Path;
 const SCIP_TYPESCRIPT_VERSION: &str = "0.4.0";
 const FILE_INDEXER: &str = "node_modules/@sourcegraph/scip-typescript/dist/src/FileIndexer.js";
 const UPSTREAM_SHA256: &str = "95c37b41a5c4725a70f66b39ff60bd2d47459a28bf735b93659077f2f99c967f";
-const PATCHED_SHA256: &str = "25d8c590841621f261ffb2ab18e69ab1415320f213ba31807f18baeafd1dc7a4";
+const PATCHED_SHA256: &str = "1841c9dbbb9da0fd21b524f567ad74dd1e0a0cde14ba0ace074865b3aa80c526";
 
 const ADD_INFORMATION_BEFORE: &str = r#"    addSymbolInformation(node, sym, declaration, symbol) {
         const documentation = [
@@ -35,7 +35,10 @@ const SYMBOL_INFORMATION_AFTER: &str = r#"            symbol: symbol.value,
             signature_documentation: publicCompilerSignature === undefined
                 ? undefined
                 : new scip.scip.Document({
-                    language: this.document.language,
+                    language: this.sourceFile.scriptKind === ts.ScriptKind.JS ||
+                        this.sourceFile.scriptKind === ts.ScriptKind.JSX
+                        ? 'javascript'
+                        : 'typescript',
                     text: this.hideWorkingDirectory(publicCompilerSignature),
                     occurrences: [],
                 }),
@@ -222,6 +225,7 @@ mod tests {
         let patched = patch_source(&source).unwrap();
 
         assert!(patched.contains("signature_documentation: publicCompilerSignature"));
+        assert!(patched.contains("this.sourceFile.scriptKind === ts.ScriptKind.JS"));
         assert!(patched.contains("ts.isFunctionLike(candidate)"));
         assert!(patched.contains("ts.TypeFormatFlags.InTypeAlias"));
         assert!(patch_source(&patched).is_err());
@@ -299,7 +303,17 @@ export function parse(value: string | number): string | number { return value; }
             .unwrap();
         assert!(status.success());
 
-        let index = crate::semantic_index_scip::ingest_scip_file(project.path(), &output).unwrap();
+        let expected_languages = std::collections::BTreeMap::from([(
+            crate::semantic_index::RepositoryPath("src/index.ts".to_string()),
+            "typescript".to_string(),
+        )]);
+        let index = crate::semantic_index_scip::ingest_scip_file_with_expected_languages(
+            project.path(),
+            &output,
+            Some(&expected_languages),
+            Some(crate::semantic_index::SemanticPositionEncoding::Utf16),
+        )
+        .unwrap();
         let parse = index
             .symbols
             .values()
@@ -308,13 +322,13 @@ export function parse(value: string | number): string | number { return value; }
         let signatures = parse
             .signatures
             .iter()
-            .map(|signature| signature.text.as_str())
+            .map(|signature| (signature.language.as_str(), signature.text.as_str()))
             .collect::<Vec<_>>();
         assert_eq!(
             signatures,
             [
-                "function parse(value: number) => number",
-                "function parse(value: string) => string",
+                ("typescript", "function parse(value: number) => number"),
+                ("typescript", "function parse(value: string) => string"),
             ]
         );
     }

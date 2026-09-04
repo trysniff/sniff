@@ -94,7 +94,7 @@ fn typescript_installation_identity_commits_the_signature_patch() {
     let identity = super::source_identity(spec);
 
     assert!(
-        identity.ends_with(":sniff-signature-patch-compiler-api-signatures-v1"),
+        identity.ends_with(":sniff-signature-patch-compiler-api-signatures-v2"),
         "{identity}"
     );
 }
