@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
-pub const SEMANTIC_INDEX_FORMAT_VERSION: u32 = 2;
+pub const SEMANTIC_INDEX_FORMAT_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -124,7 +124,7 @@ pub struct SemanticSymbol {
     pub display_name: Option<String>,
     pub kind: SemanticSymbolKind,
     pub documentation: Vec<String>,
-    pub signature: Option<SemanticSignature>,
+    pub signatures: BTreeSet<SemanticSignature>,
     pub owner: Option<SemanticResolution<SemanticSymbolId>>,
     pub definitions: BTreeSet<SemanticLocation>,
     pub visibility: SemanticVisibility,
@@ -159,7 +159,7 @@ pub enum SemanticSymbolCategory {
     Other,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct SemanticSignature {
     pub language: String,
     pub text: String,

@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-pub const INTENTIONAL_BOUNDARY_SEMANTIC_CENSUS_SCHEMA_VERSION: u32 = 3;
+pub const INTENTIONAL_BOUNDARY_SEMANTIC_CENSUS_SCHEMA_VERSION: u32 = 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -139,6 +139,14 @@ pub enum IntentionalBoundarySemanticResolution<T> {
     },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IntentionalBoundarySemanticSignatureFacts {
+    pub language: String,
+    pub text: String,
+    pub referenced_symbols: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct IntentionalBoundarySemanticSymbolFacts {
@@ -148,8 +156,7 @@ pub struct IntentionalBoundarySemanticSymbolFacts {
     pub category: IntentionalBoundarySemanticSymbolCategory,
     pub provider_kind: String,
     pub documentation: Vec<String>,
-    pub signature: Option<String>,
-    pub signature_referenced_symbols: Vec<String>,
+    pub signatures: Vec<IntentionalBoundarySemanticSignatureFacts>,
     pub owner: Option<IntentionalBoundarySemanticResolution<String>>,
     pub definitions: Vec<IntentionalBoundarySemanticRange>,
     pub visibility: IntentionalBoundarySemanticVisibility,

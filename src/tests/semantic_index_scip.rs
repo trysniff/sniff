@@ -357,7 +357,7 @@ fn captures_signature_symbol_references_and_multiline_ranges() {
         .symbols
         .get(&symbols::stable_symbol_id(RUN, None).unwrap())
         .unwrap();
-    let signature = run.signature.as_ref().unwrap();
+    let signature = run.signatures.iter().next().unwrap();
     assert!(
         signature
             .referenced_symbols
@@ -551,17 +551,54 @@ fn scip_go_blank_identifier_collisions_preserve_the_rest_of_the_index() {
     assert_eq!(blank.kind.provider_name, "ConflictingKinds");
     assert_eq!(blank.display_name.as_deref(), Some("_"));
     assert_eq!(blank.definitions.len(), 2);
-    assert!(blank.signature.is_none());
-    assert_eq!(blank.ambiguity_notes.len(), 2);
+    assert_eq!(blank.signatures.len(), 2);
+    assert_eq!(
+        blank
+            .signatures
+            .iter()
+            .map(|signature| signature.text.as_str())
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from(["const _ = assertConstant", "var _ = assertVariable()"])
+    );
+    assert_eq!(blank.ambiguity_notes.len(), 1);
     assert!(
         blank.ambiguity_notes[0].contains("conflicting SCIP symbol kinds"),
         "{:?}",
         blank.ambiguity_notes
     );
-    assert!(
-        blank.ambiguity_notes[1].contains("conflicting SCIP symbol signature values"),
-        "{:?}",
-        blank.ambiguity_notes
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn repeated_symbol_information_preserves_every_compiler_signature() {
+    let root = root("overloaded-signatures");
+    let mut index = base_index();
+    let mut source = document("overloads.ts");
+    let identity = "scip-typescript npm demo 1.0.0 `overloads.ts`/parse().";
+    for signature_text in ["(value: number): number", "(value: string): string"] {
+        let mut information = SymbolInformation::new();
+        information.symbol = identity.to_string();
+        information.kind = EnumOrUnknown::new(Kind::Function);
+        let mut signature = Signature::new();
+        signature.language = "typescript".to_string();
+        signature.text = signature_text.to_string();
+        information.signature_documentation = MessageField::some(signature);
+        source.symbols.push(information);
+    }
+    index.documents.push(source);
+
+    let imported = ingest(&root, &index).unwrap();
+    let symbol_id = symbols::stable_symbol_id(identity, None).unwrap();
+    let symbol = imported.symbols.get(&symbol_id).unwrap();
+    assert_eq!(symbol.signatures.len(), 2);
+    assert!(symbol.ambiguity_notes.is_empty());
+    assert_eq!(
+        symbol
+            .signatures
+            .iter()
+            .map(|signature| signature.text.as_str())
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from(["(value: number): number", "(value: string): string"])
     );
     fs::remove_dir_all(root).ok();
 }

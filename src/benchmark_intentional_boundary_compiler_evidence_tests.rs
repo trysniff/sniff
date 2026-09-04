@@ -92,8 +92,13 @@ fn fixture() -> (
                     category: IntentionalBoundarySemanticSymbolCategory::Callable,
                     provider_kind: "function".to_string(),
                     documentation: Vec::new(),
-                    signature: Some("fn process()".to_string()),
-                    signature_referenced_symbols: Vec::new(),
+                    signatures: vec![
+                        crate::benchmark::IntentionalBoundarySemanticSignatureFacts {
+                            language: "rust".to_string(),
+                            text: "fn process()".to_string(),
+                            referenced_symbols: Vec::new(),
+                        },
+                    ],
                     owner: None,
                     definitions: vec![location()],
                     visibility: IntentionalBoundarySemanticVisibility::Public,

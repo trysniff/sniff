@@ -36,7 +36,7 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-const SEMANTIC_CENSUS_CONTRACT: &str = "sniffbench-historical-v2-compiler-semantic-census-v5";
+const SEMANTIC_CENSUS_CONTRACT: &str = "sniffbench-historical-v2-compiler-semantic-census-v6";
 const UNCHANGED_DOCUMENT_EXCLUSION: &str =
     "compiler omitted an unchanged source document outside the exact historical patch";
 const UNTOUCHED_LANGUAGE_EXCLUSION: &str =

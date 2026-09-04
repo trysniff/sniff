@@ -240,8 +240,7 @@ fn semantic_censuses(
                             category: IntentionalBoundarySemanticSymbolCategory::Callable,
                             provider_kind: "function".to_string(),
                             documentation: Vec::new(),
-                            signature: None,
-                            signature_referenced_symbols: Vec::new(),
+                            signatures: Vec::new(),
                             owner: None,
                             definitions: vec![range.clone()],
                             visibility: if method.is_exported {

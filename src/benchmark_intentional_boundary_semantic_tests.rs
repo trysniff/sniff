@@ -102,11 +102,11 @@ fn fixture() -> (
             provider_name: "function".to_string(),
         },
         documentation: vec!["Public processing contract.".to_string()],
-        signature: Some(SemanticSignature {
+        signatures: BTreeSet::from([SemanticSignature {
             language: "rust".to_string(),
             text: "fn process(value: i32) -> i32".to_string(),
             referenced_symbols: BTreeSet::new(),
-        }),
+        }]),
         owner: None,
         definitions: BTreeSet::from([definition]),
         visibility: SemanticVisibility::Public,
@@ -123,7 +123,7 @@ fn fixture() -> (
             provider_name: "method".to_string(),
         },
         documentation: Vec::new(),
-        signature: None,
+        signatures: BTreeSet::new(),
         owner: None,
         definitions: BTreeSet::new(),
         visibility: SemanticVisibility::Public,
