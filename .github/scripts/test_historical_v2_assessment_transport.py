@@ -559,7 +559,7 @@ class ManifestTests(unittest.TestCase):
         transport.migrate_manifest(
             path,
             transport.FRAME_RUN_ID,
-            transport.BATCHED_SEMANTIC_SOURCE_RECONSTRUCTION_MIGRATION_FROM_COLLECTOR_SHA,
+            transport.NORMALIZED_SEMANTIC_SNAPSHOT_MIGRATION_FROM_COLLECTOR_SHA,
             transport.INDEXED_SEMANTIC_SNAPSHOT_PROJECTION_MIGRATION_NAME,
             transport.INDEXED_SEMANTIC_SNAPSHOT_PROJECTION_MIGRATION_SOURCE_RUN_ID,
             transport.INDEXED_SEMANTIC_SNAPSHOT_PROJECTION_MIGRATION_FROM_COLLECTOR_SHA,
@@ -1678,7 +1678,7 @@ class ManifestTests(unittest.TestCase):
                     transport.INDEXED_SEMANTIC_SNAPSHOT_PROJECTION_MIGRATION_SOURCE_ARTIFACT_SIZE,
                 )
 
-    def test_batched_semantic_source_reconstruction_migration_is_exact_and_one_way(
+    def test_normalized_semantic_snapshot_migration_is_exact_and_one_way(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -1687,21 +1687,37 @@ class ManifestTests(unittest.TestCase):
             prior_manifest = json.loads(path.read_text(encoding="utf-8"))
             prior_records = prior_manifest["collector_migrations"]
             source = (
-                transport.BATCHED_SEMANTIC_SOURCE_RECONSTRUCTION_MIGRATION_FROM_COLLECTOR_SHA
+                transport.NORMALIZED_SEMANTIC_SNAPSHOT_MIGRATION_FROM_COLLECTOR_SHA
             )
             target = "3" * 40
+
+            with self.assertRaises(ValueError):
+                transport.migrate_manifest(
+                    path,
+                    transport.FRAME_RUN_ID,
+                    target,
+                    "batched-semantic-source-reconstruction-v1",
+                    transport.NORMALIZED_SEMANTIC_SNAPSHOT_MIGRATION_SOURCE_RUN_ID,
+                    source,
+                    transport.NORMALIZED_SEMANTIC_SNAPSHOT_MIGRATION_SOURCE_ARTIFACT_ID,
+                    transport.NORMALIZED_SEMANTIC_SNAPSHOT_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+                    transport.NORMALIZED_SEMANTIC_SNAPSHOT_MIGRATION_SOURCE_ARTIFACT_SIZE,
+                )
+            self.assertEqual(
+                json.loads(path.read_text(encoding="utf-8")), prior_manifest
+            )
 
             self.assertEqual(
                 transport.migrate_manifest(
                     path,
                     transport.FRAME_RUN_ID,
                     target,
-                    transport.BATCHED_SEMANTIC_SOURCE_RECONSTRUCTION_MIGRATION_NAME,
-                    transport.BATCHED_SEMANTIC_SOURCE_RECONSTRUCTION_MIGRATION_SOURCE_RUN_ID,
+                    transport.NORMALIZED_SEMANTIC_SNAPSHOT_MIGRATION_NAME,
+                    transport.NORMALIZED_SEMANTIC_SNAPSHOT_MIGRATION_SOURCE_RUN_ID,
                     source,
-                    transport.BATCHED_SEMANTIC_SOURCE_RECONSTRUCTION_MIGRATION_SOURCE_ARTIFACT_ID,
-                    transport.BATCHED_SEMANTIC_SOURCE_RECONSTRUCTION_MIGRATION_SOURCE_ARTIFACT_DIGEST,
-                    transport.BATCHED_SEMANTIC_SOURCE_RECONSTRUCTION_MIGRATION_SOURCE_ARTIFACT_SIZE,
+                    transport.NORMALIZED_SEMANTIC_SNAPSHOT_MIGRATION_SOURCE_ARTIFACT_ID,
+                    transport.NORMALIZED_SEMANTIC_SNAPSHOT_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+                    transport.NORMALIZED_SEMANTIC_SNAPSHOT_MIGRATION_SOURCE_ARTIFACT_SIZE,
                 ),
                 target,
             )
@@ -1713,23 +1729,23 @@ class ManifestTests(unittest.TestCase):
                 {
                     "from_collector_sha": source,
                     "migration_contract": (
-                        transport.BATCHED_SEMANTIC_SOURCE_RECONSTRUCTION_MIGRATION_CONTRACT
+                        transport.NORMALIZED_SEMANTIC_SNAPSHOT_MIGRATION_CONTRACT
                     ),
                     "migration_name": (
-                        transport.BATCHED_SEMANTIC_SOURCE_RECONSTRUCTION_MIGRATION_NAME
+                        transport.NORMALIZED_SEMANTIC_SNAPSHOT_MIGRATION_NAME
                     ),
                     "source_artifact_digest": (
-                        transport.BATCHED_SEMANTIC_SOURCE_RECONSTRUCTION_MIGRATION_SOURCE_ARTIFACT_DIGEST
+                        transport.NORMALIZED_SEMANTIC_SNAPSHOT_MIGRATION_SOURCE_ARTIFACT_DIGEST
                     ),
                     "source_artifact_id": (
-                        transport.BATCHED_SEMANTIC_SOURCE_RECONSTRUCTION_MIGRATION_SOURCE_ARTIFACT_ID
+                        transport.NORMALIZED_SEMANTIC_SNAPSHOT_MIGRATION_SOURCE_ARTIFACT_ID
                     ),
                     "source_artifact_size": (
-                        transport.BATCHED_SEMANTIC_SOURCE_RECONSTRUCTION_MIGRATION_SOURCE_ARTIFACT_SIZE
+                        transport.NORMALIZED_SEMANTIC_SNAPSHOT_MIGRATION_SOURCE_ARTIFACT_SIZE
                     ),
                     "source_head_sha": source,
                     "source_run_id": (
-                        transport.BATCHED_SEMANTIC_SOURCE_RECONSTRUCTION_MIGRATION_SOURCE_RUN_ID
+                        transport.NORMALIZED_SEMANTIC_SNAPSHOT_MIGRATION_SOURCE_RUN_ID
                     ),
                     "to_collector_sha": target,
                 },
@@ -1769,12 +1785,12 @@ class ManifestTests(unittest.TestCase):
                     path,
                     transport.FRAME_RUN_ID,
                     "4" * 40,
-                    transport.BATCHED_SEMANTIC_SOURCE_RECONSTRUCTION_MIGRATION_NAME,
-                    transport.BATCHED_SEMANTIC_SOURCE_RECONSTRUCTION_MIGRATION_SOURCE_RUN_ID,
+                    transport.NORMALIZED_SEMANTIC_SNAPSHOT_MIGRATION_NAME,
+                    transport.NORMALIZED_SEMANTIC_SNAPSHOT_MIGRATION_SOURCE_RUN_ID,
                     target,
-                    transport.BATCHED_SEMANTIC_SOURCE_RECONSTRUCTION_MIGRATION_SOURCE_ARTIFACT_ID,
-                    transport.BATCHED_SEMANTIC_SOURCE_RECONSTRUCTION_MIGRATION_SOURCE_ARTIFACT_DIGEST,
-                    transport.BATCHED_SEMANTIC_SOURCE_RECONSTRUCTION_MIGRATION_SOURCE_ARTIFACT_SIZE,
+                    transport.NORMALIZED_SEMANTIC_SNAPSHOT_MIGRATION_SOURCE_ARTIFACT_ID,
+                    transport.NORMALIZED_SEMANTIC_SNAPSHOT_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+                    transport.NORMALIZED_SEMANTIC_SNAPSHOT_MIGRATION_SOURCE_ARTIFACT_SIZE,
                 )
 
     def test_storage_migration_rejects_unapproved_source_or_name(self) -> None:
@@ -2118,7 +2134,7 @@ class WorkflowContractTests(unittest.TestCase):
             "resumable-go-semantic-assembly-v1",
             "finalized-go-semantic-compaction-v1",
             "indexed-semantic-snapshot-projection-v1",
-            "batched-semantic-source-reconstruction-v1",
+            "batched-source-normalized-semantic-snapshot-v1",
             '"$transport" migrate-manifest',
             '"$PRIOR_HEAD_SHA" "$PRIOR_ARTIFACT_ID"',
             '"$PRIOR_ARTIFACT_DIGEST" "$PRIOR_ARTIFACT_SIZE"',
