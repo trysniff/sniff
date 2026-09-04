@@ -279,21 +279,21 @@ pub(in crate::benchmark::release) fn flatten_symbol(
         category: symbol_category(symbol.kind.category),
         provider_kind: symbol.kind.provider_name.clone(),
         documentation: symbol.documentation.clone(),
-        signature: symbol
-            .signature
-            .as_ref()
-            .map(|signature| signature.text.clone()),
-        signature_referenced_symbols: symbol
-            .signature
-            .as_ref()
-            .map(|signature| {
-                signature
-                    .referenced_symbols
-                    .iter()
-                    .map(|symbol| symbol.0.clone())
-                    .collect()
-            })
-            .unwrap_or_default(),
+        signatures: symbol
+            .signatures
+            .iter()
+            .map(
+                |signature| super::IntentionalBoundarySemanticSignatureFacts {
+                    language: signature.language.clone(),
+                    text: signature.text.clone(),
+                    referenced_symbols: signature
+                        .referenced_symbols
+                        .iter()
+                        .map(|symbol| symbol.0.clone())
+                        .collect(),
+                },
+            )
+            .collect(),
         owner: symbol.owner.as_ref().map(flatten_symbol_resolution),
         definitions: symbol.definitions.iter().map(flatten_location).collect(),
         visibility: visibility(symbol.visibility),

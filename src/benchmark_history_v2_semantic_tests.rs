@@ -1076,7 +1076,7 @@ fn fixture() -> Fixture {
             provider_name: "function".to_string(),
         },
         documentation: Vec::new(),
-        signature: None,
+        signatures: BTreeSet::new(),
         owner: None,
         definitions: BTreeSet::from([definition]),
         visibility: SemanticVisibility::Public,

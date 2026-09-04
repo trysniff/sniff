@@ -70,8 +70,13 @@ fn fixture(
                 category: IntentionalBoundarySemanticSymbolCategory::Callable,
                 provider_kind: "function".to_string(),
                 documentation: Vec::new(),
-                signature: Some("fn process(value: i32) -> i32".to_string()),
-                signature_referenced_symbols: Vec::new(),
+                signatures: vec![
+                    crate::benchmark::IntentionalBoundarySemanticSignatureFacts {
+                        language: "rust".to_string(),
+                        text: "fn process(value: i32) -> i32".to_string(),
+                        referenced_symbols: Vec::new(),
+                    },
+                ],
                 owner: None,
                 definitions: vec![range(7, 14)],
                 visibility: IntentionalBoundarySemanticVisibility::Public,

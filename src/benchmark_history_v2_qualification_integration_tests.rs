@@ -229,8 +229,13 @@ fn symbol_facts(repository_path: &str, name: &str) -> IntentionalBoundarySemanti
         category: IntentionalBoundarySemanticSymbolCategory::Callable,
         provider_kind: "function".to_string(),
         documentation: Vec::new(),
-        signature: Some(format!("pub fn {name}() -> i32")),
-        signature_referenced_symbols: Vec::new(),
+        signatures: vec![
+            crate::benchmark::IntentionalBoundarySemanticSignatureFacts {
+                language: "go".to_string(),
+                text: format!("pub fn {name}() -> i32"),
+                referenced_symbols: Vec::new(),
+            },
+        ],
         owner: Some(IntentionalBoundarySemanticResolution::Resolved {
             value: "fixture".to_string(),
         }),

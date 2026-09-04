@@ -8,13 +8,13 @@ use super::{
     IntentionalBoundarySemanticOccurrenceRole, IntentionalBoundarySemanticOrigin,
     IntentionalBoundarySemanticRange, IntentionalBoundarySemanticReferenceTarget,
     IntentionalBoundarySemanticRelationshipFacts, IntentionalBoundarySemanticRelationshipKind,
-    IntentionalBoundarySemanticResolution, IntentionalBoundarySemanticSourceReference,
-    IntentionalBoundarySemanticSurface, IntentionalBoundarySemanticSymbolCategory,
-    IntentionalBoundarySemanticSymbolFacts, IntentionalBoundarySemanticTestFacts,
-    IntentionalBoundarySemanticTestKind, IntentionalBoundarySemanticUnresolvedReason,
-    IntentionalBoundarySemanticVisibility, IntentionalBoundarySourceCensus,
-    IntentionalBoundarySourceFile, intentional_boundary_file_records,
-    validate_intentional_boundary_source_census,
+    IntentionalBoundarySemanticResolution, IntentionalBoundarySemanticSignatureFacts,
+    IntentionalBoundarySemanticSourceReference, IntentionalBoundarySemanticSurface,
+    IntentionalBoundarySemanticSymbolCategory, IntentionalBoundarySemanticSymbolFacts,
+    IntentionalBoundarySemanticTestFacts, IntentionalBoundarySemanticTestKind,
+    IntentionalBoundarySemanticUnresolvedReason, IntentionalBoundarySemanticVisibility,
+    IntentionalBoundarySourceCensus, IntentionalBoundarySourceFile,
+    intentional_boundary_file_records, validate_intentional_boundary_source_census,
 };
 use crate::semantic_index::{
     SemanticDispatch, SemanticIndex, SemanticLocation, SemanticOccurrenceRole,
@@ -32,7 +32,7 @@ use std::path::Path;
 use super::intentional_boundary_runtime_snapshot::IntentionalBoundaryRuntimeSnapshot;
 
 pub(super) const SEMANTIC_CENSUS_CONTRACT: &str =
-    "sniffbench-intentional-boundary-compiler-semantic-census-v3";
+    "sniffbench-intentional-boundary-compiler-semantic-census-v4";
 type MethodJoinKey = (String, String, u32, u32);
 type ExpectedMethodMap<'a> = BTreeMap<MethodJoinKey, &'a IntentionalBoundaryMethodCensusEntry>;
 

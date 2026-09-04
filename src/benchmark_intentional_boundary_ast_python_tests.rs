@@ -105,8 +105,13 @@ fn fixture_with_references(
                     category: IntentionalBoundarySemanticSymbolCategory::Callable,
                     provider_kind: "function".to_string(),
                     documentation: Vec::new(),
-                    signature: Some("def process(value)".to_string()),
-                    signature_referenced_symbols: Vec::new(),
+                    signatures: vec![
+                        crate::benchmark::IntentionalBoundarySemanticSignatureFacts {
+                            language: "python".to_string(),
+                            text: "def process(value)".to_string(),
+                            referenced_symbols: Vec::new(),
+                        },
+                    ],
                     owner: None,
                     definitions: vec![definition.clone()],
                     visibility: IntentionalBoundarySemanticVisibility::Public,

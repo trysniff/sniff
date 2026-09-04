@@ -117,7 +117,7 @@ fn render_binding_context(index: &SemanticIndex, binding: &SemanticMethodBinding
                 if !symbol.surfaces.is_empty() {
                     lines.push(format!("compiler surfaces: {:?}", symbol.surfaces));
                 }
-                if let Some(signature) = &symbol.signature {
+                for signature in &symbol.signatures {
                     lines.push(format!("compiler signature: {}", signature.text));
                 }
                 if !symbol.ambiguity_notes.is_empty() {
@@ -629,11 +629,11 @@ mod tests {
                 provider_name: "function".to_string(),
             },
             documentation: Vec::new(),
-            signature: Some(SemanticSignature {
+            signatures: BTreeSet::from([SemanticSignature {
                 language: "rust".to_string(),
                 text: "fn process(value: i32) -> i32".to_string(),
                 referenced_symbols: BTreeSet::new(),
-            }),
+            }]),
             owner: None,
             definitions,
             visibility: SemanticVisibility::Private,

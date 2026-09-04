@@ -179,16 +179,17 @@ fn merge_missing_implementation_endpoint(
             endpoint.0, owner.0
         ));
     }
-    if let Some(signature) = &symbol.signature
-        && let Some(missing) = signature
+    for signature in &symbol.signatures {
+        if let Some(missing) = signature
             .referenced_symbols
             .iter()
             .find(|referenced| !merged.symbols.contains_key(*referenced))
-    {
-        return Err(format!(
-            "implementation-pair symbol {} has signature dependency {} absent from document shards",
-            endpoint.0, missing.0
-        ));
+        {
+            return Err(format!(
+                "implementation-pair symbol {} has signature dependency {} absent from document shards",
+                endpoint.0, missing.0
+            ));
+        }
     }
     merge_symbol(merged, symbol.clone())
 }
@@ -325,15 +326,7 @@ pub(crate) fn merge_symbol(
         };
         existing.ambiguity_notes.push(detail);
     }
-    if let Err(detail) = merge_optional(
-        &mut existing.signature,
-        incoming.signature,
-        &incoming.id,
-        "signature",
-    ) {
-        existing.signature = None;
-        existing.ambiguity_notes.push(detail);
-    }
+    existing.signatures.extend(incoming.signatures);
     merge_optional(&mut existing.owner, incoming.owner, &incoming.id, "owner")?;
     for documentation in incoming.documentation {
         if !existing.documentation.contains(&documentation) {
@@ -469,7 +462,7 @@ mod tests {
                 provider_name: format!("{category:?}"),
             },
             documentation: Vec::new(),
-            signature: None,
+            signatures: BTreeSet::new(),
             owner: None,
             definitions: BTreeSet::new(),
             visibility: if origin == SemanticSymbolOrigin::Repository {

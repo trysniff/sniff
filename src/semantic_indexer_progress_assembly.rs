@@ -2,7 +2,7 @@ use super::*;
 use std::io::Read;
 
 pub(super) const ASSEMBLIES_DIRECTORY: &str = "assemblies";
-const ASSEMBLY_CONTRACT: &str = "semantic-indexer-unit-assembly-progress-v1";
+const ASSEMBLY_CONTRACT: &str = "semantic-indexer-unit-assembly-progress-v2";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

@@ -1,6 +1,7 @@
 use super::{
     HistoricalV2PublicSurfaceChange, HistoricalV2PublicSurfaceDelta,
     HistoricalV2PublicSurfaceEntry, HistoricalV2SemanticSnapshotCensus,
+    IntentionalBoundarySemanticSymbolFacts,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -33,18 +34,7 @@ fn surface_entries(
                     "historical-v2 public binding references a missing surface symbol".to_string()
                 })?;
             let symbol = &entry.symbol;
-            let semantic_fingerprint_sha256 = hash_json(&(
-                &symbol.provider_identity,
-                &symbol.display_name,
-                symbol.category,
-                &symbol.provider_kind,
-                &symbol.signature,
-                &symbol.signature_referenced_symbols,
-                &symbol.owner,
-                symbol.visibility,
-                &symbol.surfaces,
-                symbol.origin,
-            ))?;
+            let semantic_fingerprint_sha256 = semantic_fingerprint(symbol)?;
             Ok(HistoricalV2PublicSurfaceEntry {
                 indexer: binding.indexer,
                 surface_unit_id: binding.surface_unit_id.clone(),
@@ -61,6 +51,20 @@ fn surface_entries(
         return Err("historical-v2 public surface repeats a symbol".to_string());
     }
     Ok(entries)
+}
+
+fn semantic_fingerprint(symbol: &IntentionalBoundarySemanticSymbolFacts) -> Result<String, String> {
+    hash_json(&(
+        &symbol.provider_identity,
+        &symbol.display_name,
+        symbol.category,
+        &symbol.provider_kind,
+        &symbol.signatures,
+        &symbol.owner,
+        symbol.visibility,
+        &symbol.surfaces,
+        symbol.origin,
+    ))
 }
 
 fn diff_entries(
@@ -141,7 +145,11 @@ fn hash_json(value: &impl Serialize) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::benchmark::IntentionalBoundaryIndexerKind;
+    use crate::benchmark::{
+        IntentionalBoundaryIndexerKind, IntentionalBoundarySemanticOrigin,
+        IntentionalBoundarySemanticSignatureFacts, IntentionalBoundarySemanticSurface,
+        IntentionalBoundarySemanticSymbolCategory, IntentionalBoundarySemanticVisibility,
+    };
 
     #[test]
     fn moved_definitions_do_not_change_the_stable_surface_entry() {
@@ -164,6 +172,18 @@ mod tests {
         assert_eq!(delta.changed.len(), 1);
     }
 
+    #[test]
+    fn changing_one_overload_changes_the_compiler_surface_fingerprint() {
+        let base = symbol_with_signatures(&["(value: number): number", "(value: string): string"]);
+        let patched =
+            symbol_with_signatures(&["(value: boolean): boolean", "(value: string): string"]);
+
+        assert_ne!(
+            semantic_fingerprint(&base).expect("base fingerprint"),
+            semantic_fingerprint(&patched).expect("patched fingerprint")
+        );
+    }
+
     fn surface_entry(symbol: &str, fingerprint: char) -> HistoricalV2PublicSurfaceEntry {
         HistoricalV2PublicSurfaceEntry {
             indexer: IntentionalBoundaryIndexerKind::Rust,
@@ -171,6 +191,31 @@ mod tests {
             declaration_unit_id: "declaration".to_string(),
             symbol_id: symbol.to_string(),
             semantic_fingerprint_sha256: std::iter::repeat_n(fingerprint, 64).collect(),
+        }
+    }
+
+    fn symbol_with_signatures(signatures: &[&str]) -> IntentionalBoundarySemanticSymbolFacts {
+        IntentionalBoundarySemanticSymbolFacts {
+            symbol_id: "symbol".to_string(),
+            provider_identity: "compiler identity".to_string(),
+            display_name: Some("parse".to_string()),
+            category: IntentionalBoundarySemanticSymbolCategory::Callable,
+            provider_kind: "Function".to_string(),
+            documentation: Vec::new(),
+            signatures: signatures
+                .iter()
+                .map(|text| IntentionalBoundarySemanticSignatureFacts {
+                    language: "typescript".to_string(),
+                    text: (*text).to_string(),
+                    referenced_symbols: Vec::new(),
+                })
+                .collect(),
+            owner: None,
+            definitions: Vec::new(),
+            visibility: IntentionalBoundarySemanticVisibility::Public,
+            surfaces: vec![IntentionalBoundarySemanticSurface::PublicApi],
+            origin: IntentionalBoundarySemanticOrigin::Repository,
+            ambiguity_notes: Vec::new(),
         }
     }
 }
