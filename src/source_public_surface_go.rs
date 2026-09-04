@@ -1,6 +1,6 @@
 use super::{
-    SourceByteRange, SourcePublicBindingKind, SourcePublicDeclaration, SourcePublicSurface,
-    SourcePublicSymbolKind,
+    SourceByteRange, SourcePublicBindingKind, SourcePublicDeclaration, SourcePublicNamespace,
+    SourcePublicSurface, SourcePublicSymbolKind,
 };
 use tree_sitter::Node;
 
@@ -163,6 +163,11 @@ fn declaration(
         name: text.to_string(),
         target_name: text.to_string(),
         owner: owner.map(str::to_string),
+        namespace: if owner.is_some() {
+            SourcePublicNamespace::InstanceMember
+        } else {
+            SourcePublicNamespace::Module
+        },
         kind,
         exposed_identifier: SourceByteRange {
             start: name.start_byte(),

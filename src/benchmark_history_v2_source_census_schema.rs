@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-pub const HISTORICAL_V2_SOURCE_CENSUS_SCHEMA_VERSION: u32 = 5;
+pub const HISTORICAL_V2_SOURCE_CENSUS_SCHEMA_VERSION: u32 = 6;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -42,6 +42,14 @@ pub enum HistoricalV2SourcePublicSymbolKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HistoricalV2SourcePublicNamespace {
+    Module,
+    InstanceMember,
+    StaticMember,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HistoricalV2SourceByteRange {
     pub start: usize,
@@ -77,6 +85,7 @@ pub struct HistoricalV2SourcePublicDeclaration {
     pub declaration_unit_id: String,
     pub name: String,
     pub owner: Option<String>,
+    pub namespace: HistoricalV2SourcePublicNamespace,
     pub kind: HistoricalV2SourcePublicSymbolKind,
     pub identifier: HistoricalV2SourceByteRange,
     pub identifier_positions: HistoricalV2SourceIdentifierPositions,

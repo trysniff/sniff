@@ -10,8 +10,9 @@ use super::{
     HistoricalV2SourceCensusFailureEvidence, HistoricalV2SourceFile,
     HistoricalV2SourceIdentifierPositions, HistoricalV2SourceMethod, HistoricalV2SourcePosition,
     HistoricalV2SourcePositionRange, HistoricalV2SourcePublicDeclaration,
-    HistoricalV2SourcePublicSymbolKind, HistoricalV2SourceSemanticCoverage,
-    HistoricalV2SourceSnapshotCensus, HistoricalV2SourceSnapshotSide, HistoricalV2StageResult,
+    HistoricalV2SourcePublicNamespace, HistoricalV2SourcePublicSymbolKind,
+    HistoricalV2SourceSemanticCoverage, HistoricalV2SourceSnapshotCensus,
+    HistoricalV2SourceSnapshotSide, HistoricalV2StageResult,
     IntentionalBoundaryRepositoryInventory, IntentionalBoundarySourceCensus,
     census_intentional_boundary_repository, inventory_intentional_boundary_repository,
     validate_historical_v2_materialization,
@@ -21,7 +22,7 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::path::Path;
 
-const SOURCE_CENSUS_CONTRACT: &str = "sniffbench-historical-v2-source-census-v5";
+const SOURCE_CENSUS_CONTRACT: &str = "sniffbench-historical-v2-source-census-v6";
 pub(super) const PARSER_ERROR_LIMIT: usize = 4 * 1024;
 type SourceCensusStageResult =
     HistoricalV2StageResult<HistoricalV2SourceCensus, HistoricalV2SourceCensusExclusion>;
@@ -414,31 +415,44 @@ fn source_public_declarations(
                 end: declaration.exposed_identifier.end,
             };
             let identifier_positions = identifier_positions(source_text, identifier)?;
+            let namespace = match declaration.namespace {
+                crate::source_public_surface::SourcePublicNamespace::Module => {
+                    HistoricalV2SourcePublicNamespace::Module
+                }
+                crate::source_public_surface::SourcePublicNamespace::InstanceMember => {
+                    HistoricalV2SourcePublicNamespace::InstanceMember
+                }
+                crate::source_public_surface::SourcePublicNamespace::StaticMember => {
+                    HistoricalV2SourcePublicNamespace::StaticMember
+                }
+            };
             let package_path = Path::new(repository_path)
                 .parent()
                 .map(|path| path.to_string_lossy().replace('\\', "/"))
                 .unwrap_or_default();
             let surface_unit_id = hash_json(&(
-                "sniffbench-historical-v2-public-surface-v1",
+                "sniffbench-historical-v2-public-surface-v2",
                 language,
                 package_path,
                 declaration.name.as_str(),
                 declaration.owner.as_deref(),
+                namespace,
                 kind,
             ))
-            .map(|hash| format!("h2s-v1:{hash}"))?;
+            .map(|hash| format!("h2s-v2:{hash}"))?;
             let declaration_unit_id = hash_json(&(
-                "sniffbench-historical-v2-public-declaration-v1",
+                "sniffbench-historical-v2-public-declaration-v2",
                 surface_unit_id.as_str(),
                 repository_path,
                 identifier,
             ))
-            .map(|hash| format!("h2d-v1:{hash}"))?;
+            .map(|hash| format!("h2d-v2:{hash}"))?;
             Ok(HistoricalV2SourcePublicDeclaration {
                 surface_unit_id,
                 declaration_unit_id,
                 name: declaration.name,
                 owner: declaration.owner,
+                namespace,
                 kind,
                 identifier,
                 identifier_positions,
