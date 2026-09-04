@@ -5,7 +5,7 @@ use crate::semantic_index::{
 };
 use crate::semantic_index_merge::merge_symbol;
 use protobuf::Enum;
-use scip::types::{Relationship, SymbolInformation, symbol_information::Kind};
+use scip::types::{Relationship, SymbolInformation, descriptor::Suffix, symbol_information::Kind};
 use std::collections::BTreeSet;
 
 struct ImportedSignature {
@@ -244,10 +244,7 @@ fn symbol_kind(raw: i32, provider_identity: &str) -> Result<SemanticSymbolKind, 
     let kind =
         Kind::from_i32(raw).ok_or_else(|| format!("SCIP symbol uses unknown kind value {raw}"))?;
     let category = match kind {
-        Kind::UnspecifiedKind if provider_identity.ends_with("().") => {
-            SemanticSymbolCategory::Callable
-        }
-        Kind::UnspecifiedKind => SemanticSymbolCategory::Unknown,
+        Kind::UnspecifiedKind => category_from_symbol_identity(provider_identity)?,
         Kind::Function | Kind::Getter | Kind::Setter | Kind::Operator | Kind::Accessor => {
             SemanticSymbolCategory::Callable
         }
@@ -293,5 +290,34 @@ fn symbol_kind(raw: i32, provider_identity: &str) -> Result<SemanticSymbolKind, 
     Ok(SemanticSymbolKind {
         category,
         provider_name: format!("{kind:?}"),
+    })
+}
+
+fn category_from_symbol_identity(
+    provider_identity: &str,
+) -> Result<SemanticSymbolCategory, String> {
+    let symbol = scip::symbol::parse_symbol(provider_identity).map_err(|error| {
+        format!("invalid SCIP symbol identity {provider_identity:?}: {error:?}")
+    })?;
+    let Some((last, owners)) = symbol.descriptors.split_last() else {
+        return Ok(SemanticSymbolCategory::Unknown);
+    };
+    let suffix = last
+        .suffix
+        .enum_value()
+        .map_err(|value| format!("SCIP symbol identity uses unknown descriptor suffix {value}"))?;
+    let owned_by_type = owners
+        .iter()
+        .any(|descriptor| descriptor.suffix.enum_value().ok() == Some(Suffix::Type));
+    Ok(match suffix {
+        Suffix::Namespace | Suffix::Package | Suffix::Meta => SemanticSymbolCategory::Module,
+        Suffix::Type | Suffix::TypeParameter => SemanticSymbolCategory::Type,
+        Suffix::Term if owned_by_type => SemanticSymbolCategory::FieldOrProperty,
+        Suffix::Term => SemanticSymbolCategory::Variable,
+        Suffix::Method if owned_by_type => SemanticSymbolCategory::Method,
+        Suffix::Method => SemanticSymbolCategory::Callable,
+        Suffix::Parameter => SemanticSymbolCategory::Parameter,
+        Suffix::Macro => SemanticSymbolCategory::Macro,
+        Suffix::Local | Suffix::UnspecifiedSuffix => SemanticSymbolCategory::Unknown,
     })
 }

@@ -739,7 +739,7 @@ fn typescript_absolute_documents_use_repository_relative_inventory_paths() {
 }
 
 #[test]
-fn unspecified_callable_identities_are_classified_without_promoting_types() {
+fn unspecified_provider_kinds_use_structured_scip_descriptors() {
     let root = root("unspecified-kind");
     let mut index = base_index();
     let mut source = document("src/main.ts");
@@ -754,6 +754,19 @@ fn unspecified_callable_identities_are_classified_without_promoting_types() {
     type_information.symbol = "scip-typescript npm . . demo/`main.ts`/Payload#".to_string();
     type_information.kind = EnumOrUnknown::new(Kind::UnspecifiedKind);
     source.symbols.push(type_information);
+    for identity in [
+        "scip-typescript npm . . demo/`main.ts`/",
+        "scip-typescript npm . . demo/`main.ts`/Payload#run().",
+        "scip-typescript npm . . demo/`main.ts`/value.",
+        "scip-typescript npm . . demo/`main.ts`/Payload#field.",
+        "scip-typescript npm . . demo/`main.ts`/target().(argument)",
+        "scip-typescript npm . . demo/`main.ts`/expand!",
+    ] {
+        let mut information = SymbolInformation::new();
+        information.symbol = identity.to_string();
+        information.kind = EnumOrUnknown::new(Kind::UnspecifiedKind);
+        source.symbols.push(information);
+    }
     index.documents.push(source);
 
     let imported = ingest(&root, &index).unwrap();
@@ -768,6 +781,35 @@ fn unspecified_callable_identities_are_classified_without_promoting_types() {
         .find(|symbol| symbol.provider_identity.ends_with("Payload#"))
         .unwrap();
     assert_eq!(callable.kind.category, SemanticSymbolCategory::Callable);
-    assert_eq!(type_symbol.kind.category, SemanticSymbolCategory::Unknown);
+    assert_eq!(type_symbol.kind.category, SemanticSymbolCategory::Type);
+    let categories = imported
+        .symbols
+        .values()
+        .map(|symbol| (symbol.provider_identity.as_str(), symbol.kind.category))
+        .collect::<BTreeMap<_, _>>();
+    assert_eq!(
+        categories["scip-typescript npm . . demo/`main.ts`/"],
+        SemanticSymbolCategory::Module
+    );
+    assert_eq!(
+        categories["scip-typescript npm . . demo/`main.ts`/Payload#run()."],
+        SemanticSymbolCategory::Method
+    );
+    assert_eq!(
+        categories["scip-typescript npm . . demo/`main.ts`/value."],
+        SemanticSymbolCategory::Variable
+    );
+    assert_eq!(
+        categories["scip-typescript npm . . demo/`main.ts`/Payload#field."],
+        SemanticSymbolCategory::FieldOrProperty
+    );
+    assert_eq!(
+        categories["scip-typescript npm . . demo/`main.ts`/target().(argument)"],
+        SemanticSymbolCategory::Parameter
+    );
+    assert_eq!(
+        categories["scip-typescript npm . . demo/`main.ts`/expand!"],
+        SemanticSymbolCategory::Macro
+    );
     fs::remove_dir_all(root).ok();
 }
