@@ -380,7 +380,25 @@ fn source_public_declarations(
         .declarations
         .into_iter()
         .map(|declaration| {
+            if declaration.binding
+                != crate::source_public_surface::SourcePublicBindingKind::Definition
+                || declaration.name != declaration.target_name
+                || declaration.exposed_identifier != declaration.compiler_anchor
+                || declaration.source_module.is_some()
+            {
+                return Err(
+                    "historical-v2 Go public surface contains a non-definition exposure"
+                        .to_string(),
+                );
+            }
             let kind = match declaration.kind {
+                crate::source_public_surface::SourcePublicSymbolKind::CompilerDefined
+                | crate::source_public_surface::SourcePublicSymbolKind::Module => {
+                    return Err(
+                        "historical-v2 Go public surface contains an unsupported symbol kind"
+                            .to_string(),
+                    );
+                }
                 crate::source_public_surface::SourcePublicSymbolKind::Callable => {
                     HistoricalV2SourcePublicSymbolKind::Callable
                 }
@@ -401,8 +419,8 @@ fn source_public_declarations(
                 }
             };
             let identifier = HistoricalV2SourceByteRange {
-                start: declaration.identifier.start,
-                end: declaration.identifier.end,
+                start: declaration.exposed_identifier.start,
+                end: declaration.exposed_identifier.end,
             };
             let identifier_positions = identifier_positions(source_text, identifier)?;
             let package_path = Path::new(repository_path)
