@@ -1,4 +1,7 @@
-use super::{parse_file, parse_file_checked, parse_file_symbols, parse_file_symbols_checked};
+use super::{
+    parse_file, parse_file_checked, parse_file_symbols, parse_file_symbols_checked,
+    parse_source_symbols_checked,
+};
 use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -1099,4 +1102,18 @@ fn checked_symbol_parse_rejects_invalid_utf8_before_graph_construction() {
         .expect_err("invalid UTF-8 must fail closed before symbol extraction");
     assert!(error.contains("not valid UTF-8"), "{error}");
     fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn checked_symbol_parse_uses_supplied_snapshot_bytes() {
+    let symbols =
+        parse_source_symbols_checked("snapshot.py", b"def committed_symbol():\n    return 1\n")
+            .expect("parse supplied snapshot bytes");
+
+    assert!(
+        symbols
+            .definitions
+            .iter()
+            .any(|definition| definition.name == "committed_symbol")
+    );
 }

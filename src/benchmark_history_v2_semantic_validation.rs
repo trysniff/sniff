@@ -1,10 +1,11 @@
 use super::super::{
     HISTORICAL_V2_SEMANTIC_CENSUS_SCHEMA_VERSION, HistoricalV2Materialization,
-    HistoricalV2MaterializedRoots, HistoricalV2SemanticCensus, HistoricalV2SemanticMethodStatus,
-    HistoricalV2SemanticSnapshotCensus, HistoricalV2SemanticSymbol, HistoricalV2SourceCensus,
+    HistoricalV2MaterializedRoots, HistoricalV2PublicSurfaceCoverage, HistoricalV2SemanticCensus,
+    HistoricalV2SemanticMethodStatus, HistoricalV2SemanticSnapshotCensus,
+    HistoricalV2SemanticSymbol, HistoricalV2SourceCensus, HistoricalV2SourcePublicSymbolKind,
     HistoricalV2SourceSemanticCoverage, HistoricalV2SourceSnapshotCensus,
     IntentionalBoundaryIndexerKind, IntentionalBoundarySemanticOrigin,
-    IntentionalBoundarySemanticRange, IntentionalBoundarySemanticVisibility,
+    IntentionalBoundarySemanticRange, IntentionalBoundarySemanticSymbolCategory,
     validate_historical_v2_source_census,
 };
 use super::{
@@ -59,12 +60,19 @@ pub(super) fn validate_snapshot(
     changed_indexers: &BTreeSet<SemanticIndexerKind>,
     required_document_paths: &BTreeSet<String>,
 ) -> Result<(), String> {
+    let public_declaration_count = source
+        .source_files
+        .iter()
+        .map(|file| file.public_declarations.len())
+        .try_fold(0_usize, |total, count| total.checked_add(count))
+        .ok_or_else(|| "historical-v2 public declaration count overflowed".to_string())?;
     if semantic.revision != source.revision
         || semantic.source_snapshot_census_sha256 != source.snapshot_census_sha256
         || semantic.required_document_paths
             != required_document_paths.iter().cloned().collect::<Vec<_>>()
         || !is_sha256(&semantic.semantic_snapshot_sha256)
         || semantic.semantic_snapshot_sha256 != semantic_snapshot_sha256(semantic)?
+        || source.public_declaration_count != public_declaration_count
     {
         return Err("historical-v2 semantic snapshot identity changed".to_string());
     }
@@ -89,17 +97,13 @@ pub(super) fn validate_snapshot(
         .iter()
         .map(|file| file.repository_path.as_str())
         .collect::<BTreeSet<_>>();
-    let required_source_paths = source
-        .source_files
-        .iter()
-        .filter(|file| file.semantic_coverage == HistoricalV2SourceSemanticCoverage::Required)
-        .map(|file| file.repository_path.as_str())
-        .collect::<BTreeSet<_>>();
-    let symbols = validate_symbols(
+    let symbols = validate_symbols(semantic, &actual_indexers, &all_source_paths)?;
+    let public_symbols = validate_public_bindings(
+        source,
         semantic,
         &actual_indexers,
-        &all_source_paths,
-        &required_source_paths,
+        &symbols,
+        required_document_paths,
     )?;
     let referenced_symbols = validate_methods(
         source,
@@ -109,7 +113,7 @@ pub(super) fn validate_snapshot(
         &all_source_paths,
     )?;
     if semantic.symbols.iter().any(|entry| {
-        !entry.is_public_surface
+        !public_symbols.contains(&(entry.indexer, entry.symbol.symbol_id.as_str()))
             && !referenced_symbols.contains(&(entry.indexer, entry.symbol.symbol_id.as_str()))
     }) {
         return Err("historical-v2 semantic snapshot contains an unrelated symbol".to_string());
@@ -149,7 +153,6 @@ fn validate_symbols<'a>(
     semantic: &'a HistoricalV2SemanticSnapshotCensus,
     indexers: &BTreeSet<IntentionalBoundaryIndexerKind>,
     all_source_paths: &BTreeSet<&str>,
-    required_source_paths: &BTreeSet<&str>,
 ) -> Result<BTreeMap<SymbolKey<'a>, &'a HistoricalV2SemanticSymbol>, String> {
     if semantic.symbol_count != semantic.symbols.len()
         || semantic.public_symbol_count
@@ -179,21 +182,169 @@ fn validate_symbols<'a>(
         {
             return Err("historical-v2 semantic symbol is invalid or noncanonical".to_string());
         }
-        let is_public_surface = symbol.origin == IntentionalBoundarySemanticOrigin::Repository
-            && symbol.definitions.iter().any(|definition| {
-                required_source_paths.contains(definition.repository_path.as_str())
-            })
-            && (matches!(
-                symbol.visibility,
-                IntentionalBoundarySemanticVisibility::Public
-                    | IntentionalBoundarySemanticVisibility::Protected
-            ) || !symbol.surfaces.is_empty());
-        if entry.is_public_surface != is_public_surface || symbols.insert(key, entry).is_some() {
-            return Err("historical-v2 public semantic symbol classification changed".to_string());
+        if symbols.insert(key, entry).is_some() {
+            return Err("historical-v2 semantic symbol identity repeated".to_string());
         }
         previous = Some(key);
     }
     Ok(symbols)
+}
+
+fn validate_public_bindings<'a>(
+    source: &'a HistoricalV2SourceSnapshotCensus,
+    semantic: &'a HistoricalV2SemanticSnapshotCensus,
+    indexers: &BTreeSet<IntentionalBoundaryIndexerKind>,
+    symbols: &BTreeMap<SymbolKey<'a>, &'a HistoricalV2SemanticSymbol>,
+    required_document_paths: &BTreeSet<String>,
+) -> Result<BTreeSet<SymbolKey<'a>>, String> {
+    if semantic.public_binding_count != semantic.public_bindings.len() {
+        return Err("historical-v2 public binding count changed".to_string());
+    }
+    let mut expected = BTreeMap::new();
+    let mut expected_surfaces = BTreeSet::new();
+    let mut required_declarations = BTreeSet::new();
+    for file in source
+        .source_files
+        .iter()
+        .filter(|file| file.semantic_coverage == HistoricalV2SourceSemanticCoverage::Required)
+    {
+        let indexer = indexer_kind(indexer_for_language(&file.language)?);
+        if !indexers.contains(&indexer) {
+            continue;
+        }
+        if file.public_surface_coverage != HistoricalV2PublicSurfaceCoverage::Complete {
+            return Err(format!(
+                "historical-v2 public-surface collector is incomplete for {}",
+                file.repository_path
+            ));
+        }
+        for declaration in &file.public_declarations {
+            if declaration.surface_unit_id.trim().is_empty()
+                || declaration.declaration_unit_id.trim().is_empty()
+                || declaration.identifier.start >= declaration.identifier.end
+                || declaration.name.trim().is_empty()
+                || !expected_surfaces.insert(declaration.surface_unit_id.as_str())
+                || expected
+                    .insert(
+                        declaration.declaration_unit_id.as_str(),
+                        (file.repository_path.as_str(), indexer, declaration),
+                    )
+                    .is_some()
+            {
+                return Err(
+                    "historical-v2 source public declaration is invalid or repeated".to_string(),
+                );
+            }
+            if required_document_paths.contains(&file.repository_path) {
+                required_declarations.insert(declaration.declaration_unit_id.as_str());
+            }
+        }
+    }
+
+    let mut bound_declarations = BTreeSet::new();
+    let mut public_symbols = BTreeSet::new();
+    let mut previous = None;
+    for binding in &semantic.public_bindings {
+        let key = (
+            binding.indexer,
+            binding.surface_unit_id.as_str(),
+            binding.declaration_unit_id.as_str(),
+            binding.symbol_id.as_str(),
+        );
+        if previous.is_some_and(|previous| previous >= key) {
+            return Err("historical-v2 public bindings are not canonical".to_string());
+        }
+        let (repository_path, indexer, declaration) = expected
+            .get(binding.declaration_unit_id.as_str())
+            .ok_or_else(|| "historical-v2 public binding invented a declaration".to_string())?;
+        let symbol_key = (binding.indexer, binding.symbol_id.as_str());
+        let symbol = symbols.get(&symbol_key).ok_or_else(|| {
+            "historical-v2 public binding references a missing symbol".to_string()
+        })?;
+        let expected_definition =
+            declaration_semantic_range(repository_path, declaration, binding.position_encoding);
+        if binding.indexer != *indexer
+            || binding.surface_unit_id != declaration.surface_unit_id
+            || binding.repository_path != *repository_path
+            || binding.joined_definition != expected_definition
+            || binding.joined_definition.repository_path != *repository_path
+            || symbol.symbol.origin != IntentionalBoundarySemanticOrigin::Repository
+            || !symbol
+                .symbol
+                .definitions
+                .contains(&binding.joined_definition)
+            || !compatible_public_symbol_kind(declaration.kind, symbol.symbol.category)
+            || !bound_declarations.insert(binding.declaration_unit_id.as_str())
+        {
+            return Err("historical-v2 public binding changed compiler identity".to_string());
+        }
+        public_symbols.insert(symbol_key);
+        previous = Some(key);
+    }
+    if !required_declarations.is_subset(&bound_declarations) {
+        return Err("historical-v2 changed public declaration has no compiler binding".to_string());
+    }
+    if semantic.symbols.iter().any(|entry| {
+        entry.is_public_surface
+            != public_symbols.contains(&(entry.indexer, entry.symbol.symbol_id.as_str()))
+    }) {
+        return Err("historical-v2 public semantic symbol classification changed".to_string());
+    }
+    Ok(public_symbols)
+}
+
+fn declaration_semantic_range(
+    repository_path: &str,
+    declaration: &super::super::HistoricalV2SourcePublicDeclaration,
+    encoding: crate::semantic_index::SemanticPositionEncoding,
+) -> IntentionalBoundarySemanticRange {
+    let range = match encoding {
+        crate::semantic_index::SemanticPositionEncoding::Utf8 => {
+            declaration.identifier_positions.utf8
+        }
+        crate::semantic_index::SemanticPositionEncoding::Utf16 => {
+            declaration.identifier_positions.utf16
+        }
+        crate::semantic_index::SemanticPositionEncoding::Utf32 => {
+            declaration.identifier_positions.utf32
+        }
+    };
+    IntentionalBoundarySemanticRange {
+        repository_path: repository_path.to_string(),
+        start_line_zero_based: range.start.line_zero_based,
+        start_character_zero_based: range.start.character_zero_based,
+        end_line_zero_based: range.end.line_zero_based,
+        end_character_zero_based: range.end.character_zero_based,
+    }
+}
+
+fn compatible_public_symbol_kind(
+    declaration: HistoricalV2SourcePublicSymbolKind,
+    compiler: IntentionalBoundarySemanticSymbolCategory,
+) -> bool {
+    matches!(
+        (declaration, compiler),
+        (
+            HistoricalV2SourcePublicSymbolKind::Callable,
+            IntentionalBoundarySemanticSymbolCategory::Callable
+        ) | (
+            HistoricalV2SourcePublicSymbolKind::Method,
+            IntentionalBoundarySemanticSymbolCategory::Method
+        ) | (
+            HistoricalV2SourcePublicSymbolKind::Type,
+            IntentionalBoundarySemanticSymbolCategory::Type
+                | IntentionalBoundarySemanticSymbolCategory::TraitOrInterface
+        ) | (
+            HistoricalV2SourcePublicSymbolKind::Field,
+            IntentionalBoundarySemanticSymbolCategory::FieldOrProperty
+        ) | (
+            HistoricalV2SourcePublicSymbolKind::Variable,
+            IntentionalBoundarySemanticSymbolCategory::Variable
+        ) | (
+            HistoricalV2SourcePublicSymbolKind::Constant,
+            IntentionalBoundarySemanticSymbolCategory::Constant
+        )
+    )
 }
 
 type ExpectedMethod<'a> = (

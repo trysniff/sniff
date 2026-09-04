@@ -38,6 +38,7 @@ pub mod signal_layers;
 pub mod slop_cases;
 pub(crate) mod slop_reason;
 pub(crate) mod source_privacy;
+pub(crate) mod source_public_surface;
 pub mod symbol_graph;
 pub mod synthesis;
 pub mod types;

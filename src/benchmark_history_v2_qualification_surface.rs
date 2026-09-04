@@ -18,11 +18,20 @@ pub(super) fn public_surface_delta(
 fn surface_entries(
     semantic: &HistoricalV2SemanticSnapshotCensus,
 ) -> Result<Vec<HistoricalV2PublicSurfaceEntry>, String> {
-    let mut entries = semantic
+    let symbols = semantic
         .symbols
         .iter()
-        .filter(|entry| entry.is_public_surface)
-        .map(|entry| {
+        .map(|entry| ((entry.indexer, entry.symbol.symbol_id.as_str()), entry))
+        .collect::<BTreeMap<_, _>>();
+    let mut entries = semantic
+        .public_bindings
+        .iter()
+        .map(|binding| {
+            let entry = symbols
+                .get(&(binding.indexer, binding.symbol_id.as_str()))
+                .ok_or_else(|| {
+                    "historical-v2 public binding references a missing surface symbol".to_string()
+                })?;
             let symbol = &entry.symbol;
             let semantic_fingerprint_sha256 = hash_json(&(
                 &symbol.provider_identity,
@@ -37,17 +46,18 @@ fn surface_entries(
                 symbol.origin,
             ))?;
             Ok(HistoricalV2PublicSurfaceEntry {
-                indexer: entry.indexer,
+                indexer: binding.indexer,
+                surface_unit_id: binding.surface_unit_id.clone(),
+                declaration_unit_id: binding.declaration_unit_id.clone(),
                 symbol_id: symbol.symbol_id.clone(),
                 semantic_fingerprint_sha256,
             })
         })
         .collect::<Result<Vec<_>, String>>()?;
     entries.sort();
-    if entries
-        .windows(2)
-        .any(|pair| pair[0].indexer == pair[1].indexer && pair[0].symbol_id == pair[1].symbol_id)
-    {
+    if entries.windows(2).any(|pair| {
+        pair[0].indexer == pair[1].indexer && pair[0].surface_unit_id == pair[1].surface_unit_id
+    }) {
         return Err("historical-v2 public surface repeats a symbol".to_string());
     }
     Ok(entries)
@@ -76,7 +86,9 @@ fn diff_entries(
             (base.semantic_fingerprint_sha256 != patched.semantic_fingerprint_sha256).then(|| {
                 HistoricalV2PublicSurfaceChange {
                     indexer: base.indexer,
-                    symbol_id: base.symbol_id.clone(),
+                    surface_unit_id: base.surface_unit_id.clone(),
+                    base_symbol_id: base.symbol_id.clone(),
+                    patched_symbol_id: patched.symbol_id.clone(),
                     base_fingerprint_sha256: base.semantic_fingerprint_sha256.clone(),
                     patched_fingerprint_sha256: patched.semantic_fingerprint_sha256.clone(),
                 }
@@ -105,7 +117,7 @@ fn entry_map(
     let mut map = BTreeMap::new();
     for entry in entries {
         if map
-            .insert((entry.indexer, entry.symbol_id.as_str()), entry)
+            .insert((entry.indexer, entry.surface_unit_id.as_str()), entry)
             .is_some()
         {
             return Err("historical-v2 public surface repeats a symbol".to_string());
@@ -133,8 +145,10 @@ mod tests {
 
     #[test]
     fn moved_definitions_do_not_change_the_stable_surface_entry() {
-        let entry = surface_entry("symbol", '1');
-        let delta = diff_entries(vec![entry.clone()], vec![entry]).expect("surface delta");
+        let base = surface_entry("symbol", '1');
+        let mut patched = base.clone();
+        patched.declaration_unit_id = "moved-declaration".to_string();
+        let delta = diff_entries(vec![base], vec![patched]).expect("surface delta");
         assert!(delta.preserved);
         assert!(delta.changed.is_empty());
     }
@@ -153,6 +167,8 @@ mod tests {
     fn surface_entry(symbol: &str, fingerprint: char) -> HistoricalV2PublicSurfaceEntry {
         HistoricalV2PublicSurfaceEntry {
             indexer: IntentionalBoundaryIndexerKind::Rust,
+            surface_unit_id: "surface".to_string(),
+            declaration_unit_id: "declaration".to_string(),
             symbol_id: symbol.to_string(),
             semantic_fingerprint_sha256: std::iter::repeat_n(fingerprint, 64).collect(),
         }

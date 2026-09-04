@@ -42,6 +42,7 @@ mod cli_banner;
 mod counterfactual;
 mod sandbox;
 mod source_privacy;
+mod source_public_surface;
 
 use clap::Parser;
 use std::thread;

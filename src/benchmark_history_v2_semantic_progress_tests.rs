@@ -15,6 +15,7 @@ fn source_snapshot(revision: &str, digest_character: char) -> HistoricalV2Source
         source_file_count: 0,
         method_counts_by_language: BTreeMap::new(),
         method_count: 0,
+        public_declaration_count: 0,
         snapshot_census_sha256: digest(digest_character),
     }
 }
@@ -55,8 +56,10 @@ fn semantic_snapshot(
         required_document_paths: Vec::new(),
         indexers: Vec::new(),
         methods: Vec::new(),
+        public_bindings: Vec::new(),
         symbols: Vec::new(),
         symbol_count: 0,
+        public_binding_count: 0,
         public_symbol_count: 0,
         resolved_method_count: 0,
         compiler_excluded_method_count: 0,

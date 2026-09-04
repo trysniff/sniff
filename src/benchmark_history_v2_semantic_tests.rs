@@ -168,6 +168,9 @@ fn generated_files_are_committed_but_not_required_from_the_compiler_index() {
     generated.repository_path = "public/angular.min.js".to_string();
     generated.language = "javascript".to_string();
     generated.semantic_coverage = HistoricalV2SourceSemanticCoverage::GeneratedPath;
+    generated.public_surface_coverage =
+        super::super::HistoricalV2PublicSurfaceCoverage::UnsupportedLanguage;
+    generated.public_declarations.clear();
     generated.methods[0].parser_unit_id = "h2m-v1:generated".to_string();
     fixture.source.source_files.push(generated);
     fixture.source.source_file_count += 1;
@@ -265,7 +268,180 @@ fn semantic_validation_rejects_recommitted_fake_public_surface() {
             &fixture_required_paths(&fixture.source),
         )
         .unwrap_err()
-        .contains("public semantic symbol")
+        .contains("changed compiler identity")
+    );
+}
+
+#[test]
+fn changed_public_declaration_without_an_exact_compiler_symbol_fails_closed() {
+    let mut fixture = fixture();
+    fixture.source.source_files[0].public_declarations.push(
+        super::super::HistoricalV2SourcePublicDeclaration {
+            surface_unit_id: "invented-value-surface".to_string(),
+            declaration_unit_id: "invented-value-declaration".to_string(),
+            name: "value".to_string(),
+            owner: None,
+            kind: super::super::HistoricalV2SourcePublicSymbolKind::Variable,
+            identifier: super::super::HistoricalV2SourceByteRange { start: 15, end: 20 },
+            identifier_positions: source_identifier_positions(0, 15, 20),
+        },
+    );
+    fixture.source.public_declaration_count += 1;
+
+    let error = build_semantic_snapshot(
+        fixture.root.path(),
+        &fixture.source,
+        &fixture.files,
+        &fixture_changed_indexers(),
+        &fixture_required_paths(&fixture.source),
+        &fixture.indexes,
+    )
+    .unwrap_err();
+
+    assert!(error.contains("resolved 0 public symbol(s)"), "{error}");
+}
+
+#[test]
+fn ambiguous_exact_public_compiler_identity_fails_closed() {
+    let mut fixture = fixture();
+    let index = fixture.indexes.get_mut(&SemanticIndexerKind::Rust).unwrap();
+    let mut duplicate = index.symbols.values().next().unwrap().clone();
+    duplicate.id = SemanticSymbolId("rust fixture duplicate process".to_string());
+    duplicate.provider_identity = duplicate.id.0.clone();
+    index.symbols.insert(duplicate.id.clone(), duplicate);
+
+    let error = build_semantic_snapshot(
+        fixture.root.path(),
+        &fixture.source,
+        &fixture.files,
+        &fixture_changed_indexers(),
+        &fixture_required_paths(&fixture.source),
+        &fixture.indexes,
+    )
+    .unwrap_err();
+
+    assert!(error.contains("resolved 2 public symbol(s)"), "{error}");
+}
+
+#[test]
+fn semantic_validation_rejects_recommitted_missing_public_binding() {
+    let fixture = fixture();
+    let mut snapshot = build_semantic_snapshot(
+        fixture.root.path(),
+        &fixture.source,
+        &fixture.files,
+        &fixture_changed_indexers(),
+        &fixture_required_paths(&fixture.source),
+        &fixture.indexes,
+    )
+    .unwrap();
+    snapshot.public_bindings.clear();
+    snapshot.public_binding_count = 0;
+    snapshot.symbols[0].is_public_surface = false;
+    snapshot.public_symbol_count = 0;
+    snapshot.semantic_snapshot_sha256 = semantic_snapshot_sha256(&snapshot).unwrap();
+
+    let error = validation::validate_snapshot(
+        &fixture.source,
+        &snapshot,
+        &fixture_changed_indexers(),
+        &fixture_required_paths(&fixture.source),
+    )
+    .unwrap_err();
+
+    assert!(error.contains("has no compiler binding"), "{error}");
+}
+
+#[test]
+fn semantic_validation_rejects_recommitted_binding_to_another_symbol() {
+    let fixture = fixture();
+    let mut snapshot = build_semantic_snapshot(
+        fixture.root.path(),
+        &fixture.source,
+        &fixture.files,
+        &fixture_changed_indexers(),
+        &fixture_required_paths(&fixture.source),
+        &fixture.indexes,
+    )
+    .unwrap();
+    snapshot.public_bindings[0].symbol_id = "invented compiler symbol".to_string();
+    snapshot.semantic_snapshot_sha256 = semantic_snapshot_sha256(&snapshot).unwrap();
+
+    let error = validation::validate_snapshot(
+        &fixture.source,
+        &snapshot,
+        &fixture_changed_indexers(),
+        &fixture_required_paths(&fixture.source),
+    )
+    .unwrap_err();
+
+    assert!(error.contains("missing symbol"), "{error}");
+}
+
+#[test]
+fn semantic_validation_rejects_another_real_symbol_at_the_wrong_source_range() {
+    let fixture = fixture();
+    let mut snapshot = build_semantic_snapshot(
+        fixture.root.path(),
+        &fixture.source,
+        &fixture.files,
+        &fixture_changed_indexers(),
+        &fixture_required_paths(&fixture.source),
+        &fixture.indexes,
+    )
+    .unwrap();
+    let mut other = snapshot.symbols[0].clone();
+    other.symbol.symbol_id = "rust fixture secondary".to_string();
+    other.symbol.provider_identity = "rust fixture secondary".to_string();
+    other.symbol.display_name = Some("secondary".to_string());
+    other.symbol.definitions = vec![super::super::IntentionalBoundarySemanticRange {
+        repository_path: "src/lib.rs".to_string(),
+        start_line_zero_based: 0,
+        start_character_zero_based: 0,
+        end_line_zero_based: 0,
+        end_character_zero_based: 3,
+    }];
+    snapshot.symbols[0].is_public_surface = false;
+    snapshot.symbols.push(other.clone());
+    snapshot.symbol_count = snapshot.symbols.len();
+    snapshot.public_bindings[0].symbol_id = other.symbol.symbol_id;
+    snapshot.public_bindings[0].joined_definition = other.symbol.definitions[0].clone();
+    snapshot.semantic_snapshot_sha256 = semantic_snapshot_sha256(&snapshot).unwrap();
+
+    let error = validation::validate_snapshot(
+        &fixture.source,
+        &snapshot,
+        &fixture_changed_indexers(),
+        &fixture_required_paths(&fixture.source),
+    )
+    .unwrap_err();
+
+    assert!(error.contains("changed compiler identity"), "{error}");
+}
+
+#[test]
+fn source_byte_positions_respect_each_compiler_encoding() {
+    let source = "éPublic";
+    assert_eq!(
+        semantic_position_at_byte(source, 2, SemanticPositionEncoding::Utf8).unwrap(),
+        SemanticPosition {
+            line: 0,
+            character: 2
+        }
+    );
+    assert_eq!(
+        semantic_position_at_byte(source, 2, SemanticPositionEncoding::Utf16).unwrap(),
+        SemanticPosition {
+            line: 0,
+            character: 1
+        }
+    );
+    assert_eq!(
+        semantic_position_at_byte(source, 2, SemanticPositionEncoding::Utf32).unwrap(),
+        SemanticPosition {
+            line: 0,
+            character: 1
+        }
     );
 }
 
@@ -294,7 +470,7 @@ fn semantic_validation_rejects_a_recommitted_missing_method_symbol() {
             &fixture_required_paths(&fixture.source),
         )
         .unwrap_err()
-        .contains("invalid compiler evidence")
+        .contains("references a missing symbol")
     );
 }
 
@@ -707,6 +883,7 @@ fn empty_revision_does_not_require_an_indexer_for_a_changed_language() {
     source.source_file_count = 0;
     source.method_counts_by_language.clear();
     source.method_count = 0;
+    source.public_declaration_count = 0;
 
     let snapshot = build_semantic_snapshot(
         fixture.root.path(),
@@ -867,10 +1044,21 @@ fn fixture() -> Fixture {
                 source_sha256: sha256(method.source.as_bytes()),
                 is_exported: method.is_exported,
             }],
+            public_surface_coverage: super::super::HistoricalV2PublicSurfaceCoverage::Complete,
+            public_declarations: vec![super::super::HistoricalV2SourcePublicDeclaration {
+                surface_unit_id: "public-process-surface".to_string(),
+                declaration_unit_id: "public-process-declaration".to_string(),
+                name: "process".to_string(),
+                owner: None,
+                kind: super::super::HistoricalV2SourcePublicSymbolKind::Callable,
+                identifier: super::super::HistoricalV2SourceByteRange { start: 7, end: 14 },
+                identifier_positions: source_identifier_positions(0, 7, 14),
+            }],
         }],
         source_file_count: 1,
         method_counts_by_language: BTreeMap::from([("rust".to_string(), 1)]),
         method_count: 1,
+        public_declaration_count: 1,
         snapshot_census_sha256: "e".repeat(64),
     };
     let document = RepositoryPath("src/lib.rs".to_string());
@@ -953,5 +1141,27 @@ fn range(line: u32, start: u32, end: u32) -> SemanticSourceRange {
             line,
             character: end,
         },
+    }
+}
+
+fn source_identifier_positions(
+    line: u32,
+    start: u32,
+    end: u32,
+) -> super::super::HistoricalV2SourceIdentifierPositions {
+    let range = super::super::HistoricalV2SourcePositionRange {
+        start: super::super::HistoricalV2SourcePosition {
+            line_zero_based: line,
+            character_zero_based: start,
+        },
+        end: super::super::HistoricalV2SourcePosition {
+            line_zero_based: line,
+            character_zero_based: end,
+        },
+    };
+    super::super::HistoricalV2SourceIdentifierPositions {
+        utf8: range,
+        utf16: range,
+        utf32: range,
     }
 }

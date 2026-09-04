@@ -4,21 +4,24 @@ use super::intentional_boundary_inventory::{
 };
 use super::{
     BoundaryGitEntryKind, HISTORICAL_V2_SOURCE_CENSUS_SCHEMA_VERSION, HistoricalV2Materialization,
-    HistoricalV2MaterializedRoots, HistoricalV2SlotStage, HistoricalV2SlotStageError,
-    HistoricalV2SlotStageErrorKind, HistoricalV2SourceCensus, HistoricalV2SourceCensusExclusion,
-    HistoricalV2SourceCensusFailureEvidence, HistoricalV2SourceFile, HistoricalV2SourceMethod,
-    HistoricalV2SourceSemanticCoverage, HistoricalV2SourceSnapshotCensus,
-    HistoricalV2SourceSnapshotSide, HistoricalV2StageResult,
+    HistoricalV2MaterializedRoots, HistoricalV2PublicSurfaceCoverage, HistoricalV2SlotStage,
+    HistoricalV2SlotStageError, HistoricalV2SlotStageErrorKind, HistoricalV2SourceByteRange,
+    HistoricalV2SourceCensus, HistoricalV2SourceCensusExclusion,
+    HistoricalV2SourceCensusFailureEvidence, HistoricalV2SourceFile,
+    HistoricalV2SourceIdentifierPositions, HistoricalV2SourceMethod, HistoricalV2SourcePosition,
+    HistoricalV2SourcePositionRange, HistoricalV2SourcePublicDeclaration,
+    HistoricalV2SourcePublicSymbolKind, HistoricalV2SourceSemanticCoverage,
+    HistoricalV2SourceSnapshotCensus, HistoricalV2SourceSnapshotSide, HistoricalV2StageResult,
     IntentionalBoundaryRepositoryInventory, IntentionalBoundarySourceCensus,
     census_intentional_boundary_repository, inventory_intentional_boundary_repository,
     validate_historical_v2_materialization,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-const SOURCE_CENSUS_CONTRACT: &str = "sniffbench-historical-v2-source-census-v2";
+const SOURCE_CENSUS_CONTRACT: &str = "sniffbench-historical-v2-source-census-v4";
 pub(super) const PARSER_ERROR_LIMIT: usize = 4 * 1024;
 type SourceCensusStageResult =
     HistoricalV2StageResult<HistoricalV2SourceCensus, HistoricalV2SourceCensusExclusion>;
@@ -244,6 +247,8 @@ fn project_snapshot(
     }
     let mut source_files = Vec::with_capacity(parser_census.source_files.len());
     let mut method_counts_by_language = BTreeMap::<String, usize>::new();
+    let mut public_declaration_count = 0_usize;
+    let mut public_surface_ids = BTreeSet::new();
     let requests = parser_census
         .source_files
         .iter()
@@ -296,6 +301,19 @@ fn project_snapshot(
         *method_counts_by_language
             .entry(source.language.clone())
             .or_default() += methods.len();
+        let (public_surface_coverage, public_declarations) =
+            source_public_declarations(&source.repository_path, &source.language, &bytes)?;
+        for declaration in &public_declarations {
+            if !public_surface_ids.insert(declaration.surface_unit_id.clone()) {
+                return Err(format!(
+                    "historical-v2 source public surface is ambiguous at {}::{}",
+                    source.repository_path, declaration.name
+                ));
+            }
+        }
+        public_declaration_count = public_declaration_count
+            .checked_add(public_declarations.len())
+            .ok_or_else(|| "historical-v2 public declaration count overflowed".to_string())?;
         source_files.push(HistoricalV2SourceFile {
             repository_path: source.repository_path.clone(),
             object_id: source.object_id.clone(),
@@ -305,6 +323,8 @@ fn project_snapshot(
             language: source.language.clone(),
             semantic_coverage: source_semantic_coverage(&source.repository_path, &bytes),
             methods,
+            public_surface_coverage,
+            public_declarations,
         });
     }
     let method_count = method_counts_by_language
@@ -328,10 +348,141 @@ fn project_snapshot(
         source_files,
         method_counts_by_language,
         method_count,
+        public_declaration_count,
         snapshot_census_sha256: String::new(),
     };
     snapshot.snapshot_census_sha256 = snapshot_census_sha256(&snapshot)?;
     Ok(snapshot)
+}
+
+fn source_public_declarations(
+    repository_path: &str,
+    language: &str,
+    source: &[u8],
+) -> Result<
+    (
+        HistoricalV2PublicSurfaceCoverage,
+        Vec<HistoricalV2SourcePublicDeclaration>,
+    ),
+    String,
+> {
+    if language != "go" {
+        return Ok((
+            HistoricalV2PublicSurfaceCoverage::UnsupportedLanguage,
+            Vec::new(),
+        ));
+    }
+    let surface =
+        crate::source_public_surface::census_source_public_surface(repository_path, source)?;
+    let source_text = std::str::from_utf8(source)
+        .map_err(|_| "historical-v2 public-surface source is not UTF-8".to_string())?;
+    let declarations = surface
+        .declarations
+        .into_iter()
+        .map(|declaration| {
+            let kind = match declaration.kind {
+                crate::source_public_surface::SourcePublicSymbolKind::Callable => {
+                    HistoricalV2SourcePublicSymbolKind::Callable
+                }
+                crate::source_public_surface::SourcePublicSymbolKind::Method => {
+                    HistoricalV2SourcePublicSymbolKind::Method
+                }
+                crate::source_public_surface::SourcePublicSymbolKind::Type => {
+                    HistoricalV2SourcePublicSymbolKind::Type
+                }
+                crate::source_public_surface::SourcePublicSymbolKind::Field => {
+                    HistoricalV2SourcePublicSymbolKind::Field
+                }
+                crate::source_public_surface::SourcePublicSymbolKind::Variable => {
+                    HistoricalV2SourcePublicSymbolKind::Variable
+                }
+                crate::source_public_surface::SourcePublicSymbolKind::Constant => {
+                    HistoricalV2SourcePublicSymbolKind::Constant
+                }
+            };
+            let identifier = HistoricalV2SourceByteRange {
+                start: declaration.identifier.start,
+                end: declaration.identifier.end,
+            };
+            let identifier_positions = identifier_positions(source_text, identifier)?;
+            let package_path = Path::new(repository_path)
+                .parent()
+                .map(|path| path.to_string_lossy().replace('\\', "/"))
+                .unwrap_or_default();
+            let surface_unit_id = hash_json(&(
+                "sniffbench-historical-v2-public-surface-v1",
+                language,
+                package_path,
+                declaration.name.as_str(),
+                declaration.owner.as_deref(),
+                kind,
+            ))
+            .map(|hash| format!("h2s-v1:{hash}"))?;
+            let declaration_unit_id = hash_json(&(
+                "sniffbench-historical-v2-public-declaration-v1",
+                surface_unit_id.as_str(),
+                repository_path,
+                identifier,
+            ))
+            .map(|hash| format!("h2d-v1:{hash}"))?;
+            Ok(HistoricalV2SourcePublicDeclaration {
+                surface_unit_id,
+                declaration_unit_id,
+                name: declaration.name,
+                owner: declaration.owner,
+                kind,
+                identifier,
+                identifier_positions,
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    Ok((HistoricalV2PublicSurfaceCoverage::Complete, declarations))
+}
+
+fn identifier_positions(
+    source: &str,
+    range: HistoricalV2SourceByteRange,
+) -> Result<HistoricalV2SourceIdentifierPositions, String> {
+    if range.start >= range.end
+        || range.end > source.len()
+        || !source.is_char_boundary(range.start)
+        || !source.is_char_boundary(range.end)
+    {
+        return Err("historical-v2 public declaration has an invalid byte range".to_string());
+    }
+    Ok(HistoricalV2SourceIdentifierPositions {
+        utf8: position_range(source, range, |text| text.len())?,
+        utf16: position_range(source, range, |text| text.encode_utf16().count())?,
+        utf32: position_range(source, range, |text| text.chars().count())?,
+    })
+}
+
+fn position_range(
+    source: &str,
+    range: HistoricalV2SourceByteRange,
+    character_count: impl Fn(&str) -> usize,
+) -> Result<HistoricalV2SourcePositionRange, String> {
+    Ok(HistoricalV2SourcePositionRange {
+        start: source_position(source, range.start, &character_count)?,
+        end: source_position(source, range.end, &character_count)?,
+    })
+}
+
+fn source_position(
+    source: &str,
+    offset: usize,
+    character_count: &impl Fn(&str) -> usize,
+) -> Result<HistoricalV2SourcePosition, String> {
+    let prefix = &source[..offset];
+    let line = prefix.bytes().filter(|byte| *byte == b'\n').count();
+    let line_start = prefix.rfind('\n').map_or(0, |index| index + 1);
+    let character = character_count(&source[line_start..offset]);
+    Ok(HistoricalV2SourcePosition {
+        line_zero_based: u32::try_from(line)
+            .map_err(|_| "historical-v2 public declaration line exceeds u32".to_string())?,
+        character_zero_based: u32::try_from(character)
+            .map_err(|_| "historical-v2 public declaration column exceeds u32".to_string())?,
+    })
 }
 
 pub(super) fn source_semantic_coverage(
@@ -434,6 +585,7 @@ fn snapshot_census_sha256(value: &HistoricalV2SourceSnapshotCensus) -> Result<St
         value.source_file_count,
         &value.method_counts_by_language,
         value.method_count,
+        value.public_declaration_count,
     ))
 }
 
