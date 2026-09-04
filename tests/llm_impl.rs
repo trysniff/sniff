@@ -215,7 +215,7 @@ fn spawn_body_stall_then_valid_server() -> (String, Arc<AtomicUsize>) {
     (format!("http://{}", addr), hits)
 }
 
-fn spawn_http_status_server(status: u16, body: &'static str) -> (String, Arc<AtomicUsize>) {
+fn spawn_http_sequence_server(responses: Vec<(u16, &'static str)>) -> (String, Arc<AtomicUsize>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
     let hits = Arc::new(AtomicUsize::new(0));
@@ -224,24 +224,29 @@ fn spawn_http_status_server(status: u16, body: &'static str) -> (String, Arc<Ato
 
     thread::spawn(move || {
         let _ = ready_tx.send(());
-        let Ok((mut stream, _)) = listener.accept() else {
-            return;
-        };
-        hits_clone.fetch_add(1, Ordering::SeqCst);
-        let _ = read_http_request(&mut stream);
-        let response = format!(
-            "HTTP/1.1 {} ERROR\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-            status,
-            body.len(),
-            body
-        );
-        let _ = stream.write_all(response.as_bytes());
-        let _ = stream.flush();
-        let _ = stream.shutdown(Shutdown::Both);
+        for (status, body) in responses {
+            let Ok((mut stream, _)) = listener.accept() else {
+                return;
+            };
+            hits_clone.fetch_add(1, Ordering::SeqCst);
+            let _ = read_http_request(&mut stream);
+            let reason = if status == 200 { "OK" } else { "ERROR" };
+            let response = format!(
+                "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = stream.write_all(response.as_bytes());
+            let _ = stream.flush();
+            let _ = stream.shutdown(Shutdown::Both);
+        }
     });
     let _ = ready_rx.recv();
 
     (format!("http://{}", addr), hits)
+}
+
+fn spawn_http_status_server(status: u16, body: &'static str) -> (String, Arc<AtomicUsize>) {
+    spawn_http_sequence_server(vec![(status, body)])
 }
 
 fn spawn_hanging_server() -> (String, Arc<AtomicUsize>) {
@@ -585,6 +590,30 @@ async fn call_does_not_retry_on_not_found_endpoints() {
         .expect_err("expected permanent http error to fail fast");
     assert!(err.contains("HTTP 404"));
     assert_eq!(hits.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn call_retries_transient_http_errors_through_the_real_transport() {
+    let _env_lock = env_guard();
+    let _max_attempts = EnvVarGuard::set("SNIFF_LLM_MAX_ATTEMPTS", "2");
+    let valid = r#"{"choices":[{"message":{"content":"{\"smelly\":false,\"tier\":\"clean\",\"evidence\":\"\",\"reason\":\"clean\"}"}}]}"#;
+
+    for (status, body) in [
+        (429, r#"{"error":"rate limited"}"#),
+        (503, r#"{"error":"temporarily unavailable"}"#),
+    ] {
+        let (endpoint, hits) =
+            spawn_http_sequence_server(vec![(status, body), (200, valid), (200, valid)]);
+        let client = LLMClient::new(cfg(&endpoint), Some("test-key".to_string()));
+
+        let (value, _, _) = client
+            .call("Review this method.", ResponseSchema::MethodReview)
+            .await
+            .unwrap_or_else(|error| panic!("HTTP {status} did not recover: {error}"));
+
+        assert_eq!(value.expect("expected valid response")["tier"], "clean");
+        assert_eq!(hits.load(Ordering::SeqCst), 3, "HTTP {status}");
+    }
 }
 
 #[tokio::test]
