@@ -87,6 +87,18 @@ fn missing_installation_fails_closed() {
     assert!(error.contains("not installed"));
 }
 
+#[test]
+fn typescript_installation_identity_commits_the_signature_patch() {
+    let spec = pinned_indexer(SemanticIndexerKind::TypeScriptJavaScript).unwrap();
+
+    let identity = super::source_identity(spec);
+
+    assert!(
+        identity.ends_with(":sniff-signature-patch-compiler-api-signatures-v1"),
+        "{identity}"
+    );
+}
+
 #[cfg(windows)]
 #[test]
 fn windows_rust_installation_requires_the_pinned_cargo_companion() {
