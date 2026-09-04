@@ -3,9 +3,10 @@ use super::{
     IntentionalBoundarySemanticRange, IntentionalBoundarySemanticSymbolFacts,
     IntentionalBoundarySemanticUnresolvedReason,
 };
+use crate::semantic_index::SemanticPositionEncoding;
 use serde::{Deserialize, Serialize};
 
-pub const HISTORICAL_V2_SEMANTIC_CENSUS_SCHEMA_VERSION: u32 = 3;
+pub const HISTORICAL_V2_SEMANTIC_CENSUS_SCHEMA_VERSION: u32 = 5;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -44,6 +45,18 @@ pub struct HistoricalV2SemanticMethod {
     pub status: HistoricalV2SemanticMethodStatus,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HistoricalV2SemanticPublicBinding {
+    pub indexer: IntentionalBoundaryIndexerKind,
+    pub surface_unit_id: String,
+    pub declaration_unit_id: String,
+    pub repository_path: String,
+    pub symbol_id: String,
+    pub position_encoding: SemanticPositionEncoding,
+    pub joined_definition: IntentionalBoundarySemanticRange,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HistoricalV2SemanticSnapshotCensus {
@@ -52,8 +65,10 @@ pub struct HistoricalV2SemanticSnapshotCensus {
     pub required_document_paths: Vec<String>,
     pub indexers: Vec<IntentionalBoundarySemanticIndexerCensus>,
     pub methods: Vec<HistoricalV2SemanticMethod>,
+    pub public_bindings: Vec<HistoricalV2SemanticPublicBinding>,
     pub symbols: Vec<HistoricalV2SemanticSymbol>,
     pub symbol_count: usize,
+    pub public_binding_count: usize,
     pub public_symbol_count: usize,
     pub resolved_method_count: usize,
     pub compiler_excluded_method_count: usize,

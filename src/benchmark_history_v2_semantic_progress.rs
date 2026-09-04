@@ -3,8 +3,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
-const SNAPSHOT_PROGRESS_SCHEMA_VERSION: u32 = 2;
-const SNAPSHOT_PROGRESS_CONTRACT: &str = "historical-v2-semantic-snapshot-progress-v2";
+const SNAPSHOT_PROGRESS_SCHEMA_VERSION: u32 = 4;
+const SNAPSHOT_PROGRESS_CONTRACT: &str = "historical-v2-semantic-snapshot-progress-v4";
 const SNAPSHOT_FILE: &str = "snapshot.json";
 const SNAPSHOT_TEMP_FILE: &str = "snapshot.json.tmp";
 

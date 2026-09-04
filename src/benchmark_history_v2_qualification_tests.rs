@@ -115,6 +115,9 @@ fn source_file_fixture() -> HistoricalV2SourceFile {
         language: "rust".to_string(),
         semantic_coverage: HistoricalV2SourceSemanticCoverage::Required,
         methods: vec![source_method()],
+        public_surface_coverage:
+            super::super::HistoricalV2PublicSurfaceCoverage::UnsupportedLanguage,
+        public_declarations: Vec::new(),
     }
 }
 
@@ -125,8 +128,10 @@ fn semantic_snapshot() -> HistoricalV2SemanticSnapshotCensus {
         required_document_paths: Vec::new(),
         indexers: Vec::new(),
         methods: Vec::new(),
+        public_bindings: Vec::new(),
         symbols: Vec::new(),
         symbol_count: 0,
+        public_binding_count: 0,
         public_symbol_count: 0,
         resolved_method_count: 0,
         compiler_excluded_method_count: 0,

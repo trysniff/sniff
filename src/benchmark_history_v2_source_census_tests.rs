@@ -11,6 +11,19 @@ use std::path::Path;
 use std::process::Command;
 
 #[test]
+fn public_identifier_positions_commit_all_compiler_coordinate_systems() {
+    let positions =
+        identifier_positions("éPublic", HistoricalV2SourceByteRange { start: 2, end: 8 }).unwrap();
+
+    assert_eq!(positions.utf8.start.character_zero_based, 2);
+    assert_eq!(positions.utf8.end.character_zero_based, 8);
+    assert_eq!(positions.utf16.start.character_zero_based, 1);
+    assert_eq!(positions.utf16.end.character_zero_based, 7);
+    assert_eq!(positions.utf32.start.character_zero_based, 1);
+    assert_eq!(positions.utf32.end.character_zero_based, 7);
+}
+
+#[test]
 fn semantic_coverage_excludes_only_committed_generated_and_vendored_evidence() {
     for path in [
         "aci/e2e/aci-demo/web/static/angular.min.js",

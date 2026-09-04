@@ -84,24 +84,46 @@ pub(in crate::parser) fn parse_file_symbols_checked(
     file_path: &str,
 ) -> Result<LocalFileSymbols, String> {
     let (source_bytes, adapter) = load_file_context_checked(file_path)?;
-    let source_text = String::from_utf8(source_bytes.clone())
+    parse_source_symbols_with_adapter_checked(file_path, &source_bytes, &adapter)
+}
+
+pub(in crate::parser) fn parse_source_symbols_checked(
+    file_path: &str,
+    source_bytes: &[u8],
+) -> Result<LocalFileSymbols, String> {
+    let path = Path::new(file_path);
+    let ext = path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .ok_or_else(|| format!("source file has no supported extension: {file_path}"))?;
+    let adapter = languages::get_adapter(ext)
+        .ok_or_else(|| format!("unsupported source extension for {file_path}"))?;
+    parse_source_symbols_with_adapter_checked(file_path, source_bytes, &adapter)
+}
+
+fn parse_source_symbols_with_adapter_checked(
+    file_path: &str,
+    source_bytes: &[u8],
+    adapter: &LanguageAdapter,
+) -> Result<LocalFileSymbols, String> {
+    let source_text = std::str::from_utf8(source_bytes)
         .map_err(|err| format!("source file is not valid UTF-8 {file_path}: {err}"))?;
 
     // Validate the same syntax used by the method extractor before building
     // the graph, so graph failures cannot silently become zero references.
     let mut validation_record = FileRecord {
         file_path: file_path.to_string(),
-        source: source_text.clone(),
+        source: source_text.to_string(),
         language: adapter.name.clone(),
         methods: Vec::new(),
     };
-    methods::parse_methods_for_language(&mut validation_record, file_path, &adapter)?;
+    methods::parse_methods_for_language(&mut validation_record, file_path, adapter)?;
 
     Ok(symbols::parse_symbols_for_language(
-        &source_text,
-        &source_bytes,
+        source_text,
+        source_bytes,
         file_path,
-        &adapter,
+        adapter,
     ))
 }
 

@@ -4,11 +4,11 @@ use crate::benchmark::{
     HISTORICAL_V2_SELECTED_PAYLOADS_SCHEMA_VERSION, HISTORICAL_V2_SEMANTIC_CENSUS_SCHEMA_VERSION,
     HistoricalV2MaterializedRoots, HistoricalV2SelectedPayloads, HistoricalV2SemanticCensus,
     HistoricalV2SemanticMethod, HistoricalV2SemanticMethodStatus,
-    HistoricalV2SemanticSnapshotCensus, HistoricalV2SemanticSymbol, HistoricalV2SourceCensus,
-    IntentionalBoundaryIndexerKind, IntentionalBoundarySemanticOrigin,
-    IntentionalBoundarySemanticResolution, IntentionalBoundarySemanticSymbolCategory,
-    IntentionalBoundarySemanticSymbolFacts, IntentionalBoundarySemanticVisibility,
-    census_historical_v2_sources,
+    HistoricalV2SemanticPublicBinding, HistoricalV2SemanticSnapshotCensus,
+    HistoricalV2SemanticSymbol, HistoricalV2SourceCensus, IntentionalBoundaryIndexerKind,
+    IntentionalBoundarySemanticOrigin, IntentionalBoundarySemanticResolution,
+    IntentionalBoundarySemanticSymbolCategory, IntentionalBoundarySemanticSymbolFacts,
+    IntentionalBoundarySemanticVisibility, census_historical_v2_sources,
 };
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -50,10 +50,12 @@ fn real_git_reduction_with_resolved_methods_qualifies() {
             > qualification.production_non_whitespace_lines_after
     );
     assert!(qualification.changed_methods.iter().any(|method| {
-        method.side == HistoricalRevisionSide::Parent && method.symbol_name == "method_0"
+        method.side == HistoricalRevisionSide::Parent && method.symbol_name == "Method0"
     }));
     assert!(qualification.unresolved_changed_methods.is_empty());
     assert!(qualification.public_surface.preserved);
+    assert_eq!(qualification.public_surface.base_entries.len(), 20);
+    assert_eq!(qualification.public_surface.patched_entries.len(), 20);
     assert_eq!(
         qualification.qualified_paths[0].base_role,
         Some(HistoricalV2SourceRoleDecision {
@@ -81,11 +83,11 @@ impl Fixture {
         git_ok(source.path(), &["config", "user.name", "Fixture"]);
         git_ok(source.path(), &["config", "core.autocrlf", "false"]);
         fs::create_dir_all(source.path().join("src")).expect("source directory");
-        fs::write(source.path().join("src/lib.rs"), rust_source(true)).expect("base source");
+        fs::write(source.path().join("src/lib.go"), go_source(true)).expect("base source");
         git_ok(source.path(), &["add", "."]);
         git_ok(source.path(), &["commit", "-m", "base"]);
         let base_revision = git_text(source.path(), &["rev-parse", "HEAD"]);
-        fs::write(source.path().join("src/lib.rs"), rust_source(false)).expect("patched source");
+        fs::write(source.path().join("src/lib.go"), go_source(false)).expect("patched source");
         let historical_patch = format!(
             "{}\n",
             git_text(source.path(), &["diff", "--binary", "HEAD"])
@@ -127,17 +129,18 @@ impl Fixture {
     }
 }
 
-fn rust_source(redundant: bool) -> String {
-    (0..20)
+fn go_source(redundant: bool) -> String {
+    let methods = (0..20)
         .map(|index| {
             if index == 0 && redundant {
-                "pub fn method_0() -> i32 {\n    let value = 0;\n    value\n}\n".to_string()
+                "func Method0() int {\n\tvalue := 0\n\treturn value\n}\n".to_string()
             } else {
-                format!("pub fn method_{index}() -> i32 {{\n    {index}\n}}\n")
+                format!("func Method{index}() int {{\n\treturn {index}\n}}\n")
             }
         })
         .collect::<Vec<_>>()
-        .join("\n")
+        .join("\n");
+    format!("package fixture\n\n{methods}")
 }
 
 fn semantic_census(source: &HistoricalV2SourceCensus) -> HistoricalV2SemanticCensus {
@@ -147,7 +150,7 @@ fn semantic_census(source: &HistoricalV2SourceCensus) -> HistoricalV2SemanticCen
         canonical_repository: source.canonical_repository.clone(),
         materialization_sha256: source.materialization_sha256.clone(),
         source_census_sha256: source.source_census_sha256.clone(),
-        changed_indexers: vec![IntentionalBoundaryIndexerKind::Rust],
+        changed_indexers: vec![IntentionalBoundaryIndexerKind::Go],
         base: semantic_snapshot(&source.base),
         patched: semantic_snapshot(&source.patched),
         semantic_census_sha256: "1".repeat(64),
@@ -159,25 +162,40 @@ fn semantic_snapshot(
 ) -> HistoricalV2SemanticSnapshotCensus {
     let mut methods = Vec::new();
     let mut symbols = Vec::new();
+    let mut public_bindings = Vec::new();
     for file in &source.source_files {
         for method in &file.methods {
             let symbol = symbol_facts(&file.repository_path, &method.symbol_name);
+            let declaration = file
+                .public_declarations
+                .iter()
+                .find(|declaration| declaration.name == method.symbol_name)
+                .expect("public source declaration");
             methods.push(HistoricalV2SemanticMethod {
                 parser_unit_id: method.parser_unit_id.clone(),
                 repository_path: file.repository_path.clone(),
                 symbol_name: method.symbol_name.clone(),
                 start_line: method.start_line,
                 end_line: method.end_line,
-                indexer: IntentionalBoundaryIndexerKind::Rust,
+                indexer: IntentionalBoundaryIndexerKind::Go,
                 status: HistoricalV2SemanticMethodStatus::Resolved {
                     symbol_id: symbol.symbol_id.clone(),
                     joined_definition: None,
                 },
             });
             symbols.push(HistoricalV2SemanticSymbol {
-                indexer: IntentionalBoundaryIndexerKind::Rust,
+                indexer: IntentionalBoundaryIndexerKind::Go,
                 is_public_surface: true,
-                symbol,
+                symbol: symbol.clone(),
+            });
+            public_bindings.push(HistoricalV2SemanticPublicBinding {
+                indexer: IntentionalBoundaryIndexerKind::Go,
+                surface_unit_id: declaration.surface_unit_id.clone(),
+                declaration_unit_id: declaration.declaration_unit_id.clone(),
+                repository_path: file.repository_path.clone(),
+                symbol_id: symbol.symbol_id.clone(),
+                position_encoding: crate::semantic_index::SemanticPositionEncoding::Utf8,
+                joined_definition: symbol.definitions[0].clone(),
             });
         }
     }
@@ -190,6 +208,8 @@ fn semantic_snapshot(
             .map(|file| file.repository_path.clone())
             .collect(),
         indexers: Vec::new(),
+        public_binding_count: public_bindings.len(),
+        public_bindings,
         symbol_count: symbols.len(),
         public_symbol_count: symbols.len(),
         resolved_method_count: methods.len(),
@@ -203,7 +223,7 @@ fn semantic_snapshot(
 
 fn symbol_facts(repository_path: &str, name: &str) -> IntentionalBoundarySemanticSymbolFacts {
     IntentionalBoundarySemanticSymbolFacts {
-        symbol_id: format!("rust fixture {name}."),
+        symbol_id: format!("go fixture {name}."),
         provider_identity: format!("fixture:{name}"),
         display_name: Some(name.to_string()),
         category: IntentionalBoundarySemanticSymbolCategory::Callable,
@@ -219,7 +239,7 @@ fn symbol_facts(repository_path: &str, name: &str) -> IntentionalBoundarySemanti
             start_line_zero_based: 0,
             start_character_zero_based: 0,
             end_line_zero_based: 0,
-            end_character_zero_based: 0,
+            end_character_zero_based: 1,
         }],
         visibility: IntentionalBoundarySemanticVisibility::Public,
         surfaces: vec![crate::benchmark::IntentionalBoundarySemanticSurface::PublicApi],
@@ -238,7 +258,7 @@ fn selected_payloads(patch: &str) -> HistoricalV2SelectedPayloads {
         selection_sha256: "4".repeat(64),
         selected_count: 1,
         records: vec![HistoricalV2SelectedPayload {
-            language: "rust".to_string(),
+            language: "go".to_string(),
             slot_number: 1,
             source_shard_index: 0,
             source_row_index: 0,
@@ -267,7 +287,7 @@ fn assessment_identity(
         exclusion_manifest_sha256: "3".repeat(64),
         selection_sha256: "4".repeat(64),
         payloads_sha256: "5".repeat(64),
-        language: "rust".to_string(),
+        language: "go".to_string(),
         slot_number: 1,
         global_row_index: 0,
         instance_id: "fixture".to_string(),

@@ -19,7 +19,7 @@ use super::{
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 
-const QUALIFICATION_CONTRACT: &str = "sniffbench-historical-v2-qualification-v1";
+const QUALIFICATION_CONTRACT: &str = "sniffbench-historical-v2-qualification-v2";
 
 pub fn qualify_historical_v2_assessment(
     inputs: &HistoricalV2AssessmentIdentityInputs<'_>,
