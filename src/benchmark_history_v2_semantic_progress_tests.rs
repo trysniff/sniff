@@ -16,6 +16,7 @@ fn source_snapshot(revision: &str, digest_character: char) -> HistoricalV2Source
         method_counts_by_language: BTreeMap::new(),
         method_count: 0,
         public_declaration_count: 0,
+        public_reexport_count: 0,
         snapshot_census_sha256: digest(digest_character),
     }
 }

@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-pub const HISTORICAL_V2_SOURCE_CENSUS_SCHEMA_VERSION: u32 = 6;
+pub const HISTORICAL_V2_SOURCE_CENSUS_SCHEMA_VERSION: u32 = 7;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -33,12 +33,28 @@ pub enum HistoricalV2PublicSurfaceCoverage {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HistoricalV2SourcePublicSymbolKind {
+    CompilerDefined,
     Callable,
     Method,
     Type,
+    Module,
     Field,
     Variable,
     Constant,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HistoricalV2SourcePublicBindingKind {
+    Definition,
+    Reference,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HistoricalV2SourcePublicReexportKind {
+    Wildcard,
+    Namespace,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -84,9 +100,27 @@ pub struct HistoricalV2SourcePublicDeclaration {
     pub surface_unit_id: String,
     pub declaration_unit_id: String,
     pub name: String,
+    pub target_name: String,
     pub owner: Option<String>,
     pub namespace: HistoricalV2SourcePublicNamespace,
     pub kind: HistoricalV2SourcePublicSymbolKind,
+    pub binding: HistoricalV2SourcePublicBindingKind,
+    pub source_module: Option<String>,
+    pub exposed_identifier: HistoricalV2SourceByteRange,
+    pub exposed_identifier_positions: HistoricalV2SourceIdentifierPositions,
+    pub identifier: HistoricalV2SourceByteRange,
+    pub identifier_positions: HistoricalV2SourceIdentifierPositions,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HistoricalV2SourcePublicReexport {
+    pub reexport_unit_id: String,
+    pub kind: HistoricalV2SourcePublicReexportKind,
+    pub name: Option<String>,
+    pub source_module: String,
+    pub directive: HistoricalV2SourceByteRange,
+    pub exposed_identifier: Option<HistoricalV2SourceByteRange>,
     pub identifier: HistoricalV2SourceByteRange,
     pub identifier_positions: HistoricalV2SourceIdentifierPositions,
 }
@@ -104,6 +138,7 @@ pub struct HistoricalV2SourceFile {
     pub methods: Vec<HistoricalV2SourceMethod>,
     pub public_surface_coverage: HistoricalV2PublicSurfaceCoverage,
     pub public_declarations: Vec<HistoricalV2SourcePublicDeclaration>,
+    pub public_reexports: Vec<HistoricalV2SourcePublicReexport>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -118,6 +153,7 @@ pub struct HistoricalV2SourceSnapshotCensus {
     pub method_counts_by_language: BTreeMap<String, usize>,
     pub method_count: usize,
     pub public_declaration_count: usize,
+    pub public_reexport_count: usize,
     pub snapshot_census_sha256: String,
 }
 

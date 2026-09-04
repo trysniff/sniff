@@ -118,6 +118,7 @@ fn source_file_fixture() -> HistoricalV2SourceFile {
         public_surface_coverage:
             super::super::HistoricalV2PublicSurfaceCoverage::UnsupportedLanguage,
         public_declarations: Vec::new(),
+        public_reexports: Vec::new(),
     }
 }
 
