@@ -223,21 +223,21 @@ INDEXED_SEMANTIC_SNAPSHOT_PROJECTION_MIGRATION_SOURCE_ARTIFACT_DIGEST = (
 )
 INDEXED_SEMANTIC_SNAPSHOT_PROJECTION_MIGRATION_SOURCE_ARTIFACT_SIZE = 337_799_271
 
-BATCHED_SEMANTIC_SOURCE_RECONSTRUCTION_MIGRATION_NAME = (
-    "batched-semantic-source-reconstruction-v1"
+NORMALIZED_SEMANTIC_SNAPSHOT_MIGRATION_NAME = (
+    "batched-source-normalized-semantic-snapshot-v1"
 )
-BATCHED_SEMANTIC_SOURCE_RECONSTRUCTION_MIGRATION_CONTRACT = (
-    "sniffbench-historical-v2-batched-semantic-source-reconstruction-migration-v1"
+NORMALIZED_SEMANTIC_SNAPSHOT_MIGRATION_CONTRACT = (
+    "sniffbench-historical-v2-batched-source-normalized-semantic-snapshot-migration-v1"
 )
-BATCHED_SEMANTIC_SOURCE_RECONSTRUCTION_MIGRATION_FROM_COLLECTOR_SHA = (
+NORMALIZED_SEMANTIC_SNAPSHOT_MIGRATION_FROM_COLLECTOR_SHA = (
     "379c2719695fc059351c9e4ad74a42d2e6500fd2"
 )
-BATCHED_SEMANTIC_SOURCE_RECONSTRUCTION_MIGRATION_SOURCE_RUN_ID = 33_746_871_459
-BATCHED_SEMANTIC_SOURCE_RECONSTRUCTION_MIGRATION_SOURCE_ARTIFACT_ID = 9_890_267_578
-BATCHED_SEMANTIC_SOURCE_RECONSTRUCTION_MIGRATION_SOURCE_ARTIFACT_DIGEST = (
+NORMALIZED_SEMANTIC_SNAPSHOT_MIGRATION_SOURCE_RUN_ID = 33_746_871_459
+NORMALIZED_SEMANTIC_SNAPSHOT_MIGRATION_SOURCE_ARTIFACT_ID = 9_890_267_578
+NORMALIZED_SEMANTIC_SNAPSHOT_MIGRATION_SOURCE_ARTIFACT_DIGEST = (
     "sha256:dee513c46e6ee8195a1ba37241afd913a03a950241ea7d8dbbefc2304e5cfa18"
 )
-BATCHED_SEMANTIC_SOURCE_RECONSTRUCTION_MIGRATION_SOURCE_ARTIFACT_SIZE = 337_800_342
+NORMALIZED_SEMANTIC_SNAPSHOT_MIGRATION_SOURCE_ARTIFACT_SIZE = 337_800_342
 
 FRAME_FILE_SHA256 = {
     "environment.txt": "2e87f3c3e1b2005f6b6d09b1bf1b82d30a9433636c3c67f0806cc68e80ab6800",
@@ -741,11 +741,9 @@ def _migration_record(
         source_collector_sha = (
             INDEXED_SEMANTIC_SNAPSHOT_PROJECTION_MIGRATION_FROM_COLLECTOR_SHA
         )
-    elif migration_name == BATCHED_SEMANTIC_SOURCE_RECONSTRUCTION_MIGRATION_NAME:
-        contract = BATCHED_SEMANTIC_SOURCE_RECONSTRUCTION_MIGRATION_CONTRACT
-        source_collector_sha = (
-            BATCHED_SEMANTIC_SOURCE_RECONSTRUCTION_MIGRATION_FROM_COLLECTOR_SHA
-        )
+    elif migration_name == NORMALIZED_SEMANTIC_SNAPSHOT_MIGRATION_NAME:
+        contract = NORMALIZED_SEMANTIC_SNAPSHOT_MIGRATION_CONTRACT
+        source_collector_sha = NORMALIZED_SEMANTIC_SNAPSHOT_MIGRATION_FROM_COLLECTOR_SHA
     else:
         raise ValueError("transport manifest collector migration is not allowlisted")
     return {
@@ -984,23 +982,23 @@ def _expected_indexed_semantic_snapshot_projection_migration(
     )
 
 
-def _expected_batched_semantic_source_reconstruction_migration(
+def _expected_normalized_semantic_snapshot_migration(
     target_collector_sha: str,
 ) -> dict[str, Any]:
     if (
         target_collector_sha
-        == BATCHED_SEMANTIC_SOURCE_RECONSTRUCTION_MIGRATION_FROM_COLLECTOR_SHA
+        == NORMALIZED_SEMANTIC_SNAPSHOT_MIGRATION_FROM_COLLECTOR_SHA
         or re.fullmatch(r"[0-9a-f]{40}", target_collector_sha) is None
     ):
         raise ValueError("transport manifest collector migration target is invalid")
     return _migration_record(
-        BATCHED_SEMANTIC_SOURCE_RECONSTRUCTION_MIGRATION_NAME,
+        NORMALIZED_SEMANTIC_SNAPSHOT_MIGRATION_NAME,
         target_collector_sha,
-        BATCHED_SEMANTIC_SOURCE_RECONSTRUCTION_MIGRATION_SOURCE_RUN_ID,
-        BATCHED_SEMANTIC_SOURCE_RECONSTRUCTION_MIGRATION_FROM_COLLECTOR_SHA,
-        BATCHED_SEMANTIC_SOURCE_RECONSTRUCTION_MIGRATION_SOURCE_ARTIFACT_ID,
-        BATCHED_SEMANTIC_SOURCE_RECONSTRUCTION_MIGRATION_SOURCE_ARTIFACT_DIGEST,
-        BATCHED_SEMANTIC_SOURCE_RECONSTRUCTION_MIGRATION_SOURCE_ARTIFACT_SIZE,
+        NORMALIZED_SEMANTIC_SNAPSHOT_MIGRATION_SOURCE_RUN_ID,
+        NORMALIZED_SEMANTIC_SNAPSHOT_MIGRATION_FROM_COLLECTOR_SHA,
+        NORMALIZED_SEMANTIC_SNAPSHOT_MIGRATION_SOURCE_ARTIFACT_ID,
+        NORMALIZED_SEMANTIC_SNAPSHOT_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+        NORMALIZED_SEMANTIC_SNAPSHOT_MIGRATION_SOURCE_ARTIFACT_SIZE,
     )
 
 
@@ -1092,7 +1090,7 @@ def _validate_collector_migrations(
             )
         if len(migrations) >= 12:
             indexed_projection_target = (
-                BATCHED_SEMANTIC_SOURCE_RECONSTRUCTION_MIGRATION_FROM_COLLECTOR_SHA
+                NORMALIZED_SEMANTIC_SNAPSHOT_MIGRATION_FROM_COLLECTOR_SHA
                 if len(migrations) == 13
                 else collector_sha
             )
@@ -1103,7 +1101,7 @@ def _validate_collector_migrations(
             )
         if len(migrations) == 13:
             expected.append(
-                _expected_batched_semantic_source_reconstruction_migration(
+                _expected_normalized_semantic_snapshot_migration(
                     collector_sha
                 )
             )
@@ -1204,7 +1202,7 @@ def migrate_manifest(
             for item in value.get("collector_migrations", [])
         ]
     elif schema_version == 13:
-        expected_name = BATCHED_SEMANTIC_SOURCE_RECONSTRUCTION_MIGRATION_NAME
+        expected_name = NORMALIZED_SEMANTIC_SNAPSHOT_MIGRATION_NAME
         migrations = [
             _require_mapping(item, "transport manifest collector migration")
             for item in value.get("collector_migrations", [])
