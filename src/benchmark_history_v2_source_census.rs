@@ -18,10 +18,10 @@ use super::{
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::Path;
 
-const SOURCE_CENSUS_CONTRACT: &str = "sniffbench-historical-v2-source-census-v4";
+const SOURCE_CENSUS_CONTRACT: &str = "sniffbench-historical-v2-source-census-v5";
 pub(super) const PARSER_ERROR_LIMIT: usize = 4 * 1024;
 type SourceCensusStageResult =
     HistoricalV2StageResult<HistoricalV2SourceCensus, HistoricalV2SourceCensusExclusion>;
@@ -248,7 +248,6 @@ fn project_snapshot(
     let mut source_files = Vec::with_capacity(parser_census.source_files.len());
     let mut method_counts_by_language = BTreeMap::<String, usize>::new();
     let mut public_declaration_count = 0_usize;
-    let mut public_surface_ids = BTreeSet::new();
     let requests = parser_census
         .source_files
         .iter()
@@ -303,14 +302,6 @@ fn project_snapshot(
             .or_default() += methods.len();
         let (public_surface_coverage, public_declarations) =
             source_public_declarations(&source.repository_path, &source.language, &bytes)?;
-        for declaration in &public_declarations {
-            if !public_surface_ids.insert(declaration.surface_unit_id.clone()) {
-                return Err(format!(
-                    "historical-v2 source public surface is ambiguous at {}::{}",
-                    source.repository_path, declaration.name
-                ));
-            }
-        }
         public_declaration_count = public_declaration_count
             .checked_add(public_declarations.len())
             .ok_or_else(|| "historical-v2 public declaration count overflowed".to_string())?;

@@ -201,7 +201,6 @@ fn validate_public_bindings<'a>(
         return Err("historical-v2 public binding count changed".to_string());
     }
     let mut expected = BTreeMap::new();
-    let mut expected_surfaces = BTreeSet::new();
     let mut required_declarations = BTreeSet::new();
     for file in source
         .source_files
@@ -223,7 +222,6 @@ fn validate_public_bindings<'a>(
                 || declaration.declaration_unit_id.trim().is_empty()
                 || declaration.identifier.start >= declaration.identifier.end
                 || declaration.name.trim().is_empty()
-                || !expected_surfaces.insert(declaration.surface_unit_id.as_str())
                 || expected
                     .insert(
                         declaration.declaration_unit_id.as_str(),

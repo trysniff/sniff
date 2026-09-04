@@ -4,7 +4,7 @@ use super::{
 };
 use serde::{Deserialize, Serialize};
 
-pub const HISTORICAL_V2_QUALIFICATION_SCHEMA_VERSION: u32 = 2;
+pub const HISTORICAL_V2_QUALIFICATION_SCHEMA_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -98,9 +98,9 @@ pub struct HistoricalV2UnresolvedChangedMethod {
 pub struct HistoricalV2PublicSurfaceEntry {
     pub indexer: IntentionalBoundaryIndexerKind,
     pub surface_unit_id: String,
-    pub declaration_unit_id: String,
-    pub symbol_id: String,
-    pub semantic_fingerprint_sha256: String,
+    pub declaration_unit_ids: Vec<String>,
+    pub symbol_ids: Vec<String>,
+    pub compiler_fingerprint_sha256s: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -108,10 +108,10 @@ pub struct HistoricalV2PublicSurfaceEntry {
 pub struct HistoricalV2PublicSurfaceChange {
     pub indexer: IntentionalBoundaryIndexerKind,
     pub surface_unit_id: String,
-    pub base_symbol_id: String,
-    pub patched_symbol_id: String,
-    pub base_fingerprint_sha256: String,
-    pub patched_fingerprint_sha256: String,
+    pub base_symbol_ids: Vec<String>,
+    pub patched_symbol_ids: Vec<String>,
+    pub base_compiler_fingerprint_sha256s: Vec<String>,
+    pub patched_compiler_fingerprint_sha256s: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
