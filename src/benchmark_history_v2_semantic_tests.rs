@@ -1,9 +1,10 @@
 use super::*;
 use crate::semantic_index::{
-    RepositoryPath, SemanticDocument, SemanticIndexProvenance, SemanticLocation,
-    SemanticOccurrence, SemanticOccurrenceRole, SemanticPosition, SemanticPositionEncoding,
-    SemanticSourceRange, SemanticSurface, SemanticSymbol, SemanticSymbolCategory, SemanticSymbolId,
-    SemanticSymbolKind, SemanticSymbolOrigin, SemanticTextEncoding, SemanticVisibility,
+    RepositoryPath, SemanticCallEdge, SemanticDispatch, SemanticDocument, SemanticIndexProvenance,
+    SemanticLocation, SemanticOccurrence, SemanticOccurrenceRole, SemanticPosition,
+    SemanticPositionEncoding, SemanticResolution, SemanticSourceRange, SemanticSurface,
+    SemanticSymbol, SemanticSymbolCategory, SemanticSymbolId, SemanticSymbolKind,
+    SemanticSymbolOrigin, SemanticTextEncoding, SemanticVisibility,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -25,13 +26,58 @@ fn commits_exact_compiler_facts_for_every_historical_method() {
     assert_eq!(snapshot.unresolved_method_count, 0);
     assert_eq!(snapshot.methods[0].parser_unit_id, "h2m-v1:fixture");
     assert_eq!(snapshot.indexers[0].tool_name, "fixture-indexer");
+    assert_eq!(snapshot.symbol_count, 1);
     assert_eq!(snapshot.public_symbol_count, 1);
-    assert_eq!(
-        snapshot.public_symbols[0].symbol.symbol_id,
-        "rust fixture process"
-    );
+    assert_eq!(snapshot.symbols[0].symbol.symbol_id, "rust fixture process");
     validation::validate_snapshot(
-        "example/repo",
+        &fixture.source,
+        &snapshot,
+        &fixture_changed_indexers(),
+        &fixture_required_paths(&fixture.source),
+    )
+    .unwrap();
+}
+
+#[test]
+fn high_degree_graph_is_hash_committed_without_per_method_edge_copies() {
+    let mut fixture = fixture();
+    let index = fixture.indexes.get_mut(&SemanticIndexerKind::Rust).unwrap();
+    let symbol = index.symbols.keys().next().unwrap().clone();
+    for character in 0..10_000_u32 {
+        index.calls.insert(SemanticCallEdge {
+            caller: symbol.clone(),
+            callsite: SemanticLocation {
+                document: RepositoryPath("src/lib.rs".to_string()),
+                range: SemanticSourceRange {
+                    start: SemanticPosition { line: 1, character },
+                    end: SemanticPosition {
+                        line: 1,
+                        character: character + 1,
+                    },
+                },
+            },
+            callee: SemanticResolution::Resolved {
+                value: symbol.clone(),
+            },
+            dispatch: SemanticDispatch::Static,
+        });
+    }
+
+    let snapshot = build_semantic_snapshot(
+        fixture.root.path(),
+        &fixture.source,
+        &fixture.files,
+        &fixture_changed_indexers(),
+        &fixture_required_paths(&fixture.source),
+        &fixture.indexes,
+    )
+    .unwrap();
+
+    assert_eq!(snapshot.methods.len(), 1);
+    assert_eq!(snapshot.symbol_count, 1);
+    assert_eq!(snapshot.indexers[0].call_count, 10_000);
+    assert!(serde_json::to_vec(&snapshot).unwrap().len() < 16 * 1024);
+    validation::validate_snapshot(
         &fixture.source,
         &snapshot,
         &fixture_changed_indexers(),
@@ -145,7 +191,6 @@ fn generated_files_are_committed_but_not_required_from_the_compiler_index() {
     assert_eq!(snapshot.methods.len(), 1);
     assert_eq!(snapshot.methods[0].parser_unit_id, "h2m-v1:fixture");
     validation::validate_snapshot(
-        "example/repo",
         &fixture.source,
         &snapshot,
         &fixture_changed_indexers(),
@@ -171,7 +216,6 @@ fn semantic_validation_rejects_recommitted_invented_method() {
 
     assert!(
         validation::validate_snapshot(
-            "example/repo",
             &fixture.source,
             &snapshot,
             &fixture_changed_indexers(),
@@ -210,13 +254,11 @@ fn semantic_validation_rejects_recommitted_fake_public_surface() {
         &fixture.indexes,
     )
     .unwrap();
-    snapshot.public_symbols[0].symbol.origin =
-        super::super::IntentionalBoundarySemanticOrigin::External;
+    snapshot.symbols[0].symbol.origin = super::super::IntentionalBoundarySemanticOrigin::External;
     snapshot.semantic_snapshot_sha256 = semantic_snapshot_sha256(&snapshot).unwrap();
 
     assert!(
         validation::validate_snapshot(
-            "example/repo",
             &fixture.source,
             &snapshot,
             &fixture_changed_indexers(),
@@ -224,6 +266,35 @@ fn semantic_validation_rejects_recommitted_fake_public_surface() {
         )
         .unwrap_err()
         .contains("public semantic symbol")
+    );
+}
+
+#[test]
+fn semantic_validation_rejects_a_recommitted_missing_method_symbol() {
+    let fixture = fixture();
+    let mut snapshot = build_semantic_snapshot(
+        fixture.root.path(),
+        &fixture.source,
+        &fixture.files,
+        &fixture_changed_indexers(),
+        &fixture_required_paths(&fixture.source),
+        &fixture.indexes,
+    )
+    .unwrap();
+    snapshot.symbols.clear();
+    snapshot.symbol_count = 0;
+    snapshot.public_symbol_count = 0;
+    snapshot.semantic_snapshot_sha256 = semantic_snapshot_sha256(&snapshot).unwrap();
+
+    assert!(
+        validation::validate_snapshot(
+            &fixture.source,
+            &snapshot,
+            &fixture_changed_indexers(),
+            &fixture_required_paths(&fixture.source),
+        )
+        .unwrap_err()
+        .contains("invalid compiler evidence")
     );
 }
 
@@ -540,11 +611,10 @@ fn unchanged_compiler_invisible_document_is_explicitly_excluded() {
     assert_eq!(snapshot.compiler_excluded_method_count, 1);
     assert!(matches!(
         &snapshot.methods[0].status,
-        IntentionalBoundarySemanticMethodStatus::CompilerExcluded { reason }
+        HistoricalV2SemanticMethodStatus::CompilerExcluded { reason }
             if reason == UNCHANGED_DOCUMENT_EXCLUSION
     ));
     validation::validate_snapshot(
-        "example/repo",
         &fixture.source,
         &snapshot,
         &fixture_changed_indexers(),
@@ -590,11 +660,10 @@ fn untouched_language_methods_are_explicitly_excluded_without_an_indexer() {
     assert_eq!(snapshot.compiler_excluded_method_count, 1);
     assert!(matches!(
         &snapshot.methods[0].status,
-        IntentionalBoundarySemanticMethodStatus::CompilerExcluded { reason }
+        HistoricalV2SemanticMethodStatus::CompilerExcluded { reason }
             if reason == UNTOUCHED_LANGUAGE_EXCLUSION
     ));
     validation::validate_snapshot(
-        "example/repo",
         &fixture.source,
         &snapshot,
         &BTreeSet::new(),
@@ -652,7 +721,6 @@ fn empty_revision_does_not_require_an_indexer_for_a_changed_language() {
     assert!(snapshot.indexers.is_empty());
     assert!(snapshot.methods.is_empty());
     validation::validate_snapshot(
-        "example/repo",
         &source,
         &snapshot,
         &fixture_changed_indexers(),
@@ -711,7 +779,6 @@ fn semantic_validation_rejects_recommitted_required_document_scope_tampering() {
     assert_ne!(snapshot.semantic_snapshot_sha256, original_hash);
 
     let error = validation::validate_snapshot(
-        "example/repo",
         &fixture.source,
         &snapshot,
         &fixture_changed_indexers(),

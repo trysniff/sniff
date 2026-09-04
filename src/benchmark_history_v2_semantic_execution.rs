@@ -140,7 +140,6 @@ pub(super) async fn census_semantic_snapshot(
         .flatten()
     {
         validation::validate_snapshot(
-            &materialization.canonical_repository,
             inputs.source,
             &snapshot,
             changed_indexers,

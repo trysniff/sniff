@@ -55,7 +55,8 @@ fn semantic_snapshot(
         required_document_paths: Vec::new(),
         indexers: Vec::new(),
         methods: Vec::new(),
-        public_symbols: Vec::new(),
+        symbols: Vec::new(),
+        symbol_count: 0,
         public_symbol_count: 0,
         resolved_method_count: 0,
         compiler_excluded_method_count: 0,
@@ -112,6 +113,53 @@ fn completed_snapshot_resumes_only_under_the_exact_identity() {
                 &required,
             )
             .is_err()
+    );
+}
+
+#[test]
+fn previous_snapshot_progress_schema_is_not_reinterpreted() {
+    let state = tempfile::tempdir().unwrap();
+    let root = state.path().join("progress");
+    let progress = HistoricalV2SemanticProgress::open(&root).unwrap();
+    let materialization = materialization();
+    let source_census = source_census();
+    let changed = BTreeSet::from([SemanticIndexerKind::Go]);
+    let required = BTreeSet::new();
+    let snapshot = semantic_snapshot(&source_census.base);
+    progress
+        .publish_snapshot(
+            &materialization,
+            &source_census,
+            HistoricalV2SemanticSnapshotSide::Base,
+            &source_census.base,
+            &changed,
+            &required,
+            &snapshot,
+        )
+        .unwrap();
+    let path = progress
+        .side_root(HistoricalV2SemanticSnapshotSide::Base)
+        .join(SNAPSHOT_FILE);
+    let mut checkpoint: SnapshotCheckpoint =
+        serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    checkpoint.schema_version = SNAPSHOT_PROGRESS_SCHEMA_VERSION - 1;
+    checkpoint.progress_contract = "historical-v2-semantic-snapshot-progress-v1".to_string();
+    checkpoint.checkpoint_sha256.clear();
+    checkpoint.checkpoint_sha256 = canonical_sha256(&checkpoint).unwrap();
+    fs::write(&path, serde_json::to_vec(&checkpoint).unwrap()).unwrap();
+
+    assert!(
+        progress
+            .load_snapshot(
+                &materialization,
+                &source_census,
+                HistoricalV2SemanticSnapshotSide::Base,
+                &source_census.base,
+                &changed,
+                &required,
+            )
+            .unwrap_err()
+            .contains("changed immutable evidence")
     );
 }
 

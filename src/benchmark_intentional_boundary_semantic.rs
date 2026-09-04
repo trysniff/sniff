@@ -40,7 +40,6 @@ type ExpectedMethodMap<'a> = BTreeMap<MethodJoinKey, &'a IntentionalBoundaryMeth
 mod validation;
 
 pub use validation::validate_intentional_boundary_semantic_census;
-pub(super) use validation::validate_intentional_boundary_semantic_census_scoped;
 
 pub async fn census_intentional_boundary_semantics(
     repository: &str,
@@ -348,7 +347,7 @@ pub(super) fn source_reference_identity(
     serde_json::to_vec(&(reference.indexer, &reference.location, &reference.target))
 }
 
-fn flatten_location(location: &SemanticLocation) -> IntentionalBoundarySemanticRange {
+pub(super) fn flatten_location(location: &SemanticLocation) -> IntentionalBoundarySemanticRange {
     flatten_range(&location.document.0, &location.range)
 }
 
@@ -428,7 +427,7 @@ pub(super) fn indexer_kind(kind: SemanticIndexerKind) -> IntentionalBoundaryInde
     }
 }
 
-fn unresolved_reason(
+pub(super) fn unresolved_reason(
     reason: SemanticUnresolvedReason,
 ) -> IntentionalBoundarySemanticUnresolvedReason {
     match reason {

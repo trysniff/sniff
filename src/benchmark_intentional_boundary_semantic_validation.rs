@@ -24,7 +24,7 @@ pub fn validate_intentional_boundary_semantic_census(
     )
 }
 
-pub(in crate::benchmark::release) fn validate_intentional_boundary_semantic_census_scoped(
+fn validate_intentional_boundary_semantic_census_scoped(
     source_census: &IntentionalBoundarySourceCensus,
     census: &IntentionalBoundarySemanticCensus,
     expected_indexers: &BTreeSet<super::IntentionalBoundaryIndexerKind>,

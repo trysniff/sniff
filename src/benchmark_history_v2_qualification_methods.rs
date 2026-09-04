@@ -1,9 +1,9 @@
 use super::{
     HistoricalDiffHunk, HistoricalRevisionSide, HistoricalV2ChangedMethod,
-    HistoricalV2ChangedMethodResolutionFailure, HistoricalV2SemanticSnapshotCensus,
-    HistoricalV2SourceFile, HistoricalV2SourceMethod, HistoricalV2SourceRole,
-    HistoricalV2SourceRoleDecision, HistoricalV2SourceSnapshotCensus,
-    HistoricalV2UnresolvedChangedMethod, IntentionalBoundarySemanticMethodStatus,
+    HistoricalV2ChangedMethodResolutionFailure, HistoricalV2SemanticMethodStatus,
+    HistoricalV2SemanticSnapshotCensus, HistoricalV2SourceFile, HistoricalV2SourceMethod,
+    HistoricalV2SourceRole, HistoricalV2SourceRoleDecision, HistoricalV2SourceSnapshotCensus,
+    HistoricalV2UnresolvedChangedMethod,
 };
 use std::collections::BTreeMap;
 
@@ -61,7 +61,7 @@ pub(super) fn collect_side_methods(
             .iter()
             .find(|semantic| semantic.parser_unit_id == method.parser_unit_id);
         match semantic.map(|semantic| (&semantic.indexer, &semantic.status)) {
-            Some((indexer, IntentionalBoundarySemanticMethodStatus::Resolved { symbol, .. })) => {
+            Some((indexer, HistoricalV2SemanticMethodStatus::Resolved { symbol_id, .. })) => {
                 changed.insert(
                     key,
                     HistoricalV2ChangedMethod {
@@ -74,11 +74,11 @@ pub(super) fn collect_side_methods(
                         end_line: method.end_line,
                         source_sha256: method.source_sha256.clone(),
                         indexer: *indexer,
-                        compiler_symbol_id: symbol.symbol_id.clone(),
+                        compiler_symbol_id: symbol_id.clone(),
                     },
                 );
             }
-            Some((_, IntentionalBoundarySemanticMethodStatus::CompilerExcluded { reason })) => {
+            Some((_, HistoricalV2SemanticMethodStatus::CompilerExcluded { reason })) => {
                 unresolved.insert(
                     key,
                     unresolved_method(
@@ -93,7 +93,7 @@ pub(super) fn collect_side_methods(
             }
             Some((
                 _,
-                IntentionalBoundarySemanticMethodStatus::Unresolved {
+                HistoricalV2SemanticMethodStatus::Unresolved {
                     reason,
                     raw_target,
                     detail,

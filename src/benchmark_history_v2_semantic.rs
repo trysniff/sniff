@@ -3,34 +3,36 @@ use super::history_v2_semantic_exclusion::{
 };
 use super::intentional_boundary_inventory::read_intentional_boundary_git_blobs;
 use super::intentional_boundary_semantic::{
-    SemanticProjectionIndex, flatten_method, flatten_symbol, summarize_index,
+    flatten_location, flatten_symbol, summarize_index, unresolved_reason,
 };
 use super::{
     HISTORICAL_V2_SEMANTIC_CENSUS_SCHEMA_VERSION, HistoricalV2Materialization,
-    HistoricalV2MaterializedRoots, HistoricalV2PublicSymbol, HistoricalV2SemanticCensus,
-    HistoricalV2SemanticCensusExclusion, HistoricalV2SemanticCensusExclusionReason,
-    HistoricalV2SemanticCensusFailureEvidence, HistoricalV2SemanticCensusFailurePhase,
-    HistoricalV2SemanticProcessEvidence, HistoricalV2SemanticSnapshotCensus,
-    HistoricalV2SemanticSnapshotSide, HistoricalV2SlotStage, HistoricalV2SlotStageError,
+    HistoricalV2MaterializedRoots, HistoricalV2SemanticCensus, HistoricalV2SemanticCensusExclusion,
+    HistoricalV2SemanticCensusExclusionReason, HistoricalV2SemanticCensusFailureEvidence,
+    HistoricalV2SemanticCensusFailurePhase, HistoricalV2SemanticMethod,
+    HistoricalV2SemanticMethodStatus, HistoricalV2SemanticProcessEvidence,
+    HistoricalV2SemanticSnapshotCensus, HistoricalV2SemanticSnapshotSide,
+    HistoricalV2SemanticSymbol, HistoricalV2SlotStage, HistoricalV2SlotStageError,
     HistoricalV2SlotStageErrorKind, HistoricalV2SourceCensus, HistoricalV2SourceSemanticCoverage,
     HistoricalV2SourceSnapshotCensus, HistoricalV2StageResult, IntentionalBoundaryIndexerKind,
-    IntentionalBoundaryMethodCensusEntry, IntentionalBoundarySemanticMethod,
-    IntentionalBoundarySemanticMethodStatus, validate_historical_v2_source_census,
+    IntentionalBoundaryMethodCensusEntry, validate_historical_v2_source_census,
 };
-use crate::semantic_index::{SemanticIndex, SemanticSymbolOrigin, SemanticVisibility};
+use crate::semantic_index::{
+    SemanticIndex, SemanticResolution, SemanticSymbol, SemanticSymbolOrigin, SemanticVisibility,
+};
 use crate::semantic_indexer_manifest::SemanticIndexerKind;
 use crate::semantic_indexer_runner::{
     SemanticIndexerBatchOutcome, SemanticIndexerProcessEvidence, SemanticIndexerRunFailure,
     SemanticIndexerRunFailureKind, SemanticIndexerRunPhase,
 };
-use crate::semantic_method_join::join_methods;
+use crate::semantic_method_join::{SemanticMethodBinding, SemanticMethodCoverage, join_methods};
 use crate::types::FileRecord;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-const SEMANTIC_CENSUS_CONTRACT: &str = "sniffbench-historical-v2-compiler-semantic-census-v2";
+const SEMANTIC_CENSUS_CONTRACT: &str = "sniffbench-historical-v2-compiler-semantic-census-v3";
 const UNCHANGED_DOCUMENT_EXCLUSION: &str =
     "compiler omitted an unchanged source document outside the exact historical patch";
 const UNTOUCHED_LANGUAGE_EXCLUSION: &str =
@@ -239,8 +241,8 @@ fn build_semantic_snapshot(
         .filter(|file| file.semantic_coverage == HistoricalV2SourceSemanticCoverage::Required)
         .map(|file| file.repository_path.as_str())
         .collect::<BTreeSet<_>>();
-    let mut methods = Vec::<IntentionalBoundarySemanticMethod>::with_capacity(source.method_count);
-    let mut public_symbols = Vec::new();
+    let mut methods = Vec::<HistoricalV2SemanticMethod>::with_capacity(source.method_count);
+    let mut symbols = BTreeMap::new();
     let mut indexers = Vec::with_capacity(indexes.len());
     for (kind, index) in indexes {
         let files_for_indexer = crate::semantic_indexer_runner::files_for_indexer(files, *kind);
@@ -269,7 +271,6 @@ fn build_semantic_snapshot(
             )?;
         }
         let join = join_methods(root, &indexed_files, index)?;
-        let projection = SemanticProjectionIndex::new(index);
         for binding in join.bindings.values() {
             let key = (
                 binding.method.file.0.clone(),
@@ -283,33 +284,21 @@ fn build_semantic_snapshot(
                     key.0, key.1, key.2, key.3
                 )
             })?;
-            methods.push(flatten_method(
+            methods.push(flatten_historical_method(
                 indexer_kind(*kind),
                 &expected,
                 binding,
                 index,
-                &projection,
+                &mut symbols,
             )?);
         }
-        public_symbols.extend(
-            index
-                .symbols
-                .values()
-                .filter(|symbol| {
-                    symbol.origin == SemanticSymbolOrigin::Repository
-                        && symbol.definitions.iter().any(|definition| {
-                            required_paths.contains(definition.document.0.as_str())
-                        })
-                        && (matches!(
-                            symbol.visibility,
-                            SemanticVisibility::Public | SemanticVisibility::Protected
-                        ) || !symbol.surfaces.is_empty())
-                })
-                .map(|symbol| HistoricalV2PublicSymbol {
-                    indexer: indexer_kind(*kind),
-                    symbol: flatten_symbol(symbol),
-                }),
-        );
+        for symbol in index
+            .symbols
+            .values()
+            .filter(|symbol| is_public_surface_symbol(symbol, &required_paths))
+        {
+            retain_symbol(&mut symbols, indexer_kind(*kind), symbol, true)?;
+        }
         indexers.push(summarize_index(*kind, index)?);
     }
     for file in files {
@@ -334,22 +323,14 @@ fn build_semantic_snapshot(
         ));
     }
     methods.sort_by(|left, right| left.parser_unit_id.cmp(&right.parser_unit_id));
-    public_symbols.sort_by(|left, right| {
-        (left.indexer, left.symbol.symbol_id.as_str())
-            .cmp(&(right.indexer, right.symbol.symbol_id.as_str()))
-    });
-    if public_symbols.windows(2).any(|pair| {
-        pair[0].indexer == pair[1].indexer && pair[0].symbol.symbol_id == pair[1].symbol.symbol_id
-    }) {
-        return Err("historical-v2 semantic census repeats a public symbol".to_string());
-    }
+    let symbols = symbols.into_values().collect::<Vec<_>>();
     indexers.sort_by_key(|indexer| indexer.indexer);
     let resolved_method_count = methods
         .iter()
         .filter(|method| {
             matches!(
                 method.status,
-                super::IntentionalBoundarySemanticMethodStatus::Resolved { .. }
+                HistoricalV2SemanticMethodStatus::Resolved { .. }
             )
         })
         .count();
@@ -358,7 +339,7 @@ fn build_semantic_snapshot(
         .filter(|method| {
             matches!(
                 method.status,
-                super::IntentionalBoundarySemanticMethodStatus::CompilerExcluded { .. }
+                HistoricalV2SemanticMethodStatus::CompilerExcluded { .. }
             )
         })
         .count();
@@ -372,8 +353,12 @@ fn build_semantic_snapshot(
         required_document_paths: required_document_paths.iter().cloned().collect(),
         indexers,
         methods,
-        public_symbol_count: public_symbols.len(),
-        public_symbols,
+        symbol_count: symbols.len(),
+        public_symbol_count: symbols
+            .iter()
+            .filter(|symbol| symbol.is_public_surface)
+            .count(),
+        symbols,
         resolved_method_count,
         compiler_excluded_method_count,
         unresolved_method_count,
@@ -383,13 +368,104 @@ fn build_semantic_snapshot(
     Ok(snapshot)
 }
 
+fn flatten_historical_method(
+    indexer: IntentionalBoundaryIndexerKind,
+    expected: &IntentionalBoundaryMethodCensusEntry,
+    binding: &SemanticMethodBinding,
+    index: &SemanticIndex,
+    symbols: &mut BTreeMap<(IntentionalBoundaryIndexerKind, String), HistoricalV2SemanticSymbol>,
+) -> Result<HistoricalV2SemanticMethod, String> {
+    let status = match (&binding.coverage, &binding.symbol) {
+        (SemanticMethodCoverage::CompilerExcluded { reason }, _) => {
+            HistoricalV2SemanticMethodStatus::CompilerExcluded {
+                reason: reason.clone(),
+            }
+        }
+        (
+            _,
+            SemanticResolution::Unresolved {
+                reason,
+                raw_target,
+                detail,
+            },
+        ) => HistoricalV2SemanticMethodStatus::Unresolved {
+            reason: unresolved_reason(*reason),
+            raw_target: raw_target.clone(),
+            detail: detail.clone(),
+        },
+        (_, SemanticResolution::Resolved { value }) => {
+            let symbol = index.symbols.get(value).ok_or_else(|| {
+                format!(
+                    "historical-v2 semantic binding references missing symbol {}",
+                    value.0
+                )
+            })?;
+            retain_symbol(symbols, indexer, symbol, false)?;
+            HistoricalV2SemanticMethodStatus::Resolved {
+                symbol_id: value.0.clone(),
+                joined_definition: binding.definition.as_ref().map(flatten_location),
+            }
+        }
+    };
+    Ok(HistoricalV2SemanticMethod {
+        parser_unit_id: expected.parser_unit_id.clone(),
+        repository_path: binding.method.file.0.clone(),
+        symbol_name: binding.method.name.clone(),
+        start_line: binding.method.start_line as usize,
+        end_line: binding.method.end_line as usize,
+        indexer,
+        status,
+    })
+}
+
+fn retain_symbol(
+    symbols: &mut BTreeMap<(IntentionalBoundaryIndexerKind, String), HistoricalV2SemanticSymbol>,
+    indexer: IntentionalBoundaryIndexerKind,
+    symbol: &SemanticSymbol,
+    is_public_surface: bool,
+) -> Result<(), String> {
+    let key = (indexer, symbol.id.0.clone());
+    let facts = flatten_symbol(symbol);
+    if let Some(existing) = symbols.get_mut(&key) {
+        if existing.symbol != facts {
+            return Err(format!(
+                "historical-v2 compiler changed repeated symbol facts for {}",
+                symbol.id.0
+            ));
+        }
+        existing.is_public_surface |= is_public_surface;
+        return Ok(());
+    }
+    symbols.insert(
+        key,
+        HistoricalV2SemanticSymbol {
+            indexer,
+            is_public_surface,
+            symbol: facts,
+        },
+    );
+    Ok(())
+}
+
+fn is_public_surface_symbol(symbol: &SemanticSymbol, required_paths: &BTreeSet<&str>) -> bool {
+    symbol.origin == SemanticSymbolOrigin::Repository
+        && symbol
+            .definitions
+            .iter()
+            .any(|definition| required_paths.contains(definition.document.0.as_str()))
+        && (matches!(
+            symbol.visibility,
+            SemanticVisibility::Public | SemanticVisibility::Protected
+        ) || !symbol.surfaces.is_empty())
+}
+
 fn push_compiler_excluded_file_methods(
     repository_path: &str,
     file: &FileRecord,
     indexer: IntentionalBoundaryIndexerKind,
     reason: &str,
     expected_methods: &mut BTreeMap<MethodKey, IntentionalBoundaryMethodCensusEntry>,
-    methods: &mut Vec<IntentionalBoundarySemanticMethod>,
+    methods: &mut Vec<HistoricalV2SemanticMethod>,
 ) -> Result<(), String> {
     if reason.trim().is_empty() {
         return Err("historical-v2 compiler exclusion has no evidence".to_string());
@@ -411,21 +487,16 @@ fn push_compiler_excluded_file_methods(
                 key.0, key.1, key.2, key.3
             )
         })?;
-        methods.push(IntentionalBoundarySemanticMethod {
+        methods.push(HistoricalV2SemanticMethod {
             parser_unit_id: expected.parser_unit_id,
             repository_path: key.0,
             symbol_name: expected.symbol_name,
             start_line: expected.start_line,
             end_line: expected.end_line,
             indexer,
-            status: IntentionalBoundarySemanticMethodStatus::CompilerExcluded {
+            status: HistoricalV2SemanticMethodStatus::CompilerExcluded {
                 reason: reason.to_string(),
             },
-            occurrences: Vec::new(),
-            calls: Vec::new(),
-            relationships: Vec::new(),
-            imports: Vec::new(),
-            test_relationships: Vec::new(),
         });
     }
     Ok(())
@@ -554,7 +625,8 @@ pub(super) fn semantic_snapshot_sha256(
         &value.required_document_paths,
         &value.indexers,
         &value.methods,
-        &value.public_symbols,
+        &value.symbols,
+        value.symbol_count,
         value.public_symbol_count,
         value.resolved_method_count,
         value.compiler_excluded_method_count,
