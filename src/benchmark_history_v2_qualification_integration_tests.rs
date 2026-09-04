@@ -4,11 +4,12 @@ use crate::benchmark::{
     HISTORICAL_V2_SELECTED_PAYLOADS_SCHEMA_VERSION, HISTORICAL_V2_SEMANTIC_CENSUS_SCHEMA_VERSION,
     HistoricalV2MaterializedRoots, HistoricalV2SelectedPayloads, HistoricalV2SemanticCensus,
     HistoricalV2SemanticMethod, HistoricalV2SemanticMethodStatus,
-    HistoricalV2SemanticPublicBinding, HistoricalV2SemanticSnapshotCensus,
-    HistoricalV2SemanticSymbol, HistoricalV2SourceCensus, IntentionalBoundaryIndexerKind,
-    IntentionalBoundarySemanticOrigin, IntentionalBoundarySemanticResolution,
-    IntentionalBoundarySemanticSymbolCategory, IntentionalBoundarySemanticSymbolFacts,
-    IntentionalBoundarySemanticVisibility, census_historical_v2_sources,
+    HistoricalV2SemanticPublicBinding, HistoricalV2SemanticPublicBindingKind,
+    HistoricalV2SemanticSnapshotCensus, HistoricalV2SemanticSymbol, HistoricalV2SourceCensus,
+    IntentionalBoundaryIndexerKind, IntentionalBoundarySemanticOrigin,
+    IntentionalBoundarySemanticResolution, IntentionalBoundarySemanticSymbolCategory,
+    IntentionalBoundarySemanticSymbolFacts, IntentionalBoundarySemanticVisibility,
+    census_historical_v2_sources,
 };
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -194,8 +195,9 @@ fn semantic_snapshot(
                 declaration_unit_id: declaration.declaration_unit_id.clone(),
                 repository_path: file.repository_path.clone(),
                 symbol_id: symbol.symbol_id.clone(),
+                binding: HistoricalV2SemanticPublicBindingKind::Definition,
                 position_encoding: crate::semantic_index::SemanticPositionEncoding::Utf8,
-                joined_definition: symbol.definitions[0].clone(),
+                compiler_anchor: symbol.definitions[0].clone(),
             });
         }
     }

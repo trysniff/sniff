@@ -6,7 +6,7 @@ use super::{
 use crate::semantic_index::SemanticPositionEncoding;
 use serde::{Deserialize, Serialize};
 
-pub const HISTORICAL_V2_SEMANTIC_CENSUS_SCHEMA_VERSION: u32 = 6;
+pub const HISTORICAL_V2_SEMANTIC_CENSUS_SCHEMA_VERSION: u32 = 7;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -46,6 +46,14 @@ pub struct HistoricalV2SemanticMethod {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HistoricalV2SemanticPublicBindingKind {
+    Definition,
+    Reference,
+    ReexportExpansion,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HistoricalV2SemanticPublicBinding {
     pub indexer: IntentionalBoundaryIndexerKind,
@@ -53,8 +61,9 @@ pub struct HistoricalV2SemanticPublicBinding {
     pub declaration_unit_id: String,
     pub repository_path: String,
     pub symbol_id: String,
+    pub binding: HistoricalV2SemanticPublicBindingKind,
     pub position_encoding: SemanticPositionEncoding,
-    pub joined_definition: IntentionalBoundarySemanticRange,
+    pub compiler_anchor: IntentionalBoundarySemanticRange,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

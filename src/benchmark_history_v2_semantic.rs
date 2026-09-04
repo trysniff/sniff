@@ -11,10 +11,11 @@ use super::{
     HistoricalV2SemanticCensusExclusionReason, HistoricalV2SemanticCensusFailureEvidence,
     HistoricalV2SemanticCensusFailurePhase, HistoricalV2SemanticMethod,
     HistoricalV2SemanticMethodStatus, HistoricalV2SemanticProcessEvidence,
-    HistoricalV2SemanticPublicBinding, HistoricalV2SemanticSnapshotCensus,
-    HistoricalV2SemanticSnapshotSide, HistoricalV2SemanticSymbol, HistoricalV2SlotStage,
-    HistoricalV2SlotStageError, HistoricalV2SlotStageErrorKind, HistoricalV2SourceCensus,
-    HistoricalV2SourceFile, HistoricalV2SourcePublicDeclaration,
+    HistoricalV2SemanticPublicBinding, HistoricalV2SemanticPublicBindingKind,
+    HistoricalV2SemanticSnapshotCensus, HistoricalV2SemanticSnapshotSide,
+    HistoricalV2SemanticSymbol, HistoricalV2SlotStage, HistoricalV2SlotStageError,
+    HistoricalV2SlotStageErrorKind, HistoricalV2SourceCensus, HistoricalV2SourceFile,
+    HistoricalV2SourcePublicBindingKind, HistoricalV2SourcePublicDeclaration,
     HistoricalV2SourcePublicSymbolKind, HistoricalV2SourceSemanticCoverage,
     HistoricalV2SourceSnapshotCensus, HistoricalV2StageResult, IntentionalBoundaryIndexerKind,
     IntentionalBoundaryMethodCensusEntry, validate_historical_v2_source_census,
@@ -36,7 +37,7 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-const SEMANTIC_CENSUS_CONTRACT: &str = "sniffbench-historical-v2-compiler-semantic-census-v6";
+const SEMANTIC_CENSUS_CONTRACT: &str = "sniffbench-historical-v2-compiler-semantic-census-v7";
 const UNCHANGED_DOCUMENT_EXCLUSION: &str =
     "compiler omitted an unchanged source document outside the exact historical patch";
 const UNTOUCHED_LANGUAGE_EXCLUSION: &str =
@@ -497,23 +498,15 @@ fn bind_public_surface(
                 &record.source,
                 document.position_encoding,
             )?;
-            let candidates = index
-                .symbols
-                .values()
-                .filter(|symbol| {
-                    symbol.origin == SemanticSymbolOrigin::Repository
-                        && symbol.ambiguity_notes.is_empty()
-                        && compatible_public_symbol_kind(declaration.kind, symbol.kind.category)
-                        && symbol.definitions.contains(&location)
-                })
-                .collect::<Vec<_>>();
-            let [symbol] = candidates.as_slice() else {
-                return Err(format!(
-                    "historical-v2 compiler resolved {} public symbol(s) at the exact declaration of {}::{}",
-                    candidates.len(),
-                    file.repository_path,
-                    declaration.name
-                ));
+            let (binding, symbol) = match declaration.binding {
+                HistoricalV2SourcePublicBindingKind::Definition => (
+                    HistoricalV2SemanticPublicBindingKind::Definition,
+                    symbol_at_exact_definition(index, declaration, &location)?,
+                ),
+                HistoricalV2SourcePublicBindingKind::Reference => (
+                    HistoricalV2SemanticPublicBindingKind::Reference,
+                    symbol_at_exact_reference(index, document, declaration, &location)?,
+                ),
             };
             retain_symbol(symbols, indexer_kind(kind), symbol, true)?;
             bindings.push(HistoricalV2SemanticPublicBinding {
@@ -522,12 +515,91 @@ fn bind_public_surface(
                 declaration_unit_id: declaration.declaration_unit_id.clone(),
                 repository_path: file.repository_path.clone(),
                 symbol_id: symbol.id.0.clone(),
+                binding,
                 position_encoding: document.position_encoding,
-                joined_definition: flatten_location(&location),
+                compiler_anchor: flatten_location(&location),
             });
+        }
+        if !file.public_reexports.is_empty() {
+            return Err(format!(
+                "historical-v2 compiler re-export expansion is incomplete for {}",
+                file.repository_path
+            ));
         }
     }
     Ok(())
+}
+
+fn symbol_at_exact_definition<'a>(
+    index: &'a SemanticIndex,
+    declaration: &HistoricalV2SourcePublicDeclaration,
+    location: &SemanticLocation,
+) -> Result<&'a SemanticSymbol, String> {
+    let candidates = index
+        .symbols
+        .values()
+        .filter(|symbol| {
+            valid_public_symbol(declaration, symbol) && symbol.definitions.contains(location)
+        })
+        .collect::<Vec<_>>();
+    let [symbol] = candidates.as_slice() else {
+        return Err(format!(
+            "historical-v2 compiler resolved {} public symbol(s) at the exact definition of {}::{}",
+            candidates.len(),
+            location.document.0,
+            declaration.name
+        ));
+    };
+    Ok(*symbol)
+}
+
+fn symbol_at_exact_reference<'a>(
+    index: &'a SemanticIndex,
+    document: &crate::semantic_index::SemanticDocument,
+    declaration: &HistoricalV2SourcePublicDeclaration,
+    location: &SemanticLocation,
+) -> Result<&'a SemanticSymbol, String> {
+    let occurrences = document
+        .occurrences
+        .iter()
+        .filter(|occurrence| occurrence.range == location.range)
+        .collect::<Vec<_>>();
+    let [occurrence] = occurrences.as_slice() else {
+        return Err(format!(
+            "historical-v2 compiler emitted {} occurrence(s) at the exact public reference of {}::{}",
+            occurrences.len(),
+            location.document.0,
+            declaration.name
+        ));
+    };
+    let symbol_id = occurrence.symbol.as_ref().ok_or_else(|| {
+        format!(
+            "historical-v2 compiler left the exact public reference unresolved at {}::{}",
+            location.document.0, declaration.name
+        )
+    })?;
+    let symbol = index.symbols.get(symbol_id).ok_or_else(|| {
+        format!(
+            "historical-v2 public reference points to missing compiler symbol {}",
+            symbol_id.0
+        )
+    })?;
+    if !valid_public_symbol(declaration, symbol) {
+        return Err(format!(
+            "historical-v2 public reference has an incompatible compiler symbol at {}::{}",
+            location.document.0, declaration.name
+        ));
+    }
+    Ok(symbol)
+}
+
+fn valid_public_symbol(
+    declaration: &HistoricalV2SourcePublicDeclaration,
+    symbol: &SemanticSymbol,
+) -> bool {
+    symbol.origin == SemanticSymbolOrigin::Repository
+        && symbol.ambiguity_notes.is_empty()
+        && compatible_public_symbol_kind(declaration.kind, symbol.kind.category)
 }
 
 fn declaration_location(
@@ -539,9 +611,19 @@ fn declaration_location(
     let range = declaration.identifier;
     if range.start >= range.end
         || range.end > source.len()
+        || declaration.exposed_identifier.start >= declaration.exposed_identifier.end
+        || declaration.exposed_identifier.end > source.len()
         || !source.is_char_boundary(range.start)
         || !source.is_char_boundary(range.end)
-        || source[range.start..range.end] != declaration.name
+        || !source.is_char_boundary(declaration.exposed_identifier.start)
+        || !source.is_char_boundary(declaration.exposed_identifier.end)
+        || source[declaration.exposed_identifier.start..declaration.exposed_identifier.end]
+            != declaration.name
+        || &source[range.start..range.end]
+            != match declaration.binding {
+                HistoricalV2SourcePublicBindingKind::Definition => declaration.target_name.as_str(),
+                HistoricalV2SourcePublicBindingKind::Reference => declaration.name.as_str(),
+            }
     {
         return Err(format!(
             "historical-v2 public declaration range changed: {}::{}",
@@ -589,8 +671,27 @@ fn compatible_public_symbol_kind(
     matches!(
         (declaration, compiler),
         (
+            HistoricalV2SourcePublicSymbolKind::CompilerDefined,
+            SemanticSymbolCategory::Callable
+                | SemanticSymbolCategory::Constructor
+                | SemanticSymbolCategory::Method
+                | SemanticSymbolCategory::Type
+                | SemanticSymbolCategory::TraitOrInterface
+                | SemanticSymbolCategory::Module
+                | SemanticSymbolCategory::Namespace
+                | SemanticSymbolCategory::Package
+                | SemanticSymbolCategory::FieldOrProperty
+                | SemanticSymbolCategory::Variable
+                | SemanticSymbolCategory::Constant
+                | SemanticSymbolCategory::Macro
+        ) | (
             HistoricalV2SourcePublicSymbolKind::Callable,
             SemanticSymbolCategory::Callable
+        ) | (
+            HistoricalV2SourcePublicSymbolKind::Module,
+            SemanticSymbolCategory::Module
+                | SemanticSymbolCategory::Namespace
+                | SemanticSymbolCategory::Package
         ) | (
             HistoricalV2SourcePublicSymbolKind::Method,
             SemanticSymbolCategory::Method

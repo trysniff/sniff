@@ -1,8 +1,9 @@
 use super::super::{
     HISTORICAL_V2_SEMANTIC_CENSUS_SCHEMA_VERSION, HistoricalV2Materialization,
     HistoricalV2MaterializedRoots, HistoricalV2PublicSurfaceCoverage, HistoricalV2SemanticCensus,
-    HistoricalV2SemanticMethodStatus, HistoricalV2SemanticSnapshotCensus,
-    HistoricalV2SemanticSymbol, HistoricalV2SourceCensus, HistoricalV2SourcePublicSymbolKind,
+    HistoricalV2SemanticMethodStatus, HistoricalV2SemanticPublicBindingKind,
+    HistoricalV2SemanticSnapshotCensus, HistoricalV2SemanticSymbol, HistoricalV2SourceCensus,
+    HistoricalV2SourcePublicBindingKind, HistoricalV2SourcePublicSymbolKind,
     HistoricalV2SourceSemanticCoverage, HistoricalV2SourceSnapshotCensus,
     IntentionalBoundaryIndexerKind, IntentionalBoundarySemanticOrigin,
     IntentionalBoundarySemanticRange, IntentionalBoundarySemanticSymbolCategory,
@@ -217,9 +218,16 @@ fn validate_public_bindings<'a>(
                 file.repository_path
             ));
         }
+        if !file.public_reexports.is_empty() {
+            return Err(format!(
+                "historical-v2 compiler re-export expansion is incomplete for {}",
+                file.repository_path
+            ));
+        }
         for declaration in &file.public_declarations {
             if declaration.surface_unit_id.trim().is_empty()
                 || declaration.declaration_unit_id.trim().is_empty()
+                || declaration.exposed_identifier.start >= declaration.exposed_identifier.end
                 || declaration.identifier.start >= declaration.identifier.end
                 || declaration.name.trim().is_empty()
                 || expected
@@ -259,18 +267,25 @@ fn validate_public_bindings<'a>(
         let symbol = symbols.get(&symbol_key).ok_or_else(|| {
             "historical-v2 public binding references a missing symbol".to_string()
         })?;
-        let expected_definition =
+        let expected_anchor =
             declaration_semantic_range(repository_path, declaration, binding.position_encoding);
+        let expected_binding = match declaration.binding {
+            HistoricalV2SourcePublicBindingKind::Definition => {
+                HistoricalV2SemanticPublicBindingKind::Definition
+            }
+            HistoricalV2SourcePublicBindingKind::Reference => {
+                HistoricalV2SemanticPublicBindingKind::Reference
+            }
+        };
         if binding.indexer != *indexer
             || binding.surface_unit_id != declaration.surface_unit_id
             || binding.repository_path != *repository_path
-            || binding.joined_definition != expected_definition
-            || binding.joined_definition.repository_path != *repository_path
+            || binding.binding != expected_binding
+            || binding.compiler_anchor != expected_anchor
+            || binding.compiler_anchor.repository_path != *repository_path
             || symbol.symbol.origin != IntentionalBoundarySemanticOrigin::Repository
-            || !symbol
-                .symbol
-                .definitions
-                .contains(&binding.joined_definition)
+            || (binding.binding == HistoricalV2SemanticPublicBindingKind::Definition
+                && !symbol.symbol.definitions.contains(&binding.compiler_anchor))
             || !compatible_public_symbol_kind(declaration.kind, symbol.symbol.category)
             || !bound_declarations.insert(binding.declaration_unit_id.as_str())
         {
@@ -323,8 +338,27 @@ fn compatible_public_symbol_kind(
     matches!(
         (declaration, compiler),
         (
+            HistoricalV2SourcePublicSymbolKind::CompilerDefined,
+            IntentionalBoundarySemanticSymbolCategory::Callable
+                | IntentionalBoundarySemanticSymbolCategory::Constructor
+                | IntentionalBoundarySemanticSymbolCategory::Method
+                | IntentionalBoundarySemanticSymbolCategory::Type
+                | IntentionalBoundarySemanticSymbolCategory::TraitOrInterface
+                | IntentionalBoundarySemanticSymbolCategory::Module
+                | IntentionalBoundarySemanticSymbolCategory::Namespace
+                | IntentionalBoundarySemanticSymbolCategory::Package
+                | IntentionalBoundarySemanticSymbolCategory::FieldOrProperty
+                | IntentionalBoundarySemanticSymbolCategory::Variable
+                | IntentionalBoundarySemanticSymbolCategory::Constant
+                | IntentionalBoundarySemanticSymbolCategory::Macro
+        ) | (
             HistoricalV2SourcePublicSymbolKind::Callable,
             IntentionalBoundarySemanticSymbolCategory::Callable
+        ) | (
+            HistoricalV2SourcePublicSymbolKind::Module,
+            IntentionalBoundarySemanticSymbolCategory::Module
+                | IntentionalBoundarySemanticSymbolCategory::Namespace
+                | IntentionalBoundarySemanticSymbolCategory::Package
         ) | (
             HistoricalV2SourcePublicSymbolKind::Method,
             IntentionalBoundarySemanticSymbolCategory::Method

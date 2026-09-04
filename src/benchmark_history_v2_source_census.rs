@@ -354,7 +354,7 @@ fn project_snapshot(
     Ok(snapshot)
 }
 
-fn source_public_declarations(
+pub(super) fn source_public_declarations(
     repository_path: &str,
     language: &str,
     source: &[u8],

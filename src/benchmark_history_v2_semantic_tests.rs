@@ -330,6 +330,95 @@ fn ambiguous_exact_public_compiler_identity_fails_closed() {
 }
 
 #[test]
+fn public_reference_binds_the_exact_compiler_occurrence() {
+    let fixture = reference_fixture();
+
+    let snapshot = build_semantic_snapshot(
+        fixture.root.path(),
+        &fixture.source,
+        &fixture.files,
+        &BTreeSet::from([SemanticIndexerKind::TypeScriptJavaScript]),
+        &fixture_required_paths(&fixture.source),
+        &fixture.indexes,
+    )
+    .unwrap();
+
+    assert_eq!(snapshot.public_bindings.len(), 1);
+    assert_eq!(
+        snapshot.public_bindings[0].binding,
+        HistoricalV2SemanticPublicBindingKind::Reference
+    );
+    assert_eq!(
+        snapshot.public_bindings[0]
+            .compiler_anchor
+            .start_character_zero_based,
+        41
+    );
+    validation::validate_snapshot(
+        &fixture.source,
+        &snapshot,
+        &BTreeSet::from([SemanticIndexerKind::TypeScriptJavaScript]),
+        &fixture_required_paths(&fixture.source),
+    )
+    .unwrap();
+}
+
+#[test]
+fn public_reference_does_not_fall_back_to_a_matching_symbol_name() {
+    let mut fixture = reference_fixture();
+    fixture
+        .indexes
+        .get_mut(&SemanticIndexerKind::TypeScriptJavaScript)
+        .unwrap()
+        .documents
+        .values_mut()
+        .next()
+        .unwrap()
+        .occurrences
+        .clear();
+
+    let error = build_semantic_snapshot(
+        fixture.root.path(),
+        &fixture.source,
+        &fixture.files,
+        &BTreeSet::from([SemanticIndexerKind::TypeScriptJavaScript]),
+        &fixture_required_paths(&fixture.source),
+        &fixture.indexes,
+    )
+    .unwrap_err();
+
+    assert!(error.contains("emitted 0 occurrence(s)"), "{error}");
+}
+
+#[test]
+fn semantic_validation_rejects_a_retyped_public_reference() {
+    let fixture = reference_fixture();
+    let changed_indexers = BTreeSet::from([SemanticIndexerKind::TypeScriptJavaScript]);
+    let required_paths = fixture_required_paths(&fixture.source);
+    let mut snapshot = build_semantic_snapshot(
+        fixture.root.path(),
+        &fixture.source,
+        &fixture.files,
+        &changed_indexers,
+        &required_paths,
+        &fixture.indexes,
+    )
+    .unwrap();
+    snapshot.public_bindings[0].binding = HistoricalV2SemanticPublicBindingKind::Definition;
+    snapshot.semantic_snapshot_sha256 = semantic_snapshot_sha256(&snapshot).unwrap();
+
+    let error = validation::validate_snapshot(
+        &fixture.source,
+        &snapshot,
+        &changed_indexers,
+        &required_paths,
+    )
+    .unwrap_err();
+
+    assert!(error.contains("changed compiler identity"), "{error}");
+}
+
+#[test]
 fn semantic_validation_rejects_recommitted_missing_public_binding() {
     let fixture = fixture();
     let mut snapshot = build_semantic_snapshot(
@@ -411,7 +500,7 @@ fn semantic_validation_rejects_another_real_symbol_at_the_wrong_source_range() {
     snapshot.symbols.push(other.clone());
     snapshot.symbol_count = snapshot.symbols.len();
     snapshot.public_bindings[0].symbol_id = other.symbol.symbol_id;
-    snapshot.public_bindings[0].joined_definition = other.symbol.definitions[0].clone();
+    snapshot.public_bindings[0].compiler_anchor = other.symbol.definitions[0].clone();
     snapshot.semantic_snapshot_sha256 = semantic_snapshot_sha256(&snapshot).unwrap();
 
     let error = validation::validate_snapshot(
@@ -1142,6 +1231,119 @@ fn fixture() -> Fixture {
         source,
         files,
         indexes: BTreeMap::from([(SemanticIndexerKind::Rust, index)]),
+    }
+}
+
+fn reference_fixture() -> Fixture {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(root.path().join("src")).unwrap();
+    let source_text = "const internal = 1; export { internal as publicName };\n";
+    let absolute = root.path().join("src/index.ts");
+    std::fs::write(&absolute, source_text).unwrap();
+    let files = vec![
+        crate::parser::parse_source_checked(&absolute.to_string_lossy(), source_text.as_bytes())
+            .unwrap(),
+    ];
+    let (_, public_declarations, public_reexports) =
+        super::super::history_v2_source_census::source_public_declarations(
+            "src/index.ts",
+            "typescript",
+            source_text.as_bytes(),
+        )
+        .unwrap();
+    let source = HistoricalV2SourceSnapshotCensus {
+        revision: "a".repeat(40),
+        inventory_sha256: "b".repeat(64),
+        parser_census_sha256: "c".repeat(64),
+        tracked_entry_count: 1,
+        source_files: vec![super::super::HistoricalV2SourceFile {
+            repository_path: "src/index.ts".to_string(),
+            object_id: "d".repeat(40),
+            byte_length: source_text.len() as u64,
+            source_sha256: sha256(source_text.as_bytes()),
+            non_whitespace_lines: 1,
+            language: "typescript".to_string(),
+            semantic_coverage: HistoricalV2SourceSemanticCoverage::Required,
+            methods: Vec::new(),
+            public_surface_coverage: super::super::HistoricalV2PublicSurfaceCoverage::Complete,
+            public_declarations,
+            public_reexports,
+        }],
+        source_file_count: 1,
+        method_counts_by_language: BTreeMap::from([("typescript".to_string(), 0)]),
+        method_count: 0,
+        public_declaration_count: 1,
+        public_reexport_count: 0,
+        snapshot_census_sha256: "e".repeat(64),
+    };
+    let document_path = RepositoryPath("src/index.ts".to_string());
+    let symbol_id = SemanticSymbolId("typescript fixture internal".to_string());
+    let definition = SemanticLocation {
+        document: document_path.clone(),
+        range: range(0, 6, 14),
+    };
+    let symbol = SemanticSymbol {
+        id: symbol_id.clone(),
+        provider_identity: symbol_id.0.clone(),
+        display_name: Some("publicName".to_string()),
+        kind: SemanticSymbolKind {
+            category: SemanticSymbolCategory::Variable,
+            provider_name: "variable".to_string(),
+        },
+        documentation: Vec::new(),
+        signatures: BTreeSet::new(),
+        owner: None,
+        definitions: BTreeSet::from([definition]),
+        visibility: SemanticVisibility::Public,
+        surfaces: BTreeSet::from([SemanticSurface::PublicApi]),
+        origin: SemanticSymbolOrigin::Repository,
+        ambiguity_notes: Vec::new(),
+    };
+    let compiler_anchor = range(0, 41, 51);
+    let index = SemanticIndex {
+        format_version: crate::semantic_index::SEMANTIC_INDEX_FORMAT_VERSION,
+        repository_root: root.path().to_string_lossy().replace('\\', "/"),
+        provenance: SemanticIndexProvenance {
+            format: "scip".to_string(),
+            tool_name: "fixture-indexer".to_string(),
+            tool_version: Some("1.0.0".to_string()),
+            arguments: Vec::new(),
+            source_text_encoding: Some(SemanticTextEncoding::Utf8),
+            invocations: vec![crate::semantic_index::SemanticIndexerInvocation {
+                arguments: Vec::new(),
+                context: Default::default(),
+                contribution: crate::semantic_index::SemanticIndexerContribution::CompleteIndex,
+                output_sha256: "0".repeat(64),
+            }],
+            diagnostics: Vec::new(),
+        },
+        documents: BTreeMap::from([(
+            document_path.clone(),
+            SemanticDocument {
+                path: document_path,
+                language: "typescript".to_string(),
+                position_encoding: SemanticPositionEncoding::Utf16,
+                embedded_text: None,
+                occurrences: vec![SemanticOccurrence {
+                    range: compiler_anchor,
+                    symbol: Some(symbol_id.clone()),
+                    roles: BTreeSet::from([SemanticOccurrenceRole::Read]),
+                    override_documentation: Vec::new(),
+                }],
+            },
+        )]),
+        symbols: BTreeMap::from([(symbol_id, symbol)]),
+        relationships: BTreeSet::new(),
+        imports: BTreeSet::new(),
+        calls: BTreeSet::new(),
+        test_relationships: BTreeSet::new(),
+        unresolved_edges: BTreeSet::new(),
+    };
+    Fixture {
+        root,
+        source,
+        files,
+        indexes: BTreeMap::from([(SemanticIndexerKind::TypeScriptJavaScript, index)]),
     }
 }
 
