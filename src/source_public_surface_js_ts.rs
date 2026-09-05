@@ -65,6 +65,7 @@ fn collect_named(
             kind: SourcePublicSymbolKind::CompilerDefined,
             exposed_identifier: byte_range(exposed),
             compiler_anchor: byte_range(exposed),
+            owner_compiler_anchor: None,
             binding: SourcePublicBindingKind::Reference,
             source_module: source_module.clone(),
         });
@@ -245,6 +246,7 @@ fn collect_default(
         kind,
         exposed_identifier: exposed,
         compiler_anchor: anchor,
+        owner_compiler_anchor: None,
         binding,
         source_module: None,
     });
@@ -436,6 +438,7 @@ fn push_member(
         kind,
         exposed_identifier: identifier,
         compiler_anchor: identifier,
+        owner_compiler_anchor: None,
         binding: SourcePublicBindingKind::Definition,
         source_module: None,
     });
@@ -486,6 +489,7 @@ fn push_definition(
         kind,
         exposed_identifier: identifier,
         compiler_anchor: identifier,
+        owner_compiler_anchor: None,
         binding: SourcePublicBindingKind::Definition,
         source_module: None,
     });

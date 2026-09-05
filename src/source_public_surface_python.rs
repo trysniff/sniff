@@ -477,6 +477,7 @@ fn push_definition(
             kind,
             exposed_identifier: range,
             compiler_anchor: range,
+            owner_compiler_anchor: None,
             binding: SourcePublicBindingKind::Definition,
             source_module: None,
         },

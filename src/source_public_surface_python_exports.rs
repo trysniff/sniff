@@ -59,6 +59,7 @@ pub(super) fn collect_import_from(
                     kind: SourcePublicSymbolKind::CompilerDefined,
                     exposed_identifier: exposed,
                     compiler_anchor: byte_range(alias.range),
+                    owner_compiler_anchor: None,
                     binding: SourcePublicBindingKind::Reference,
                     source_module: Some(source_module.clone()),
                 },

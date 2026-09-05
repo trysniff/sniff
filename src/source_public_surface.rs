@@ -65,6 +65,7 @@ pub(crate) struct SourcePublicDeclaration {
     pub kind: SourcePublicSymbolKind,
     pub exposed_identifier: SourceByteRange,
     pub compiler_anchor: SourceByteRange,
+    pub owner_compiler_anchor: Option<SourceByteRange>,
     pub binding: SourcePublicBindingKind,
     pub source_module: Option<String>,
 }
