@@ -177,6 +177,7 @@ fn declaration(
             start: name.start_byte(),
             end: name.end_byte(),
         },
+        owner_compiler_anchor: None,
         binding: SourcePublicBindingKind::Definition,
         source_module: None,
     }

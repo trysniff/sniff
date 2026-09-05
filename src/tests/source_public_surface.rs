@@ -643,4 +643,30 @@ fn rust_surface_rejects_restricted_conditional_inline_and_tuple_exports() {
     let tuple = census_source_public_surface("src/lib.rs", b"pub struct Newtype(pub u32);\n")
         .expect_err("tuple field must not use its type as an identifier");
     assert!(tuple.contains("no exact source identifier"), "{tuple}");
+
+    let private_owner = census_source_public_surface(
+        "src/lib.rs",
+        b"struct Private;\nimpl Private { pub fn inaccessible(&self) {} }\n",
+    )
+    .expect("public syntax on a private type is not external API");
+    assert!(private_owner.declarations.is_empty());
+
+    let cross_file_owner = census_source_public_surface(
+        "src/extensions.rs",
+        b"impl crate::Root { pub fn cross_file(&self) {} }\n",
+    )
+    .expect("cross-file inherent impl retains an exact owner anchor");
+    let method = cross_file_owner
+        .declarations
+        .iter()
+        .find(|declaration| declaration.name == "cross_file")
+        .unwrap();
+    assert_eq!(method.owner.as_deref(), Some("Root"));
+    assert_eq!(
+        slice(
+            b"impl crate::Root { pub fn cross_file(&self) {} }\n",
+            method.owner_compiler_anchor.unwrap()
+        ),
+        "Root"
+    );
 }

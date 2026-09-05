@@ -3,6 +3,7 @@ use super::{
     SourcePublicReexport, SourcePublicReexportKind, SourcePublicSurface, SourcePublicSymbolKind,
 };
 use proc_macro2::{LineColumn, Span};
+use std::collections::{BTreeMap, BTreeSet};
 use syn::spanned::Spanned;
 
 #[path = "source_public_surface_rust_use.rs"]
@@ -14,9 +15,29 @@ pub(super) fn census(file_path: &str, source: &[u8]) -> Result<SourcePublicSurfa
     let file = syn::parse_file(source)
         .map_err(|error| format!("failed to parse Rust public surface {file_path}: {error}"))?;
     let ranges = SpanRanges::new(source);
+    let module_names = file
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            syn::Item::Mod(module) => Some(module.ident.to_string()),
+            _ => None,
+        })
+        .collect();
+    let local_types = file
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            syn::Item::Struct(item) => Some((item.ident.to_string(), public(&item.vis))),
+            syn::Item::Enum(item) => Some((item.ident.to_string(), public(&item.vis))),
+            syn::Item::Union(item) => Some((item.ident.to_string(), public(&item.vis))),
+            _ => None,
+        })
+        .collect();
     let mut collector = Collector {
         file_path,
         ranges,
+        module_names,
+        local_types,
         declarations: Vec::new(),
         reexports: Vec::new(),
     };
@@ -30,6 +51,8 @@ pub(super) fn census(file_path: &str, source: &[u8]) -> Result<SourcePublicSurfa
 struct Collector<'a> {
     file_path: &'a str,
     ranges: SpanRanges<'a>,
+    module_names: BTreeSet<String>,
+    local_types: BTreeMap<String, bool>,
     declarations: Vec<SourcePublicDeclaration>,
     reexports: Vec<SourcePublicReexport>,
 }
@@ -112,6 +135,7 @@ impl Collector<'_> {
                     self.reject_conditional(&item.attrs, item.span())?;
                     use_tree::collect(
                         item,
+                        &self.module_names,
                         &self.ranges,
                         &mut self.declarations,
                         &mut self.reexports,
@@ -234,42 +258,55 @@ impl Collector<'_> {
         if item.trait_.is_some() {
             return Ok(());
         }
-        let owner = simple_type_name(&item.self_ty).ok_or_else(|| {
-            format!(
-                "public Rust inherent impl has no stable owner spelling in {} at byte {}",
+        let Some(owner_ident) = simple_type_ident(&item.self_ty) else {
+            if !item.items.iter().any(public_impl_surface) {
+                return Ok(());
+            }
+            return Err(format!(
+                "public Rust inherent impl has no exact owner identifier in {} at byte {}",
                 self.file_path,
                 self.ranges
                     .range(item.self_ty.span())
                     .map_or(0, |range| range.start),
-            )
-        })?;
+            ));
+        };
+        let owner = owner_ident.to_string();
+        let owner_compiler_anchor = self.ranges.range(owner_ident.span())?;
+        match self.local_types.get(&owner) {
+            Some(true) => {}
+            Some(false) => return Ok(()),
+            None => {}
+        }
         for member in &item.items {
             match member {
                 syn::ImplItem::Fn(member) if public(&member.vis) => {
                     self.reject_conditional(&member.attrs, member.span())?;
-                    self.member(
+                    self.impl_member(
                         &member.sig.ident,
                         &owner,
                         SourcePublicSymbolKind::Method,
                         signature_namespace(&member.sig),
+                        owner_compiler_anchor,
                     )?;
                 }
                 syn::ImplItem::Const(member) if public(&member.vis) => {
                     self.reject_conditional(&member.attrs, member.span())?;
-                    self.member(
+                    self.impl_member(
                         &member.ident,
                         &owner,
                         SourcePublicSymbolKind::Constant,
                         SourcePublicNamespace::StaticMember,
+                        owner_compiler_anchor,
                     )?;
                 }
                 syn::ImplItem::Type(member) if public(&member.vis) => {
                     self.reject_conditional(&member.attrs, member.span())?;
-                    self.member(
+                    self.impl_member(
                         &member.ident,
                         &owner,
                         SourcePublicSymbolKind::Type,
                         SourcePublicNamespace::StaticMember,
+                        owner_compiler_anchor,
                     )?;
                 }
                 syn::ImplItem::Macro(member) => {
@@ -331,6 +368,7 @@ impl Collector<'_> {
             namespace,
             kind,
             self.ranges.range(ident.span())?,
+            None,
         );
         Ok(())
     }
@@ -349,6 +387,27 @@ impl Collector<'_> {
             namespace,
             kind,
             self.ranges.range(ident.span())?,
+            None,
+        );
+        Ok(())
+    }
+
+    fn impl_member(
+        &mut self,
+        ident: &syn::Ident,
+        owner: &str,
+        kind: SourcePublicSymbolKind,
+        namespace: SourcePublicNamespace,
+        owner_compiler_anchor: SourceByteRange,
+    ) -> Result<(), String> {
+        self.definition_range(
+            ident.to_string(),
+            ident.to_string(),
+            Some(owner.to_string()),
+            namespace,
+            kind,
+            self.ranges.range(ident.span())?,
+            Some(owner_compiler_anchor),
         );
         Ok(())
     }
@@ -361,6 +420,7 @@ impl Collector<'_> {
         namespace: SourcePublicNamespace,
         kind: SourcePublicSymbolKind,
         range: SourceByteRange,
+        owner_compiler_anchor: Option<SourceByteRange>,
     ) {
         self.declarations.push(SourcePublicDeclaration {
             name,
@@ -370,6 +430,7 @@ impl Collector<'_> {
             kind,
             exposed_identifier: range,
             compiler_anchor: range,
+            owner_compiler_anchor,
             binding: SourcePublicBindingKind::Definition,
             source_module: None,
         });
@@ -391,6 +452,16 @@ fn public(visibility: &syn::Visibility) -> bool {
     matches!(visibility, syn::Visibility::Public(_))
 }
 
+fn public_impl_surface(member: &syn::ImplItem) -> bool {
+    match member {
+        syn::ImplItem::Fn(member) => public(&member.vis),
+        syn::ImplItem::Const(member) => public(&member.vis),
+        syn::ImplItem::Type(member) => public(&member.vis),
+        syn::ImplItem::Macro(_) => true,
+        _ => false,
+    }
+}
+
 fn conditional_attr(attr: &syn::Attribute) -> bool {
     attr.path().is_ident("cfg") || attr.path().is_ident("cfg_attr")
 }
@@ -409,16 +480,14 @@ fn signature_namespace(signature: &syn::Signature) -> SourcePublicNamespace {
     }
 }
 
-fn simple_type_name(ty: &syn::Type) -> Option<String> {
+fn simple_type_ident(ty: &syn::Type) -> Option<&syn::Ident> {
     match ty {
-        syn::Type::Path(path) if path.qself.is_none() => path
-            .path
-            .segments
-            .last()
-            .map(|segment| segment.ident.to_string()),
-        syn::Type::Reference(reference) => simple_type_name(&reference.elem),
-        syn::Type::Paren(paren) => simple_type_name(&paren.elem),
-        syn::Type::Group(group) => simple_type_name(&group.elem),
+        syn::Type::Path(path) if path.qself.is_none() => {
+            path.path.segments.last().map(|segment| &segment.ident)
+        }
+        syn::Type::Reference(reference) => simple_type_ident(&reference.elem),
+        syn::Type::Paren(paren) => simple_type_ident(&paren.elem),
+        syn::Type::Group(group) => simple_type_ident(&group.elem),
         _ => None,
     }
 }
