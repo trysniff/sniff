@@ -513,9 +513,26 @@ fn pinned_typescript_provider_drives_recursive_public_reexports() {
         .status()
         .unwrap();
     assert!(status.success());
+    let expected_languages = fixture
+        .source
+        .source_files
+        .iter()
+        .map(|file| {
+            (
+                RepositoryPath(file.repository_path.clone()),
+                file.language.clone(),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
     fixture.indexes.insert(
         SemanticIndexerKind::TypeScriptJavaScript,
-        crate::semantic_index_scip::ingest_scip_file(fixture.root.path(), &output).unwrap(),
+        crate::semantic_index_scip::ingest_scip_file_with_expected_languages(
+            fixture.root.path(),
+            &output,
+            Some(&expected_languages),
+            Some(SemanticPositionEncoding::Utf16),
+        )
+        .unwrap(),
     );
     let changed_indexers = BTreeSet::from([SemanticIndexerKind::TypeScriptJavaScript]);
     let required_paths = fixture_required_paths(&fixture.source);
