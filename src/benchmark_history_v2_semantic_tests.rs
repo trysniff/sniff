@@ -9,6 +9,56 @@ use crate::semantic_index::{
 };
 use std::collections::{BTreeMap, BTreeSet};
 
+fn fixture_cargo_project_model(
+    revision: &str,
+    inventory_sha256: &str,
+    rust_library_root: Option<&str>,
+) -> super::super::IntentionalBoundaryProjectModelCensus {
+    use super::super::{
+        IntentionalBoundaryManifestDeclarationKind, IntentionalBoundaryManifestTarget,
+        IntentionalBoundaryProjectModelProvider, IntentionalBoundaryProjectModelTarget,
+        IntentionalBoundaryProjectModelTargetStatus,
+    };
+
+    let targets = rust_library_root
+        .map(|repository_path| {
+            vec![IntentionalBoundaryProjectModelTarget {
+                target_id: "fixture-target".to_string(),
+                execution_id: "fixture-execution".to_string(),
+                provider: IntentionalBoundaryProjectModelProvider::CargoMetadata,
+                manifest_repository_path: "Cargo.toml".to_string(),
+                manifest_object_id: "0".repeat(40),
+                package_name: "fixture".to_string(),
+                package_version: "0.1.0".to_string(),
+                target_name: "fixture".to_string(),
+                provider_kinds: vec!["lib".to_string()],
+                provider_output_types: vec!["lib".to_string()],
+                source_repository_paths: vec![repository_path.to_string()],
+                producer_tasks: Vec::new(),
+                required_features: Vec::new(),
+                target_status: IntentionalBoundaryProjectModelTargetStatus::Boundary {
+                    declaration_kind: IntentionalBoundaryManifestDeclarationKind::PublishedModule,
+                    target: IntentionalBoundaryManifestTarget::RepositoryPath {
+                        repository_path: repository_path.to_string(),
+                    },
+                },
+            }]
+        })
+        .unwrap_or_default();
+    super::super::IntentionalBoundaryProjectModelCensus {
+        schema_version: super::super::INTENTIONAL_BOUNDARY_PROJECT_MODEL_CENSUS_SCHEMA_VERSION,
+        project_model_contract: "fixture".to_string(),
+        repository: "example/repo".to_string(),
+        revision: revision.to_string(),
+        inventory_sha256: inventory_sha256.to_string(),
+        executions: Vec::new(),
+        targets,
+        execution_count_by_provider: BTreeMap::new(),
+        target_count_by_status: BTreeMap::new(),
+        project_model_census_sha256: "f".repeat(64),
+    }
+}
+
 #[test]
 fn commits_exact_compiler_facts_for_every_historical_method() {
     let fixture = fixture();
@@ -27,9 +77,12 @@ fn commits_exact_compiler_facts_for_every_historical_method() {
     assert_eq!(snapshot.unresolved_method_count, 0);
     assert_eq!(snapshot.methods[0].parser_unit_id, "h2m-v1:fixture");
     assert_eq!(snapshot.indexers[0].tool_name, "fixture-indexer");
-    assert_eq!(snapshot.symbol_count, 1);
+    assert_eq!(snapshot.symbol_count, 2);
     assert_eq!(snapshot.public_symbol_count, 1);
-    assert_eq!(snapshot.symbols[0].symbol.symbol_id, "rust fixture process");
+    assert_eq!(snapshot.public_root_count, 1);
+    assert!(snapshot.symbols.iter().any(|entry| {
+        entry.symbol.symbol_id == "rust fixture process" && entry.is_public_surface
+    }));
     validation::validate_snapshot(
         &fixture.source,
         &snapshot,
@@ -75,7 +128,7 @@ fn high_degree_graph_is_hash_committed_without_per_method_edge_copies() {
     .unwrap();
 
     assert_eq!(snapshot.methods.len(), 1);
-    assert_eq!(snapshot.symbol_count, 1);
+    assert_eq!(snapshot.symbol_count, 2);
     assert_eq!(snapshot.indexers[0].call_count, 10_000);
     assert!(serde_json::to_vec(&snapshot).unwrap().len() < 16 * 1024);
     validation::validate_snapshot(
@@ -291,6 +344,8 @@ fn changed_public_declaration_without_an_exact_compiler_symbol_fails_closed() {
             exposed_identifier_positions: source_identifier_positions(0, 15, 20),
             identifier: super::super::HistoricalV2SourceByteRange { start: 15, end: 20 },
             identifier_positions: source_identifier_positions(0, 15, 20),
+            owner_identifier: None,
+            owner_identifier_positions: None,
         },
     );
     fixture.source.public_declaration_count += 1;
@@ -312,7 +367,12 @@ fn changed_public_declaration_without_an_exact_compiler_symbol_fails_closed() {
 fn ambiguous_exact_public_compiler_identity_fails_closed() {
     let mut fixture = fixture();
     let index = fixture.indexes.get_mut(&SemanticIndexerKind::Rust).unwrap();
-    let mut duplicate = index.symbols.values().next().unwrap().clone();
+    let mut duplicate = index
+        .symbols
+        .values()
+        .find(|symbol| symbol.kind.category == SemanticSymbolCategory::Callable)
+        .unwrap()
+        .clone();
     duplicate.id = SemanticSymbolId("rust fixture duplicate process".to_string());
     duplicate.provider_identity = duplicate.id.0.clone();
     index.symbols.insert(duplicate.id.clone(), duplicate);
@@ -1026,7 +1086,12 @@ fn semantic_validation_rejects_recommitted_missing_public_binding() {
     .unwrap();
     snapshot.public_bindings.clear();
     snapshot.public_binding_count = 0;
-    snapshot.symbols[0].is_public_surface = false;
+    snapshot
+        .symbols
+        .iter_mut()
+        .find(|entry| entry.symbol.symbol_id == "rust fixture process")
+        .unwrap()
+        .is_public_surface = false;
     snapshot.public_symbol_count = 0;
     snapshot.semantic_snapshot_sha256 = semantic_snapshot_sha256(&snapshot).unwrap();
 
@@ -1716,6 +1781,11 @@ fn fixture() -> Fixture {
         revision: "a".repeat(40),
         inventory_sha256: "b".repeat(64),
         parser_census_sha256: "c".repeat(64),
+        cargo_project_model: fixture_cargo_project_model(
+            &"a".repeat(40),
+            &"b".repeat(64),
+            Some("src/lib.rs"),
+        ),
         tracked_entry_count: 1,
         source_files: vec![super::super::HistoricalV2SourceFile {
             repository_path: "src/lib.rs".to_string(),
@@ -1748,6 +1818,8 @@ fn fixture() -> Fixture {
                 exposed_identifier_positions: source_identifier_positions(0, 7, 14),
                 identifier: super::super::HistoricalV2SourceByteRange { start: 7, end: 14 },
                 identifier_positions: source_identifier_positions(0, 7, 14),
+                owner_identifier: None,
+                owner_identifier_positions: None,
             }],
             public_reexports: Vec::new(),
         }],
@@ -1776,6 +1848,27 @@ fn fixture() -> Fixture {
         signatures: BTreeSet::new(),
         owner: None,
         definitions: BTreeSet::from([definition]),
+        visibility: SemanticVisibility::Public,
+        surfaces: BTreeSet::from([SemanticSurface::PublicApi]),
+        origin: SemanticSymbolOrigin::Repository,
+        ambiguity_notes: Vec::new(),
+    };
+    let root_symbol_id = SemanticSymbolId("rust fixture crate".to_string());
+    let root_symbol = SemanticSymbol {
+        id: root_symbol_id.clone(),
+        provider_identity: "rust-analyzer cargo fixture 0.1.0 crate/".to_string(),
+        display_name: Some("crate".to_string()),
+        kind: SemanticSymbolKind {
+            category: SemanticSymbolCategory::Module,
+            provider_name: "module".to_string(),
+        },
+        documentation: Vec::new(),
+        signatures: BTreeSet::new(),
+        owner: None,
+        definitions: BTreeSet::from([SemanticLocation {
+            document: document.clone(),
+            range: range(0, 0, 0),
+        }]),
         visibility: SemanticVisibility::Public,
         surfaces: BTreeSet::from([SemanticSurface::PublicApi]),
         origin: SemanticSymbolOrigin::Repository,
@@ -1813,7 +1906,7 @@ fn fixture() -> Fixture {
                 }],
             },
         )]),
-        symbols: BTreeMap::from([(symbol_id, symbol)]),
+        symbols: BTreeMap::from([(symbol_id, symbol), (root_symbol_id, root_symbol)]),
         relationships: BTreeSet::new(),
         imports: BTreeSet::new(),
         calls: BTreeSet::new(),
@@ -1849,6 +1942,7 @@ fn reference_fixture() -> Fixture {
         revision: "a".repeat(40),
         inventory_sha256: "b".repeat(64),
         parser_census_sha256: "c".repeat(64),
+        cargo_project_model: fixture_cargo_project_model(&"a".repeat(40), &"b".repeat(64), None),
         tracked_entry_count: 1,
         source_files: vec![super::super::HistoricalV2SourceFile {
             repository_path: "src/index.ts".to_string(),
@@ -2276,6 +2370,652 @@ fn python_surface_fixture(
     )
 }
 
+#[test]
+fn rust_public_surface_starts_at_the_compiler_crate_root() {
+    let fixture = rust_surface_fixture(
+        &[
+            ("src/lib.rs", "mod hidden;\npub mod public;\n"),
+            ("src/hidden.rs", "pub fn hidden_api() {}\n"),
+            ("src/public.rs", "pub fn visible_api() {}\n"),
+        ],
+        &[
+            ("src/lib.rs", "hidden", "src/hidden.rs"),
+            ("src/lib.rs", "public", "src/public.rs"),
+        ],
+    );
+    let changed_indexers = BTreeSet::from([SemanticIndexerKind::Rust]);
+    let required_paths = fixture_required_paths(&fixture.source);
+
+    let snapshot = build_semantic_snapshot(
+        fixture.root.path(),
+        &fixture.source,
+        &fixture.files,
+        &changed_indexers,
+        &required_paths,
+        &fixture.indexes,
+    )
+    .unwrap();
+
+    assert_eq!(snapshot.public_root_count, 1);
+    assert_eq!(snapshot.public_roots[0].repository_path, "src/lib.rs");
+    let hidden = fixture.source.source_files[0..]
+        .iter()
+        .find(|file| file.repository_path == "src/hidden.rs")
+        .unwrap()
+        .public_declarations
+        .iter()
+        .find(|declaration| declaration.name == "hidden_api")
+        .unwrap();
+    let visible = fixture
+        .source
+        .source_files
+        .iter()
+        .find(|file| file.repository_path == "src/public.rs")
+        .unwrap()
+        .public_declarations
+        .iter()
+        .find(|declaration| declaration.name == "visible_api")
+        .unwrap();
+    assert!(snapshot.public_bindings.iter().any(|binding| {
+        binding.declaration_unit_id == hidden.declaration_unit_id && !binding.externally_reachable
+    }));
+    assert!(snapshot.public_bindings.iter().any(|binding| {
+        binding.origin_declaration_unit_id == visible.declaration_unit_id
+            && binding.binding == HistoricalV2SemanticPublicBindingKind::ReexportExpansion
+            && binding.repository_path == "src/lib.rs"
+            && binding.externally_reachable
+    }));
+    assert!(!snapshot.public_bindings.iter().any(|binding| {
+        binding.origin_declaration_unit_id == hidden.declaration_unit_id
+            && binding.binding == HistoricalV2SemanticPublicBindingKind::ReexportExpansion
+    }));
+    validation::validate_snapshot(
+        &fixture.source,
+        &snapshot,
+        &changed_indexers,
+        &required_paths,
+    )
+    .unwrap();
+}
+
+#[test]
+fn rust_binary_target_is_not_an_external_public_surface() {
+    let mut fixture = compiler_surface_fixture(
+        "rust",
+        SemanticIndexerKind::Rust,
+        SemanticPositionEncoding::Utf8,
+        &[("src/main.rs", "pub fn command() {}\n")],
+        &[],
+    );
+    fixture.source.cargo_project_model.targets[0].target_status =
+        super::super::IntentionalBoundaryProjectModelTargetStatus::Boundary {
+            declaration_kind:
+                super::super::IntentionalBoundaryManifestDeclarationKind::RuntimeEntrypoint,
+            target: super::super::IntentionalBoundaryManifestTarget::RepositoryPath {
+                repository_path: "src/main.rs".to_string(),
+            },
+        };
+    let changed_indexers = BTreeSet::from([SemanticIndexerKind::Rust]);
+    let required_paths = fixture_required_paths(&fixture.source);
+
+    let snapshot = build_semantic_snapshot(
+        fixture.root.path(),
+        &fixture.source,
+        &fixture.files,
+        &changed_indexers,
+        &required_paths,
+        &fixture.indexes,
+    )
+    .unwrap();
+
+    assert_eq!(snapshot.public_root_count, 0);
+    assert!(
+        snapshot
+            .public_bindings
+            .iter()
+            .all(|binding| !binding.externally_reachable)
+    );
+    validation::validate_snapshot(
+        &fixture.source,
+        &snapshot,
+        &changed_indexers,
+        &required_paths,
+    )
+    .unwrap();
+}
+
+#[test]
+fn rust_mixed_library_and_binary_targets_select_only_the_cargo_library_root() {
+    let mut fixture = rust_surface_fixture(
+        &[
+            ("src/lib.rs", "pub fn library_api() {}\n"),
+            ("src/main.rs", "pub fn command() {}\n"),
+        ],
+        &[],
+    );
+    let index = fixture.indexes.get_mut(&SemanticIndexerKind::Rust).unwrap();
+    let crate_root = index
+        .symbols
+        .values_mut()
+        .find(|symbol| symbol.provider_identity.ends_with(" crate/"))
+        .unwrap();
+    crate_root.definitions.insert(SemanticLocation {
+        document: RepositoryPath("src/main.rs".to_string()),
+        range: range(0, 0, 0),
+    });
+    let changed_indexers = BTreeSet::from([SemanticIndexerKind::Rust]);
+    let required_paths = fixture_required_paths(&fixture.source);
+
+    let snapshot = build_semantic_snapshot(
+        fixture.root.path(),
+        &fixture.source,
+        &fixture.files,
+        &changed_indexers,
+        &required_paths,
+        &fixture.indexes,
+    )
+    .unwrap();
+
+    assert_eq!(snapshot.public_root_count, 1);
+    assert_eq!(snapshot.public_roots[0].repository_path, "src/lib.rs");
+    assert!(snapshot.public_bindings.iter().any(|binding| {
+        binding.repository_path == "src/lib.rs" && binding.externally_reachable
+    }));
+    assert!(snapshot.public_bindings.iter().any(|binding| {
+        binding.repository_path == "src/main.rs" && !binding.externally_reachable
+    }));
+    validation::validate_snapshot(
+        &fixture.source,
+        &snapshot,
+        &changed_indexers,
+        &required_paths,
+    )
+    .unwrap();
+}
+
+#[test]
+fn rust_named_alias_exposes_the_exact_compiler_target_without_the_module() {
+    let fixture = rust_surface_fixture(
+        &[
+            (
+                "src/lib.rs",
+                "mod hidden;\npub use hidden::Hidden as Alias;\n",
+            ),
+            ("src/hidden.rs", "pub struct Hidden;\n"),
+        ],
+        &[("src/lib.rs", "hidden", "src/hidden.rs")],
+    );
+    let changed_indexers = BTreeSet::from([SemanticIndexerKind::Rust]);
+    let required_paths = fixture_required_paths(&fixture.source);
+
+    let snapshot = build_semantic_snapshot(
+        fixture.root.path(),
+        &fixture.source,
+        &fixture.files,
+        &changed_indexers,
+        &required_paths,
+        &fixture.indexes,
+    )
+    .unwrap();
+
+    let alias = fixture
+        .source
+        .source_files
+        .iter()
+        .find(|file| file.repository_path == "src/lib.rs")
+        .unwrap()
+        .public_declarations
+        .iter()
+        .find(|declaration| declaration.name == "Alias")
+        .unwrap();
+    let hidden = fixture
+        .source
+        .source_files
+        .iter()
+        .find(|file| file.repository_path == "src/hidden.rs")
+        .unwrap()
+        .public_declarations
+        .iter()
+        .find(|declaration| declaration.name == "Hidden")
+        .unwrap();
+    let alias_binding = snapshot
+        .public_bindings
+        .iter()
+        .find(|binding| binding.declaration_unit_id == alias.declaration_unit_id)
+        .unwrap();
+    let hidden_binding = snapshot
+        .public_bindings
+        .iter()
+        .find(|binding| binding.declaration_unit_id == hidden.declaration_unit_id)
+        .unwrap();
+    assert!(alias_binding.externally_reachable);
+    assert!(!hidden_binding.externally_reachable);
+    assert_eq!(alias_binding.symbol_id, hidden_binding.symbol_id);
+    validation::validate_snapshot(
+        &fixture.source,
+        &snapshot,
+        &changed_indexers,
+        &required_paths,
+    )
+    .unwrap();
+}
+
+#[test]
+fn rust_cross_file_inherent_method_follows_its_compiler_resolved_public_owner() {
+    let fixture = rust_surface_fixture(
+        &[
+            ("src/lib.rs", "pub struct Root;\nmod extensions;\n"),
+            (
+                "src/extensions.rs",
+                "impl crate::Root { pub fn cross_file(&self) {} }\n",
+            ),
+        ],
+        &[("src/lib.rs", "extensions", "src/extensions.rs")],
+    );
+    let changed_indexers = BTreeSet::from([SemanticIndexerKind::Rust]);
+    let required_paths = fixture_required_paths(&fixture.source);
+
+    let snapshot = build_semantic_snapshot(
+        fixture.root.path(),
+        &fixture.source,
+        &fixture.files,
+        &changed_indexers,
+        &required_paths,
+        &fixture.indexes,
+    )
+    .unwrap();
+
+    let method = fixture
+        .source
+        .source_files
+        .iter()
+        .find(|file| file.repository_path == "src/extensions.rs")
+        .unwrap()
+        .public_declarations
+        .iter()
+        .find(|declaration| declaration.name == "cross_file")
+        .unwrap();
+    let direct = snapshot
+        .public_bindings
+        .iter()
+        .find(|binding| binding.declaration_unit_id == method.declaration_unit_id)
+        .unwrap();
+    let expansion = snapshot
+        .public_bindings
+        .iter()
+        .find(|binding| {
+            binding.origin_declaration_unit_id == method.declaration_unit_id
+                && binding.binding == HistoricalV2SemanticPublicBindingKind::OwnerExpansion
+        })
+        .unwrap();
+    assert!(!direct.externally_reachable);
+    assert!(direct.owner_symbol_id.is_some());
+    assert!(direct.owner_compiler_anchor.is_some());
+    assert!(expansion.externally_reachable);
+    assert!(expansion.exposing_owner_declaration_unit_id.is_some());
+    validation::validate_snapshot(
+        &fixture.source,
+        &snapshot,
+        &changed_indexers,
+        &required_paths,
+    )
+    .unwrap();
+}
+
+#[test]
+fn rust_public_type_alias_exposes_inherent_methods_of_the_exact_target_type() {
+    let fixture = rust_surface_fixture(
+        &[
+            (
+                "src/lib.rs",
+                "mod hidden;\npub use hidden::Hidden as Alias;\npub use hidden::Hidden as SecondAlias;\n",
+            ),
+            (
+                "src/hidden.rs",
+                "pub struct Hidden;\nimpl Hidden { pub fn aliased_method(&self) {} }\n",
+            ),
+        ],
+        &[("src/lib.rs", "hidden", "src/hidden.rs")],
+    );
+    let changed_indexers = BTreeSet::from([SemanticIndexerKind::Rust]);
+    let required_paths = fixture_required_paths(&fixture.source);
+
+    let snapshot = build_semantic_snapshot(
+        fixture.root.path(),
+        &fixture.source,
+        &fixture.files,
+        &changed_indexers,
+        &required_paths,
+        &fixture.indexes,
+    )
+    .unwrap();
+
+    let method = fixture
+        .source
+        .source_files
+        .iter()
+        .find(|file| file.repository_path == "src/hidden.rs")
+        .unwrap()
+        .public_declarations
+        .iter()
+        .find(|declaration| declaration.name == "aliased_method")
+        .unwrap();
+    let direct = snapshot
+        .public_bindings
+        .iter()
+        .find(|binding| binding.declaration_unit_id == method.declaration_unit_id)
+        .unwrap();
+    let expansions = snapshot
+        .public_bindings
+        .iter()
+        .filter(|binding| {
+            binding.origin_declaration_unit_id == method.declaration_unit_id
+                && binding.binding == HistoricalV2SemanticPublicBindingKind::OwnerExpansion
+        })
+        .collect::<Vec<_>>();
+    assert!(!direct.externally_reachable);
+    assert_eq!(expansions.len(), 2);
+    assert!(
+        expansions
+            .iter()
+            .all(|binding| binding.externally_reachable)
+    );
+    assert_ne!(expansions[0].surface_unit_id, expansions[1].surface_unit_id);
+    assert_ne!(
+        expansions[0].exposing_owner_declaration_unit_id,
+        expansions[1].exposing_owner_declaration_unit_id
+    );
+    validation::validate_snapshot(
+        &fixture.source,
+        &snapshot,
+        &changed_indexers,
+        &required_paths,
+    )
+    .unwrap();
+
+    let mut omitted = snapshot.clone();
+    omitted
+        .public_bindings
+        .retain(|binding| binding.binding != HistoricalV2SemanticPublicBindingKind::OwnerExpansion);
+    omitted.public_binding_count = omitted.public_bindings.len();
+    omitted.semantic_snapshot_sha256 = semantic_snapshot_sha256(&omitted).unwrap();
+    let error = validation::validate_snapshot(
+        &fixture.source,
+        &omitted,
+        &changed_indexers,
+        &required_paths,
+    )
+    .unwrap_err();
+    assert!(error.contains("owner expansion set is incomplete or invented"));
+}
+
+#[test]
+fn rust_public_type_alias_exposes_exact_compiler_owned_fields() {
+    let fixture = rust_surface_fixture(
+        &[
+            (
+                "src/lib.rs",
+                "mod hidden;\npub use hidden::Hidden as Alias;\n",
+            ),
+            ("src/hidden.rs", "pub struct Hidden { pub value: u32 }\n"),
+        ],
+        &[("src/lib.rs", "hidden", "src/hidden.rs")],
+    );
+    let changed_indexers = BTreeSet::from([SemanticIndexerKind::Rust]);
+    let required_paths = fixture_required_paths(&fixture.source);
+
+    let snapshot = build_semantic_snapshot(
+        fixture.root.path(),
+        &fixture.source,
+        &fixture.files,
+        &changed_indexers,
+        &required_paths,
+        &fixture.indexes,
+    )
+    .unwrap();
+
+    let field = fixture
+        .source
+        .source_files
+        .iter()
+        .find(|file| file.repository_path == "src/hidden.rs")
+        .unwrap()
+        .public_declarations
+        .iter()
+        .find(|declaration| declaration.name == "value")
+        .unwrap();
+    let direct = snapshot
+        .public_bindings
+        .iter()
+        .find(|binding| binding.declaration_unit_id == field.declaration_unit_id)
+        .unwrap();
+    let expansion = snapshot
+        .public_bindings
+        .iter()
+        .find(|binding| {
+            binding.origin_declaration_unit_id == field.declaration_unit_id
+                && binding.binding == HistoricalV2SemanticPublicBindingKind::OwnerExpansion
+        })
+        .unwrap();
+    assert!(!direct.externally_reachable);
+    assert!(direct.owner_symbol_id.is_some());
+    assert!(expansion.externally_reachable);
+    validation::validate_snapshot(
+        &fixture.source,
+        &snapshot,
+        &changed_indexers,
+        &required_paths,
+    )
+    .unwrap();
+}
+
+#[test]
+fn semantic_validation_rejects_a_recommitted_rust_private_module_as_public() {
+    let fixture = rust_surface_fixture(
+        &[
+            ("src/lib.rs", "mod hidden;\n"),
+            ("src/hidden.rs", "pub fn hidden_api() {}\n"),
+        ],
+        &[("src/lib.rs", "hidden", "src/hidden.rs")],
+    );
+    let changed_indexers = BTreeSet::from([SemanticIndexerKind::Rust]);
+    let required_paths = fixture_required_paths(&fixture.source);
+    let mut snapshot = build_semantic_snapshot(
+        fixture.root.path(),
+        &fixture.source,
+        &fixture.files,
+        &changed_indexers,
+        &required_paths,
+        &fixture.indexes,
+    )
+    .unwrap();
+    let hidden = snapshot
+        .public_bindings
+        .iter_mut()
+        .find(|binding| binding.repository_path == "src/hidden.rs")
+        .unwrap();
+    hidden.externally_reachable = true;
+    let hidden_symbol_id = hidden.symbol_id.clone();
+    snapshot
+        .symbols
+        .iter_mut()
+        .find(|entry| entry.symbol.symbol_id == hidden_symbol_id)
+        .unwrap()
+        .is_public_surface = true;
+    snapshot.public_symbol_count += 1;
+    snapshot.semantic_snapshot_sha256 = semantic_snapshot_sha256(&snapshot).unwrap();
+
+    let error = validation::validate_snapshot(
+        &fixture.source,
+        &snapshot,
+        &changed_indexers,
+        &required_paths,
+    )
+    .unwrap_err();
+
+    assert!(error.contains("changed compiler identity"), "{error}");
+}
+
+#[test]
+fn semantic_validation_rejects_a_recommitted_missing_rust_public_root() {
+    let fixture = rust_surface_fixture(&[("src/lib.rs", "pub fn api() {}\n")], &[]);
+    let changed_indexers = BTreeSet::from([SemanticIndexerKind::Rust]);
+    let required_paths = fixture_required_paths(&fixture.source);
+    let mut snapshot = build_semantic_snapshot(
+        fixture.root.path(),
+        &fixture.source,
+        &fixture.files,
+        &changed_indexers,
+        &required_paths,
+        &fixture.indexes,
+    )
+    .unwrap();
+    snapshot.public_roots.clear();
+    snapshot.public_root_count = 0;
+    snapshot
+        .symbols
+        .iter_mut()
+        .find(|entry| entry.is_public_root_evidence)
+        .unwrap()
+        .is_public_root_evidence = false;
+    snapshot.semantic_snapshot_sha256 = semantic_snapshot_sha256(&snapshot).unwrap();
+
+    let error = validation::validate_snapshot(
+        &fixture.source,
+        &snapshot,
+        &changed_indexers,
+        &required_paths,
+    )
+    .unwrap_err();
+
+    assert!(
+        error.contains("disagree with Cargo library targets"),
+        "{error}"
+    );
+}
+
+#[test]
+fn rust_module_reference_without_a_namespace_surface_fails_closed() {
+    let mut fixture = compiler_surface_fixture(
+        "rust",
+        SemanticIndexerKind::Rust,
+        SemanticPositionEncoding::Utf8,
+        &[("src/lib.rs", "pub use nested::module as api;\n")],
+        &[],
+    );
+    let declaration = fixture.source.source_files[0].public_declarations[0].clone();
+    let module_id = SemanticSymbolId("rust fixture nested module".to_string());
+    let index = fixture.indexes.get_mut(&SemanticIndexerKind::Rust).unwrap();
+    index.symbols.insert(
+        module_id.clone(),
+        SemanticSymbol {
+            id: module_id.clone(),
+            provider_identity: "rust-analyzer cargo fixture 0.1.0 nested/module/".to_string(),
+            display_name: Some("module".to_string()),
+            kind: SemanticSymbolKind {
+                category: SemanticSymbolCategory::Module,
+                provider_name: "module".to_string(),
+            },
+            documentation: Vec::new(),
+            signatures: BTreeSet::new(),
+            owner: None,
+            definitions: BTreeSet::from([SemanticLocation {
+                document: RepositoryPath("src/lib.rs".to_string()),
+                range: range(0, 16, 22),
+            }]),
+            visibility: SemanticVisibility::Public,
+            surfaces: BTreeSet::from([SemanticSurface::PublicApi]),
+            origin: SemanticSymbolOrigin::Repository,
+            ambiguity_notes: Vec::new(),
+        },
+    );
+    let anchor = semantic_range(identifier_range(
+        &declaration,
+        SemanticPositionEncoding::Utf8,
+    ));
+    index
+        .documents
+        .get_mut(&RepositoryPath("src/lib.rs".to_string()))
+        .unwrap()
+        .occurrences
+        .iter_mut()
+        .find(|occurrence| occurrence.range == anchor)
+        .unwrap()
+        .symbol = Some(module_id);
+
+    let error = build_semantic_snapshot(
+        fixture.root.path(),
+        &fixture.source,
+        &fixture.files,
+        &BTreeSet::from([SemanticIndexerKind::Rust]),
+        &fixture_required_paths(&fixture.source),
+        &fixture.indexes,
+    )
+    .unwrap_err();
+
+    assert!(
+        error.contains("was not represented as a namespace re-export"),
+        "{error}"
+    );
+}
+
+fn rust_surface_fixture(
+    sources: &[(&str, &str)],
+    module_targets: &[(&str, &str, &str)],
+) -> Fixture {
+    let mut fixture = compiler_surface_fixture(
+        "rust",
+        SemanticIndexerKind::Rust,
+        SemanticPositionEncoding::Utf8,
+        sources,
+        module_targets,
+    );
+    let index = fixture.indexes.get_mut(&SemanticIndexerKind::Rust).unwrap();
+    for file in &fixture.source.source_files {
+        for declaration in file.public_declarations.iter().filter(|declaration| {
+            declaration.binding == super::super::HistoricalV2SourcePublicBindingKind::Reference
+        }) {
+            let source_module = declaration.source_module.as_deref().unwrap_or_default();
+            let target_path = module_targets
+                .iter()
+                .find(|(source_path, module, _)| {
+                    *source_path == file.repository_path && *module == source_module
+                })
+                .map(|(_, _, target_path)| *target_path)
+                .unwrap();
+            let target = fixture
+                .source
+                .source_files
+                .iter()
+                .find(|target| target.repository_path == target_path)
+                .unwrap()
+                .public_declarations
+                .iter()
+                .find(|target| {
+                    target.binding == super::super::HistoricalV2SourcePublicBindingKind::Definition
+                        && target.name == declaration.target_name
+                })
+                .unwrap();
+            let target_symbol =
+                SemanticSymbolId(format!("rust declaration {}", target.declaration_unit_id));
+            let expected_range = semantic_range(identifier_range(
+                declaration,
+                SemanticPositionEncoding::Utf8,
+            ));
+            let occurrence = index
+                .documents
+                .get_mut(&RepositoryPath(file.repository_path.clone()))
+                .unwrap()
+                .occurrences
+                .iter_mut()
+                .find(|occurrence| occurrence.range == expected_range)
+                .unwrap();
+            occurrence.symbol = Some(target_symbol);
+        }
+    }
+    fixture
+}
+
 fn compiler_surface_fixture(
     language: &str,
     indexer: SemanticIndexerKind,
@@ -2396,11 +3136,20 @@ fn compiler_surface_fixture(
 
     for (_, _, target_path) in module_targets {
         let symbol_id = SemanticSymbolId(format!("{language} module {target_path}"));
+        let provider_identity = if language == "rust" {
+            let module = std::path::Path::new(target_path)
+                .file_stem()
+                .and_then(|name| name.to_str())
+                .unwrap();
+            format!("rust-analyzer cargo fixture 0.1.0 {module}/")
+        } else {
+            symbol_id.0.clone()
+        };
         symbols
             .entry(symbol_id.clone())
             .or_insert_with(|| SemanticSymbol {
                 id: symbol_id.clone(),
-                provider_identity: symbol_id.0.clone(),
+                provider_identity,
                 display_name: Some((*target_path).to_string()),
                 kind: SemanticSymbolKind {
                     category: SemanticSymbolCategory::Module,
@@ -2419,16 +3168,94 @@ fn compiler_surface_fixture(
                 ambiguity_notes: Vec::new(),
             });
     }
+    let owner_references = source_files
+        .iter()
+        .flat_map(|file| {
+            file.public_declarations.iter().filter_map(|declaration| {
+                let range = owner_identifier_range(declaration, position_encoding)?;
+                Some((
+                    file.repository_path.clone(),
+                    declaration.owner.clone()?,
+                    semantic_range(range),
+                ))
+            })
+        })
+        .collect::<Vec<_>>();
+    for (repository_path, owner_name, range) in owner_references {
+        let owners = source_files
+            .iter()
+            .flat_map(|file| &file.public_declarations)
+            .filter(|declaration| {
+                declaration.name == owner_name
+                    && declaration.kind == super::super::HistoricalV2SourcePublicSymbolKind::Type
+                    && declaration.binding
+                        == super::super::HistoricalV2SourcePublicBindingKind::Definition
+            })
+            .collect::<Vec<_>>();
+        let [owner] = owners.as_slice() else {
+            panic!("fixture owner {owner_name} must resolve to one compiler type");
+        };
+        documents
+            .get_mut(&RepositoryPath(repository_path))
+            .unwrap()
+            .occurrences
+            .push(SemanticOccurrence {
+                range,
+                symbol: Some(SemanticSymbolId(format!(
+                    "{language} declaration {}",
+                    owner.declaration_unit_id
+                ))),
+                roles: BTreeSet::from([SemanticOccurrenceRole::Read]),
+                override_documentation: Vec::new(),
+            });
+    }
+    let rust_library_root = if language == "rust" {
+        let root_path = sources
+            .iter()
+            .map(|(path, _)| *path)
+            .find(|path| path.ends_with("/lib.rs") || *path == "lib.rs")
+            .or_else(|| sources.first().map(|(path, _)| *path))
+            .expect("Rust public-surface fixture needs one source root");
+        let root_id = SemanticSymbolId("rust fixture crate root".to_string());
+        symbols.insert(
+            root_id.clone(),
+            SemanticSymbol {
+                id: root_id,
+                provider_identity: "rust-analyzer cargo fixture 0.1.0 crate/".to_string(),
+                display_name: Some("crate".to_string()),
+                kind: SemanticSymbolKind {
+                    category: SemanticSymbolCategory::Module,
+                    provider_name: "module".to_string(),
+                },
+                documentation: Vec::new(),
+                signatures: BTreeSet::new(),
+                owner: None,
+                definitions: BTreeSet::from([SemanticLocation {
+                    document: RepositoryPath(root_path.to_string()),
+                    range: range(0, 0, 0),
+                }]),
+                visibility: SemanticVisibility::Public,
+                surfaces: BTreeSet::from([SemanticSurface::PublicApi]),
+                origin: SemanticSymbolOrigin::Repository,
+                ambiguity_notes: Vec::new(),
+            },
+        );
+        Some(root_path)
+    } else {
+        None
+    };
     for (source_path, source_module, target_path) in module_targets {
         let source_file = source_files
             .iter()
             .find(|file| file.repository_path == *source_path)
             .unwrap();
-        let reexport = source_file
+        let Some(reexport) = source_file
             .public_reexports
             .iter()
             .find(|reexport| reexport.source_module == *source_module)
-            .unwrap();
+        else {
+            continue;
+        };
         documents
             .get_mut(&RepositoryPath((*source_path).to_string()))
             .unwrap()
@@ -2456,6 +3283,11 @@ fn compiler_surface_fixture(
         revision: "a".repeat(40),
         inventory_sha256: "b".repeat(64),
         parser_census_sha256: "c".repeat(64),
+        cargo_project_model: fixture_cargo_project_model(
+            &"a".repeat(40),
+            &"b".repeat(64),
+            rust_library_root,
+        ),
         tracked_entry_count: source_files.len(),
         source_file_count: source_files.len(),
         source_files,
@@ -2507,6 +3339,20 @@ fn identifier_range(
         SemanticPositionEncoding::Utf16 => declaration.identifier_positions.utf16,
         SemanticPositionEncoding::Utf32 => declaration.identifier_positions.utf32,
     }
+}
+
+fn owner_identifier_range(
+    declaration: &super::super::HistoricalV2SourcePublicDeclaration,
+    encoding: SemanticPositionEncoding,
+) -> Option<super::super::HistoricalV2SourcePositionRange> {
+    declaration
+        .owner_identifier_positions
+        .as_ref()
+        .map(|positions| match encoding {
+            SemanticPositionEncoding::Utf8 => positions.utf8,
+            SemanticPositionEncoding::Utf16 => positions.utf16,
+            SemanticPositionEncoding::Utf32 => positions.utf32,
+        })
 }
 
 fn reexport_identifier_range(
