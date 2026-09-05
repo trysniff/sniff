@@ -254,6 +254,12 @@ fn source_identity(spec: PinnedIndexer) -> String {
             crate::semantic_indexer_manifest::SCIP_TYPESCRIPT_SIGNATURE_PATCH_ID
         );
     }
+    if spec.kind == SemanticIndexerKind::Python {
+        return format!(
+            "{source}:sniff-public-api-patch-{}",
+            crate::semantic_indexer_manifest::SCIP_PYTHON_PUBLIC_API_PATCH_ID
+        );
+    }
     if spec.kind == SemanticIndexerKind::Kotlin {
         let source = format!(
             "{source}:sniff-kotlin-patch-{}",
