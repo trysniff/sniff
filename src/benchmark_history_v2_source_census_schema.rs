@@ -2,7 +2,7 @@ use super::{HistoricalV2NodePackageSurfaceCensus, IntentionalBoundaryProjectMode
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-pub const HISTORICAL_V2_SOURCE_CENSUS_SCHEMA_VERSION: u32 = 10;
+pub const HISTORICAL_V2_SOURCE_CENSUS_SCHEMA_VERSION: u32 = 11;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

@@ -33,7 +33,7 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::path::Path;
 
-const SOURCE_CENSUS_CONTRACT: &str = "sniffbench-historical-v2-source-census-v10";
+const SOURCE_CENSUS_CONTRACT: &str = "sniffbench-historical-v2-source-census-v11";
 pub(super) const PARSER_ERROR_LIMIT: usize = 4 * 1024;
 type SourceCensusStageResult =
     HistoricalV2StageResult<HistoricalV2SourceCensus, HistoricalV2SourceCensusExclusion>;

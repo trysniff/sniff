@@ -1,4 +1,5 @@
 use super::super::{
+    HistoricalV2NodePackageExposure, HistoricalV2NodePackageTargetStatus,
     HistoricalV2SemanticPublicBinding, HistoricalV2SemanticPublicBindingKind,
     HistoricalV2SemanticPublicReexportHop, HistoricalV2SemanticSnapshotCensus,
     HistoricalV2SourceFile, HistoricalV2SourcePublicNamespace, HistoricalV2SourcePublicReexport,
@@ -50,6 +51,7 @@ pub(super) fn validate_complete_reexport_expansions(
     let mut expected = BTreeSet::new();
     for file in files
         .values()
+        .filter(|file| !matches!(file.language.as_str(), "typescript" | "javascript"))
         .filter(|file| file.language != "rust" || public_root_paths.contains(&file.repository_path))
     {
         for slot in resolve_expected_file(
@@ -78,7 +80,80 @@ pub(super) fn validate_complete_reexport_expansions(
             "historical-v2 compiler re-export expansion set is incomplete or invented".to_string(),
         );
     }
+    let mut expected_package_exposures = BTreeSet::new();
+    for exposure in &source.node_package_surfaces.exposures {
+        if exposure.target_status != HistoricalV2NodePackageTargetStatus::TrackedRegularFile {
+            return Err(
+                "historical-v2 semantic validation found an unresolved Node package root"
+                    .to_string(),
+            );
+        }
+        let file = files
+            .get(exposure.target_repository_path.as_str())
+            .copied()
+            .ok_or_else(|| {
+                "historical-v2 semantic validation omitted a Node package target".to_string()
+            })?;
+        if !matches!(file.language.as_str(), "typescript" | "javascript") {
+            return Err(
+                "historical-v2 semantic validation found a non-JavaScript Node package target"
+                    .to_string(),
+            );
+        }
+        for slot in resolve_expected_file(
+            file,
+            &files,
+            &direct_bindings,
+            &hops,
+            &mut cache,
+            &mut Vec::new(),
+        )?
+        .into_iter()
+        .filter(|slot| slot.owner.is_none())
+        {
+            expected_package_exposures.insert(expected_node_package_slot(exposure, slot)?);
+        }
+    }
+    let actual_package_exposures = semantic
+        .public_bindings
+        .iter()
+        .filter(|binding| binding.binding == HistoricalV2SemanticPublicBindingKind::PackageExposure)
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    if actual_package_exposures != expected_package_exposures {
+        return Err(
+            "historical-v2 compiler package exposure set is incomplete or invented".to_string(),
+        );
+    }
     Ok(())
+}
+
+fn expected_node_package_slot(
+    exposure: &HistoricalV2NodePackageExposure,
+    target: ExpectedPublicSlot,
+) -> Result<HistoricalV2SemanticPublicBinding, String> {
+    let surface_unit_id = super::public_surface::historical_node_package_public_surface_unit_id(
+        &exposure.surface_slot_id,
+        &target.name,
+        target.owner.as_deref(),
+        target.namespace,
+        target.kind,
+    )?;
+    let declaration_unit_id = super::public_surface::node_package_expansion_declaration_unit_id(
+        &surface_unit_id,
+        &exposure.exposure_id,
+        &target.binding.origin_declaration_unit_id,
+        &target.binding.symbol_id,
+        &target.binding.reexport_path,
+    )?;
+    let mut binding = target.binding;
+    binding.surface_unit_id = surface_unit_id;
+    binding.declaration_unit_id = declaration_unit_id;
+    binding.repository_path = exposure.target_repository_path.clone();
+    binding.binding = HistoricalV2SemanticPublicBindingKind::PackageExposure;
+    binding.externally_reachable = true;
+    binding.package_exposure_id = Some(exposure.exposure_id.clone());
+    Ok(binding)
 }
 
 fn resolve_expected_file<'a>(
@@ -301,6 +376,7 @@ fn expected_expanded_slot(
             symbol_id: target.binding.symbol_id,
             owner_symbol_id: target.binding.owner_symbol_id,
             exposing_owner_declaration_unit_id: None,
+            package_exposure_id: None,
             binding: HistoricalV2SemanticPublicBindingKind::ReexportExpansion,
             externally_reachable: true,
             position_encoding: hop.position_encoding,

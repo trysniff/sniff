@@ -1,16 +1,18 @@
 use super::super::{
     HISTORICAL_V2_SEMANTIC_CENSUS_SCHEMA_VERSION, HistoricalV2Materialization,
-    HistoricalV2MaterializedRoots, HistoricalV2PublicSurfaceCoverage, HistoricalV2SemanticCensus,
+    HistoricalV2MaterializedRoots, HistoricalV2NodePackageTargetStatus,
+    HistoricalV2PublicSurfaceCoverage, HistoricalV2SemanticCensus,
     HistoricalV2SemanticMethodStatus, HistoricalV2SemanticPublicBinding,
     HistoricalV2SemanticPublicBindingKind, HistoricalV2SemanticPublicReexportHop,
-    HistoricalV2SemanticSnapshotCensus, HistoricalV2SemanticSymbol, HistoricalV2SourceCensus,
-    HistoricalV2SourceFile, HistoricalV2SourcePublicBindingKind,
-    HistoricalV2SourcePublicDeclaration, HistoricalV2SourcePublicNamespace,
-    HistoricalV2SourcePublicReexport, HistoricalV2SourcePublicReexportKind,
-    HistoricalV2SourcePublicSymbolKind, HistoricalV2SourceSemanticCoverage,
-    HistoricalV2SourceSnapshotCensus, IntentionalBoundaryIndexerKind,
-    IntentionalBoundarySemanticOrigin, IntentionalBoundarySemanticRange,
-    IntentionalBoundarySemanticSymbolCategory, validate_historical_v2_source_census,
+    HistoricalV2SemanticPublicRootOrigin, HistoricalV2SemanticSnapshotCensus,
+    HistoricalV2SemanticSymbol, HistoricalV2SourceCensus, HistoricalV2SourceFile,
+    HistoricalV2SourcePublicBindingKind, HistoricalV2SourcePublicDeclaration,
+    HistoricalV2SourcePublicNamespace, HistoricalV2SourcePublicReexport,
+    HistoricalV2SourcePublicReexportKind, HistoricalV2SourcePublicSymbolKind,
+    HistoricalV2SourceSemanticCoverage, HistoricalV2SourceSnapshotCensus,
+    IntentionalBoundaryIndexerKind, IntentionalBoundarySemanticOrigin,
+    IntentionalBoundarySemanticRange, IntentionalBoundarySemanticSymbolCategory,
+    validate_historical_v2_source_census,
 };
 use super::{
     SEMANTIC_CENSUS_CONTRACT, indexer_for_language, indexer_kind, semantic_census_sha256,
@@ -131,7 +133,7 @@ pub(super) fn validate_snapshot(
         &all_source_paths,
         &public_surface_document_paths,
     )?;
-    let public_symbols = validate_public_bindings(
+    let binding_symbols = validate_public_bindings(
         source,
         semantic,
         &actual_indexers,
@@ -148,7 +150,7 @@ pub(super) fn validate_snapshot(
         &all_source_paths,
     )?;
     if semantic.symbols.iter().any(|entry| {
-        !public_symbols.contains(&(entry.indexer, entry.symbol.symbol_id.as_str()))
+        !binding_symbols.contains(&(entry.indexer, entry.symbol.symbol_id.as_str()))
             && !reexport_symbols.contains(&(entry.indexer, entry.symbol.symbol_id.as_str()))
             && !public_root_symbols.contains(&(entry.indexer, entry.symbol.symbol_id.as_str()))
             && !referenced_symbols.contains(&(entry.indexer, entry.symbol.symbol_id.as_str()))
@@ -281,6 +283,17 @@ fn validate_public_roots<'a>(
     } else {
         BTreeSet::new()
     };
+    let expected_node_roots =
+        if indexers.contains(&IntentionalBoundaryIndexerKind::TypeScriptJavaScript) {
+            source
+                .node_package_surfaces
+                .exposures
+                .iter()
+                .map(|exposure| (exposure.exposure_id.as_str(), exposure))
+                .collect::<BTreeMap<_, _>>()
+        } else {
+            BTreeMap::new()
+        };
     if semantic.public_root_count != semantic.public_roots.len()
         || semantic
             .public_roots
@@ -295,6 +308,8 @@ fn validate_public_roots<'a>(
         .map(|file| (file.repository_path.as_str(), file.language.as_str()))
         .collect::<BTreeMap<_, _>>();
     let mut paths = BTreeSet::new();
+    let mut rust_paths = BTreeSet::new();
+    let mut node_exposure_ids = BTreeSet::new();
     let mut root_symbols = BTreeSet::new();
     for root in &semantic.public_roots {
         let symbol_key = (root.indexer, root.module_symbol_id.as_str());
@@ -308,35 +323,79 @@ fn validate_public_roots<'a>(
                     symbol.symbol.provider_identity
                 )
             })?;
-        let [descriptor] = parsed.descriptors.as_slice() else {
-            return Err(
-                "historical-v2 Rust public root has a non-root descriptor path".to_string(),
-            );
-        };
-        if root.indexer != IntentionalBoundaryIndexerKind::Rust
-            || !indexers.contains(&root.indexer)
-            || source_languages.get(root.repository_path.as_str()) != Some(&"rust")
+        if !indexers.contains(&root.indexer)
             || !public_surface_document_paths.contains(root.repository_path.as_str())
             || root.compiler_definition.repository_path != root.repository_path
             || symbol.symbol.category != IntentionalBoundarySemanticSymbolCategory::Module
             || symbol.symbol.origin != IntentionalBoundarySemanticOrigin::Repository
+            || !symbol.symbol.ambiguity_notes.is_empty()
             || !symbol
                 .symbol
                 .definitions
                 .contains(&root.compiler_definition)
-            || parsed.scheme != "rust-analyzer"
-            || descriptor.name != "crate"
-            || descriptor.suffix.enum_value().ok() != Some(Suffix::Namespace)
-            || !paths.insert(root.repository_path.clone())
-            || !root_symbols.insert(symbol_key)
         {
             return Err("historical-v2 public root changed compiler identity".to_string());
         }
+        match &root.origin {
+            HistoricalV2SemanticPublicRootOrigin::RustCargoLibrary => {
+                let [descriptor] = parsed.descriptors.as_slice() else {
+                    return Err(
+                        "historical-v2 Rust public root has a non-root descriptor path".to_string(),
+                    );
+                };
+                if root.indexer != IntentionalBoundaryIndexerKind::Rust
+                    || source_languages.get(root.repository_path.as_str()) != Some(&"rust")
+                    || parsed.scheme != "rust-analyzer"
+                    || descriptor.name != "crate"
+                    || descriptor.suffix.enum_value().ok() != Some(Suffix::Namespace)
+                    || !rust_paths.insert(root.repository_path.clone())
+                {
+                    return Err(
+                        "historical-v2 Rust public root changed compiler identity".to_string()
+                    );
+                }
+            }
+            HistoricalV2SemanticPublicRootOrigin::NodePackageExposure {
+                exposure_id,
+                surface_slot_id,
+            } => {
+                let exposure = expected_node_roots
+                    .get(exposure_id.as_str())
+                    .ok_or_else(|| {
+                        "historical-v2 Node public root invented a package exposure".to_string()
+                    })?;
+                if root.indexer != IntentionalBoundaryIndexerKind::TypeScriptJavaScript
+                    || source_languages
+                        .get(root.repository_path.as_str())
+                        .is_none_or(|language| !matches!(*language, "typescript" | "javascript"))
+                    || parsed.scheme != "scip-typescript"
+                    || symbol.symbol.owner.is_some()
+                    || exposure.target_status
+                        != HistoricalV2NodePackageTargetStatus::TrackedRegularFile
+                    || exposure.target_repository_path != root.repository_path
+                    || exposure.surface_slot_id != *surface_slot_id
+                    || !node_exposure_ids.insert(exposure_id.as_str())
+                {
+                    return Err(
+                        "historical-v2 Node public root changed compiler identity".to_string()
+                    );
+                }
+            }
+        }
+        paths.insert(root.repository_path.clone());
+        root_symbols.insert(symbol_key);
     }
-    if paths != expected_rust_roots {
+    if rust_paths != expected_rust_roots {
         return Err(
             "historical-v2 Rust public roots disagree with Cargo library targets".to_string(),
         );
+    }
+    if node_exposure_ids.len() != expected_node_roots.len()
+        || !expected_node_roots
+            .keys()
+            .all(|exposure_id| node_exposure_ids.contains(exposure_id))
+    {
+        return Err("historical-v2 Node public roots disagree with package exposures".to_string());
     }
     Ok((paths, root_symbols))
 }
@@ -399,6 +458,7 @@ fn validate_reexport_hops<'a>(
         return Err("historical-v2 public re-export hop count or order changed".to_string());
     }
     let mut expected = BTreeMap::new();
+    let mut mandatory = BTreeSet::new();
     for file in source
         .source_files
         .iter()
@@ -418,10 +478,10 @@ fn validate_reexport_hops<'a>(
             {
                 return Err("historical-v2 source repeats a public re-export".to_string());
             }
+            if !matches!(file.language.as_str(), "rust" | "typescript" | "javascript") {
+                mandatory.insert(reexport.reexport_unit_id.as_str());
+            }
         }
-    }
-    if expected.len() != semantic.public_reexport_hops.len() {
-        return Err("historical-v2 compiler omitted a public re-export hop".to_string());
     }
 
     let mut validated = BTreeMap::new();
@@ -460,6 +520,12 @@ fn validate_reexport_hops<'a>(
         }
         validated.insert(hop.reexport_unit_id.as_str(), (file, reexport, hop));
         reexport_symbols.insert(symbol_key);
+    }
+    if !mandatory
+        .iter()
+        .all(|reexport_id| validated.contains_key(reexport_id))
+    {
+        return Err("historical-v2 compiler omitted a public re-export hop".to_string());
     }
     Ok((validated, reexport_symbols))
 }
@@ -515,6 +581,7 @@ fn validate_public_bindings<'a>(
     }
 
     let mut bound_declarations = BTreeSet::new();
+    let mut binding_symbols = BTreeSet::new();
     let mut public_symbols = BTreeSet::new();
     let direct_pairs = semantic
         .public_bindings
@@ -594,14 +661,20 @@ fn validate_public_bindings<'a>(
                         }),
                     _ => false,
                 };
-                let expected_reachability = binding.indexer != IntentionalBoundaryIndexerKind::Rust
-                    || (binding.owner_symbol_id.is_none()
-                        && public_root_paths.contains(*repository_path));
+                let expected_reachability = match binding.indexer {
+                    IntentionalBoundaryIndexerKind::Rust => {
+                        binding.owner_symbol_id.is_none()
+                            && public_root_paths.contains(*repository_path)
+                    }
+                    IntentionalBoundaryIndexerKind::TypeScriptJavaScript => false,
+                    _ => true,
+                };
                 if binding.indexer != *indexer
                     || binding.surface_unit_id != declaration.surface_unit_id
                     || binding.origin_declaration_unit_id != declaration.declaration_unit_id
                     || !binding.reexport_path.is_empty()
                     || binding.exposing_owner_declaration_unit_id.is_some()
+                    || binding.package_exposure_id.is_some()
                     || binding.repository_path != *repository_path
                     || binding.binding != expected_binding
                     || binding.compiler_anchor != expected_anchor
@@ -620,6 +693,11 @@ fn validate_public_bindings<'a>(
                 }
             }
             HistoricalV2SemanticPublicBindingKind::ReexportExpansion => {
+                if binding.package_exposure_id.is_some() {
+                    return Err(
+                        "historical-v2 re-export expansion claimed a package exposure".to_string(),
+                    );
+                }
                 validate_expanded_public_binding(
                     binding,
                     symbol,
@@ -630,15 +708,26 @@ fn validate_public_bindings<'a>(
                 )?;
             }
             HistoricalV2SemanticPublicBindingKind::OwnerExpansion => {
-                if binding.indexer != IntentionalBoundaryIndexerKind::Rust
-                    || !binding.externally_reachable
+                if !binding.externally_reachable
+                    || binding.exposing_owner_declaration_unit_id.is_none()
                 {
                     return Err(
                         "historical-v2 owner expansion changed compiler identity".to_string()
                     );
                 }
             }
+            HistoricalV2SemanticPublicBindingKind::PackageExposure => {
+                validate_node_package_binding(
+                    source,
+                    binding,
+                    symbol,
+                    &expected,
+                    reexports,
+                    &direct_pairs,
+                )?;
+            }
         }
+        binding_symbols.insert(symbol_key);
         if binding.externally_reachable {
             public_symbols.insert(symbol_key);
         }
@@ -660,7 +749,7 @@ fn validate_public_bindings<'a>(
     }) {
         return Err("historical-v2 public semantic symbol classification changed".to_string());
     }
-    Ok(public_symbols)
+    Ok(binding_symbols)
 }
 
 fn validate_complete_owner_expansions(
@@ -677,7 +766,7 @@ fn validate_complete_owner_expansions(
         .public_bindings
         .iter()
         .filter(|binding| {
-            binding.indexer == IntentionalBoundaryIndexerKind::Rust
+            !binding.externally_reachable
                 && matches!(
                     binding.binding,
                     HistoricalV2SemanticPublicBindingKind::Definition
@@ -690,8 +779,7 @@ fn validate_complete_owner_expansions(
         .public_bindings
         .iter()
         .filter(|binding| {
-            binding.indexer == IntentionalBoundaryIndexerKind::Rust
-                && binding.externally_reachable
+            binding.externally_reachable
                 && binding.owner_symbol_id.is_none()
                 && binding.binding != HistoricalV2SemanticPublicBindingKind::OwnerExpansion
         })
@@ -701,17 +789,15 @@ fn validate_complete_owner_expansions(
         let declaration = declarations
             .get(member.origin_declaration_unit_id.as_str())
             .copied()
-            .ok_or_else(|| {
-                "historical-v2 Rust owner member has no source declaration".to_string()
-            })?;
+            .ok_or_else(|| "historical-v2 owner member has no source declaration".to_string())?;
         let source_owner = declaration
             .owner
             .as_deref()
-            .ok_or_else(|| "historical-v2 Rust owner member has no source owner".to_string())?;
-        for owner in owners
-            .iter()
-            .filter(|owner| Some(owner.symbol_id.as_str()) == member.owner_symbol_id.as_deref())
-        {
+            .ok_or_else(|| "historical-v2 owner member has no source owner".to_string())?;
+        for owner in owners.iter().filter(|owner| {
+            owner.indexer == member.indexer
+                && Some(owner.symbol_id.as_str()) == member.owner_symbol_id.as_deref()
+        }) {
             let surface_unit_id = super::super::history_v2_source_census::historical_public_owner_member_surface_unit_id(
                 &owner.surface_unit_id,
                 source_owner,
@@ -729,6 +815,7 @@ fn validate_complete_owner_expansions(
             expansion.surface_unit_id = surface_unit_id;
             expansion.declaration_unit_id = declaration_unit_id;
             expansion.exposing_owner_declaration_unit_id = Some(owner.declaration_unit_id.clone());
+            expansion.package_exposure_id = owner.package_exposure_id.clone();
             expansion.binding = HistoricalV2SemanticPublicBindingKind::OwnerExpansion;
             expansion.externally_reachable = true;
             expansion.reexport_path.clear();
@@ -745,6 +832,132 @@ fn validate_complete_owner_expansions(
         return Err(
             "historical-v2 compiler owner expansion set is incomplete or invented".to_string(),
         );
+    }
+    Ok(())
+}
+
+fn validate_node_package_binding<'a>(
+    source: &HistoricalV2SourceSnapshotCensus,
+    binding: &HistoricalV2SemanticPublicBinding,
+    symbol: &HistoricalV2SemanticSymbol,
+    declarations: &DeclarationMap<'a>,
+    reexports: &ReexportMap<'a>,
+    direct_pairs: &BTreeSet<(&str, &str)>,
+) -> Result<(), String> {
+    let exposure_id = binding
+        .package_exposure_id
+        .as_deref()
+        .ok_or_else(|| "historical-v2 Node package binding has no exposure identity".to_string())?;
+    let exposure = source
+        .node_package_surfaces
+        .exposures
+        .iter()
+        .find(|exposure| exposure.exposure_id == exposure_id)
+        .ok_or_else(|| "historical-v2 Node package binding invented an exposure".to_string())?;
+    let (origin_path, origin_indexer, origin) = declarations
+        .get(binding.origin_declaration_unit_id.as_str())
+        .copied()
+        .ok_or_else(|| {
+            "historical-v2 Node package binding has no origin declaration".to_string()
+        })?;
+    if binding.indexer != IntentionalBoundaryIndexerKind::TypeScriptJavaScript
+        || origin_indexer != IntentionalBoundaryIndexerKind::TypeScriptJavaScript
+        || binding.binding != HistoricalV2SemanticPublicBindingKind::PackageExposure
+        || !binding.externally_reachable
+        || binding.repository_path != exposure.target_repository_path
+        || exposure.target_status != HistoricalV2NodePackageTargetStatus::TrackedRegularFile
+        || binding.owner_symbol_id.is_some()
+        || binding.owner_compiler_anchor.is_some()
+        || binding.exposing_owner_declaration_unit_id.is_some()
+        || symbol.symbol.origin != IntentionalBoundarySemanticOrigin::Repository
+        || !compatible_public_symbol_kind(origin.kind, symbol.symbol.category)
+        || !direct_pairs.contains(&(
+            binding.origin_declaration_unit_id.as_str(),
+            binding.symbol_id.as_str(),
+        ))
+    {
+        return Err("historical-v2 Node package binding changed compiler identity".to_string());
+    }
+
+    let mut current_path = binding.repository_path.as_str();
+    let mut seen_hops = BTreeSet::new();
+    for reexport_id in &binding.reexport_path {
+        if !seen_hops.insert(reexport_id.as_str()) {
+            return Err("historical-v2 Node package binding contains a cycle".to_string());
+        }
+        let (file, _, hop) = reexports
+            .get(reexport_id.as_str())
+            .copied()
+            .ok_or_else(|| {
+                "historical-v2 Node package binding references an omitted public re-export hop"
+                    .to_string()
+            })?;
+        if file.repository_path != current_path || hop.indexer != binding.indexer {
+            return Err("historical-v2 Node package binding has a disconnected path".to_string());
+        }
+        current_path = hop.target_repository_path.as_str();
+    }
+    if current_path != origin_path {
+        return Err("historical-v2 Node package binding misses its origin".to_string());
+    }
+
+    let mut name = origin.name.clone();
+    let mut owner = origin.owner.clone();
+    let mut namespace = origin.namespace;
+    let mut kind = origin.kind;
+    for reexport_id in binding.reexport_path.iter().rev() {
+        let (_, reexport, _) = reexports.get(reexport_id.as_str()).copied().unwrap();
+        match reexport.kind {
+            HistoricalV2SourcePublicReexportKind::Wildcard => {
+                if name == "default" {
+                    return Err(
+                        "historical-v2 Node package wildcard exposed a default export".to_string(),
+                    );
+                }
+            }
+            HistoricalV2SourcePublicReexportKind::Namespace => {
+                name = reexport.name.clone().ok_or_else(|| {
+                    "historical-v2 Node package namespace has no exposed name".to_string()
+                })?;
+                owner = None;
+                namespace = HistoricalV2SourcePublicNamespace::Module;
+                kind = HistoricalV2SourcePublicSymbolKind::Module;
+            }
+        }
+    }
+    if owner.is_some() {
+        return Err("historical-v2 Node package binding exposed a member directly".to_string());
+    }
+    let expected_surface = super::public_surface::historical_node_package_public_surface_unit_id(
+        &exposure.surface_slot_id,
+        &name,
+        None,
+        namespace,
+        kind,
+    )?;
+    let expected_declaration = super::public_surface::node_package_expansion_declaration_unit_id(
+        &expected_surface,
+        exposure_id,
+        &binding.origin_declaration_unit_id,
+        &binding.symbol_id,
+        &binding.reexport_path,
+    )?;
+    let (expected_encoding, expected_anchor) =
+        if let Some(reexport_id) = binding.reexport_path.first() {
+            let hop = reexports.get(reexport_id.as_str()).unwrap().2;
+            (hop.position_encoding, hop.compiler_anchor.clone())
+        } else {
+            (
+                binding.position_encoding,
+                declaration_semantic_range(origin_path, origin, binding.position_encoding),
+            )
+        };
+    if binding.surface_unit_id != expected_surface
+        || binding.declaration_unit_id != expected_declaration
+        || binding.position_encoding != expected_encoding
+        || binding.compiler_anchor != expected_anchor
+    {
+        return Err("historical-v2 Node package binding changed public identity".to_string());
     }
     Ok(())
 }

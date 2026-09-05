@@ -6,7 +6,7 @@ use super::{
 use crate::semantic_index::SemanticPositionEncoding;
 use serde::{Deserialize, Serialize};
 
-pub const HISTORICAL_V2_SEMANTIC_CENSUS_SCHEMA_VERSION: u32 = 10;
+pub const HISTORICAL_V2_SEMANTIC_CENSUS_SCHEMA_VERSION: u32 = 11;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -54,6 +54,7 @@ pub enum HistoricalV2SemanticPublicBindingKind {
     Reference,
     ReexportExpansion,
     OwnerExpansion,
+    PackageExposure,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -68,6 +69,7 @@ pub struct HistoricalV2SemanticPublicBinding {
     pub symbol_id: String,
     pub owner_symbol_id: Option<String>,
     pub exposing_owner_declaration_unit_id: Option<String>,
+    pub package_exposure_id: Option<String>,
     pub binding: HistoricalV2SemanticPublicBindingKind,
     pub externally_reachable: bool,
     pub position_encoding: SemanticPositionEncoding,
@@ -94,6 +96,17 @@ pub struct HistoricalV2SemanticPublicRoot {
     pub repository_path: String,
     pub module_symbol_id: String,
     pub compiler_definition: IntentionalBoundarySemanticRange,
+    pub origin: HistoricalV2SemanticPublicRootOrigin,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum HistoricalV2SemanticPublicRootOrigin {
+    RustCargoLibrary,
+    NodePackageExposure {
+        exposure_id: String,
+        surface_slot_id: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

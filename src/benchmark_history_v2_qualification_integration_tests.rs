@@ -201,6 +201,7 @@ fn semantic_snapshot(
                 symbol_id: symbol.symbol_id.clone(),
                 owner_symbol_id: None,
                 exposing_owner_declaration_unit_id: None,
+                package_exposure_id: None,
                 binding: HistoricalV2SemanticPublicBindingKind::Definition,
                 externally_reachable: true,
                 position_encoding: crate::semantic_index::SemanticPositionEncoding::Utf8,
