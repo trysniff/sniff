@@ -20,6 +20,7 @@ pub(super) fn validate_complete_reexport_expansions(
     source: &HistoricalV2SourceSnapshotCensus,
     semantic: &HistoricalV2SemanticSnapshotCensus,
     public_surface_document_paths: &BTreeSet<&str>,
+    public_root_paths: &BTreeSet<String>,
 ) -> Result<(), String> {
     let files = source
         .source_files
@@ -31,7 +32,11 @@ pub(super) fn validate_complete_reexport_expansions(
         .public_bindings
         .iter()
         .filter(|binding| {
-            binding.binding != HistoricalV2SemanticPublicBindingKind::ReexportExpansion
+            matches!(
+                binding.binding,
+                HistoricalV2SemanticPublicBindingKind::Definition
+                    | HistoricalV2SemanticPublicBindingKind::Reference
+            )
         })
         .map(|binding| (binding.declaration_unit_id.as_str(), binding))
         .collect::<BTreeMap<_, _>>();
@@ -43,7 +48,10 @@ pub(super) fn validate_complete_reexport_expansions(
 
     let mut cache = BTreeMap::new();
     let mut expected = BTreeSet::new();
-    for file in files.values() {
+    for file in files
+        .values()
+        .filter(|file| file.language != "rust" || public_root_paths.contains(&file.repository_path))
+    {
         for slot in resolve_expected_file(
             file,
             &files,
@@ -291,9 +299,13 @@ fn expected_expanded_slot(
             reexport_path,
             repository_path: file.repository_path.clone(),
             symbol_id: target.binding.symbol_id,
+            owner_symbol_id: target.binding.owner_symbol_id,
+            exposing_owner_declaration_unit_id: None,
             binding: HistoricalV2SemanticPublicBindingKind::ReexportExpansion,
+            externally_reachable: true,
             position_encoding: hop.position_encoding,
             compiler_anchor: hop.compiler_anchor.clone(),
+            owner_compiler_anchor: target.binding.owner_compiler_anchor,
         },
     })
 }

@@ -1,11 +1,14 @@
 use super::super::{
     HistoricalV2PublicSurfaceCoverage, HistoricalV2SemanticPublicBinding,
     HistoricalV2SemanticPublicBindingKind, HistoricalV2SemanticPublicReexportHop,
-    HistoricalV2SemanticSymbol, HistoricalV2SourceFile, HistoricalV2SourcePublicBindingKind,
-    HistoricalV2SourcePublicDeclaration, HistoricalV2SourcePublicNamespace,
-    HistoricalV2SourcePublicReexport, HistoricalV2SourcePublicReexportKind,
-    HistoricalV2SourcePublicSymbolKind, HistoricalV2SourceSemanticCoverage,
-    HistoricalV2SourceSnapshotCensus, IntentionalBoundaryIndexerKind,
+    HistoricalV2SemanticPublicRoot, HistoricalV2SemanticSymbol, HistoricalV2SourceFile,
+    HistoricalV2SourcePublicBindingKind, HistoricalV2SourcePublicDeclaration,
+    HistoricalV2SourcePublicNamespace, HistoricalV2SourcePublicReexport,
+    HistoricalV2SourcePublicReexportKind, HistoricalV2SourcePublicSymbolKind,
+    HistoricalV2SourceSemanticCoverage, HistoricalV2SourceSnapshotCensus,
+    IntentionalBoundaryIndexerKind, IntentionalBoundaryManifestDeclarationKind,
+    IntentionalBoundaryManifestTarget, IntentionalBoundaryProjectModelProvider,
+    IntentionalBoundaryProjectModelTargetStatus,
 };
 use super::{
     file_repository_path, flatten_location, hash_json, indexer_for_language, indexer_kind,
@@ -17,6 +20,7 @@ use crate::semantic_index::{
 };
 use crate::semantic_indexer_manifest::SemanticIndexerKind;
 use crate::types::FileRecord;
+use scip::types::descriptor::Suffix;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 pub(super) struct PublicSurfaceBindingInputs<'a> {
@@ -31,6 +35,7 @@ pub(super) struct PublicSurfaceBindingOutputs<'a> {
     pub(super) symbols:
         &'a mut BTreeMap<(IntentionalBoundaryIndexerKind, String), HistoricalV2SemanticSymbol>,
     pub(super) bindings: &'a mut Vec<HistoricalV2SemanticPublicBinding>,
+    pub(super) roots: &'a mut Vec<HistoricalV2SemanticPublicRoot>,
     pub(super) reexport_hops: &'a mut BTreeMap<String, HistoricalV2SemanticPublicReexportHop>,
     pub(super) public_surface_document_paths: &'a mut BTreeSet<String>,
 }
@@ -49,6 +54,7 @@ pub(super) fn bind_public_surface(
     let PublicSurfaceBindingOutputs {
         symbols,
         bindings,
+        roots,
         reexport_hops,
         public_surface_document_paths,
     } = outputs;
@@ -66,6 +72,29 @@ pub(super) fn bind_public_surface(
         .map(|file| (file.repository_path.as_str(), file))
         .collect::<BTreeMap<_, _>>();
     let mut direct_bindings = BTreeMap::new();
+    let rust_library_roots = rust_public_library_target_roots(source)?;
+    let indexed_source_paths = indexed_files
+        .iter()
+        .map(|file| file_repository_path(root, file))
+        .collect::<Result<BTreeSet<_>, _>>()?;
+    let indexed_rust_library_roots = rust_library_roots
+        .intersection(&indexed_source_paths)
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let rust_roots = if kind == SemanticIndexerKind::Rust {
+        compiler_rust_public_roots(index, &indexed_rust_library_roots)?
+    } else {
+        BTreeMap::new()
+    };
+    for (repository_path, (symbol, definition)) in &rust_roots {
+        retain_symbol(symbols, indexer_kind(kind), symbol, false, true, false)?;
+        roots.push(HistoricalV2SemanticPublicRoot {
+            indexer: indexer_kind(kind),
+            repository_path: repository_path.clone(),
+            module_symbol_id: symbol.id.0.clone(),
+            compiler_definition: flatten_location(definition),
+        });
+    }
     for file in source_files.values() {
         let path = RepositoryPath(file.repository_path.clone());
         let Some(document) = index.documents.get(&path) else {
@@ -84,6 +113,8 @@ pub(super) fn bind_public_surface(
                 file.repository_path
             )
         })?;
+        let file_externally_reachable =
+            kind != SemanticIndexerKind::Rust || rust_roots.contains_key(&file.repository_path);
         for declaration in &file.public_declarations {
             let location = declaration_location(
                 file,
@@ -101,7 +132,52 @@ pub(super) fn bind_public_surface(
                     symbol_at_exact_reference(index, document, declaration, &location)?,
                 ),
             };
-            retain_symbol(symbols, indexer_kind(kind), symbol, true, false)?;
+            let owner_location = declaration_owner_location(
+                file,
+                declaration,
+                &record.source,
+                document.position_encoding,
+            )?;
+            let owner_symbol = owner_location
+                .as_ref()
+                .map(|location| {
+                    symbol_at_exact_owner_reference(index, document, declaration, location)
+                })
+                .transpose()?;
+            let externally_reachable = file_externally_reachable
+                && (kind != SemanticIndexerKind::Rust || owner_symbol.is_none());
+            if kind == SemanticIndexerKind::Rust
+                && binding == HistoricalV2SemanticPublicBindingKind::Reference
+                && matches!(
+                    symbol.kind.category,
+                    SemanticSymbolCategory::Module
+                        | SemanticSymbolCategory::Namespace
+                        | SemanticSymbolCategory::Package
+                )
+            {
+                return Err(format!(
+                    "historical-v2 Rust public module reference {} was not represented as a namespace re-export",
+                    declaration.declaration_unit_id
+                ));
+            }
+            retain_symbol(
+                symbols,
+                indexer_kind(kind),
+                symbol,
+                externally_reachable,
+                false,
+                false,
+            )?;
+            if let Some(owner_symbol) = owner_symbol {
+                retain_symbol(
+                    symbols,
+                    indexer_kind(kind),
+                    owner_symbol,
+                    false,
+                    false,
+                    false,
+                )?;
+            }
             let public_binding = HistoricalV2SemanticPublicBinding {
                 indexer: indexer_kind(kind),
                 surface_unit_id: declaration.surface_unit_id.clone(),
@@ -110,9 +186,13 @@ pub(super) fn bind_public_surface(
                 reexport_path: Vec::new(),
                 repository_path: file.repository_path.clone(),
                 symbol_id: symbol.id.0.clone(),
+                owner_symbol_id: owner_symbol.map(|symbol| symbol.id.0.clone()),
+                exposing_owner_declaration_unit_id: None,
                 binding,
+                externally_reachable,
                 position_encoding: document.position_encoding,
                 compiler_anchor: flatten_location(&location),
+                owner_compiler_anchor: owner_location.as_ref().map(flatten_location),
             };
             if direct_bindings
                 .insert(
@@ -131,6 +211,9 @@ pub(super) fn bind_public_surface(
     for file in source_files
         .values()
         .filter(|file| public_surface_document_paths.contains(file.repository_path.as_str()))
+        .filter(|file| {
+            kind != SemanticIndexerKind::Rust || rust_roots.contains_key(&file.repository_path)
+        })
     {
         let slots = resolve_file_public_slots(
             file,
@@ -144,14 +227,256 @@ pub(super) fn bind_public_surface(
             &mut cache,
             &mut Vec::new(),
         )?;
-        for slot in slots
+        for mut slot in slots
             .into_iter()
             .filter(|slot| !slot.binding.reexport_path.is_empty())
         {
+            slot.binding.externally_reachable = true;
+            let symbol = index
+                .symbols
+                .get(&crate::semantic_index::SemanticSymbolId(
+                    slot.binding.symbol_id.clone(),
+                ))
+                .ok_or_else(|| {
+                    "historical-v2 public expansion points to a missing compiler symbol".to_string()
+                })?;
+            retain_symbol(symbols, indexer_kind(kind), symbol, true, false, false)?;
             bindings.push(slot.binding);
         }
     }
+    if kind == SemanticIndexerKind::Rust {
+        expand_rust_owner_surfaces(source, index, symbols, bindings)?;
+    }
     Ok(())
+}
+
+fn expand_rust_owner_surfaces(
+    source: &HistoricalV2SourceSnapshotCensus,
+    index: &SemanticIndex,
+    symbols: &mut BTreeMap<(IntentionalBoundaryIndexerKind, String), HistoricalV2SemanticSymbol>,
+    bindings: &mut Vec<HistoricalV2SemanticPublicBinding>,
+) -> Result<(), String> {
+    let declarations = source
+        .source_files
+        .iter()
+        .flat_map(|file| file.public_declarations.iter())
+        .map(|declaration| (declaration.declaration_unit_id.as_str(), declaration))
+        .collect::<BTreeMap<_, _>>();
+    let members = bindings
+        .iter()
+        .filter(|binding| {
+            binding.indexer == IntentionalBoundaryIndexerKind::Rust
+                && matches!(
+                    binding.binding,
+                    HistoricalV2SemanticPublicBindingKind::Definition
+                        | HistoricalV2SemanticPublicBindingKind::Reference
+                )
+                && binding.owner_symbol_id.is_some()
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    let owners = bindings
+        .iter()
+        .filter(|binding| {
+            binding.indexer == IntentionalBoundaryIndexerKind::Rust
+                && binding.externally_reachable
+                && binding.owner_symbol_id.is_none()
+                && binding.binding != HistoricalV2SemanticPublicBindingKind::OwnerExpansion
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut expansions = Vec::new();
+    for member in members {
+        let declaration = declarations
+            .get(member.origin_declaration_unit_id.as_str())
+            .copied()
+            .ok_or_else(|| {
+                "historical-v2 Rust owner member has no source declaration".to_string()
+            })?;
+        let source_owner = declaration
+            .owner
+            .as_deref()
+            .ok_or_else(|| "historical-v2 Rust owner member has no source owner".to_string())?;
+        for owner in owners
+            .iter()
+            .filter(|owner| Some(owner.symbol_id.as_str()) == member.owner_symbol_id.as_deref())
+        {
+            let surface_unit_id = super::super::history_v2_source_census::historical_public_owner_member_surface_unit_id(
+                &owner.surface_unit_id,
+                source_owner,
+                &declaration.name,
+                declaration.namespace,
+                declaration.kind,
+            )?;
+            let declaration_unit_id = owner_expansion_declaration_unit_id(
+                &surface_unit_id,
+                &member.origin_declaration_unit_id,
+                &member.symbol_id,
+                &owner.declaration_unit_id,
+            )?;
+            let mut expansion = member.clone();
+            expansion.surface_unit_id = surface_unit_id;
+            expansion.declaration_unit_id = declaration_unit_id;
+            expansion.exposing_owner_declaration_unit_id = Some(owner.declaration_unit_id.clone());
+            expansion.binding = HistoricalV2SemanticPublicBindingKind::OwnerExpansion;
+            expansion.externally_reachable = true;
+            expansion.reexport_path.clear();
+            expansions.push(expansion);
+        }
+    }
+    for expansion in &expansions {
+        let symbol = index
+            .symbols
+            .get(&crate::semantic_index::SemanticSymbolId(
+                expansion.symbol_id.clone(),
+            ))
+            .ok_or_else(|| {
+                "historical-v2 Rust owner surface points to a missing compiler symbol".to_string()
+            })?;
+        retain_symbol(
+            symbols,
+            IntentionalBoundaryIndexerKind::Rust,
+            symbol,
+            true,
+            false,
+            false,
+        )?;
+    }
+    bindings.extend(expansions);
+    Ok(())
+}
+
+pub(super) fn owner_expansion_declaration_unit_id(
+    surface_unit_id: &str,
+    origin_declaration_unit_id: &str,
+    symbol_id: &str,
+    exposing_owner_declaration_unit_id: &str,
+) -> Result<String, String> {
+    hash_json(&(
+        "sniffbench-historical-v2-public-owner-expansion-v1",
+        surface_unit_id,
+        origin_declaration_unit_id,
+        symbol_id,
+        exposing_owner_declaration_unit_id,
+    ))
+    .map(|hash| format!("h2oe-v1:{hash}"))
+}
+
+pub(super) fn rust_public_library_target_roots(
+    source: &HistoricalV2SourceSnapshotCensus,
+) -> Result<BTreeSet<String>, String> {
+    let mut roots = BTreeSet::new();
+    for target in &source.cargo_project_model.targets {
+        if target.provider != IntentionalBoundaryProjectModelProvider::CargoMetadata {
+            return Err("historical-v2 Cargo project model mixed providers".to_string());
+        }
+        let IntentionalBoundaryProjectModelTargetStatus::Boundary {
+            declaration_kind: IntentionalBoundaryManifestDeclarationKind::PublishedModule,
+            target,
+        } = &target.target_status
+        else {
+            continue;
+        };
+        let IntentionalBoundaryManifestTarget::RepositoryPath { repository_path } = target else {
+            return Err(
+                "historical-v2 Cargo library target has a non-file public root".to_string(),
+            );
+        };
+        let source_file = source
+            .source_files
+            .iter()
+            .find(|file| file.repository_path == *repository_path)
+            .ok_or_else(|| {
+                format!(
+                    "historical-v2 Cargo library root is absent from source census: {repository_path}"
+                )
+            })?;
+        if source_file.language != "rust"
+            || source_file.semantic_coverage != HistoricalV2SourceSemanticCoverage::Required
+        {
+            return Err(format!(
+                "historical-v2 Cargo library root is not required Rust source: {repository_path}"
+            ));
+        }
+        if !roots.insert(repository_path.clone()) {
+            return Err(format!(
+                "historical-v2 Cargo project model repeats a library root: {repository_path}"
+            ));
+        }
+    }
+    Ok(roots)
+}
+
+fn compiler_rust_public_roots<'a>(
+    index: &'a SemanticIndex,
+    library_roots: &BTreeSet<String>,
+) -> Result<BTreeMap<String, (&'a SemanticSymbol, &'a SemanticLocation)>, String> {
+    let mut roots = BTreeMap::new();
+    for symbol in index.symbols.values() {
+        if symbol.origin != SemanticSymbolOrigin::Repository
+            || !symbol.ambiguity_notes.is_empty()
+            || symbol.kind.category != SemanticSymbolCategory::Module
+        {
+            continue;
+        }
+        let parsed = scip::symbol::parse_symbol(&symbol.provider_identity).map_err(|error| {
+            format!(
+                "historical-v2 Rust module has invalid compiler identity {:?}: {error:?}",
+                symbol.provider_identity
+            )
+        })?;
+        let [descriptor] = parsed.descriptors.as_slice() else {
+            continue;
+        };
+        if parsed.scheme != "rust-analyzer"
+            || descriptor.name != "crate"
+            || descriptor.suffix.enum_value().ok() != Some(Suffix::Namespace)
+        {
+            continue;
+        }
+        let matching_definitions = symbol
+            .definitions
+            .iter()
+            .filter(|definition| library_roots.contains(&definition.document.0))
+            .collect::<Vec<_>>();
+        if matching_definitions.len() > 1 {
+            return Err(format!(
+                "historical-v2 Rust crate root {} has {} library definitions",
+                symbol.id.0,
+                matching_definitions.len()
+            ));
+        }
+        let Some(definition) = matching_definitions.first().copied() else {
+            continue;
+        };
+        if !index.documents.contains_key(&definition.document) {
+            return Err(format!(
+                "historical-v2 Rust crate root {} has no compiler document",
+                symbol.id.0
+            ));
+        }
+        if roots
+            .insert(definition.document.0.clone(), (symbol, definition))
+            .is_some()
+        {
+            return Err(format!(
+                "historical-v2 Rust compiler emitted multiple crate roots for {}",
+                definition.document.0
+            ));
+        }
+    }
+    if roots.keys().collect::<BTreeSet<_>>() != library_roots.iter().collect::<BTreeSet<_>>() {
+        let missing = library_roots
+            .iter()
+            .filter(|path| !roots.contains_key(*path))
+            .cloned()
+            .collect::<Vec<_>>();
+        return Err(format!(
+            "historical-v2 Rust compiler omitted exact library crate root(s): {}",
+            missing.join(", ")
+        ));
+    }
+    Ok(roots)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -248,7 +573,14 @@ fn resolve_file_public_slots(
     for reexport in &file.public_reexports {
         let (hop, module_symbol) =
             resolve_public_reexport(file, reexport, &record.source, document, kind, index)?;
-        retain_symbol(symbols, indexer_kind(kind), module_symbol, false, true)?;
+        retain_symbol(
+            symbols,
+            indexer_kind(kind),
+            module_symbol,
+            false,
+            false,
+            true,
+        )?;
         if let Some(existing) = reexport_hops.insert(reexport.reexport_unit_id.clone(), hop.clone())
             && existing != hop
         {
@@ -415,9 +747,13 @@ fn expand_reexport_slot(
             reexport_path,
             repository_path: file.repository_path.clone(),
             symbol_id: target.binding.symbol_id,
+            owner_symbol_id: target.binding.owner_symbol_id,
+            exposing_owner_declaration_unit_id: None,
             binding: HistoricalV2SemanticPublicBindingKind::ReexportExpansion,
+            externally_reachable: true,
             position_encoding: hop.position_encoding,
             compiler_anchor: hop.compiler_anchor.clone(),
+            owner_compiler_anchor: target.binding.owner_compiler_anchor,
         },
     })
 }
@@ -662,6 +998,64 @@ fn symbol_at_exact_reference<'a>(
     Ok(symbol)
 }
 
+fn symbol_at_exact_owner_reference<'a>(
+    index: &'a SemanticIndex,
+    document: &crate::semantic_index::SemanticDocument,
+    declaration: &HistoricalV2SourcePublicDeclaration,
+    location: &SemanticLocation,
+) -> Result<&'a SemanticSymbol, String> {
+    let occurrences = document
+        .occurrences
+        .iter()
+        .filter(|occurrence| occurrence.range == location.range)
+        .collect::<Vec<_>>();
+    if occurrences.is_empty() {
+        return Err(format!(
+            "historical-v2 compiler omitted the exact owner occurrence of {}::{}",
+            location.document.0, declaration.name
+        ));
+    }
+    let symbol_ids = occurrences
+        .iter()
+        .map(|occurrence| {
+            occurrence.symbol.as_ref().ok_or_else(|| {
+                format!(
+                    "historical-v2 compiler left the exact owner unresolved at {}::{}",
+                    location.document.0, declaration.name
+                )
+            })
+        })
+        .collect::<Result<BTreeSet<_>, _>>()?;
+    if symbol_ids.len() != 1 {
+        return Err(format!(
+            "historical-v2 compiler emitted {} distinct symbols at the exact owner of {}::{}",
+            symbol_ids.len(),
+            location.document.0,
+            declaration.name
+        ));
+    }
+    let symbol_id = symbol_ids.iter().next().copied().unwrap();
+    let symbol = index.symbols.get(symbol_id).ok_or_else(|| {
+        format!(
+            "historical-v2 public owner points to missing compiler symbol {}",
+            symbol_id.0
+        )
+    })?;
+    if symbol.origin != SemanticSymbolOrigin::Repository
+        || !symbol.ambiguity_notes.is_empty()
+        || !matches!(
+            symbol.kind.category,
+            SemanticSymbolCategory::Type | SemanticSymbolCategory::TraitOrInterface
+        )
+    {
+        return Err(format!(
+            "historical-v2 public owner has an incompatible compiler symbol at {}::{}",
+            location.document.0, declaration.name
+        ));
+    }
+    Ok(symbol)
+}
+
 fn valid_public_symbol(
     declaration: &HistoricalV2SourcePublicDeclaration,
     symbol: &SemanticSymbol,
@@ -716,6 +1110,52 @@ fn declaration_location(
             end: semantic_position_at_byte(source, range.end, encoding)?,
         },
     })
+}
+
+fn declaration_owner_location(
+    file: &HistoricalV2SourceFile,
+    declaration: &HistoricalV2SourcePublicDeclaration,
+    source: &str,
+    encoding: SemanticPositionEncoding,
+) -> Result<Option<SemanticLocation>, String> {
+    let Some(range) = declaration.owner_identifier else {
+        if declaration.owner_identifier_positions.is_some() {
+            return Err(format!(
+                "historical-v2 public owner positions have no byte range: {}::{}",
+                file.repository_path, declaration.name
+            ));
+        }
+        return Ok(None);
+    };
+    let owner_name = declaration
+        .owner
+        .as_deref()
+        .and_then(|owner| owner.rsplit("::").next())
+        .ok_or_else(|| {
+            format!(
+                "historical-v2 public owner anchor has no owner: {}::{}",
+                file.repository_path, declaration.name
+            )
+        })?;
+    if declaration.owner_identifier_positions.is_none()
+        || range.start >= range.end
+        || range.end > source.len()
+        || !source.is_char_boundary(range.start)
+        || !source.is_char_boundary(range.end)
+        || &source[range.start..range.end] != owner_name
+    {
+        return Err(format!(
+            "historical-v2 public owner range changed: {}::{}",
+            file.repository_path, declaration.name
+        ));
+    }
+    Ok(Some(SemanticLocation {
+        document: RepositoryPath(file.repository_path.clone()),
+        range: SemanticSourceRange {
+            start: semantic_position_at_byte(source, range.start, encoding)?,
+            end: semantic_position_at_byte(source, range.end, encoding)?,
+        },
+    }))
 }
 
 fn valid_python_namespace_anchor(anchor: &str, source_module: &str, exposed: &str) -> bool {

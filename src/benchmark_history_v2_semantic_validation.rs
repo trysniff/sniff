@@ -17,6 +17,7 @@ use super::{
     semantic_scope, semantic_snapshot_sha256,
 };
 use crate::semantic_indexer_manifest::SemanticIndexerKind;
+use scip::types::descriptor::Suffix;
 use std::collections::{BTreeMap, BTreeSet};
 
 pub fn validate_historical_v2_semantic_census_commitment(
@@ -115,6 +116,13 @@ pub(super) fn validate_snapshot(
         &actual_indexers,
         required_document_paths,
     )?;
+    let (public_root_paths, public_root_symbols) = validate_public_roots(
+        source,
+        semantic,
+        &actual_indexers,
+        &symbols,
+        &public_surface_document_paths,
+    )?;
     let (reexports, reexport_symbols) = validate_reexport_hops(
         source,
         semantic,
@@ -130,6 +138,7 @@ pub(super) fn validate_snapshot(
         &symbols,
         &reexports,
         &public_surface_document_paths,
+        &public_root_paths,
     )?;
     let referenced_symbols = validate_methods(
         source,
@@ -141,9 +150,16 @@ pub(super) fn validate_snapshot(
     if semantic.symbols.iter().any(|entry| {
         !public_symbols.contains(&(entry.indexer, entry.symbol.symbol_id.as_str()))
             && !reexport_symbols.contains(&(entry.indexer, entry.symbol.symbol_id.as_str()))
+            && !public_root_symbols.contains(&(entry.indexer, entry.symbol.symbol_id.as_str()))
             && !referenced_symbols.contains(&(entry.indexer, entry.symbol.symbol_id.as_str()))
     }) {
         return Err("historical-v2 semantic snapshot contains an unrelated symbol".to_string());
+    }
+    if semantic.symbols.iter().any(|entry| {
+        entry.is_public_root_evidence
+            != public_root_symbols.contains(&(entry.indexer, entry.symbol.symbol_id.as_str()))
+    }) {
+        return Err("historical-v2 public root evidence classification changed".to_string());
     }
     if semantic.symbols.iter().any(|entry| {
         entry.is_reexport_evidence
@@ -248,6 +264,81 @@ fn validate_public_surface_document_paths<'a>(
         }
     }
     Ok(paths)
+}
+
+fn validate_public_roots<'a>(
+    source: &HistoricalV2SourceSnapshotCensus,
+    semantic: &'a HistoricalV2SemanticSnapshotCensus,
+    indexers: &BTreeSet<IntentionalBoundaryIndexerKind>,
+    symbols: &BTreeMap<SymbolKey<'a>, &'a HistoricalV2SemanticSymbol>,
+    public_surface_document_paths: &BTreeSet<&str>,
+) -> Result<(BTreeSet<String>, BTreeSet<SymbolKey<'a>>), String> {
+    let expected_rust_roots = if indexers.contains(&IntentionalBoundaryIndexerKind::Rust) {
+        super::public_surface::rust_public_library_target_roots(source)?
+            .into_iter()
+            .filter(|path| public_surface_document_paths.contains(path.as_str()))
+            .collect()
+    } else {
+        BTreeSet::new()
+    };
+    if semantic.public_root_count != semantic.public_roots.len()
+        || semantic
+            .public_roots
+            .windows(2)
+            .any(|pair| pair[0] >= pair[1])
+    {
+        return Err("historical-v2 public root census is noncanonical".to_string());
+    }
+    let source_languages = source
+        .source_files
+        .iter()
+        .map(|file| (file.repository_path.as_str(), file.language.as_str()))
+        .collect::<BTreeMap<_, _>>();
+    let mut paths = BTreeSet::new();
+    let mut root_symbols = BTreeSet::new();
+    for root in &semantic.public_roots {
+        let symbol_key = (root.indexer, root.module_symbol_id.as_str());
+        let symbol = symbols
+            .get(&symbol_key)
+            .ok_or_else(|| "historical-v2 public root references a missing symbol".to_string())?;
+        let parsed =
+            scip::symbol::parse_symbol(&symbol.symbol.provider_identity).map_err(|error| {
+                format!(
+                    "historical-v2 public root has invalid compiler identity {:?}: {error:?}",
+                    symbol.symbol.provider_identity
+                )
+            })?;
+        let [descriptor] = parsed.descriptors.as_slice() else {
+            return Err(
+                "historical-v2 Rust public root has a non-root descriptor path".to_string(),
+            );
+        };
+        if root.indexer != IntentionalBoundaryIndexerKind::Rust
+            || !indexers.contains(&root.indexer)
+            || source_languages.get(root.repository_path.as_str()) != Some(&"rust")
+            || !public_surface_document_paths.contains(root.repository_path.as_str())
+            || root.compiler_definition.repository_path != root.repository_path
+            || symbol.symbol.category != IntentionalBoundarySemanticSymbolCategory::Module
+            || symbol.symbol.origin != IntentionalBoundarySemanticOrigin::Repository
+            || !symbol
+                .symbol
+                .definitions
+                .contains(&root.compiler_definition)
+            || parsed.scheme != "rust-analyzer"
+            || descriptor.name != "crate"
+            || descriptor.suffix.enum_value().ok() != Some(Suffix::Namespace)
+            || !paths.insert(root.repository_path.clone())
+            || !root_symbols.insert(symbol_key)
+        {
+            return Err("historical-v2 public root changed compiler identity".to_string());
+        }
+    }
+    if paths != expected_rust_roots {
+        return Err(
+            "historical-v2 Rust public roots disagree with Cargo library targets".to_string(),
+        );
+    }
+    Ok((paths, root_symbols))
 }
 
 fn validate_symbols<'a>(
@@ -380,6 +471,7 @@ fn validate_public_bindings<'a>(
     symbols: &BTreeMap<SymbolKey<'a>, &'a HistoricalV2SemanticSymbol>,
     reexports: &ReexportMap<'a>,
     public_surface_document_paths: &BTreeSet<&str>,
+    public_root_paths: &BTreeSet<String>,
 ) -> Result<BTreeSet<SymbolKey<'a>>, String> {
     if semantic.public_binding_count != semantic.public_bindings.len() {
         return Err("historical-v2 public binding count changed".to_string());
@@ -428,7 +520,11 @@ fn validate_public_bindings<'a>(
         .public_bindings
         .iter()
         .filter(|binding| {
-            binding.binding != HistoricalV2SemanticPublicBindingKind::ReexportExpansion
+            matches!(
+                binding.binding,
+                HistoricalV2SemanticPublicBindingKind::Definition
+                    | HistoricalV2SemanticPublicBindingKind::Reference
+            )
         })
         .map(|binding| {
             (
@@ -473,14 +569,45 @@ fn validate_public_bindings<'a>(
                         HistoricalV2SemanticPublicBindingKind::Reference
                     }
                 };
+                let expected_owner_anchor = declaration_owner_semantic_range(
+                    repository_path,
+                    declaration,
+                    binding.position_encoding,
+                )?;
+                let owner_valid = match (
+                    binding.owner_symbol_id.as_deref(),
+                    binding.owner_compiler_anchor.as_ref(),
+                    expected_owner_anchor.as_ref(),
+                ) {
+                    (None, None, None) => true,
+                    (Some(owner_id), Some(actual_anchor), Some(expected_anchor)) => symbols
+                        .get(&(binding.indexer, owner_id))
+                        .is_some_and(|owner| {
+                            actual_anchor == expected_anchor
+                                && owner.symbol.origin
+                                    == IntentionalBoundarySemanticOrigin::Repository
+                                && matches!(
+                                    owner.symbol.category,
+                                    IntentionalBoundarySemanticSymbolCategory::Type
+                                        | IntentionalBoundarySemanticSymbolCategory::TraitOrInterface
+                                )
+                        }),
+                    _ => false,
+                };
+                let expected_reachability = binding.indexer != IntentionalBoundaryIndexerKind::Rust
+                    || (binding.owner_symbol_id.is_none()
+                        && public_root_paths.contains(*repository_path));
                 if binding.indexer != *indexer
                     || binding.surface_unit_id != declaration.surface_unit_id
                     || binding.origin_declaration_unit_id != declaration.declaration_unit_id
                     || !binding.reexport_path.is_empty()
+                    || binding.exposing_owner_declaration_unit_id.is_some()
                     || binding.repository_path != *repository_path
                     || binding.binding != expected_binding
                     || binding.compiler_anchor != expected_anchor
                     || binding.compiler_anchor.repository_path != *repository_path
+                    || !owner_valid
+                    || binding.externally_reachable != expected_reachability
                     || symbol.symbol.origin != IntentionalBoundarySemanticOrigin::Repository
                     || (binding.binding == HistoricalV2SemanticPublicBindingKind::Definition
                         && !symbol.symbol.definitions.contains(&binding.compiler_anchor))
@@ -499,10 +626,22 @@ fn validate_public_bindings<'a>(
                     &expected,
                     reexports,
                     &direct_pairs,
+                    public_root_paths,
                 )?;
             }
+            HistoricalV2SemanticPublicBindingKind::OwnerExpansion => {
+                if binding.indexer != IntentionalBoundaryIndexerKind::Rust
+                    || !binding.externally_reachable
+                {
+                    return Err(
+                        "historical-v2 owner expansion changed compiler identity".to_string()
+                    );
+                }
+            }
         }
-        public_symbols.insert(symbol_key);
+        if binding.externally_reachable {
+            public_symbols.insert(symbol_key);
+        }
         previous = Some(key);
     }
     if !required_declarations.is_subset(&bound_declarations) {
@@ -512,7 +651,9 @@ fn validate_public_bindings<'a>(
         source,
         semantic,
         public_surface_document_paths,
+        public_root_paths,
     )?;
+    validate_complete_owner_expansions(source, semantic)?;
     if semantic.symbols.iter().any(|entry| {
         entry.is_public_surface
             != public_symbols.contains(&(entry.indexer, entry.symbol.symbol_id.as_str()))
@@ -522,18 +663,107 @@ fn validate_public_bindings<'a>(
     Ok(public_symbols)
 }
 
+fn validate_complete_owner_expansions(
+    source: &HistoricalV2SourceSnapshotCensus,
+    semantic: &HistoricalV2SemanticSnapshotCensus,
+) -> Result<(), String> {
+    let declarations = source
+        .source_files
+        .iter()
+        .flat_map(|file| file.public_declarations.iter())
+        .map(|declaration| (declaration.declaration_unit_id.as_str(), declaration))
+        .collect::<BTreeMap<_, _>>();
+    let members = semantic
+        .public_bindings
+        .iter()
+        .filter(|binding| {
+            binding.indexer == IntentionalBoundaryIndexerKind::Rust
+                && matches!(
+                    binding.binding,
+                    HistoricalV2SemanticPublicBindingKind::Definition
+                        | HistoricalV2SemanticPublicBindingKind::Reference
+                )
+                && binding.owner_symbol_id.is_some()
+        })
+        .collect::<Vec<_>>();
+    let owners = semantic
+        .public_bindings
+        .iter()
+        .filter(|binding| {
+            binding.indexer == IntentionalBoundaryIndexerKind::Rust
+                && binding.externally_reachable
+                && binding.owner_symbol_id.is_none()
+                && binding.binding != HistoricalV2SemanticPublicBindingKind::OwnerExpansion
+        })
+        .collect::<Vec<_>>();
+    let mut expected = BTreeSet::new();
+    for member in members {
+        let declaration = declarations
+            .get(member.origin_declaration_unit_id.as_str())
+            .copied()
+            .ok_or_else(|| {
+                "historical-v2 Rust owner member has no source declaration".to_string()
+            })?;
+        let source_owner = declaration
+            .owner
+            .as_deref()
+            .ok_or_else(|| "historical-v2 Rust owner member has no source owner".to_string())?;
+        for owner in owners
+            .iter()
+            .filter(|owner| Some(owner.symbol_id.as_str()) == member.owner_symbol_id.as_deref())
+        {
+            let surface_unit_id = super::super::history_v2_source_census::historical_public_owner_member_surface_unit_id(
+                &owner.surface_unit_id,
+                source_owner,
+                &declaration.name,
+                declaration.namespace,
+                declaration.kind,
+            )?;
+            let declaration_unit_id = super::public_surface::owner_expansion_declaration_unit_id(
+                &surface_unit_id,
+                &member.origin_declaration_unit_id,
+                &member.symbol_id,
+                &owner.declaration_unit_id,
+            )?;
+            let mut expansion = (*member).clone();
+            expansion.surface_unit_id = surface_unit_id;
+            expansion.declaration_unit_id = declaration_unit_id;
+            expansion.exposing_owner_declaration_unit_id = Some(owner.declaration_unit_id.clone());
+            expansion.binding = HistoricalV2SemanticPublicBindingKind::OwnerExpansion;
+            expansion.externally_reachable = true;
+            expansion.reexport_path.clear();
+            expected.insert(expansion);
+        }
+    }
+    let actual = semantic
+        .public_bindings
+        .iter()
+        .filter(|binding| binding.binding == HistoricalV2SemanticPublicBindingKind::OwnerExpansion)
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    if actual != expected {
+        return Err(
+            "historical-v2 compiler owner expansion set is incomplete or invented".to_string(),
+        );
+    }
+    Ok(())
+}
+
 fn validate_expanded_public_binding<'a>(
     binding: &HistoricalV2SemanticPublicBinding,
     symbol: &HistoricalV2SemanticSymbol,
     declarations: &DeclarationMap<'a>,
     reexports: &ReexportMap<'a>,
     direct_pairs: &BTreeSet<(&str, &str)>,
+    public_root_paths: &BTreeSet<String>,
 ) -> Result<(), String> {
     let (origin_path, origin_indexer, origin) = declarations
         .get(binding.origin_declaration_unit_id.as_str())
         .copied()
         .ok_or_else(|| "historical-v2 re-export expansion has no origin declaration".to_string())?;
     if binding.reexport_path.is_empty()
+        || !binding.externally_reachable
+        || binding.exposing_owner_declaration_unit_id.is_some()
         || binding.indexer != origin_indexer
         || symbol.symbol.origin != IntentionalBoundarySemanticOrigin::Repository
         || !compatible_public_symbol_kind(origin.kind, symbol.symbol.category)
@@ -608,6 +838,13 @@ fn validate_expanded_public_binding<'a>(
         .get(binding.reexport_path[0].as_str())
         .map(|(_, _, hop)| *hop)
         .unwrap();
+    if binding.indexer == IntentionalBoundaryIndexerKind::Rust
+        && !public_root_paths.contains(&binding.repository_path)
+    {
+        return Err(
+            "historical-v2 Rust re-export expansion does not start at a public root".to_string(),
+        );
+    }
     let expected_declaration = super::reexport_expansion_declaration_unit_id(
         &binding.surface_unit_id,
         &binding.repository_path,
@@ -646,6 +883,38 @@ fn declaration_semantic_range(
         start_character_zero_based: range.start.character_zero_based,
         end_line_zero_based: range.end.line_zero_based,
         end_character_zero_based: range.end.character_zero_based,
+    }
+}
+
+fn declaration_owner_semantic_range(
+    repository_path: &str,
+    declaration: &super::super::HistoricalV2SourcePublicDeclaration,
+    encoding: crate::semantic_index::SemanticPositionEncoding,
+) -> Result<Option<IntentionalBoundarySemanticRange>, String> {
+    let positions = match encoding {
+        crate::semantic_index::SemanticPositionEncoding::Utf8 => declaration
+            .owner_identifier_positions
+            .as_ref()
+            .map(|positions| positions.utf8),
+        crate::semantic_index::SemanticPositionEncoding::Utf16 => declaration
+            .owner_identifier_positions
+            .as_ref()
+            .map(|positions| positions.utf16),
+        crate::semantic_index::SemanticPositionEncoding::Utf32 => declaration
+            .owner_identifier_positions
+            .as_ref()
+            .map(|positions| positions.utf32),
+    };
+    match (declaration.owner_identifier, positions) {
+        (None, None) => Ok(None),
+        (Some(_), Some(range)) => Ok(Some(IntentionalBoundarySemanticRange {
+            repository_path: repository_path.to_string(),
+            start_line_zero_based: range.start.line_zero_based,
+            start_character_zero_based: range.start.character_zero_based,
+            end_line_zero_based: range.end.line_zero_based,
+            end_character_zero_based: range.end.character_zero_based,
+        })),
+        _ => Err("historical-v2 public owner anchor is incomplete".to_string()),
     }
 }
 
