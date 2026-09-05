@@ -187,12 +187,15 @@ fn semantic_snapshot(
             symbols.push(HistoricalV2SemanticSymbol {
                 indexer: IntentionalBoundaryIndexerKind::Go,
                 is_public_surface: true,
+                is_reexport_evidence: false,
                 symbol: symbol.clone(),
             });
             public_bindings.push(HistoricalV2SemanticPublicBinding {
                 indexer: IntentionalBoundaryIndexerKind::Go,
                 surface_unit_id: declaration.surface_unit_id.clone(),
                 declaration_unit_id: declaration.declaration_unit_id.clone(),
+                origin_declaration_unit_id: declaration.declaration_unit_id.clone(),
+                reexport_path: Vec::new(),
                 repository_path: file.repository_path.clone(),
                 symbol_id: symbol.symbol_id.clone(),
                 binding: HistoricalV2SemanticPublicBindingKind::Definition,
@@ -209,9 +212,16 @@ fn semantic_snapshot(
             .iter()
             .map(|file| file.repository_path.clone())
             .collect(),
+        public_surface_document_paths: source
+            .source_files
+            .iter()
+            .map(|file| file.repository_path.clone())
+            .collect(),
         indexers: Vec::new(),
         public_binding_count: public_bindings.len(),
         public_bindings,
+        public_reexport_hop_count: 0,
+        public_reexport_hops: Vec::new(),
         symbol_count: symbols.len(),
         public_symbol_count: symbols.len(),
         resolved_method_count: methods.len(),

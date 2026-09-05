@@ -12,10 +12,12 @@ use super::{
     HistoricalV2SemanticCensusFailurePhase, HistoricalV2SemanticMethod,
     HistoricalV2SemanticMethodStatus, HistoricalV2SemanticProcessEvidence,
     HistoricalV2SemanticPublicBinding, HistoricalV2SemanticPublicBindingKind,
-    HistoricalV2SemanticSnapshotCensus, HistoricalV2SemanticSnapshotSide,
-    HistoricalV2SemanticSymbol, HistoricalV2SlotStage, HistoricalV2SlotStageError,
-    HistoricalV2SlotStageErrorKind, HistoricalV2SourceCensus, HistoricalV2SourceFile,
-    HistoricalV2SourcePublicBindingKind, HistoricalV2SourcePublicDeclaration,
+    HistoricalV2SemanticPublicReexportHop, HistoricalV2SemanticSnapshotCensus,
+    HistoricalV2SemanticSnapshotSide, HistoricalV2SemanticSymbol, HistoricalV2SlotStage,
+    HistoricalV2SlotStageError, HistoricalV2SlotStageErrorKind, HistoricalV2SourceCensus,
+    HistoricalV2SourceFile, HistoricalV2SourcePublicBindingKind,
+    HistoricalV2SourcePublicDeclaration, HistoricalV2SourcePublicNamespace,
+    HistoricalV2SourcePublicReexport, HistoricalV2SourcePublicReexportKind,
     HistoricalV2SourcePublicSymbolKind, HistoricalV2SourceSemanticCoverage,
     HistoricalV2SourceSnapshotCensus, HistoricalV2StageResult, IntentionalBoundaryIndexerKind,
     IntentionalBoundaryMethodCensusEntry, validate_historical_v2_source_census,
@@ -55,6 +57,9 @@ struct HistoricalV2SemanticScope {
 
 #[path = "benchmark_history_v2_semantic_validation.rs"]
 mod validation;
+
+#[path = "benchmark_history_v2_semantic_public_surface_validation.rs"]
+mod public_surface_validation;
 
 #[path = "benchmark_history_v2_semantic_stage_support.rs"]
 mod stage_support;
@@ -243,6 +248,8 @@ fn build_semantic_snapshot(
     let mut methods = Vec::<HistoricalV2SemanticMethod>::with_capacity(source.method_count);
     let mut symbols = BTreeMap::new();
     let mut public_bindings = Vec::new();
+    let mut public_reexport_hops = BTreeMap::new();
+    let mut public_surface_document_paths = BTreeSet::new();
     let mut indexers = Vec::with_capacity(indexes.len());
     for (kind, index) in indexes {
         let files_for_indexer = crate::semantic_indexer_runner::files_for_indexer(files, *kind);
@@ -300,6 +307,8 @@ fn build_semantic_snapshot(
             index,
             &mut symbols,
             &mut public_bindings,
+            &mut public_reexport_hops,
+            &mut public_surface_document_paths,
         )?;
         indexers.push(summarize_index(*kind, index)?);
     }
@@ -332,6 +341,7 @@ fn build_semantic_snapshot(
     {
         return Err("historical-v2 public surface repeats a declaration binding".to_string());
     }
+    let public_reexport_hops = public_reexport_hops.into_values().collect::<Vec<_>>();
     let symbols = symbols.into_values().collect::<Vec<_>>();
     indexers.sort_by_key(|indexer| indexer.indexer);
     let resolved_method_count = methods
@@ -360,10 +370,13 @@ fn build_semantic_snapshot(
         revision: source.revision.clone(),
         source_snapshot_census_sha256: source.snapshot_census_sha256.clone(),
         required_document_paths: required_document_paths.iter().cloned().collect(),
+        public_surface_document_paths: public_surface_document_paths.into_iter().collect(),
         indexers,
         methods,
         public_binding_count: public_bindings.len(),
         public_bindings,
+        public_reexport_hop_count: public_reexport_hops.len(),
+        public_reexport_hops,
         symbol_count: symbols.len(),
         public_symbol_count: symbols
             .iter()
@@ -411,7 +424,7 @@ fn flatten_historical_method(
                     value.0
                 )
             })?;
-            retain_symbol(symbols, indexer, symbol, false)?;
+            retain_symbol(symbols, indexer, symbol, false, false)?;
             HistoricalV2SemanticMethodStatus::Resolved {
                 symbol_id: value.0.clone(),
                 joined_definition: binding.definition.as_ref().map(flatten_location),
@@ -434,6 +447,7 @@ fn retain_symbol(
     indexer: IntentionalBoundaryIndexerKind,
     symbol: &SemanticSymbol,
     is_public_surface: bool,
+    is_reexport_evidence: bool,
 ) -> Result<(), String> {
     let key = (indexer, symbol.id.0.clone());
     let facts = flatten_symbol(symbol);
@@ -445,6 +459,7 @@ fn retain_symbol(
             ));
         }
         existing.is_public_surface |= is_public_surface;
+        existing.is_reexport_evidence |= is_reexport_evidence;
         return Ok(());
     }
     symbols.insert(
@@ -452,6 +467,7 @@ fn retain_symbol(
         HistoricalV2SemanticSymbol {
             indexer,
             is_public_surface,
+            is_reexport_evidence,
             symbol: facts,
         },
     );
@@ -466,26 +482,36 @@ fn bind_public_surface(
     index: &SemanticIndex,
     symbols: &mut BTreeMap<(IntentionalBoundaryIndexerKind, String), HistoricalV2SemanticSymbol>,
     bindings: &mut Vec<HistoricalV2SemanticPublicBinding>,
+    reexport_hops: &mut BTreeMap<String, HistoricalV2SemanticPublicReexportHop>,
+    public_surface_document_paths: &mut BTreeSet<String>,
 ) -> Result<(), String> {
-    let indexed_files = indexed_files
+    let records = indexed_files
         .iter()
         .map(|file| Ok((file_repository_path(root, file)?, file)))
         .collect::<Result<BTreeMap<_, _>, String>>()?;
-    for file in source.source_files.iter().filter(|file| {
-        file.semantic_coverage == HistoricalV2SourceSemanticCoverage::Required
-            && indexer_for_language(&file.language) == Ok(kind)
-    }) {
+    let source_files = source
+        .source_files
+        .iter()
+        .filter(|file| {
+            file.semantic_coverage == HistoricalV2SourceSemanticCoverage::Required
+                && indexer_for_language(&file.language) == Ok(kind)
+        })
+        .map(|file| (file.repository_path.as_str(), file))
+        .collect::<BTreeMap<_, _>>();
+    let mut direct_bindings = BTreeMap::new();
+    for file in source_files.values() {
         let path = RepositoryPath(file.repository_path.clone());
         let Some(document) = index.documents.get(&path) else {
             continue;
         };
+        public_surface_document_paths.insert(file.repository_path.clone());
         if file.public_surface_coverage != super::HistoricalV2PublicSurfaceCoverage::Complete {
             return Err(format!(
                 "historical-v2 public-surface collector is incomplete for {}",
                 file.repository_path
             ));
         }
-        let record = indexed_files.get(&file.repository_path).ok_or_else(|| {
+        let record = records.get(&file.repository_path).ok_or_else(|| {
             format!(
                 "historical-v2 public-surface source is missing from parser records: {}",
                 file.repository_path
@@ -508,26 +534,433 @@ fn bind_public_surface(
                     symbol_at_exact_reference(index, document, declaration, &location)?,
                 ),
             };
-            retain_symbol(symbols, indexer_kind(kind), symbol, true)?;
-            bindings.push(HistoricalV2SemanticPublicBinding {
+            retain_symbol(symbols, indexer_kind(kind), symbol, true, false)?;
+            let public_binding = HistoricalV2SemanticPublicBinding {
                 indexer: indexer_kind(kind),
                 surface_unit_id: declaration.surface_unit_id.clone(),
                 declaration_unit_id: declaration.declaration_unit_id.clone(),
+                origin_declaration_unit_id: declaration.declaration_unit_id.clone(),
+                reexport_path: Vec::new(),
                 repository_path: file.repository_path.clone(),
                 symbol_id: symbol.id.0.clone(),
                 binding,
                 position_encoding: document.position_encoding,
                 compiler_anchor: flatten_location(&location),
-            });
+            };
+            if direct_bindings
+                .insert(
+                    declaration.declaration_unit_id.clone(),
+                    public_binding.clone(),
+                )
+                .is_some()
+            {
+                return Err("historical-v2 repeated a direct public declaration".to_string());
+            }
+            bindings.push(public_binding);
         }
-        if !file.public_reexports.is_empty() {
-            return Err(format!(
-                "historical-v2 compiler re-export expansion is incomplete for {}",
-                file.repository_path
-            ));
+    }
+
+    let mut cache = BTreeMap::new();
+    for file in source_files
+        .values()
+        .filter(|file| public_surface_document_paths.contains(file.repository_path.as_str()))
+    {
+        let slots = resolve_file_public_slots(
+            file,
+            &source_files,
+            &records,
+            &direct_bindings,
+            kind,
+            index,
+            symbols,
+            reexport_hops,
+            &mut cache,
+            &mut Vec::new(),
+        )?;
+        for slot in slots
+            .into_iter()
+            .filter(|slot| !slot.binding.reexport_path.is_empty())
+        {
+            bindings.push(slot.binding);
         }
     }
     Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ResolvedPublicSlot {
+    name: String,
+    owner: Option<String>,
+    namespace: HistoricalV2SourcePublicNamespace,
+    kind: HistoricalV2SourcePublicSymbolKind,
+    binding: HistoricalV2SemanticPublicBinding,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn resolve_file_public_slots(
+    file: &HistoricalV2SourceFile,
+    source_files: &BTreeMap<&str, &HistoricalV2SourceFile>,
+    records: &BTreeMap<String, &FileRecord>,
+    direct_bindings: &BTreeMap<String, HistoricalV2SemanticPublicBinding>,
+    kind: SemanticIndexerKind,
+    index: &SemanticIndex,
+    symbols: &mut BTreeMap<(IntentionalBoundaryIndexerKind, String), HistoricalV2SemanticSymbol>,
+    reexport_hops: &mut BTreeMap<String, HistoricalV2SemanticPublicReexportHop>,
+    cache: &mut BTreeMap<String, Vec<ResolvedPublicSlot>>,
+    stack: &mut Vec<String>,
+) -> Result<Vec<ResolvedPublicSlot>, String> {
+    if let Some(cached) = cache.get(&file.repository_path) {
+        return Ok(cached.clone());
+    }
+    if stack.contains(&file.repository_path) {
+        stack.push(file.repository_path.clone());
+        return Err(format!(
+            "historical-v2 compiler found a cyclic public re-export path: {}",
+            stack.join(" -> ")
+        ));
+    }
+    stack.push(file.repository_path.clone());
+    if file.public_surface_coverage != super::HistoricalV2PublicSurfaceCoverage::Complete {
+        return Err(format!(
+            "historical-v2 public-surface collector is incomplete for {}",
+            file.repository_path
+        ));
+    }
+    let document = index
+        .documents
+        .get(&RepositoryPath(file.repository_path.clone()))
+        .ok_or_else(|| {
+            format!(
+                "historical-v2 compiler omitted a public-surface document: {}",
+                file.repository_path
+            )
+        })?;
+    let record = records.get(&file.repository_path).ok_or_else(|| {
+        format!(
+            "historical-v2 public-surface source is missing from parser records: {}",
+            file.repository_path
+        )
+    })?;
+    let mut slots = file
+        .public_declarations
+        .iter()
+        .map(|declaration| {
+            let binding = direct_bindings
+                .get(&declaration.declaration_unit_id)
+                .ok_or_else(|| {
+                    format!(
+                        "historical-v2 compiler omitted direct public binding {}",
+                        declaration.declaration_unit_id
+                    )
+                })?;
+            Ok(ResolvedPublicSlot {
+                name: declaration.name.clone(),
+                owner: declaration.owner.clone(),
+                namespace: declaration.namespace,
+                kind: declaration.kind,
+                binding: binding.clone(),
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    let direct_surfaces = slots
+        .iter()
+        .map(|slot| slot.binding.surface_unit_id.clone())
+        .collect::<BTreeSet<_>>();
+    let mut wildcard_symbols = BTreeMap::<String, String>::new();
+
+    for reexport in &file.public_reexports {
+        let (hop, module_symbol) =
+            resolve_public_reexport(file, reexport, &record.source, document, kind, index)?;
+        retain_symbol(symbols, indexer_kind(kind), module_symbol, false, true)?;
+        if let Some(existing) = reexport_hops.insert(reexport.reexport_unit_id.clone(), hop.clone())
+            && existing != hop
+        {
+            return Err("historical-v2 compiler changed a repeated re-export hop".to_string());
+        }
+        let target = source_files
+            .get(hop.target_repository_path.as_str())
+            .copied()
+            .ok_or_else(|| {
+                format!(
+                    "historical-v2 public re-export target is not an enumerable repository source: {}",
+                    hop.target_repository_path
+                )
+            })?;
+        if indexer_for_language(&target.language)? != kind {
+            return Err("historical-v2 public re-export crossed compiler indexers".to_string());
+        }
+        let target_slots = resolve_file_public_slots(
+            target,
+            source_files,
+            records,
+            direct_bindings,
+            kind,
+            index,
+            symbols,
+            reexport_hops,
+            cache,
+            stack,
+        )?;
+        match reexport.kind {
+            HistoricalV2SourcePublicReexportKind::Wildcard => {
+                for target_slot in target_slots
+                    .into_iter()
+                    .filter(|slot| slot.name != "default")
+                {
+                    let expanded = expand_reexport_slot(file, reexport, &hop, target_slot, None)?;
+                    if direct_surfaces.contains(&expanded.binding.surface_unit_id) {
+                        continue;
+                    }
+                    if let Some(existing) = wildcard_symbols.insert(
+                        expanded.binding.surface_unit_id.clone(),
+                        expanded.binding.symbol_id.clone(),
+                    ) && existing != expanded.binding.symbol_id
+                    {
+                        return Err(format!(
+                            "historical-v2 compiler found an ambiguous wildcard export in {}",
+                            file.repository_path
+                        ));
+                    }
+                    slots.push(expanded);
+                }
+            }
+            HistoricalV2SourcePublicReexportKind::Namespace => {
+                let name = reexport.name.as_deref().ok_or_else(|| {
+                    "historical-v2 namespace re-export has no exposed name".to_string()
+                })?;
+                if target_slots.is_empty() {
+                    return Err(format!(
+                        "historical-v2 namespace re-export target has no enumerable bindings: {}",
+                        hop.target_repository_path
+                    ));
+                }
+                for target_slot in target_slots {
+                    let expanded =
+                        expand_reexport_slot(file, reexport, &hop, target_slot, Some(name))?;
+                    if direct_surfaces.contains(&expanded.binding.surface_unit_id) {
+                        return Err(format!(
+                            "historical-v2 namespace re-export collides with a direct export in {}",
+                            file.repository_path
+                        ));
+                    }
+                    slots.push(expanded);
+                }
+            }
+        }
+    }
+    stack.pop();
+    slots.sort_by(|left, right| left.binding.cmp(&right.binding));
+    cache.insert(file.repository_path.clone(), slots.clone());
+    Ok(slots)
+}
+
+fn expand_reexport_slot(
+    file: &HistoricalV2SourceFile,
+    reexport: &HistoricalV2SourcePublicReexport,
+    hop: &HistoricalV2SemanticPublicReexportHop,
+    target: ResolvedPublicSlot,
+    namespace_name: Option<&str>,
+) -> Result<ResolvedPublicSlot, String> {
+    let (name, owner, namespace, kind) = namespace_name.map_or_else(
+        || {
+            (
+                target.name.clone(),
+                target.owner.clone(),
+                target.namespace,
+                target.kind,
+            )
+        },
+        |name| {
+            (
+                name.to_string(),
+                None,
+                HistoricalV2SourcePublicNamespace::Module,
+                HistoricalV2SourcePublicSymbolKind::Module,
+            )
+        },
+    );
+    let module_identity = super::history_v2_source_census::public_module_identity(
+        &file.repository_path,
+        &file.language,
+    );
+    let surface_unit_id = super::history_v2_source_census::historical_public_surface_unit_id(
+        &file.language,
+        &module_identity,
+        &name,
+        owner.as_deref(),
+        namespace,
+        kind,
+    )?;
+    let mut reexport_path = vec![reexport.reexport_unit_id.clone()];
+    reexport_path.extend(target.binding.reexport_path);
+    let declaration_unit_id = reexport_expansion_declaration_unit_id(
+        &surface_unit_id,
+        &file.repository_path,
+        &target.binding.origin_declaration_unit_id,
+        &target.binding.symbol_id,
+        &reexport_path,
+    )?;
+    Ok(ResolvedPublicSlot {
+        name,
+        owner,
+        namespace,
+        kind,
+        binding: HistoricalV2SemanticPublicBinding {
+            indexer: hop.indexer,
+            surface_unit_id,
+            declaration_unit_id,
+            origin_declaration_unit_id: target.binding.origin_declaration_unit_id,
+            reexport_path,
+            repository_path: file.repository_path.clone(),
+            symbol_id: target.binding.symbol_id,
+            binding: HistoricalV2SemanticPublicBindingKind::ReexportExpansion,
+            position_encoding: hop.position_encoding,
+            compiler_anchor: hop.compiler_anchor.clone(),
+        },
+    })
+}
+
+fn reexport_expansion_declaration_unit_id(
+    surface_unit_id: &str,
+    repository_path: &str,
+    origin_declaration_unit_id: &str,
+    symbol_id: &str,
+    reexport_path: &[String],
+) -> Result<String, String> {
+    hash_json(&(
+        "sniffbench-historical-v2-public-reexport-expansion-v1",
+        surface_unit_id,
+        repository_path,
+        origin_declaration_unit_id,
+        symbol_id,
+        reexport_path,
+    ))
+    .map(|hash| format!("h2x-v1:{hash}"))
+}
+
+fn resolve_public_reexport<'a>(
+    file: &HistoricalV2SourceFile,
+    reexport: &HistoricalV2SourcePublicReexport,
+    source: &str,
+    document: &crate::semantic_index::SemanticDocument,
+    kind: SemanticIndexerKind,
+    index: &'a SemanticIndex,
+) -> Result<(HistoricalV2SemanticPublicReexportHop, &'a SemanticSymbol), String> {
+    let location = reexport_location(file, reexport, source, document.position_encoding)?;
+    let occurrences = document
+        .occurrences
+        .iter()
+        .filter(|occurrence| occurrence.range == location.range)
+        .collect::<Vec<_>>();
+    let [occurrence] = occurrences.as_slice() else {
+        return Err(format!(
+            "historical-v2 compiler emitted {} occurrence(s) at re-export {}",
+            occurrences.len(),
+            reexport.reexport_unit_id
+        ));
+    };
+    let symbol_id = occurrence.symbol.as_ref().ok_or_else(|| {
+        format!(
+            "historical-v2 compiler left re-export {} unresolved",
+            reexport.reexport_unit_id
+        )
+    })?;
+    let symbol = index.symbols.get(symbol_id).ok_or_else(|| {
+        format!(
+            "historical-v2 re-export points to missing compiler module {}",
+            symbol_id.0
+        )
+    })?;
+    if symbol.origin != SemanticSymbolOrigin::Repository
+        || !symbol.ambiguity_notes.is_empty()
+        || !matches!(
+            symbol.kind.category,
+            SemanticSymbolCategory::Module
+                | SemanticSymbolCategory::Namespace
+                | SemanticSymbolCategory::Package
+        )
+    {
+        return Err(format!(
+            "historical-v2 re-export {} has no unambiguous repository module",
+            reexport.reexport_unit_id
+        ));
+    }
+    let targets = symbol
+        .definitions
+        .iter()
+        .map(|definition| definition.document.0.clone())
+        .collect::<BTreeSet<_>>();
+    if targets.len() != 1 {
+        return Err(format!(
+            "historical-v2 compiler resolved re-export {} to {} module document(s)",
+            reexport.reexport_unit_id,
+            targets.len()
+        ));
+    }
+    let target_repository_path = targets.iter().next().unwrap();
+    if !index
+        .documents
+        .contains_key(&RepositoryPath(target_repository_path.clone()))
+    {
+        return Err(format!(
+            "historical-v2 compiler omitted re-export target document {}",
+            target_repository_path
+        ));
+    }
+    Ok((
+        HistoricalV2SemanticPublicReexportHop {
+            indexer: indexer_kind(kind),
+            reexport_unit_id: reexport.reexport_unit_id.clone(),
+            repository_path: file.repository_path.clone(),
+            target_repository_path: target_repository_path.clone(),
+            module_symbol_id: symbol.id.0.clone(),
+            position_encoding: document.position_encoding,
+            compiler_anchor: flatten_location(&location),
+        },
+        symbol,
+    ))
+}
+
+fn reexport_location(
+    file: &HistoricalV2SourceFile,
+    reexport: &HistoricalV2SourcePublicReexport,
+    source: &str,
+    encoding: SemanticPositionEncoding,
+) -> Result<SemanticLocation, String> {
+    let range = reexport.identifier;
+    let valid_range = range.start < range.end
+        && range.end <= source.len()
+        && source.is_char_boundary(range.start)
+        && source.is_char_boundary(range.end);
+    let valid_text = valid_range
+        && match reexport.kind {
+            HistoricalV2SourcePublicReexportKind::Wildcard => {
+                let text = &source[range.start..range.end];
+                text.len() >= 2
+                    && matches!(
+                        (text.as_bytes()[0], text.as_bytes()[text.len() - 1]),
+                        (b'\'', b'\'') | (b'"', b'"')
+                    )
+                    && text[1..text.len() - 1] == reexport.source_module
+            }
+            HistoricalV2SourcePublicReexportKind::Namespace => reexport
+                .name
+                .as_deref()
+                .is_some_and(|name| &source[range.start..range.end] == name),
+        };
+    if !valid_text {
+        return Err(format!(
+            "historical-v2 public re-export range changed: {}::{}",
+            file.repository_path, reexport.reexport_unit_id
+        ));
+    }
+    Ok(SemanticLocation {
+        document: RepositoryPath(file.repository_path.clone()),
+        range: SemanticSourceRange {
+            start: semantic_position_at_byte(source, range.start, encoding)?,
+            end: semantic_position_at_byte(source, range.end, encoding)?,
+        },
+    })
 }
 
 fn symbol_at_exact_definition<'a>(

@@ -13,6 +13,7 @@ pub const HISTORICAL_V2_SEMANTIC_CENSUS_SCHEMA_VERSION: u32 = 7;
 pub struct HistoricalV2SemanticSymbol {
     pub indexer: IntentionalBoundaryIndexerKind,
     pub is_public_surface: bool,
+    pub is_reexport_evidence: bool,
     pub symbol: IntentionalBoundarySemanticSymbolFacts,
 }
 
@@ -59,9 +60,23 @@ pub struct HistoricalV2SemanticPublicBinding {
     pub indexer: IntentionalBoundaryIndexerKind,
     pub surface_unit_id: String,
     pub declaration_unit_id: String,
+    pub origin_declaration_unit_id: String,
+    pub reexport_path: Vec<String>,
     pub repository_path: String,
     pub symbol_id: String,
     pub binding: HistoricalV2SemanticPublicBindingKind,
+    pub position_encoding: SemanticPositionEncoding,
+    pub compiler_anchor: IntentionalBoundarySemanticRange,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HistoricalV2SemanticPublicReexportHop {
+    pub indexer: IntentionalBoundaryIndexerKind,
+    pub reexport_unit_id: String,
+    pub repository_path: String,
+    pub target_repository_path: String,
+    pub module_symbol_id: String,
     pub position_encoding: SemanticPositionEncoding,
     pub compiler_anchor: IntentionalBoundarySemanticRange,
 }
@@ -72,12 +87,15 @@ pub struct HistoricalV2SemanticSnapshotCensus {
     pub revision: String,
     pub source_snapshot_census_sha256: String,
     pub required_document_paths: Vec<String>,
+    pub public_surface_document_paths: Vec<String>,
     pub indexers: Vec<IntentionalBoundarySemanticIndexerCensus>,
     pub methods: Vec<HistoricalV2SemanticMethod>,
     pub public_bindings: Vec<HistoricalV2SemanticPublicBinding>,
+    pub public_reexport_hops: Vec<HistoricalV2SemanticPublicReexportHop>,
     pub symbols: Vec<HistoricalV2SemanticSymbol>,
     pub symbol_count: usize,
     pub public_binding_count: usize,
+    pub public_reexport_hop_count: usize,
     pub public_symbol_count: usize,
     pub resolved_method_count: usize,
     pub compiler_excluded_method_count: usize,
