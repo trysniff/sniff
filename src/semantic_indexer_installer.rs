@@ -25,6 +25,9 @@ mod scip_java_patch;
 #[path = "semantic_indexer_scip_typescript_patch.rs"]
 mod scip_typescript_patch;
 
+#[path = "semantic_indexer_scip_python_patch.rs"]
+mod scip_python_patch;
+
 #[path = "semantic_indexer_scip_java_repacker_source.rs"]
 mod scip_java_repacker_source;
 
@@ -155,6 +158,9 @@ async fn install_source(spec: PinnedIndexer, root: &Path) -> Result<(), String> 
     }?;
     if spec.kind == crate::semantic_indexer_manifest::SemanticIndexerKind::TypeScriptJavaScript {
         scip_typescript_patch::patch_compiler_signatures(root, spec)?;
+    }
+    if spec.kind == crate::semantic_indexer_manifest::SemanticIndexerKind::Python {
+        scip_python_patch::patch_compiler_public_api(root, spec)?;
     }
     if spec.kind == crate::semantic_indexer_manifest::SemanticIndexerKind::Kotlin {
         scip_java_patch::patch_kotlin_annotation_references(root, spec).await?;

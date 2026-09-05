@@ -99,6 +99,18 @@ fn typescript_installation_identity_commits_the_signature_patch() {
     );
 }
 
+#[test]
+fn python_installation_identity_commits_the_public_api_patch() {
+    let spec = pinned_indexer(SemanticIndexerKind::Python).unwrap();
+
+    let identity = super::source_identity(spec);
+
+    assert!(
+        identity.ends_with(":sniff-public-api-patch-compiler-public-api-v1"),
+        "{identity}"
+    );
+}
+
 #[cfg(windows)]
 #[test]
 fn windows_rust_installation_requires_the_pinned_cargo_companion() {
