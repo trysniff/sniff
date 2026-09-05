@@ -419,6 +419,397 @@ fn semantic_validation_rejects_a_retyped_public_reference() {
 }
 
 #[test]
+fn compiler_reexports_expand_wildcards_chains_and_namespaces_exhaustively() {
+    let fixture = reexport_fixture();
+    let changed_indexers = BTreeSet::from([SemanticIndexerKind::TypeScriptJavaScript]);
+    let required_paths = fixture_required_paths(&fixture.source);
+
+    let snapshot = build_semantic_snapshot(
+        fixture.root.path(),
+        &fixture.source,
+        &fixture.files,
+        &changed_indexers,
+        &required_paths,
+        &fixture.indexes,
+    )
+    .unwrap();
+
+    let expansions = snapshot
+        .public_bindings
+        .iter()
+        .filter(|binding| {
+            binding.binding == HistoricalV2SemanticPublicBindingKind::ReexportExpansion
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(expansions.len(), 4);
+    assert!(
+        expansions
+            .iter()
+            .any(|binding| binding.reexport_path.len() == 2)
+    );
+    let default_declaration = fixture.source.source_files[2]
+        .public_declarations
+        .iter()
+        .find(|declaration| declaration.name == "default")
+        .unwrap();
+    let default_expansions = expansions
+        .iter()
+        .filter(|binding| {
+            binding.origin_declaration_unit_id == default_declaration.declaration_unit_id
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(default_expansions.len(), 1);
+    assert_eq!(default_expansions[0].repository_path, "src/root.ts");
+    let namespace_bindings = expansions
+        .iter()
+        .filter(|binding| {
+            binding.repository_path == "src/root.ts" && binding.reexport_path.len() == 1
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(namespace_bindings.len(), 2);
+    assert_eq!(
+        namespace_bindings[0].surface_unit_id,
+        namespace_bindings[1].surface_unit_id
+    );
+    validation::validate_snapshot(
+        &fixture.source,
+        &snapshot,
+        &changed_indexers,
+        &required_paths,
+    )
+    .unwrap();
+}
+
+#[test]
+#[ignore = "requires the installed checksum-pinned scip-typescript runtime and Node.js"]
+fn pinned_typescript_provider_drives_recursive_public_reexports() {
+    let mut fixture = reexport_fixture();
+    std::fs::write(
+        fixture.root.path().join("package.json"),
+        r#"{"name":"sniff-reexport-probe","version":"1.0.0"}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        fixture.root.path().join("tsconfig.json"),
+        r#"{"compilerOptions":{"strict":true,"noEmit":true},"include":["src/**/*.ts"]}"#,
+    )
+    .unwrap();
+    let spec =
+        crate::semantic_indexer_manifest::pinned_indexer(SemanticIndexerKind::TypeScriptJavaScript)
+            .unwrap();
+    let installed = crate::semantic_indexer_installation::SemanticIndexerStore::for_user()
+        .unwrap()
+        .verify(spec)
+        .unwrap();
+    let output = fixture.root.path().join("index.scip");
+    let status = std::process::Command::new(if cfg!(windows) { "node.exe" } else { "node" })
+        .arg(&installed.entrypoint)
+        .arg("index")
+        .arg("--cwd")
+        .arg(fixture.root.path())
+        .arg("--output")
+        .arg(&output)
+        .arg("--no-progress-bar")
+        .status()
+        .unwrap();
+    assert!(status.success());
+    fixture.indexes.insert(
+        SemanticIndexerKind::TypeScriptJavaScript,
+        crate::semantic_index_scip::ingest_scip_file(fixture.root.path(), &output).unwrap(),
+    );
+    let changed_indexers = BTreeSet::from([SemanticIndexerKind::TypeScriptJavaScript]);
+    let required_paths = fixture_required_paths(&fixture.source);
+
+    let snapshot = build_semantic_snapshot(
+        fixture.root.path(),
+        &fixture.source,
+        &fixture.files,
+        &changed_indexers,
+        &required_paths,
+        &fixture.indexes,
+    )
+    .unwrap();
+
+    assert_eq!(snapshot.public_reexport_hop_count, 3);
+    assert_eq!(
+        snapshot
+            .public_bindings
+            .iter()
+            .filter(|binding| {
+                binding.binding == HistoricalV2SemanticPublicBindingKind::ReexportExpansion
+            })
+            .count(),
+        4
+    );
+    validation::validate_snapshot(
+        &fixture.source,
+        &snapshot,
+        &changed_indexers,
+        &required_paths,
+    )
+    .unwrap();
+}
+
+#[test]
+fn semantic_validation_rejects_a_recommitted_omitted_reexport_expansion() {
+    let fixture = reexport_fixture();
+    let changed_indexers = BTreeSet::from([SemanticIndexerKind::TypeScriptJavaScript]);
+    let required_paths = fixture_required_paths(&fixture.source);
+    let mut snapshot = build_semantic_snapshot(
+        fixture.root.path(),
+        &fixture.source,
+        &fixture.files,
+        &changed_indexers,
+        &required_paths,
+        &fixture.indexes,
+    )
+    .unwrap();
+    let index = snapshot
+        .public_bindings
+        .iter()
+        .position(|binding| {
+            binding.binding == HistoricalV2SemanticPublicBindingKind::ReexportExpansion
+        })
+        .unwrap();
+    snapshot.public_bindings.remove(index);
+    snapshot.public_binding_count = snapshot.public_bindings.len();
+    snapshot.semantic_snapshot_sha256 = semantic_snapshot_sha256(&snapshot).unwrap();
+
+    let error = validation::validate_snapshot(
+        &fixture.source,
+        &snapshot,
+        &changed_indexers,
+        &required_paths,
+    )
+    .unwrap_err();
+
+    assert!(error.contains("expansion set is incomplete"), "{error}");
+}
+
+#[test]
+fn semantic_validation_rejects_a_recommitted_omitted_reexport_hop() {
+    let fixture = reexport_fixture();
+    let changed_indexers = BTreeSet::from([SemanticIndexerKind::TypeScriptJavaScript]);
+    let required_paths = fixture_required_paths(&fixture.source);
+    let mut snapshot = build_semantic_snapshot(
+        fixture.root.path(),
+        &fixture.source,
+        &fixture.files,
+        &changed_indexers,
+        &required_paths,
+        &fixture.indexes,
+    )
+    .unwrap();
+    snapshot.public_reexport_hops.pop();
+    snapshot.public_reexport_hop_count = snapshot.public_reexport_hops.len();
+    snapshot.semantic_snapshot_sha256 = semantic_snapshot_sha256(&snapshot).unwrap();
+
+    let error = validation::validate_snapshot(
+        &fixture.source,
+        &snapshot,
+        &changed_indexers,
+        &required_paths,
+    )
+    .unwrap_err();
+
+    assert!(error.contains("omitted a public re-export hop"), "{error}");
+}
+
+#[test]
+fn compiler_reexport_cycles_fail_closed() {
+    let fixture = typescript_surface_fixture(
+        &[
+            ("src/a.ts", "export * from \"./b\";\n"),
+            ("src/b.ts", "export * from \"./a\";\n"),
+        ],
+        &[
+            ("src/a.ts", "./b", "src/b.ts"),
+            ("src/b.ts", "./a", "src/a.ts"),
+        ],
+    );
+
+    let error = build_semantic_snapshot(
+        fixture.root.path(),
+        &fixture.source,
+        &fixture.files,
+        &BTreeSet::from([SemanticIndexerKind::TypeScriptJavaScript]),
+        &fixture_required_paths(&fixture.source),
+        &fixture.indexes,
+    )
+    .unwrap_err();
+
+    assert!(error.contains("cyclic public re-export path"), "{error}");
+}
+
+#[test]
+fn compiler_reexport_missing_target_document_fails_closed() {
+    let mut fixture = reexport_fixture();
+    fixture
+        .indexes
+        .get_mut(&SemanticIndexerKind::TypeScriptJavaScript)
+        .unwrap()
+        .documents
+        .remove(&RepositoryPath("src/target.ts".to_string()));
+
+    let error = build_semantic_snapshot(
+        fixture.root.path(),
+        &fixture.source,
+        &fixture.files,
+        &BTreeSet::from([SemanticIndexerKind::TypeScriptJavaScript]),
+        &fixture_required_paths(&fixture.source),
+        &fixture.indexes,
+    )
+    .unwrap_err();
+
+    assert!(error.contains("omitted changed source document"), "{error}");
+}
+
+#[test]
+fn compiler_reexport_external_module_identity_fails_closed() {
+    let mut fixture = reexport_fixture();
+    let index = fixture
+        .indexes
+        .get_mut(&SemanticIndexerKind::TypeScriptJavaScript)
+        .unwrap();
+    index
+        .symbols
+        .get_mut(&SemanticSymbolId(
+            "typescript module src/target.ts".to_string(),
+        ))
+        .unwrap()
+        .origin = SemanticSymbolOrigin::External;
+
+    let error = build_semantic_snapshot(
+        fixture.root.path(),
+        &fixture.source,
+        &fixture.files,
+        &BTreeSet::from([SemanticIndexerKind::TypeScriptJavaScript]),
+        &fixture_required_paths(&fixture.source),
+        &fixture.indexes,
+    )
+    .unwrap_err();
+
+    assert!(error.contains("unambiguous repository module"), "{error}");
+}
+
+#[test]
+fn compiler_reexport_ambiguous_module_target_fails_closed() {
+    let mut fixture = reexport_fixture();
+    let index = fixture
+        .indexes
+        .get_mut(&SemanticIndexerKind::TypeScriptJavaScript)
+        .unwrap();
+    index
+        .symbols
+        .get_mut(&SemanticSymbolId(
+            "typescript module src/target.ts".to_string(),
+        ))
+        .unwrap()
+        .definitions
+        .insert(SemanticLocation {
+            document: RepositoryPath("src/barrel.ts".to_string()),
+            range: range(0, 0, 1),
+        });
+
+    let error = build_semantic_snapshot(
+        fixture.root.path(),
+        &fixture.source,
+        &fixture.files,
+        &BTreeSet::from([SemanticIndexerKind::TypeScriptJavaScript]),
+        &fixture_required_paths(&fixture.source),
+        &fixture.indexes,
+    )
+    .unwrap_err();
+
+    assert!(error.contains("2 module document(s)"), "{error}");
+}
+
+#[test]
+fn compiler_namespace_reexport_empty_target_fails_closed() {
+    let fixture = typescript_surface_fixture(
+        &[
+            (
+                "src/root.ts",
+                "export * as emptyNamespace from \"./empty\";\n",
+            ),
+            ("src/empty.ts", "export {};\n"),
+        ],
+        &[("src/root.ts", "./empty", "src/empty.ts")],
+    );
+
+    let error = build_semantic_snapshot(
+        fixture.root.path(),
+        &fixture.source,
+        &fixture.files,
+        &BTreeSet::from([SemanticIndexerKind::TypeScriptJavaScript]),
+        &fixture_required_paths(&fixture.source),
+        &fixture.indexes,
+    )
+    .unwrap_err();
+
+    assert!(error.contains("no enumerable bindings"), "{error}");
+}
+
+#[test]
+fn compiler_reexport_distinct_wildcard_symbols_fail_closed() {
+    let fixture = typescript_surface_fixture(
+        &[
+            (
+                "src/root.ts",
+                "export * from \"./left\"; export * from \"./right\";\n",
+            ),
+            ("src/left.ts", "export const duplicate = 1;\n"),
+            ("src/right.ts", "export const duplicate = 2;\n"),
+        ],
+        &[
+            ("src/root.ts", "./left", "src/left.ts"),
+            ("src/root.ts", "./right", "src/right.ts"),
+        ],
+    );
+
+    let error = build_semantic_snapshot(
+        fixture.root.path(),
+        &fixture.source,
+        &fixture.files,
+        &BTreeSet::from([SemanticIndexerKind::TypeScriptJavaScript]),
+        &fixture_required_paths(&fixture.source),
+        &fixture.indexes,
+    )
+    .unwrap_err();
+
+    assert!(error.contains("ambiguous wildcard export"), "{error}");
+}
+
+#[test]
+fn direct_export_overrides_same_named_wildcard_slot() {
+    let fixture = typescript_surface_fixture(
+        &[
+            (
+                "src/root.ts",
+                "export const duplicate = 3; export * from \"./target\";\n",
+            ),
+            ("src/target.ts", "export const duplicate = 1;\n"),
+        ],
+        &[("src/root.ts", "./target", "src/target.ts")],
+    );
+
+    let snapshot = build_semantic_snapshot(
+        fixture.root.path(),
+        &fixture.source,
+        &fixture.files,
+        &BTreeSet::from([SemanticIndexerKind::TypeScriptJavaScript]),
+        &fixture_required_paths(&fixture.source),
+        &fixture.indexes,
+    )
+    .unwrap();
+
+    assert!(snapshot.public_bindings.iter().all(|binding| {
+        binding.repository_path != "src/root.ts"
+            || binding.binding != HistoricalV2SemanticPublicBindingKind::ReexportExpansion
+    }));
+}
+
+#[test]
 fn semantic_validation_rejects_recommitted_missing_public_binding() {
     let fixture = fixture();
     let mut snapshot = build_semantic_snapshot(
@@ -1344,6 +1735,270 @@ fn reference_fixture() -> Fixture {
         source,
         files,
         indexes: BTreeMap::from([(SemanticIndexerKind::TypeScriptJavaScript, index)]),
+    }
+}
+
+fn reexport_fixture() -> Fixture {
+    typescript_surface_fixture(
+        &[
+            (
+                "src/root.ts",
+                "export * from \"./barrel\"; export * as api from \"./target\";\n",
+            ),
+            ("src/barrel.ts", "export * from \"./target\";\n"),
+            (
+                "src/target.ts",
+                "export const kept = 1; export default interface Hidden {}\n",
+            ),
+        ],
+        &[
+            ("src/root.ts", "./barrel", "src/barrel.ts"),
+            ("src/root.ts", "./target", "src/target.ts"),
+            ("src/barrel.ts", "./target", "src/target.ts"),
+        ],
+    )
+}
+
+fn typescript_surface_fixture(
+    sources: &[(&str, &str)],
+    module_targets: &[(&str, &str, &str)],
+) -> Fixture {
+    let root = tempfile::tempdir().unwrap();
+    let mut files = Vec::new();
+    let mut source_files = Vec::new();
+    let mut documents = BTreeMap::new();
+    let mut symbols = BTreeMap::new();
+
+    for (ordinal, (repository_path, source_text)) in sources.iter().enumerate() {
+        let absolute = root.path().join(repository_path);
+        std::fs::create_dir_all(absolute.parent().unwrap()).unwrap();
+        std::fs::write(&absolute, source_text).unwrap();
+        let record = crate::parser::parse_source_checked(
+            &absolute.to_string_lossy(),
+            source_text.as_bytes(),
+        )
+        .unwrap();
+        assert!(
+            record.methods.is_empty(),
+            "fixture sources must be method-free"
+        );
+        let (coverage, public_declarations, public_reexports) =
+            super::super::history_v2_source_census::source_public_declarations(
+                repository_path,
+                "typescript",
+                source_text.as_bytes(),
+            )
+            .unwrap();
+        let document_path = RepositoryPath((*repository_path).to_string());
+        let mut occurrences = Vec::new();
+        for declaration in &public_declarations {
+            let symbol_id = SemanticSymbolId(format!(
+                "typescript declaration {}",
+                declaration.declaration_unit_id
+            ));
+            let definition = SemanticLocation {
+                document: document_path.clone(),
+                range: semantic_range(declaration.identifier_positions.utf16),
+            };
+            symbols.insert(
+                symbol_id.clone(),
+                SemanticSymbol {
+                    id: symbol_id.clone(),
+                    provider_identity: symbol_id.0.clone(),
+                    display_name: Some(declaration.name.clone()),
+                    kind: SemanticSymbolKind {
+                        category: semantic_category(declaration.kind),
+                        provider_name: "fixture-declaration".to_string(),
+                    },
+                    documentation: Vec::new(),
+                    signatures: BTreeSet::new(),
+                    owner: None,
+                    definitions: BTreeSet::from([definition]),
+                    visibility: SemanticVisibility::Public,
+                    surfaces: BTreeSet::from([SemanticSurface::PublicApi]),
+                    origin: SemanticSymbolOrigin::Repository,
+                    ambiguity_notes: Vec::new(),
+                },
+            );
+            occurrences.push(SemanticOccurrence {
+                range: semantic_range(declaration.identifier_positions.utf16),
+                symbol: Some(symbol_id),
+                roles: BTreeSet::from([match declaration.binding {
+                    super::super::HistoricalV2SourcePublicBindingKind::Definition => {
+                        SemanticOccurrenceRole::Definition
+                    }
+                    super::super::HistoricalV2SourcePublicBindingKind::Reference => {
+                        SemanticOccurrenceRole::Read
+                    }
+                }]),
+                override_documentation: Vec::new(),
+            });
+        }
+        files.push(record);
+        source_files.push(super::super::HistoricalV2SourceFile {
+            repository_path: (*repository_path).to_string(),
+            object_id: format!("{ordinal:040x}"),
+            byte_length: source_text.len() as u64,
+            source_sha256: sha256(source_text.as_bytes()),
+            non_whitespace_lines: source_text
+                .lines()
+                .filter(|line| !line.trim().is_empty())
+                .count(),
+            language: "typescript".to_string(),
+            semantic_coverage: HistoricalV2SourceSemanticCoverage::Required,
+            methods: Vec::new(),
+            public_surface_coverage: coverage,
+            public_declarations,
+            public_reexports,
+        });
+        documents.insert(
+            document_path.clone(),
+            SemanticDocument {
+                path: document_path,
+                language: "typescript".to_string(),
+                position_encoding: SemanticPositionEncoding::Utf16,
+                embedded_text: None,
+                occurrences,
+            },
+        );
+    }
+
+    for (_, _, target_path) in module_targets {
+        let symbol_id = SemanticSymbolId(format!("typescript module {target_path}"));
+        symbols
+            .entry(symbol_id.clone())
+            .or_insert_with(|| SemanticSymbol {
+                id: symbol_id.clone(),
+                provider_identity: symbol_id.0.clone(),
+                display_name: Some((*target_path).to_string()),
+                kind: SemanticSymbolKind {
+                    category: SemanticSymbolCategory::Module,
+                    provider_name: "module".to_string(),
+                },
+                documentation: Vec::new(),
+                signatures: BTreeSet::new(),
+                owner: None,
+                definitions: BTreeSet::from([SemanticLocation {
+                    document: RepositoryPath((*target_path).to_string()),
+                    range: range(0, 0, 1),
+                }]),
+                visibility: SemanticVisibility::Public,
+                surfaces: BTreeSet::from([SemanticSurface::PublicApi]),
+                origin: SemanticSymbolOrigin::Repository,
+                ambiguity_notes: Vec::new(),
+            });
+    }
+    for (source_path, source_module, target_path) in module_targets {
+        let source_file = source_files
+            .iter()
+            .find(|file| file.repository_path == *source_path)
+            .unwrap();
+        let reexport = source_file
+            .public_reexports
+            .iter()
+            .find(|reexport| reexport.source_module == *source_module)
+            .unwrap();
+        documents
+            .get_mut(&RepositoryPath((*source_path).to_string()))
+            .unwrap()
+            .occurrences
+            .push(SemanticOccurrence {
+                range: semantic_range(reexport.identifier_positions.utf16),
+                symbol: Some(SemanticSymbolId(format!("typescript module {target_path}"))),
+                roles: BTreeSet::from([SemanticOccurrenceRole::Read]),
+                override_documentation: Vec::new(),
+            });
+    }
+
+    source_files.sort_by(|left, right| left.repository_path.cmp(&right.repository_path));
+    files.sort_by(|left, right| left.file_path.cmp(&right.file_path));
+    let public_declaration_count = source_files
+        .iter()
+        .map(|file| file.public_declarations.len())
+        .sum();
+    let public_reexport_count = source_files
+        .iter()
+        .map(|file| file.public_reexports.len())
+        .sum();
+    let source = HistoricalV2SourceSnapshotCensus {
+        revision: "a".repeat(40),
+        inventory_sha256: "b".repeat(64),
+        parser_census_sha256: "c".repeat(64),
+        tracked_entry_count: source_files.len(),
+        source_file_count: source_files.len(),
+        source_files,
+        method_counts_by_language: BTreeMap::from([("typescript".to_string(), 0)]),
+        method_count: 0,
+        public_declaration_count,
+        public_reexport_count,
+        snapshot_census_sha256: "e".repeat(64),
+    };
+    let index = SemanticIndex {
+        format_version: crate::semantic_index::SEMANTIC_INDEX_FORMAT_VERSION,
+        repository_root: root.path().to_string_lossy().replace('\\', "/"),
+        provenance: SemanticIndexProvenance {
+            format: "scip".to_string(),
+            tool_name: "fixture-indexer".to_string(),
+            tool_version: Some("1.0.0".to_string()),
+            arguments: Vec::new(),
+            source_text_encoding: Some(SemanticTextEncoding::Utf8),
+            invocations: vec![crate::semantic_index::SemanticIndexerInvocation {
+                arguments: Vec::new(),
+                context: Default::default(),
+                contribution: crate::semantic_index::SemanticIndexerContribution::CompleteIndex,
+                output_sha256: "0".repeat(64),
+            }],
+            diagnostics: Vec::new(),
+        },
+        documents,
+        symbols,
+        relationships: BTreeSet::new(),
+        imports: BTreeSet::new(),
+        calls: BTreeSet::new(),
+        test_relationships: BTreeSet::new(),
+        unresolved_edges: BTreeSet::new(),
+    };
+    Fixture {
+        root,
+        source,
+        files,
+        indexes: BTreeMap::from([(SemanticIndexerKind::TypeScriptJavaScript, index)]),
+    }
+}
+
+fn semantic_category(
+    kind: super::super::HistoricalV2SourcePublicSymbolKind,
+) -> SemanticSymbolCategory {
+    match kind {
+        super::super::HistoricalV2SourcePublicSymbolKind::CompilerDefined
+        | super::super::HistoricalV2SourcePublicSymbolKind::Variable => {
+            SemanticSymbolCategory::Variable
+        }
+        super::super::HistoricalV2SourcePublicSymbolKind::Callable => {
+            SemanticSymbolCategory::Callable
+        }
+        super::super::HistoricalV2SourcePublicSymbolKind::Method => SemanticSymbolCategory::Method,
+        super::super::HistoricalV2SourcePublicSymbolKind::Type => SemanticSymbolCategory::Type,
+        super::super::HistoricalV2SourcePublicSymbolKind::Module => SemanticSymbolCategory::Module,
+        super::super::HistoricalV2SourcePublicSymbolKind::Field => {
+            SemanticSymbolCategory::FieldOrProperty
+        }
+        super::super::HistoricalV2SourcePublicSymbolKind::Constant => {
+            SemanticSymbolCategory::Constant
+        }
+    }
+}
+
+fn semantic_range(range: super::super::HistoricalV2SourcePositionRange) -> SemanticSourceRange {
+    SemanticSourceRange {
+        start: SemanticPosition {
+            line: range.start.line_zero_based,
+            character: range.start.character_zero_based,
+        },
+        end: SemanticPosition {
+            line: range.end.line_zero_based,
+            character: range.end.character_zero_based,
+        },
     }
 }
 
