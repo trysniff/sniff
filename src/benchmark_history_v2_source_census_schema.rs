@@ -1,7 +1,8 @@
+use super::IntentionalBoundaryProjectModelCensus;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-pub const HISTORICAL_V2_SOURCE_CENSUS_SCHEMA_VERSION: u32 = 7;
+pub const HISTORICAL_V2_SOURCE_CENSUS_SCHEMA_VERSION: u32 = 9;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -110,6 +111,8 @@ pub struct HistoricalV2SourcePublicDeclaration {
     pub exposed_identifier_positions: HistoricalV2SourceIdentifierPositions,
     pub identifier: HistoricalV2SourceByteRange,
     pub identifier_positions: HistoricalV2SourceIdentifierPositions,
+    pub owner_identifier: Option<HistoricalV2SourceByteRange>,
+    pub owner_identifier_positions: Option<HistoricalV2SourceIdentifierPositions>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -147,6 +150,7 @@ pub struct HistoricalV2SourceSnapshotCensus {
     pub revision: String,
     pub inventory_sha256: String,
     pub parser_census_sha256: String,
+    pub cargo_project_model: IntentionalBoundaryProjectModelCensus,
     pub tracked_entry_count: usize,
     pub source_files: Vec<HistoricalV2SourceFile>,
     pub source_file_count: usize,

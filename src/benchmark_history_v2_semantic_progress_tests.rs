@@ -1,8 +1,26 @@
 use super::*;
+use crate::benchmark::{
+    INTENTIONAL_BOUNDARY_PROJECT_MODEL_CENSUS_SCHEMA_VERSION, IntentionalBoundaryProjectModelCensus,
+};
 use std::fs;
 
 fn digest(character: char) -> String {
     character.to_string().repeat(64)
+}
+
+fn empty_cargo_project_model(revision: &str) -> IntentionalBoundaryProjectModelCensus {
+    IntentionalBoundaryProjectModelCensus {
+        schema_version: INTENTIONAL_BOUNDARY_PROJECT_MODEL_CENSUS_SCHEMA_VERSION,
+        project_model_contract: "fixture".to_string(),
+        repository: "example/repository".to_string(),
+        revision: revision.to_string(),
+        inventory_sha256: digest('1'),
+        executions: Vec::new(),
+        targets: Vec::new(),
+        execution_count_by_provider: BTreeMap::new(),
+        target_count_by_status: BTreeMap::new(),
+        project_model_census_sha256: digest('0'),
+    }
 }
 
 fn source_snapshot(revision: &str, digest_character: char) -> HistoricalV2SourceSnapshotCensus {
@@ -10,6 +28,7 @@ fn source_snapshot(revision: &str, digest_character: char) -> HistoricalV2Source
         revision: revision.to_string(),
         inventory_sha256: digest('1'),
         parser_census_sha256: digest('2'),
+        cargo_project_model: empty_cargo_project_model(revision),
         tracked_entry_count: 0,
         source_files: Vec::new(),
         source_file_count: 0,
@@ -59,10 +78,12 @@ fn semantic_snapshot(
         indexers: Vec::new(),
         methods: Vec::new(),
         public_bindings: Vec::new(),
+        public_roots: Vec::new(),
         public_reexport_hops: Vec::new(),
         symbols: Vec::new(),
         symbol_count: 0,
         public_binding_count: 0,
+        public_root_count: 0,
         public_reexport_hop_count: 0,
         public_symbol_count: 0,
         resolved_method_count: 0,

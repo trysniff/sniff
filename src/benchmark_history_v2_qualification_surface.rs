@@ -32,7 +32,11 @@ fn surface_entries(
         .map(|entry| ((entry.indexer, entry.symbol.symbol_id.as_str()), entry))
         .collect::<BTreeMap<_, _>>();
     let mut aggregates = BTreeMap::new();
-    for binding in &semantic.public_bindings {
+    for binding in semantic
+        .public_bindings
+        .iter()
+        .filter(|binding| binding.externally_reachable)
+    {
         let entry = symbols
             .get(&(binding.indexer, binding.symbol_id.as_str()))
             .ok_or_else(|| {

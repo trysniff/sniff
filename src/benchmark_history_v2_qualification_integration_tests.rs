@@ -187,6 +187,7 @@ fn semantic_snapshot(
             symbols.push(HistoricalV2SemanticSymbol {
                 indexer: IntentionalBoundaryIndexerKind::Go,
                 is_public_surface: true,
+                is_public_root_evidence: false,
                 is_reexport_evidence: false,
                 symbol: symbol.clone(),
             });
@@ -198,9 +199,13 @@ fn semantic_snapshot(
                 reexport_path: Vec::new(),
                 repository_path: file.repository_path.clone(),
                 symbol_id: symbol.symbol_id.clone(),
+                owner_symbol_id: None,
+                exposing_owner_declaration_unit_id: None,
                 binding: HistoricalV2SemanticPublicBindingKind::Definition,
+                externally_reachable: true,
                 position_encoding: crate::semantic_index::SemanticPositionEncoding::Utf8,
                 compiler_anchor: symbol.definitions[0].clone(),
+                owner_compiler_anchor: None,
             });
         }
     }
@@ -220,6 +225,8 @@ fn semantic_snapshot(
         indexers: Vec::new(),
         public_binding_count: public_bindings.len(),
         public_bindings,
+        public_root_count: 0,
+        public_roots: Vec::new(),
         public_reexport_hop_count: 0,
         public_reexport_hops: Vec::new(),
         symbol_count: symbols.len(),

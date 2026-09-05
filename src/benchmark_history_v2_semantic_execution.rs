@@ -46,7 +46,8 @@ async fn census_historical_v2_semantics_typed_internal(
     source_census: &HistoricalV2SourceCensus,
     progress_root: Option<&Path>,
 ) -> Result<SemanticCensusStageResult, HistoricalV2SlotStageError> {
-    validate_historical_v2_source_census(materialization, roots, source_census).map_err(invalid)?;
+    validate_historical_v2_source_census_commitment(materialization, roots, source_census)
+        .map_err(invalid)?;
     let scope = semantic_scope(materialization, roots, source_census).map_err(infrastructure)?;
     let mut failures = Vec::new();
     let mut stage_errors = Vec::new();
