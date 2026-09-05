@@ -119,7 +119,17 @@ fn resolve_expected_file<'a>(
         .iter()
         .map(|slot| slot.binding.surface_unit_id.clone())
         .collect::<BTreeSet<_>>();
-    let mut wildcard_symbols = BTreeMap::<String, String>::new();
+    let direct_surface_last_anchors = file.public_declarations.iter().fold(
+        BTreeMap::<String, usize>::new(),
+        |mut anchors, declaration| {
+            anchors
+                .entry(declaration.surface_unit_id.clone())
+                .and_modify(|start| *start = (*start).max(declaration.identifier.start))
+                .or_insert(declaration.identifier.start);
+            anchors
+        },
+    );
+    let mut wildcard_source_surfaces = BTreeMap::<String, String>::new();
 
     for reexport in &file.public_reexports {
         let hop = hops
@@ -139,18 +149,34 @@ fn resolve_expected_file<'a>(
             resolve_expected_file(target, files, direct_bindings, hops, cache, stack)?;
         match reexport.kind {
             HistoricalV2SourcePublicReexportKind::Wildcard => {
-                for target_slot in target_slots
-                    .into_iter()
-                    .filter(|slot| slot.name != "default")
-                {
+                let mut matched = false;
+                for target_slot in target_slots.into_iter().filter(|slot| {
+                    slot.name != "default"
+                        && reexport
+                            .name
+                            .as_deref()
+                            .is_none_or(|name| slot.name == name)
+                }) {
+                    matched = true;
+                    let source_surface_unit_id = target_slot.binding.surface_unit_id.clone();
                     let expanded = expected_expanded_slot(file, reexport, hop, target_slot, None)?;
                     if direct_surfaces.contains(&expanded.binding.surface_unit_id) {
+                        if file.language == "python"
+                            && direct_surface_last_anchors
+                                .get(&expanded.binding.surface_unit_id)
+                                .is_some_and(|start| *start < reexport.directive.start)
+                        {
+                            return Err(format!(
+                                "historical-v2 semantic validation found a Python wildcard overwriting an earlier direct public binding in {}",
+                                file.repository_path
+                            ));
+                        }
                         continue;
                     }
-                    if let Some(existing) = wildcard_symbols.insert(
+                    if let Some(existing) = wildcard_source_surfaces.insert(
                         expanded.binding.surface_unit_id.clone(),
-                        expanded.binding.symbol_id.clone(),
-                    ) && existing != expanded.binding.symbol_id
+                        source_surface_unit_id.clone(),
+                    ) && existing != source_surface_unit_id
                     {
                         return Err(format!(
                             "historical-v2 semantic validation found an ambiguous wildcard export in {}",
@@ -158,6 +184,14 @@ fn resolve_expected_file<'a>(
                         ));
                     }
                     slots.push(expanded);
+                }
+                if let Some(name) = reexport.name.as_deref()
+                    && !matched
+                {
+                    return Err(format!(
+                        "historical-v2 semantic validation found Python __all__ name {name:?} absent from wildcard target {}",
+                        hop.target_repository_path
+                    ));
                 }
             }
             HistoricalV2SourcePublicReexportKind::Namespace => {

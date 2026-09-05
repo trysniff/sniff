@@ -6,6 +6,9 @@ mod go;
 #[path = "source_public_surface_js_ts.rs"]
 mod js_ts;
 
+#[path = "source_public_surface_python.rs"]
+mod python;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum SourcePublicSymbolKind {
@@ -94,6 +97,7 @@ pub(crate) fn census_source_public_surface(
         .name;
     let mut surface = match language.as_str() {
         "go" => go::census(file_path, source)?,
+        "python" => python::census(file_path, source)?,
         "typescript" | "javascript" => js_ts::census(file_path, source)?,
         _ => {
             return Err(format!(
@@ -102,7 +106,15 @@ pub(crate) fn census_source_public_surface(
         }
     };
     surface.declarations.sort();
-    surface.reexports.sort();
+    if language == "python" {
+        surface.reexports.sort_by(|left, right| {
+            left.directive
+                .cmp(&right.directive)
+                .then_with(|| left.cmp(right))
+        });
+    } else {
+        surface.reexports.sort();
+    }
     if surface
         .declarations
         .windows(2)

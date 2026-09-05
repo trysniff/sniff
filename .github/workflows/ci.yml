@@ -195,6 +195,9 @@ jobs:
             benchmark::release::history_v2_semantic::tests::pinned_typescript_provider_drives_recursive_public_reexports \
             -- --exact --ignored --test-threads=1 --nocapture
           cargo test --lib --locked \
+            benchmark::release::history_v2_semantic::tests::pinned_python_provider_drives_signatures_and_recursive_public_surfaces \
+            -- --exact --ignored --test-threads=1 --nocapture
+          cargo test --lib --locked \
             semantic_indexer_runner::go_runner::tests::live_multi_shard_go_index_preserves_calls_and_structural_implementations \
             -- --exact --ignored --test-threads=1 --nocapture
 
