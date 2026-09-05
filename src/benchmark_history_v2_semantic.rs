@@ -294,15 +294,19 @@ fn build_semantic_snapshot(
             )?);
         }
         bind_public_surface(
-            root,
-            source,
-            &indexed_files,
-            *kind,
-            index,
-            &mut symbols,
-            &mut public_bindings,
-            &mut public_reexport_hops,
-            &mut public_surface_document_paths,
+            PublicSurfaceBindingInputs {
+                root,
+                source,
+                indexed_files: &indexed_files,
+                kind: *kind,
+                index,
+            },
+            PublicSurfaceBindingOutputs {
+                symbols: &mut symbols,
+                bindings: &mut public_bindings,
+                reexport_hops: &mut public_reexport_hops,
+                public_surface_document_paths: &mut public_surface_document_paths,
+            },
         )?;
         indexers.push(summarize_index(*kind, index)?);
     }
@@ -470,7 +474,10 @@ fn retain_symbol(
 
 #[cfg(test)]
 use public_surface::semantic_position_at_byte;
-use public_surface::{bind_public_surface, reexport_expansion_declaration_unit_id};
+use public_surface::{
+    PublicSurfaceBindingInputs, PublicSurfaceBindingOutputs, bind_public_surface,
+    reexport_expansion_declaration_unit_id,
+};
 
 fn push_compiler_excluded_file_methods(
     repository_path: &str,

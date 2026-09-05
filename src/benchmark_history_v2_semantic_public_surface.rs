@@ -19,17 +19,39 @@ use crate::semantic_indexer_manifest::SemanticIndexerKind;
 use crate::types::FileRecord;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
+pub(super) struct PublicSurfaceBindingInputs<'a> {
+    pub(super) root: &'a Path,
+    pub(super) source: &'a HistoricalV2SourceSnapshotCensus,
+    pub(super) indexed_files: &'a [FileRecord],
+    pub(super) kind: SemanticIndexerKind,
+    pub(super) index: &'a SemanticIndex,
+}
+
+pub(super) struct PublicSurfaceBindingOutputs<'a> {
+    pub(super) symbols:
+        &'a mut BTreeMap<(IntentionalBoundaryIndexerKind, String), HistoricalV2SemanticSymbol>,
+    pub(super) bindings: &'a mut Vec<HistoricalV2SemanticPublicBinding>,
+    pub(super) reexport_hops: &'a mut BTreeMap<String, HistoricalV2SemanticPublicReexportHop>,
+    pub(super) public_surface_document_paths: &'a mut BTreeSet<String>,
+}
+
 pub(super) fn bind_public_surface(
-    root: &Path,
-    source: &HistoricalV2SourceSnapshotCensus,
-    indexed_files: &[FileRecord],
-    kind: SemanticIndexerKind,
-    index: &SemanticIndex,
-    symbols: &mut BTreeMap<(IntentionalBoundaryIndexerKind, String), HistoricalV2SemanticSymbol>,
-    bindings: &mut Vec<HistoricalV2SemanticPublicBinding>,
-    reexport_hops: &mut BTreeMap<String, HistoricalV2SemanticPublicReexportHop>,
-    public_surface_document_paths: &mut BTreeSet<String>,
+    inputs: PublicSurfaceBindingInputs<'_>,
+    outputs: PublicSurfaceBindingOutputs<'_>,
 ) -> Result<(), String> {
+    let PublicSurfaceBindingInputs {
+        root,
+        source,
+        indexed_files,
+        kind,
+        index,
+    } = inputs;
+    let PublicSurfaceBindingOutputs {
+        symbols,
+        bindings,
+        reexport_hops,
+        public_surface_document_paths,
+    } = outputs;
     let records = indexed_files
         .iter()
         .map(|file| Ok((file_repository_path(root, file)?, file)))
