@@ -51,6 +51,12 @@ fn surface_entries(
 }
 
 fn semantic_fingerprint(symbol: &IntentionalBoundarySemanticSymbolFacts) -> Result<String, String> {
+    if symbol.signatures.is_empty() {
+        return Err(format!(
+            "historical-v2 public compiler symbol {} has no compiler API signature",
+            symbol.symbol_id
+        ));
+    }
     let signatures = symbol
         .signatures
         .iter()
@@ -225,6 +231,19 @@ mod tests {
         assert_ne!(
             semantic_fingerprint(&base).expect("base fingerprint"),
             semantic_fingerprint(&patched).expect("patched fingerprint")
+        );
+    }
+
+    #[test]
+    fn public_surface_without_a_compiler_signature_fails_closed() {
+        let mut symbol = symbol_with_signatures(&[]);
+        symbol.symbol_id = "unsigned".to_string();
+
+        let error = semantic_fingerprint(&symbol).unwrap_err();
+
+        assert_eq!(
+            error,
+            "historical-v2 public compiler symbol unsigned has no compiler API signature"
         );
     }
 

@@ -248,6 +248,12 @@ fn source_identity(spec: PinnedIndexer) -> String {
             format!("download:{}:sha256-{}", download.url, download.sha256)
         }
     };
+    if spec.kind == SemanticIndexerKind::TypeScriptJavaScript {
+        return format!(
+            "{source}:sniff-signature-patch-{}",
+            crate::semantic_indexer_manifest::SCIP_TYPESCRIPT_SIGNATURE_PATCH_ID
+        );
+    }
     if spec.kind == SemanticIndexerKind::Kotlin {
         let source = format!(
             "{source}:sniff-kotlin-patch-{}",
