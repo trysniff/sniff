@@ -88,6 +88,14 @@ pub(super) fn census_historical_v2_node_package_surfaces(
                 .collect::<Vec<_>>();
             let mut exposure = HistoricalV2NodePackageExposure {
                 exposure_id: String::new(),
+                surface_slot_id: node_package_surface_slot_id(
+                    parsed.package_name.as_deref(),
+                    &entry.repository_path,
+                    map_entry_kind(parsed_exposure.entry_kind),
+                    &parsed_exposure.public_subpath,
+                    &conditions,
+                    &parsed_exposure.fallback_indices,
+                )?,
                 manifest_repository_path: entry.repository_path.clone(),
                 manifest_object_id: entry.object_id.clone(),
                 package_name: parsed.package_name.clone(),
@@ -245,6 +253,7 @@ fn exposure_id(exposure: &HistoricalV2NodePackageExposure) -> Result<String, Str
         "sniffbench-historical-v2-node-package-exposure-v1",
         &exposure.manifest_repository_path,
         &exposure.manifest_object_id,
+        &exposure.surface_slot_id,
         &exposure.package_name,
         exposure.entry_kind,
         &exposure.public_subpath,
@@ -257,6 +266,33 @@ fn exposure_id(exposure: &HistoricalV2NodePackageExposure) -> Result<String, Str
         &exposure.target_object_id,
     ))
     .map(|hash| format!("h2ne-v1:{hash}"))
+}
+
+fn node_package_surface_slot_id(
+    package_name: Option<&str>,
+    manifest_repository_path: &str,
+    entry_kind: HistoricalV2NodePackageEntryKind,
+    public_subpath: &str,
+    conditions: &[HistoricalV2NodePackageCondition],
+    fallback_indices: &[usize],
+) -> Result<String, String> {
+    let package_identity = package_name.map_or_else(
+        || ("manifest_path", manifest_repository_path),
+        |name| ("package_name", name),
+    );
+    let condition_identity = conditions
+        .iter()
+        .map(|condition| (condition.name.as_str(), condition.ordinal))
+        .collect::<Vec<_>>();
+    hash_json(&(
+        "sniffbench-historical-v2-node-package-surface-slot-v1",
+        package_identity,
+        entry_kind,
+        public_subpath,
+        condition_identity,
+        fallback_indices,
+    ))
+    .map(|hash| format!("h2nes-v1:{hash}"))
 }
 
 fn node_package_surface_census_sha256(

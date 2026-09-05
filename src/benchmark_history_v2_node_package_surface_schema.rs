@@ -2,7 +2,7 @@ use super::IntentionalBoundarySemanticRange;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-pub const HISTORICAL_V2_NODE_PACKAGE_SURFACE_CENSUS_SCHEMA_VERSION: u32 = 1;
+pub const HISTORICAL_V2_NODE_PACKAGE_SURFACE_CENSUS_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -34,6 +34,7 @@ pub struct HistoricalV2NodePackageCondition {
 #[serde(deny_unknown_fields)]
 pub struct HistoricalV2NodePackageExposure {
     pub exposure_id: String,
+    pub surface_slot_id: String,
     pub manifest_repository_path: String,
     pub manifest_object_id: String,
     pub package_name: Option<String>,
