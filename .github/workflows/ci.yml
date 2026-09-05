@@ -192,6 +192,9 @@ jobs:
             semantic_indexer_installer::scip_typescript_patch::tests::patched_provider_emits_exact_public_overload_signatures \
             -- --exact --ignored --test-threads=1 --nocapture
           cargo test --lib --locked \
+            benchmark::release::history_v2_semantic::tests::pinned_typescript_provider_drives_recursive_public_reexports \
+            -- --exact --ignored --test-threads=1 --nocapture
+          cargo test --lib --locked \
             semantic_indexer_runner::go_runner::tests::live_multi_shard_go_index_preserves_calls_and_structural_implementations \
             -- --exact --ignored --test-threads=1 --nocapture
 
