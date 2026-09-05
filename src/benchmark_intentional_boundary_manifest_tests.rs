@@ -301,6 +301,100 @@ fn package_scripts_reject_non_string_commands() {
 }
 
 #[test]
+fn node_package_exports_preserve_subpaths_conditions_fallbacks_and_exact_spans() {
+    let package = r#"{
+  "name": "@example/pkg",
+  "private": true,
+  "exports": {
+    ".": {
+      "types": "./types/index.d.ts",
+      "import": [null, {"development": "./src/dev.ts"}, "./dist/index.js"],
+      "default": "./dist/index.js"
+    },
+    "./feature": "./src/feature.ts"
+  },
+  "main": "./legacy.cjs",
+  "module": "./legacy.mjs",
+  "types": "./legacy.d.ts"
+}"#;
+
+    let parsed = node::parse_node_package_json("packages/pkg/package.json", package).unwrap();
+
+    assert_eq!(parsed.package_name.as_deref(), Some("@example/pkg"));
+    assert!(parsed.private);
+    assert!(parsed.has_exports);
+    assert_eq!(parsed.exposures.len(), 8);
+    assert_eq!(parsed.declarations.len(), 8);
+    let development = parsed
+        .exposures
+        .iter()
+        .find(|exposure| exposure.target == "./src/dev.ts")
+        .unwrap();
+    assert_eq!(development.public_subpath, ".");
+    assert_eq!(development.fallback_indices, vec![1]);
+    assert_eq!(
+        development
+            .conditions
+            .iter()
+            .map(|condition| (condition.name.as_str(), condition.ordinal))
+            .collect::<Vec<_>>(),
+        vec![("import", 1), ("development", 0)]
+    );
+    assert_eq!(
+        &package[development.target_span.clone()],
+        "\"./src/dev.ts\""
+    );
+    assert_eq!(&package[development.public_subpath_span.clone()], "\".\"");
+    assert_eq!(
+        &package[development.conditions[0].span.clone()],
+        "\"import\""
+    );
+    let feature = parsed
+        .exposures
+        .iter()
+        .find(|exposure| exposure.public_subpath == "./feature")
+        .unwrap();
+    assert_eq!(
+        feature.entry_kind,
+        node::ParsedNodePackageEntryKind::Exports
+    );
+    assert_eq!(
+        &package[feature.public_subpath_span.clone()],
+        "\"./feature\""
+    );
+    assert!(parsed.exposures.iter().any(|exposure| {
+        exposure.entry_kind == node::ParsedNodePackageEntryKind::Module
+            && exposure.target == "./legacy.mjs"
+    }));
+}
+
+#[test]
+fn node_package_exports_fail_closed_on_inexact_maps_and_patterns() {
+    for (source, expected) in [
+        (
+            r#"{"exports":{".":"./index.js","default":"./fallback.js"}}"#,
+            "cannot mix subpath keys and condition keys",
+        ),
+        (
+            r#"{"exports":{".":{"./nested":"./index.js"}}}"#,
+            "nested subpath map",
+        ),
+        (
+            r#"{"exports":{"./features/*":"./src/features/*.js"}}"#,
+            "pattern is not yet compiler-enumerated",
+        ),
+        (
+            r#"{"exports":"./node_modules/pkg/index.js"}"#,
+            "unsupported or unsafe",
+        ),
+    ] {
+        let error = node::parse_node_package_json("package.json", source)
+            .expect_err("inexact package export must fail closed");
+        assert!(error.contains(expected), "{error}");
+    }
+}
+
+#[test]
 fn rejects_duplicate_json_keys_and_targets_that_escape_the_repository() {
     let (duplicate, revision, inventory) = repository(&[(
         "package.json",

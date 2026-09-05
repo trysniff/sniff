@@ -59,6 +59,23 @@ fn fixture_cargo_project_model(
     }
 }
 
+fn fixture_node_package_surfaces(
+    revision: &str,
+    inventory_sha256: &str,
+) -> super::super::HistoricalV2NodePackageSurfaceCensus {
+    super::super::HistoricalV2NodePackageSurfaceCensus {
+        schema_version: super::super::HISTORICAL_V2_NODE_PACKAGE_SURFACE_CENSUS_SCHEMA_VERSION,
+        contract: "fixture".to_string(),
+        repository: "example/repo".to_string(),
+        revision: revision.to_string(),
+        inventory_sha256: inventory_sha256.to_string(),
+        documents: Vec::new(),
+        exposures: Vec::new(),
+        exposure_count_by_entry_kind: BTreeMap::new(),
+        census_sha256: "9".repeat(64),
+    }
+}
+
 #[test]
 fn commits_exact_compiler_facts_for_every_historical_method() {
     let fixture = fixture();
@@ -1786,6 +1803,7 @@ fn fixture() -> Fixture {
             &"b".repeat(64),
             Some("src/lib.rs"),
         ),
+        node_package_surfaces: fixture_node_package_surfaces(&"a".repeat(40), &"b".repeat(64)),
         tracked_entry_count: 1,
         source_files: vec![super::super::HistoricalV2SourceFile {
             repository_path: "src/lib.rs".to_string(),
@@ -1943,6 +1961,7 @@ fn reference_fixture() -> Fixture {
         inventory_sha256: "b".repeat(64),
         parser_census_sha256: "c".repeat(64),
         cargo_project_model: fixture_cargo_project_model(&"a".repeat(40), &"b".repeat(64), None),
+        node_package_surfaces: fixture_node_package_surfaces(&"a".repeat(40), &"b".repeat(64)),
         tracked_entry_count: 1,
         source_files: vec![super::super::HistoricalV2SourceFile {
             repository_path: "src/index.ts".to_string(),
@@ -3288,6 +3307,7 @@ fn compiler_surface_fixture(
             &"b".repeat(64),
             rust_library_root,
         ),
+        node_package_surfaces: fixture_node_package_surfaces(&"a".repeat(40), &"b".repeat(64)),
         tracked_entry_count: source_files.len(),
         source_file_count: source_files.len(),
         source_files,
