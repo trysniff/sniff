@@ -2,6 +2,10 @@ use super::history_v2_source_census_exclusion::seal_source_census_exclusion;
 use super::intentional_boundary_inventory::{
     read_intentional_boundary_git_blobs, supported_source_git_blob_requests,
 };
+use super::intentional_boundary_project_model_cargo::census_intentional_boundary_cargo_project_models_typed;
+use super::intentional_boundary_project_model_outcome::{
+    ProjectModelDerivationError, ProjectModelDerivationErrorKind,
+};
 use super::{
     BoundaryGitEntryKind, HISTORICAL_V2_SOURCE_CENSUS_SCHEMA_VERSION, HistoricalV2Materialization,
     HistoricalV2MaterializedRoots, HistoricalV2PublicSurfaceCoverage, HistoricalV2SlotStage,
@@ -14,16 +18,17 @@ use super::{
     HistoricalV2SourcePublicReexport, HistoricalV2SourcePublicReexportKind,
     HistoricalV2SourcePublicSymbolKind, HistoricalV2SourceSemanticCoverage,
     HistoricalV2SourceSnapshotCensus, HistoricalV2SourceSnapshotSide, HistoricalV2StageResult,
-    IntentionalBoundaryRepositoryInventory, IntentionalBoundarySourceCensus,
-    census_intentional_boundary_repository, inventory_intentional_boundary_repository,
-    validate_historical_v2_materialization,
+    IntentionalBoundaryProjectModelCensus, IntentionalBoundaryRepositoryInventory,
+    IntentionalBoundarySourceCensus, census_intentional_boundary_repository,
+    inventory_intentional_boundary_repository, validate_historical_v2_materialization,
+    validate_intentional_boundary_project_model_census_commitment,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::path::Path;
 
-const SOURCE_CENSUS_CONTRACT: &str = "sniffbench-historical-v2-source-census-v7";
+const SOURCE_CENSUS_CONTRACT: &str = "sniffbench-historical-v2-source-census-v9";
 pub(super) const PARSER_ERROR_LIMIT: usize = 4 * 1024;
 type SourceCensusStageResult =
     HistoricalV2StageResult<HistoricalV2SourceCensus, HistoricalV2SourceCensusExclusion>;
@@ -91,18 +96,38 @@ pub fn census_historical_v2_sources_typed(
         &patched_inventory,
     )
     .map_err(infrastructure)?;
+    let base_cargo_project_model = census_intentional_boundary_cargo_project_models_typed(
+        &inventory_repository,
+        &materialization.base_revision,
+        &roots.base_root,
+        &base_inventory,
+    )
+    .map_err(project_model_stage_error)?;
+    let patched_cargo_project_model = census_intentional_boundary_cargo_project_models_typed(
+        &inventory_repository,
+        &materialization.patched_commit_oid,
+        &roots.patched_root,
+        &patched_inventory,
+    )
+    .map_err(project_model_stage_error)?;
 
     let mut census = HistoricalV2SourceCensus {
         schema_version: HISTORICAL_V2_SOURCE_CENSUS_SCHEMA_VERSION,
         source_census_contract: SOURCE_CENSUS_CONTRACT.to_string(),
         canonical_repository: materialization.canonical_repository.clone(),
         materialization_sha256: materialization.materialization_sha256.clone(),
-        base: project_snapshot(&roots.base_root, &base_inventory, &base_parser_census)
-            .map_err(infrastructure)?,
+        base: project_snapshot(
+            &roots.base_root,
+            &base_inventory,
+            &base_parser_census,
+            base_cargo_project_model,
+        )
+        .map_err(infrastructure)?,
         patched: project_snapshot(
             &roots.patched_root,
             &patched_inventory,
             &patched_parser_census,
+            patched_cargo_project_model,
         )
         .map_err(infrastructure)?,
         source_census_sha256: String::new(),
@@ -126,6 +151,69 @@ pub fn validate_historical_v2_source_census(
     };
     if census != &expected {
         return Err("historical-v2 source census changed".to_string());
+    }
+    Ok(())
+}
+
+pub fn validate_historical_v2_source_census_commitment(
+    materialization: &HistoricalV2Materialization,
+    roots: &HistoricalV2MaterializedRoots,
+    census: &HistoricalV2SourceCensus,
+) -> Result<(), String> {
+    validate_historical_v2_materialization(materialization, roots)?;
+    if census.schema_version != HISTORICAL_V2_SOURCE_CENSUS_SCHEMA_VERSION
+        || census.source_census_contract != SOURCE_CENSUS_CONTRACT
+        || census.canonical_repository != materialization.canonical_repository
+        || census.materialization_sha256 != materialization.materialization_sha256
+        || census.source_census_sha256 != source_census_sha256(census)?
+    {
+        return Err("historical-v2 source census commitment changed".to_string());
+    }
+    let inventory_repository = format!("github.com/{}", materialization.canonical_repository);
+    let base_inventory = inventory_intentional_boundary_repository(
+        &inventory_repository,
+        &materialization.base_revision,
+        &roots.base_root,
+    )?;
+    let patched_inventory = inventory_intentional_boundary_repository(
+        &inventory_repository,
+        &materialization.patched_commit_oid,
+        &roots.patched_root,
+    )?;
+    validate_intentional_boundary_project_model_census_commitment(
+        &base_inventory,
+        &census.base.cargo_project_model,
+    )?;
+    validate_intentional_boundary_project_model_census_commitment(
+        &patched_inventory,
+        &census.patched.cargo_project_model,
+    )?;
+    let base_parser_census = census_intentional_boundary_repository(
+        &inventory_repository,
+        &materialization.base_revision,
+        &roots.base_root,
+        &base_inventory,
+    )?;
+    let patched_parser_census = census_intentional_boundary_repository(
+        &inventory_repository,
+        &materialization.patched_commit_oid,
+        &roots.patched_root,
+        &patched_inventory,
+    )?;
+    let expected_base = project_snapshot(
+        &roots.base_root,
+        &base_inventory,
+        &base_parser_census,
+        census.base.cargo_project_model.clone(),
+    )?;
+    let expected_patched = project_snapshot(
+        &roots.patched_root,
+        &patched_inventory,
+        &patched_parser_census,
+        census.patched.cargo_project_model.clone(),
+    )?;
+    if census.base != expected_base || census.patched != expected_patched {
+        return Err("historical-v2 source census commitment changed".to_string());
     }
     Ok(())
 }
@@ -240,6 +328,7 @@ fn project_snapshot(
     root: &Path,
     inventory: &IntentionalBoundaryRepositoryInventory,
     parser_census: &IntentionalBoundarySourceCensus,
+    cargo_project_model: IntentionalBoundaryProjectModelCensus,
 ) -> Result<HistoricalV2SourceSnapshotCensus, String> {
     if inventory.revision != parser_census.revision
         || inventory.inventory_sha256 != parser_census.inventory_sha256
@@ -341,6 +430,7 @@ fn project_snapshot(
         revision: inventory.revision.clone(),
         inventory_sha256: inventory.inventory_sha256.clone(),
         parser_census_sha256: parser_census.census_sha256.clone(),
+        cargo_project_model,
         tracked_entry_count: inventory.tracked_entries.len(),
         source_file_count: source_files.len(),
         source_files,
@@ -366,7 +456,10 @@ pub(super) fn source_public_declarations(
     ),
     String,
 > {
-    if !matches!(language, "go" | "python" | "typescript" | "javascript") {
+    if !matches!(
+        language,
+        "go" | "python" | "rust" | "typescript" | "javascript"
+    ) {
         return Ok((
             HistoricalV2PublicSurfaceCoverage::UnsupportedLanguage,
             Vec::new(),
@@ -431,7 +524,16 @@ pub(super) fn source_public_declarations(
                 start: declaration.compiler_anchor.start,
                 end: declaration.compiler_anchor.end,
             };
-            let identifier_positions = identifier_positions(source_text, identifier)?;
+            let identifier_coordinate_positions = identifier_positions(source_text, identifier)?;
+            let owner_identifier = declaration.owner_compiler_anchor.map(|range| {
+                HistoricalV2SourceByteRange {
+                    start: range.start,
+                    end: range.end,
+                }
+            });
+            let owner_identifier_positions = owner_identifier
+                .map(|range| identifier_positions(source_text, range))
+                .transpose()?;
             let namespace = match declaration.namespace {
                 crate::source_public_surface::SourcePublicNamespace::Module => {
                     HistoricalV2SourcePublicNamespace::Module
@@ -453,15 +555,16 @@ pub(super) fn source_public_declarations(
                 kind,
             )?;
             let declaration_unit_id = hash_json(&(
-                "sniffbench-historical-v2-public-declaration-v3",
+                "sniffbench-historical-v2-public-declaration-v4",
                 surface_unit_id.as_str(),
                 repository_path,
                 exposed_identifier,
                 identifier,
+                owner_identifier,
                 binding,
                 declaration.source_module.as_deref(),
             ))
-            .map(|hash| format!("h2d-v3:{hash}"))?;
+            .map(|hash| format!("h2d-v4:{hash}"))?;
             Ok(HistoricalV2SourcePublicDeclaration {
                 surface_unit_id,
                 declaration_unit_id,
@@ -475,7 +578,9 @@ pub(super) fn source_public_declarations(
                 exposed_identifier,
                 exposed_identifier_positions,
                 identifier,
-                identifier_positions,
+                identifier_positions: identifier_coordinate_positions,
+                owner_identifier,
+                owner_identifier_positions,
             })
         })
         .collect::<Result<Vec<_>, String>>()?;
@@ -556,6 +661,28 @@ pub(super) fn historical_public_surface_unit_id(
         kind,
     ))
     .map(|hash| format!("h2s-v4:{hash}"))
+}
+
+pub(super) fn historical_public_owner_member_surface_unit_id(
+    owner_surface_unit_id: &str,
+    source_owner: &str,
+    name: &str,
+    namespace: HistoricalV2SourcePublicNamespace,
+    kind: HistoricalV2SourcePublicSymbolKind,
+) -> Result<String, String> {
+    let nested_owner = source_owner
+        .split_once("::")
+        .map(|(_, nested)| nested)
+        .unwrap_or("");
+    hash_json(&(
+        "sniffbench-historical-v2-public-owner-member-surface-v1",
+        owner_surface_unit_id,
+        nested_owner,
+        name,
+        namespace,
+        kind,
+    ))
+    .map(|hash| format!("h2om-v1:{hash}"))
 }
 
 pub(super) fn public_module_identity(repository_path: &str, language: &str) -> String {
@@ -717,12 +844,14 @@ fn snapshot_census_sha256(value: &HistoricalV2SourceSnapshotCensus) -> Result<St
         &value.revision,
         &value.inventory_sha256,
         &value.parser_census_sha256,
+        &value.cargo_project_model,
         value.tracked_entry_count,
         &value.source_files,
         value.source_file_count,
         &value.method_counts_by_language,
         value.method_count,
         value.public_declaration_count,
+        value.public_reexport_count,
     ))
 }
 
@@ -752,6 +881,28 @@ fn invalid(detail: impl Into<String>) -> HistoricalV2SlotStageError {
         stage: HistoricalV2SlotStage::SourceCensus,
         kind: HistoricalV2SlotStageErrorKind::InvalidInput,
         detail: detail.into(),
+    }
+}
+
+fn project_model_stage_error(error: ProjectModelDerivationError) -> HistoricalV2SlotStageError {
+    let kind = match error.kind {
+        ProjectModelDerivationErrorKind::InvalidInput => {
+            HistoricalV2SlotStageErrorKind::InvalidInput
+        }
+        ProjectModelDerivationErrorKind::InfrastructureUnavailable => {
+            HistoricalV2SlotStageErrorKind::InfrastructureUnavailable
+        }
+        ProjectModelDerivationErrorKind::InfrastructureFailed
+        | ProjectModelDerivationErrorKind::UnsupportedProjectShape
+        | ProjectModelDerivationErrorKind::ProviderRejectedRepository
+        | ProjectModelDerivationErrorKind::ProviderOutputIncomplete => {
+            HistoricalV2SlotStageErrorKind::InfrastructureFailed
+        }
+    };
+    HistoricalV2SlotStageError {
+        stage: HistoricalV2SlotStage::SourceCensus,
+        kind,
+        detail: format!("historical-v2 Cargo project model failed: {}", error.detail),
     }
 }
 

@@ -15,7 +15,7 @@ use super::{
     HistoricalV2SemanticSymbol, HistoricalV2SlotStage, HistoricalV2SlotStageError,
     HistoricalV2SlotStageErrorKind, HistoricalV2SourceCensus, HistoricalV2SourceSemanticCoverage,
     HistoricalV2SourceSnapshotCensus, HistoricalV2StageResult, IntentionalBoundaryIndexerKind,
-    IntentionalBoundaryMethodCensusEntry, validate_historical_v2_source_census,
+    IntentionalBoundaryMethodCensusEntry, validate_historical_v2_source_census_commitment,
 };
 use crate::semantic_index::{SemanticIndex, SemanticResolution, SemanticSymbol};
 use crate::semantic_indexer_manifest::SemanticIndexerKind;
@@ -30,7 +30,7 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-const SEMANTIC_CENSUS_CONTRACT: &str = "sniffbench-historical-v2-compiler-semantic-census-v7";
+const SEMANTIC_CENSUS_CONTRACT: &str = "sniffbench-historical-v2-compiler-semantic-census-v10";
 const UNCHANGED_DOCUMENT_EXCLUSION: &str =
     "compiler omitted an unchanged source document outside the exact historical patch";
 const UNTOUCHED_LANGUAGE_EXCLUSION: &str =
@@ -242,6 +242,7 @@ fn build_semantic_snapshot(
     let mut methods = Vec::<HistoricalV2SemanticMethod>::with_capacity(source.method_count);
     let mut symbols = BTreeMap::new();
     let mut public_bindings = Vec::new();
+    let mut public_roots = Vec::new();
     let mut public_reexport_hops = BTreeMap::new();
     let mut public_surface_document_paths = BTreeSet::new();
     let mut indexers = Vec::with_capacity(indexes.len());
@@ -304,6 +305,7 @@ fn build_semantic_snapshot(
             PublicSurfaceBindingOutputs {
                 symbols: &mut symbols,
                 bindings: &mut public_bindings,
+                roots: &mut public_roots,
                 reexport_hops: &mut public_reexport_hops,
                 public_surface_document_paths: &mut public_surface_document_paths,
             },
@@ -333,6 +335,10 @@ fn build_semantic_snapshot(
     }
     methods.sort_by(|left, right| left.parser_unit_id.cmp(&right.parser_unit_id));
     public_bindings.sort();
+    public_roots.sort();
+    if public_roots.windows(2).any(|pair| pair[0] == pair[1]) {
+        return Err("historical-v2 public roots are repeated".to_string());
+    }
     if public_bindings
         .windows(2)
         .any(|pair| pair[0].declaration_unit_id == pair[1].declaration_unit_id)
@@ -373,6 +379,8 @@ fn build_semantic_snapshot(
         methods,
         public_binding_count: public_bindings.len(),
         public_bindings,
+        public_root_count: public_roots.len(),
+        public_roots,
         public_reexport_hop_count: public_reexport_hops.len(),
         public_reexport_hops,
         symbol_count: symbols.len(),
@@ -422,7 +430,7 @@ fn flatten_historical_method(
                     value.0
                 )
             })?;
-            retain_symbol(symbols, indexer, symbol, false, false)?;
+            retain_symbol(symbols, indexer, symbol, false, false, false)?;
             HistoricalV2SemanticMethodStatus::Resolved {
                 symbol_id: value.0.clone(),
                 joined_definition: binding.definition.as_ref().map(flatten_location),
@@ -445,6 +453,7 @@ fn retain_symbol(
     indexer: IntentionalBoundaryIndexerKind,
     symbol: &SemanticSymbol,
     is_public_surface: bool,
+    is_public_root_evidence: bool,
     is_reexport_evidence: bool,
 ) -> Result<(), String> {
     let key = (indexer, symbol.id.0.clone());
@@ -457,6 +466,7 @@ fn retain_symbol(
             ));
         }
         existing.is_public_surface |= is_public_surface;
+        existing.is_public_root_evidence |= is_public_root_evidence;
         existing.is_reexport_evidence |= is_reexport_evidence;
         return Ok(());
     }
@@ -465,6 +475,7 @@ fn retain_symbol(
         HistoricalV2SemanticSymbol {
             indexer,
             is_public_surface,
+            is_public_root_evidence,
             is_reexport_evidence,
             symbol: facts,
         },

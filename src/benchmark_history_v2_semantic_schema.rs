@@ -6,13 +6,14 @@ use super::{
 use crate::semantic_index::SemanticPositionEncoding;
 use serde::{Deserialize, Serialize};
 
-pub const HISTORICAL_V2_SEMANTIC_CENSUS_SCHEMA_VERSION: u32 = 7;
+pub const HISTORICAL_V2_SEMANTIC_CENSUS_SCHEMA_VERSION: u32 = 10;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HistoricalV2SemanticSymbol {
     pub indexer: IntentionalBoundaryIndexerKind,
     pub is_public_surface: bool,
+    pub is_public_root_evidence: bool,
     pub is_reexport_evidence: bool,
     pub symbol: IntentionalBoundarySemanticSymbolFacts,
 }
@@ -52,6 +53,7 @@ pub enum HistoricalV2SemanticPublicBindingKind {
     Definition,
     Reference,
     ReexportExpansion,
+    OwnerExpansion,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -64,9 +66,13 @@ pub struct HistoricalV2SemanticPublicBinding {
     pub reexport_path: Vec<String>,
     pub repository_path: String,
     pub symbol_id: String,
+    pub owner_symbol_id: Option<String>,
+    pub exposing_owner_declaration_unit_id: Option<String>,
     pub binding: HistoricalV2SemanticPublicBindingKind,
+    pub externally_reachable: bool,
     pub position_encoding: SemanticPositionEncoding,
     pub compiler_anchor: IntentionalBoundarySemanticRange,
+    pub owner_compiler_anchor: Option<IntentionalBoundarySemanticRange>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -81,6 +87,15 @@ pub struct HistoricalV2SemanticPublicReexportHop {
     pub compiler_anchor: IntentionalBoundarySemanticRange,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HistoricalV2SemanticPublicRoot {
+    pub indexer: IntentionalBoundaryIndexerKind,
+    pub repository_path: String,
+    pub module_symbol_id: String,
+    pub compiler_definition: IntentionalBoundarySemanticRange,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HistoricalV2SemanticSnapshotCensus {
@@ -91,10 +106,12 @@ pub struct HistoricalV2SemanticSnapshotCensus {
     pub indexers: Vec<IntentionalBoundarySemanticIndexerCensus>,
     pub methods: Vec<HistoricalV2SemanticMethod>,
     pub public_bindings: Vec<HistoricalV2SemanticPublicBinding>,
+    pub public_roots: Vec<HistoricalV2SemanticPublicRoot>,
     pub public_reexport_hops: Vec<HistoricalV2SemanticPublicReexportHop>,
     pub symbols: Vec<HistoricalV2SemanticSymbol>,
     pub symbol_count: usize,
     pub public_binding_count: usize,
+    pub public_root_count: usize,
     pub public_reexport_hop_count: usize,
     pub public_symbol_count: usize,
     pub resolved_method_count: usize,

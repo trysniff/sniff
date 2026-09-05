@@ -37,7 +37,7 @@ fn typescript_named_reexport_commits_exposure_and_compiler_anchor() {
         b"publicName"
     );
     assert!(declaration.surface_unit_id.starts_with("h2s-v4:"));
-    assert!(declaration.declaration_unit_id.starts_with("h2d-v3:"));
+    assert!(declaration.declaration_unit_id.starts_with("h2d-v4:"));
 }
 
 #[test]
@@ -167,6 +167,50 @@ fn python_named_reference_commits_exposure_and_full_compiler_anchor() {
 }
 
 #[test]
+fn rust_public_surface_is_complete_and_keeps_module_exposure_typed() {
+    let source = b"mod hidden;\npub mod api;\npub use hidden::Thing as Alias;\npub fn run() {}\n";
+    let (coverage, declarations, reexports) =
+        source_public_declarations("src/lib.rs", "rust", source).unwrap();
+
+    assert_eq!(coverage, HistoricalV2PublicSurfaceCoverage::Complete);
+    assert!(declarations.iter().any(|declaration| {
+        declaration.name == "run"
+            && declaration.binding == HistoricalV2SourcePublicBindingKind::Definition
+    }));
+    let alias = declarations
+        .iter()
+        .find(|declaration| declaration.name == "Alias")
+        .unwrap();
+    assert_eq!(alias.target_name, "Thing");
+    assert_eq!(alias.source_module.as_deref(), Some("hidden"));
+    assert_eq!(
+        alias.binding,
+        HistoricalV2SourcePublicBindingKind::Reference
+    );
+    let module = reexports
+        .iter()
+        .find(|reexport| reexport.name.as_deref() == Some("api"))
+        .unwrap();
+    assert_eq!(module.kind, HistoricalV2SourcePublicReexportKind::Namespace);
+    assert_eq!(module.source_module, "api");
+}
+
+#[test]
+fn rust_inherent_method_commits_the_exact_compiler_owner_coordinates() {
+    let source = b"pub struct Root;\nimpl crate::Root { pub fn run(&self) {} }\n";
+    let (_, declarations, _) = source_public_declarations("src/lib.rs", "rust", source).unwrap();
+    let method = declarations
+        .iter()
+        .find(|declaration| declaration.name == "run")
+        .unwrap();
+    let owner = method.owner_identifier.unwrap();
+
+    assert_eq!(&source[owner.start..owner.end], b"Root");
+    assert_eq!(method.owner.as_deref(), Some("Root"));
+    assert!(method.owner_identifier_positions.is_some());
+}
+
+#[test]
 fn public_identifier_positions_commit_all_compiler_coordinate_systems() {
     let positions =
         identifier_positions("éPublic", HistoricalV2SourceByteRange { start: 2, end: 8 }).unwrap();
@@ -228,7 +272,7 @@ fn commits_complete_base_and_patched_source_snapshots_deterministically() {
     let second_census = census_historical_v2_sources(&second.0, &second.1).unwrap();
 
     assert_eq!(first_census, second_census);
-    assert_eq!(first_census.base.tracked_entry_count, 2);
+    assert_eq!(first_census.base.tracked_entry_count, 3);
     assert_eq!(first_census.base.source_file_count, 2);
     assert_eq!(first_census.base.method_count, 2);
     assert_eq!(first_census.patched.method_count, 2);
@@ -236,6 +280,25 @@ fn commits_complete_base_and_patched_source_snapshots_deterministically() {
         first_census.base.method_counts_by_language,
         BTreeMap::from([("rust".to_string(), 2)])
     );
+    let published = first_census
+        .base
+        .cargo_project_model
+        .targets
+        .iter()
+        .filter(|target| {
+            matches!(
+                &target.target_status,
+                super::super::IntentionalBoundaryProjectModelTargetStatus::Boundary {
+                    declaration_kind:
+                        super::super::IntentionalBoundaryManifestDeclarationKind::PublishedModule,
+                    target: super::super::IntentionalBoundaryManifestTarget::RepositoryPath {
+                        repository_path,
+                    },
+                } if repository_path == "src/lib.rs"
+            )
+        })
+        .count();
+    assert_eq!(published, 1);
     assert_eq!(source_lines(&first_census.base, "src/lib.rs"), 4);
     assert_eq!(source_lines(&first_census.patched, "src/lib.rs"), 3);
     assert_ne!(
@@ -246,6 +309,7 @@ fn commits_complete_base_and_patched_source_snapshots_deterministically() {
         source_hash(&first_census.base, "tests/value.rs"),
         source_hash(&first_census.patched, "tests/value.rs")
     );
+    validate_historical_v2_source_census_commitment(&first.0, &first.1, &first_census).unwrap();
     validate_historical_v2_source_census(&first.0, &first.1, &first_census).unwrap();
 }
 
@@ -570,6 +634,11 @@ impl Fixture {
         git_ok(source.path(), &["config", "user.name", "Fixture"]);
         fs::create_dir_all(source.path().join("src")).unwrap();
         fs::create_dir_all(source.path().join("tests")).unwrap();
+        fs::write(
+            source.path().join("Cargo.toml"),
+            "[package]\nname = \"historical-v2-fixture\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
         fs::write(source.path().join("src/lib.rs"), base_source).unwrap();
         if let Some(extra_source) = extra_source {
             fs::write(source.path().join("src/non_utf8.rs"), extra_source).unwrap();
