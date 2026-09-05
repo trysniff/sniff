@@ -6,7 +6,7 @@ use std::path::Path;
 const SCIP_PYTHON_VERSION: &str = "0.6.6";
 const SCIP_PYTHON_BUNDLE: &str = "node_modules/@sourcegraph/scip-python/dist/scip-python.js";
 const UPSTREAM_SHA256: &str = "55c645ed91e34ea4a2a7b47b1c482162cf173882e335a64c48ea6e8cbdb0ec05";
-const PATCHED_SHA256: &str = "428bfa87504028d20a047df3b156b0d1e9cb1749795831a54e316dff0e018c82";
+const PATCHED_SHA256: &str = "bc6e80ae6280524b9502abb6813cd9229df840df950b7898d6d907fb2bd7ab97";
 
 const WRITER_ASSIGNMENT_BEFORE: &str = r#"visitAssignment(e){let t=!1,i="";if(38===e.leftExpression.nodeType){const s=this.evaluator.getType(e.leftExpression);if(e.typeAnnotationComment?i+=this._printExpression(e.typeAnnotationComment,!0):s&&(i+=l.getFullNameOfType(s)),null==s?void 0:s.typeAliasInfo)t=!0;else if(9===e.rightExpression.nodeType){const i=this.evaluator.getType(e.rightExpression.leftExpression);i&&(0,o.isInstantiableClass)(i)&&o.ClassType.isBuiltIn(i,["TypeVar","TypeVarTuple","ParamSpec","NewType"])&&(t=!0)}}return i&&(t&&(i+=" = ",i+=this._printExpression(e.rightExpression)),this.docstrings.set(e.id,[i])),!0}"#;
 const WRITER_ASSIGNMENT_AFTER: &str = r#"visitAssignment(e){let t=!1,i="";const s=38===e.leftExpression.nodeType?e.leftExpression:54===e.leftExpression.nodeType&&38===e.leftExpression.valueExpression.nodeType?e.leftExpression.valueExpression:void 0;if(s){const n=this.evaluator.getType(s);if(54===e.leftExpression.nodeType?i+=this._printExpression(e.leftExpression.typeAnnotation,!0):e.typeAnnotationComment?i+=this._printExpression(e.typeAnnotationComment,!0):n&&(i+=l.getFullNameOfType(n)),null==n?void 0:n.typeAliasInfo)t=!0;else if(9===e.rightExpression.nodeType){const i=this.evaluator.getType(e.rightExpression.leftExpression);i&&(0,o.isInstantiableClass)(i)&&o.ClassType.isBuiltIn(i,["TypeVar","TypeVarTuple","ParamSpec","NewType"])&&(t=!0)}}return i&&(t&&(i+=" = ",i+=this._printExpression(e.rightExpression)),this.docstrings.set(e.id,[i])),!0}"#;
@@ -29,7 +29,7 @@ const IMPORTED_MODULE_BRANCH_AFTER: &str = r#"if(t&&8===t.category){const e=i.pa
 
 const NAMESPACE_IMPORT_BEFORE: &str =
     r#"visitImportFromAs(e){return this.pushNewOccurrence(e,this.getScipSymbol(e)),!1}"#;
-const NAMESPACE_IMPORT_AFTER: &str = r#"visitImportFromAs(e){const t=this.evaluator.getDeclarationsForNameNode(e.name)||[],i=t[0]&&this.evaluator.resolveAliasDeclaration(t[0],!0),s=i&&i.path&&i.node&&[21,22,36].includes(i.node.nodeType)&&this.program.getSourceFile(i.path),n=s&&s.getModuleName(),r=n&&(a.resolve(i.path).startsWith(this.cwd)?this.projectPackage:this.moduleNameNodeToPythonPackage(e.parent.module));return this.pushNewOccurrence(e,n&&r?p.makeModuleInit(r,n):this.getScipSymbol(e)),!1}"#;
+const NAMESPACE_IMPORT_AFTER: &str = r#"visitImportFromAs(e){const t=this.getAliasedSymbolTypeForName(e,e.name.value),i=this.evaluator.getDeclarationsForNameNode(e.name)||[],s=i[0]&&this.evaluator.resolveAliasDeclarationWithInfo(i[0],!0,this.fileInfo.isStubFile),n=t&&8===t.category?t.moduleName:s&&s.declaration&&8===s.declaration.type?(r=this.program.getSourceFile(s.declaration.path),r&&r.getModuleName()):void 0,o=n&&this.getPackageInfo(e,n);var r;return this.pushNewOccurrence(e,o?p.makeModuleInit(o,n):this.getScipSymbol(e)),!1}"#;
 
 pub(super) fn patch_compiler_public_api(root: &Path, spec: PinnedIndexer) -> Result<(), String> {
     if spec.kind != SemanticIndexerKind::Python || spec.version != SCIP_PYTHON_VERSION {
@@ -147,7 +147,8 @@ mod tests {
         assert!(patched.contains("signature_documentation:i?new h.scip.Document"));
         assert!(patched.contains("_.isOverloadedFunction(r.decoratedType)"));
         assert!(patched.contains("this.program.getSourceFile(s)"));
-        assert!(patched.contains("this.program.getSourceFile(i.path)"));
+        assert!(patched.contains("this.getAliasedSymbolTypeForName(e,e.name.value)"));
+        assert!(patched.contains("this.evaluator.resolveAliasDeclarationWithInfo"));
         assert!(patch_source(&patched).is_err());
         assert!(patch_source("").is_err());
     }

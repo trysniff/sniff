@@ -366,7 +366,7 @@ pub(super) fn source_public_declarations(
     ),
     String,
 > {
-    if !matches!(language, "go" | "typescript" | "javascript") {
+    if !matches!(language, "go" | "python" | "typescript" | "javascript") {
         return Ok((
             HistoricalV2PublicSurfaceCoverage::UnsupportedLanguage,
             Vec::new(),
@@ -561,6 +561,14 @@ pub(super) fn historical_public_surface_unit_id(
 pub(super) fn public_module_identity(repository_path: &str, language: &str) -> String {
     if matches!(language, "typescript" | "javascript") {
         return repository_path.to_string();
+    }
+    if language == "python" {
+        let normalized = repository_path.replace('\\', "/");
+        let module = normalized.strip_suffix(".py").unwrap_or(&normalized);
+        return module
+            .strip_suffix("/__init__")
+            .unwrap_or(module)
+            .to_string();
     }
     Path::new(repository_path)
         .parent()

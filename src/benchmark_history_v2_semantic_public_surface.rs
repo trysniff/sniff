@@ -233,7 +233,17 @@ fn resolve_file_public_slots(
         .iter()
         .map(|slot| slot.binding.surface_unit_id.clone())
         .collect::<BTreeSet<_>>();
-    let mut wildcard_symbols = BTreeMap::<String, String>::new();
+    let direct_surface_last_anchors = file.public_declarations.iter().fold(
+        BTreeMap::<String, usize>::new(),
+        |mut anchors, declaration| {
+            anchors
+                .entry(declaration.surface_unit_id.clone())
+                .and_modify(|start| *start = (*start).max(declaration.identifier.start))
+                .or_insert(declaration.identifier.start);
+            anchors
+        },
+    );
+    let mut wildcard_source_surfaces = BTreeMap::<String, String>::new();
 
     for reexport in &file.public_reexports {
         let (hop, module_symbol) =
@@ -270,18 +280,34 @@ fn resolve_file_public_slots(
         )?;
         match reexport.kind {
             HistoricalV2SourcePublicReexportKind::Wildcard => {
-                for target_slot in target_slots
-                    .into_iter()
-                    .filter(|slot| slot.name != "default")
-                {
+                let mut matched = false;
+                for target_slot in target_slots.into_iter().filter(|slot| {
+                    slot.name != "default"
+                        && reexport
+                            .name
+                            .as_deref()
+                            .is_none_or(|name| slot.name == name)
+                }) {
+                    matched = true;
+                    let source_surface_unit_id = target_slot.binding.surface_unit_id.clone();
                     let expanded = expand_reexport_slot(file, reexport, &hop, target_slot, None)?;
                     if direct_surfaces.contains(&expanded.binding.surface_unit_id) {
+                        if file.language == "python"
+                            && direct_surface_last_anchors
+                                .get(&expanded.binding.surface_unit_id)
+                                .is_some_and(|start| *start < reexport.directive.start)
+                        {
+                            return Err(format!(
+                                "historical-v2 Python wildcard overwrites an earlier direct public binding in {}",
+                                file.repository_path
+                            ));
+                        }
                         continue;
                     }
-                    if let Some(existing) = wildcard_symbols.insert(
+                    if let Some(existing) = wildcard_source_surfaces.insert(
                         expanded.binding.surface_unit_id.clone(),
-                        expanded.binding.symbol_id.clone(),
-                    ) && existing != expanded.binding.symbol_id
+                        source_surface_unit_id.clone(),
+                    ) && existing != source_surface_unit_id
                     {
                         return Err(format!(
                             "historical-v2 compiler found an ambiguous wildcard export in {}",
@@ -289,6 +315,14 @@ fn resolve_file_public_slots(
                         ));
                     }
                     slots.push(expanded);
+                }
+                if let Some(name) = reexport.name.as_deref()
+                    && !matched
+                {
+                    return Err(format!(
+                        "historical-v2 Python __all__ name {name:?} is absent from wildcard target {}",
+                        hop.target_repository_path
+                    ));
                 }
             }
             HistoricalV2SourcePublicReexportKind::Namespace => {
@@ -449,8 +483,13 @@ fn resolve_public_reexport<'a>(
         )
     {
         return Err(format!(
-            "historical-v2 re-export {} has no unambiguous repository module",
-            reexport.reexport_unit_id
+            "historical-v2 re-export {} in {} from {:?} has no unambiguous repository module (origin={:?}, category={:?}, ambiguity={:?})",
+            reexport.reexport_unit_id,
+            file.repository_path,
+            reexport.source_module,
+            symbol.origin,
+            symbol.kind.category,
+            symbol.ambiguity_notes,
         ));
     }
     let targets = symbol
@@ -501,20 +540,49 @@ fn reexport_location(
         && source.is_char_boundary(range.start)
         && source.is_char_boundary(range.end);
     let valid_text = valid_range
+        && range.start >= reexport.directive.start
+        && range.end <= reexport.directive.end
         && match reexport.kind {
             HistoricalV2SourcePublicReexportKind::Wildcard => {
                 let text = &source[range.start..range.end];
-                text.len() >= 2
-                    && matches!(
-                        (text.as_bytes()[0], text.as_bytes()[text.len() - 1]),
-                        (b'\'', b'\'') | (b'"', b'"')
-                    )
-                    && text[1..text.len() - 1] == reexport.source_module
+                if file.language == "python" {
+                    text == reexport.source_module
+                } else {
+                    text.len() >= 2
+                        && matches!(
+                            (text.as_bytes()[0], text.as_bytes()[text.len() - 1]),
+                            (b'\'', b'\'') | (b'"', b'"')
+                        )
+                        && text[1..text.len() - 1] == reexport.source_module
+                }
             }
-            HistoricalV2SourcePublicReexportKind::Namespace => reexport
-                .name
-                .as_deref()
-                .is_some_and(|name| &source[range.start..range.end] == name),
+            HistoricalV2SourcePublicReexportKind::Namespace => {
+                let exposed = reexport.exposed_identifier;
+                let valid_exposed = exposed.is_some_and(|exposed| {
+                    exposed.start < exposed.end
+                        && exposed.start >= reexport.directive.start
+                        && exposed.end <= reexport.directive.end
+                        && exposed.end <= source.len()
+                        && reexport
+                            .name
+                            .as_deref()
+                            .is_some_and(|name| &source[exposed.start..exposed.end] == name)
+                });
+                if file.language == "python" {
+                    valid_exposed
+                        && valid_python_namespace_anchor(
+                            &source[range.start..range.end],
+                            &reexport.source_module,
+                            reexport.name.as_deref().unwrap_or_default(),
+                        )
+                } else {
+                    valid_exposed
+                        && reexport
+                            .name
+                            .as_deref()
+                            .is_some_and(|name| &source[range.start..range.end] == name)
+                }
+            }
         };
     if !valid_text {
         return Err(format!(
@@ -620,11 +688,21 @@ fn declaration_location(
         || !source.is_char_boundary(declaration.exposed_identifier.end)
         || source[declaration.exposed_identifier.start..declaration.exposed_identifier.end]
             != declaration.name
-        || &source[range.start..range.end]
-            != match declaration.binding {
-                HistoricalV2SourcePublicBindingKind::Definition => declaration.target_name.as_str(),
-                HistoricalV2SourcePublicBindingKind::Reference => declaration.name.as_str(),
+        || !match declaration.binding {
+            HistoricalV2SourcePublicBindingKind::Definition => {
+                &source[range.start..range.end] == declaration.target_name.as_str()
             }
+            HistoricalV2SourcePublicBindingKind::Reference if file.language == "python" => {
+                valid_python_alias_anchor(
+                    &source[range.start..range.end],
+                    &declaration.target_name,
+                    &declaration.name,
+                )
+            }
+            HistoricalV2SourcePublicBindingKind::Reference => {
+                &source[range.start..range.end] == declaration.name.as_str()
+            }
+        }
     {
         return Err(format!(
             "historical-v2 public declaration range changed: {}::{}",
@@ -638,6 +716,44 @@ fn declaration_location(
             end: semantic_position_at_byte(source, range.end, encoding)?,
         },
     })
+}
+
+fn valid_python_namespace_anchor(anchor: &str, source_module: &str, exposed: &str) -> bool {
+    if !source_module.starts_with('.') {
+        return anchor == source_module;
+    }
+    let target = source_module.trim_start_matches('.');
+    !target.is_empty() && valid_python_alias_anchor(anchor, target, exposed)
+}
+
+fn valid_python_alias_anchor(anchor: &str, target: &str, exposed: &str) -> bool {
+    let Ok(tokens) = rustpython_parser::lexer::lex(anchor, rustpython_parser::Mode::Module)
+        .collect::<Result<Vec<_>, _>>()
+    else {
+        return false;
+    };
+    let mut before_as = String::new();
+    let mut alias = None;
+    let mut saw_as = false;
+    for (token, _) in tokens {
+        match token {
+            rustpython_parser::Tok::Name { name } if saw_as => {
+                if alias.replace(name).is_some() {
+                    return false;
+                }
+            }
+            rustpython_parser::Tok::Name { name } => before_as.push_str(&name),
+            rustpython_parser::Tok::Dot if !saw_as => before_as.push('.'),
+            rustpython_parser::Tok::As if !saw_as => saw_as = true,
+            rustpython_parser::Tok::Newline | rustpython_parser::Tok::EndOfFile => {}
+            _ => return false,
+        }
+    }
+    before_as == target
+        && match alias {
+            Some(alias) => saw_as && alias == exposed,
+            None => !saw_as && target == exposed,
+        }
 }
 
 pub(super) fn semantic_position_at_byte(

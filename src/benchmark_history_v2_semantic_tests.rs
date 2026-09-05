@@ -569,6 +569,191 @@ fn pinned_typescript_provider_drives_recursive_public_reexports() {
 }
 
 #[test]
+#[ignore = "requires the installed checksum-pinned scip-python runtime and Node.js"]
+fn pinned_python_provider_drives_signatures_and_recursive_public_surfaces() {
+    let mut fixture = python_surface_fixture(
+        &[
+            (
+                "pkg/core.py",
+                r#"from typing import overload
+
+PUBLIC_CONSTANT: int = 7
+_PRIVATE_CONSTANT: int = 8
+
+@overload
+def parse(value: str) -> str: ...
+
+@overload
+def parse(value: int) -> int: ...
+
+def parse(value: str | int) -> str | int:
+    return value
+
+class Widget:
+    category: str = "public"
+
+    def __init__(self, name: str) -> None:
+        self.label: str = name
+
+    def render(self, prefix: str = "") -> str:
+        return prefix
+
+    @staticmethod
+    def build(name: str) -> "Widget":
+        return Widget()
+"#,
+            ),
+            ("pkg/extra.py", "class Extra:\n    pass\n"),
+            (
+                "pkg/reexports.py",
+                r#"from .core import Widget as PublicWidget
+from .extra import *
+from . import core as namespace
+
+__all__ = ["PublicWidget", "Extra", "namespace"]
+"#,
+            ),
+            (
+                "pkg/__init__.py",
+                r#"from .reexports import *
+
+__all__ = ["PublicWidget", "Extra", "namespace"]
+"#,
+            ),
+        ],
+        &[
+            ("pkg/reexports.py", ".extra", "pkg/extra.py"),
+            ("pkg/reexports.py", ".core", "pkg/core.py"),
+            ("pkg/__init__.py", ".reexports", "pkg/reexports.py"),
+        ],
+    );
+    let spec =
+        crate::semantic_indexer_manifest::pinned_indexer(SemanticIndexerKind::Python).unwrap();
+    let entrypoint = std::env::var_os("SNIFF_TEST_SCIP_PYTHON_ENTRYPOINT")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| {
+            crate::semantic_indexer_installation::SemanticIndexerStore::for_user()
+                .unwrap()
+                .verify(spec)
+                .unwrap()
+                .entrypoint
+        });
+    let output = fixture.root.path().join("index.scip");
+    let mut command = std::process::Command::new(if cfg!(windows) { "node.exe" } else { "node" });
+    if cfg!(windows) {
+        command
+            .arg("--preserve-symlinks")
+            .arg("--preserve-symlinks-main")
+            .arg("-e")
+            .arg(crate::semantic_indexer_runner::WINDOWS_SCIP_PYTHON_BOOTSTRAP)
+            .arg(&entrypoint);
+    } else {
+        command.arg(&entrypoint);
+    }
+    command
+        .arg("index")
+        .arg(".")
+        .arg("--project-name")
+        .arg("sniff-python-public-surface")
+        .arg("--project-version")
+        .arg("_")
+        .arg("--output")
+        .arg(&output)
+        .arg("--quiet");
+    if cfg!(windows) {
+        let environment = fixture.root.path().join("python-environment.json");
+        std::fs::write(&environment, "[]").unwrap();
+        command.arg("--environment").arg(environment);
+    }
+    let status = command.current_dir(fixture.root.path()).status().unwrap();
+    assert!(status.success());
+    assert!(output.is_file());
+    let expected_languages = fixture
+        .source
+        .source_files
+        .iter()
+        .map(|file| {
+            (
+                RepositoryPath(file.repository_path.clone()),
+                file.language.clone(),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let live_index = crate::semantic_index_scip::ingest_scip_file_with_expected_languages(
+        fixture.root.path(),
+        &output,
+        Some(&expected_languages),
+        Some(SemanticPositionEncoding::Utf32),
+    )
+    .unwrap();
+    fixture
+        .indexes
+        .insert(SemanticIndexerKind::Python, live_index);
+    let changed_indexers = BTreeSet::from([SemanticIndexerKind::Python]);
+    let required_paths = fixture_required_paths(&fixture.source);
+
+    let snapshot = build_semantic_snapshot(
+        fixture.root.path(),
+        &fixture.source,
+        &fixture.files,
+        &changed_indexers,
+        &required_paths,
+        &fixture.indexes,
+    )
+    .unwrap();
+
+    let parse_signatures = snapshot
+        .symbols
+        .iter()
+        .flat_map(|symbol| &symbol.symbol.signatures)
+        .filter(|signature| signature.text.contains("def parse("))
+        .map(|signature| signature.text.as_str())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(parse_signatures.len(), 2, "{parse_signatures:#?}");
+    assert!(
+        parse_signatures
+            .iter()
+            .all(|signature| signature.contains("@overload"))
+    );
+    assert_eq!(snapshot.public_reexport_hop_count, 5);
+    assert!(snapshot.public_bindings.iter().any(|binding| {
+        binding.repository_path == "pkg/__init__.py"
+            && binding.binding == HistoricalV2SemanticPublicBindingKind::ReexportExpansion
+            && binding.reexport_path.len() == 2
+    }));
+    assert!(snapshot.symbols.iter().all(|symbol| {
+        symbol.symbol.display_name.as_deref() != Some("_PRIVATE_CONSTANT")
+            || !symbol.is_public_surface
+    }));
+    let label_declaration = fixture
+        .source
+        .source_files
+        .iter()
+        .find(|file| file.repository_path == "pkg/core.py")
+        .and_then(|file| {
+            file.public_declarations.iter().find(|declaration| {
+                declaration.owner.as_deref() == Some("Widget") && declaration.name == "label"
+            })
+        })
+        .expect("instance field source declaration");
+    let label_binding = snapshot
+        .public_bindings
+        .iter()
+        .find(|binding| binding.declaration_unit_id == label_declaration.declaration_unit_id)
+        .expect("instance field compiler binding");
+    assert!(snapshot.symbols.iter().any(|symbol| {
+        symbol.symbol.symbol_id == label_binding.symbol_id && symbol.is_public_surface
+    }));
+    validation::validate_snapshot(
+        &fixture.source,
+        &snapshot,
+        &changed_indexers,
+        &required_paths,
+    )
+    .unwrap();
+}
+
+#[test]
 fn semantic_validation_rejects_a_recommitted_omitted_reexport_expansion() {
     let fixture = reexport_fixture();
     let changed_indexers = BTreeSet::from([SemanticIndexerKind::TypeScriptJavaScript]);
@@ -1781,6 +1966,323 @@ fn typescript_surface_fixture(
     sources: &[(&str, &str)],
     module_targets: &[(&str, &str, &str)],
 ) -> Fixture {
+    compiler_surface_fixture(
+        "typescript",
+        SemanticIndexerKind::TypeScriptJavaScript,
+        SemanticPositionEncoding::Utf16,
+        sources,
+        module_targets,
+    )
+}
+
+#[test]
+fn python_all_selects_only_the_named_wildcard_binding() {
+    let fixture = python_surface_fixture(
+        &[
+            (
+                "pkg/__init__.py",
+                "from .target import *\n__all__ = ['kept']\n",
+            ),
+            ("pkg/target.py", "kept: int = 1\nskipped: int = 2\n"),
+        ],
+        &[("pkg/__init__.py", ".target", "pkg/target.py")],
+    );
+    let changed_indexers = BTreeSet::from([SemanticIndexerKind::Python]);
+    let required_paths = fixture_required_paths(&fixture.source);
+
+    let snapshot = build_semantic_snapshot(
+        fixture.root.path(),
+        &fixture.source,
+        &fixture.files,
+        &changed_indexers,
+        &required_paths,
+        &fixture.indexes,
+    )
+    .unwrap();
+
+    let root_expansions = snapshot
+        .public_bindings
+        .iter()
+        .filter(|binding| {
+            binding.repository_path == "pkg/__init__.py"
+                && binding.binding == HistoricalV2SemanticPublicBindingKind::ReexportExpansion
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(root_expansions.len(), 1);
+    let kept = fixture.source.source_files[1]
+        .public_declarations
+        .iter()
+        .find(|declaration| declaration.name == "kept")
+        .unwrap();
+    assert_eq!(
+        root_expansions[0].origin_declaration_unit_id,
+        kept.declaration_unit_id
+    );
+    validation::validate_snapshot(
+        &fixture.source,
+        &snapshot,
+        &changed_indexers,
+        &required_paths,
+    )
+    .unwrap();
+}
+
+#[test]
+fn python_all_name_absent_from_wildcard_target_fails_closed() {
+    let fixture = python_surface_fixture(
+        &[
+            (
+                "pkg/__init__.py",
+                "from .target import *\n__all__ = ['missing']\n",
+            ),
+            ("pkg/target.py", "kept: int = 1\n"),
+        ],
+        &[("pkg/__init__.py", ".target", "pkg/target.py")],
+    );
+
+    let error = build_semantic_snapshot(
+        fixture.root.path(),
+        &fixture.source,
+        &fixture.files,
+        &BTreeSet::from([SemanticIndexerKind::Python]),
+        &fixture_required_paths(&fixture.source),
+        &fixture.indexes,
+    )
+    .unwrap_err();
+
+    assert!(error.contains("absent from wildcard target"), "{error}");
+}
+
+#[test]
+fn python_namespace_import_expands_the_repository_module() {
+    let fixture = python_surface_fixture(
+        &[
+            (
+                "pkg/__init__.py",
+                "from . import target as api\n__all__ = ['api']\n",
+            ),
+            ("pkg/target.py", "kept: int = 1\n"),
+        ],
+        &[("pkg/__init__.py", ".target", "pkg/target.py")],
+    );
+    let changed_indexers = BTreeSet::from([SemanticIndexerKind::Python]);
+    let required_paths = fixture_required_paths(&fixture.source);
+
+    let snapshot = build_semantic_snapshot(
+        fixture.root.path(),
+        &fixture.source,
+        &fixture.files,
+        &changed_indexers,
+        &required_paths,
+        &fixture.indexes,
+    )
+    .unwrap();
+
+    assert_eq!(snapshot.public_reexport_hop_count, 1);
+    assert_eq!(
+        snapshot
+            .public_bindings
+            .iter()
+            .filter(|binding| {
+                binding.repository_path == "pkg/__init__.py"
+                    && binding.binding == HistoricalV2SemanticPublicBindingKind::ReexportExpansion
+            })
+            .count(),
+        1
+    );
+    validation::validate_snapshot(
+        &fixture.source,
+        &snapshot,
+        &changed_indexers,
+        &required_paths,
+    )
+    .unwrap();
+}
+
+#[test]
+fn python_recursive_wildcard_preserves_one_namespace_surface() {
+    let fixture = python_surface_fixture(
+        &[
+            (
+                "pkg/__init__.py",
+                "from .reexports import *\n__all__ = ['api']\n",
+            ),
+            (
+                "pkg/reexports.py",
+                "from . import target as api\n__all__ = ['api']\n",
+            ),
+            ("pkg/target.py", "first: int = 1\nsecond: str = 'two'\n"),
+        ],
+        &[
+            ("pkg/__init__.py", ".reexports", "pkg/reexports.py"),
+            ("pkg/reexports.py", ".target", "pkg/target.py"),
+        ],
+    );
+    let changed_indexers = BTreeSet::from([SemanticIndexerKind::Python]);
+    let required_paths = fixture_required_paths(&fixture.source);
+
+    let snapshot = build_semantic_snapshot(
+        fixture.root.path(),
+        &fixture.source,
+        &fixture.files,
+        &changed_indexers,
+        &required_paths,
+        &fixture.indexes,
+    )
+    .unwrap();
+
+    let root_namespace = snapshot
+        .public_bindings
+        .iter()
+        .filter(|binding| {
+            binding.repository_path == "pkg/__init__.py"
+                && binding.binding == HistoricalV2SemanticPublicBindingKind::ReexportExpansion
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(root_namespace.len(), 2);
+    assert_eq!(
+        root_namespace
+            .iter()
+            .map(|binding| binding.surface_unit_id.as_str())
+            .collect::<BTreeSet<_>>()
+            .len(),
+        1
+    );
+    assert_eq!(
+        root_namespace
+            .iter()
+            .map(|binding| binding.symbol_id.as_str())
+            .collect::<BTreeSet<_>>()
+            .len(),
+        2
+    );
+    validation::validate_snapshot(
+        &fixture.source,
+        &snapshot,
+        &changed_indexers,
+        &required_paths,
+    )
+    .unwrap();
+}
+
+#[test]
+fn python_wildcard_after_a_colliding_direct_binding_fails_closed() {
+    let fixture = python_surface_fixture(
+        &[
+            ("pkg/__init__.py", "kept: int = 1\nfrom .target import *\n"),
+            ("pkg/target.py", "kept: int = 2\n"),
+        ],
+        &[("pkg/__init__.py", ".target", "pkg/target.py")],
+    );
+
+    let error = build_semantic_snapshot(
+        fixture.root.path(),
+        &fixture.source,
+        &fixture.files,
+        &BTreeSet::from([SemanticIndexerKind::Python]),
+        &fixture_required_paths(&fixture.source),
+        &fixture.indexes,
+    )
+    .expect_err("source-order wildcard overwrite must not produce an inexact public surface");
+
+    assert!(
+        error.contains("wildcard overwrites an earlier direct public binding"),
+        "{error}"
+    );
+}
+
+#[test]
+fn python_direct_binding_after_a_wildcard_remains_authoritative() {
+    let fixture = python_surface_fixture(
+        &[
+            ("pkg/__init__.py", "from .target import *\nkept: int = 1\n"),
+            ("pkg/target.py", "kept: int = 2\n"),
+        ],
+        &[("pkg/__init__.py", ".target", "pkg/target.py")],
+    );
+
+    let snapshot = build_semantic_snapshot(
+        fixture.root.path(),
+        &fixture.source,
+        &fixture.files,
+        &BTreeSet::from([SemanticIndexerKind::Python]),
+        &fixture_required_paths(&fixture.source),
+        &fixture.indexes,
+    )
+    .expect("later direct binding should shadow the wildcard");
+
+    assert!(!snapshot.public_bindings.iter().any(|binding| {
+        binding.repository_path == "pkg/__init__.py"
+            && binding.binding == HistoricalV2SemanticPublicBindingKind::ReexportExpansion
+    }));
+}
+
+#[test]
+fn semantic_validation_rejects_a_recommitted_omitted_python_expansion() {
+    let fixture = python_surface_fixture(
+        &[
+            (
+                "pkg/__init__.py",
+                "from .target import *\n__all__ = ['kept']\n",
+            ),
+            ("pkg/target.py", "kept: int = 1\n"),
+        ],
+        &[("pkg/__init__.py", ".target", "pkg/target.py")],
+    );
+    let changed_indexers = BTreeSet::from([SemanticIndexerKind::Python]);
+    let required_paths = fixture_required_paths(&fixture.source);
+    let mut snapshot = build_semantic_snapshot(
+        fixture.root.path(),
+        &fixture.source,
+        &fixture.files,
+        &changed_indexers,
+        &required_paths,
+        &fixture.indexes,
+    )
+    .unwrap();
+    let index = snapshot
+        .public_bindings
+        .iter()
+        .position(|binding| {
+            binding.repository_path == "pkg/__init__.py"
+                && binding.binding == HistoricalV2SemanticPublicBindingKind::ReexportExpansion
+        })
+        .unwrap();
+    snapshot.public_bindings.remove(index);
+    snapshot.public_binding_count = snapshot.public_bindings.len();
+    snapshot.semantic_snapshot_sha256 = semantic_snapshot_sha256(&snapshot).unwrap();
+
+    let error = validation::validate_snapshot(
+        &fixture.source,
+        &snapshot,
+        &changed_indexers,
+        &required_paths,
+    )
+    .unwrap_err();
+
+    assert!(error.contains("expansion set is incomplete"), "{error}");
+}
+
+fn python_surface_fixture(
+    sources: &[(&str, &str)],
+    module_targets: &[(&str, &str, &str)],
+) -> Fixture {
+    compiler_surface_fixture(
+        "python",
+        SemanticIndexerKind::Python,
+        SemanticPositionEncoding::Utf32,
+        sources,
+        module_targets,
+    )
+}
+
+fn compiler_surface_fixture(
+    language: &str,
+    indexer: SemanticIndexerKind,
+    position_encoding: SemanticPositionEncoding,
+    sources: &[(&str, &str)],
+    module_targets: &[(&str, &str, &str)],
+) -> Fixture {
     let root = tempfile::tempdir().unwrap();
     let mut files = Vec::new();
     let mut source_files = Vec::new();
@@ -1796,14 +2298,25 @@ fn typescript_surface_fixture(
             source_text.as_bytes(),
         )
         .unwrap();
-        assert!(
-            record.methods.is_empty(),
-            "fixture sources must be method-free"
-        );
+        let methods = record
+            .methods
+            .iter()
+            .enumerate()
+            .map(
+                |(method_ordinal, method)| super::super::HistoricalV2SourceMethod {
+                    parser_unit_id: format!("h2m-v1:fixture-{ordinal}-{method_ordinal}"),
+                    symbol_name: method.name.clone(),
+                    start_line: method.start_line,
+                    end_line: method.end_line,
+                    source_sha256: sha256(method.source.as_bytes()),
+                    is_exported: method.is_exported,
+                },
+            )
+            .collect::<Vec<_>>();
         let (coverage, public_declarations, public_reexports) =
             super::super::history_v2_source_census::source_public_declarations(
                 repository_path,
-                "typescript",
+                language,
                 source_text.as_bytes(),
             )
             .unwrap();
@@ -1811,12 +2324,12 @@ fn typescript_surface_fixture(
         let mut occurrences = Vec::new();
         for declaration in &public_declarations {
             let symbol_id = SemanticSymbolId(format!(
-                "typescript declaration {}",
+                "{language} declaration {}",
                 declaration.declaration_unit_id
             ));
             let definition = SemanticLocation {
                 document: document_path.clone(),
-                range: semantic_range(declaration.identifier_positions.utf16),
+                range: semantic_range(identifier_range(declaration, position_encoding)),
             };
             symbols.insert(
                 symbol_id.clone(),
@@ -1839,7 +2352,7 @@ fn typescript_surface_fixture(
                 },
             );
             occurrences.push(SemanticOccurrence {
-                range: semantic_range(declaration.identifier_positions.utf16),
+                range: semantic_range(identifier_range(declaration, position_encoding)),
                 symbol: Some(symbol_id),
                 roles: BTreeSet::from([match declaration.binding {
                     super::super::HistoricalV2SourcePublicBindingKind::Definition => {
@@ -1862,9 +2375,9 @@ fn typescript_surface_fixture(
                 .lines()
                 .filter(|line| !line.trim().is_empty())
                 .count(),
-            language: "typescript".to_string(),
+            language: language.to_string(),
             semantic_coverage: HistoricalV2SourceSemanticCoverage::Required,
-            methods: Vec::new(),
+            methods,
             public_surface_coverage: coverage,
             public_declarations,
             public_reexports,
@@ -1873,8 +2386,8 @@ fn typescript_surface_fixture(
             document_path.clone(),
             SemanticDocument {
                 path: document_path,
-                language: "typescript".to_string(),
-                position_encoding: SemanticPositionEncoding::Utf16,
+                language: language.to_string(),
+                position_encoding,
                 embedded_text: None,
                 occurrences,
             },
@@ -1882,7 +2395,7 @@ fn typescript_surface_fixture(
     }
 
     for (_, _, target_path) in module_targets {
-        let symbol_id = SemanticSymbolId(format!("typescript module {target_path}"));
+        let symbol_id = SemanticSymbolId(format!("{language} module {target_path}"));
         symbols
             .entry(symbol_id.clone())
             .or_insert_with(|| SemanticSymbol {
@@ -1921,8 +2434,8 @@ fn typescript_surface_fixture(
             .unwrap()
             .occurrences
             .push(SemanticOccurrence {
-                range: semantic_range(reexport.identifier_positions.utf16),
-                symbol: Some(SemanticSymbolId(format!("typescript module {target_path}"))),
+                range: semantic_range(reexport_identifier_range(reexport, position_encoding)),
+                symbol: Some(SemanticSymbolId(format!("{language} module {target_path}"))),
                 roles: BTreeSet::from([SemanticOccurrenceRole::Read]),
                 override_documentation: Vec::new(),
             });
@@ -1938,6 +2451,7 @@ fn typescript_surface_fixture(
         .iter()
         .map(|file| file.public_reexports.len())
         .sum();
+    let method_count = source_files.iter().map(|file| file.methods.len()).sum();
     let source = HistoricalV2SourceSnapshotCensus {
         revision: "a".repeat(40),
         inventory_sha256: "b".repeat(64),
@@ -1945,8 +2459,8 @@ fn typescript_surface_fixture(
         tracked_entry_count: source_files.len(),
         source_file_count: source_files.len(),
         source_files,
-        method_counts_by_language: BTreeMap::from([("typescript".to_string(), 0)]),
-        method_count: 0,
+        method_counts_by_language: BTreeMap::from([(language.to_string(), method_count)]),
+        method_count,
         public_declaration_count,
         public_reexport_count,
         snapshot_census_sha256: "e".repeat(64),
@@ -1980,7 +2494,29 @@ fn typescript_surface_fixture(
         root,
         source,
         files,
-        indexes: BTreeMap::from([(SemanticIndexerKind::TypeScriptJavaScript, index)]),
+        indexes: BTreeMap::from([(indexer, index)]),
+    }
+}
+
+fn identifier_range(
+    declaration: &super::super::HistoricalV2SourcePublicDeclaration,
+    encoding: SemanticPositionEncoding,
+) -> super::super::HistoricalV2SourcePositionRange {
+    match encoding {
+        SemanticPositionEncoding::Utf8 => declaration.identifier_positions.utf8,
+        SemanticPositionEncoding::Utf16 => declaration.identifier_positions.utf16,
+        SemanticPositionEncoding::Utf32 => declaration.identifier_positions.utf32,
+    }
+}
+
+fn reexport_identifier_range(
+    reexport: &super::super::HistoricalV2SourcePublicReexport,
+    encoding: SemanticPositionEncoding,
+) -> super::super::HistoricalV2SourcePositionRange {
+    match encoding {
+        SemanticPositionEncoding::Utf8 => reexport.identifier_positions.utf8,
+        SemanticPositionEncoding::Utf16 => reexport.identifier_positions.utf16,
+        SemanticPositionEncoding::Utf32 => reexport.identifier_positions.utf32,
     }
 }
 

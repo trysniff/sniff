@@ -123,6 +123,50 @@ fn typescript_module_paths_are_part_of_public_surface_identity() {
 }
 
 #[test]
+fn python_public_surface_is_complete_and_uses_module_identity() {
+    let source = b"def public(value: str) -> str:\n    return value\n";
+    let (coverage, declarations, reexports) =
+        source_public_declarations("pkg/core.py", "python", source).unwrap();
+
+    assert_eq!(coverage, HistoricalV2PublicSurfaceCoverage::Complete);
+    assert!(reexports.is_empty());
+    assert_eq!(declarations.len(), 1);
+    assert_eq!(declarations[0].name, "public");
+    assert_eq!(
+        &source[declarations[0].identifier.start..declarations[0].identifier.end],
+        b"public"
+    );
+    assert_ne!(
+        public_module_identity("pkg/core.py", "python"),
+        public_module_identity("pkg/other.py", "python")
+    );
+    assert_eq!(public_module_identity("pkg/__init__.py", "python"), "pkg");
+    assert_eq!(public_module_identity("pkg/core.py", "python"), "pkg/core");
+}
+
+#[test]
+fn python_named_reference_commits_exposure_and_full_compiler_anchor() {
+    let source = b"from .core import Widget as PublicWidget\n__all__ = ['PublicWidget']\n";
+    let (_, declarations, reexports) =
+        source_public_declarations("pkg/__init__.py", "python", source).unwrap();
+
+    assert!(reexports.is_empty());
+    assert_eq!(declarations.len(), 1);
+    let declaration = &declarations[0];
+    assert_eq!(declaration.name, "PublicWidget");
+    assert_eq!(declaration.target_name, "Widget");
+    assert_eq!(declaration.source_module.as_deref(), Some(".core"));
+    assert_eq!(
+        &source[declaration.exposed_identifier.start..declaration.exposed_identifier.end],
+        b"PublicWidget"
+    );
+    assert_eq!(
+        &source[declaration.identifier.start..declaration.identifier.end],
+        b"Widget as PublicWidget"
+    );
+}
+
+#[test]
 fn public_identifier_positions_commit_all_compiler_coordinate_systems() {
     let positions =
         identifier_positions("éPublic", HistoricalV2SourceByteRange { start: 2, end: 8 }).unwrap();
