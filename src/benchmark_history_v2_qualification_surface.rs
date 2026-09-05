@@ -1,7 +1,7 @@
 use super::{
     HistoricalV2PublicSurfaceChange, HistoricalV2PublicSurfaceDelta,
-    HistoricalV2PublicSurfaceEntry, HistoricalV2SemanticSnapshotCensus,
-    IntentionalBoundarySemanticSymbolFacts,
+    HistoricalV2PublicSurfaceEntry, HistoricalV2SemanticPublicRootOrigin,
+    HistoricalV2SemanticSnapshotCensus, IntentionalBoundarySemanticSymbolFacts,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -32,6 +32,28 @@ fn surface_entries(
         .map(|entry| ((entry.indexer, entry.symbol.symbol_id.as_str()), entry))
         .collect::<BTreeMap<_, _>>();
     let mut aggregates = BTreeMap::new();
+    for root in &semantic.public_roots {
+        let HistoricalV2SemanticPublicRootOrigin::NodePackageExposure {
+            exposure_id,
+            surface_slot_id,
+        } = &root.origin
+        else {
+            continue;
+        };
+        let entry = symbols
+            .get(&(root.indexer, root.module_symbol_id.as_str()))
+            .ok_or_else(|| {
+                "historical-v2 Node public root references a missing surface symbol".to_string()
+            })?;
+        record_surface_binding(
+            &mut aggregates,
+            root.indexer,
+            surface_slot_id,
+            exposure_id,
+            &entry.symbol.symbol_id,
+            node_package_root_fingerprint(surface_slot_id)?,
+        );
+    }
     for binding in semantic
         .public_bindings
         .iter()
@@ -52,6 +74,13 @@ fn surface_entries(
         );
     }
     Ok(finish_surface_entries(aggregates))
+}
+
+fn node_package_root_fingerprint(surface_slot_id: &str) -> Result<String, String> {
+    hash_json(&(
+        "sniffbench-historical-v2-node-package-root-surface-v1",
+        surface_slot_id,
+    ))
 }
 
 fn semantic_fingerprint(symbol: &IntentionalBoundarySemanticSymbolFacts) -> Result<String, String> {
@@ -199,8 +228,10 @@ fn hash_json(value: &impl Serialize) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::benchmark::release::HistoricalV2SemanticPublicRoot;
     use crate::benchmark::{
-        IntentionalBoundaryIndexerKind, IntentionalBoundarySemanticOrigin,
+        HistoricalV2SemanticSymbol, IntentionalBoundaryIndexerKind,
+        IntentionalBoundarySemanticOrigin, IntentionalBoundarySemanticRange,
         IntentionalBoundarySemanticSignatureFacts, IntentionalBoundarySemanticSurface,
         IntentionalBoundarySemanticSymbolCategory, IntentionalBoundarySemanticVisibility,
     };
@@ -275,6 +306,74 @@ mod tests {
         assert_eq!(entries[0].compiler_fingerprint_sha256s, ["1".repeat(64)]);
     }
 
+    #[test]
+    fn side_effect_only_node_package_root_is_a_public_surface() {
+        let entries = surface_entries(&snapshot_with_node_root(
+            "src/index.ts",
+            "package-root",
+            "exposure-a",
+            "module-a",
+        ))
+        .expect("root surface");
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].surface_unit_id, "package-root");
+        assert_eq!(entries[0].declaration_unit_ids, ["exposure-a"]);
+        assert_eq!(entries[0].symbol_ids, ["module-a"]);
+        assert_eq!(entries[0].compiler_fingerprint_sha256s.len(), 1);
+    }
+
+    #[test]
+    fn moving_a_node_package_root_preserves_its_public_slot() {
+        let base = surface_entries(&snapshot_with_node_root(
+            "src/index.ts",
+            "package-root",
+            "exposure-a",
+            "module-a",
+        ))
+        .unwrap();
+        let patched = surface_entries(&snapshot_with_node_root(
+            "src/moved.ts",
+            "package-root",
+            "exposure-b",
+            "module-b",
+        ))
+        .unwrap();
+
+        let delta = diff_entries(base, patched).unwrap();
+        assert!(delta.preserved);
+        assert!(delta.changed.is_empty());
+    }
+
+    #[test]
+    fn removing_a_side_effect_only_node_package_root_changes_the_surface() {
+        let base = surface_entries(&snapshot_with_node_root(
+            "src/index.ts",
+            "package-root",
+            "exposure-a",
+            "module-a",
+        ))
+        .unwrap();
+
+        let delta = diff_entries(base, Vec::new()).unwrap();
+        assert!(!delta.preserved);
+        assert_eq!(delta.removed.len(), 1);
+
+        let added = diff_entries(
+            Vec::new(),
+            surface_entries(&snapshot_with_node_root(
+                "src/index.ts",
+                "package-root",
+                "exposure-a",
+                "module-a",
+            ))
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(!added.preserved);
+        assert_eq!(added.added.len(), 1);
+    }
+
     fn surface_entry(symbol: &str, fingerprint: char) -> HistoricalV2PublicSurfaceEntry {
         HistoricalV2PublicSurfaceEntry {
             indexer: IntentionalBoundaryIndexerKind::Rust,
@@ -307,6 +406,61 @@ mod tests {
             surfaces: vec![IntentionalBoundarySemanticSurface::PublicApi],
             origin: IntentionalBoundarySemanticOrigin::Repository,
             ambiguity_notes: Vec::new(),
+        }
+    }
+
+    fn snapshot_with_node_root(
+        repository_path: &str,
+        surface_slot_id: &str,
+        exposure_id: &str,
+        symbol_id: &str,
+    ) -> HistoricalV2SemanticSnapshotCensus {
+        let compiler_definition = IntentionalBoundarySemanticRange {
+            repository_path: repository_path.to_string(),
+            start_line_zero_based: 0,
+            start_character_zero_based: 0,
+            end_line_zero_based: 0,
+            end_character_zero_based: 0,
+        };
+        let mut symbol = symbol_with_signatures(&[]);
+        symbol.symbol_id = symbol_id.to_string();
+        symbol.category = IntentionalBoundarySemanticSymbolCategory::Module;
+        symbol.definitions = vec![compiler_definition.clone()];
+        HistoricalV2SemanticSnapshotCensus {
+            revision: "1".repeat(40),
+            source_snapshot_census_sha256: "2".repeat(64),
+            required_document_paths: vec![repository_path.to_string()],
+            public_surface_document_paths: vec![repository_path.to_string()],
+            indexers: Vec::new(),
+            methods: Vec::new(),
+            public_bindings: Vec::new(),
+            public_roots: vec![HistoricalV2SemanticPublicRoot {
+                indexer: IntentionalBoundaryIndexerKind::TypeScriptJavaScript,
+                repository_path: repository_path.to_string(),
+                module_symbol_id: symbol_id.to_string(),
+                compiler_definition,
+                origin: HistoricalV2SemanticPublicRootOrigin::NodePackageExposure {
+                    exposure_id: exposure_id.to_string(),
+                    surface_slot_id: surface_slot_id.to_string(),
+                },
+            }],
+            public_reexport_hops: Vec::new(),
+            symbols: vec![HistoricalV2SemanticSymbol {
+                indexer: IntentionalBoundaryIndexerKind::TypeScriptJavaScript,
+                is_public_surface: false,
+                is_public_root_evidence: true,
+                is_reexport_evidence: false,
+                symbol,
+            }],
+            symbol_count: 1,
+            public_binding_count: 0,
+            public_root_count: 1,
+            public_reexport_hop_count: 0,
+            public_symbol_count: 0,
+            resolved_method_count: 0,
+            compiler_excluded_method_count: 0,
+            unresolved_method_count: 0,
+            semantic_snapshot_sha256: "3".repeat(64),
         }
     }
 }
