@@ -526,6 +526,15 @@ pub type PublicAlias = Record;
                 declaration.name
             );
             assert_eq!(slice(source, declaration.compiler_anchor), declaration.name);
+            if let Some(owner) = declaration.owner.as_deref() {
+                let owner_anchor = declaration
+                    .owner_compiler_anchor
+                    .expect("Rust member owner anchor");
+                assert_eq!(
+                    slice(source, owner_anchor),
+                    owner.split("::").next().unwrap()
+                );
+            }
             (
                 declaration.name.as_str(),
                 declaration.owner.as_deref(),

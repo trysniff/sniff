@@ -57,6 +57,16 @@ struct Collector<'a> {
     reexports: Vec<SourcePublicReexport>,
 }
 
+struct DefinitionInput {
+    name: String,
+    target_name: String,
+    owner: Option<String>,
+    namespace: SourcePublicNamespace,
+    kind: SourcePublicSymbolKind,
+    range: SourceByteRange,
+    owner_compiler_anchor: Option<SourceByteRange>,
+}
+
 impl Collector<'_> {
     fn collect_items(&mut self, items: &[syn::Item]) -> Result<(), String> {
         for item in items {
@@ -68,12 +78,14 @@ impl Collector<'_> {
                 syn::Item::Struct(item) if public(&item.vis) => {
                     self.reject_conditional(&item.attrs, item.span())?;
                     let owner = item.ident.to_string();
+                    let owner_anchor = self.ranges.range(item.ident.span())?;
                     self.definition(&item.ident, None, SourcePublicSymbolKind::Type)?;
-                    self.collect_fields(&owner, &item.fields, false)?;
+                    self.collect_fields(&owner, owner_anchor, &item.fields, false)?;
                 }
                 syn::Item::Enum(item) if public(&item.vis) => {
                     self.reject_conditional(&item.attrs, item.span())?;
                     let owner = item.ident.to_string();
+                    let owner_anchor = self.ranges.range(item.ident.span())?;
                     self.definition(&item.ident, None, SourcePublicSymbolKind::Type)?;
                     for variant in &item.variants {
                         self.reject_conditional(&variant.attrs, variant.span())?;
@@ -82,9 +94,11 @@ impl Collector<'_> {
                             &owner,
                             SourcePublicSymbolKind::Constant,
                             SourcePublicNamespace::StaticMember,
+                            owner_anchor,
                         )?;
                         self.collect_fields(
                             &format!("{owner}::{}", variant.ident),
+                            owner_anchor,
                             &variant.fields,
                             true,
                         )?;
@@ -93,15 +107,17 @@ impl Collector<'_> {
                 syn::Item::Union(item) if public(&item.vis) => {
                     self.reject_conditional(&item.attrs, item.span())?;
                     let owner = item.ident.to_string();
+                    let owner_anchor = self.ranges.range(item.ident.span())?;
                     self.definition(&item.ident, None, SourcePublicSymbolKind::Type)?;
                     for field in &item.fields.named {
                         if public(&field.vis) {
                             self.reject_conditional(&field.attrs, field.span())?;
                             if let Some(ident) = &field.ident {
-                                self.definition(
+                                self.owned_definition(
                                     ident,
-                                    Some(&owner),
+                                    &owner,
                                     SourcePublicSymbolKind::Field,
+                                    owner_anchor,
                                 )?;
                             }
                         }
@@ -110,8 +126,9 @@ impl Collector<'_> {
                 syn::Item::Trait(item) if public(&item.vis) => {
                     self.reject_conditional(&item.attrs, item.span())?;
                     let owner = item.ident.to_string();
+                    let owner_anchor = self.ranges.range(item.ident.span())?;
                     self.definition(&item.ident, None, SourcePublicSymbolKind::Type)?;
-                    self.collect_trait_items(&owner, &item.items)?;
+                    self.collect_trait_items(&owner, owner_anchor, &item.items)?;
                 }
                 syn::Item::TraitAlias(item) if public(&item.vis) => {
                     self.reject_conditional(&item.attrs, item.span())?;
@@ -191,6 +208,7 @@ impl Collector<'_> {
     fn collect_fields(
         &mut self,
         owner: &str,
+        owner_compiler_anchor: SourceByteRange,
         fields: &syn::Fields,
         inherited_public: bool,
     ) -> Result<(), String> {
@@ -200,7 +218,12 @@ impl Collector<'_> {
             }
             self.reject_conditional(&field.attrs, field.span())?;
             if let Some(ident) = &field.ident {
-                self.definition(ident, Some(owner), SourcePublicSymbolKind::Field)?;
+                self.owned_definition(
+                    ident,
+                    owner,
+                    SourcePublicSymbolKind::Field,
+                    owner_compiler_anchor,
+                )?;
             } else {
                 return Err(format!(
                     "public Rust tuple field {owner}::{index} has no exact source identifier for compiler binding in {}",
@@ -211,7 +234,12 @@ impl Collector<'_> {
         Ok(())
     }
 
-    fn collect_trait_items(&mut self, owner: &str, items: &[syn::TraitItem]) -> Result<(), String> {
+    fn collect_trait_items(
+        &mut self,
+        owner: &str,
+        owner_compiler_anchor: SourceByteRange,
+        items: &[syn::TraitItem],
+    ) -> Result<(), String> {
         for item in items {
             match item {
                 syn::TraitItem::Fn(item) => {
@@ -221,6 +249,7 @@ impl Collector<'_> {
                         owner,
                         SourcePublicSymbolKind::Method,
                         signature_namespace(&item.sig),
+                        owner_compiler_anchor,
                     )?;
                 }
                 syn::TraitItem::Const(item) => {
@@ -230,6 +259,7 @@ impl Collector<'_> {
                         owner,
                         SourcePublicSymbolKind::Constant,
                         SourcePublicNamespace::StaticMember,
+                        owner_compiler_anchor,
                     )?;
                 }
                 syn::TraitItem::Type(item) => {
@@ -239,6 +269,7 @@ impl Collector<'_> {
                         owner,
                         SourcePublicSymbolKind::Type,
                         SourcePublicNamespace::StaticMember,
+                        owner_compiler_anchor,
                     )?;
                 }
                 syn::TraitItem::Macro(item) => {
@@ -361,15 +392,15 @@ impl Collector<'_> {
         } else {
             SourcePublicNamespace::Module
         };
-        self.definition_range(
-            ident.to_string(),
-            ident.to_string(),
-            owner.map(str::to_string),
+        self.definition_range(DefinitionInput {
+            name: ident.to_string(),
+            target_name: ident.to_string(),
+            owner: owner.map(str::to_string),
             namespace,
             kind,
-            self.ranges.range(ident.span())?,
-            None,
-        );
+            range: self.ranges.range(ident.span())?,
+            owner_compiler_anchor: None,
+        });
         Ok(())
     }
 
@@ -379,16 +410,36 @@ impl Collector<'_> {
         owner: &str,
         kind: SourcePublicSymbolKind,
         namespace: SourcePublicNamespace,
+        owner_compiler_anchor: SourceByteRange,
     ) -> Result<(), String> {
-        self.definition_range(
-            ident.to_string(),
-            ident.to_string(),
-            Some(owner.to_string()),
+        self.definition_range(DefinitionInput {
+            name: ident.to_string(),
+            target_name: ident.to_string(),
+            owner: Some(owner.to_string()),
             namespace,
             kind,
-            self.ranges.range(ident.span())?,
-            None,
-        );
+            range: self.ranges.range(ident.span())?,
+            owner_compiler_anchor: Some(owner_compiler_anchor),
+        });
+        Ok(())
+    }
+
+    fn owned_definition(
+        &mut self,
+        ident: &syn::Ident,
+        owner: &str,
+        kind: SourcePublicSymbolKind,
+        owner_compiler_anchor: SourceByteRange,
+    ) -> Result<(), String> {
+        self.definition_range(DefinitionInput {
+            name: ident.to_string(),
+            target_name: ident.to_string(),
+            owner: Some(owner.to_string()),
+            namespace: SourcePublicNamespace::InstanceMember,
+            kind,
+            range: self.ranges.range(ident.span())?,
+            owner_compiler_anchor: Some(owner_compiler_anchor),
+        });
         Ok(())
     }
 
@@ -400,37 +451,28 @@ impl Collector<'_> {
         namespace: SourcePublicNamespace,
         owner_compiler_anchor: SourceByteRange,
     ) -> Result<(), String> {
-        self.definition_range(
-            ident.to_string(),
-            ident.to_string(),
-            Some(owner.to_string()),
+        self.definition_range(DefinitionInput {
+            name: ident.to_string(),
+            target_name: ident.to_string(),
+            owner: Some(owner.to_string()),
             namespace,
             kind,
-            self.ranges.range(ident.span())?,
-            Some(owner_compiler_anchor),
-        );
+            range: self.ranges.range(ident.span())?,
+            owner_compiler_anchor: Some(owner_compiler_anchor),
+        });
         Ok(())
     }
 
-    fn definition_range(
-        &mut self,
-        name: String,
-        target_name: String,
-        owner: Option<String>,
-        namespace: SourcePublicNamespace,
-        kind: SourcePublicSymbolKind,
-        range: SourceByteRange,
-        owner_compiler_anchor: Option<SourceByteRange>,
-    ) {
+    fn definition_range(&mut self, input: DefinitionInput) {
         self.declarations.push(SourcePublicDeclaration {
-            name,
-            target_name,
-            owner,
-            namespace,
-            kind,
-            exposed_identifier: range,
-            compiler_anchor: range,
-            owner_compiler_anchor,
+            name: input.name,
+            target_name: input.target_name,
+            owner: input.owner,
+            namespace: input.namespace,
+            kind: input.kind,
+            exposed_identifier: input.range,
+            compiler_anchor: input.range,
+            owner_compiler_anchor: input.owner_compiler_anchor,
             binding: SourcePublicBindingKind::Definition,
             source_module: None,
         });

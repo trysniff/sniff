@@ -14,6 +14,10 @@ pub(super) fn collect(
     reexports: &mut Vec<SourcePublicReexport>,
 ) -> Result<(), String> {
     let directive = ranges.range(item.span())?;
+    let mut output = CollectOutput {
+        declarations,
+        reexports,
+    };
     collect_tree(
         &item.tree,
         Vec::new(),
@@ -21,9 +25,13 @@ pub(super) fn collect(
         module_names,
         directive,
         ranges,
-        declarations,
-        reexports,
+        &mut output,
     )
+}
+
+struct CollectOutput<'a> {
+    declarations: &'a mut Vec<SourcePublicDeclaration>,
+    reexports: &'a mut Vec<SourcePublicReexport>,
 }
 
 fn collect_tree(
@@ -33,8 +41,7 @@ fn collect_tree(
     module_names: &BTreeSet<String>,
     directive: crate::source_public_surface::SourceByteRange,
     ranges: &SpanRanges<'_>,
-    declarations: &mut Vec<SourcePublicDeclaration>,
-    reexports: &mut Vec<SourcePublicReexport>,
+    output: &mut CollectOutput<'_>,
 ) -> Result<(), String> {
     match tree {
         syn::UseTree::Path(path) => {
@@ -46,8 +53,7 @@ fn collect_tree(
                 module_names,
                 directive,
                 ranges,
-                declarations,
-                reexports,
+                output,
             )
         }
         syn::UseTree::Name(name) => {
@@ -65,7 +71,7 @@ fn collect_tree(
                     path_with_target(&prefix, &target),
                     ranges.range(name.ident.span())?,
                     directive,
-                    reexports,
+                    output.reexports,
                 );
                 return Ok(());
             }
@@ -74,7 +80,7 @@ fn collect_tree(
                 target,
                 source_module,
                 ranges.range(name.ident.span())?,
-                declarations,
+                output.declarations,
             );
             Ok(())
         }
@@ -88,7 +94,7 @@ fn collect_tree(
                     path_with_target(&prefix, &target),
                     ranges.range(rename.rename.span())?,
                     directive,
-                    reexports,
+                    output.reexports,
                 );
                 return Ok(());
             }
@@ -97,7 +103,7 @@ fn collect_tree(
                 target,
                 source_module,
                 ranges.range(rename.rename.span())?,
-                declarations,
+                output.declarations,
             );
             Ok(())
         }
@@ -108,7 +114,7 @@ fn collect_tree(
             let anchor = module_anchor.ok_or_else(|| {
                 "Rust public glob has no exact compiler module anchor".to_string()
             })?;
-            reexports.push(SourcePublicReexport {
+            output.reexports.push(SourcePublicReexport {
                 kind: SourcePublicReexportKind::Wildcard,
                 name: None,
                 source_module: prefix.join("::"),
@@ -127,8 +133,7 @@ fn collect_tree(
                     module_names,
                     directive,
                     ranges,
-                    declarations,
-                    reexports,
+                    output,
                 )?;
             }
             Ok(())
