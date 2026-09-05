@@ -1,6 +1,8 @@
 use super::*;
 use crate::benchmark::{
-    INTENTIONAL_BOUNDARY_PROJECT_MODEL_CENSUS_SCHEMA_VERSION, IntentionalBoundaryProjectModelCensus,
+    HISTORICAL_V2_NODE_PACKAGE_SURFACE_CENSUS_SCHEMA_VERSION, HistoricalV2NodePackageSurfaceCensus,
+    INTENTIONAL_BOUNDARY_PROJECT_MODEL_CENSUS_SCHEMA_VERSION,
+    IntentionalBoundaryProjectModelCensus,
 };
 use std::fs;
 
@@ -23,12 +25,27 @@ fn empty_cargo_project_model(revision: &str) -> IntentionalBoundaryProjectModelC
     }
 }
 
+fn empty_node_package_surfaces(revision: &str) -> HistoricalV2NodePackageSurfaceCensus {
+    HistoricalV2NodePackageSurfaceCensus {
+        schema_version: HISTORICAL_V2_NODE_PACKAGE_SURFACE_CENSUS_SCHEMA_VERSION,
+        contract: "fixture".to_string(),
+        repository: "example/repository".to_string(),
+        revision: revision.to_string(),
+        inventory_sha256: digest('1'),
+        documents: Vec::new(),
+        exposures: Vec::new(),
+        exposure_count_by_entry_kind: BTreeMap::new(),
+        census_sha256: digest('9'),
+    }
+}
+
 fn source_snapshot(revision: &str, digest_character: char) -> HistoricalV2SourceSnapshotCensus {
     HistoricalV2SourceSnapshotCensus {
         revision: revision.to_string(),
         inventory_sha256: digest('1'),
         parser_census_sha256: digest('2'),
         cargo_project_model: empty_cargo_project_model(revision),
+        node_package_surfaces: empty_node_package_surfaces(revision),
         tracked_entry_count: 0,
         source_files: Vec::new(),
         source_file_count: 0,

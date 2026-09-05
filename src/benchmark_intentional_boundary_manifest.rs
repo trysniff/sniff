@@ -27,6 +27,7 @@ mod go;
 
 #[path = "benchmark_intentional_boundary_manifest_node.rs"]
 mod node;
+pub(super) use node::{ParsedNodePackageEntryKind, parse_node_package_json};
 #[path = "benchmark_intentional_boundary_manifest_toml.rs"]
 mod toml;
 
@@ -303,7 +304,7 @@ pub(super) fn resolve_manifest_path(manifest_path: &str, target: &str) -> Result
     Ok(parts.join("/"))
 }
 
-fn span_range(
+pub(super) fn span_range(
     repository_path: &str,
     source: &str,
     span: std::ops::Range<usize>,
