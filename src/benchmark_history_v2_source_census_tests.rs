@@ -36,7 +36,7 @@ fn typescript_named_reexport_commits_exposure_and_compiler_anchor() {
         &source[declaration.identifier.start..declaration.identifier.end],
         b"publicName"
     );
-    assert!(declaration.surface_unit_id.starts_with("h2s-v3:"));
+    assert!(declaration.surface_unit_id.starts_with("h2s-v4:"));
     assert!(declaration.declaration_unit_id.starts_with("h2d-v3:"));
 }
 
@@ -58,7 +58,7 @@ fn typescript_wildcard_and_namespace_reexports_are_persisted() {
     assert_eq!(wildcard.source_module, "./all");
     assert_eq!(
         &source[wildcard.identifier.start..wildcard.identifier.end],
-        b"./all"
+        b"\"./all\""
     );
     let namespace = reexports
         .iter()
@@ -111,6 +111,15 @@ fn typescript_static_and_instance_members_have_distinct_surface_ids() {
     assert_eq!(runs.len(), 2);
     assert_ne!(runs[0].namespace, runs[1].namespace);
     assert_ne!(runs[0].surface_unit_id, runs[1].surface_unit_id);
+}
+
+#[test]
+fn typescript_module_paths_are_part_of_public_surface_identity() {
+    let source = b"export const value = 1;\n";
+    let (_, first, _) = source_public_declarations("src/first.ts", "typescript", source).unwrap();
+    let (_, second, _) = source_public_declarations("src/second.ts", "typescript", source).unwrap();
+
+    assert_ne!(first[0].surface_unit_id, second[0].surface_unit_id);
 }
 
 #[test]

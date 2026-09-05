@@ -443,20 +443,15 @@ pub(super) fn source_public_declarations(
                     HistoricalV2SourcePublicNamespace::StaticMember
                 }
             };
-            let package_path = Path::new(repository_path)
-                .parent()
-                .map(|path| path.to_string_lossy().replace('\\', "/"))
-                .unwrap_or_default();
-            let surface_unit_id = hash_json(&(
-                "sniffbench-historical-v2-public-surface-v3",
+            let module_identity = public_module_identity(repository_path, language);
+            let surface_unit_id = historical_public_surface_unit_id(
                 language,
-                package_path,
-                declaration.name.as_str(),
+                &module_identity,
+                &declaration.name,
                 declaration.owner.as_deref(),
                 namespace,
                 kind,
-            ))
-            .map(|hash| format!("h2s-v3:{hash}"))?;
+            )?;
             let declaration_unit_id = hash_json(&(
                 "sniffbench-historical-v2-public-declaration-v3",
                 surface_unit_id.as_str(),
@@ -541,6 +536,36 @@ pub(super) fn source_public_declarations(
         declarations,
         reexports,
     ))
+}
+
+pub(super) fn historical_public_surface_unit_id(
+    language: &str,
+    module_identity: &str,
+    name: &str,
+    owner: Option<&str>,
+    namespace: HistoricalV2SourcePublicNamespace,
+    kind: HistoricalV2SourcePublicSymbolKind,
+) -> Result<String, String> {
+    hash_json(&(
+        "sniffbench-historical-v2-public-surface-v4",
+        language,
+        module_identity,
+        name,
+        owner,
+        namespace,
+        kind,
+    ))
+    .map(|hash| format!("h2s-v4:{hash}"))
+}
+
+pub(super) fn public_module_identity(repository_path: &str, language: &str) -> String {
+    if matches!(language, "typescript" | "javascript") {
+        return repository_path.to_string();
+    }
+    Path::new(repository_path)
+        .parent()
+        .map(|path| path.to_string_lossy().replace('\\', "/"))
+        .unwrap_or_default()
 }
 
 fn identifier_positions(

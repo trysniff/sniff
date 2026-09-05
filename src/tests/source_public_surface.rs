@@ -192,7 +192,7 @@ export * as publicNamespace from "./namespace";
         .expect("wildcard re-export");
     assert_eq!(wildcard.name, None);
     assert_eq!(wildcard.source_module, "./wildcard");
-    assert_eq!(slice(source, wildcard.compiler_anchor), "./wildcard");
+    assert_eq!(slice(source, wildcard.compiler_anchor), "\"./wildcard\"");
     let namespace = surface
         .reexports
         .iter()

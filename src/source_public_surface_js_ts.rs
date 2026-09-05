@@ -457,7 +457,7 @@ fn collect_export_all(
             SourcePublicReexportKind::Wildcard,
             None,
             None,
-            string_content_range(export.source.span, source)?,
+            quoted_string_range(export.source.span, source)?,
         ),
     };
     surface.reexports.push(SourcePublicReexport {
@@ -491,7 +491,7 @@ fn push_definition(
     });
 }
 
-fn string_content_range(span: Span, source: &str) -> Result<SourceByteRange, String> {
+fn quoted_string_range(span: Span, source: &str) -> Result<SourceByteRange, String> {
     let range = byte_range(span);
     if range.end.saturating_sub(range.start) < 2 || range.end > source.len() {
         return Err("JavaScript/TypeScript module specifier has an invalid range".into());
@@ -503,10 +503,7 @@ fn string_content_range(span: Span, source: &str) -> Result<SourceByteRange, Str
     ) {
         return Err("JavaScript/TypeScript module specifier is not quoted".into());
     }
-    Ok(SourceByteRange {
-        start: range.start + 1,
-        end: range.end - 1,
-    })
+    Ok(range)
 }
 
 fn byte_range(span: Span) -> SourceByteRange {
