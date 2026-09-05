@@ -9,7 +9,9 @@ use super::{
     HistoricalV2SourceCensus, HistoricalV2SourceCensusExclusion,
     HistoricalV2SourceCensusFailureEvidence, HistoricalV2SourceFile,
     HistoricalV2SourceIdentifierPositions, HistoricalV2SourceMethod, HistoricalV2SourcePosition,
-    HistoricalV2SourcePositionRange, HistoricalV2SourcePublicDeclaration,
+    HistoricalV2SourcePositionRange, HistoricalV2SourcePublicBindingKind,
+    HistoricalV2SourcePublicDeclaration, HistoricalV2SourcePublicNamespace,
+    HistoricalV2SourcePublicReexport, HistoricalV2SourcePublicReexportKind,
     HistoricalV2SourcePublicSymbolKind, HistoricalV2SourceSemanticCoverage,
     HistoricalV2SourceSnapshotCensus, HistoricalV2SourceSnapshotSide, HistoricalV2StageResult,
     IntentionalBoundaryRepositoryInventory, IntentionalBoundarySourceCensus,
@@ -21,7 +23,7 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::path::Path;
 
-const SOURCE_CENSUS_CONTRACT: &str = "sniffbench-historical-v2-source-census-v5";
+const SOURCE_CENSUS_CONTRACT: &str = "sniffbench-historical-v2-source-census-v7";
 pub(super) const PARSER_ERROR_LIMIT: usize = 4 * 1024;
 type SourceCensusStageResult =
     HistoricalV2StageResult<HistoricalV2SourceCensus, HistoricalV2SourceCensusExclusion>;
@@ -248,6 +250,7 @@ fn project_snapshot(
     let mut source_files = Vec::with_capacity(parser_census.source_files.len());
     let mut method_counts_by_language = BTreeMap::<String, usize>::new();
     let mut public_declaration_count = 0_usize;
+    let mut public_reexport_count = 0_usize;
     let requests = parser_census
         .source_files
         .iter()
@@ -300,11 +303,14 @@ fn project_snapshot(
         *method_counts_by_language
             .entry(source.language.clone())
             .or_default() += methods.len();
-        let (public_surface_coverage, public_declarations) =
+        let (public_surface_coverage, public_declarations, public_reexports) =
             source_public_declarations(&source.repository_path, &source.language, &bytes)?;
         public_declaration_count = public_declaration_count
             .checked_add(public_declarations.len())
             .ok_or_else(|| "historical-v2 public declaration count overflowed".to_string())?;
+        public_reexport_count = public_reexport_count
+            .checked_add(public_reexports.len())
+            .ok_or_else(|| "historical-v2 public re-export count overflowed".to_string())?;
         source_files.push(HistoricalV2SourceFile {
             repository_path: source.repository_path.clone(),
             object_id: source.object_id.clone(),
@@ -316,6 +322,7 @@ fn project_snapshot(
             methods,
             public_surface_coverage,
             public_declarations,
+            public_reexports,
         });
     }
     let method_count = method_counts_by_language
@@ -340,13 +347,14 @@ fn project_snapshot(
         method_counts_by_language,
         method_count,
         public_declaration_count,
+        public_reexport_count,
         snapshot_census_sha256: String::new(),
     };
     snapshot.snapshot_census_sha256 = snapshot_census_sha256(&snapshot)?;
     Ok(snapshot)
 }
 
-fn source_public_declarations(
+pub(super) fn source_public_declarations(
     repository_path: &str,
     language: &str,
     source: &[u8],
@@ -354,12 +362,14 @@ fn source_public_declarations(
     (
         HistoricalV2PublicSurfaceCoverage,
         Vec<HistoricalV2SourcePublicDeclaration>,
+        Vec<HistoricalV2SourcePublicReexport>,
     ),
     String,
 > {
-    if language != "go" {
+    if !matches!(language, "go" | "typescript" | "javascript") {
         return Ok((
             HistoricalV2PublicSurfaceCoverage::UnsupportedLanguage,
+            Vec::new(),
             Vec::new(),
         ));
     }
@@ -371,24 +381,26 @@ fn source_public_declarations(
         .declarations
         .into_iter()
         .map(|declaration| {
-            if declaration.binding
-                != crate::source_public_surface::SourcePublicBindingKind::Definition
-                || declaration.name != declaration.target_name
-                || declaration.exposed_identifier != declaration.compiler_anchor
-                || declaration.source_module.is_some()
-            {
-                return Err(
-                    "historical-v2 Go public surface contains a non-definition exposure"
-                        .to_string(),
-                );
-            }
+            let binding = match declaration.binding {
+                crate::source_public_surface::SourcePublicBindingKind::Definition => {
+                    HistoricalV2SourcePublicBindingKind::Definition
+                }
+                crate::source_public_surface::SourcePublicBindingKind::Reference => {
+                    HistoricalV2SourcePublicBindingKind::Reference
+                }
+                crate::source_public_surface::SourcePublicBindingKind::Unsupported => {
+                    return Err(format!(
+                        "historical-v2 public surface has an unsupported exposure in {repository_path}: {}",
+                        declaration.name
+                    ));
+                }
+            };
             let kind = match declaration.kind {
-                crate::source_public_surface::SourcePublicSymbolKind::CompilerDefined
-                | crate::source_public_surface::SourcePublicSymbolKind::Module => {
-                    return Err(
-                        "historical-v2 Go public surface contains an unsupported symbol kind"
-                            .to_string(),
-                    );
+                crate::source_public_surface::SourcePublicSymbolKind::CompilerDefined => {
+                    HistoricalV2SourcePublicSymbolKind::CompilerDefined
+                }
+                crate::source_public_surface::SourcePublicSymbolKind::Module => {
+                    HistoricalV2SourcePublicSymbolKind::Module
                 }
                 crate::source_public_surface::SourcePublicSymbolKind::Callable => {
                     HistoricalV2SourcePublicSymbolKind::Callable
@@ -409,43 +421,151 @@ fn source_public_declarations(
                     HistoricalV2SourcePublicSymbolKind::Constant
                 }
             };
-            let identifier = HistoricalV2SourceByteRange {
+            let exposed_identifier = HistoricalV2SourceByteRange {
                 start: declaration.exposed_identifier.start,
                 end: declaration.exposed_identifier.end,
             };
+            let exposed_identifier_positions =
+                identifier_positions(source_text, exposed_identifier)?;
+            let identifier = HistoricalV2SourceByteRange {
+                start: declaration.compiler_anchor.start,
+                end: declaration.compiler_anchor.end,
+            };
             let identifier_positions = identifier_positions(source_text, identifier)?;
-            let package_path = Path::new(repository_path)
-                .parent()
-                .map(|path| path.to_string_lossy().replace('\\', "/"))
-                .unwrap_or_default();
-            let surface_unit_id = hash_json(&(
-                "sniffbench-historical-v2-public-surface-v1",
+            let namespace = match declaration.namespace {
+                crate::source_public_surface::SourcePublicNamespace::Module => {
+                    HistoricalV2SourcePublicNamespace::Module
+                }
+                crate::source_public_surface::SourcePublicNamespace::InstanceMember => {
+                    HistoricalV2SourcePublicNamespace::InstanceMember
+                }
+                crate::source_public_surface::SourcePublicNamespace::StaticMember => {
+                    HistoricalV2SourcePublicNamespace::StaticMember
+                }
+            };
+            let module_identity = public_module_identity(repository_path, language);
+            let surface_unit_id = historical_public_surface_unit_id(
                 language,
-                package_path,
-                declaration.name.as_str(),
+                &module_identity,
+                &declaration.name,
                 declaration.owner.as_deref(),
+                namespace,
                 kind,
-            ))
-            .map(|hash| format!("h2s-v1:{hash}"))?;
+            )?;
             let declaration_unit_id = hash_json(&(
-                "sniffbench-historical-v2-public-declaration-v1",
+                "sniffbench-historical-v2-public-declaration-v3",
                 surface_unit_id.as_str(),
                 repository_path,
+                exposed_identifier,
                 identifier,
+                binding,
+                declaration.source_module.as_deref(),
             ))
-            .map(|hash| format!("h2d-v1:{hash}"))?;
+            .map(|hash| format!("h2d-v3:{hash}"))?;
             Ok(HistoricalV2SourcePublicDeclaration {
                 surface_unit_id,
                 declaration_unit_id,
                 name: declaration.name,
+                target_name: declaration.target_name,
                 owner: declaration.owner,
+                namespace,
                 kind,
+                binding,
+                source_module: declaration.source_module,
+                exposed_identifier,
+                exposed_identifier_positions,
                 identifier,
                 identifier_positions,
             })
         })
         .collect::<Result<Vec<_>, String>>()?;
-    Ok((HistoricalV2PublicSurfaceCoverage::Complete, declarations))
+    let reexports = surface
+        .reexports
+        .into_iter()
+        .map(|reexport| {
+            let kind = match reexport.kind {
+                crate::source_public_surface::SourcePublicReexportKind::Wildcard => {
+                    HistoricalV2SourcePublicReexportKind::Wildcard
+                }
+                crate::source_public_surface::SourcePublicReexportKind::Namespace => {
+                    HistoricalV2SourcePublicReexportKind::Namespace
+                }
+            };
+            let directive = HistoricalV2SourceByteRange {
+                start: reexport.directive.start,
+                end: reexport.directive.end,
+            };
+            let exposed_identifier =
+                reexport
+                    .exposed_identifier
+                    .map(|range| HistoricalV2SourceByteRange {
+                        start: range.start,
+                        end: range.end,
+                    });
+            let identifier = HistoricalV2SourceByteRange {
+                start: reexport.compiler_anchor.start,
+                end: reexport.compiler_anchor.end,
+            };
+            let identifier_positions = identifier_positions(source_text, identifier)?;
+            let reexport_unit_id = hash_json(&(
+                "sniffbench-historical-v2-public-reexport-v1",
+                language,
+                repository_path,
+                kind,
+                reexport.name.as_deref(),
+                reexport.source_module.as_str(),
+                directive,
+                exposed_identifier,
+                identifier,
+            ))
+            .map(|hash| format!("h2r-v1:{hash}"))?;
+            Ok(HistoricalV2SourcePublicReexport {
+                reexport_unit_id,
+                kind,
+                name: reexport.name,
+                source_module: reexport.source_module,
+                directive,
+                exposed_identifier,
+                identifier,
+                identifier_positions,
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    Ok((
+        HistoricalV2PublicSurfaceCoverage::Complete,
+        declarations,
+        reexports,
+    ))
+}
+
+pub(super) fn historical_public_surface_unit_id(
+    language: &str,
+    module_identity: &str,
+    name: &str,
+    owner: Option<&str>,
+    namespace: HistoricalV2SourcePublicNamespace,
+    kind: HistoricalV2SourcePublicSymbolKind,
+) -> Result<String, String> {
+    hash_json(&(
+        "sniffbench-historical-v2-public-surface-v4",
+        language,
+        module_identity,
+        name,
+        owner,
+        namespace,
+        kind,
+    ))
+    .map(|hash| format!("h2s-v4:{hash}"))
+}
+
+pub(super) fn public_module_identity(repository_path: &str, language: &str) -> String {
+    if matches!(language, "typescript" | "javascript") {
+        return repository_path.to_string();
+    }
+    Path::new(repository_path)
+        .parent()
+        .map(|path| path.to_string_lossy().replace('\\', "/"))
+        .unwrap_or_default()
 }
 
 fn identifier_positions(

@@ -11,19 +11,13 @@ use super::{
     HistoricalV2SemanticCensusExclusionReason, HistoricalV2SemanticCensusFailureEvidence,
     HistoricalV2SemanticCensusFailurePhase, HistoricalV2SemanticMethod,
     HistoricalV2SemanticMethodStatus, HistoricalV2SemanticProcessEvidence,
-    HistoricalV2SemanticPublicBinding, HistoricalV2SemanticSnapshotCensus,
-    HistoricalV2SemanticSnapshotSide, HistoricalV2SemanticSymbol, HistoricalV2SlotStage,
-    HistoricalV2SlotStageError, HistoricalV2SlotStageErrorKind, HistoricalV2SourceCensus,
-    HistoricalV2SourceFile, HistoricalV2SourcePublicDeclaration,
-    HistoricalV2SourcePublicSymbolKind, HistoricalV2SourceSemanticCoverage,
+    HistoricalV2SemanticSnapshotCensus, HistoricalV2SemanticSnapshotSide,
+    HistoricalV2SemanticSymbol, HistoricalV2SlotStage, HistoricalV2SlotStageError,
+    HistoricalV2SlotStageErrorKind, HistoricalV2SourceCensus, HistoricalV2SourceSemanticCoverage,
     HistoricalV2SourceSnapshotCensus, HistoricalV2StageResult, IntentionalBoundaryIndexerKind,
     IntentionalBoundaryMethodCensusEntry, validate_historical_v2_source_census,
 };
-use crate::semantic_index::{
-    RepositoryPath, SemanticIndex, SemanticLocation, SemanticPosition, SemanticPositionEncoding,
-    SemanticResolution, SemanticSourceRange, SemanticSymbol, SemanticSymbolCategory,
-    SemanticSymbolOrigin,
-};
+use crate::semantic_index::{SemanticIndex, SemanticResolution, SemanticSymbol};
 use crate::semantic_indexer_manifest::SemanticIndexerKind;
 use crate::semantic_indexer_runner::{
     SemanticIndexerBatchOutcome, SemanticIndexerProcessEvidence, SemanticIndexerRunFailure,
@@ -36,7 +30,7 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-const SEMANTIC_CENSUS_CONTRACT: &str = "sniffbench-historical-v2-compiler-semantic-census-v6";
+const SEMANTIC_CENSUS_CONTRACT: &str = "sniffbench-historical-v2-compiler-semantic-census-v7";
 const UNCHANGED_DOCUMENT_EXCLUSION: &str =
     "compiler omitted an unchanged source document outside the exact historical patch";
 const UNTOUCHED_LANGUAGE_EXCLUSION: &str =
@@ -54,6 +48,12 @@ struct HistoricalV2SemanticScope {
 
 #[path = "benchmark_history_v2_semantic_validation.rs"]
 mod validation;
+
+#[path = "benchmark_history_v2_semantic_public_surface.rs"]
+mod public_surface;
+
+#[path = "benchmark_history_v2_semantic_public_surface_validation.rs"]
+mod public_surface_validation;
 
 #[path = "benchmark_history_v2_semantic_stage_support.rs"]
 mod stage_support;
@@ -242,6 +242,8 @@ fn build_semantic_snapshot(
     let mut methods = Vec::<HistoricalV2SemanticMethod>::with_capacity(source.method_count);
     let mut symbols = BTreeMap::new();
     let mut public_bindings = Vec::new();
+    let mut public_reexport_hops = BTreeMap::new();
+    let mut public_surface_document_paths = BTreeSet::new();
     let mut indexers = Vec::with_capacity(indexes.len());
     for (kind, index) in indexes {
         let files_for_indexer = crate::semantic_indexer_runner::files_for_indexer(files, *kind);
@@ -292,13 +294,19 @@ fn build_semantic_snapshot(
             )?);
         }
         bind_public_surface(
-            root,
-            source,
-            &indexed_files,
-            *kind,
-            index,
-            &mut symbols,
-            &mut public_bindings,
+            PublicSurfaceBindingInputs {
+                root,
+                source,
+                indexed_files: &indexed_files,
+                kind: *kind,
+                index,
+            },
+            PublicSurfaceBindingOutputs {
+                symbols: &mut symbols,
+                bindings: &mut public_bindings,
+                reexport_hops: &mut public_reexport_hops,
+                public_surface_document_paths: &mut public_surface_document_paths,
+            },
         )?;
         indexers.push(summarize_index(*kind, index)?);
     }
@@ -331,6 +339,7 @@ fn build_semantic_snapshot(
     {
         return Err("historical-v2 public surface repeats a declaration binding".to_string());
     }
+    let public_reexport_hops = public_reexport_hops.into_values().collect::<Vec<_>>();
     let symbols = symbols.into_values().collect::<Vec<_>>();
     indexers.sort_by_key(|indexer| indexer.indexer);
     let resolved_method_count = methods
@@ -359,10 +368,13 @@ fn build_semantic_snapshot(
         revision: source.revision.clone(),
         source_snapshot_census_sha256: source.snapshot_census_sha256.clone(),
         required_document_paths: required_document_paths.iter().cloned().collect(),
+        public_surface_document_paths: public_surface_document_paths.into_iter().collect(),
         indexers,
         methods,
         public_binding_count: public_bindings.len(),
         public_bindings,
+        public_reexport_hop_count: public_reexport_hops.len(),
+        public_reexport_hops,
         symbol_count: symbols.len(),
         public_symbol_count: symbols
             .iter()
@@ -410,7 +422,7 @@ fn flatten_historical_method(
                     value.0
                 )
             })?;
-            retain_symbol(symbols, indexer, symbol, false)?;
+            retain_symbol(symbols, indexer, symbol, false, false)?;
             HistoricalV2SemanticMethodStatus::Resolved {
                 symbol_id: value.0.clone(),
                 joined_definition: binding.definition.as_ref().map(flatten_location),
@@ -433,6 +445,7 @@ fn retain_symbol(
     indexer: IntentionalBoundaryIndexerKind,
     symbol: &SemanticSymbol,
     is_public_surface: bool,
+    is_reexport_evidence: bool,
 ) -> Result<(), String> {
     let key = (indexer, symbol.id.0.clone());
     let facts = flatten_symbol(symbol);
@@ -444,6 +457,7 @@ fn retain_symbol(
             ));
         }
         existing.is_public_surface |= is_public_surface;
+        existing.is_reexport_evidence |= is_reexport_evidence;
         return Ok(());
     }
     symbols.insert(
@@ -451,164 +465,19 @@ fn retain_symbol(
         HistoricalV2SemanticSymbol {
             indexer,
             is_public_surface,
+            is_reexport_evidence,
             symbol: facts,
         },
     );
     Ok(())
 }
 
-fn bind_public_surface(
-    root: &Path,
-    source: &HistoricalV2SourceSnapshotCensus,
-    indexed_files: &[FileRecord],
-    kind: SemanticIndexerKind,
-    index: &SemanticIndex,
-    symbols: &mut BTreeMap<(IntentionalBoundaryIndexerKind, String), HistoricalV2SemanticSymbol>,
-    bindings: &mut Vec<HistoricalV2SemanticPublicBinding>,
-) -> Result<(), String> {
-    let indexed_files = indexed_files
-        .iter()
-        .map(|file| Ok((file_repository_path(root, file)?, file)))
-        .collect::<Result<BTreeMap<_, _>, String>>()?;
-    for file in source.source_files.iter().filter(|file| {
-        file.semantic_coverage == HistoricalV2SourceSemanticCoverage::Required
-            && indexer_for_language(&file.language) == Ok(kind)
-    }) {
-        let path = RepositoryPath(file.repository_path.clone());
-        let Some(document) = index.documents.get(&path) else {
-            continue;
-        };
-        if file.public_surface_coverage != super::HistoricalV2PublicSurfaceCoverage::Complete {
-            return Err(format!(
-                "historical-v2 public-surface collector is incomplete for {}",
-                file.repository_path
-            ));
-        }
-        let record = indexed_files.get(&file.repository_path).ok_or_else(|| {
-            format!(
-                "historical-v2 public-surface source is missing from parser records: {}",
-                file.repository_path
-            )
-        })?;
-        for declaration in &file.public_declarations {
-            let location = declaration_location(
-                file,
-                declaration,
-                &record.source,
-                document.position_encoding,
-            )?;
-            let candidates = index
-                .symbols
-                .values()
-                .filter(|symbol| {
-                    symbol.origin == SemanticSymbolOrigin::Repository
-                        && symbol.ambiguity_notes.is_empty()
-                        && compatible_public_symbol_kind(declaration.kind, symbol.kind.category)
-                        && symbol.definitions.contains(&location)
-                })
-                .collect::<Vec<_>>();
-            let [symbol] = candidates.as_slice() else {
-                return Err(format!(
-                    "historical-v2 compiler resolved {} public symbol(s) at the exact declaration of {}::{}",
-                    candidates.len(),
-                    file.repository_path,
-                    declaration.name
-                ));
-            };
-            retain_symbol(symbols, indexer_kind(kind), symbol, true)?;
-            bindings.push(HistoricalV2SemanticPublicBinding {
-                indexer: indexer_kind(kind),
-                surface_unit_id: declaration.surface_unit_id.clone(),
-                declaration_unit_id: declaration.declaration_unit_id.clone(),
-                repository_path: file.repository_path.clone(),
-                symbol_id: symbol.id.0.clone(),
-                position_encoding: document.position_encoding,
-                joined_definition: flatten_location(&location),
-            });
-        }
-    }
-    Ok(())
-}
-
-fn declaration_location(
-    file: &HistoricalV2SourceFile,
-    declaration: &HistoricalV2SourcePublicDeclaration,
-    source: &str,
-    encoding: SemanticPositionEncoding,
-) -> Result<SemanticLocation, String> {
-    let range = declaration.identifier;
-    if range.start >= range.end
-        || range.end > source.len()
-        || !source.is_char_boundary(range.start)
-        || !source.is_char_boundary(range.end)
-        || source[range.start..range.end] != declaration.name
-    {
-        return Err(format!(
-            "historical-v2 public declaration range changed: {}::{}",
-            file.repository_path, declaration.name
-        ));
-    }
-    Ok(SemanticLocation {
-        document: RepositoryPath(file.repository_path.clone()),
-        range: SemanticSourceRange {
-            start: semantic_position_at_byte(source, range.start, encoding)?,
-            end: semantic_position_at_byte(source, range.end, encoding)?,
-        },
-    })
-}
-
-fn semantic_position_at_byte(
-    source: &str,
-    offset: usize,
-    encoding: SemanticPositionEncoding,
-) -> Result<SemanticPosition, String> {
-    if offset > source.len() || !source.is_char_boundary(offset) {
-        return Err("historical-v2 public declaration is not on a UTF-8 boundary".to_string());
-    }
-    let prefix = &source[..offset];
-    let line = prefix.bytes().filter(|byte| *byte == b'\n').count();
-    let line_start = prefix.rfind('\n').map_or(0, |index| index + 1);
-    let line_prefix = &source[line_start..offset];
-    let character = match encoding {
-        SemanticPositionEncoding::Utf8 => line_prefix.len(),
-        SemanticPositionEncoding::Utf16 => line_prefix.encode_utf16().count(),
-        SemanticPositionEncoding::Utf32 => line_prefix.chars().count(),
-    };
-    Ok(SemanticPosition {
-        line: u32::try_from(line)
-            .map_err(|_| "historical-v2 public declaration line exceeds u32".to_string())?,
-        character: u32::try_from(character)
-            .map_err(|_| "historical-v2 public declaration column exceeds u32".to_string())?,
-    })
-}
-
-fn compatible_public_symbol_kind(
-    declaration: HistoricalV2SourcePublicSymbolKind,
-    compiler: SemanticSymbolCategory,
-) -> bool {
-    matches!(
-        (declaration, compiler),
-        (
-            HistoricalV2SourcePublicSymbolKind::Callable,
-            SemanticSymbolCategory::Callable
-        ) | (
-            HistoricalV2SourcePublicSymbolKind::Method,
-            SemanticSymbolCategory::Method
-        ) | (
-            HistoricalV2SourcePublicSymbolKind::Type,
-            SemanticSymbolCategory::Type | SemanticSymbolCategory::TraitOrInterface
-        ) | (
-            HistoricalV2SourcePublicSymbolKind::Field,
-            SemanticSymbolCategory::FieldOrProperty
-        ) | (
-            HistoricalV2SourcePublicSymbolKind::Variable,
-            SemanticSymbolCategory::Variable
-        ) | (
-            HistoricalV2SourcePublicSymbolKind::Constant,
-            SemanticSymbolCategory::Constant
-        )
-    )
-}
+#[cfg(test)]
+use public_surface::semantic_position_at_byte;
+use public_surface::{
+    PublicSurfaceBindingInputs, PublicSurfaceBindingOutputs, bind_public_surface,
+    reexport_expansion_declaration_unit_id,
+};
 
 fn push_compiler_excluded_file_methods(
     repository_path: &str,

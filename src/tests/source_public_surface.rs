@@ -86,6 +86,14 @@ fn js_ts_surface_separates_public_names_from_compiler_anchors() {
     let source = br#"export function direct(): string { return "direct"; }
 export const value = 1;
 export interface Shape { area(): number; }
+export class Service {
+  static run(): string { return "static"; }
+  run(): string { return "instance"; }
+  protected stop(): void {}
+  private hidden(): void {}
+  #secret = 1;
+}
+export enum Mode { Fast = "fast", Safe = "safe" }
 export { direct as aliased } from "./named";
 export { value as exposedValue, direct };
 export default function namedDefault(): string { return "default"; }
@@ -108,6 +116,46 @@ export * as publicNamespace from "./namespace";
     assert_eq!(direct.binding, SourcePublicBindingKind::Definition);
     assert_eq!(slice(source, direct.exposed_identifier), "direct");
     assert_eq!(slice(source, direct.compiler_anchor), "direct");
+    assert_eq!(direct.namespace, super::SourcePublicNamespace::Module);
+
+    let area = surface
+        .declarations
+        .iter()
+        .find(|declaration| declaration.owner.as_deref() == Some("Shape"))
+        .expect("interface method");
+    assert_eq!(area.name, "area");
+    assert_eq!(area.kind, SourcePublicSymbolKind::Method);
+    assert_eq!(area.namespace, super::SourcePublicNamespace::InstanceMember);
+
+    let runs = surface
+        .declarations
+        .iter()
+        .filter(|declaration| {
+            declaration.owner.as_deref() == Some("Service") && declaration.name == "run"
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(runs.len(), 2);
+    assert!(runs.iter().any(|declaration| {
+        declaration.namespace == super::SourcePublicNamespace::StaticMember
+    }));
+    assert!(runs.iter().any(|declaration| {
+        declaration.namespace == super::SourcePublicNamespace::InstanceMember
+    }));
+    assert!(surface.declarations.iter().any(|declaration| {
+        declaration.owner.as_deref() == Some("Service") && declaration.name == "stop"
+    }));
+    assert!(!surface.declarations.iter().any(|declaration| {
+        declaration.owner.as_deref() == Some("Service")
+            && matches!(declaration.name.as_str(), "hidden" | "secret")
+    }));
+    assert_eq!(
+        surface
+            .declarations
+            .iter()
+            .filter(|declaration| declaration.owner.as_deref() == Some("Mode"))
+            .count(),
+        2
+    );
 
     let aliased = declaration("aliased", SourcePublicBindingKind::Reference);
     assert_eq!(aliased.target_name, "direct");
@@ -144,7 +192,7 @@ export * as publicNamespace from "./namespace";
         .expect("wildcard re-export");
     assert_eq!(wildcard.name, None);
     assert_eq!(wildcard.source_module, "./wildcard");
-    assert_eq!(slice(source, wildcard.compiler_anchor), "./wildcard");
+    assert_eq!(slice(source, wildcard.compiler_anchor), "\"./wildcard\"");
     let namespace = surface
         .reexports
         .iter()
@@ -159,6 +207,17 @@ export * as publicNamespace from "./namespace";
         "publicNamespace"
     );
     assert_eq!(slice(source, namespace.compiler_anchor), "publicNamespace");
+}
+
+#[test]
+fn js_ts_surface_rejects_unnamed_exported_type_members() {
+    let error = census_source_public_surface(
+        "surface.ts",
+        b"export interface Callable { (value: string): string; }\n",
+    )
+    .expect_err("unnamed interface call signature must fail closed");
+
+    assert!(error.contains("unnamed callable or index"), "{error}");
 }
 
 fn slice(source: &[u8], range: super::SourceByteRange) -> &str {

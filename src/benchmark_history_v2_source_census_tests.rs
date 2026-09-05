@@ -11,6 +11,118 @@ use std::path::Path;
 use std::process::Command;
 
 #[test]
+fn typescript_named_reexport_commits_exposure_and_compiler_anchor() {
+    let source = b"export { internal as publicName } from \"./dep\";\n";
+
+    let (coverage, declarations, reexports) =
+        source_public_declarations("src/index.ts", "typescript", source).unwrap();
+
+    assert_eq!(coverage, HistoricalV2PublicSurfaceCoverage::Complete);
+    assert!(reexports.is_empty());
+    assert_eq!(declarations.len(), 1);
+    let declaration = &declarations[0];
+    assert_eq!(declaration.name, "publicName");
+    assert_eq!(declaration.target_name, "internal");
+    assert_eq!(
+        declaration.binding,
+        HistoricalV2SourcePublicBindingKind::Reference
+    );
+    assert_eq!(declaration.source_module.as_deref(), Some("./dep"));
+    assert_eq!(
+        &source[declaration.exposed_identifier.start..declaration.exposed_identifier.end],
+        b"publicName"
+    );
+    assert_eq!(
+        &source[declaration.identifier.start..declaration.identifier.end],
+        b"publicName"
+    );
+    assert!(declaration.surface_unit_id.starts_with("h2s-v4:"));
+    assert!(declaration.declaration_unit_id.starts_with("h2d-v3:"));
+}
+
+#[test]
+fn typescript_wildcard_and_namespace_reexports_are_persisted() {
+    let source = b"export * from \"./all\";\nexport * as api from \"./namespace\";\n";
+
+    let (coverage, declarations, reexports) =
+        source_public_declarations("src/index.ts", "typescript", source).unwrap();
+
+    assert_eq!(coverage, HistoricalV2PublicSurfaceCoverage::Complete);
+    assert!(declarations.is_empty());
+    assert_eq!(reexports.len(), 2);
+    let wildcard = reexports
+        .iter()
+        .find(|reexport| reexport.kind == HistoricalV2SourcePublicReexportKind::Wildcard)
+        .unwrap();
+    assert_eq!(wildcard.name, None);
+    assert_eq!(wildcard.source_module, "./all");
+    assert_eq!(
+        &source[wildcard.identifier.start..wildcard.identifier.end],
+        b"\"./all\""
+    );
+    let namespace = reexports
+        .iter()
+        .find(|reexport| reexport.kind == HistoricalV2SourcePublicReexportKind::Namespace)
+        .unwrap();
+    assert_eq!(namespace.name.as_deref(), Some("api"));
+    assert_eq!(namespace.source_module, "./namespace");
+    assert_eq!(
+        namespace
+            .exposed_identifier
+            .map(|range| &source[range.start..range.end]),
+        Some(b"api".as_slice())
+    );
+    assert!(
+        reexports
+            .iter()
+            .all(|reexport| reexport.reexport_unit_id.starts_with("h2r-v1:"))
+    );
+}
+
+#[test]
+fn typescript_anonymous_default_export_fails_closed() {
+    let error = source_public_declarations(
+        "src/index.ts",
+        "typescript",
+        b"export default function (): number { return 1; }\n",
+    )
+    .expect_err("anonymous public compiler binding must not be guessed");
+
+    assert!(error.contains("unsupported exposure"), "{error}");
+}
+
+#[test]
+fn typescript_static_and_instance_members_have_distinct_surface_ids() {
+    let source = br#"export class Service {
+  static run(): string { return "static"; }
+  run(): string { return "instance"; }
+}
+"#;
+
+    let (_, declarations, _) =
+        source_public_declarations("src/index.ts", "typescript", source).unwrap();
+    let runs = declarations
+        .iter()
+        .filter(|declaration| {
+            declaration.owner.as_deref() == Some("Service") && declaration.name == "run"
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(runs.len(), 2);
+    assert_ne!(runs[0].namespace, runs[1].namespace);
+    assert_ne!(runs[0].surface_unit_id, runs[1].surface_unit_id);
+}
+
+#[test]
+fn typescript_module_paths_are_part_of_public_surface_identity() {
+    let source = b"export const value = 1;\n";
+    let (_, first, _) = source_public_declarations("src/first.ts", "typescript", source).unwrap();
+    let (_, second, _) = source_public_declarations("src/second.ts", "typescript", source).unwrap();
+
+    assert_ne!(first[0].surface_unit_id, second[0].surface_unit_id);
+}
+
+#[test]
 fn public_identifier_positions_commit_all_compiler_coordinate_systems() {
     let positions =
         identifier_positions("éPublic", HistoricalV2SourceByteRange { start: 2, end: 8 }).unwrap();

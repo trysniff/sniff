@@ -29,6 +29,14 @@ pub(crate) enum SourcePublicBindingKind {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+pub(crate) enum SourcePublicNamespace {
+    Module,
+    InstanceMember,
+    StaticMember,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub(crate) enum SourcePublicReexportKind {
     Wildcard,
     Namespace,
@@ -47,6 +55,7 @@ pub(crate) struct SourcePublicDeclaration {
     pub name: String,
     pub target_name: String,
     pub owner: Option<String>,
+    pub namespace: SourcePublicNamespace,
     pub kind: SourcePublicSymbolKind,
     pub exposed_identifier: SourceByteRange,
     pub compiler_anchor: SourceByteRange,
@@ -102,6 +111,19 @@ pub(crate) fn census_source_public_surface(
         return Err(format!(
             "public-surface census repeated a declaration in {file_path}"
         ));
+    }
+    for declaration in &surface.declarations {
+        let valid_namespace = matches!(
+            (declaration.namespace, declaration.owner.as_ref()),
+            (SourcePublicNamespace::Module, None)
+                | (SourcePublicNamespace::InstanceMember, Some(_))
+                | (SourcePublicNamespace::StaticMember, Some(_))
+        );
+        if !valid_namespace {
+            return Err(format!(
+                "public-surface declaration has an incoherent namespace in {file_path}"
+            ));
+        }
     }
     if surface.reexports.windows(2).any(|pair| pair[0] == pair[1]) {
         return Err(format!(
