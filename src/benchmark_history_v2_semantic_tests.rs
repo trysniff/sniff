@@ -1,3 +1,4 @@
+use super::super::HistoricalV2SemanticPublicBindingKind;
 use super::*;
 use crate::semantic_index::{
     RepositoryPath, SemanticCallEdge, SemanticDispatch, SemanticDocument, SemanticIndexProvenance,
