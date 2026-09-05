@@ -9,6 +9,9 @@ mod js_ts;
 #[path = "source_public_surface_python.rs"]
 mod python;
 
+#[path = "source_public_surface_rust.rs"]
+mod rust;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum SourcePublicSymbolKind {
@@ -98,6 +101,7 @@ pub(crate) fn census_source_public_surface(
     let mut surface = match language.as_str() {
         "go" => go::census(file_path, source)?,
         "python" => python::census(file_path, source)?,
+        "rust" => rust::census(file_path, source)?,
         "typescript" | "javascript" => js_ts::census(file_path, source)?,
         _ => {
             return Err(format!(

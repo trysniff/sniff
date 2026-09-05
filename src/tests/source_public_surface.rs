@@ -480,8 +480,167 @@ fn slice(source: &[u8], range: super::SourceByteRange) -> &str {
 }
 
 #[test]
-fn source_surface_rejects_languages_without_a_complete_collector() {
-    let error = census_source_public_surface("surface.rs", b"pub fn public() {}\n")
-        .expect_err("unsupported public-surface collector must fail closed");
-    assert!(error.contains("not implemented for rust"), "{error}");
+fn rust_surface_collects_public_definitions_members_and_reexports() {
+    let source = br#"mod hidden;
+pub mod public;
+
+pub use hidden::Hidden as Alias;
+pub use public::*;
+
+pub struct Record {
+    pub value: u32,
+    private: u32,
+}
+
+pub enum Choice {
+    First,
+    Second { value: u32 },
+}
+
+pub trait Contract {
+    type Output;
+    const LIMIT: usize;
+    fn transform(&self) -> Self::Output;
+    fn construct() -> Self;
+}
+
+impl Record {
+    pub fn method(&self) -> u32 { self.value }
+    pub fn associated() -> Self { Self { value: 0, private: 0 } }
+    fn private_method(&self) -> u32 { self.private }
+}
+
+pub fn run() {}
+pub const LIMIT: usize = 3;
+pub static ENABLED: bool = true;
+pub type PublicAlias = Record;
+"#;
+
+    let surface = census_source_public_surface("src/lib.rs", source).expect("Rust surface");
+    let declarations = surface
+        .declarations
+        .iter()
+        .map(|declaration| {
+            assert_eq!(
+                slice(source, declaration.exposed_identifier),
+                declaration.name
+            );
+            assert_eq!(slice(source, declaration.compiler_anchor), declaration.name);
+            (
+                declaration.name.as_str(),
+                declaration.owner.as_deref(),
+                declaration.namespace,
+                declaration.kind,
+                declaration.binding,
+            )
+        })
+        .collect::<Vec<_>>();
+
+    assert!(declarations.contains(&(
+        "Record",
+        None,
+        super::SourcePublicNamespace::Module,
+        SourcePublicSymbolKind::Type,
+        SourcePublicBindingKind::Definition,
+    )));
+    assert!(declarations.contains(&(
+        "value",
+        Some("Record"),
+        super::SourcePublicNamespace::InstanceMember,
+        SourcePublicSymbolKind::Field,
+        SourcePublicBindingKind::Definition,
+    )));
+    assert!(declarations.contains(&(
+        "First",
+        Some("Choice"),
+        super::SourcePublicNamespace::StaticMember,
+        SourcePublicSymbolKind::Constant,
+        SourcePublicBindingKind::Definition,
+    )));
+    assert!(declarations.contains(&(
+        "method",
+        Some("Record"),
+        super::SourcePublicNamespace::InstanceMember,
+        SourcePublicSymbolKind::Method,
+        SourcePublicBindingKind::Definition,
+    )));
+    assert!(declarations.contains(&(
+        "associated",
+        Some("Record"),
+        super::SourcePublicNamespace::StaticMember,
+        SourcePublicSymbolKind::Method,
+        SourcePublicBindingKind::Definition,
+    )));
+    assert!(declarations.contains(&(
+        "transform",
+        Some("Contract"),
+        super::SourcePublicNamespace::InstanceMember,
+        SourcePublicSymbolKind::Method,
+        SourcePublicBindingKind::Definition,
+    )));
+    assert!(declarations.contains(&(
+        "construct",
+        Some("Contract"),
+        super::SourcePublicNamespace::StaticMember,
+        SourcePublicSymbolKind::Method,
+        SourcePublicBindingKind::Definition,
+    )));
+    assert!(declarations.contains(&(
+        "Alias",
+        None,
+        super::SourcePublicNamespace::Module,
+        SourcePublicSymbolKind::CompilerDefined,
+        SourcePublicBindingKind::Reference,
+    )));
+    assert!(
+        !declarations
+            .iter()
+            .any(|(name, _, _, _, _)| { matches!(*name, "private" | "private_method") })
+    );
+
+    assert_eq!(surface.reexports.len(), 2);
+    let module = surface
+        .reexports
+        .iter()
+        .find(|reexport| reexport.kind == SourcePublicReexportKind::Namespace)
+        .expect("public module");
+    assert_eq!(module.name.as_deref(), Some("public"));
+    assert_eq!(slice(source, module.compiler_anchor), "public");
+    let wildcard = surface
+        .reexports
+        .iter()
+        .find(|reexport| reexport.kind == SourcePublicReexportKind::Wildcard)
+        .expect("public glob");
+    assert_eq!(wildcard.source_module, "public");
+    assert_eq!(slice(source, wildcard.compiler_anchor), "public");
+}
+
+#[test]
+fn rust_surface_rejects_restricted_conditional_inline_and_tuple_exports() {
+    let restricted = census_source_public_surface(
+        "src/lib.rs",
+        b"pub(crate) fn crate_only() {}\npub(super) const PARENT: usize = 1;\n",
+    )
+    .expect("restricted visibility is not externally public");
+    assert!(restricted.declarations.is_empty());
+    assert!(restricted.reexports.is_empty());
+
+    let conditional = census_source_public_surface(
+        "src/lib.rs",
+        b"#[cfg(feature = \"fast\")]\npub fn selected() {}\n",
+    )
+    .expect_err("conditional API requires a variant");
+    assert!(
+        conditional.contains("explicit build variant"),
+        "{conditional}"
+    );
+
+    let inline =
+        census_source_public_surface("src/lib.rs", b"pub mod inline { pub fn nested() {} }\n")
+            .expect_err("inline module must not be flattened");
+    assert!(inline.contains("inline public Rust module"), "{inline}");
+
+    let tuple = census_source_public_surface("src/lib.rs", b"pub struct Newtype(pub u32);\n")
+        .expect_err("tuple field must not use its type as an identifier");
+    assert!(tuple.contains("no exact source identifier"), "{tuple}");
 }
