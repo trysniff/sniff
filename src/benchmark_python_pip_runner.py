@@ -1,4 +1,6 @@
+import ensurepip
 import os
+from pathlib import Path
 import runpy
 import sys
 
@@ -18,10 +20,22 @@ def inherit_appcontainer_acl_for_private_temp():
     os.mkdir = mkdir
 
 
+def bundled_pip_wheel():
+    bundled = Path(ensurepip.__file__).parent / "_bundled"
+    wheels = sorted(bundled.glob("pip-*.whl"))
+    if len(wheels) != 1:
+        raise SystemExit("Python runtime must provide exactly one bundled pip wheel")
+    wheel = wheels[0]
+    if wheel.is_symlink() or not wheel.is_file():
+        raise SystemExit("bundled pip wheel is not a regular file")
+    return wheel
+
+
 def main():
     if sys.version_info < (3, 11):
         raise SystemExit("Python 3.11 or newer is required for pip isolation")
     inherit_appcontainer_acl_for_private_temp()
+    sys.path.insert(0, str(bundled_pip_wheel()))
     runpy.run_module("pip", run_name="__main__")
 
 
