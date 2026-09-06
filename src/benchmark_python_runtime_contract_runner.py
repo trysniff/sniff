@@ -3,6 +3,7 @@ import importlib.metadata
 import json
 from pathlib import Path
 import platform
+import pip
 import sys
 
 
@@ -25,41 +26,47 @@ def sha256(path):
 
 def pip_tree():
     distribution = importlib.metadata.distribution("pip")
-    files = distribution.files
-    if files is None or len(files) > MAX_FILES:
-        fail("pip distribution has no bounded file inventory")
+    package_file = Path(pip.__file__)
+    if package_file.is_symlink() or not package_file.is_file():
+        fail("pip runtime module is not a regular file")
+    package_root = package_file.parent
     records = []
-    for entry in files:
+    for entry in package_root.rglob("*"):
         if (
             entry.suffix == ".pyc"
             or "__pycache__" in entry.parts
             or ".." in entry.parts
         ):
             continue
-        unresolved = Path(distribution.locate_file(entry))
-        if unresolved.is_symlink() or not unresolved.is_file():
-            fail("pip distribution contains a non-regular file")
-        path = unresolved
-        size = path.stat().st_size
+        if entry.is_symlink():
+            fail("pip runtime tree contains a symbolic link")
+        if entry.is_dir():
+            continue
+        if not entry.is_file():
+            fail("pip runtime tree contains a non-regular file")
+        size = entry.stat().st_size
         if size > MAX_FILE_BYTES:
-            fail("pip distribution file exceeds its size limit")
+            fail("pip runtime file exceeds its size limit")
+        relative = entry.relative_to(package_root)
         records.append(
             {
-                "path": str(entry).replace("\\", "/"),
-                "sha256": sha256(path),
+                "path": "pip/" + str(relative).replace("\\", "/"),
+                "sha256": sha256(entry),
                 "size": size,
             }
         )
+        if len(records) > MAX_FILES:
+            fail("pip runtime tree exceeds its file-count limit")
     records.sort(key=lambda record: record["path"])
     if not records or len({record["path"] for record in records}) != len(records):
-        fail("pip distribution file inventory is empty or ambiguous")
+        fail("pip runtime file inventory is empty or ambiguous")
     digest = hashlib.sha256()
     total_bytes = 0
     for record in records:
         encoded_path = record["path"].encode("utf-8")
         total_bytes += record["size"]
         if total_bytes > MAX_TOTAL_BYTES:
-            fail("pip distribution exceeds its total size limit")
+            fail("pip runtime exceeds its total size limit")
         digest.update(len(encoded_path).to_bytes(8, "little"))
         digest.update(encoded_path)
         digest.update(record["size"].to_bytes(8, "little"))
