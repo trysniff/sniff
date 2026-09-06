@@ -1,7 +1,7 @@
 use super::non_blind_history_runtime_adapters::{
     bun_launch, cargo_launch, generic_launch, go_launch, gradle_installation_launch, gradle_launch,
     gradle_tooling_launch, node_launch, node_manager_launch, private_python_launch, python_launch,
-    uv_launch,
+    resolver_python_launch, uv_launch,
 };
 #[cfg(windows)]
 use super::non_blind_history_runtime_support::{
@@ -41,6 +41,7 @@ const PRIVATE_ENVIRONMENT_DIRECTORIES: &[&str] = &[
     "gradle-project-cache",
     "npm",
     "pip",
+    "pip-env",
     "python-env",
     "pycache",
     "tmp",
@@ -118,6 +119,7 @@ pub(crate) fn prepare_historical_runtime(
         "python" | "python3" => python_launch(program, &expanded_args)?,
         "uv" => uv_launch(&expanded_args)?,
         "{sniff_private_python}" => private_python_launch(&cache_root, &expanded_args)?,
+        "{sniff_resolver_python}" => resolver_python_launch(&cache_root, &expanded_args)?,
         "node" => node_launch(&expanded_args)?,
         "npm" | "pnpm" | "yarn" => node_manager_launch(program, &expanded_args)?,
         "bun" => bun_launch(&expanded_args)?,
@@ -338,6 +340,7 @@ fn private_environment(root: &Path, cache: &Path) -> Vec<(String, String)> {
 fn expand_reserved_argument(root: &Path, cache: &Path, argument: &str) -> String {
     match argument {
         "{sniff_private_python_env}" => sandbox_repository_path(root, &cache.join("python-env")),
+        "{sniff_resolver_python_env}" => sandbox_repository_path(root, &cache.join("pip-env")),
         "{sniff_gradle_project_cache}" => {
             sandbox_repository_path(root, &cache.join("gradle-project-cache"))
         }
@@ -393,6 +396,16 @@ mod tests {
                     ),
                     sandbox_value,
                     "Gradle project cache was not exposed through its reserved argument"
+                );
+            } else if *directory == "pip-env" {
+                assert_eq!(
+                    expand_reserved_argument(
+                        &plan.command.root,
+                        &canonical_cache,
+                        "{sniff_resolver_python_env}",
+                    ),
+                    sandbox_value,
+                    "Python resolver environment was not exposed through its reserved argument"
                 );
             } else {
                 assert!(

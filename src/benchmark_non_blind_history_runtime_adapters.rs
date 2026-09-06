@@ -142,7 +142,23 @@ pub(super) fn private_python_launch(
     cache_root: &Path,
     args: &[String],
 ) -> Result<Launch, HistoricalRuntimePlanError> {
-    let host = resolve_on_path("python")?;
+    private_environment_python_launch(cache_root, "python-env", args)
+}
+
+pub(super) fn resolver_python_launch(
+    cache_root: &Path,
+    args: &[String],
+) -> Result<Launch, HistoricalRuntimePlanError> {
+    private_environment_python_launch(cache_root, "pip-env", args)
+}
+
+fn private_environment_python_launch(
+    cache_root: &Path,
+    environment: &str,
+    args: &[String],
+) -> Result<Launch, HistoricalRuntimePlanError> {
+    let host_name = if cfg!(windows) { "python" } else { "python3" };
+    let host = resolve_on_path(host_name)?;
     let prefix = query_path(
         &host,
         &["-c", "import sys; print(sys.prefix)"],
@@ -150,11 +166,11 @@ pub(super) fn private_python_launch(
     )?;
     #[cfg(windows)]
     let private = cache_root
-        .join("python-env")
+        .join(environment)
         .join("Scripts")
         .join("python.exe");
     #[cfg(not(windows))]
-    let private = cache_root.join("python-env").join("bin").join("python");
+    let private = cache_root.join(environment).join("bin").join("python");
     let private = canonical_file(&private, "private historical Python runtime")?;
     let runtime_files = vec![host];
     #[cfg(windows)]

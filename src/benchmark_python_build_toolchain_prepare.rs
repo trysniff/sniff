@@ -25,6 +25,7 @@ const REQUIREMENTS_CONTRACT: &str = "requirements-contract.json";
 const PROVENANCE: &str = "wheelhouse-provenance.json";
 const WHEELHOUSE: &str = "wheelhouse";
 const DYNAMIC_REQUIREMENTS: &str = "dynamic-requirements.json";
+const RESOLVER_ENVIRONMENT: &str = "pip-env";
 const PRIVATE_ENVIRONMENT: &str = "python-env";
 const PREPARED_TOOLCHAIN: &str = "prepared-toolchain";
 const PIP_RUNNER_NAME: &str = "python-pip-runner.py";
@@ -87,6 +88,7 @@ pub(super) fn materialize_python_build_toolchain(
     write_helper(cache, RUNTIME_CONTRACT_RUNNER_NAME, RUNTIME_CONTRACT_RUNNER)?;
     write_helper(cache, WHEELHOUSE_RUNNER_NAME, WHEELHOUSE_RUNNER)?;
     write_helper(cache, PIP_RUNNER_NAME, PIP_RUNNER)?;
+    create_resolver_environment(root, cache)?;
     let (python_identity, pip_identity, target_platform) =
         python_build_runtime_identities(root, cache)?;
     let request = PythonBuildToolchainRequest {
@@ -121,6 +123,10 @@ pub(super) fn materialize_python_build_toolchain(
     installed.materialize_into(cache)?;
     create_environment_from_wheelhouse(root, cache, WHEELHOUSE, FINAL_LOCK)?;
     let environment_tree_sha256 = python_environment_tree_sha256(&cache.join(PRIVATE_ENVIRONMENT))?;
+    remove_directory(
+        &cache.join(RESOLVER_ENVIRONMENT),
+        "private Python resolver environment",
+    )?;
     Ok(MaterializedPythonBuildToolchain {
         identity_sha256: installed.identity_sha256,
         requirements_contract: cache.join(REQUIREMENTS_CONTRACT),
@@ -230,7 +236,7 @@ fn resolve_wheelhouse(
     let input_bytes = fs::read(cache.join(input))
         .map_err(|error| format!("failed to read Python build requirements: {error}"))?;
     if !input_bytes.is_empty() {
-        run_host_python(
+        run_resolver_python(
             root,
             cache,
             &[
@@ -314,7 +320,7 @@ fn create_environment_from_wheelhouse(
     let wheelhouse_argument = sandbox_relative(root, &cache.join(wheelhouse))?;
     let lock_argument = sandbox_relative(root, &cache.join(lock))?;
     let pip_runner = sandbox_relative(root, &cache.join(PIP_RUNNER_NAME))?;
-    run_host_python(
+    run_resolver_python(
         root,
         cache,
         &[
@@ -343,12 +349,40 @@ fn create_environment_from_wheelhouse(
     )
 }
 
+fn create_resolver_environment(root: &Path, cache: &Path) -> Result<(), String> {
+    let environment = cache.join(RESOLVER_ENVIRONMENT);
+    if environment.exists()
+        && fs::read_dir(&environment)
+            .map_err(|error| format!("failed to inspect private Python resolver: {error}"))?
+            .next()
+            .is_some()
+    {
+        return Err("private Python resolver environment is not empty".to_string());
+    }
+    let environment_argument = sandbox_relative(root, &environment)?;
+    run_host_python(
+        root,
+        cache,
+        &[
+            "-I",
+            "-B",
+            "-m",
+            "venv",
+            "--copies",
+            "--without-pip",
+            &environment_argument,
+        ],
+        false,
+        "Python resolver-environment creation",
+    )
+}
+
 fn python_build_runtime_identities(
     root: &Path,
     cache: &Path,
 ) -> Result<(String, String, String), String> {
     let runner = sandbox_relative(root, &cache.join(RUNTIME_CONTRACT_RUNNER_NAME))?;
-    let output = run_host_python_output(
+    let output = run_resolver_python_output(
         root,
         cache,
         &["-I", &runner],
@@ -437,6 +471,28 @@ fn run_private_python(
     let mut command = vec!["{sniff_private_python}".to_string()];
     command.extend(arguments.iter().map(|argument| argument.to_string()));
     run_command(root, cache, &command, false, label).map(|_| ())
+}
+
+fn run_resolver_python(
+    root: &Path,
+    cache: &Path,
+    arguments: &[&str],
+    allow_network: bool,
+    label: &str,
+) -> Result<(), String> {
+    run_resolver_python_output(root, cache, arguments, allow_network, label).map(|_| ())
+}
+
+fn run_resolver_python_output(
+    root: &Path,
+    cache: &Path,
+    arguments: &[&str],
+    allow_network: bool,
+    label: &str,
+) -> Result<CommandOutput, String> {
+    let mut command = vec!["{sniff_resolver_python}".to_string()];
+    command.extend(arguments.iter().map(|argument| argument.to_string()));
+    run_command(root, cache, &command, allow_network, label)
 }
 
 fn run_command(
@@ -668,8 +724,24 @@ mod tests {
     fn runtime_contract_runner_hashes_the_pip_distribution() {
         let root = tempfile::tempdir().unwrap();
         fs::write(root.path().join("runner.py"), RUNTIME_CONTRACT_RUNNER).unwrap();
+        let environment = root.path().join("pip-env");
+        let created = Command::new(host_python())
+            .args(["-I", "-B", "-m", "venv", "--copies", "--without-pip"])
+            .arg(&environment)
+            .output()
+            .unwrap();
+        assert!(
+            created.status.success(),
+            "{}",
+            String::from_utf8_lossy(&created.stderr)
+        );
+        let python = if cfg!(windows) {
+            environment.join("Scripts").join("python.exe")
+        } else {
+            environment.join("bin").join("python")
+        };
 
-        let output = Command::new(host_python())
+        let output = Command::new(python)
             .args(["-I", "runner.py"])
             .current_dir(root.path())
             .output()
