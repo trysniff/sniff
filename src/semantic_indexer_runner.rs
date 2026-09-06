@@ -1825,6 +1825,7 @@ fn build_indexer_sandbox_command(
             read_only_paths,
             writable_paths,
             persistent_read_only_paths,
+            persistent_executable_paths: Vec::new(),
             executable_paths,
             #[cfg(windows)]
             windows_virtualized_paths,

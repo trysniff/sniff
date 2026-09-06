@@ -54,6 +54,27 @@ pub(crate) struct HistoricalRuntimePlan {
     pub(crate) launcher_kind: &'static str,
 }
 
+pub(crate) fn persist_historical_runtime_directories(plan: &mut HistoricalRuntimePlan) {
+    #[cfg(windows)]
+    {
+        let mut persistent = plan
+            .command
+            .read_only_paths
+            .iter()
+            .filter(|path| path.is_dir())
+            .cloned()
+            .collect::<Vec<_>>();
+        persistent.sort_by_key(|path| path.components().count());
+        persistent.dedup();
+        plan.command
+            .read_only_paths
+            .retain(|path| !persistent.iter().any(|root| path.starts_with(root)));
+        plan.command.persistent_executable_paths.extend(persistent);
+    }
+    #[cfg(not(windows))]
+    let _ = plan;
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum HistoricalRuntimePlanError {
     Unavailable(String),
@@ -219,6 +240,7 @@ pub(crate) fn prepare_historical_runtime(
             read_only_paths,
             writable_paths: vec![cache_root],
             persistent_read_only_paths: Vec::new(),
+            persistent_executable_paths: Vec::new(),
             executable_paths,
             #[cfg(windows)]
             windows_virtualized_paths,
@@ -295,6 +317,7 @@ fn private_environment(root: &Path, cache: &Path) -> Vec<(String, String)> {
         ("NODE_REPL_HISTORY".to_string(), path("node-history")),
         ("OPENSSL_CONF".to_string(), path(PRIVATE_OPENSSL_CONFIG)),
         ("PIP_CACHE_DIR".to_string(), path("pip")),
+        ("PYTHONDONTWRITEBYTECODE".to_string(), "1".to_string()),
         ("PYTHONPYCACHEPREFIX".to_string(), path("pycache")),
         ("TEMP".to_string(), temp.clone()),
         ("TMP".to_string(), temp.clone()),
@@ -442,5 +465,60 @@ mod tests {
 
         assert_eq!(output.status_code, Some(0), "stderr={}", output.stderr);
         assert_eq!(output.stdout.trim(), "sniff-python-runtime");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_runtime_can_persist_immutable_python_directories() {
+        let root = tempfile::tempdir().unwrap();
+        let cache = root.path().join("cache");
+        fs::create_dir(&cache).unwrap();
+        let command = vec![
+            "python".to_string(),
+            "-I".to_string(),
+            "-c".to_string(),
+            "print('sniff-persistent-python-runtime')".to_string(),
+        ];
+
+        let mut plan = prepare_historical_runtime(root.path(), &cache, &command).unwrap();
+        persist_historical_runtime_directories(&mut plan);
+        assert!(!plan.command.persistent_executable_paths.is_empty());
+        assert!(
+            plan.command
+                .read_only_paths
+                .iter()
+                .all(|path| !path.is_dir())
+        );
+        let output = crate::sandbox::run(&plan.command).unwrap();
+
+        assert_eq!(output.status_code, Some(0), "stderr={}", output.stderr);
+        assert_eq!(output.stdout.trim(), "sniff-persistent-python-runtime");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_runtime_python_can_capture_child_output() {
+        let root = tempfile::tempdir().unwrap();
+        let cache = root.path().join("cache");
+        fs::create_dir(&cache).unwrap();
+        let command = vec![
+            "python".to_string(),
+            "-I".to_string(),
+            "-c".to_string(),
+            concat!(
+                "import subprocess, sys; ",
+                "result = subprocess.run(",
+                "[sys.executable, '-I', '-c', \"print('sniff-python-child')\"], ",
+                "capture_output=True, text=True, check=True); ",
+                "print(result.stdout.strip())"
+            )
+            .to_string(),
+        ];
+
+        let plan = prepare_historical_runtime(root.path(), &cache, &command).unwrap();
+        let output = crate::sandbox::run(&plan.command).unwrap();
+
+        assert_eq!(output.status_code, Some(0), "stderr={}", output.stderr);
+        assert_eq!(output.stdout.trim(), "sniff-python-child");
     }
 }
