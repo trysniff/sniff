@@ -111,7 +111,14 @@ fn wheel_files() -> BTreeMap<String, Vec<u8>> {
 }
 
 fn build_wheel(mut files: BTreeMap<String, Vec<u8>>) -> Vec<u8> {
-    let record_path = "example_package-1.2.3.dist-info/RECORD";
+    let dist_info = files
+        .keys()
+        .filter_map(|path| path.strip_suffix("/METADATA"))
+        .collect::<Vec<_>>();
+    let [dist_info] = dist_info.as_slice() else {
+        panic!("fixture must contain exactly one METADATA member");
+    };
+    let record_path = format!("{dist_info}/RECORD");
     let mut record = String::new();
     for (path, contents) in &files {
         let digest =
@@ -119,7 +126,7 @@ fn build_wheel(mut files: BTreeMap<String, Vec<u8>>) -> Vec<u8> {
         record.push_str(&format!("{path},sha256={digest},{}\n", contents.len()));
     }
     record.push_str(&format!("{record_path},,\n"));
-    files.insert(record_path.to_string(), record.into_bytes());
+    files.insert(record_path, record.into_bytes());
 
     let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
     let options = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
@@ -332,6 +339,49 @@ fn python_wheel_filename_must_match_verified_metadata() {
 }
 
 #[test]
+fn python_wheel_accepts_normalized_pep_440_epoch_and_local_version() {
+    let dist_info = "example_package-1!2.0+cpu.dist-info";
+    let files = BTreeMap::from([
+        (
+            format!("{dist_info}/METADATA"),
+            b"Metadata-Version: 2.4\nName: Example_Package\nVersion: 1!2.0+CPU\n\n".to_vec(),
+        ),
+        (
+            format!("{dist_info}/WHEEL"),
+            b"Wheel-Version: 1.0\nGenerator: fixture\nRoot-Is-Purelib: true\nTag: py3-none-any\n\n"
+                .to_vec(),
+        ),
+        ("pkg/__init__.py".to_string(), b"VALUE = 1\n".to_vec()),
+    ]);
+
+    let wheel = parse_wheel(
+        "example_package-1!2.0+cpu-py3-none-any.whl",
+        &build_wheel(files),
+    )
+    .unwrap();
+
+    assert_eq!(wheel.distribution_version, "1!2.0+CPU");
+}
+
+#[test]
+fn python_wheel_rejects_non_pep_440_metadata_version() {
+    let mut files = wheel_files();
+    files.insert(
+        "example_package-1.2.3.dist-info/METADATA".to_string(),
+        b"Metadata-Version: 2.4\nName: Example_Package\nVersion: definitely not a version\n\n"
+            .to_vec(),
+    );
+
+    let error = parse_wheel(
+        "example_package-1.2.3-py3-none-any.whl",
+        &build_wheel(files),
+    )
+    .unwrap_err();
+
+    assert!(error.contains("Version is not PEP 440"), "{error}");
+}
+
+#[test]
 fn python_distribution_manifest_rejects_escaping_backend_path() {
     let pyproject = r#"[build-system]
 requires = ["fixture==1.0.0"]
@@ -356,7 +406,7 @@ fn python_distribution_manifest_accepts_explicit_dependency_free_backend() {
     let pyproject = r#"[build-system]
 requires = []
 build-backend = "fixture_backend"
-backend-path = ["build_backend"]
+backend-path = ["."]
 "#;
     let (root, revision, inventory) = repository(pyproject);
     let wheel = build_wheel(wheel_files());
@@ -376,10 +426,7 @@ backend-path = ["build_backend"]
     .unwrap();
 
     assert!(census.distributions[0].build_requirements.is_empty());
-    assert_eq!(
-        census.distributions[0].backend_path,
-        ["build_backend".to_string()]
-    );
+    assert_eq!(census.distributions[0].backend_path, [".".to_string()]);
 }
 
 #[test]

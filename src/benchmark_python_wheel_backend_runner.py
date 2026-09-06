@@ -11,20 +11,41 @@ def fail(message):
 
 def canonical_child(root, relative):
     path = Path(relative)
-    if path.is_absolute() or not path.parts or any(part in ("", ".", "..") for part in path.parts):
+    if relative != "." and (
+        path.is_absolute()
+        or not path.parts
+        or any(part in ("", ".", "..") for part in path.parts)
+    ):
         fail(f"backend-path is not canonical: {relative}")
-    candidate = root / path
+    candidate = root
+    for component in path.parts:
+        candidate /= component
+        if candidate.is_symlink():
+            fail(f"backend-path contains an unsupported symbolic link: {relative}")
     if not candidate.is_dir():
         fail(f"backend-path is not a directory: {relative}")
     return candidate
 
 
+def module_is_symlink_free_child(module_file, declared_root):
+    if module_file != declared_root and not module_file.is_relative_to(declared_root):
+        return False
+    current = declared_root
+    for component in module_file.relative_to(declared_root).parts:
+        current /= component
+        if current.is_symlink():
+            fail("in-tree build backend module path contains a symbolic link")
+    return True
+
+
 def main():
+    if sys.version_info < (3, 11):
+        fail("Python 3.11 or newer is required for the isolated wheel runner")
     if len(sys.argv) != 3:
         fail("expected project and wheel-output directories")
-    sandbox_root = Path.cwd()
-    project = sandbox_root / sys.argv[1]
-    output = sandbox_root / sys.argv[2]
+    sandbox_root = Path.cwd().resolve()
+    project = (sandbox_root / sys.argv[1]).resolve()
+    output = (sandbox_root / sys.argv[2]).resolve()
     if not project.is_dir() or not output.is_dir():
         fail("project or wheel-output directory is unavailable")
     manifest = tomllib.loads((project / "pyproject.toml").read_text(encoding="utf-8"))
@@ -42,9 +63,23 @@ def main():
         isinstance(path, str) for path in backend_paths
     ):
         fail("backend-path is not an array of strings")
-    sys.path[0:0] = [str(canonical_child(project, path)) for path in backend_paths]
+    resolved_backend_paths = [canonical_child(project, path) for path in backend_paths]
+    sys.path[0:0] = [str(path) for path in resolved_backend_paths]
     module_name, separator, object_path = backend_name.partition(":")
-    backend = importlib.import_module(module_name)
+    backend_module = importlib.import_module(module_name)
+    if resolved_backend_paths:
+        module_file = getattr(backend_module, "__file__", None)
+        if not isinstance(module_file, str):
+            fail("in-tree build backend has no concrete module file")
+        module_file = Path(module_file)
+        if not module_file.is_absolute() or not module_file.is_file():
+            fail("in-tree build backend module file is unavailable")
+        if not any(
+            module_is_symlink_free_child(module_file, path)
+            for path in resolved_backend_paths
+        ):
+            fail("build backend was not loaded from a declared backend-path")
+    backend = backend_module
     if separator:
         for component in object_path.split("."):
             if not component:
