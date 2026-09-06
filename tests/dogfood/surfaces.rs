@@ -2,6 +2,7 @@ use super::*;
 
 #[test]
 fn medication_numeric_rules_still_surface_as_real_slop_end_to_end() {
+    let _kotlin_dogfood = lock_kotlin_dogfood();
     let root = unique_root("sniff-dogfood-medication-numeric-rules");
     fs::create_dir_all(&root).unwrap();
     let slop_hits = Arc::new(AtomicUsize::new(0));

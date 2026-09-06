@@ -118,6 +118,7 @@ fn default_scan_reviews_every_method_without_separate_file_calls_end_to_end() {
 
 #[test]
 fn default_scan_reviews_every_supported_language_end_to_end() {
+    let _kotlin_dogfood = lock_kotlin_dogfood();
     let root = unique_root("sniff-dogfood-exhaustive-language-review");
     fs::create_dir_all(&root).unwrap();
 

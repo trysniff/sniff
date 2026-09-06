@@ -6,11 +6,19 @@ use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command as ProcessCommand};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, mpsc};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 struct Command(ProcessCommand);
+
+fn lock_kotlin_dogfood() -> MutexGuard<'static, ()> {
+    static KOTLIN_DOGFOOD: OnceLock<Mutex<()>> = OnceLock::new();
+    KOTLIN_DOGFOOD
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
 
 impl Command {
     fn new<S: AsRef<OsStr>>(program: S) -> Self {
