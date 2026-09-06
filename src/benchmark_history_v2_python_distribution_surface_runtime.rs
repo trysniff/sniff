@@ -231,7 +231,7 @@ fn require_dependency_free_python_backend(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::process::Command;
+    use std::process::{Command, Output};
 
     const FIXTURE_BACKEND: &str = r#"import base64
 import csv
@@ -273,20 +273,82 @@ def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
     return filename
 "#;
 
+    fn run_backend_runner(root: &Path) -> Output {
+        fs::write(root.join("pep517_runner.py"), PYTHON_WHEEL_BACKEND_RUNNER).unwrap();
+        fs::create_dir(root.join("output")).unwrap();
+        Command::new(if cfg!(windows) { "python" } else { "python3" })
+            .args(["-I", "-S", "pep517_runner.py", "project", "output"])
+            .current_dir(root)
+            .output()
+            .unwrap()
+    }
+
+    #[test]
+    fn backend_runner_rejects_module_outside_declared_backend_path() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir_all(root.path().join("project/backend")).unwrap();
+        fs::write(root.path().join("project/outside.py"), "VALUE = 1\n").unwrap();
+        fs::write(
+            root.path().join("project/pyproject.toml"),
+            "[build-system]\nrequires = []\nbuild-backend = 'fixture_backend'\nbackend-path = ['backend']\n",
+        )
+        .unwrap();
+        fs::write(
+            root.path().join("project/backend/fixture_backend.py"),
+            "from pathlib import Path\n__file__ = str(Path(__file__).parents[1] / 'outside.py')\n",
+        )
+        .unwrap();
+
+        let output = run_backend_runner(root.path());
+
+        assert!(!output.status.success());
+        assert!(
+            String::from_utf8_lossy(&output.stderr)
+                .contains("build backend was not loaded from a declared backend-path"),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn backend_runner_rejects_symlinked_backend_path() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir_all(root.path().join("project")).unwrap();
+        fs::create_dir(root.path().join("outside")).unwrap();
+        symlink(
+            root.path().join("outside"),
+            root.path().join("project/backend"),
+        )
+        .unwrap();
+        fs::write(
+            root.path().join("project/pyproject.toml"),
+            "[build-system]\nrequires = []\nbuild-backend = 'fixture_backend'\nbackend-path = ['backend']\n",
+        )
+        .unwrap();
+
+        let output = run_backend_runner(root.path());
+
+        assert!(!output.status.success());
+        assert!(
+            String::from_utf8_lossy(&output.stderr)
+                .contains("backend-path contains an unsupported symbolic link"),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
     #[test]
     fn production_runtime_builds_dependency_free_backend_offline() {
         let root = tempfile::tempdir().unwrap();
-        fs::create_dir(root.path().join("build_backend")).unwrap();
         fs::write(
             root.path().join("pyproject.toml"),
-            "[build-system]\nrequires = []\nbuild-backend = 'fixture_backend'\nbackend-path = ['build_backend']\n",
+            "[build-system]\nrequires = []\nbuild-backend = 'fixture_backend'\nbackend-path = ['.']\n",
         )
         .unwrap();
-        fs::write(
-            root.path().join("build_backend/fixture_backend.py"),
-            FIXTURE_BACKEND,
-        )
-        .unwrap();
+        fs::write(root.path().join("fixture_backend.py"), FIXTURE_BACKEND).unwrap();
 
         let git = |args: &[&str]| {
             let output = Command::new("git")

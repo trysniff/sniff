@@ -10,11 +10,13 @@ use super::{
     IntentionalBoundaryRepositoryInventory,
 };
 use base64::Engine;
+use pep440_rs::Version;
 use serde::Serialize;
 use sha2::{Digest, Sha256, Sha384, Sha512};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Cursor, Read};
 use std::path::{Component, Path};
+use std::str::FromStr;
 
 const PYTHON_DISTRIBUTION_SURFACE_CONTRACT: &str =
     "sniffbench-historical-v2-python-distribution-surfaces-v1";
@@ -382,6 +384,9 @@ fn parse_python_distribution_manifest(
 }
 
 fn validate_relative_manifest_path(path: &str, manifest: &str) -> Result<(), String> {
+    if path == "." {
+        return Ok(());
+    }
     if path.is_empty()
         || path.contains('\\')
         || Path::new(path).is_absolute()
@@ -742,17 +747,11 @@ fn validate_wheel_filename(
     if normalize_distribution_name(parts[0])? != normalized_distribution_name {
         return Err("Python wheel filename disagrees with METADATA Name".to_string());
     }
-    let escaped_version = distribution_version
-        .chars()
-        .map(|character| {
-            if character.is_ascii_alphanumeric() || character == '.' {
-                character
-            } else {
-                '_'
-            }
-        })
-        .collect::<String>();
-    if parts[1] != escaped_version || dist_info != format!("{}-{}.dist-info", parts[0], parts[1]) {
+    let normalized_version = Version::from_str(distribution_version)
+        .map_err(|error| format!("Python wheel METADATA Version is not PEP 440: {error}"))?
+        .to_string();
+    if parts[1] != normalized_version || dist_info != format!("{}-{}.dist-info", parts[0], parts[1])
+    {
         return Err(
             "Python wheel filename disagrees with METADATA Version or dist-info".to_string(),
         );

@@ -64,6 +64,7 @@ dotenvy = "0.15"
 flate2 = "1"
 ignore = "0.4"
 indicatif = "0.17"
+pep440_rs = "0.7"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-native-roots"] }
 regex = "1"
 serde = { version = "1", features = ["derive"] }
