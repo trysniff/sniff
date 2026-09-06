@@ -1,7 +1,7 @@
 use super::non_blind_history_runtime_adapters::{
     bun_launch, cargo_launch, generic_launch, go_launch, gradle_installation_launch, gradle_launch,
     gradle_tooling_launch, node_launch, node_manager_launch, private_python_launch, python_launch,
-    uv_launch,
+    resolver_python_launch, uv_launch,
 };
 #[cfg(windows)]
 use super::non_blind_history_runtime_support::{
@@ -41,6 +41,7 @@ const PRIVATE_ENVIRONMENT_DIRECTORIES: &[&str] = &[
     "gradle-project-cache",
     "npm",
     "pip",
+    "pip-env",
     "python-env",
     "pycache",
     "tmp",
@@ -52,6 +53,27 @@ pub(crate) struct HistoricalRuntimePlan {
     pub(crate) command: SandboxCommand,
     pub(crate) runtime_identity: String,
     pub(crate) launcher_kind: &'static str,
+}
+
+pub(crate) fn persist_historical_runtime_directories(plan: &mut HistoricalRuntimePlan) {
+    #[cfg(windows)]
+    {
+        let mut persistent = plan
+            .command
+            .read_only_paths
+            .iter()
+            .filter(|path| path.is_dir())
+            .cloned()
+            .collect::<Vec<_>>();
+        persistent.sort_by_key(|path| path.components().count());
+        persistent.dedup();
+        plan.command
+            .read_only_paths
+            .retain(|path| !persistent.iter().any(|root| path.starts_with(root)));
+        plan.command.persistent_executable_paths.extend(persistent);
+    }
+    #[cfg(not(windows))]
+    let _ = plan;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -97,6 +119,7 @@ pub(crate) fn prepare_historical_runtime(
         "python" | "python3" => python_launch(program, &expanded_args)?,
         "uv" => uv_launch(&expanded_args)?,
         "{sniff_private_python}" => private_python_launch(&cache_root, &expanded_args)?,
+        "{sniff_resolver_python}" => resolver_python_launch(&cache_root, &expanded_args)?,
         "node" => node_launch(&expanded_args)?,
         "npm" | "pnpm" | "yarn" => node_manager_launch(program, &expanded_args)?,
         "bun" => bun_launch(&expanded_args)?,
@@ -219,6 +242,7 @@ pub(crate) fn prepare_historical_runtime(
             read_only_paths,
             writable_paths: vec![cache_root],
             persistent_read_only_paths: Vec::new(),
+            persistent_executable_paths: Vec::new(),
             executable_paths,
             #[cfg(windows)]
             windows_virtualized_paths,
@@ -295,6 +319,7 @@ fn private_environment(root: &Path, cache: &Path) -> Vec<(String, String)> {
         ("NODE_REPL_HISTORY".to_string(), path("node-history")),
         ("OPENSSL_CONF".to_string(), path(PRIVATE_OPENSSL_CONFIG)),
         ("PIP_CACHE_DIR".to_string(), path("pip")),
+        ("PYTHONDONTWRITEBYTECODE".to_string(), "1".to_string()),
         ("PYTHONPYCACHEPREFIX".to_string(), path("pycache")),
         ("TEMP".to_string(), temp.clone()),
         ("TMP".to_string(), temp.clone()),
@@ -315,6 +340,7 @@ fn private_environment(root: &Path, cache: &Path) -> Vec<(String, String)> {
 fn expand_reserved_argument(root: &Path, cache: &Path, argument: &str) -> String {
     match argument {
         "{sniff_private_python_env}" => sandbox_repository_path(root, &cache.join("python-env")),
+        "{sniff_resolver_python_env}" => sandbox_repository_path(root, &cache.join("pip-env")),
         "{sniff_gradle_project_cache}" => {
             sandbox_repository_path(root, &cache.join("gradle-project-cache"))
         }
@@ -370,6 +396,16 @@ mod tests {
                     ),
                     sandbox_value,
                     "Gradle project cache was not exposed through its reserved argument"
+                );
+            } else if *directory == "pip-env" {
+                assert_eq!(
+                    expand_reserved_argument(
+                        &plan.command.root,
+                        &canonical_cache,
+                        "{sniff_resolver_python_env}",
+                    ),
+                    sandbox_value,
+                    "Python resolver environment was not exposed through its reserved argument"
                 );
             } else {
                 assert!(
@@ -442,5 +478,60 @@ mod tests {
 
         assert_eq!(output.status_code, Some(0), "stderr={}", output.stderr);
         assert_eq!(output.stdout.trim(), "sniff-python-runtime");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_runtime_can_persist_immutable_python_directories() {
+        let root = tempfile::tempdir().unwrap();
+        let cache = root.path().join("cache");
+        fs::create_dir(&cache).unwrap();
+        let command = vec![
+            "python".to_string(),
+            "-I".to_string(),
+            "-c".to_string(),
+            "print('sniff-persistent-python-runtime')".to_string(),
+        ];
+
+        let mut plan = prepare_historical_runtime(root.path(), &cache, &command).unwrap();
+        persist_historical_runtime_directories(&mut plan);
+        assert!(!plan.command.persistent_executable_paths.is_empty());
+        assert!(
+            plan.command
+                .read_only_paths
+                .iter()
+                .all(|path| !path.is_dir())
+        );
+        let output = crate::sandbox::run(&plan.command).unwrap();
+
+        assert_eq!(output.status_code, Some(0), "stderr={}", output.stderr);
+        assert_eq!(output.stdout.trim(), "sniff-persistent-python-runtime");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_runtime_python_can_capture_child_output() {
+        let root = tempfile::tempdir().unwrap();
+        let cache = root.path().join("cache");
+        fs::create_dir(&cache).unwrap();
+        let command = vec![
+            "python".to_string(),
+            "-I".to_string(),
+            "-c".to_string(),
+            concat!(
+                "import subprocess, sys; ",
+                "result = subprocess.run(",
+                "[sys.executable, '-I', '-c', \"print('sniff-python-child')\"], ",
+                "capture_output=True, text=True, check=True); ",
+                "print(result.stdout.strip())"
+            )
+            .to_string(),
+        ];
+
+        let plan = prepare_historical_runtime(root.path(), &cache, &command).unwrap();
+        let output = crate::sandbox::run(&plan.command).unwrap();
+
+        assert_eq!(output.status_code, Some(0), "stderr={}", output.stderr);
+        assert_eq!(output.stdout.trim(), "sniff-python-child");
     }
 }

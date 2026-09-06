@@ -713,6 +713,7 @@ fn standalone_compiler_check(file_path: &str, source: &str) -> Result<bool, Stri
             read_only_paths: Vec::new(),
             writable_paths: Vec::new(),
             persistent_read_only_paths: Vec::new(),
+            persistent_executable_paths: Vec::new(),
             executable_paths: Vec::new(),
             #[cfg(windows)]
             windows_virtualized_paths: Vec::new(),
