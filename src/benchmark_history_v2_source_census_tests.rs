@@ -401,11 +401,9 @@ fn replay_rejects_source_census_tampering() {
     let mut census = census_historical_v2_sources(&materialized.0, &materialized.1).unwrap();
     census.base.source_files[0].methods[0].parser_unit_id = "invented".to_string();
 
-    assert!(
-        validate_historical_v2_source_census(&materialized.0, &materialized.1, &census)
-            .unwrap_err()
-            .contains("changed")
-    );
+    let error = validate_historical_v2_source_census(&materialized.0, &materialized.1, &census)
+        .unwrap_err();
+    assert!(error.contains("changed"), "{error}");
 }
 
 #[test]

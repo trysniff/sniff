@@ -6,7 +6,7 @@ use super::{
 use crate::semantic_index::SemanticPositionEncoding;
 use serde::{Deserialize, Serialize};
 
-pub const HISTORICAL_V2_SEMANTIC_CENSUS_SCHEMA_VERSION: u32 = 11;
+pub const HISTORICAL_V2_SEMANTIC_CENSUS_SCHEMA_VERSION: u32 = 12;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -105,6 +105,10 @@ pub enum HistoricalV2SemanticPublicRootOrigin {
     RustCargoLibrary,
     NodePackageExposure {
         exposure_id: String,
+        surface_slot_id: String,
+    },
+    PythonDistributionModule {
+        module_exposure_id: String,
         surface_slot_id: String,
     },
 }

@@ -1,10 +1,10 @@
 use super::super::{
     HistoricalV2NodePackageExposure, HistoricalV2NodePackageTargetStatus,
-    HistoricalV2SemanticPublicBinding, HistoricalV2SemanticPublicBindingKind,
-    HistoricalV2SemanticPublicReexportHop, HistoricalV2SemanticSnapshotCensus,
-    HistoricalV2SourceFile, HistoricalV2SourcePublicNamespace, HistoricalV2SourcePublicReexport,
-    HistoricalV2SourcePublicReexportKind, HistoricalV2SourcePublicSymbolKind,
-    HistoricalV2SourceSnapshotCensus,
+    HistoricalV2PythonDistributionModule, HistoricalV2SemanticPublicBinding,
+    HistoricalV2SemanticPublicBindingKind, HistoricalV2SemanticPublicReexportHop,
+    HistoricalV2SemanticSnapshotCensus, HistoricalV2SourceFile, HistoricalV2SourcePublicNamespace,
+    HistoricalV2SourcePublicReexport, HistoricalV2SourcePublicReexportKind,
+    HistoricalV2SourcePublicSymbolKind, HistoricalV2SourceSnapshotCensus,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -51,7 +51,12 @@ pub(super) fn validate_complete_reexport_expansions(
     let mut expected = BTreeSet::new();
     for file in files
         .values()
-        .filter(|file| !matches!(file.language.as_str(), "typescript" | "javascript"))
+        .filter(|file| {
+            !matches!(
+                file.language.as_str(),
+                "typescript" | "javascript" | "python"
+            )
+        })
         .filter(|file| file.language != "rust" || public_root_paths.contains(&file.repository_path))
     {
         for slot in resolve_expected_file(
@@ -114,6 +119,46 @@ pub(super) fn validate_complete_reexport_expansions(
             expected_package_exposures.insert(expected_node_package_slot(exposure, slot)?);
         }
     }
+    for root in &semantic.public_roots {
+        let super::super::HistoricalV2SemanticPublicRootOrigin::PythonDistributionModule {
+            module_exposure_id,
+            ..
+        } = &root.origin
+        else {
+            continue;
+        };
+        let module = source
+            .python_distribution_surfaces
+            .modules
+            .iter()
+            .find(|module| module.module_exposure_id == *module_exposure_id)
+            .ok_or_else(|| {
+                "historical-v2 semantic validation invented a Python distribution root".to_string()
+            })?;
+        let file = files
+            .get(root.repository_path.as_str())
+            .copied()
+            .ok_or_else(|| {
+                "historical-v2 semantic validation omitted a Python distribution root".to_string()
+            })?;
+        for slot in resolve_expected_file(
+            file,
+            &files,
+            &direct_bindings,
+            &hops,
+            &mut cache,
+            &mut Vec::new(),
+        )?
+        .into_iter()
+        .filter(|slot| slot.owner.is_none())
+        {
+            expected_package_exposures.insert(expected_python_package_slot(
+                module,
+                &root.repository_path,
+                slot,
+            )?);
+        }
+    }
     let actual_package_exposures = semantic
         .public_bindings
         .iter()
@@ -126,6 +171,37 @@ pub(super) fn validate_complete_reexport_expansions(
         );
     }
     Ok(())
+}
+
+fn expected_python_package_slot(
+    module: &HistoricalV2PythonDistributionModule,
+    repository_path: &str,
+    target: ExpectedPublicSlot,
+) -> Result<HistoricalV2SemanticPublicBinding, String> {
+    let surface_unit_id =
+        super::public_surface::historical_python_distribution_public_surface_unit_id(
+            &module.surface_slot_id,
+            &target.name,
+            target.owner.as_deref(),
+            target.namespace,
+            target.kind,
+        )?;
+    let declaration_unit_id =
+        super::public_surface::python_distribution_expansion_declaration_unit_id(
+            &surface_unit_id,
+            &module.module_exposure_id,
+            &target.binding.origin_declaration_unit_id,
+            &target.binding.symbol_id,
+            &target.binding.reexport_path,
+        )?;
+    let mut binding = target.binding;
+    binding.surface_unit_id = surface_unit_id;
+    binding.declaration_unit_id = declaration_unit_id;
+    binding.repository_path = repository_path.to_string();
+    binding.binding = HistoricalV2SemanticPublicBindingKind::PackageExposure;
+    binding.externally_reachable = true;
+    binding.package_exposure_id = Some(module.module_exposure_id.clone());
+    Ok(binding)
 }
 
 fn expected_node_package_slot(

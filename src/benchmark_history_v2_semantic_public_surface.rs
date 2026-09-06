@@ -1,6 +1,7 @@
 use super::super::{
     HistoricalV2NodePackageExposure, HistoricalV2NodePackageTargetStatus,
-    HistoricalV2PublicSurfaceCoverage, HistoricalV2SemanticPublicBinding,
+    HistoricalV2PublicSurfaceCoverage, HistoricalV2PythonDistributionModule,
+    HistoricalV2PythonModuleKind, HistoricalV2SemanticPublicBinding,
     HistoricalV2SemanticPublicBindingKind, HistoricalV2SemanticPublicReexportHop,
     HistoricalV2SemanticPublicRoot, HistoricalV2SemanticPublicRootOrigin,
     HistoricalV2SemanticSymbol, HistoricalV2SourceFile, HistoricalV2SourcePublicBindingKind,
@@ -92,6 +93,19 @@ pub(super) fn bind_public_surface(
     } else {
         Vec::new()
     };
+    let python_modules = if kind == SemanticIndexerKind::Python {
+        compiler_python_distribution_modules(source, index)?
+    } else {
+        Vec::new()
+    };
+    let python_shipped_paths = python_modules
+        .iter()
+        .map(|module| module.definition.document.0.clone())
+        .collect::<BTreeSet<_>>();
+    let python_roots = python_modules
+        .iter()
+        .filter(|module| module.module.is_distribution_root)
+        .collect::<Vec<_>>();
     for (repository_path, (symbol, definition)) in &rust_roots {
         retain_symbol(symbols, indexer_kind(kind), symbol, false, true, false)?;
         roots.push(HistoricalV2SemanticPublicRoot {
@@ -115,6 +129,19 @@ pub(super) fn bind_public_surface(
             },
         });
     }
+    for root in &python_roots {
+        retain_symbol(symbols, indexer_kind(kind), root.symbol, false, true, false)?;
+        roots.push(HistoricalV2SemanticPublicRoot {
+            indexer: indexer_kind(kind),
+            repository_path: root.definition.document.0.clone(),
+            module_symbol_id: root.symbol.id.0.clone(),
+            compiler_definition: flatten_location(root.definition),
+            origin: HistoricalV2SemanticPublicRootOrigin::PythonDistributionModule {
+                module_exposure_id: root.module.module_exposure_id.clone(),
+                surface_slot_id: root.module.surface_slot_id.clone(),
+            },
+        });
+    }
     for file in source_files.values() {
         let path = RepositoryPath(file.repository_path.clone());
         let Some(document) = index.documents.get(&path) else {
@@ -135,7 +162,7 @@ pub(super) fn bind_public_surface(
         })?;
         let file_externally_reachable = match kind {
             SemanticIndexerKind::Rust => rust_roots.contains_key(&file.repository_path),
-            SemanticIndexerKind::TypeScriptJavaScript => false,
+            SemanticIndexerKind::TypeScriptJavaScript | SemanticIndexerKind::Python => false,
             _ => true,
         };
         for declaration in &file.public_declarations {
@@ -235,11 +262,10 @@ pub(super) fn bind_public_surface(
     for file in source_files
         .values()
         .filter(|file| public_surface_document_paths.contains(file.repository_path.as_str()))
-        .filter(|file| {
-            !matches!(
-                kind,
-                SemanticIndexerKind::Rust | SemanticIndexerKind::TypeScriptJavaScript
-            ) || rust_roots.contains_key(&file.repository_path)
+        .filter(|file| match kind {
+            SemanticIndexerKind::Rust => rust_roots.contains_key(&file.repository_path),
+            SemanticIndexerKind::TypeScriptJavaScript | SemanticIndexerKind::Python => false,
+            _ => true,
         })
     {
         let slots = resolve_file_public_slots(
@@ -251,6 +277,7 @@ pub(super) fn bind_public_surface(
             index,
             symbols,
             reexport_hops,
+            &python_shipped_paths,
             &mut cache,
             &mut Vec::new(),
         )?;
@@ -290,6 +317,7 @@ pub(super) fn bind_public_surface(
             index,
             symbols,
             reexport_hops,
+            &python_shipped_paths,
             &mut cache,
             &mut Vec::new(),
         )?;
@@ -302,6 +330,41 @@ pub(super) fn bind_public_surface(
                 ))
                 .ok_or_else(|| {
                     "historical-v2 Node package expansion points to a missing compiler symbol"
+                        .to_string()
+                })?;
+            retain_symbol(symbols, indexer_kind(kind), symbol, true, false, false)?;
+            bindings.push(expanded.binding);
+        }
+    }
+    for root in python_roots {
+        let repository_path = root.definition.document.0.as_str();
+        let file = source_files.get(repository_path).copied().ok_or_else(|| {
+            format!(
+                "historical-v2 Python distribution root is absent from source census: {repository_path}"
+            )
+        })?;
+        let slots = resolve_file_public_slots(
+            file,
+            &source_files,
+            &records,
+            &direct_bindings,
+            kind,
+            index,
+            symbols,
+            reexport_hops,
+            &python_shipped_paths,
+            &mut cache,
+            &mut Vec::new(),
+        )?;
+        for slot in slots.into_iter().filter(|slot| slot.owner.is_none()) {
+            let expanded = expand_python_distribution_slot(root.module, repository_path, slot)?;
+            let symbol = index
+                .symbols
+                .get(&crate::semantic_index::SemanticSymbolId(
+                    expanded.binding.symbol_id.clone(),
+                ))
+                .ok_or_else(|| {
+                    "historical-v2 Python distribution expansion points to a missing compiler symbol"
                         .to_string()
                 })?;
             retain_symbol(symbols, indexer_kind(kind), symbol, true, false, false)?;
@@ -340,8 +403,7 @@ fn expand_owner_surfaces(
     let owners = bindings
         .iter()
         .filter(|binding| {
-            binding.indexer == IntentionalBoundaryIndexerKind::Rust
-                && binding.externally_reachable
+            binding.externally_reachable
                 && binding.owner_symbol_id.is_none()
                 && binding.binding != HistoricalV2SemanticPublicBindingKind::OwnerExpansion
         })
@@ -352,13 +414,11 @@ fn expand_owner_surfaces(
         let declaration = declarations
             .get(member.origin_declaration_unit_id.as_str())
             .copied()
-            .ok_or_else(|| {
-                "historical-v2 Rust owner member has no source declaration".to_string()
-            })?;
+            .ok_or_else(|| "historical-v2 owner member has no source declaration".to_string())?;
         let source_owner = declaration
             .owner
             .as_deref()
-            .ok_or_else(|| "historical-v2 Rust owner member has no source owner".to_string())?;
+            .ok_or_else(|| "historical-v2 owner member has no source owner".to_string())?;
         for owner in owners.iter().filter(|owner| {
             owner.indexer == member.indexer
                 && Some(owner.symbol_id.as_str()) == member.owner_symbol_id.as_deref()
@@ -396,14 +456,7 @@ fn expand_owner_surfaces(
             .ok_or_else(|| {
                 "historical-v2 Rust owner surface points to a missing compiler symbol".to_string()
             })?;
-        retain_symbol(
-            symbols,
-            IntentionalBoundaryIndexerKind::Rust,
-            symbol,
-            true,
-            false,
-            false,
-        )?;
+        retain_symbol(symbols, expansion.indexer, symbol, true, false, false)?;
     }
     bindings.extend(expansions);
     Ok(())
@@ -413,6 +466,117 @@ struct CompilerNodePublicRoot<'a> {
     exposure: &'a HistoricalV2NodePackageExposure,
     symbol: &'a SemanticSymbol,
     definition: &'a SemanticLocation,
+}
+
+struct CompilerPythonDistributionModule<'a> {
+    module: &'a HistoricalV2PythonDistributionModule,
+    symbol: &'a SemanticSymbol,
+    definition: &'a SemanticLocation,
+}
+
+fn compiler_python_distribution_modules<'a>(
+    source: &'a HistoricalV2SourceSnapshotCensus,
+    index: &'a SemanticIndex,
+) -> Result<Vec<CompilerPythonDistributionModule<'a>>, String> {
+    if source.python_distribution_surfaces.revision != source.revision
+        || source.python_distribution_surfaces.inventory_sha256 != source.inventory_sha256
+    {
+        return Err("historical-v2 Python distribution surface identity changed".to_string());
+    }
+    let source_files = source
+        .source_files
+        .iter()
+        .map(|file| (file.repository_path.as_str(), file))
+        .collect::<BTreeMap<_, _>>();
+    let mut resolved = Vec::new();
+    for module in &source.python_distribution_surfaces.modules {
+        match module.kind {
+            HistoricalV2PythonModuleKind::NamespacePackage => {
+                if module.is_distribution_root {
+                    return Err(format!(
+                        "historical-v2 Python namespace distribution root has no compiler definition: {}",
+                        module.import_name
+                    ));
+                }
+                continue;
+            }
+            HistoricalV2PythonModuleKind::ExtensionModule => {
+                return Err(format!(
+                    "historical-v2 Python extension module has no exact source provenance: {}",
+                    module.import_name
+                ));
+            }
+            HistoricalV2PythonModuleKind::StubModule
+            | HistoricalV2PythonModuleKind::StubPackageInit => {
+                return Err(format!(
+                    "historical-v2 Python stub module is not covered by the compiler source census: {}",
+                    module.import_name
+                ));
+            }
+            HistoricalV2PythonModuleKind::SourceModule
+            | HistoricalV2PythonModuleKind::SourcePackageInit => {}
+        }
+        let member_sha256 = module.member_sha256.as_deref().ok_or_else(|| {
+            format!(
+                "historical-v2 Python source module has no wheel member hash: {}",
+                module.import_name
+            )
+        })?;
+        let mut candidates = Vec::new();
+        for symbol in index.symbols.values() {
+            if symbol.origin != SemanticSymbolOrigin::Repository
+                || !symbol.ambiguity_notes.is_empty()
+                || symbol.owner.is_some()
+                || symbol.kind.category != SemanticSymbolCategory::Module
+            {
+                continue;
+            }
+            let Ok(parsed) = scip::symbol::parse_symbol(&symbol.provider_identity) else {
+                continue;
+            };
+            let [package, init] = parsed.descriptors.as_slice() else {
+                continue;
+            };
+            if parsed.scheme != "scip-python"
+                || package.name != module.import_name
+                || package.suffix.enum_value().ok() != Some(Suffix::Package)
+                || init.name != "__init__"
+                || init.suffix.enum_value().ok() != Some(Suffix::Meta)
+            {
+                continue;
+            }
+            for definition in &symbol.definitions {
+                let Some(file) = source_files.get(definition.document.0.as_str()).copied() else {
+                    continue;
+                };
+                if file.language == "python"
+                    && file.semantic_coverage == HistoricalV2SourceSemanticCoverage::Required
+                    && file.source_sha256 == member_sha256
+                {
+                    candidates.push((symbol, definition));
+                }
+            }
+        }
+        let [(symbol, definition)] = candidates.as_slice() else {
+            return Err(format!(
+                "historical-v2 compiler resolved Python wheel module {} to {} exact source definitions",
+                module.import_name,
+                candidates.len()
+            ));
+        };
+        if !index.documents.contains_key(&definition.document) {
+            return Err(format!(
+                "historical-v2 compiler omitted Python wheel module document {}",
+                definition.document.0
+            ));
+        }
+        resolved.push(CompilerPythonDistributionModule {
+            module,
+            symbol,
+            definition,
+        });
+    }
+    Ok(resolved)
 }
 
 fn compiler_node_public_roots<'a>(
@@ -532,6 +696,41 @@ fn expand_node_package_slot(
     })
 }
 
+fn expand_python_distribution_slot(
+    module: &HistoricalV2PythonDistributionModule,
+    repository_path: &str,
+    target: ResolvedPublicSlot,
+) -> Result<ResolvedPublicSlot, String> {
+    let surface_unit_id = historical_python_distribution_public_surface_unit_id(
+        &module.surface_slot_id,
+        &target.name,
+        target.owner.as_deref(),
+        target.namespace,
+        target.kind,
+    )?;
+    let declaration_unit_id = python_distribution_expansion_declaration_unit_id(
+        &surface_unit_id,
+        &module.module_exposure_id,
+        &target.binding.origin_declaration_unit_id,
+        &target.binding.symbol_id,
+        &target.binding.reexport_path,
+    )?;
+    let mut binding = target.binding;
+    binding.surface_unit_id = surface_unit_id;
+    binding.declaration_unit_id = declaration_unit_id;
+    binding.repository_path = repository_path.to_string();
+    binding.binding = HistoricalV2SemanticPublicBindingKind::PackageExposure;
+    binding.externally_reachable = true;
+    binding.package_exposure_id = Some(module.module_exposure_id.clone());
+    Ok(ResolvedPublicSlot {
+        name: target.name,
+        owner: target.owner,
+        namespace: target.namespace,
+        kind: target.kind,
+        binding,
+    })
+}
+
 pub(super) fn historical_node_package_public_surface_unit_id(
     surface_slot_id: &str,
     name: &str,
@@ -550,6 +749,24 @@ pub(super) fn historical_node_package_public_surface_unit_id(
     .map(|hash| format!("h2nps-v1:{hash}"))
 }
 
+pub(super) fn historical_python_distribution_public_surface_unit_id(
+    surface_slot_id: &str,
+    name: &str,
+    owner: Option<&str>,
+    namespace: HistoricalV2SourcePublicNamespace,
+    kind: HistoricalV2SourcePublicSymbolKind,
+) -> Result<String, String> {
+    hash_json(&(
+        "sniffbench-historical-v2-python-distribution-public-surface-v1",
+        surface_slot_id,
+        name,
+        owner,
+        namespace,
+        kind,
+    ))
+    .map(|hash| format!("h2pyps-v1:{hash}"))
+}
+
 pub(super) fn node_package_expansion_declaration_unit_id(
     surface_unit_id: &str,
     exposure_id: &str,
@@ -566,6 +783,24 @@ pub(super) fn node_package_expansion_declaration_unit_id(
         reexport_path,
     ))
     .map(|hash| format!("h2nex-v1:{hash}"))
+}
+
+pub(super) fn python_distribution_expansion_declaration_unit_id(
+    surface_unit_id: &str,
+    module_exposure_id: &str,
+    origin_declaration_unit_id: &str,
+    symbol_id: &str,
+    reexport_path: &[String],
+) -> Result<String, String> {
+    hash_json(&(
+        "sniffbench-historical-v2-python-distribution-expansion-v1",
+        surface_unit_id,
+        module_exposure_id,
+        origin_declaration_unit_id,
+        symbol_id,
+        reexport_path,
+    ))
+    .map(|hash| format!("h2pyex-v1:{hash}"))
 }
 
 pub(super) fn owner_expansion_declaration_unit_id(
@@ -720,6 +955,7 @@ fn resolve_file_public_slots(
     index: &SemanticIndex,
     symbols: &mut BTreeMap<(IntentionalBoundaryIndexerKind, String), HistoricalV2SemanticSymbol>,
     reexport_hops: &mut BTreeMap<String, HistoricalV2SemanticPublicReexportHop>,
+    python_shipped_paths: &BTreeSet<String>,
     cache: &mut BTreeMap<String, Vec<ResolvedPublicSlot>>,
     stack: &mut Vec<String>,
 ) -> Result<Vec<ResolvedPublicSlot>, String> {
@@ -820,6 +1056,14 @@ fn resolve_file_public_slots(
         if indexer_for_language(&target.language)? != kind {
             return Err("historical-v2 public re-export crossed compiler indexers".to_string());
         }
+        if kind == SemanticIndexerKind::Python
+            && !python_shipped_paths.contains(&target.repository_path)
+        {
+            return Err(format!(
+                "historical-v2 Python public re-export targets an unshipped module: {}",
+                target.repository_path
+            ));
+        }
         let target_slots = resolve_file_public_slots(
             target,
             source_files,
@@ -829,6 +1073,7 @@ fn resolve_file_public_slots(
             index,
             symbols,
             reexport_hops,
+            python_shipped_paths,
             cache,
             stack,
         )?;

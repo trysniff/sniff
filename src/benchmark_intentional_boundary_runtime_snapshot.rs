@@ -65,6 +65,10 @@ impl IntentionalBoundaryRuntimeSnapshot {
     pub(super) fn path(&self) -> &Path {
         &self.checkout_root
     }
+
+    pub(super) fn sandbox_root(&self) -> &Path {
+        &self.allocation_root
+    }
 }
 
 impl Drop for IntentionalBoundaryRuntimeSnapshot {

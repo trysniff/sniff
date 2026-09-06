@@ -26,6 +26,7 @@ include = [
   "/gold_fixtures/**",
   "/scripts/**",
   "/src/*.rs",
+  "/src/benchmark_python_wheel_backend_runner.py",
   "/src/benchmark_assets/**",
   "/src/**/*.rs",
   "/tests/**",
@@ -55,8 +56,10 @@ path = "tests/historical_v2_command_recovery.rs"
 required-features = ["sniffbench-frame"]
 
 [dependencies]
+base64 = "0.22"
 clap = { version = "4", features = ["derive"] }
 colored = "2"
+csv = "1.3"
 dotenvy = "0.15"
 flate2 = "1"
 ignore = "0.4"
