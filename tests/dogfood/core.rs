@@ -238,6 +238,7 @@ fn differential_proof_runs_through_the_cli_sandbox() {
 
 #[test]
 fn support_facades_are_reviewed_and_real_slop_still_surfaces_end_to_end() {
+    let _kotlin_dogfood = lock_kotlin_dogfood();
     let root = unique_root("sniff-dogfood-slf");
     fs::create_dir_all(&root).unwrap();
 
@@ -499,6 +500,7 @@ fn react_main_entrypoints_stay_out_of_the_report_but_are_reviewed_end_to_end() {
 
 #[test]
 fn methodless_compatibility_shims_stay_out_of_the_report_without_ai_spend() {
+    let _kotlin_dogfood = lock_kotlin_dogfood();
     let root = unique_root("sniff-dogfood-compat-shim");
     fs::create_dir_all(&root).unwrap();
 
