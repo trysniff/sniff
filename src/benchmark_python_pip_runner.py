@@ -1,8 +1,13 @@
-import ensurepip
+import hashlib
 import os
 from pathlib import Path
 import runpy
 import sys
+
+
+PIP_WHEEL_FILENAME = "pip-26.2.1-py3-none-any.whl"
+PIP_WHEEL_SHA256 = "71138adf1f4ca900cdb7d289c21b7494329f2332b6d85f0e1c42108c0384ed3e"
+PIP_WHEEL_BYTES = 1_816_632
 
 
 def inherit_appcontainer_acl_for_private_temp():
@@ -20,14 +25,22 @@ def inherit_appcontainer_acl_for_private_temp():
     os.mkdir = mkdir
 
 
-def bundled_pip_wheel():
-    bundled = Path(ensurepip.__file__).parent / "_bundled"
-    wheels = sorted(bundled.glob("pip-*.whl"))
-    if len(wheels) != 1:
-        raise SystemExit("Python runtime must provide exactly one bundled pip wheel")
-    wheel = wheels[0]
+def sha256(path):
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        while chunk := source.read(64 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def sniff_pip_wheel():
+    wheel = Path(__file__).with_name(PIP_WHEEL_FILENAME)
     if wheel.is_symlink() or not wheel.is_file():
-        raise SystemExit("bundled pip wheel is not a regular file")
+        raise SystemExit("Sniff's pinned pip wheel is not a regular file")
+    if wheel.stat().st_size != PIP_WHEEL_BYTES:
+        raise SystemExit("Sniff's pinned pip wheel has an unexpected size")
+    if sha256(wheel) != PIP_WHEEL_SHA256:
+        raise SystemExit("Sniff's pinned pip wheel failed SHA-256 verification")
     return wheel
 
 
@@ -35,7 +48,7 @@ def main():
     if sys.version_info < (3, 11):
         raise SystemExit("Python 3.11 or newer is required for pip isolation")
     inherit_appcontainer_acl_for_private_temp()
-    sys.path.insert(0, str(bundled_pip_wheel()))
+    sys.path.insert(0, str(sniff_pip_wheel()))
     runpy.run_module("pip", run_name="__main__")
 
 
