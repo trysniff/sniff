@@ -4,7 +4,7 @@ use super::{
 };
 use serde::{Deserialize, Serialize};
 
-pub const HISTORICAL_V2_QUALIFICATION_SCHEMA_VERSION: u32 = 4;
+pub const HISTORICAL_V2_QUALIFICATION_SCHEMA_VERSION: u32 = 5;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

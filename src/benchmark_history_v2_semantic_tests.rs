@@ -118,6 +118,95 @@ fn fixture_node_package_surfaces(
     }
 }
 
+fn fixture_python_distribution_surfaces(
+    revision: &str,
+    inventory_sha256: &str,
+    sources: Option<&[(&str, &str)]>,
+) -> super::super::HistoricalV2PythonDistributionSurfaceCensus {
+    let (distributions, modules, module_count_by_kind) = sources
+        .map(|sources| {
+            let distribution_id = "fixture-python-distribution".to_string();
+            let modules = sources
+                .iter()
+                .map(|(repository_path, source)| {
+                    let (import_name, kind) = python_fixture_module_identity(repository_path);
+                    super::super::HistoricalV2PythonDistributionModule {
+                        module_exposure_id: format!("fixture-python-module-{import_name}-{kind:?}"),
+                        surface_slot_id: format!("fixture-python-slot-{import_name}-{kind:?}"),
+                        distribution_id: distribution_id.clone(),
+                        normalized_distribution_name: "fixture".to_string(),
+                        is_distribution_root: !import_name.contains('.'),
+                        import_name,
+                        kind,
+                        archive_member_path: Some((*repository_path).to_string()),
+                        installed_path: Some((*repository_path).to_string()),
+                        member_sha256: Some(sha256(source.as_bytes())),
+                        member_byte_length: Some(source.len() as u64),
+                    }
+                })
+                .collect::<Vec<_>>();
+            let module_count_by_kind =
+                modules.iter().fold(BTreeMap::new(), |mut counts, module| {
+                    *counts.entry(module.kind).or_insert(0) += 1;
+                    counts
+                });
+            let distributions = vec![super::super::HistoricalV2PythonDistribution {
+                distribution_id,
+                manifest_repository_path: "pyproject.toml".to_string(),
+                manifest_object_id: "5".repeat(40),
+                manifest_source_sha256: "4".repeat(64),
+                build_backend: "fixture.build".to_string(),
+                backend_path: Vec::new(),
+                build_requirements: vec![super::super::HistoricalV2PythonBuildRequirement {
+                    ordinal: 0,
+                    requirement: "fixture-build==1.0.0".to_string(),
+                }],
+                toolchain_identity_sha256: "3".repeat(64),
+                command_contract: "fixture".to_string(),
+                wheel_filename: "fixture-1.0.0-py3-none-any.whl".to_string(),
+                wheel_sha256: "2".repeat(64),
+                wheel_byte_length: 1,
+                distribution_name: "fixture".to_string(),
+                normalized_distribution_name: "fixture".to_string(),
+                distribution_version: "1.0.0".to_string(),
+                wheel_root: super::super::HistoricalV2PythonWheelRoot::Purelib,
+                metadata_member_path: "fixture-1.0.0.dist-info/METADATA".to_string(),
+                wheel_metadata_member_path: "fixture-1.0.0.dist-info/WHEEL".to_string(),
+                record_member_path: "fixture-1.0.0.dist-info/RECORD".to_string(),
+                module_count: modules.len(),
+            }];
+            (distributions, modules, module_count_by_kind)
+        })
+        .unwrap_or_default();
+    super::super::HistoricalV2PythonDistributionSurfaceCensus {
+        schema_version:
+            super::super::HISTORICAL_V2_PYTHON_DISTRIBUTION_SURFACE_CENSUS_SCHEMA_VERSION,
+        contract: "fixture".to_string(),
+        repository: "example/repo".to_string(),
+        revision: revision.to_string(),
+        inventory_sha256: inventory_sha256.to_string(),
+        distributions,
+        modules,
+        module_count_by_kind,
+        census_sha256: "6".repeat(64),
+    }
+}
+
+fn python_fixture_module_identity(
+    repository_path: &str,
+) -> (String, super::super::HistoricalV2PythonModuleKind) {
+    let module = repository_path.strip_suffix(".py").unwrap();
+    let is_init = module.ends_with("/__init__") || module == "__init__";
+    let module = module.strip_suffix("/__init__").unwrap_or(module);
+    let import_name = module.replace('/', ".");
+    let kind = if is_init {
+        super::super::HistoricalV2PythonModuleKind::SourcePackageInit
+    } else {
+        super::super::HistoricalV2PythonModuleKind::SourceModule
+    };
+    (import_name, kind)
+}
+
 #[test]
 fn commits_exact_compiler_facts_for_every_historical_method() {
     let fixture = fixture();
@@ -1043,7 +1132,7 @@ __all__ = ["PublicWidget", "Extra", "namespace"]
     assert_eq!(snapshot.public_reexport_hop_count, 5);
     assert!(snapshot.public_bindings.iter().any(|binding| {
         binding.repository_path == "pkg/__init__.py"
-            && binding.binding == HistoricalV2SemanticPublicBindingKind::ReexportExpansion
+            && binding.binding == HistoricalV2SemanticPublicBindingKind::PackageExposure
             && binding.reexport_path.len() == 2
     }));
     assert!(snapshot.symbols.iter().all(|symbol| {
@@ -2062,6 +2151,11 @@ fn fixture() -> Fixture {
             &"b".repeat(64),
             None,
         ),
+        python_distribution_surfaces: fixture_python_distribution_surfaces(
+            &"a".repeat(40),
+            &"b".repeat(64),
+            None,
+        ),
         tracked_entry_count: 1,
         source_files: vec![super::super::HistoricalV2SourceFile {
             repository_path: "src/lib.rs".to_string(),
@@ -2223,6 +2317,11 @@ fn reference_fixture() -> Fixture {
             &"a".repeat(40),
             &"b".repeat(64),
             Some(("src/index.ts", &"d".repeat(40))),
+        ),
+        python_distribution_surfaces: fixture_python_distribution_surfaces(
+            &"a".repeat(40),
+            &"b".repeat(64),
+            None,
         ),
         tracked_entry_count: 1,
         source_files: vec![super::super::HistoricalV2SourceFile {
@@ -2401,7 +2500,7 @@ fn python_all_selects_only_the_named_wildcard_binding() {
         .iter()
         .filter(|binding| {
             binding.repository_path == "pkg/__init__.py"
-                && binding.binding == HistoricalV2SemanticPublicBindingKind::ReexportExpansion
+                && binding.binding == HistoricalV2SemanticPublicBindingKind::PackageExposure
         })
         .collect::<Vec<_>>();
     assert_eq!(root_expansions.len(), 1);
@@ -2481,7 +2580,7 @@ fn python_namespace_import_expands_the_repository_module() {
             .iter()
             .filter(|binding| {
                 binding.repository_path == "pkg/__init__.py"
-                    && binding.binding == HistoricalV2SemanticPublicBindingKind::ReexportExpansion
+                    && binding.binding == HistoricalV2SemanticPublicBindingKind::PackageExposure
             })
             .count(),
         1
@@ -2532,7 +2631,7 @@ fn python_recursive_wildcard_preserves_one_namespace_surface() {
         .iter()
         .filter(|binding| {
             binding.repository_path == "pkg/__init__.py"
-                && binding.binding == HistoricalV2SemanticPublicBindingKind::ReexportExpansion
+                && binding.binding == HistoricalV2SemanticPublicBindingKind::PackageExposure
         })
         .collect::<Vec<_>>();
     assert_eq!(root_namespace.len(), 2);
@@ -2607,10 +2706,179 @@ fn python_direct_binding_after_a_wildcard_remains_authoritative() {
     )
     .expect("later direct binding should shadow the wildcard");
 
-    assert!(!snapshot.public_bindings.iter().any(|binding| {
-        binding.repository_path == "pkg/__init__.py"
-            && binding.binding == HistoricalV2SemanticPublicBindingKind::ReexportExpansion
+    let package_bindings = snapshot
+        .public_bindings
+        .iter()
+        .filter(|binding| {
+            binding.repository_path == "pkg/__init__.py"
+                && binding.binding == HistoricalV2SemanticPublicBindingKind::PackageExposure
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(package_bindings.len(), 1);
+    assert!(package_bindings[0].reexport_path.is_empty());
+}
+
+#[test]
+fn python_distribution_root_keeps_unreexported_module_bindings_latent() {
+    let fixture = python_surface_fixture(
+        &[
+            ("pkg/__init__.py", "\n"),
+            ("pkg/internal.py", "def helper() -> int:\n    return 1\n"),
+        ],
+        &[],
+    );
+    let changed_indexers = BTreeSet::from([SemanticIndexerKind::Python]);
+    let required_paths = fixture_required_paths(&fixture.source);
+
+    let snapshot = build_semantic_snapshot(
+        fixture.root.path(),
+        &fixture.source,
+        &fixture.files,
+        &changed_indexers,
+        &required_paths,
+        &fixture.indexes,
+    )
+    .unwrap();
+
+    assert_eq!(snapshot.public_root_count, 1);
+    assert_eq!(snapshot.public_roots[0].repository_path, "pkg/__init__.py");
+    let helper = fixture
+        .source
+        .source_files
+        .iter()
+        .find(|file| file.repository_path == "pkg/internal.py")
+        .and_then(|file| {
+            file.public_declarations
+                .iter()
+                .find(|declaration| declaration.name == "helper")
+        })
+        .unwrap();
+    assert!(snapshot.public_bindings.iter().any(|binding| {
+        binding.declaration_unit_id == helper.declaration_unit_id && !binding.externally_reachable
     }));
+    assert!(!snapshot.public_bindings.iter().any(|binding| {
+        binding.origin_declaration_unit_id == helper.declaration_unit_id
+            && binding.binding == HistoricalV2SemanticPublicBindingKind::PackageExposure
+    }));
+    validation::validate_snapshot(
+        &fixture.source,
+        &snapshot,
+        &changed_indexers,
+        &required_paths,
+    )
+    .unwrap();
+}
+
+#[test]
+fn python_distribution_reexport_to_unshipped_module_fails_closed() {
+    let mut fixture = python_surface_fixture(
+        &[
+            ("pkg/__init__.py", "from .internal import *\n"),
+            ("pkg/internal.py", "value: int = 1\n"),
+        ],
+        &[("pkg/__init__.py", ".internal", "pkg/internal.py")],
+    );
+    fixture
+        .source
+        .python_distribution_surfaces
+        .modules
+        .retain(|module| module.import_name != "pkg.internal");
+    fixture.source.python_distribution_surfaces.distributions[0].module_count = 1;
+    fixture
+        .source
+        .python_distribution_surfaces
+        .module_count_by_kind
+        .insert(super::super::HistoricalV2PythonModuleKind::SourceModule, 0);
+
+    let error = build_semantic_snapshot(
+        fixture.root.path(),
+        &fixture.source,
+        &fixture.files,
+        &BTreeSet::from([SemanticIndexerKind::Python]),
+        &fixture_required_paths(&fixture.source),
+        &fixture.indexes,
+    )
+    .unwrap_err();
+
+    assert!(error.contains("unshipped module"), "{error}");
+}
+
+#[test]
+fn python_distribution_missing_or_ambiguous_compiler_root_fails_closed() {
+    let fixture = python_surface_fixture(&[("pkg/__init__.py", "value: int = 1\n")], &[]);
+    let root_symbol = SemanticSymbolId("python module pkg/__init__.py".to_string());
+    let mut missing = fixture.indexes.clone();
+    missing
+        .get_mut(&SemanticIndexerKind::Python)
+        .unwrap()
+        .symbols
+        .remove(&root_symbol);
+    let missing_error = build_semantic_snapshot(
+        fixture.root.path(),
+        &fixture.source,
+        &fixture.files,
+        &BTreeSet::from([SemanticIndexerKind::Python]),
+        &fixture_required_paths(&fixture.source),
+        &missing,
+    )
+    .unwrap_err();
+    assert!(
+        missing_error.contains("0 exact source definitions"),
+        "{missing_error}"
+    );
+
+    let mut ambiguous = fixture.indexes.clone();
+    let mut duplicate = ambiguous[&SemanticIndexerKind::Python].symbols[&root_symbol].clone();
+    duplicate.id = SemanticSymbolId("python duplicate module pkg".to_string());
+    ambiguous
+        .get_mut(&SemanticIndexerKind::Python)
+        .unwrap()
+        .symbols
+        .insert(duplicate.id.clone(), duplicate);
+    let ambiguous_error = build_semantic_snapshot(
+        fixture.root.path(),
+        &fixture.source,
+        &fixture.files,
+        &BTreeSet::from([SemanticIndexerKind::Python]),
+        &fixture_required_paths(&fixture.source),
+        &ambiguous,
+    )
+    .unwrap_err();
+    assert!(
+        ambiguous_error.contains("2 exact source definitions"),
+        "{ambiguous_error}"
+    );
+}
+
+#[test]
+fn python_distribution_uncovered_public_variants_fail_closed() {
+    for (kind, expected) in [
+        (
+            super::super::HistoricalV2PythonModuleKind::StubPackageInit,
+            "stub module",
+        ),
+        (
+            super::super::HistoricalV2PythonModuleKind::ExtensionModule,
+            "extension module",
+        ),
+        (
+            super::super::HistoricalV2PythonModuleKind::NamespacePackage,
+            "namespace distribution root",
+        ),
+    ] {
+        let mut fixture = python_surface_fixture(&[("pkg/__init__.py", "value: int = 1\n")], &[]);
+        fixture.source.python_distribution_surfaces.modules[0].kind = kind;
+        let error = build_semantic_snapshot(
+            fixture.root.path(),
+            &fixture.source,
+            &fixture.files,
+            &BTreeSet::from([SemanticIndexerKind::Python]),
+            &fixture_required_paths(&fixture.source),
+            &fixture.indexes,
+        )
+        .unwrap_err();
+        assert!(error.contains(expected), "{error}");
+    }
 }
 
 #[test]
@@ -2641,7 +2909,7 @@ fn semantic_validation_rejects_a_recommitted_omitted_python_expansion() {
         .iter()
         .position(|binding| {
             binding.repository_path == "pkg/__init__.py"
-                && binding.binding == HistoricalV2SemanticPublicBindingKind::ReexportExpansion
+                && binding.binding == HistoricalV2SemanticPublicBindingKind::PackageExposure
         })
         .unwrap();
     snapshot.public_bindings.remove(index);
@@ -2656,7 +2924,10 @@ fn semantic_validation_rejects_a_recommitted_omitted_python_expansion() {
     )
     .unwrap_err();
 
-    assert!(error.contains("expansion set is incomplete"), "{error}");
+    assert!(
+        error.contains("package exposure set is incomplete"),
+        "{error}"
+    );
 }
 
 fn python_surface_fixture(
@@ -3436,6 +3707,38 @@ fn compiler_surface_fixture(
         );
     }
 
+    if language == "python" {
+        for (repository_path, _) in sources {
+            let (import_name, _) = python_fixture_module_identity(repository_path);
+            let symbol_id = SemanticSymbolId(format!("python module {repository_path}"));
+            symbols.insert(
+                symbol_id.clone(),
+                SemanticSymbol {
+                    id: symbol_id,
+                    provider_identity: format!(
+                        "scip-python python fixture _ `{import_name}`/__init__:"
+                    ),
+                    display_name: Some(import_name),
+                    kind: SemanticSymbolKind {
+                        category: SemanticSymbolCategory::Module,
+                        provider_name: "module".to_string(),
+                    },
+                    documentation: Vec::new(),
+                    signatures: BTreeSet::new(),
+                    owner: None,
+                    definitions: BTreeSet::from([SemanticLocation {
+                        document: RepositoryPath((*repository_path).to_string()),
+                        range: range(0, 0, 1),
+                    }]),
+                    visibility: SemanticVisibility::Public,
+                    surfaces: BTreeSet::from([SemanticSurface::PublicApi]),
+                    origin: SemanticSymbolOrigin::Repository,
+                    ambiguity_notes: Vec::new(),
+                },
+            );
+        }
+    }
+
     for (_, _, target_path) in module_targets {
         let symbol_id = SemanticSymbolId(format!("{language} module {target_path}"));
         let provider_identity = match language {
@@ -3448,6 +3751,10 @@ fn compiler_surface_fixture(
             }
             "typescript" | "javascript" => {
                 format!("scip-typescript npm fixture 1.0.0 `{target_path}`/")
+            }
+            "python" => {
+                let (import_name, _) = python_fixture_module_identity(target_path);
+                format!("scip-python python fixture _ `{import_name}`/__init__:")
             }
             _ => symbol_id.0.clone(),
         };
@@ -3632,6 +3939,11 @@ fn compiler_surface_fixture(
             node_package_root
                 .as_ref()
                 .map(|(repository_path, object_id)| (*repository_path, object_id.as_str())),
+        ),
+        python_distribution_surfaces: fixture_python_distribution_surfaces(
+            &"a".repeat(40),
+            &"b".repeat(64),
+            (language == "python").then_some(sources),
         ),
         tracked_entry_count: source_files.len(),
         source_file_count: source_files.len(),

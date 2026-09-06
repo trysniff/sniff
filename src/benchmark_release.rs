@@ -161,6 +161,14 @@ pub use history_v2_node_package_surface_schema::*;
 #[path = "benchmark_history_v2_node_package_surface.rs"]
 mod history_v2_node_package_surface;
 
+#[path = "benchmark_history_v2_python_distribution_surface_schema.rs"]
+mod history_v2_python_distribution_surface_schema;
+
+pub use history_v2_python_distribution_surface_schema::*;
+
+#[path = "benchmark_history_v2_python_distribution_surface.rs"]
+mod history_v2_python_distribution_surface;
+
 #[path = "benchmark_history_v2_test_materialization.rs"]
 mod history_v2_test_materialization;
 

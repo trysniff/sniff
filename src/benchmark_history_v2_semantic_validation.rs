@@ -1,7 +1,7 @@
 use super::super::{
     HISTORICAL_V2_SEMANTIC_CENSUS_SCHEMA_VERSION, HistoricalV2Materialization,
     HistoricalV2MaterializedRoots, HistoricalV2NodePackageTargetStatus,
-    HistoricalV2PublicSurfaceCoverage, HistoricalV2SemanticCensus,
+    HistoricalV2PublicSurfaceCoverage, HistoricalV2PythonModuleKind, HistoricalV2SemanticCensus,
     HistoricalV2SemanticMethodStatus, HistoricalV2SemanticPublicBinding,
     HistoricalV2SemanticPublicBindingKind, HistoricalV2SemanticPublicReexportHop,
     HistoricalV2SemanticPublicRootOrigin, HistoricalV2SemanticSnapshotCensus,
@@ -294,6 +294,36 @@ fn validate_public_roots<'a>(
         } else {
             BTreeMap::new()
         };
+    let expected_python_roots = if indexers.contains(&IntentionalBoundaryIndexerKind::Python) {
+        let unsupported_roots = source
+            .python_distribution_surfaces
+            .modules
+            .iter()
+            .filter(|module| module.is_distribution_root)
+            .filter(|module| {
+                !matches!(
+                    module.kind,
+                    HistoricalV2PythonModuleKind::SourceModule
+                        | HistoricalV2PythonModuleKind::SourcePackageInit
+                )
+            })
+            .count();
+        if unsupported_roots != 0 {
+            return Err(
+                "historical-v2 Python distribution has compiler-incomplete public roots"
+                    .to_string(),
+            );
+        }
+        source
+            .python_distribution_surfaces
+            .modules
+            .iter()
+            .filter(|module| module.is_distribution_root)
+            .map(|module| (module.module_exposure_id.as_str(), module))
+            .collect::<BTreeMap<_, _>>()
+    } else {
+        BTreeMap::new()
+    };
     if semantic.public_root_count != semantic.public_roots.len()
         || semantic
             .public_roots
@@ -307,9 +337,15 @@ fn validate_public_roots<'a>(
         .iter()
         .map(|file| (file.repository_path.as_str(), file.language.as_str()))
         .collect::<BTreeMap<_, _>>();
+    let source_files = source
+        .source_files
+        .iter()
+        .map(|file| (file.repository_path.as_str(), file))
+        .collect::<BTreeMap<_, _>>();
     let mut paths = BTreeSet::new();
     let mut rust_paths = BTreeSet::new();
     let mut node_exposure_ids = BTreeSet::new();
+    let mut python_exposure_ids = BTreeSet::new();
     let mut root_symbols = BTreeSet::new();
     for root in &semantic.public_roots {
         let symbol_key = (root.indexer, root.module_symbol_id.as_str());
@@ -381,6 +417,45 @@ fn validate_public_roots<'a>(
                     );
                 }
             }
+            HistoricalV2SemanticPublicRootOrigin::PythonDistributionModule {
+                module_exposure_id,
+                surface_slot_id,
+            } => {
+                let module = expected_python_roots
+                    .get(module_exposure_id.as_str())
+                    .ok_or_else(|| {
+                        "historical-v2 Python public root invented a distribution module"
+                            .to_string()
+                    })?;
+                let [package, init] = parsed.descriptors.as_slice() else {
+                    return Err(
+                        "historical-v2 Python public root has a non-module descriptor path"
+                            .to_string(),
+                    );
+                };
+                let file = source_files
+                    .get(root.repository_path.as_str())
+                    .copied()
+                    .ok_or_else(|| {
+                        "historical-v2 Python public root source disappeared".to_string()
+                    })?;
+                if root.indexer != IntentionalBoundaryIndexerKind::Python
+                    || file.language != "python"
+                    || parsed.scheme != "scip-python"
+                    || package.name != module.import_name
+                    || package.suffix.enum_value().ok() != Some(Suffix::Package)
+                    || init.name != "__init__"
+                    || init.suffix.enum_value().ok() != Some(Suffix::Meta)
+                    || symbol.symbol.owner.is_some()
+                    || module.surface_slot_id != *surface_slot_id
+                    || module.member_sha256.as_deref() != Some(file.source_sha256.as_str())
+                    || !python_exposure_ids.insert(module_exposure_id.as_str())
+                {
+                    return Err(
+                        "historical-v2 Python public root changed compiler identity".to_string()
+                    );
+                }
+            }
         }
         paths.insert(root.repository_path.clone());
         root_symbols.insert(symbol_key);
@@ -396,6 +471,15 @@ fn validate_public_roots<'a>(
             .all(|exposure_id| node_exposure_ids.contains(exposure_id))
     {
         return Err("historical-v2 Node public roots disagree with package exposures".to_string());
+    }
+    if python_exposure_ids.len() != expected_python_roots.len()
+        || !expected_python_roots
+            .keys()
+            .all(|exposure_id| python_exposure_ids.contains(exposure_id))
+    {
+        return Err(
+            "historical-v2 Python public roots disagree with distribution modules".to_string(),
+        );
     }
     Ok((paths, root_symbols))
 }
@@ -666,7 +750,8 @@ fn validate_public_bindings<'a>(
                         binding.owner_symbol_id.is_none()
                             && public_root_paths.contains(*repository_path)
                     }
-                    IntentionalBoundaryIndexerKind::TypeScriptJavaScript => false,
+                    IntentionalBoundaryIndexerKind::TypeScriptJavaScript
+                    | IntentionalBoundaryIndexerKind::Python => false,
                     _ => true,
                 };
                 if binding.indexer != *indexer
@@ -716,16 +801,33 @@ fn validate_public_bindings<'a>(
                     );
                 }
             }
-            HistoricalV2SemanticPublicBindingKind::PackageExposure => {
-                validate_node_package_binding(
-                    source,
-                    binding,
-                    symbol,
-                    &expected,
-                    reexports,
-                    &direct_pairs,
-                )?;
-            }
+            HistoricalV2SemanticPublicBindingKind::PackageExposure => match binding.indexer {
+                IntentionalBoundaryIndexerKind::TypeScriptJavaScript => {
+                    validate_node_package_binding(
+                        source,
+                        binding,
+                        symbol,
+                        &expected,
+                        reexports,
+                        &direct_pairs,
+                    )?;
+                }
+                IntentionalBoundaryIndexerKind::Python => {
+                    validate_python_package_binding(
+                        source,
+                        binding,
+                        symbol,
+                        &expected,
+                        reexports,
+                        &direct_pairs,
+                    )?;
+                }
+                _ => {
+                    return Err(
+                        "historical-v2 package exposure used an unsupported indexer".to_string()
+                    );
+                }
+            },
         }
         binding_symbols.insert(symbol_key);
         if binding.externally_reachable {
@@ -958,6 +1060,141 @@ fn validate_node_package_binding<'a>(
         || binding.compiler_anchor != expected_anchor
     {
         return Err("historical-v2 Node package binding changed public identity".to_string());
+    }
+    Ok(())
+}
+
+fn validate_python_package_binding<'a>(
+    source: &HistoricalV2SourceSnapshotCensus,
+    binding: &HistoricalV2SemanticPublicBinding,
+    symbol: &HistoricalV2SemanticSymbol,
+    declarations: &DeclarationMap<'a>,
+    reexports: &ReexportMap<'a>,
+    direct_pairs: &BTreeSet<(&str, &str)>,
+) -> Result<(), String> {
+    let exposure_id = binding.package_exposure_id.as_deref().ok_or_else(|| {
+        "historical-v2 Python package binding has no module exposure identity".to_string()
+    })?;
+    let module = source
+        .python_distribution_surfaces
+        .modules
+        .iter()
+        .find(|module| module.module_exposure_id == exposure_id)
+        .ok_or_else(|| {
+            "historical-v2 Python package binding invented a module exposure".to_string()
+        })?;
+    let root_file = source
+        .source_files
+        .iter()
+        .find(|file| file.repository_path == binding.repository_path)
+        .ok_or_else(|| "historical-v2 Python package root source disappeared".to_string())?;
+    let (origin_path, origin_indexer, origin) = declarations
+        .get(binding.origin_declaration_unit_id.as_str())
+        .copied()
+        .ok_or_else(|| {
+            "historical-v2 Python package binding has no origin declaration".to_string()
+        })?;
+    if binding.indexer != IntentionalBoundaryIndexerKind::Python
+        || origin_indexer != IntentionalBoundaryIndexerKind::Python
+        || binding.binding != HistoricalV2SemanticPublicBindingKind::PackageExposure
+        || !binding.externally_reachable
+        || !module.is_distribution_root
+        || module.member_sha256.as_deref() != Some(root_file.source_sha256.as_str())
+        || binding.owner_symbol_id.is_some()
+        || binding.owner_compiler_anchor.is_some()
+        || binding.exposing_owner_declaration_unit_id.is_some()
+        || symbol.symbol.origin != IntentionalBoundarySemanticOrigin::Repository
+        || !compatible_public_symbol_kind(origin.kind, symbol.symbol.category)
+        || !direct_pairs.contains(&(
+            binding.origin_declaration_unit_id.as_str(),
+            binding.symbol_id.as_str(),
+        ))
+    {
+        return Err("historical-v2 Python package binding changed compiler identity".to_string());
+    }
+
+    let mut current_path = binding.repository_path.as_str();
+    let mut seen_hops = BTreeSet::new();
+    for reexport_id in &binding.reexport_path {
+        if !seen_hops.insert(reexport_id.as_str()) {
+            return Err("historical-v2 Python package binding contains a cycle".to_string());
+        }
+        let (file, _, hop) = reexports
+            .get(reexport_id.as_str())
+            .copied()
+            .ok_or_else(|| {
+                "historical-v2 Python package binding references an omitted public re-export hop"
+                    .to_string()
+            })?;
+        if file.repository_path != current_path || hop.indexer != binding.indexer {
+            return Err("historical-v2 Python package binding has a disconnected path".to_string());
+        }
+        current_path = hop.target_repository_path.as_str();
+    }
+    if current_path != origin_path {
+        return Err("historical-v2 Python package binding did not reach its origin".to_string());
+    }
+
+    let mut name = origin.name.clone();
+    let mut owner = origin.owner.clone();
+    let mut namespace = origin.namespace;
+    let mut kind = origin.kind;
+    for reexport_id in binding.reexport_path.iter().rev() {
+        let (_, reexport, _) = reexports.get(reexport_id.as_str()).copied().unwrap();
+        match reexport.kind {
+            HistoricalV2SourcePublicReexportKind::Wildcard => {
+                if name == "default" {
+                    return Err(
+                        "historical-v2 Python package wildcard exposed a default binding"
+                            .to_string(),
+                    );
+                }
+            }
+            HistoricalV2SourcePublicReexportKind::Namespace => {
+                name = reexport.name.clone().ok_or_else(|| {
+                    "historical-v2 Python package namespace has no exposed name".to_string()
+                })?;
+                owner = None;
+                namespace = HistoricalV2SourcePublicNamespace::Module;
+                kind = HistoricalV2SourcePublicSymbolKind::Module;
+            }
+        }
+    }
+    if owner.is_some() {
+        return Err("historical-v2 Python package binding exposed a member directly".to_string());
+    }
+    let expected_surface =
+        super::public_surface::historical_python_distribution_public_surface_unit_id(
+            &module.surface_slot_id,
+            &name,
+            None,
+            namespace,
+            kind,
+        )?;
+    let expected_declaration =
+        super::public_surface::python_distribution_expansion_declaration_unit_id(
+            &expected_surface,
+            exposure_id,
+            &binding.origin_declaration_unit_id,
+            &binding.symbol_id,
+            &binding.reexport_path,
+        )?;
+    let (expected_encoding, expected_anchor) =
+        if let Some(reexport_id) = binding.reexport_path.first() {
+            let hop = reexports.get(reexport_id.as_str()).unwrap().2;
+            (hop.position_encoding, hop.compiler_anchor.clone())
+        } else {
+            (
+                binding.position_encoding,
+                declaration_semantic_range(origin_path, origin, binding.position_encoding),
+            )
+        };
+    if binding.surface_unit_id != expected_surface
+        || binding.declaration_unit_id != expected_declaration
+        || binding.position_encoding != expected_encoding
+        || binding.compiler_anchor != expected_anchor
+    {
+        return Err("historical-v2 Python package binding changed public identity".to_string());
     }
     Ok(())
 }

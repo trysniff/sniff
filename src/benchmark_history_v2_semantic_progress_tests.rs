@@ -1,6 +1,8 @@
 use super::*;
 use crate::benchmark::{
-    HISTORICAL_V2_NODE_PACKAGE_SURFACE_CENSUS_SCHEMA_VERSION, HistoricalV2NodePackageSurfaceCensus,
+    HISTORICAL_V2_NODE_PACKAGE_SURFACE_CENSUS_SCHEMA_VERSION,
+    HISTORICAL_V2_PYTHON_DISTRIBUTION_SURFACE_CENSUS_SCHEMA_VERSION,
+    HistoricalV2NodePackageSurfaceCensus, HistoricalV2PythonDistributionSurfaceCensus,
     INTENTIONAL_BOUNDARY_PROJECT_MODEL_CENSUS_SCHEMA_VERSION,
     IntentionalBoundaryProjectModelCensus,
 };
@@ -39,6 +41,22 @@ fn empty_node_package_surfaces(revision: &str) -> HistoricalV2NodePackageSurface
     }
 }
 
+fn empty_python_distribution_surfaces(
+    revision: &str,
+) -> HistoricalV2PythonDistributionSurfaceCensus {
+    HistoricalV2PythonDistributionSurfaceCensus {
+        schema_version: HISTORICAL_V2_PYTHON_DISTRIBUTION_SURFACE_CENSUS_SCHEMA_VERSION,
+        contract: "fixture".to_string(),
+        repository: "example/repository".to_string(),
+        revision: revision.to_string(),
+        inventory_sha256: digest('1'),
+        distributions: Vec::new(),
+        modules: Vec::new(),
+        module_count_by_kind: BTreeMap::new(),
+        census_sha256: digest('8'),
+    }
+}
+
 fn source_snapshot(revision: &str, digest_character: char) -> HistoricalV2SourceSnapshotCensus {
     HistoricalV2SourceSnapshotCensus {
         revision: revision.to_string(),
@@ -46,6 +64,7 @@ fn source_snapshot(revision: &str, digest_character: char) -> HistoricalV2Source
         parser_census_sha256: digest('2'),
         cargo_project_model: empty_cargo_project_model(revision),
         node_package_surfaces: empty_node_package_surfaces(revision),
+        python_distribution_surfaces: empty_python_distribution_surfaces(revision),
         tracked_entry_count: 0,
         source_files: Vec::new(),
         source_file_count: 0,

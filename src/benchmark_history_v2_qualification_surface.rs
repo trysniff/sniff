@@ -33,17 +33,21 @@ fn surface_entries(
         .collect::<BTreeMap<_, _>>();
     let mut aggregates = BTreeMap::new();
     for root in &semantic.public_roots {
-        let HistoricalV2SemanticPublicRootOrigin::NodePackageExposure {
-            exposure_id,
-            surface_slot_id,
-        } = &root.origin
-        else {
-            continue;
+        let (exposure_id, surface_slot_id, root_kind) = match &root.origin {
+            HistoricalV2SemanticPublicRootOrigin::RustCargoLibrary => continue,
+            HistoricalV2SemanticPublicRootOrigin::NodePackageExposure {
+                exposure_id,
+                surface_slot_id,
+            } => (exposure_id, surface_slot_id, "node"),
+            HistoricalV2SemanticPublicRootOrigin::PythonDistributionModule {
+                module_exposure_id,
+                surface_slot_id,
+            } => (module_exposure_id, surface_slot_id, "python"),
         };
         let entry = symbols
             .get(&(root.indexer, root.module_symbol_id.as_str()))
             .ok_or_else(|| {
-                "historical-v2 Node public root references a missing surface symbol".to_string()
+                "historical-v2 package public root references a missing surface symbol".to_string()
             })?;
         record_surface_binding(
             &mut aggregates,
@@ -51,7 +55,7 @@ fn surface_entries(
             surface_slot_id,
             exposure_id,
             &entry.symbol.symbol_id,
-            node_package_root_fingerprint(surface_slot_id)?,
+            package_root_fingerprint(root_kind, surface_slot_id)?,
         );
     }
     for binding in semantic
@@ -76,9 +80,10 @@ fn surface_entries(
     Ok(finish_surface_entries(aggregates))
 }
 
-fn node_package_root_fingerprint(surface_slot_id: &str) -> Result<String, String> {
+fn package_root_fingerprint(root_kind: &str, surface_slot_id: &str) -> Result<String, String> {
     hash_json(&(
-        "sniffbench-historical-v2-node-package-root-surface-v1",
+        "sniffbench-historical-v2-package-root-surface-v1",
+        root_kind,
         surface_slot_id,
     ))
 }
@@ -374,6 +379,44 @@ mod tests {
         assert_eq!(added.added.len(), 1);
     }
 
+    #[test]
+    fn empty_python_package_root_is_a_stable_public_surface() {
+        let base = surface_entries(&snapshot_with_python_root(
+            "pkg/__init__.py",
+            "python-package-root",
+            "module-exposure-a",
+            "python-module-a",
+        ))
+        .unwrap();
+        let patched = surface_entries(&snapshot_with_python_root(
+            "src/pkg/__init__.py",
+            "python-package-root",
+            "module-exposure-b",
+            "python-module-b",
+        ))
+        .unwrap();
+
+        assert_eq!(base.len(), 1);
+        assert_eq!(base[0].surface_unit_id, "python-package-root");
+        let delta = diff_entries(base, patched).unwrap();
+        assert!(delta.preserved);
+        assert!(delta.changed.is_empty());
+    }
+
+    #[test]
+    fn adding_or_removing_a_python_package_root_changes_the_surface() {
+        let root = surface_entries(&snapshot_with_python_root(
+            "pkg/__init__.py",
+            "python-package-root",
+            "module-exposure-a",
+            "python-module-a",
+        ))
+        .unwrap();
+
+        assert!(!diff_entries(root.clone(), Vec::new()).unwrap().preserved);
+        assert!(!diff_entries(Vec::new(), root).unwrap().preserved);
+    }
+
     fn surface_entry(symbol: &str, fingerprint: char) -> HistoricalV2PublicSurfaceEntry {
         HistoricalV2PublicSurfaceEntry {
             indexer: IntentionalBoundaryIndexerKind::Rust,
@@ -415,6 +458,40 @@ mod tests {
         exposure_id: &str,
         symbol_id: &str,
     ) -> HistoricalV2SemanticSnapshotCensus {
+        snapshot_with_package_root(
+            repository_path,
+            symbol_id,
+            IntentionalBoundaryIndexerKind::TypeScriptJavaScript,
+            HistoricalV2SemanticPublicRootOrigin::NodePackageExposure {
+                exposure_id: exposure_id.to_string(),
+                surface_slot_id: surface_slot_id.to_string(),
+            },
+        )
+    }
+
+    fn snapshot_with_python_root(
+        repository_path: &str,
+        surface_slot_id: &str,
+        module_exposure_id: &str,
+        symbol_id: &str,
+    ) -> HistoricalV2SemanticSnapshotCensus {
+        snapshot_with_package_root(
+            repository_path,
+            symbol_id,
+            IntentionalBoundaryIndexerKind::Python,
+            HistoricalV2SemanticPublicRootOrigin::PythonDistributionModule {
+                module_exposure_id: module_exposure_id.to_string(),
+                surface_slot_id: surface_slot_id.to_string(),
+            },
+        )
+    }
+
+    fn snapshot_with_package_root(
+        repository_path: &str,
+        symbol_id: &str,
+        indexer: IntentionalBoundaryIndexerKind,
+        origin: HistoricalV2SemanticPublicRootOrigin,
+    ) -> HistoricalV2SemanticSnapshotCensus {
         let compiler_definition = IntentionalBoundarySemanticRange {
             repository_path: repository_path.to_string(),
             start_line_zero_based: 0,
@@ -435,18 +512,15 @@ mod tests {
             methods: Vec::new(),
             public_bindings: Vec::new(),
             public_roots: vec![HistoricalV2SemanticPublicRoot {
-                indexer: IntentionalBoundaryIndexerKind::TypeScriptJavaScript,
+                indexer,
                 repository_path: repository_path.to_string(),
                 module_symbol_id: symbol_id.to_string(),
                 compiler_definition,
-                origin: HistoricalV2SemanticPublicRootOrigin::NodePackageExposure {
-                    exposure_id: exposure_id.to_string(),
-                    surface_slot_id: surface_slot_id.to_string(),
-                },
+                origin,
             }],
             public_reexport_hops: Vec::new(),
             symbols: vec![HistoricalV2SemanticSymbol {
-                indexer: IntentionalBoundaryIndexerKind::TypeScriptJavaScript,
+                indexer,
                 is_public_surface: false,
                 is_public_root_evidence: true,
                 is_reexport_evidence: false,

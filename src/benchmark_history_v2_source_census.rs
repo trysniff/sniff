@@ -2,6 +2,10 @@ use super::history_v2_node_package_surface::{
     census_historical_v2_node_package_surfaces,
     validate_historical_v2_node_package_surface_census_commitment,
 };
+use super::history_v2_python_distribution_surface::{
+    census_historical_v2_python_distribution_surfaces,
+    validate_historical_v2_python_distribution_surface_census_commitment,
+};
 use super::history_v2_source_census_exclusion::seal_source_census_exclusion;
 use super::intentional_boundary_inventory::{
     read_intentional_boundary_git_blobs, supported_source_git_blob_requests,
@@ -13,19 +17,19 @@ use super::intentional_boundary_project_model_outcome::{
 use super::{
     BoundaryGitEntryKind, HISTORICAL_V2_SOURCE_CENSUS_SCHEMA_VERSION, HistoricalV2Materialization,
     HistoricalV2MaterializedRoots, HistoricalV2NodePackageSurfaceCensus,
-    HistoricalV2PublicSurfaceCoverage, HistoricalV2SlotStage, HistoricalV2SlotStageError,
-    HistoricalV2SlotStageErrorKind, HistoricalV2SourceByteRange, HistoricalV2SourceCensus,
-    HistoricalV2SourceCensusExclusion, HistoricalV2SourceCensusFailureEvidence,
-    HistoricalV2SourceFile, HistoricalV2SourceIdentifierPositions, HistoricalV2SourceMethod,
-    HistoricalV2SourcePosition, HistoricalV2SourcePositionRange,
-    HistoricalV2SourcePublicBindingKind, HistoricalV2SourcePublicDeclaration,
-    HistoricalV2SourcePublicNamespace, HistoricalV2SourcePublicReexport,
-    HistoricalV2SourcePublicReexportKind, HistoricalV2SourcePublicSymbolKind,
-    HistoricalV2SourceSemanticCoverage, HistoricalV2SourceSnapshotCensus,
-    HistoricalV2SourceSnapshotSide, HistoricalV2StageResult, IntentionalBoundaryProjectModelCensus,
-    IntentionalBoundaryRepositoryInventory, IntentionalBoundarySourceCensus,
-    census_intentional_boundary_repository, inventory_intentional_boundary_repository,
-    validate_historical_v2_materialization,
+    HistoricalV2PublicSurfaceCoverage, HistoricalV2PythonDistributionSurfaceCensus,
+    HistoricalV2SlotStage, HistoricalV2SlotStageError, HistoricalV2SlotStageErrorKind,
+    HistoricalV2SourceByteRange, HistoricalV2SourceCensus, HistoricalV2SourceCensusExclusion,
+    HistoricalV2SourceCensusFailureEvidence, HistoricalV2SourceFile,
+    HistoricalV2SourceIdentifierPositions, HistoricalV2SourceMethod, HistoricalV2SourcePosition,
+    HistoricalV2SourcePositionRange, HistoricalV2SourcePublicBindingKind,
+    HistoricalV2SourcePublicDeclaration, HistoricalV2SourcePublicNamespace,
+    HistoricalV2SourcePublicReexport, HistoricalV2SourcePublicReexportKind,
+    HistoricalV2SourcePublicSymbolKind, HistoricalV2SourceSemanticCoverage,
+    HistoricalV2SourceSnapshotCensus, HistoricalV2SourceSnapshotSide, HistoricalV2StageResult,
+    IntentionalBoundaryProjectModelCensus, IntentionalBoundaryRepositoryInventory,
+    IntentionalBoundarySourceCensus, census_intentional_boundary_repository,
+    inventory_intentional_boundary_repository, validate_historical_v2_materialization,
     validate_intentional_boundary_project_model_census_commitment,
 };
 use serde::Serialize;
@@ -33,7 +37,7 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::path::Path;
 
-const SOURCE_CENSUS_CONTRACT: &str = "sniffbench-historical-v2-source-census-v11";
+const SOURCE_CENSUS_CONTRACT: &str = "sniffbench-historical-v2-source-census-v12";
 pub(super) const PARSER_ERROR_LIMIT: usize = 4 * 1024;
 type SourceCensusStageResult =
     HistoricalV2StageResult<HistoricalV2SourceCensus, HistoricalV2SourceCensusExclusion>;
@@ -129,6 +133,20 @@ pub fn census_historical_v2_sources_typed(
         &patched_inventory,
     )
     .map_err(infrastructure)?;
+    let base_python_distribution_surfaces = census_historical_v2_python_distribution_surfaces(
+        &inventory_repository,
+        &materialization.base_revision,
+        &roots.base_root,
+        &base_inventory,
+    )
+    .map_err(infrastructure)?;
+    let patched_python_distribution_surfaces = census_historical_v2_python_distribution_surfaces(
+        &inventory_repository,
+        &materialization.patched_commit_oid,
+        &roots.patched_root,
+        &patched_inventory,
+    )
+    .map_err(infrastructure)?;
 
     let mut census = HistoricalV2SourceCensus {
         schema_version: HISTORICAL_V2_SOURCE_CENSUS_SCHEMA_VERSION,
@@ -141,6 +159,7 @@ pub fn census_historical_v2_sources_typed(
             &base_parser_census,
             base_cargo_project_model,
             base_node_package_surfaces,
+            base_python_distribution_surfaces,
         )
         .map_err(infrastructure)?,
         patched: project_snapshot(
@@ -149,6 +168,7 @@ pub fn census_historical_v2_sources_typed(
             &patched_parser_census,
             patched_cargo_project_model,
             patched_node_package_surfaces,
+            patched_python_distribution_surfaces,
         )
         .map_err(infrastructure)?,
         source_census_sha256: String::new(),
@@ -210,6 +230,16 @@ pub fn validate_historical_v2_source_census_commitment(
         &base_inventory,
         &census.base.node_package_surfaces,
     )?;
+    validate_historical_v2_python_distribution_surface_census_commitment(
+        &roots.base_root,
+        &base_inventory,
+        &census.base.python_distribution_surfaces,
+    )?;
+    validate_historical_v2_python_distribution_surface_census_commitment(
+        &roots.patched_root,
+        &patched_inventory,
+        &census.patched.python_distribution_surfaces,
+    )?;
     validate_historical_v2_node_package_surface_census_commitment(
         &roots.patched_root,
         &patched_inventory,
@@ -237,6 +267,7 @@ pub fn validate_historical_v2_source_census_commitment(
         &base_parser_census,
         census.base.cargo_project_model.clone(),
         census.base.node_package_surfaces.clone(),
+        census.base.python_distribution_surfaces.clone(),
     )?;
     let expected_patched = project_snapshot(
         &roots.patched_root,
@@ -244,6 +275,7 @@ pub fn validate_historical_v2_source_census_commitment(
         &patched_parser_census,
         census.patched.cargo_project_model.clone(),
         census.patched.node_package_surfaces.clone(),
+        census.patched.python_distribution_surfaces.clone(),
     )?;
     if census.base != expected_base || census.patched != expected_patched {
         return Err("historical-v2 source census commitment changed".to_string());
@@ -363,6 +395,7 @@ fn project_snapshot(
     parser_census: &IntentionalBoundarySourceCensus,
     cargo_project_model: IntentionalBoundaryProjectModelCensus,
     node_package_surfaces: HistoricalV2NodePackageSurfaceCensus,
+    python_distribution_surfaces: HistoricalV2PythonDistributionSurfaceCensus,
 ) -> Result<HistoricalV2SourceSnapshotCensus, String> {
     if inventory.revision != parser_census.revision
         || inventory.inventory_sha256 != parser_census.inventory_sha256
@@ -466,6 +499,7 @@ fn project_snapshot(
         parser_census_sha256: parser_census.census_sha256.clone(),
         cargo_project_model,
         node_package_surfaces,
+        python_distribution_surfaces,
         tracked_entry_count: inventory.tracked_entries.len(),
         source_file_count: source_files.len(),
         source_files,
@@ -881,6 +915,7 @@ fn snapshot_census_sha256(value: &HistoricalV2SourceSnapshotCensus) -> Result<St
         &value.parser_census_sha256,
         &value.cargo_project_model,
         &value.node_package_surfaces,
+        &value.python_distribution_surfaces,
         value.tracked_entry_count,
         &value.source_files,
         value.source_file_count,
