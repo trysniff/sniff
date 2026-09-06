@@ -48,6 +48,9 @@ pub(crate) struct SandboxCommand {
     /// Host-controlled toolchains that may retain a read-only sandbox grant.
     /// Repository content must never be placed in this collection.
     pub(crate) persistent_read_only_paths: Vec<PathBuf>,
+    /// Immutable host-controlled runtime roots that may retain read-execute
+    /// access through Sniff's named sandbox capability.
+    pub(crate) persistent_executable_paths: Vec<PathBuf>,
     /// Trusted compiler/runtime images that the worker may execute. Windows
     /// grants these only to the unique per-run AppContainer identity.
     pub(crate) executable_paths: Vec<PathBuf>,
@@ -70,6 +73,7 @@ impl SandboxCommand {
         self.read_only_paths
             .iter()
             .chain(self.persistent_read_only_paths.iter())
+            .chain(self.persistent_executable_paths.iter())
             .chain(self.executable_paths.iter())
     }
 }
@@ -513,7 +517,11 @@ fn validate_spec(spec: &SandboxCommand) -> Result<(), SandboxError> {
             )));
         }
     }
-    for path in &spec.persistent_read_only_paths {
+    for path in spec
+        .persistent_read_only_paths
+        .iter()
+        .chain(&spec.persistent_executable_paths)
+    {
         let canonical_path = std::fs::canonicalize(path).map_err(|error| {
             SandboxError::Invalid(format!(
                 "persistent sandbox path could not be canonicalized: {} ({error})",
@@ -524,7 +532,7 @@ fn validate_spec(spec: &SandboxCommand) -> Result<(), SandboxError> {
             || canonical_root.starts_with(&canonical_path)
         {
             return Err(SandboxError::Invalid(format!(
-                "persistent sandbox read-only paths must not overlap the repository root: {}",
+                "persistent sandbox paths must not overlap the repository root: {}",
                 path.display()
             )));
         }
@@ -575,6 +583,7 @@ fn validate_spec(spec: &SandboxCommand) -> Result<(), SandboxError> {
                 .read_only_paths
                 .iter()
                 .chain(&spec.persistent_read_only_paths)
+                .chain(&spec.persistent_executable_paths)
                 .any(|allowed| {
                     std::fs::canonicalize(allowed).is_ok_and(|allowed| {
                         canonical_path.starts_with(&allowed)
@@ -1360,6 +1369,7 @@ mod tests {
             read_only_paths: Vec::new(),
             writable_paths: Vec::new(),
             persistent_read_only_paths: Vec::new(),
+            persistent_executable_paths: Vec::new(),
             executable_paths: Vec::new(),
             #[cfg(windows)]
             windows_virtualized_paths: Vec::new(),
@@ -1680,6 +1690,7 @@ mod tests {
             read_only_paths: Vec::new(),
             writable_paths: Vec::new(),
             persistent_read_only_paths: Vec::new(),
+            persistent_executable_paths: Vec::new(),
             executable_paths: Vec::new(),
             #[cfg(windows)]
             windows_virtualized_paths: Vec::new(),
@@ -1762,6 +1773,52 @@ mod tests {
             allowed_output.stderr
         );
         assert!(allowed_output.stdout.contains("trusted-toolchain-evidence"));
+
+        std::fs::remove_dir_all(root).unwrap();
+        std::fs::remove_dir_all(external).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_persistent_read_and_execute_capabilities_are_distinct() {
+        let root = windows_test_root("persistent-capability-distinction");
+        let external = windows_test_root("persistent-capability-runtime");
+        let child = external.join("trusted-child.exe");
+        let system_root = std::env::var_os("SystemRoot").expect("SystemRoot should be defined");
+        std::fs::copy(
+            PathBuf::from(system_root)
+                .join("System32")
+                .join("whoami.exe"),
+            &child,
+        )
+        .expect("stage signed persistent child process");
+
+        let mut read_only = windows_command(root.clone(), child.display().to_string());
+        read_only.persistent_read_only_paths = vec![external.clone()];
+        read_only.windows_virtualized_paths = vec![external.clone()];
+        let read_only_output =
+            super::run(&read_only).expect("persistent read-only sandbox should start");
+        assert_ne!(read_only_output.status_code, Some(0));
+
+        let mut executable = windows_command(root.clone(), child.display().to_string());
+        executable.persistent_executable_paths = vec![external.clone()];
+        executable.windows_virtualized_paths = vec![external.clone()];
+        let executable_output =
+            super::run(&executable).expect("persistent executable sandbox should start");
+        assert_eq!(
+            executable_output.status_code,
+            Some(0),
+            "stdout={:?} stderr={:?}",
+            executable_output.stdout,
+            executable_output.stderr
+        );
+
+        let mut read_only_again = windows_command(root.clone(), child.display().to_string());
+        read_only_again.persistent_read_only_paths = vec![external.clone()];
+        read_only_again.windows_virtualized_paths = vec![external.clone()];
+        let read_only_again_output = super::run(&read_only_again)
+            .expect("persistent read-only sandbox should still start after an executable grant");
+        assert_ne!(read_only_again_output.status_code, Some(0));
 
         std::fs::remove_dir_all(root).unwrap();
         std::fs::remove_dir_all(external).unwrap();
@@ -1858,6 +1915,7 @@ mod tests {
             read_only_paths: Vec::new(),
             writable_paths: Vec::new(),
             persistent_read_only_paths: Vec::new(),
+            persistent_executable_paths: Vec::new(),
             executable_paths: Vec::new(),
             #[cfg(windows)]
             windows_virtualized_paths: Vec::new(),
@@ -1902,6 +1960,7 @@ mod tests {
             read_only_paths: Vec::new(),
             writable_paths: Vec::new(),
             persistent_read_only_paths: Vec::new(),
+            persistent_executable_paths: Vec::new(),
             executable_paths: Vec::new(),
             #[cfg(windows)]
             windows_virtualized_paths: Vec::new(),
@@ -1981,6 +2040,7 @@ mod tests {
             read_only_paths: Vec::new(),
             writable_paths: Vec::new(),
             persistent_read_only_paths: Vec::new(),
+            persistent_executable_paths: Vec::new(),
             executable_paths: vec![executable],
             #[cfg(windows)]
             windows_virtualized_paths: Vec::new(),

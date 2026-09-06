@@ -235,6 +235,7 @@ pub(crate) fn run_proof_command(
         read_only_paths: Vec::new(),
         writable_paths: Vec::new(),
         persistent_read_only_paths: Vec::new(),
+        persistent_executable_paths: Vec::new(),
         executable_paths: Vec::new(),
         #[cfg(windows)]
         windows_virtualized_paths: Vec::new(),

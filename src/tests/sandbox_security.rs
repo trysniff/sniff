@@ -136,6 +136,13 @@ fn main() {
                 .expect("launch trusted child executable");
             println!("child-status={}", status.code().unwrap_or(-1));
         }
+        Some("nested-write") => {
+            let root = std::path::PathBuf::from(args.next().expect("missing writable root"));
+            let directory = root.join("created-by-sandbox");
+            std::fs::create_dir(&directory).expect("create nested writable directory");
+            std::fs::write(directory.join("artifact"), "sandbox-owned")
+                .expect("write nested sandbox artifact");
+        }
         Some("child") => std::thread::sleep(Duration::from_secs(10)),
         _ => panic!("unknown malicious-worker mode"),
     }
@@ -174,6 +181,7 @@ fn command(root: &Path, program: &Path, args: Vec<String>) -> SandboxCommand {
         read_only_paths: Vec::new(),
         writable_paths: Vec::new(),
         persistent_read_only_paths: Vec::new(),
+        persistent_executable_paths: Vec::new(),
         executable_paths: Vec::new(),
         #[cfg(windows)]
         windows_virtualized_paths: Vec::new(),
@@ -356,6 +364,34 @@ fn windows_mapped_external_child_can_start() {
     assert!(output.stdout.contains(r"java-home="));
     assert!(output.stdout.contains(r"\java-runtime"));
     assert!(output.stdout.contains("child-status=0"));
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_sandbox_created_directories_remain_writable() {
+    let _sandbox_guard = sandbox_resource_guard();
+    let repository = tempfile::tempdir().expect("create nested-write repository");
+    let worker = compile_worker(repository.path());
+    let writable = repository.path().join("cache");
+    std::fs::create_dir(&writable).expect("create writable sandbox root");
+    let mut spec = command(
+        repository.path(),
+        &worker,
+        vec![
+            "nested-write".to_string(),
+            writable.to_string_lossy().into_owned(),
+        ],
+    );
+    spec.writable_paths.push(writable.clone());
+    spec.windows_virtualized_paths = vec![repository.path().to_path_buf()];
+
+    let output = run(&spec).expect("nested-write sandbox should start");
+
+    assert_eq!(output.status_code, Some(0), "stderr={}", output.stderr);
+    assert_eq!(
+        std::fs::read_to_string(writable.join("created-by-sandbox/artifact")).unwrap(),
+        "sandbox-owned"
+    );
 }
 
 #[cfg(windows)]

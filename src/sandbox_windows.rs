@@ -17,16 +17,17 @@ use windows_sys::Win32::Foundation::{
 use windows_sys::Win32::Security::Authorization::{
     ConvertSidToStringSidW, ConvertStringSidToSidW, EXPLICIT_ACCESS_W, GRANT_ACCESS,
     GetExplicitEntriesFromAclW, GetNamedSecurityInfoW, REVOKE_ACCESS, SE_FILE_OBJECT, SET_ACCESS,
-    SetEntriesInAclW, SetNamedSecurityInfoW, TRUSTEE_IS_SID, TRUSTEE_IS_WELL_KNOWN_GROUP,
-    TRUSTEE_W,
+    SetEntriesInAclW, SetNamedSecurityInfoW, TRUSTEE_IS_SID, TRUSTEE_IS_UNKNOWN,
+    TRUSTEE_IS_WELL_KNOWN_GROUP, TRUSTEE_W,
 };
 use windows_sys::Win32::Security::Isolation::{
     CreateAppContainerProfile, DeleteAppContainerProfile,
 };
 use windows_sys::Win32::Security::{
-    DACL_SECURITY_INFORMATION, DeriveCapabilitySidsFromName, EqualSid, NO_INHERITANCE,
-    SECURITY_ATTRIBUTES, SECURITY_CAPABILITIES, SID_AND_ATTRIBUTES,
-    SUB_CONTAINERS_AND_OBJECTS_INHERIT,
+    ACL, DACL_SECURITY_INFORMATION, DeriveCapabilitySidsFromName, EqualSid, GetTokenInformation,
+    NO_INHERITANCE, SECURITY_ATTRIBUTES, SECURITY_CAPABILITIES, SID_AND_ATTRIBUTES,
+    SUB_CONTAINERS_AND_OBJECTS_INHERIT, SetTokenInformation, TOKEN_ADJUST_DEFAULT,
+    TOKEN_DEFAULT_DACL, TOKEN_QUERY, TokenDefaultDacl,
 };
 use windows_sys::Win32::System::JobObjects::{
     AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_ACTIVE_PROCESS,
@@ -38,10 +39,11 @@ use windows_sys::Win32::System::Pipes::CreatePipe;
 use windows_sys::Win32::System::Threading::{
     CREATE_NO_WINDOW, CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT, CreateMutexW, CreateProcessW,
     DeleteProcThreadAttributeList, EXTENDED_STARTUPINFO_PRESENT, GetExitCodeProcess,
-    InitializeProcThreadAttributeList, PROC_THREAD_ATTRIBUTE_CHILD_PROCESS_POLICY,
-    PROC_THREAD_ATTRIBUTE_HANDLE_LIST, PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES,
-    PROCESS_INFORMATION, ReleaseMutex, ResumeThread, STARTF_USESTDHANDLES, STARTUPINFOEXW,
-    TerminateProcess, UpdateProcThreadAttribute, WaitForSingleObject,
+    InitializeProcThreadAttributeList, OpenProcessToken,
+    PROC_THREAD_ATTRIBUTE_CHILD_PROCESS_POLICY, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+    PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES, PROCESS_INFORMATION, ReleaseMutex, ResumeThread,
+    STARTF_USESTDHANDLES, STARTUPINFOEXW, TerminateProcess, UpdateProcThreadAttribute,
+    WaitForSingleObject,
 };
 
 #[path = "sandbox_windows_drive.rs"]
@@ -56,10 +58,12 @@ use global_access::{all_application_packages_access, all_application_packages_tr
 
 const INTERNET_CLIENT_SID: &str = "S-1-15-3-1";
 const PERSISTENT_READ_CAPABILITY: &str = "trysniff.semantic-indexer-read.v1";
+const PERSISTENT_EXECUTE_CAPABILITY: &str = "trysniff.semantic-indexer-execute.v1";
 const SE_GROUP_ENABLED: u32 = 0x00000004;
 const FILE_GENERIC_READ_ACCESS: u32 = 0x0012_0089;
 const FILE_GENERIC_EXECUTE_ACCESS: u32 = 0x0012_00A0;
 const DIRECTORY_TRAVERSE_ACCESS: u32 = 0x0012_00A0;
+const GENERIC_ALL_ACCESS: u32 = 0x1000_0000;
 const PROCESS_CREATION_CHILD_PROCESS_OVERRIDE: u32 = 0x02;
 const ACL_COMMAND_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const ACL_COMMAND_OUTPUT_LIMIT: usize = 64 * 1024;
@@ -116,6 +120,16 @@ pub(super) fn run(spec: &SandboxCommand) -> Result<SandboxOutput, SandboxError> 
         });
         Some(capability)
     };
+    let persistent_execute_capability = if spec.persistent_executable_paths.is_empty() {
+        None
+    } else {
+        let capability = CapabilitySid::derive(PERSISTENT_EXECUTE_CAPABILITY)?;
+        capabilities.push(SID_AND_ATTRIBUTES {
+            Sid: capability.sid,
+            Attributes: SE_GROUP_ENABLED,
+        });
+        Some(capability)
+    };
 
     let mut app_container_sid = std::ptr::null_mut();
     let capability_pointer = if capabilities.is_empty() {
@@ -155,32 +169,37 @@ pub(super) fn run(spec: &SandboxCommand) -> Result<SandboxOutput, SandboxError> 
         for path in &effective_spec.persistent_read_only_paths {
             ensure_persistent_read_acl(path, capability.sid, &capability_sid)?;
         }
+    }
+    if let Some(capability) = &persistent_execute_capability {
+        let capability_sid = sid_string(capability.sid)?;
+        for path in &effective_spec.persistent_executable_paths {
+            ensure_persistent_executable_acl(path, capability.sid, &capability_sid)?;
+        }
+    }
+    if persistent_read_capability.is_some() || persistent_execute_capability.is_some() {
         trace_phase(started, "persistent toolchain access verified");
     }
+    let persistent_access = PersistentAccess {
+        read_only_paths: &effective_spec.persistent_read_only_paths,
+        executable_paths: &effective_spec.persistent_executable_paths,
+        read_capability_enabled: persistent_read_capability.is_some(),
+        execute_capability_enabled: persistent_execute_capability.is_some(),
+    };
     let mut acl_guard = AclGuard::grant(
         &effective_spec.root,
         &effective_spec.read_only_paths,
         &effective_spec.writable_paths,
-        &effective_spec.persistent_read_only_paths,
+        &persistent_access,
         &app_container_sid_text,
         &recovery_ledger,
     )?;
     trace_phase(started, "filesystem access granted");
     // AppContainer file-read permission is not enough to launch an executable.
-    if !system_program
-        && !globally_accessible_persistent_executable(
-            &program,
-            &effective_spec.persistent_read_only_paths,
-        )?
-    {
+    if !system_program && !persistent_access.can_execute(&program)? {
         acl_guard.grant_once(&program, "RX", false, &recovery_ledger)?;
     }
     for path in &effective_spec.executable_paths {
-        acl_guard.grant_external_executable(
-            path,
-            &effective_spec.persistent_read_only_paths,
-            &recovery_ledger,
-        )?;
+        acl_guard.grant_external_executable(path, &persistent_access, &recovery_ledger)?;
     }
     trace_phase(started, "program execution granted");
     let canonical_root = normalize_windows_path(
@@ -309,7 +328,8 @@ struct CapabilitySid {
 
 impl CapabilitySid {
     fn derive(name: &str) -> Result<Self, SandboxError> {
-        let name = wide_null(name);
+        let capability_name = name;
+        let name = wide_null(capability_name);
         let mut group_sids = std::ptr::null_mut();
         let mut group_count = 0_u32;
         let mut capability_sids = std::ptr::null_mut();
@@ -338,7 +358,7 @@ impl CapabilitySid {
         }
         if capability_sid.is_null() {
             return Err(SandboxError::Failed(format!(
-                "Windows returned {capability_count} SIDs for sandbox capability {PERSISTENT_READ_CAPABILITY}; expected exactly one"
+                "Windows returned {capability_count} SIDs for sandbox capability {capability_name}; expected exactly one"
             )));
         }
         Ok(Self {
@@ -606,6 +626,12 @@ fn run_process(
         close_handles([stdout_read, stderr_read]);
         return Err(last_error("start Windows AppContainer process"));
     }
+    if let Err(error) = configure_process_default_dacl(process_info.hProcess, app_container_sid) {
+        terminate_process_and_close(process_info.hProcess);
+        unsafe { CloseHandle(process_info.hThread) };
+        close_handles([stdout_read, stderr_read]);
+        return Err(error);
+    }
     let job = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
     if job.is_null() {
         terminate_process_and_close(process_info.hProcess);
@@ -704,6 +730,87 @@ fn terminate_process_and_close(process: HANDLE) {
         TerminateProcess(process, 1);
         CloseHandle(process);
     }
+}
+
+fn configure_process_default_dacl(
+    process: HANDLE,
+    app_container_sid: *mut c_void,
+) -> Result<(), SandboxError> {
+    let mut token = std::ptr::null_mut();
+    if unsafe { OpenProcessToken(process, TOKEN_QUERY | TOKEN_ADJUST_DEFAULT, &mut token) } == 0 {
+        return Err(last_error("open Windows AppContainer process token"));
+    }
+    let result = extend_token_default_dacl(token, app_container_sid);
+    unsafe { CloseHandle(token) };
+    result
+}
+
+fn extend_token_default_dacl(
+    token: HANDLE,
+    app_container_sid: *mut c_void,
+) -> Result<(), SandboxError> {
+    let mut required = 0_u32;
+    unsafe {
+        GetTokenInformation(
+            token,
+            TokenDefaultDacl,
+            std::ptr::null_mut(),
+            0,
+            &mut required,
+        )
+    };
+    if required < std::mem::size_of::<TOKEN_DEFAULT_DACL>() as u32 {
+        return Err(last_error("size Windows AppContainer token default DACL"));
+    }
+    let mut buffer = vec![0_u8; required as usize];
+    if unsafe {
+        GetTokenInformation(
+            token,
+            TokenDefaultDacl,
+            buffer.as_mut_ptr().cast(),
+            required,
+            &mut required,
+        )
+    } == 0
+    {
+        return Err(last_error("read Windows AppContainer token default DACL"));
+    }
+    let current = unsafe { &*(buffer.as_ptr().cast::<TOKEN_DEFAULT_DACL>()) };
+    let entry = EXPLICIT_ACCESS_W {
+        grfAccessPermissions: GENERIC_ALL_ACCESS,
+        grfAccessMode: GRANT_ACCESS,
+        grfInheritance: NO_INHERITANCE,
+        Trustee: TRUSTEE_W {
+            pMultipleTrustee: std::ptr::null_mut(),
+            MultipleTrusteeOperation: 0,
+            TrusteeForm: TRUSTEE_IS_SID,
+            TrusteeType: TRUSTEE_IS_UNKNOWN,
+            ptstrName: app_container_sid.cast(),
+        },
+    };
+    let mut updated: *mut ACL = std::ptr::null_mut();
+    let status = unsafe { SetEntriesInAclW(1, &entry, current.DefaultDacl, &mut updated) };
+    if status != 0 {
+        return Err(SandboxError::Failed(format!(
+            "extend Windows AppContainer token default DACL failed with status {status}"
+        )));
+    }
+    let info = TOKEN_DEFAULT_DACL {
+        DefaultDacl: updated,
+    };
+    let applied = unsafe {
+        SetTokenInformation(
+            token,
+            TokenDefaultDacl,
+            (&info as *const TOKEN_DEFAULT_DACL).cast(),
+            std::mem::size_of::<TOKEN_DEFAULT_DACL>() as u32,
+        )
+    };
+    unsafe { LocalFree(updated.cast()) };
+    if applied == 0 {
+        return Err(last_error("set Windows AppContainer token default DACL"));
+    }
+    Ok(())
 }
 
 fn configure_job(job: HANDLE, memory_limit: u64, process_limit: u32) -> Result<(), SandboxError> {
@@ -926,9 +1033,31 @@ fn ensure_persistent_read_acl(
     grant_acl(path, capability_sid_text, "R")
 }
 
+fn ensure_persistent_executable_acl(
+    path: &Path,
+    capability_sid: *mut c_void,
+    capability_sid_text: &str,
+) -> Result<(), SandboxError> {
+    let access = FILE_GENERIC_READ_ACCESS | FILE_GENERIC_EXECUTE_ACCESS;
+    if persistent_acl_exists(path, capability_sid, access)?
+        || all_application_packages_tree_access(path, access)?
+    {
+        return Ok(());
+    }
+    grant_acl(path, capability_sid_text, "RX")
+}
+
 fn persistent_read_acl_exists(
     path: &Path,
     capability_sid: *mut c_void,
+) -> Result<bool, SandboxError> {
+    persistent_acl_exists(path, capability_sid, FILE_GENERIC_READ_ACCESS)
+}
+
+fn persistent_acl_exists(
+    path: &Path,
+    capability_sid: *mut c_void,
+    required_access: u32,
 ) -> Result<bool, SandboxError> {
     let path = normalize_windows_path(path.to_path_buf());
     let native_path = native_acl_path(&path);
@@ -975,7 +1104,7 @@ fn persistent_read_acl_exists(
                 && !trustee_sid.is_null()
                 && unsafe { EqualSid(trustee_sid, capability_sid) != 0 }
                 && matches!(entry.grfAccessMode, GRANT_ACCESS | SET_ACCESS)
-                && entry.grfAccessPermissions & FILE_GENERIC_READ_ACCESS == FILE_GENERIC_READ_ACCESS
+                && entry.grfAccessPermissions & required_access == required_access
                 && (!path.is_dir()
                     || entry.grfInheritance & SUB_CONTAINERS_AND_OBJECTS_INHERIT
                         == SUB_CONTAINERS_AND_OBJECTS_INHERIT)
@@ -1214,16 +1343,14 @@ impl AclGuard {
         root: &Path,
         read_only_paths: &[std::path::PathBuf],
         writable_paths: &[std::path::PathBuf],
-        persistent_read_only_paths: &[PathBuf],
+        persistent_access: &PersistentAccess<'_>,
         sid: &str,
         recovery: &RecoveryLedger,
     ) -> Result<Self, SandboxError> {
         let paths = explicit_acl_paths(root, read_only_paths, writable_paths);
         let mut grants: Vec<AclGrant> = Vec::with_capacity(paths.len());
         for (path, permission) in paths {
-            if permission == "R"
-                && globally_accessible_persistent_read(&path, persistent_read_only_paths)?
-            {
+            if permission == "R" && persistent_access.can_read(&path)? {
                 continue;
             }
             // Directory grants use inheritance rather than recursively
@@ -1247,7 +1374,7 @@ impl AclGuard {
     fn grant_external_executable(
         &mut self,
         path: &Path,
-        persistent_read_only_paths: &[PathBuf],
+        persistent_access: &PersistentAccess<'_>,
         recovery: &RecoveryLedger,
     ) -> Result<(), SandboxError> {
         let path = normalize_windows_path(std::fs::canonicalize(path).map_err(|error| {
@@ -1256,7 +1383,7 @@ impl AclGuard {
                 path.display()
             ))
         })?);
-        if globally_accessible_persistent_executable(&path, persistent_read_only_paths)? {
+        if persistent_access.can_execute(&path)? {
             return Ok(());
         }
         if path.is_dir() {
@@ -1331,42 +1458,58 @@ impl AclGuard {
     }
 }
 
-fn globally_accessible_persistent_executable(
-    executable: &Path,
-    persistent_read_only_paths: &[PathBuf],
-) -> Result<bool, SandboxError> {
-    if !covered_by_persistent_path(executable, persistent_read_only_paths)? {
-        return Ok(false);
-    }
-    if executable.is_dir() {
-        return all_application_packages_tree_access(
-            executable,
-            FILE_GENERIC_READ_ACCESS | FILE_GENERIC_EXECUTE_ACCESS,
-        );
-    }
-    let Some(parent) = executable.parent() else {
-        return Ok(false);
-    };
-    Ok(
-        all_application_packages_access(parent, DIRECTORY_TRAVERSE_ACCESS)?
-            && all_application_packages_access(
-                executable,
-                FILE_GENERIC_READ_ACCESS | FILE_GENERIC_EXECUTE_ACCESS,
-            )?,
-    )
+struct PersistentAccess<'a> {
+    read_only_paths: &'a [PathBuf],
+    executable_paths: &'a [PathBuf],
+    read_capability_enabled: bool,
+    execute_capability_enabled: bool,
 }
 
-fn globally_accessible_persistent_read(
-    path: &Path,
-    persistent_read_only_paths: &[PathBuf],
-) -> Result<bool, SandboxError> {
-    if !covered_by_persistent_path(path, persistent_read_only_paths)? {
-        return Ok(false);
+impl PersistentAccess<'_> {
+    fn can_execute(&self, executable: &Path) -> Result<bool, SandboxError> {
+        if !covered_by_persistent_path(executable, self.executable_paths)? {
+            return Ok(false);
+        }
+        if self.execute_capability_enabled {
+            return Ok(true);
+        }
+        if executable.is_dir() {
+            return all_application_packages_tree_access(
+                executable,
+                FILE_GENERIC_READ_ACCESS | FILE_GENERIC_EXECUTE_ACCESS,
+            );
+        }
+        let Some(parent) = executable.parent() else {
+            return Ok(false);
+        };
+        Ok(
+            all_application_packages_access(parent, DIRECTORY_TRAVERSE_ACCESS)?
+                && all_application_packages_access(
+                    executable,
+                    FILE_GENERIC_READ_ACCESS | FILE_GENERIC_EXECUTE_ACCESS,
+                )?,
+        )
     }
-    if path.is_dir() {
-        all_application_packages_tree_access(path, FILE_GENERIC_READ_ACCESS)
-    } else {
-        all_application_packages_access(path, FILE_GENERIC_READ_ACCESS)
+
+    fn can_read(&self, path: &Path) -> Result<bool, SandboxError> {
+        if self.read_capability_enabled && covered_by_persistent_path(path, self.read_only_paths)? {
+            return Ok(true);
+        }
+        if self.execute_capability_enabled
+            && covered_by_persistent_path(path, self.executable_paths)?
+        {
+            return Ok(true);
+        }
+        if !covered_by_persistent_path(path, self.read_only_paths)?
+            && !covered_by_persistent_path(path, self.executable_paths)?
+        {
+            return Ok(false);
+        }
+        if path.is_dir() {
+            all_application_packages_tree_access(path, FILE_GENERIC_READ_ACCESS)
+        } else {
+            all_application_packages_access(path, FILE_GENERIC_READ_ACCESS)
+        }
     }
 }
 
@@ -1514,8 +1657,9 @@ fn last_error(action: &str) -> SandboxError {
 mod tests {
     use super::{
         CREATE_SUSPENDED, CapabilitySid, SANDBOX_PROCESS_CREATION_FLAGS,
-        ensure_persistent_read_acl, explicit_acl_paths, extend_executable_mapping_roots,
-        native_acl_path, persistent_read_acl_exists, revoke_acl, sid_string, update_acl_entry,
+        ensure_persistent_executable_acl, ensure_persistent_read_acl, explicit_acl_paths,
+        extend_executable_mapping_roots, native_acl_path, persistent_acl_exists,
+        persistent_read_acl_exists, revoke_acl, sid_string, update_acl_entry,
     };
     use std::path::{Path, PathBuf};
     use windows_sys::Win32::Security::EqualSid;
@@ -1610,6 +1754,7 @@ mod tests {
             read_only_paths: Vec::new(),
             writable_paths: Vec::new(),
             persistent_read_only_paths: Vec::new(),
+            persistent_executable_paths: Vec::new(),
             executable_paths: Vec::new(),
             windows_virtualized_paths: Vec::new(),
             env: Vec::new(),
@@ -1637,6 +1782,17 @@ mod tests {
     }
 
     #[test]
+    fn named_persistent_execute_capability_is_stable_and_distinct_from_read() {
+        let read = CapabilitySid::derive(super::PERSISTENT_READ_CAPABILITY).unwrap();
+        let first = CapabilitySid::derive(super::PERSISTENT_EXECUTE_CAPABILITY).unwrap();
+        let second = CapabilitySid::derive(super::PERSISTENT_EXECUTE_CAPABILITY).unwrap();
+
+        assert_ne!(first.sid, second.sid);
+        assert_ne!(unsafe { EqualSid(first.sid, second.sid) }, 0);
+        assert_eq!(unsafe { EqualSid(read.sid, first.sid) }, 0);
+    }
+
+    #[test]
     fn persistent_read_acl_is_granted_once_and_detected() {
         let root = std::env::temp_dir().join(format!(
             "sniff-persistent-acl-test-{}-{}",
@@ -1653,6 +1809,36 @@ mod tests {
         assert!(!persistent_read_acl_exists(&root, capability.sid).unwrap());
         ensure_persistent_read_acl(&root, capability.sid, &capability_text).unwrap();
         assert!(persistent_read_acl_exists(&root, capability.sid).unwrap());
+        assert!(
+            !persistent_acl_exists(
+                &root,
+                capability.sid,
+                super::FILE_GENERIC_READ_ACCESS | super::FILE_GENERIC_EXECUTE_ACCESS,
+            )
+            .unwrap()
+        );
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn persistent_execute_acl_is_granted_once_and_detected() {
+        let root = std::env::temp_dir().join(format!(
+            "sniff-persistent-executable-acl-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let capability = CapabilitySid::derive(super::PERSISTENT_EXECUTE_CAPABILITY).unwrap();
+        let capability_text = sid_string(capability.sid).unwrap();
+        let access = super::FILE_GENERIC_READ_ACCESS | super::FILE_GENERIC_EXECUTE_ACCESS;
+
+        assert!(!persistent_acl_exists(&root, capability.sid, access).unwrap());
+        ensure_persistent_executable_acl(&root, capability.sid, &capability_text).unwrap();
+        assert!(persistent_acl_exists(&root, capability.sid, access).unwrap());
 
         std::fs::remove_dir_all(root).unwrap();
     }
