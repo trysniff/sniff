@@ -66,6 +66,7 @@ def main():
     resolved_backend_paths = [canonical_child(project, path) for path in backend_paths]
     sys.path[0:0] = [str(path) for path in resolved_backend_paths]
     module_name, separator, object_path = backend_name.partition(":")
+    os.chdir(project)
     backend_module = importlib.import_module(module_name)
     if resolved_backend_paths:
         module_file = getattr(backend_module, "__file__", None)
@@ -85,7 +86,6 @@ def main():
             if not component:
                 fail("build-backend object path is empty")
             backend = getattr(backend, component)
-    os.chdir(project)
     dynamic_requirements = getattr(backend, "get_requires_for_build_wheel", lambda _: [])({})
     if dynamic_requirements != []:
         fail("dynamic Python build requirements need a prepared deterministic toolchain")
