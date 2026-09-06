@@ -31,6 +31,11 @@ const PREPARED_TOOLCHAIN: &str = "prepared-toolchain";
 const PIP_RUNNER_NAME: &str = "python-pip-runner.py";
 const RUNTIME_CONTRACT_RUNNER_NAME: &str = "python-runtime-contract.py";
 const WHEELHOUSE_RUNNER_NAME: &str = "python-wheelhouse-runner.py";
+const PIP_WHEEL_NAME: &str = "pip-26.2.1-py3-none-any.whl";
+const PIP_VERSION: &str = "26.2.1";
+const PIP_WHEEL_SHA256: &str = "71138adf1f4ca900cdb7d289c21b7494329f2332b6d85f0e1c42108c0384ed3e";
+const PIP_WHEEL: &[u8] =
+    include_bytes!("benchmark_assets/python-build/pip-26.2.1-py3-none-any.whl");
 const PIP_RUNNER: &str = include_str!("benchmark_python_pip_runner.py");
 const RUNTIME_CONTRACT_RUNNER: &str = include_str!("benchmark_python_runtime_contract_runner.py");
 const WHEELHOUSE_RUNNER: &str = include_str!("benchmark_python_wheelhouse_runner.py");
@@ -88,6 +93,7 @@ pub(super) fn materialize_python_build_toolchain(
     write_helper(cache, RUNTIME_CONTRACT_RUNNER_NAME, RUNTIME_CONTRACT_RUNNER)?;
     write_helper(cache, WHEELHOUSE_RUNNER_NAME, WHEELHOUSE_RUNNER)?;
     write_helper(cache, PIP_RUNNER_NAME, PIP_RUNNER)?;
+    write_pip_wheel(cache)?;
     create_resolver_environment(root, cache)?;
     let (python_identity, pip_identity, target_platform) =
         python_build_runtime_identities(root, cache)?;
@@ -425,15 +431,10 @@ fn validate_runtime_contract(contract: &PythonBuildRuntimeContract) -> Result<()
         || !safe(&contract.python_version)
         || !safe(&contract.cache_tag)
         || !safe(&contract.platform)
-        || !safe(&contract.pip_version)
-        || contract.pip_file_count == 0
-        || contract.pip_file_count > 100_000
-        || contract.pip_total_bytes > 2 * 1024 * 1024 * 1024
-        || contract.pip_files_sha256.len() != 64
-        || !contract
-            .pip_files_sha256
-            .bytes()
-            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        || contract.pip_version != PIP_VERSION
+        || contract.pip_file_count != 1
+        || contract.pip_total_bytes != PIP_WHEEL.len() as u64
+        || contract.pip_files_sha256 != PIP_WHEEL_SHA256
     {
         return Err("Python build-runtime contract is incomplete or unsafe".to_string());
     }
@@ -554,6 +555,26 @@ fn write_helper(cache: &Path, name: &str, source: &str) -> Result<(), String> {
     fs::write(&path, source).map_err(|error| {
         format!(
             "failed to write private Python helper {}: {error}",
+            path.display()
+        )
+    })
+}
+
+fn write_pip_wheel(cache: &Path) -> Result<(), String> {
+    let embedded_sha256 = format!("{:x}", Sha256::digest(PIP_WHEEL));
+    if embedded_sha256 != PIP_WHEEL_SHA256 {
+        return Err("embedded pip wheel failed SHA-256 verification".to_string());
+    }
+    let path = cache.join(PIP_WHEEL_NAME);
+    if path.exists() {
+        return Err(format!(
+            "private pinned pip wheel already exists: {}",
+            path.display()
+        ));
+    }
+    fs::write(&path, PIP_WHEEL).map_err(|error| {
+        format!(
+            "failed to write private pinned pip wheel {}: {error}",
             path.display()
         )
     })
@@ -724,6 +745,7 @@ mod tests {
     fn runtime_contract_runner_hashes_the_pip_distribution() {
         let root = tempfile::tempdir().unwrap();
         fs::write(root.path().join("runner.py"), RUNTIME_CONTRACT_RUNNER).unwrap();
+        fs::write(root.path().join(PIP_WHEEL_NAME), PIP_WHEEL).unwrap();
         let environment = root.path().join("pip-env");
         let created = Command::new(host_python())
             .args(["-I", "-B", "-m", "venv", "--copies", "--without-pip"])
@@ -757,5 +779,27 @@ mod tests {
         assert!(contract.pip_file_count > 0);
         assert!(contract.pip_total_bytes > 0);
         assert_eq!(contract.pip_files_sha256.len(), 64);
+    }
+
+    #[test]
+    fn pip_runner_rejects_a_corrupt_pinned_wheel() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("runner.py"), PIP_RUNNER).unwrap();
+        let mut corrupt = PIP_WHEEL.to_vec();
+        corrupt[0] ^= 1;
+        fs::write(root.path().join(PIP_WHEEL_NAME), corrupt).unwrap();
+
+        let output = Command::new(host_python())
+            .args(["-I", "runner.py", "--version"])
+            .current_dir(root.path())
+            .output()
+            .unwrap();
+
+        assert!(!output.status.success());
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("failed SHA-256 verification"),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 }
