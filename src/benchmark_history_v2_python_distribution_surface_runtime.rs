@@ -1,7 +1,16 @@
 use super::super::intentional_boundary_runtime_snapshot::{
     IntentionalBoundaryRuntimeSnapshot, allocate_runtime_directory,
 };
-use super::super::non_blind_history_runtime::prepare_historical_runtime;
+use super::super::non_blind_history_runtime::{
+    persist_historical_runtime_directories, prepare_historical_runtime,
+};
+use super::super::python_build_requirement::PYPI_SIMPLE_INDEX;
+use super::super::python_build_toolchain_prepare::{
+    PythonBuildToolchainMaterialization, materialize_python_build_toolchain,
+};
+use super::super::python_build_toolchain_store::{
+    PythonBuildToolchainStore, python_environment_tree_sha256,
+};
 use super::*;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
@@ -46,7 +55,9 @@ pub(in crate::benchmark::release) fn census_historical_v2_python_distribution_su
         revision,
         root,
         inventory,
-        |_, manifest_repository_path| run_python_wheel_build(&snapshot, manifest_repository_path),
+        |_, manifest_repository_path| {
+            run_python_wheel_build(&snapshot, revision, manifest_repository_path)
+        },
     )
 }
 
@@ -71,20 +82,50 @@ pub(in crate::benchmark::release) fn validate_historical_v2_python_distribution_
         root,
         inventory,
         census,
-        |_, manifest_repository_path| run_python_wheel_build(&snapshot, manifest_repository_path),
+        |_, manifest_repository_path| {
+            run_python_wheel_build(&snapshot, &inventory.revision, manifest_repository_path)
+        },
     )
 }
 
 fn run_python_wheel_build(
     snapshot: &IntentionalBoundaryRuntimeSnapshot,
+    revision: &str,
     manifest_repository_path: &str,
 ) -> Result<PythonWheelBuildOutput, String> {
-    require_dependency_free_python_backend(snapshot.path(), manifest_repository_path)?;
+    let store = PythonBuildToolchainStore::for_user()?;
+    run_python_wheel_build_with_store(snapshot, revision, manifest_repository_path, &store)
+}
+
+fn run_python_wheel_build_with_store(
+    snapshot: &IntentionalBoundaryRuntimeSnapshot,
+    revision: &str,
+    manifest_repository_path: &str,
+    store: &PythonBuildToolchainStore,
+) -> Result<PythonWheelBuildOutput, String> {
+    run_python_wheel_build_with_store_and_index(
+        snapshot,
+        revision,
+        manifest_repository_path,
+        store,
+        PYPI_SIMPLE_INDEX,
+    )
+}
+
+fn run_python_wheel_build_with_store_and_index(
+    snapshot: &IntentionalBoundaryRuntimeSnapshot,
+    revision: &str,
+    manifest_repository_path: &str,
+    store: &PythonBuildToolchainStore,
+    package_index: &str,
+) -> Result<PythonWheelBuildOutput, String> {
+    let manifest = read_python_build_manifest(snapshot.path(), manifest_repository_path)?;
     let root = snapshot.sandbox_root();
     let runtime = PythonWheelBuildCallRuntime::create(root)?;
     let cache = runtime.path().join("cache");
     let output = cache.join("wheel-output");
     let runner = cache.join("pep517_runner.py");
+    let requirements_contract = cache.join("requirements-contract.json");
     fs::create_dir(&cache)
         .map_err(|error| format!("failed to create private Python wheel cache: {error}"))?;
     fs::create_dir(&output)
@@ -112,13 +153,33 @@ fn run_python_wheel_build(
         .map_err(|_| "Python wheel backend runner escaped its sandbox".to_string())?
         .to_string_lossy()
         .replace('\\', "/");
+    let requirements_argument = requirements_contract
+        .strip_prefix(root)
+        .map_err(|_| "Python build requirements escaped its snapshot".to_string())?
+        .to_string_lossy()
+        .replace('\\', "/");
+    let toolchain = materialize_python_build_toolchain(PythonBuildToolchainMaterialization {
+        snapshot,
+        revision,
+        cache: &cache,
+        runner_argument: &runner_argument,
+        project_argument: &project_directory,
+        manifest: &manifest,
+        store,
+        package_index,
+    })?;
+    if toolchain.requirements_contract != requirements_contract {
+        return Err("prepared Python requirements contract path changed".to_string());
+    }
     let logical_command = vec![
-        if cfg!(windows) { "python" } else { "python3" }.to_string(),
+        "{sniff_private_python}".to_string(),
         "-I".to_string(),
-        "-S".to_string(),
-        runner_argument,
-        project_directory,
-        output_argument,
+        "-B".to_string(),
+        runner_argument.clone(),
+        "build".to_string(),
+        project_directory.clone(),
+        output_argument.clone(),
+        requirements_argument.clone(),
     ];
     let mut plan = prepare_historical_runtime(root, &cache, &logical_command)
         .map_err(|error| format!("failed to prepare offline Python wheel build: {error:?}"))?;
@@ -129,8 +190,10 @@ fn run_python_wheel_build(
     }
     plan.command.timeout = PYTHON_WHEEL_BUILD_TIMEOUT;
     plan.command.output_limit = PYTHON_WHEEL_BUILD_OUTPUT_LIMIT;
+    persist_historical_runtime_directories(&mut plan);
     let toolchain_identity_sha256 = hash_json(&(
-        "sniffbench-python-wheel-toolchain-v1",
+        "sniffbench-python-wheel-prepared-toolchain-v1",
+        &toolchain.identity_sha256,
         &plan.runtime_identity,
         sha256(PYTHON_WHEEL_BACKEND_RUNNER),
         PYTHON_WHEEL_BUILD_COMMAND_CONTRACT,
@@ -150,6 +213,10 @@ fn run_python_wheel_build(
                 .map_or_else(|| "unknown".to_string(), |status| status.to_string()),
             process.stderr.trim()
         ));
+    }
+    let actual_environment = python_environment_tree_sha256(&cache.join("python-env"))?;
+    if actual_environment != toolchain.environment_tree_sha256 {
+        return Err("Python build backend changed its prepared toolchain".to_string());
     }
     let wheels = fs::read_dir(&output)
         .map_err(|error| format!("failed to inspect Python wheel output: {error}"))?
@@ -191,10 +258,10 @@ fn run_python_wheel_build(
     })
 }
 
-fn require_dependency_free_python_backend(
+fn read_python_build_manifest(
     checkout: &Path,
     manifest_repository_path: &str,
-) -> Result<(), String> {
+) -> Result<ParsedPythonDistributionManifest, String> {
     if manifest_repository_path.contains('\\')
         || Path::new(manifest_repository_path).is_absolute()
         || Path::new(manifest_repository_path)
@@ -220,12 +287,7 @@ fn require_dependency_free_python_backend(
                     "Python distribution manifest has no build-system: {manifest_repository_path}"
                 )
             })?;
-    if !manifest.build_requirements.is_empty() {
-        return Err(format!(
-            "Python distribution {manifest_repository_path} requires an unavailable prepared deterministic build toolchain"
-        ));
-    }
-    Ok(())
+    Ok(manifest)
 }
 
 #[cfg(test)]
@@ -278,9 +340,22 @@ def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
 
     fn run_backend_runner(root: &Path) -> Output {
         fs::write(root.join("pep517_runner.py"), PYTHON_WHEEL_BACKEND_RUNNER).unwrap();
+        fs::write(
+            root.join("requirements-contract.json"),
+            r#"{"static_requirements":[],"dynamic_requirements":[]}"#,
+        )
+        .unwrap();
         fs::create_dir(root.join("output")).unwrap();
         Command::new(if cfg!(windows) { "python" } else { "python3" })
-            .args(["-I", "-S", "pep517_runner.py", "project", "output"])
+            .args([
+                "-I",
+                "-S",
+                "pep517_runner.py",
+                "build",
+                "project",
+                "output",
+                "requirements-contract.json",
+            ])
             .current_dir(root)
             .output()
             .unwrap()
@@ -381,7 +456,7 @@ def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
         )
         .unwrap();
 
-        let output = run_python_wheel_build(&snapshot, "pyproject.toml").unwrap();
+        let output = run_python_wheel_build(&snapshot, &revision, "pyproject.toml").unwrap();
         assert!(is_sha256(&output.toolchain_identity_sha256));
         assert_eq!(
             output.wheel_filename,
@@ -394,11 +469,18 @@ def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
     }
 
     #[test]
-    fn production_runtime_rejects_unprepared_external_build_requirements() {
+    #[ignore = "requires a networked Python package repository"]
+    fn production_runtime_builds_with_external_pep517_requirements() {
         let root = tempfile::tempdir().unwrap();
+        fs::create_dir_all(root.path().join("src/fixture_package")).unwrap();
+        fs::write(
+            root.path().join("src/fixture_package/__init__.py"),
+            "VALUE = 1\n",
+        )
+        .unwrap();
         fs::write(
             root.path().join("pyproject.toml"),
-            "[build-system]\nrequires = ['hatchling==1.27.0']\nbuild-backend = 'hatchling.build'\n",
+            "[build-system]\nrequires = ['hatchling==1.27.0']\nbuild-backend = 'hatchling.build'\n\n[project]\nname = 'fixture-package'\nversion = '1.0.0'\n",
         )
         .unwrap();
         let git = |args: &[&str]| {
@@ -424,10 +506,30 @@ def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
         )
         .unwrap();
 
-        let error = run_python_wheel_build(&snapshot, "pyproject.toml").unwrap_err();
-        assert!(
-            error.contains("prepared deterministic build toolchain"),
-            "{error}"
+        let store = PythonBuildToolchainStore::at(root.path().join("toolchain-store"));
+
+        let output =
+            run_python_wheel_build_with_store(&snapshot, &revision, "pyproject.toml", &store);
+        let output = output.unwrap();
+        assert_eq!(
+            output.wheel_filename,
+            "fixture_package-1.0.0-py2.py3-none-any.whl"
         );
+        assert!(is_sha256(&output.toolchain_identity_sha256));
+
+        let cached =
+            run_python_wheel_build_with_store(&snapshot, &revision, "pyproject.toml", &store)
+                .unwrap();
+        assert_eq!(
+            cached.toolchain_identity_sha256,
+            output.toolchain_identity_sha256
+        );
+        assert_eq!(cached.wheel_filename, output.wheel_filename);
+        assert_eq!(sha256(&cached.wheel_bytes), sha256(&output.wheel_bytes));
     }
+}
+
+#[cfg(test)]
+mod toolchain_integration_tests {
+    include!("benchmark_python_build_toolchain_integration_tests.rs");
 }

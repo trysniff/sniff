@@ -169,6 +169,15 @@ pub use history_v2_python_distribution_surface_schema::*;
 #[path = "benchmark_history_v2_python_distribution_surface.rs"]
 mod history_v2_python_distribution_surface;
 
+#[path = "benchmark_python_build_requirement.rs"]
+mod python_build_requirement;
+
+#[path = "benchmark_python_build_toolchain_store.rs"]
+mod python_build_toolchain_store;
+
+#[path = "benchmark_python_build_toolchain_prepare.rs"]
+mod python_build_toolchain_prepare;
+
 #[path = "benchmark_history_v2_test_materialization.rs"]
 mod history_v2_test_materialization;
 

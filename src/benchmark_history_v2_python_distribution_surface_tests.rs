@@ -257,6 +257,30 @@ fn python_distribution_census_requires_explicit_pep517_backend() {
 }
 
 #[test]
+fn python_distribution_manifest_rejects_non_registry_build_requirements() {
+    for requirement in [
+        "--extra-index-url https://example.invalid/simple",
+        "fixture @ https://example.invalid/fixture.whl",
+        "../fixture",
+    ] {
+        let pyproject = format!(
+            "[build-system]\nrequires = [{requirement:?}]\nbuild-backend = 'fixture.build'\n"
+        );
+        let (root, revision, inventory) = repository(&pyproject);
+        let error = census_historical_v2_python_distribution_surfaces_with_executor(
+            "github.com/example/python-surfaces",
+            &revision,
+            root.path(),
+            &inventory,
+            |_, _| unreachable!(),
+        )
+        .unwrap_err();
+
+        assert!(error.contains("allowed PEP 508 requirement"), "{error}");
+    }
+}
+
+#[test]
 fn python_distribution_census_rejects_record_hash_mismatch() {
     let (root, revision, inventory) = repository(valid_pyproject());
     let record_path = "example_package-1.2.3.dist-info/RECORD";

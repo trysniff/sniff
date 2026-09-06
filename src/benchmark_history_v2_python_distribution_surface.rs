@@ -2,6 +2,7 @@ use super::intentional_boundary_inventory::{
     read_intentional_boundary_git_blob_typed,
     validate_intentional_boundary_repository_inventory_typed,
 };
+use super::python_build_requirement::validate_python_build_requirement;
 use super::{
     BoundaryGitEntryKind, HISTORICAL_V2_PYTHON_DISTRIBUTION_SURFACE_CENSUS_SCHEMA_VERSION,
     HistoricalV2PythonBuildRequirement, HistoricalV2PythonDistribution,
@@ -41,13 +42,13 @@ pub(super) struct PythonWheelBuildOutput {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct ParsedPythonDistributionManifest {
-    repository_path: String,
-    object_id: String,
-    source_sha256: String,
-    build_backend: String,
-    backend_path: Vec<String>,
-    build_requirements: Vec<HistoricalV2PythonBuildRequirement>,
+pub(super) struct ParsedPythonDistributionManifest {
+    pub(super) repository_path: String,
+    pub(super) object_id: String,
+    pub(super) source_sha256: String,
+    pub(super) build_backend: String,
+    pub(super) backend_path: Vec<String>,
+    pub(super) build_requirements: Vec<HistoricalV2PythonBuildRequirement>,
 }
 
 #[derive(Debug)]
@@ -303,7 +304,7 @@ fn python_distribution_manifests(
     Ok(manifests)
 }
 
-fn parse_python_distribution_manifest(
+pub(super) fn parse_python_distribution_manifest(
     repository_path: &str,
     object_id: &str,
     source: &str,
@@ -345,6 +346,11 @@ fn parse_python_distribution_manifest(
                         "Python build-system.requires[{ordinal}] is not an exact non-empty string in {repository_path}"
                     )
                 })?;
+            validate_python_build_requirement(requirement).map_err(|error| {
+                format!(
+                    "Python build-system.requires[{ordinal}] is not an allowed PEP 508 requirement in {repository_path}: {error}"
+                )
+            })?;
             Ok(HistoricalV2PythonBuildRequirement {
                 ordinal,
                 requirement: requirement.to_string(),
