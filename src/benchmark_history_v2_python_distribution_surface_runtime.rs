@@ -240,6 +240,9 @@ import io
 import os
 import zipfile
 
+if not os.path.isfile("pyproject.toml"):
+    raise RuntimeError("backend was not imported from the project root")
+
 
 def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
     filename = "fixture_package-1.0.0-py3-none-any.whl"
