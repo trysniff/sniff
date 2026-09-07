@@ -237,10 +237,17 @@ fn validate_runtime_files(spec: PinnedIndexer, root: &Path) -> Result<(), String
 
 fn source_identity(spec: PinnedIndexer) -> String {
     let source = match spec.source {
-        IndexerInstallSource::Npm {
-            package,
-            integrity_sha512,
-        } => format!("npm:{package}@{}:sha512-{integrity_sha512}", spec.version),
+        IndexerInstallSource::NpmTarballs { packages } => format!(
+            "npm-tarballs:{}",
+            packages
+                .iter()
+                .map(|package| format!(
+                    "{}@{}:{}:sha512-{}",
+                    package.name, package.version, package.url, package.integrity_sha512
+                ))
+                .collect::<Vec<_>>()
+                .join(";")
+        ),
         IndexerInstallSource::GoModule { module, commit, .. } => {
             format!("go:{module}@v{}:{commit}", spec.version)
         }

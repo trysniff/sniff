@@ -34,9 +34,8 @@ pub(crate) enum IndexerRuntime {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum IndexerInstallSource {
-    Npm {
-        package: &'static str,
-        integrity_sha512: &'static str,
+    NpmTarballs {
+        packages: &'static [PinnedNpmPackage],
     },
     GoModule {
         module: &'static str,
@@ -45,6 +44,54 @@ pub(crate) enum IndexerInstallSource {
     },
     Download(IndexerDownload),
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PinnedNpmPackage {
+    pub(crate) name: &'static str,
+    pub(crate) version: &'static str,
+    pub(crate) url: &'static str,
+    pub(crate) integrity_sha512: &'static str,
+}
+
+const SCIP_TYPESCRIPT_NPM_PACKAGES: &[PinnedNpmPackage] = &[
+    PinnedNpmPackage {
+        name: "@sourcegraph/scip-typescript",
+        version: "0.4.0",
+        url: "https://registry.npmjs.org/@sourcegraph/scip-typescript/-/scip-typescript-0.4.0.tgz",
+        integrity_sha512: "k+AtsrqmS41Sd5qjkZlHcmvoSQIvBOonRj4jpgp0KNFM6aqvMGpdSuPUqrUcg8ENTKjUbfaUVszgQwq3bCOvwA==",
+    },
+    PinnedNpmPackage {
+        name: "commander",
+        version: "12.1.0",
+        url: "https://registry.npmjs.org/commander/-/commander-12.1.0.tgz",
+        integrity_sha512: "Vw8qHK3bZM9y/P10u3Vib8o/DdkvA2OtPtZvD871QKjy74Wj1WSKFILMPRPSdUSx5RFK1arlJzEtA4PkFgnbuA==",
+    },
+    PinnedNpmPackage {
+        name: "google-protobuf",
+        version: "3.21.4",
+        url: "https://registry.npmjs.org/google-protobuf/-/google-protobuf-3.21.4.tgz",
+        integrity_sha512: "MnG7N936zcKTco4Jd2PX2U96Kf9PxygAPKBug+74LHzmHXmceN16MmRcdgZv+DGef/S9YvQAfRsNCn4cjf9yyQ==",
+    },
+    PinnedNpmPackage {
+        name: "progress",
+        version: "2.0.3",
+        url: "https://registry.npmjs.org/progress/-/progress-2.0.3.tgz",
+        integrity_sha512: "7PiHtLll5LdnKIMw100I+8xJXR5gW2QwWYkT6iJva0bXitZKa/XMrSbdmg3r2Xnaidz9Qumd0VPaMrZlF9V9sA==",
+    },
+    PinnedNpmPackage {
+        name: "typescript",
+        version: "5.6.2",
+        url: "https://registry.npmjs.org/typescript/-/typescript-5.6.2.tgz",
+        integrity_sha512: "NW8ByodCSNCwZeghjN3o+JX5OFH0Ojg6sadjEKY4huZ52TqbJTJnDo5+Tw98lSy63NZvi4n+ez5m2u5d4PkZyw==",
+    },
+];
+
+const SCIP_PYTHON_NPM_PACKAGES: &[PinnedNpmPackage] = &[PinnedNpmPackage {
+    name: "@sourcegraph/scip-python",
+    version: "0.6.6",
+    url: "https://registry.npmjs.org/@sourcegraph/scip-python/-/scip-python-0.6.6.tgz",
+    integrity_sha512: "qoKL1Rggg0o5newAFbCFAKlS0AjWxG5MA+mC28BtgxOv0DhO4zdL8u7151FxEppDpXMVvm7+yXSjXotoVH9cMQ==",
+}];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct IndexerDownload {
@@ -158,9 +205,8 @@ pub(crate) fn pinned_indexer(kind: SemanticIndexerKind) -> Result<PinnedIndexer,
             display_name: "scip-typescript",
             version: "0.4.0",
             runtime: IndexerRuntime::NodeScript,
-            source: IndexerInstallSource::Npm {
-                package: "@sourcegraph/scip-typescript",
-                integrity_sha512: "k+AtsrqmS41Sd5qjkZlHcmvoSQIvBOonRj4jpgp0KNFM6aqvMGpdSuPUqrUcg8ENTKjUbfaUVszgQwq3bCOvwA==",
+            source: IndexerInstallSource::NpmTarballs {
+                packages: SCIP_TYPESCRIPT_NPM_PACKAGES,
             },
             version_output: VersionOutput::Exact("0.4.0"),
         }),
@@ -169,9 +215,8 @@ pub(crate) fn pinned_indexer(kind: SemanticIndexerKind) -> Result<PinnedIndexer,
             display_name: "scip-python",
             version: "0.6.6",
             runtime: IndexerRuntime::NodeScript,
-            source: IndexerInstallSource::Npm {
-                package: "@sourcegraph/scip-python",
-                integrity_sha512: "qoKL1Rggg0o5newAFbCFAKlS0AjWxG5MA+mC28BtgxOv0DhO4zdL8u7151FxEppDpXMVvm7+yXSjXotoVH9cMQ==",
+            source: IndexerInstallSource::NpmTarballs {
+                packages: SCIP_PYTHON_NPM_PACKAGES,
             },
             version_output: VersionOutput::Exact("0.6.6"),
         }),

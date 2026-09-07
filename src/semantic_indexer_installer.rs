@@ -5,9 +5,7 @@ use crate::semantic_indexer_manifest::{
 use crate::types::FileRecord;
 use flate2::read::GzDecoder;
 use reqwest::Client;
-use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::ffi::OsString;
 use std::fs::{self, OpenOptions};
 use std::io::{Cursor, Read, Write};
 use std::path::{Component, Path, PathBuf};
@@ -18,6 +16,9 @@ use zip::ZipArchive;
 
 #[path = "semantic_indexer_go_installer.rs"]
 mod go_installer;
+
+#[path = "semantic_indexer_npm.rs"]
+mod npm;
 
 #[path = "semantic_indexer_scip_java_patch.rs"]
 mod scip_java_patch;
@@ -148,7 +149,7 @@ fn create_staging_directory(final_root: &Path, spec: PinnedIndexer) -> Result<Pa
 
 async fn install_source(spec: PinnedIndexer, root: &Path) -> Result<(), String> {
     match spec.source {
-        IndexerInstallSource::Npm { package, .. } => install_npm(spec, root, package).await,
+        IndexerInstallSource::NpmTarballs { packages } => npm::install(root, packages).await,
         IndexerInstallSource::GoModule {
             module,
             package,
@@ -170,51 +171,6 @@ async fn install_source(spec: PinnedIndexer, root: &Path) -> Result<(), String> 
         scip_java_windows::patch_scip_java_windows(root, spec)?;
     }
     Ok(())
-}
-
-async fn install_npm(spec: PinnedIndexer, root: &Path, package: &str) -> Result<(), String> {
-    let package_spec = format!("{package}@{}", spec.version);
-    let npm = executable_name("npm");
-    let mut view_command = Command::new(&npm);
-    view_command
-        .arg("view")
-        .arg(&package_spec)
-        .arg("dist.integrity")
-        .arg("--json");
-    let view = run_command(&mut view_command, "npm package integrity lookup").await?;
-    let actual = parse_json_string(&view, "npm integrity")?;
-    let expected = format!(
-        "sha512-{}",
-        match spec.source {
-            IndexerInstallSource::Npm {
-                integrity_sha512, ..
-            } => integrity_sha512,
-            _ => unreachable!(),
-        }
-    );
-    if actual.trim() != expected {
-        return Err(format!(
-            "{} npm integrity mismatch; expected {}, received {}",
-            spec.display_name,
-            expected,
-            actual.trim()
-        ));
-    }
-    let mut install_command = Command::new(&npm);
-    install_command
-        .arg("install")
-        .arg("--prefix")
-        .arg(root)
-        .args([
-            "--ignore-scripts",
-            "--no-bin-links",
-            "--no-package-lock",
-            "--omit=dev",
-        ])
-        .arg(&package_spec);
-    run_command(&mut install_command, "npm package installation")
-        .await
-        .map(|_| ())
 }
 
 async fn install_download(
@@ -416,15 +372,6 @@ async fn run_json_command(command: &mut Command, label: &str) -> Result<Vec<u8>,
     ))
 }
 
-fn parse_json_string(bytes: &[u8], label: &str) -> Result<String, String> {
-    let value: Value = serde_json::from_slice(bytes)
-        .map_err(|error| format!("{label} returned invalid JSON: {error}"))?;
-    value
-        .as_str()
-        .map(str::to_string)
-        .ok_or_else(|| format!("{label} did not return a JSON string"))
-}
-
 fn compact_output(bytes: &[u8]) -> String {
     let text = String::from_utf8_lossy(bytes);
     let compact = text.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -432,14 +379,6 @@ fn compact_output(bytes: &[u8]) -> String {
         format!("{}...", &compact[..400])
     } else {
         compact
-    }
-}
-
-fn executable_name(name: &str) -> OsString {
-    if cfg!(windows) {
-        OsString::from(format!("{name}.cmd"))
-    } else {
-        OsString::from(name)
     }
 }
 

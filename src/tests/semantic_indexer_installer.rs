@@ -1,3 +1,4 @@
+use super::compact_output;
 #[cfg(windows)]
 use super::scip_java_windows::{
     WINDOWS_GRADLE_TEMP_FILES, WINDOWS_SCIP_JAVA_PROCESS_RUNNER,
@@ -5,10 +6,72 @@ use super::scip_java_windows::{
 };
 #[cfg(windows)]
 use super::unpack_zip;
-use super::{compact_output, parse_json_string};
 
 const SCIP_JAVA_UPSTREAM_SHA256: &str =
     "a694cae143c32c5b6226362fb4bd268a8d13d3cd9b482819b3b0029a9a97b8fe";
+
+#[tokio::test]
+#[ignore = "requires Node and npm registry access"]
+async fn pinned_npm_closures_install_patch_seal_and_run_without_npm() {
+    use crate::semantic_indexer_installation::SemanticIndexerStore;
+    use crate::semantic_indexer_manifest::{SemanticIndexerKind, pinned_indexer};
+    use tokio::process::Command;
+
+    for kind in [
+        SemanticIndexerKind::TypeScriptJavaScript,
+        SemanticIndexerKind::Python,
+    ] {
+        let spec = pinned_indexer(kind).expect("pinned Node indexer");
+        let temp = tempfile::tempdir().expect("create isolated installation root");
+        super::install_source(spec, temp.path())
+            .await
+            .unwrap_or_else(|error| panic!("install {}: {error}", spec.display_name));
+
+        let store = SemanticIndexerStore::at(temp.path().join("unused-store"));
+        let installed = store
+            .seal_at(spec, temp.path())
+            .unwrap_or_else(|error| panic!("seal {}: {error}", spec.display_name));
+        store
+            .verify_at(spec, temp.path())
+            .unwrap_or_else(|error| panic!("verify {}: {error}", spec.display_name));
+
+        let mut command = Command::new("node");
+        #[cfg(windows)]
+        if kind == SemanticIndexerKind::Python {
+            command
+                .arg("-e")
+                .arg(crate::semantic_indexer_runner::WINDOWS_SCIP_PYTHON_BOOTSTRAP)
+                .arg(&installed.entrypoint)
+                .arg("--version");
+        } else {
+            command.arg(&installed.entrypoint).arg("--version");
+        }
+        #[cfg(not(windows))]
+        command.arg(&installed.entrypoint).arg("--version");
+
+        let output = command
+            .output()
+            .await
+            .unwrap_or_else(|error| panic!("run {}: {error}", spec.display_name));
+        let combined = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            output.status.success(),
+            "{} version command failed: {}",
+            spec.display_name,
+            compact_output(combined.as_bytes())
+        );
+        assert!(
+            spec.accepts_version_output(&combined),
+            "{} emitted unexpected version output: {}",
+            spec.display_name,
+            compact_output(combined.as_bytes())
+        );
+    }
+}
 
 #[tokio::test]
 #[ignore = "requires the checksum-pinned scip-java launcher, JDK 17, Gradle, and Maven access"]
@@ -138,15 +201,6 @@ async fn patched_kotlin_indexer_reaches_semantic_ir_with_exact_annotation_identi
         "scip-java maven maven/org.jetbrains.kotlin/kotlin-stdlib 2.2.0 kotlin/Deprecated#"
     );
     assert_eq!(symbol.origin, SemanticSymbolOrigin::External);
-}
-
-#[test]
-fn json_integrity_values_must_be_strings() {
-    assert_eq!(
-        parse_json_string(br#""sha512-example""#, "integrity").unwrap(),
-        "sha512-example"
-    );
-    assert!(parse_json_string(br#"{"integrity":"wrong-shape"}"#, "integrity").is_err());
 }
 
 #[test]
