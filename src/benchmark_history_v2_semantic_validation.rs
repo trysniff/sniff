@@ -3,17 +3,18 @@ use super::super::{
     HISTORICAL_V2_SEMANTIC_CENSUS_SCHEMA_VERSION, HistoricalV2Materialization,
     HistoricalV2MaterializedRoots, HistoricalV2NodePackageTargetStatus,
     HistoricalV2PublicSurfaceCoverage, HistoricalV2PythonDistributionModule,
-    HistoricalV2PythonModuleKind, HistoricalV2SemanticCensus, HistoricalV2SemanticMethodStatus,
-    HistoricalV2SemanticPublicBinding, HistoricalV2SemanticPublicBindingKind,
-    HistoricalV2SemanticPublicReexportHop, HistoricalV2SemanticPublicRootOrigin,
-    HistoricalV2SemanticSnapshotCensus, HistoricalV2SemanticSymbol, HistoricalV2SourceCensus,
-    HistoricalV2SourceFile, HistoricalV2SourcePublicBindingKind,
-    HistoricalV2SourcePublicDeclaration, HistoricalV2SourcePublicNamespace,
-    HistoricalV2SourcePublicReexport, HistoricalV2SourcePublicReexportKind,
-    HistoricalV2SourcePublicSymbolKind, HistoricalV2SourceSemanticCoverage,
-    HistoricalV2SourceSnapshotCensus, IntentionalBoundaryIndexerKind,
-    IntentionalBoundarySemanticOrigin, IntentionalBoundarySemanticRange,
-    IntentionalBoundarySemanticSymbolCategory, validate_historical_v2_source_census,
+    HistoricalV2PythonModuleKind, HistoricalV2SemanticCensus, HistoricalV2SemanticGoPackageRoot,
+    HistoricalV2SemanticMethodStatus, HistoricalV2SemanticPublicBinding,
+    HistoricalV2SemanticPublicBindingKind, HistoricalV2SemanticPublicReexportHop,
+    HistoricalV2SemanticPublicRootOrigin, HistoricalV2SemanticSnapshotCensus,
+    HistoricalV2SemanticSymbol, HistoricalV2SourceCensus, HistoricalV2SourceFile,
+    HistoricalV2SourcePublicBindingKind, HistoricalV2SourcePublicDeclaration,
+    HistoricalV2SourcePublicNamespace, HistoricalV2SourcePublicReexport,
+    HistoricalV2SourcePublicReexportKind, HistoricalV2SourcePublicSymbolKind,
+    HistoricalV2SourceSemanticCoverage, HistoricalV2SourceSnapshotCensus,
+    IntentionalBoundaryIndexerKind, IntentionalBoundarySemanticOrigin,
+    IntentionalBoundarySemanticRange, IntentionalBoundarySemanticSymbolCategory,
+    validate_historical_v2_source_census,
 };
 use super::{
     SEMANTIC_CENSUS_CONTRACT, indexer_for_language, indexer_kind, semantic_census_sha256,
@@ -124,6 +125,12 @@ pub(super) fn validate_snapshot(
         semantic,
         &actual_indexers,
         &symbols,
+        &public_surface_document_paths,
+    )?;
+    validate_go_package_roots(
+        source,
+        semantic,
+        &actual_indexers,
         &public_surface_document_paths,
     )?;
     let (reexports, reexport_symbols) = validate_reexport_hops(
@@ -489,6 +496,58 @@ fn validate_public_roots<'a>(
         );
     }
     Ok((paths, root_symbols))
+}
+
+fn validate_go_package_roots(
+    source: &HistoricalV2SourceSnapshotCensus,
+    semantic: &HistoricalV2SemanticSnapshotCensus,
+    indexers: &BTreeSet<IntentionalBoundaryIndexerKind>,
+    public_surface_document_paths: &BTreeSet<&str>,
+) -> Result<(), String> {
+    if semantic.go_package_root_count != semantic.go_package_roots.len()
+        || semantic
+            .go_package_roots
+            .windows(2)
+            .any(|pair| pair[0] >= pair[1])
+    {
+        return Err("historical-v2 Go package root census is noncanonical".to_string());
+    }
+
+    let mut expected = if indexers.contains(&IntentionalBoundaryIndexerKind::Go) {
+        go_package_exposures(&source.go_project_model)?
+            .into_iter()
+            .filter(|package| package.externally_reachable)
+            .map(|package| {
+                if !package
+                    .source_repository_paths
+                    .iter()
+                    .all(|path| public_surface_document_paths.contains(path.as_str()))
+                {
+                    return Err(format!(
+                        "historical-v2 Go package {} has compiler-invisible public source",
+                        package.import_path
+                    ));
+                }
+                Ok(HistoricalV2SemanticGoPackageRoot {
+                    target_id: package.target_id,
+                    surface_slot_id: package.surface_slot_id,
+                    module_path: package.module_path,
+                    import_path: package.import_path,
+                    source_repository_paths: package.source_repository_paths,
+                })
+            })
+            .collect::<Result<Vec<_>, String>>()?
+    } else {
+        Vec::new()
+    };
+    expected.sort();
+
+    if semantic.go_package_roots != expected {
+        return Err(
+            "historical-v2 Go package roots disagree with compiler package exposures".to_string(),
+        );
+    }
+    Ok(())
 }
 
 fn python_distribution_module_is_external_entry(

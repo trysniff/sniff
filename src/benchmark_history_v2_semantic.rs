@@ -30,7 +30,7 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-const SEMANTIC_CENSUS_CONTRACT: &str = "sniffbench-historical-v2-compiler-semantic-census-v14";
+const SEMANTIC_CENSUS_CONTRACT: &str = "sniffbench-historical-v2-compiler-semantic-census-v15";
 const UNCHANGED_DOCUMENT_EXCLUSION: &str =
     "compiler omitted an unchanged source document outside the exact historical patch";
 const UNTOUCHED_LANGUAGE_EXCLUSION: &str =
@@ -243,6 +243,7 @@ fn build_semantic_snapshot(
     let mut symbols = BTreeMap::new();
     let mut public_bindings = Vec::new();
     let mut public_roots = Vec::new();
+    let mut go_package_roots = Vec::new();
     let mut public_reexport_hops = BTreeMap::new();
     let mut public_surface_document_paths = BTreeSet::new();
     let mut indexers = Vec::with_capacity(indexes.len());
@@ -306,6 +307,7 @@ fn build_semantic_snapshot(
                 symbols: &mut symbols,
                 bindings: &mut public_bindings,
                 roots: &mut public_roots,
+                go_package_roots: &mut go_package_roots,
                 reexport_hops: &mut public_reexport_hops,
                 public_surface_document_paths: &mut public_surface_document_paths,
             },
@@ -336,6 +338,7 @@ fn build_semantic_snapshot(
     methods.sort_by(|left, right| left.parser_unit_id.cmp(&right.parser_unit_id));
     public_bindings.sort();
     public_roots.sort();
+    go_package_roots.sort();
     if public_roots.windows(2).any(|pair| pair[0] == pair[1]) {
         return Err("historical-v2 public roots are repeated".to_string());
     }
@@ -381,6 +384,8 @@ fn build_semantic_snapshot(
         public_bindings,
         public_root_count: public_roots.len(),
         public_roots,
+        go_package_root_count: go_package_roots.len(),
+        go_package_roots,
         public_reexport_hop_count: public_reexport_hops.len(),
         public_reexport_hops,
         symbol_count: symbols.len(),
@@ -650,21 +655,9 @@ pub(super) fn indexer_kind(kind: SemanticIndexerKind) -> IntentionalBoundaryInde
 pub(super) fn semantic_snapshot_sha256(
     value: &HistoricalV2SemanticSnapshotCensus,
 ) -> Result<String, String> {
-    hash_json(&(
-        &value.revision,
-        &value.source_snapshot_census_sha256,
-        &value.required_document_paths,
-        &value.indexers,
-        &value.methods,
-        &value.public_bindings,
-        &value.symbols,
-        value.symbol_count,
-        value.public_binding_count,
-        value.public_symbol_count,
-        value.resolved_method_count,
-        value.compiler_excluded_method_count,
-        value.unresolved_method_count,
-    ))
+    let mut committed = value.clone();
+    committed.semantic_snapshot_sha256.clear();
+    hash_json(&committed)
 }
 
 pub(super) fn semantic_census_sha256(value: &HistoricalV2SemanticCensus) -> Result<String, String> {

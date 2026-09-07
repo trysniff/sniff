@@ -4,16 +4,17 @@ use super::super::history_v2_go_package_surface::{
 use super::super::{
     HistoricalV2NodePackageExposure, HistoricalV2NodePackageTargetStatus,
     HistoricalV2PublicSurfaceCoverage, HistoricalV2PythonDistributionModule,
-    HistoricalV2PythonModuleKind, HistoricalV2SemanticPublicBinding,
-    HistoricalV2SemanticPublicBindingKind, HistoricalV2SemanticPublicReexportHop,
-    HistoricalV2SemanticPublicRoot, HistoricalV2SemanticPublicRootOrigin,
-    HistoricalV2SemanticSymbol, HistoricalV2SourceFile, HistoricalV2SourcePublicBindingKind,
-    HistoricalV2SourcePublicDeclaration, HistoricalV2SourcePublicNamespace,
-    HistoricalV2SourcePublicReexport, HistoricalV2SourcePublicReexportKind,
-    HistoricalV2SourcePublicSymbolKind, HistoricalV2SourceSemanticCoverage,
-    HistoricalV2SourceSnapshotCensus, IntentionalBoundaryIndexerKind,
-    IntentionalBoundaryManifestDeclarationKind, IntentionalBoundaryManifestTarget,
-    IntentionalBoundaryProjectModelProvider, IntentionalBoundaryProjectModelTargetStatus,
+    HistoricalV2PythonModuleKind, HistoricalV2SemanticGoPackageRoot,
+    HistoricalV2SemanticPublicBinding, HistoricalV2SemanticPublicBindingKind,
+    HistoricalV2SemanticPublicReexportHop, HistoricalV2SemanticPublicRoot,
+    HistoricalV2SemanticPublicRootOrigin, HistoricalV2SemanticSymbol, HistoricalV2SourceFile,
+    HistoricalV2SourcePublicBindingKind, HistoricalV2SourcePublicDeclaration,
+    HistoricalV2SourcePublicNamespace, HistoricalV2SourcePublicReexport,
+    HistoricalV2SourcePublicReexportKind, HistoricalV2SourcePublicSymbolKind,
+    HistoricalV2SourceSemanticCoverage, HistoricalV2SourceSnapshotCensus,
+    IntentionalBoundaryIndexerKind, IntentionalBoundaryManifestDeclarationKind,
+    IntentionalBoundaryManifestTarget, IntentionalBoundaryProjectModelProvider,
+    IntentionalBoundaryProjectModelTargetStatus,
 };
 use super::{
     file_repository_path, flatten_location, hash_json, indexer_for_language, indexer_kind,
@@ -41,6 +42,7 @@ pub(super) struct PublicSurfaceBindingOutputs<'a> {
         &'a mut BTreeMap<(IntentionalBoundaryIndexerKind, String), HistoricalV2SemanticSymbol>,
     pub(super) bindings: &'a mut Vec<HistoricalV2SemanticPublicBinding>,
     pub(super) roots: &'a mut Vec<HistoricalV2SemanticPublicRoot>,
+    pub(super) go_package_roots: &'a mut Vec<HistoricalV2SemanticGoPackageRoot>,
     pub(super) reexport_hops: &'a mut BTreeMap<String, HistoricalV2SemanticPublicReexportHop>,
     pub(super) public_surface_document_paths: &'a mut BTreeSet<String>,
 }
@@ -60,6 +62,7 @@ pub(super) fn bind_public_surface(
         symbols,
         bindings,
         roots,
+        go_package_roots,
         reexport_hops,
         public_surface_document_paths,
     } = outputs;
@@ -115,6 +118,31 @@ pub(super) fn bind_public_surface(
         Vec::new()
     };
     let go_sources = go_package_source_map(&go_packages)?;
+    if kind == SemanticIndexerKind::Go {
+        for package in go_packages
+            .iter()
+            .filter(|package| package.externally_reachable)
+        {
+            for repository_path in &package.source_repository_paths {
+                if !index
+                    .documents
+                    .contains_key(&RepositoryPath(repository_path.clone()))
+                {
+                    return Err(format!(
+                        "historical-v2 Go package {} has compiler-invisible source {repository_path}",
+                        package.import_path
+                    ));
+                }
+            }
+            go_package_roots.push(HistoricalV2SemanticGoPackageRoot {
+                target_id: package.target_id.clone(),
+                surface_slot_id: package.surface_slot_id.clone(),
+                module_path: package.module_path.clone(),
+                import_path: package.import_path.clone(),
+                source_repository_paths: package.source_repository_paths.clone(),
+            });
+        }
+    }
     for (repository_path, (symbol, definition)) in &rust_roots {
         retain_symbol(symbols, indexer_kind(kind), symbol, false, true, false)?;
         roots.push(HistoricalV2SemanticPublicRoot {
