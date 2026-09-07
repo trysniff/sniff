@@ -191,6 +191,7 @@ fn empty_index(
             }],
             diagnostics: Vec::new(),
         },
+        variant: crate::semantic_index::SemanticIndexVariant::Unqualified,
         documents: BTreeMap::new(),
         symbols: BTreeMap::new(),
         relationships: BTreeSet::new(),

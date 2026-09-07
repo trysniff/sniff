@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
-pub const SEMANTIC_INDEX_FORMAT_VERSION: u32 = 3;
+pub const SEMANTIC_INDEX_FORMAT_VERSION: u32 = 4;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -11,11 +11,26 @@ pub struct SemanticSymbolId(pub String);
 #[serde(transparent)]
 pub struct RepositoryPath(pub String);
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct SemanticVariantId(pub String);
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum SemanticIndexVariant {
+    Unqualified,
+    Qualified {
+        identity: SemanticVariantId,
+        dimensions: BTreeMap<String, String>,
+    },
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SemanticIndex {
     pub format_version: u32,
     pub repository_root: String,
     pub provenance: SemanticIndexProvenance,
+    pub variant: SemanticIndexVariant,
     pub documents: BTreeMap<RepositoryPath, SemanticDocument>,
     pub symbols: BTreeMap<SemanticSymbolId, SemanticSymbol>,
     pub relationships: BTreeSet<SemanticRelationship>,

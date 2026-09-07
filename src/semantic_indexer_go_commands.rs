@@ -371,6 +371,7 @@ mod tests {
                 }],
                 diagnostics: Vec::new(),
             },
+            variant: crate::semantic_index::SemanticIndexVariant::Unqualified,
             documents: paths
                 .iter()
                 .map(|path| {
