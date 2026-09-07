@@ -487,6 +487,51 @@ fn go_project_model_rejects_an_untyped_default_variant() {
 }
 
 #[test]
+fn plans_every_toolchain_platform_and_only_supported_cgo_worlds() {
+    let variants = parse_go_dist_variants(
+        r#"[
+            {"GOOS":"linux","GOARCH":"amd64","CgoSupported":true,"FirstClass":true},
+            {"GOOS":"wasip1","GOARCH":"wasm","CgoSupported":false,"FirstClass":false}
+        ]"#,
+    )
+    .unwrap();
+
+    assert_eq!(
+        variants,
+        [
+            go_variant_for("linux", "amd64", false, &[]),
+            go_variant_for("linux", "amd64", true, &[]),
+            go_variant_for("wasip1", "wasm", false, &[]),
+        ]
+    );
+}
+
+#[test]
+fn rejects_broken_repeated_or_unbounded_toolchain_platforms() {
+    for output in [
+        r#"[{"GOOS":"linux","GOARCH":"amd64","CgoSupported":true,"FirstClass":true,"Broken":true}]"#.to_string(),
+        r#"[
+            {"GOOS":"linux","GOARCH":"amd64","CgoSupported":true,"FirstClass":true},
+            {"GOOS":"linux","GOARCH":"amd64","CgoSupported":true,"FirstClass":true}
+        ]"#.to_string(),
+    ] {
+        assert!(parse_go_dist_variants(&output).is_err());
+    }
+
+    let unbounded = (0..=GO_VARIANT_LIMIT)
+        .map(|ordinal| {
+            serde_json::json!({
+                "GOOS": format!("os{ordinal}"),
+                "GOARCH": "arch",
+                "CgoSupported": false,
+                "FirstClass": false,
+            })
+        })
+        .collect::<Vec<_>>();
+    assert!(parse_go_dist_variants(&serde_json::to_string(&unbounded).unwrap()).is_err());
+}
+
+#[test]
 fn records_untracked_go_sources_as_unresolved_without_losing_commitment() {
     let (root, inventory) = repository();
     fs::write(root.path().join("api/untracked.go"), "package api\n").unwrap();
@@ -602,11 +647,11 @@ fn collector_executes_every_tracked_go_module_exactly_once() {
         |execution_root, manifest| {
             call_count.set(call_count.get() + 1);
             manifests.push(manifest.to_string());
-            Ok(GoListExecutionOutput {
+            Ok(vec![GoListExecutionOutput {
                 toolchain_identity_sha256: "e".repeat(64),
                 variant: go_variant(),
                 stdout: String::from_utf8(go_list_output(execution_root, manifest)).unwrap(),
-            })
+            }])
         },
     )
     .unwrap();
@@ -628,11 +673,11 @@ fn collector_rejects_repository_mutation_by_go_list_boundary() {
         &inventory,
         |_, manifest| {
             fs::write(root.path().join("api/api.go"), "package api\n").unwrap();
-            Ok(GoListExecutionOutput {
+            Ok(vec![GoListExecutionOutput {
                 toolchain_identity_sha256: "f".repeat(64),
                 variant: go_variant(),
                 stdout: String::from_utf8(go_list_output(root.path(), manifest)).unwrap(),
-            })
+            }])
         },
     )
     .unwrap_err();

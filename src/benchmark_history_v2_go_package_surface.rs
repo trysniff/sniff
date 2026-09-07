@@ -1,7 +1,7 @@
 use super::{
     IntentionalBoundaryManifestDeclarationKind, IntentionalBoundaryManifestTarget,
     IntentionalBoundaryProjectModelCensus, IntentionalBoundaryProjectModelProvider,
-    IntentionalBoundaryProjectModelTargetStatus,
+    IntentionalBoundaryProjectModelTargetStatus, IntentionalBoundaryProjectModelVariant,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -12,26 +12,59 @@ const GO_PACKAGE_SURFACE_SLOT_CONTRACT: &str =
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct HistoricalV2GoPackageExposure {
-    pub(super) target_id: String,
     pub(super) surface_slot_id: String,
     pub(super) module_path: String,
     pub(super) import_path: String,
     pub(super) source_repository_paths: Vec<String>,
+    pub(super) externally_reachable: bool,
+    pub(super) variants: Vec<HistoricalV2GoPackageVariantExposure>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) struct HistoricalV2GoPackageVariantExposure {
+    pub(super) target_id: String,
+    pub(super) variant: IntentionalBoundaryProjectModelVariant,
+    pub(super) source_repository_paths: Vec<String>,
+    pub(super) ignored_source_repository_paths: Vec<String>,
     pub(super) externally_reachable: bool,
 }
 
 pub(super) fn go_package_exposures(
     model: &IntentionalBoundaryProjectModelCensus,
 ) -> Result<Vec<HistoricalV2GoPackageExposure>, String> {
-    let mut exposures = Vec::with_capacity(model.targets.len());
+    let executions = model
+        .executions
+        .iter()
+        .map(|execution| (execution.execution_id.as_str(), execution))
+        .collect::<BTreeMap<_, _>>();
+    let mut exposures = BTreeMap::new();
     let mut target_ids = BTreeSet::new();
-    let mut source_owners = BTreeMap::new();
+    let mut source_owners: BTreeMap<&str, (&str, &str)> = BTreeMap::new();
     for target in &model.targets {
         if target.provider != IntentionalBoundaryProjectModelProvider::GoList {
             return Err("historical-v2 Go project model mixed providers".to_string());
         }
         if !target_ids.insert(target.target_id.as_str()) {
             return Err("historical-v2 Go project model repeated a target identity".to_string());
+        }
+        let execution = executions
+            .get(target.execution_id.as_str())
+            .ok_or_else(|| {
+                format!(
+                    "historical-v2 Go target {} has no compiler execution",
+                    target.target_name
+                )
+            })?;
+        if execution.provider != IntentionalBoundaryProjectModelProvider::GoList
+            || !matches!(
+                execution.variant,
+                IntentionalBoundaryProjectModelVariant::Go { .. }
+            )
+        {
+            return Err(format!(
+                "historical-v2 Go target {} has an invalid compiler variant",
+                target.target_name
+            ));
         }
         let (provider_kind, expected_declaration, externally_reachable) =
             match target.provider_kinds.as_slice() {
@@ -90,29 +123,66 @@ pub(super) fn go_package_exposures(
                 target.target_name
             ));
         }
-        for source in repository_paths {
+        for source in repository_paths
+            .iter()
+            .chain(&target.ignored_source_repository_paths)
+        {
+            let package_key = (target.package_name.as_str(), target.target_name.as_str());
             if source_owners
-                .insert(source.as_str(), target.target_name.as_str())
-                .is_some()
+                .insert(source.as_str(), package_key)
+                .is_some_and(|owner| owner != package_key)
             {
                 return Err(format!(
                     "historical-v2 Go source {source} belongs to more than one compiler package"
                 ));
             }
         }
-        exposures.push(HistoricalV2GoPackageExposure {
-            target_id: target.target_id.clone(),
-            surface_slot_id: go_package_surface_slot_id(&target.package_name, &target.target_name)?,
-            module_path: target.package_name.clone(),
-            import_path: target.target_name.clone(),
-            source_repository_paths: repository_paths.clone(),
-            externally_reachable,
-        });
+        let key = (target.package_name.clone(), target.target_name.clone());
+        let exposure = exposures
+            .entry(key)
+            .or_insert_with(|| HistoricalV2GoPackageExposure {
+                surface_slot_id: String::new(),
+                module_path: target.package_name.clone(),
+                import_path: target.target_name.clone(),
+                source_repository_paths: Vec::new(),
+                externally_reachable: false,
+                variants: Vec::new(),
+            });
+        exposure.externally_reachable |= externally_reachable;
+        exposure
+            .source_repository_paths
+            .extend(repository_paths.iter().cloned());
+        exposure
+            .source_repository_paths
+            .extend(target.ignored_source_repository_paths.iter().cloned());
+        exposure
+            .variants
+            .push(HistoricalV2GoPackageVariantExposure {
+                target_id: target.target_id.clone(),
+                variant: execution.variant.clone(),
+                source_repository_paths: repository_paths.clone(),
+                ignored_source_repository_paths: target.ignored_source_repository_paths.clone(),
+                externally_reachable,
+            });
+    }
+    let mut exposures = exposures.into_values().collect::<Vec<_>>();
+    for exposure in &mut exposures {
+        exposure.surface_slot_id =
+            go_package_surface_slot_id(&exposure.module_path, &exposure.import_path)?;
+        exposure.source_repository_paths.sort();
+        exposure.source_repository_paths.dedup();
+        exposure.variants.sort();
+        if exposure.variants.windows(2).any(|pair| pair[0] >= pair[1]) {
+            return Err(format!(
+                "historical-v2 Go package {} repeated a compiler variant",
+                exposure.import_path
+            ));
+        }
     }
     exposures.sort_by(|left, right| {
         left.import_path
             .cmp(&right.import_path)
-            .then_with(|| left.target_id.cmp(&right.target_id))
+            .then_with(|| left.module_path.cmp(&right.module_path))
     });
     Ok(exposures)
 }

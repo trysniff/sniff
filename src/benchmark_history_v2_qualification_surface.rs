@@ -59,13 +59,16 @@ fn surface_entries(
         );
     }
     for root in &semantic.go_package_roots {
-        record_symbol_free_surface(
-            &mut aggregates,
-            super::IntentionalBoundaryIndexerKind::Go,
-            &root.surface_slot_id,
-            &root.target_id,
-            package_root_fingerprint("go", &root.surface_slot_id)?,
-        );
+        let fingerprint = package_root_fingerprint("go", &root.surface_slot_id)?;
+        for target_id in &root.variant_target_ids {
+            record_symbol_free_surface(
+                &mut aggregates,
+                super::IntentionalBoundaryIndexerKind::Go,
+                &root.surface_slot_id,
+                target_id,
+                fingerprint.clone(),
+            );
+        }
     }
     for binding in semantic
         .public_bindings
@@ -568,7 +571,7 @@ mod tests {
         snapshot.symbols.clear();
         snapshot.symbol_count = 0;
         snapshot.go_package_roots = vec![HistoricalV2SemanticGoPackageRoot {
-            target_id: target_id.to_string(),
+            variant_target_ids: vec![target_id.to_string()],
             surface_slot_id: surface_slot_id.to_string(),
             module_path: "example.test/fixture".to_string(),
             import_path: "example.test/fixture/api".to_string(),

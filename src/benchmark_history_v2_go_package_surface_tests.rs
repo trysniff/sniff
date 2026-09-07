@@ -1,19 +1,50 @@
 use super::*;
 use crate::benchmark::release::{
     INTENTIONAL_BOUNDARY_PROJECT_MODEL_CENSUS_SCHEMA_VERSION,
-    IntentionalBoundaryProjectModelTarget, IntentionalBoundaryProjectModelUnresolvedReason,
+    IntentionalBoundaryProjectModelExecution, IntentionalBoundaryProjectModelTarget,
+    IntentionalBoundaryProjectModelUnresolvedReason, IntentionalBoundaryProjectModelVariant,
 };
 
 fn model(
     targets: Vec<IntentionalBoundaryProjectModelTarget>,
 ) -> IntentionalBoundaryProjectModelCensus {
+    let execution_ids = targets
+        .iter()
+        .map(|target| target.execution_id.clone())
+        .collect::<BTreeSet<_>>();
+    let executions = execution_ids
+        .iter()
+        .enumerate()
+        .map(
+            |(ordinal, execution_id)| IntentionalBoundaryProjectModelExecution {
+                execution_id: execution_id.clone(),
+                provider: IntentionalBoundaryProjectModelProvider::GoList,
+                variant: IntentionalBoundaryProjectModelVariant::Go {
+                    goos: if ordinal == 0 { "linux" } else { "windows" }.to_string(),
+                    goarch: "amd64".to_string(),
+                    cgo_enabled: false,
+                    build_tags: Vec::new(),
+                },
+                invocation_anchor_repository_path: "go.mod".to_string(),
+                invocation_anchor_object_id: "d".repeat(40),
+                toolchain_identity_sha256: "e".repeat(64),
+                command_contract: "fixture".to_string(),
+                normalized_model_sha256: "f".repeat(64),
+                covered_manifest_repository_paths: vec!["go.mod".to_string()],
+                target_count: targets
+                    .iter()
+                    .filter(|target| target.execution_id == *execution_id)
+                    .count(),
+            },
+        )
+        .collect();
     IntentionalBoundaryProjectModelCensus {
         schema_version: INTENTIONAL_BOUNDARY_PROJECT_MODEL_CENSUS_SCHEMA_VERSION,
         project_model_contract: "fixture".to_string(),
         repository: "example/repo".to_string(),
         revision: "a".repeat(40),
         inventory_sha256: "b".repeat(64),
-        executions: Vec::new(),
+        executions,
         targets,
         execution_count_by_provider: BTreeMap::new(),
         target_count_by_status: BTreeMap::new(),
@@ -88,7 +119,7 @@ fn exposes_only_importable_library_packages() {
     assert!(
         exposures
             .iter()
-            .find(|exposure| exposure.target_id == "public")
+            .find(|exposure| exposure.import_path.ends_with("/public"))
             .unwrap()
             .externally_reachable
     );
@@ -96,7 +127,12 @@ fn exposes_only_importable_library_packages() {
         assert!(
             !exposures
                 .iter()
-                .find(|exposure| exposure.target_id == id)
+                .find(|exposure| {
+                    exposure
+                        .variants
+                        .iter()
+                        .any(|variant| variant.target_id == id)
+                })
                 .unwrap()
                 .externally_reachable
         );
@@ -105,6 +141,36 @@ fn exposes_only_importable_library_packages() {
         exposures
             .iter()
             .all(|exposure| exposure.surface_slot_id.starts_with("h2gops-v1:"))
+    );
+}
+
+#[test]
+fn groups_repeated_package_ownership_without_flattening_variants() {
+    let linux = target(
+        "linux-target",
+        "example.test/project/public",
+        "package",
+        "public/api.go",
+    );
+    let mut windows = target(
+        "windows-target",
+        "example.test/project/public",
+        "package",
+        "public/windows.go",
+    );
+    windows.execution_id = "windows-execution".to_string();
+    windows.ignored_source_repository_paths = vec!["public/api.go".to_string()];
+    let exposures = go_package_exposures(&model(vec![linux, windows])).unwrap();
+
+    assert_eq!(exposures.len(), 1);
+    assert_eq!(exposures[0].variants.len(), 2);
+    assert_eq!(
+        exposures[0].source_repository_paths,
+        ["public/api.go", "public/windows.go"]
+    );
+    assert_ne!(
+        exposures[0].variants[0].variant,
+        exposures[0].variants[1].variant
     );
 }
 
