@@ -21,8 +21,9 @@ use super::{
     retain_symbol,
 };
 use crate::semantic_index::{
-    RepositoryPath, SemanticIndex, SemanticLocation, SemanticPosition, SemanticPositionEncoding,
-    SemanticSourceRange, SemanticSymbol, SemanticSymbolCategory, SemanticSymbolOrigin,
+    RepositoryPath, SemanticIndex, SemanticIndexVariant, SemanticLocation, SemanticPosition,
+    SemanticPositionEncoding, SemanticSourceRange, SemanticSymbol, SemanticSymbolCategory,
+    SemanticSymbolOrigin,
 };
 use crate::semantic_indexer_manifest::SemanticIndexerKind;
 use crate::types::FileRecord;
@@ -38,12 +39,15 @@ pub(super) struct PublicSurfaceBindingInputs<'a> {
 }
 
 pub(super) struct PublicSurfaceBindingOutputs<'a> {
-    pub(super) symbols:
-        &'a mut BTreeMap<(IntentionalBoundaryIndexerKind, String), HistoricalV2SemanticSymbol>,
+    pub(super) symbols: &'a mut BTreeMap<
+        (IntentionalBoundaryIndexerKind, SemanticIndexVariant, String),
+        HistoricalV2SemanticSymbol,
+    >,
     pub(super) bindings: &'a mut Vec<HistoricalV2SemanticPublicBinding>,
     pub(super) roots: &'a mut Vec<HistoricalV2SemanticPublicRoot>,
     pub(super) go_package_roots: &'a mut Vec<HistoricalV2SemanticGoPackageRoot>,
-    pub(super) reexport_hops: &'a mut BTreeMap<String, HistoricalV2SemanticPublicReexportHop>,
+    pub(super) reexport_hops:
+        &'a mut BTreeMap<(SemanticIndexVariant, String), HistoricalV2SemanticPublicReexportHop>,
     pub(super) public_surface_document_paths: &'a mut BTreeSet<String>,
 }
 
@@ -123,27 +127,39 @@ pub(super) fn bind_public_surface(
             .iter()
             .filter(|package| package.externally_reachable)
         {
-            let mut variant_target_ids = package
+            let package_variants = package
                 .variants
                 .iter()
                 .filter(|variant| variant.externally_reachable)
+                .filter(|variant| match &index.variant {
+                    SemanticIndexVariant::Unqualified => true,
+                    SemanticIndexVariant::Qualified { identity, .. } => {
+                        variant.execution_id == identity.0
+                    }
+                })
+                .collect::<Vec<_>>();
+            if package_variants.is_empty() {
+                continue;
+            }
+            let mut variant_target_ids = package_variants
+                .iter()
                 .map(|variant| variant.target_id.clone())
                 .collect::<Vec<_>>();
             variant_target_ids.sort();
-            let mut source_repository_paths = package
-                .variants
+            let mut source_repository_paths = package_variants
                 .iter()
-                .filter(|variant| variant.externally_reachable)
-                .flat_map(|variant| {
-                    variant
-                        .source_repository_paths
-                        .iter()
-                        .chain(&variant.ignored_source_repository_paths)
-                })
+                .flat_map(|variant| variant.source_repository_paths.iter())
                 .cloned()
                 .collect::<Vec<_>>();
             source_repository_paths.sort();
             source_repository_paths.dedup();
+            let mut ignored_source_repository_paths = package_variants
+                .iter()
+                .flat_map(|variant| variant.ignored_source_repository_paths.iter())
+                .cloned()
+                .collect::<Vec<_>>();
+            ignored_source_repository_paths.sort();
+            ignored_source_repository_paths.dedup();
             for repository_path in &source_repository_paths {
                 if !index
                     .documents
@@ -155,19 +171,42 @@ pub(super) fn bind_public_surface(
                     ));
                 }
             }
+            if matches!(index.variant, SemanticIndexVariant::Qualified { .. })
+                && ignored_source_repository_paths.iter().any(|path| {
+                    index
+                        .documents
+                        .contains_key(&RepositoryPath(path.to_string()))
+                })
+            {
+                return Err(format!(
+                    "historical-v2 Go package {} indexed a source excluded from its compiler variant",
+                    package.import_path
+                ));
+            }
             go_package_roots.push(HistoricalV2SemanticGoPackageRoot {
+                variant: index.variant.clone(),
                 variant_target_ids,
                 surface_slot_id: package.surface_slot_id.clone(),
                 module_path: package.module_path.clone(),
                 import_path: package.import_path.clone(),
                 source_repository_paths,
+                ignored_source_repository_paths,
             });
         }
     }
     for (repository_path, (symbol, definition)) in &rust_roots {
-        retain_symbol(symbols, indexer_kind(kind), symbol, false, true, false)?;
+        retain_symbol(
+            symbols,
+            indexer_kind(kind),
+            &index.variant,
+            symbol,
+            false,
+            true,
+            false,
+        )?;
         roots.push(HistoricalV2SemanticPublicRoot {
             indexer: indexer_kind(kind),
+            variant: index.variant.clone(),
             repository_path: repository_path.clone(),
             module_symbol_id: symbol.id.0.clone(),
             compiler_definition: flatten_location(definition),
@@ -175,9 +214,18 @@ pub(super) fn bind_public_surface(
         });
     }
     for root in &node_roots {
-        retain_symbol(symbols, indexer_kind(kind), root.symbol, false, true, false)?;
+        retain_symbol(
+            symbols,
+            indexer_kind(kind),
+            &index.variant,
+            root.symbol,
+            false,
+            true,
+            false,
+        )?;
         roots.push(HistoricalV2SemanticPublicRoot {
             indexer: indexer_kind(kind),
+            variant: index.variant.clone(),
             repository_path: root.exposure.target_repository_path.clone(),
             module_symbol_id: root.symbol.id.0.clone(),
             compiler_definition: flatten_location(root.definition),
@@ -188,9 +236,18 @@ pub(super) fn bind_public_surface(
         });
     }
     for root in &python_roots {
-        retain_symbol(symbols, indexer_kind(kind), root.symbol, false, true, false)?;
+        retain_symbol(
+            symbols,
+            indexer_kind(kind),
+            &index.variant,
+            root.symbol,
+            false,
+            true,
+            false,
+        )?;
         roots.push(HistoricalV2SemanticPublicRoot {
             indexer: indexer_kind(kind),
+            variant: index.variant.clone(),
             repository_path: root.definition.document.0.clone(),
             module_symbol_id: root.symbol.id.0.clone(),
             compiler_definition: flatten_location(root.definition),
@@ -274,6 +331,7 @@ pub(super) fn bind_public_surface(
             retain_symbol(
                 symbols,
                 indexer_kind(kind),
+                &index.variant,
                 symbol,
                 externally_reachable,
                 false,
@@ -283,6 +341,7 @@ pub(super) fn bind_public_surface(
                 retain_symbol(
                     symbols,
                     indexer_kind(kind),
+                    &index.variant,
                     owner_symbol,
                     false,
                     false,
@@ -291,6 +350,7 @@ pub(super) fn bind_public_surface(
             }
             let public_binding = HistoricalV2SemanticPublicBinding {
                 indexer: indexer_kind(kind),
+                variant: index.variant.clone(),
                 surface_unit_id: declaration.surface_unit_id.clone(),
                 declaration_unit_id: declaration.declaration_unit_id.clone(),
                 origin_declaration_unit_id: declaration.declaration_unit_id.clone(),
@@ -356,7 +416,15 @@ pub(super) fn bind_public_surface(
                 .ok_or_else(|| {
                     "historical-v2 public expansion points to a missing compiler symbol".to_string()
                 })?;
-            retain_symbol(symbols, indexer_kind(kind), symbol, true, false, false)?;
+            retain_symbol(
+                symbols,
+                indexer_kind(kind),
+                &index.variant,
+                symbol,
+                true,
+                false,
+                false,
+            )?;
             bindings.push(slot.binding);
         }
     }
@@ -394,7 +462,15 @@ pub(super) fn bind_public_surface(
                     "historical-v2 Node package expansion points to a missing compiler symbol"
                         .to_string()
                 })?;
-            retain_symbol(symbols, indexer_kind(kind), symbol, true, false, false)?;
+            retain_symbol(
+                symbols,
+                indexer_kind(kind),
+                &index.variant,
+                symbol,
+                true,
+                false,
+                false,
+            )?;
             bindings.push(expanded.binding);
         }
     }
@@ -429,7 +505,15 @@ pub(super) fn bind_public_surface(
                     "historical-v2 Python distribution expansion points to a missing compiler symbol"
                         .to_string()
                 })?;
-            retain_symbol(symbols, indexer_kind(kind), symbol, true, false, false)?;
+            retain_symbol(
+                symbols,
+                indexer_kind(kind),
+                &index.variant,
+                symbol,
+                true,
+                false,
+                false,
+            )?;
             bindings.push(expanded.binding);
         }
     }
@@ -457,7 +541,10 @@ fn go_file_is_externally_reachable(
 fn expand_owner_surfaces(
     source: &HistoricalV2SourceSnapshotCensus,
     index: &SemanticIndex,
-    symbols: &mut BTreeMap<(IntentionalBoundaryIndexerKind, String), HistoricalV2SemanticSymbol>,
+    symbols: &mut BTreeMap<
+        (IntentionalBoundaryIndexerKind, SemanticIndexVariant, String),
+        HistoricalV2SemanticSymbol,
+    >,
     bindings: &mut Vec<HistoricalV2SemanticPublicBinding>,
 ) -> Result<(), String> {
     let declarations = source
@@ -500,6 +587,7 @@ fn expand_owner_surfaces(
             .ok_or_else(|| "historical-v2 owner member has no source owner".to_string())?;
         for owner in owners.iter().filter(|owner| {
             owner.indexer == member.indexer
+                && owner.variant == member.variant
                 && Some(owner.symbol_id.as_str()) == member.owner_symbol_id.as_deref()
         }) {
             let surface_unit_id = super::super::history_v2_source_census::historical_public_owner_member_surface_unit_id(
@@ -535,7 +623,15 @@ fn expand_owner_surfaces(
             .ok_or_else(|| {
                 "historical-v2 Rust owner surface points to a missing compiler symbol".to_string()
             })?;
-        retain_symbol(symbols, expansion.indexer, symbol, true, false, false)?;
+        retain_symbol(
+            symbols,
+            expansion.indexer,
+            &expansion.variant,
+            symbol,
+            true,
+            false,
+            false,
+        )?;
     }
     bindings.extend(expansions);
     Ok(())
@@ -1103,8 +1199,14 @@ fn resolve_file_public_slots(
     direct_bindings: &BTreeMap<String, HistoricalV2SemanticPublicBinding>,
     kind: SemanticIndexerKind,
     index: &SemanticIndex,
-    symbols: &mut BTreeMap<(IntentionalBoundaryIndexerKind, String), HistoricalV2SemanticSymbol>,
-    reexport_hops: &mut BTreeMap<String, HistoricalV2SemanticPublicReexportHop>,
+    symbols: &mut BTreeMap<
+        (IntentionalBoundaryIndexerKind, SemanticIndexVariant, String),
+        HistoricalV2SemanticSymbol,
+    >,
+    reexport_hops: &mut BTreeMap<
+        (SemanticIndexVariant, String),
+        HistoricalV2SemanticPublicReexportHop,
+    >,
     python_shipped_paths: &BTreeSet<String>,
     cache: &mut BTreeMap<String, Vec<ResolvedPublicSlot>>,
     stack: &mut Vec<String>,
@@ -1184,13 +1286,16 @@ fn resolve_file_public_slots(
         retain_symbol(
             symbols,
             indexer_kind(kind),
+            &index.variant,
             module_symbol,
             false,
             false,
             true,
         )?;
-        if let Some(existing) = reexport_hops.insert(reexport.reexport_unit_id.clone(), hop.clone())
-            && existing != hop
+        if let Some(existing) = reexport_hops.insert(
+            (index.variant.clone(), reexport.reexport_unit_id.clone()),
+            hop.clone(),
+        ) && existing != hop
         {
             return Err("historical-v2 compiler changed a repeated re-export hop".to_string());
         }
@@ -1358,6 +1463,7 @@ fn expand_reexport_slot(
         kind,
         binding: HistoricalV2SemanticPublicBinding {
             indexer: hop.indexer,
+            variant: hop.variant.clone(),
             surface_unit_id,
             declaration_unit_id,
             origin_declaration_unit_id: target.binding.origin_declaration_unit_id,
@@ -1471,6 +1577,7 @@ fn resolve_public_reexport<'a>(
     Ok((
         HistoricalV2SemanticPublicReexportHop {
             indexer: indexer_kind(kind),
+            variant: index.variant.clone(),
             reexport_unit_id: reexport.reexport_unit_id.clone(),
             repository_path: file.repository_path.clone(),
             target_repository_path: target_repository_path.clone(),
