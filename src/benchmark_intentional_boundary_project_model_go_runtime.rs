@@ -8,6 +8,10 @@ use super::super::intentional_boundary_runtime_snapshot::{
     IntentionalBoundaryRuntimeSnapshot, allocate_runtime_directory,
 };
 use super::super::non_blind_history_runtime::prepare_historical_runtime;
+use super::variants::{
+    GO_VARIANT_LIMIT, go_project_model_pipeline_identity, parse_go_constraint_tags,
+    parse_go_dist_variants, stage_go_constraint_invocation,
+};
 use super::*;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -15,7 +19,6 @@ use std::time::Duration;
 
 const GO_LIST_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const GO_LIST_OUTPUT_LIMIT: usize = 32 * 1024 * 1024;
-pub(super) const GO_VARIANT_LIMIT: usize = 256;
 
 struct GoListCallRuntime(PathBuf);
 
@@ -39,21 +42,6 @@ pub(super) struct GoListExecutionOutput {
     pub(super) toolchain_identity_sha256: String,
     pub(super) variant: IntentionalBoundaryProjectModelVariant,
     pub(super) stdout: String,
-}
-
-#[derive(Debug, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-struct GoDistPlatform {
-    #[serde(rename = "GOOS")]
-    goos: String,
-    #[serde(rename = "GOARCH")]
-    goarch: String,
-    #[serde(rename = "CgoSupported")]
-    cgo_supported: bool,
-    #[serde(rename = "FirstClass")]
-    _first_class: bool,
-    #[serde(default, rename = "Broken")]
-    broken: bool,
 }
 
 struct GoCommandExecution {
@@ -115,7 +103,7 @@ pub(super) fn census_go_project_models_with_executor<F>(
     executor: F,
 ) -> Result<IntentionalBoundaryProjectModelCensus, String>
 where
-    F: FnMut(&Path, &str) -> Result<Vec<GoListExecutionOutput>, String>,
+    F: FnMut(&Path, &str, &[String]) -> Result<Vec<GoListExecutionOutput>, String>,
 {
     let mut executor = executor;
     census_go_project_models_at_execution_root(
@@ -124,8 +112,8 @@ where
         root,
         root,
         inventory,
-        |execution_root, manifest_path| {
-            executor(execution_root, manifest_path).map_err(|detail| {
+        |execution_root, manifest_path, source_paths| {
+            executor(execution_root, manifest_path, source_paths).map_err(|detail| {
                 go_error(
                     ProjectModelDerivationErrorKind::InfrastructureFailed,
                     IntentionalBoundaryProjectModelFailurePhase::Execution,
@@ -147,7 +135,11 @@ fn census_go_project_models_at_execution_root<F>(
     mut executor: F,
 ) -> Result<IntentionalBoundaryProjectModelCensus, ProjectModelDerivationError>
 where
-    F: FnMut(&Path, &str) -> Result<Vec<GoListExecutionOutput>, ProjectModelDerivationError>,
+    F: FnMut(
+        &Path,
+        &str,
+        &[String],
+    ) -> Result<Vec<GoListExecutionOutput>, ProjectModelDerivationError>,
 {
     validate_intentional_boundary_repository_inventory(
         repository,
@@ -185,7 +177,8 @@ where
     let mut executions = Vec::new();
     let mut targets = Vec::new();
     for manifest_path in &go_manifests {
-        let outputs = executor(execution_root, manifest_path);
+        let module_sources = go_module_source_paths(inventory, &go_manifests, manifest_path)?;
+        let outputs = executor(execution_root, manifest_path, &module_sources);
         if let Err(error) = validate_intentional_boundary_repository_inventory(
             repository,
             revision,
@@ -269,9 +262,58 @@ where
     })
 }
 
+fn go_module_source_paths(
+    inventory: &IntentionalBoundaryRepositoryInventory,
+    go_manifests: &[String],
+    manifest_repository_path: &str,
+) -> Result<Vec<String>, ProjectModelDerivationError> {
+    let module_directory = manifest_repository_path
+        .rsplit_once('/')
+        .map_or("", |(directory, _)| directory);
+    let module_prefix = (!module_directory.is_empty()).then(|| format!("{module_directory}/"));
+    let nested_module_prefixes = go_manifests
+        .iter()
+        .filter_map(|manifest| manifest.rsplit_once('/').map(|(directory, _)| directory))
+        .filter(|directory| {
+            *directory != module_directory
+                && (module_directory.is_empty()
+                    || directory
+                        .strip_prefix(module_directory)
+                        .is_some_and(|suffix| suffix.starts_with('/')))
+        })
+        .map(|directory| format!("{directory}/"))
+        .collect::<Vec<_>>();
+    let mut sources = Vec::new();
+    for entry in &inventory.tracked_entries {
+        let path = entry.repository_path.as_str();
+        if !path.ends_with(".go")
+            || path.ends_with("_test.go")
+            || module_prefix
+                .as_deref()
+                .is_some_and(|prefix| !path.starts_with(prefix))
+            || nested_module_prefixes
+                .iter()
+                .any(|prefix| path.starts_with(prefix))
+        {
+            continue;
+        }
+        if entry.kind != BoundaryGitEntryKind::RegularBlob {
+            return Err(go_error(
+                ProjectModelDerivationErrorKind::UnsupportedProjectShape,
+                IntentionalBoundaryProjectModelFailurePhase::RepositoryValidation,
+                Some(manifest_repository_path),
+                format!("Go module source is not a regular Git blob: {path}"),
+            ));
+        }
+        sources.push(path.to_string());
+    }
+    Ok(sources)
+}
+
 fn run_go_lists(
     root: &Path,
     manifest_repository_path: &str,
+    source_repository_paths: &[String],
 ) -> Result<Vec<GoListExecutionOutput>, ProjectModelDerivationError> {
     let runtime = GoListCallRuntime::create(root).map_err(|detail| {
         go_error(
@@ -311,7 +353,48 @@ fn run_go_lists(
         ProjectModelDerivationErrorKind::InfrastructureFailed,
         "sandboxed Go platform discovery",
     )?;
-    let variants = parse_go_dist_variants(&platform_execution.output.stdout).map_err(|detail| {
+    let constraint_invocation =
+        stage_go_constraint_invocation(root, &cache, source_repository_paths).map_err(
+            |detail| {
+                go_error(
+                    ProjectModelDerivationErrorKind::InfrastructureFailed,
+                    IntentionalBoundaryProjectModelFailurePhase::RuntimePreparation,
+                    Some(manifest_repository_path),
+                    detail,
+                )
+            },
+        )?;
+    let constraint_command = vec![
+        "go".to_string(),
+        "run".to_string(),
+        constraint_invocation.helper_repository_path,
+        constraint_invocation.request_repository_path,
+    ];
+    let constraint_execution = run_go_project_model_command(
+        root,
+        &cache,
+        manifest_repository_path,
+        constraint_command,
+        &[("GO111MODULE".to_string(), "off".to_string())],
+        ProjectModelDerivationErrorKind::ProviderRejectedRepository,
+        "sandboxed Go constraint discovery",
+    )?;
+    if platform_execution.toolchain_identity_sha256
+        != constraint_execution.toolchain_identity_sha256
+    {
+        return Err(go_error(
+            ProjectModelDerivationErrorKind::InfrastructureFailed,
+            IntentionalBoundaryProjectModelFailurePhase::IntegrityVerification,
+            Some(manifest_repository_path),
+            "Go toolchain identity changed between platform and constraint discovery",
+        ));
+    }
+    let build_tags = parse_go_constraint_tags(
+        &constraint_execution.output.stdout,
+        source_repository_paths,
+        &platform_execution.output.stdout,
+    )
+    .map_err(|detail| {
         go_error(
             ProjectModelDerivationErrorKind::ProviderOutputIncomplete,
             IntentionalBoundaryProjectModelFailurePhase::OutputValidation,
@@ -319,18 +402,28 @@ fn run_go_lists(
             detail,
         )
     })?;
+    let variants = parse_go_dist_variants(&platform_execution.output.stdout, &build_tags).map_err(
+        |detail| {
+            go_error(
+                ProjectModelDerivationErrorKind::ProviderOutputIncomplete,
+                IntentionalBoundaryProjectModelFailurePhase::OutputValidation,
+                Some(manifest_repository_path),
+                detail,
+            )
+        },
+    )?;
     let mut outputs = Vec::with_capacity(variants.len());
     for variant in variants {
         let IntentionalBoundaryProjectModelVariant::Go {
             goos,
             goarch,
             cgo_enabled,
-            ..
+            build_tags,
         } = &variant
         else {
             unreachable!("Go platform planning only emits Go variants");
         };
-        let logical_command = vec![
+        let mut logical_command = vec![
             "go".to_string(),
             "-C".to_string(),
             module_directory.to_string(),
@@ -339,8 +432,11 @@ fn run_go_lists(
             "-find".to_string(),
             "-mod=readonly".to_string(),
             "-buildvcs=false".to_string(),
-            "./...".to_string(),
         ];
+        if !build_tags.is_empty() {
+            logical_command.push(format!("-tags={}", build_tags.join(",")));
+        }
+        logical_command.push("./...".to_string());
         let explicit_context = vec![
             (
                 "CGO_ENABLED".to_string(),
@@ -374,55 +470,6 @@ fn run_go_lists(
         });
     }
     Ok(outputs)
-}
-
-pub(super) fn parse_go_dist_variants(
-    stdout: &str,
-) -> Result<Vec<IntentionalBoundaryProjectModelVariant>, String> {
-    let platforms: Vec<GoDistPlatform> = serde_json::from_str(stdout)
-        .map_err(|error| format!("Go platform discovery returned invalid JSON: {error}"))?;
-    if platforms.is_empty() {
-        return Err("Go platform discovery returned no supported platforms".to_string());
-    }
-    let mut platform_keys = BTreeSet::new();
-    let mut variants = Vec::new();
-    for platform in platforms {
-        if !platform_component_is_valid(&platform.goos)
-            || !platform_component_is_valid(&platform.goarch)
-            || platform.broken
-            || !platform_keys.insert((platform.goos.clone(), platform.goarch.clone()))
-        {
-            return Err(
-                "Go platform discovery returned an invalid or repeated platform".to_string(),
-            );
-        }
-        for cgo_enabled in
-            [false, true]
-                .into_iter()
-                .take(if platform.cgo_supported { 2 } else { 1 })
-        {
-            variants.push(IntentionalBoundaryProjectModelVariant::Go {
-                goos: platform.goos.clone(),
-                goarch: platform.goarch.clone(),
-                cgo_enabled,
-                build_tags: Vec::new(),
-            });
-        }
-    }
-    variants.sort();
-    if variants.len() > GO_VARIANT_LIMIT || variants.windows(2).any(|pair| pair[0] >= pair[1]) {
-        return Err(
-            "Go platform discovery exceeds or repeats the strict variant limit".to_string(),
-        );
-    }
-    Ok(variants)
-}
-
-fn platform_component_is_valid(value: &str) -> bool {
-    !value.is_empty()
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
 }
 
 fn run_go_project_model_command(
@@ -472,7 +519,15 @@ fn run_go_project_model_command(
     }
     plan.command.timeout = GO_LIST_TIMEOUT;
     plan.command.output_limit = GO_LIST_OUTPUT_LIMIT;
-    let toolchain_identity_sha256 = plan.runtime_identity;
+    let toolchain_identity_sha256 = go_project_model_pipeline_identity(&plan.runtime_identity)
+        .map_err(|detail| {
+            go_error(
+                ProjectModelDerivationErrorKind::InfrastructureFailed,
+                IntentionalBoundaryProjectModelFailurePhase::RuntimePreparation,
+                Some(manifest_repository_path),
+                detail,
+            )
+        })?;
     let output = crate::sandbox::run(&plan.command).map_err(|error| {
         project_model_sandbox_error(
             Provider::GoList,

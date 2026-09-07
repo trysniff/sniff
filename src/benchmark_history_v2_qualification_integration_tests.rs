@@ -18,6 +18,13 @@ use std::process::Command;
 
 #[test]
 fn real_git_reduction_with_resolved_methods_qualifies() {
+    if !Command::new("go")
+        .arg("version")
+        .output()
+        .is_ok_and(|output| output.status.success())
+    {
+        return;
+    }
     let fixture = Fixture::new();
     let (materialization, roots) = fixture.materialize();
     let source_census =
@@ -84,6 +91,11 @@ impl Fixture {
         git_ok(source.path(), &["config", "user.name", "Fixture"]);
         git_ok(source.path(), &["config", "core.autocrlf", "false"]);
         fs::create_dir_all(source.path().join("src")).expect("source directory");
+        fs::write(
+            source.path().join("go.mod"),
+            "module example.com/qualification-fixture\n\ngo 1.22\n",
+        )
+        .expect("Go module manifest");
         fs::write(source.path().join("src/lib.go"), go_source(true)).expect("base source");
         git_ok(source.path(), &["add", "."]);
         git_ok(source.path(), &["commit", "-m", "base"]);

@@ -493,6 +493,7 @@ fn plans_every_toolchain_platform_and_only_supported_cgo_worlds() {
             {"GOOS":"linux","GOARCH":"amd64","CgoSupported":true,"FirstClass":true},
             {"GOOS":"wasip1","GOARCH":"wasm","CgoSupported":false,"FirstClass":false}
         ]"#,
+        &[],
     )
     .unwrap();
 
@@ -515,20 +516,137 @@ fn rejects_broken_repeated_or_unbounded_toolchain_platforms() {
             {"GOOS":"linux","GOARCH":"amd64","CgoSupported":true,"FirstClass":true}
         ]"#.to_string(),
     ] {
-        assert!(parse_go_dist_variants(&output).is_err());
+        assert!(parse_go_dist_variants(&output, &[]).is_err());
     }
 
-    let unbounded = (0..=GO_VARIANT_LIMIT)
-        .map(|ordinal| {
-            serde_json::json!({
-                "GOOS": format!("os{ordinal}"),
-                "GOARCH": "arch",
-                "CgoSupported": false,
-                "FirstClass": false,
-            })
-        })
+    let unbounded_tags = (0..12)
+        .map(|index| format!("tag{index}"))
         .collect::<Vec<_>>();
-    assert!(parse_go_dist_variants(&serde_json::to_string(&unbounded).unwrap()).is_err());
+    assert!(
+        parse_go_dist_variants(
+            r#"[{"GOOS":"linux","GOARCH":"amd64","CgoSupported":false,"FirstClass":true}]"#,
+            &unbounded_tags,
+        )
+        .is_err()
+    );
+    assert_eq!(GO_VARIANT_LIMIT, 2_048);
+}
+
+#[test]
+fn discovers_only_ordinary_custom_tags_from_exact_constraint_output() {
+    let platforms = r#"[
+        {"GOOS":"linux","GOARCH":"amd64","CgoSupported":true,"FirstClass":true},
+        {"GOOS":"windows","GOARCH":"arm64","CgoSupported":false,"FirstClass":true}
+    ]"#;
+    let output = serde_json::json!({
+        "schema_version": 1,
+        "files": [
+            {
+                "repository_path": "api/api.go",
+                "tags": ["amd64", "cgo", "enterprise", "go1.25", "ignore", "linux", "unix"]
+            },
+            {
+                "repository_path": "api/more.go",
+                "tags": ["enterprise", "purego"]
+            }
+        ]
+    });
+
+    assert_eq!(
+        parse_go_constraint_tags(
+            &serde_json::to_string(&output).unwrap(),
+            &["api/api.go".to_string(), "api/more.go".to_string()],
+            platforms,
+        )
+        .unwrap(),
+        ["enterprise", "purego"]
+    );
+}
+
+#[test]
+fn rejects_constraint_output_that_needs_unmodeled_compiler_modes() {
+    let platforms = r#"[
+        {"GOOS":"linux","GOARCH":"amd64","CgoSupported":true,"FirstClass":true}
+    ]"#;
+    for tag in [
+        "amd64.v3",
+        "goexperiment.arenas",
+        "race",
+        "msan",
+        "asan",
+        "fuzz",
+    ] {
+        let output = serde_json::json!({
+            "schema_version": 1,
+            "files": [{"repository_path": "api/api.go", "tags": [tag]}]
+        });
+        let error = parse_go_constraint_tags(
+            &serde_json::to_string(&output).unwrap(),
+            &["api/api.go".to_string()],
+            platforms,
+        )
+        .unwrap_err();
+        assert!(
+            error.contains(tag),
+            "unexpected rejection for {tag}: {error}"
+        );
+    }
+}
+
+#[test]
+fn custom_tags_expand_to_every_boolean_assignment() {
+    let variants = parse_go_dist_variants(
+        r#"[
+            {"GOOS":"linux","GOARCH":"amd64","CgoSupported":true,"FirstClass":true},
+            {"GOOS":"wasip1","GOARCH":"wasm","CgoSupported":false,"FirstClass":false}
+        ]"#,
+        &["enterprise".to_string(), "purego".to_string()],
+    )
+    .unwrap();
+
+    assert_eq!(variants.len(), 12);
+    for expected in [
+        Vec::<String>::new(),
+        vec!["enterprise".to_string()],
+        vec!["purego".to_string()],
+        vec!["enterprise".to_string(), "purego".to_string()],
+    ] {
+        assert!(variants.iter().any(|variant| {
+            matches!(
+                variant,
+                IntentionalBoundaryProjectModelVariant::Go { build_tags, .. }
+                    if build_tags == &expected
+            )
+        }));
+    }
+}
+
+#[test]
+fn rejects_reordered_or_malformed_constraint_censuses() {
+    let platforms = r#"[{"GOOS":"linux","GOARCH":"amd64","CgoSupported":false,"FirstClass":true}]"#;
+    for output in [
+        serde_json::json!({
+            "schema_version": 2,
+            "files": [{"repository_path": "api/api.go", "tags": []}]
+        }),
+        serde_json::json!({
+            "schema_version": 1,
+            "files": [{"repository_path": "wrong.go", "tags": []}]
+        }),
+        serde_json::json!({
+            "schema_version": 1,
+            "files": [{"repository_path": "api/api.go", "tags": ["same", "same"]}]
+        }),
+    ] {
+        assert!(
+            parse_go_constraint_tags(
+                &serde_json::to_string(&output).unwrap(),
+                &["api/api.go".to_string()],
+                platforms,
+            )
+            .is_err()
+        );
+    }
 }
 
 #[test]
@@ -644,9 +762,25 @@ fn collector_executes_every_tracked_go_module_exactly_once() {
         &inventory.revision,
         root.path(),
         &inventory,
-        |execution_root, manifest| {
+        |execution_root, manifest, source_paths| {
             call_count.set(call_count.get() + 1);
             manifests.push(manifest.to_string());
+            match manifest {
+                "go.mod" => assert_eq!(
+                    source_paths,
+                    [
+                        "api/api.go",
+                        "api/api_windows.go",
+                        "api/more.go",
+                        "cmd/tool/main.go",
+                        "cmd/tool/support.go",
+                    ]
+                ),
+                "tools/go.mod" => {
+                    assert_eq!(source_paths, ["tools/library/library.go"])
+                }
+                _ => panic!("unexpected Go module {manifest}"),
+            }
             Ok(vec![GoListExecutionOutput {
                 toolchain_identity_sha256: "e".repeat(64),
                 variant: go_variant(),
@@ -671,7 +805,7 @@ fn collector_rejects_repository_mutation_by_go_list_boundary() {
         &inventory.revision,
         root.path(),
         &inventory,
-        |_, manifest| {
+        |_, manifest, _| {
             fs::write(root.path().join("api/api.go"), "package api\n").unwrap();
             Ok(vec![GoListExecutionOutput {
                 toolchain_identity_sha256: "f".repeat(64),
@@ -758,8 +892,12 @@ fn real_go_list_is_sandboxed_or_fails_as_typed_unavailable() {
     );
     if go_available {
         let census = result.unwrap();
-        assert_eq!(census.executions.len(), 2);
-        assert_eq!(census.targets.len(), 3);
+        assert!(census.executions.len() > 2);
+        assert!(census.targets.len() >= census.executions.len());
+        assert!(census.executions.iter().all(|execution| matches!(
+            execution.variant,
+            IntentionalBoundaryProjectModelVariant::Go { .. }
+        )));
         validate_intentional_boundary_project_model_census_commitment(&inventory, &census).unwrap();
     } else {
         let error = result.unwrap_err();
