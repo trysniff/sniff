@@ -18,7 +18,7 @@ use support::*;
 mod validation;
 use validation::*;
 
-pub(super) const BUNDLE_CONTRACT: &str = "sniffbench-historical-v2-source-review-v2";
+pub(super) const BUNDLE_CONTRACT: &str = "sniffbench-historical-v2-source-review-v3";
 pub(super) const REVIEW_ITEM_CONTRACT: &str = "sniffbench-historical-v2-review-item-v1";
 pub(super) const MANIFEST_NAME: &str = "manifest.json";
 
