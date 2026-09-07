@@ -18,11 +18,11 @@ use super::{
     kotlin_dependency_preparation_failure, missing_position_encoding,
     prepare_mixed_typescript_javascript_project, private_indexer_directory_argument,
     private_indexer_environment, private_indexer_jvm_arguments, project_name,
-    publish_isolated_index, reject_unsupported_android_gradle, repository_relative_path,
-    require_dependency_preparation_success, resolve_java_home_runtime, runtime_file_identities,
-    sandbox_repository_argument, source_integrity_digest_at, validate_expected_documents,
-    validate_required_document_scope, verify_runtime_identities_unchanged,
-    write_private_gradle_properties,
+    publish_isolated_index, recover_semantic_indexer_progress, reject_unsupported_android_gradle,
+    repository_relative_path, require_dependency_preparation_success, resolve_java_home_runtime,
+    runtime_file_identities, sandbox_repository_argument, source_integrity_digest_at,
+    validate_expected_documents, validate_required_document_scope,
+    verify_runtime_identities_unchanged, write_private_gradle_properties,
 };
 #[cfg(windows)]
 use super::{
@@ -43,6 +43,16 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read, Write};
 use std::path::Path;
 use std::time::Duration;
+
+#[test]
+fn qualified_go_progress_rejects_uncommitted_variant_directories() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(root.path().join("go").join("not-a-variant-digest")).unwrap();
+
+    let error = recover_semantic_indexer_progress(root.path()).unwrap_err();
+
+    assert!(error.contains("invalid entry"), "{error}");
+}
 
 #[cfg(windows)]
 #[tokio::test]

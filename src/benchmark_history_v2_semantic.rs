@@ -17,11 +17,13 @@ use super::{
     HistoricalV2SourceSnapshotCensus, HistoricalV2StageResult, IntentionalBoundaryIndexerKind,
     IntentionalBoundaryMethodCensusEntry, validate_historical_v2_source_census_commitment,
 };
-use crate::semantic_index::{SemanticIndex, SemanticResolution, SemanticSymbol};
+use crate::semantic_index::{SemanticIndex, SemanticIndexSet, SemanticResolution, SemanticSymbol};
 use crate::semantic_indexer_manifest::SemanticIndexerKind;
+#[cfg(test)]
+use crate::semantic_indexer_runner::SemanticIndexerBatchOutcome;
 use crate::semantic_indexer_runner::{
-    SemanticIndexerBatchOutcome, SemanticIndexerProcessEvidence, SemanticIndexerRunFailure,
-    SemanticIndexerRunFailureKind, SemanticIndexerRunPhase,
+    SemanticIndexerProcessEvidence, SemanticIndexerRunFailure, SemanticIndexerRunFailureKind,
+    SemanticIndexerRunPhase, SemanticVariantIndexerBatchOutcome,
 };
 use crate::semantic_method_join::{SemanticMethodBinding, SemanticMethodCoverage, join_methods};
 use crate::types::FileRecord;
@@ -60,6 +62,9 @@ mod stage_support;
 
 #[path = "benchmark_history_v2_semantic_progress.rs"]
 mod progress;
+
+#[path = "benchmark_history_v2_semantic_variants.rs"]
+mod variants;
 
 use stage_support::*;
 
@@ -658,6 +663,38 @@ pub(super) fn semantic_snapshot_sha256(
     let mut committed = value.clone();
     committed.semantic_snapshot_sha256.clear();
     hash_json(&committed)
+}
+
+fn build_semantic_snapshot_from_index_sets(
+    root: &Path,
+    source: &HistoricalV2SourceSnapshotCensus,
+    files: &[FileRecord],
+    changed_indexers: &BTreeSet<SemanticIndexerKind>,
+    required_document_paths: &BTreeSet<String>,
+    indexes: BTreeMap<SemanticIndexerKind, SemanticIndexSet>,
+) -> Result<HistoricalV2SemanticSnapshotCensus, String> {
+    let indexes = indexes
+        .into_iter()
+        .map(|(kind, indexes)| {
+            indexes
+                .into_unqualified()
+                .map(|index| (kind, index))
+                .map_err(|_| {
+                    format!(
+                        "historical-v2 {} semantic snapshot cannot flatten qualified compiler variants",
+                        kind.display_name()
+                    )
+                })
+        })
+        .collect::<Result<BTreeMap<_, _>, _>>()?;
+    build_semantic_snapshot(
+        root,
+        source,
+        files,
+        changed_indexers,
+        required_document_paths,
+        &indexes,
+    )
 }
 
 pub(super) fn semantic_census_sha256(value: &HistoricalV2SemanticCensus) -> Result<String, String> {

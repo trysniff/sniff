@@ -1,5 +1,8 @@
 use crate::sandbox::{SandboxCommand, sandbox_path};
-use crate::semantic_index::{RepositoryPath, SemanticIndex, SemanticPositionEncoding};
+use crate::semantic_index::{
+    RepositoryPath, SemanticIndex, SemanticIndexSet, SemanticIndexerVariantPlan,
+    SemanticPositionEncoding,
+};
 use crate::semantic_indexer_installation::{InstalledIndexer, SemanticIndexerStore};
 use crate::semantic_indexer_manifest::{
     IndexerRuntime, PinnedIndexer, SemanticIndexerKind, pinned_indexer, required_indexers,
@@ -35,7 +38,63 @@ pub(crate) use recovery::recover_interrupted_semantic_indexing;
 use recovery::{INDEXER_CACHE_DIR, INDEXER_TEMP_DIR, SemanticIndexerRecoveryGuard};
 
 pub(crate) fn recover_semantic_indexer_progress(progress_root: &Path) -> Result<(), String> {
-    progress::SemanticProgressStore::recover_existing(&progress_root.join("go"))
+    let go_root = progress_root.join("go");
+    if !go_root.exists() {
+        return Ok(());
+    }
+    let metadata = fs::symlink_metadata(&go_root).map_err(|error| {
+        format!(
+            "failed to inspect Go semantic progress root {}: {error}",
+            go_root.display()
+        )
+    })?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return Err(format!(
+            "Go semantic progress root is not a plain directory: {}",
+            go_root.display()
+        ));
+    }
+    if go_root.join("scope.json").exists() {
+        return progress::SemanticProgressStore::recover_existing(&go_root);
+    }
+    for entry in fs::read_dir(&go_root).map_err(|error| {
+        format!(
+            "failed to enumerate Go semantic progress root {}: {error}",
+            go_root.display()
+        )
+    })? {
+        let entry = entry.map_err(|error| {
+            format!(
+                "failed to inspect Go semantic progress root {}: {error}",
+                go_root.display()
+            )
+        })?;
+        let name = entry
+            .file_name()
+            .into_string()
+            .map_err(|_| "Go semantic variant progress has a non-UTF-8 name".to_string())?;
+        let metadata = fs::symlink_metadata(entry.path()).map_err(|error| {
+            format!(
+                "failed to inspect Go semantic variant progress {}: {error}",
+                entry.path().display()
+            )
+        })?;
+        if !metadata.is_dir() || metadata.file_type().is_symlink() || !is_lower_sha256(&name) {
+            return Err(format!(
+                "Go semantic variant progress contains an invalid entry: {}",
+                entry.path().display()
+            ));
+        }
+        progress::SemanticProgressStore::recover_existing(&entry.path())?;
+    }
+    Ok(())
+}
+
+fn is_lower_sha256(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
 }
 
 #[cfg(test)]
@@ -199,21 +258,41 @@ pub(crate) async fn run_required_indexers_exhaustive_typed_scoped(
         files,
         required_documents,
         None,
+        &BTreeMap::new(),
+    )
+    .await
+    .and_then(into_unqualified_batch_outcome)
+}
+
+pub(crate) async fn run_required_indexers_exhaustive_typed_scoped_with_variants(
+    repository_root: &Path,
+    files: &[FileRecord],
+    required_documents: &[FileRecord],
+    variant_plans: &BTreeMap<SemanticIndexerKind, Vec<SemanticIndexerVariantPlan>>,
+) -> Result<SemanticVariantIndexerBatchOutcome, SemanticIndexerRunFailure> {
+    run_required_indexers_exhaustive_typed_scoped_internal(
+        repository_root,
+        files,
+        required_documents,
+        None,
+        variant_plans,
     )
     .await
 }
 
-pub(crate) async fn run_required_indexers_exhaustive_typed_scoped_resumable(
+pub(crate) async fn run_required_indexers_exhaustive_typed_scoped_resumable_with_variants(
     repository_root: &Path,
     files: &[FileRecord],
     required_documents: &[FileRecord],
     progress_root: &Path,
-) -> Result<SemanticIndexerBatchOutcome, SemanticIndexerRunFailure> {
+    variant_plans: &BTreeMap<SemanticIndexerKind, Vec<SemanticIndexerVariantPlan>>,
+) -> Result<SemanticVariantIndexerBatchOutcome, SemanticIndexerRunFailure> {
     run_required_indexers_exhaustive_typed_scoped_internal(
         repository_root,
         files,
         required_documents,
         Some(progress_root),
+        variant_plans,
     )
     .await
 }
@@ -223,7 +302,8 @@ async fn run_required_indexers_exhaustive_typed_scoped_internal(
     files: &[FileRecord],
     required_documents: &[FileRecord],
     progress_root: Option<&Path>,
-) -> Result<SemanticIndexerBatchOutcome, SemanticIndexerRunFailure> {
+    variant_plans: &BTreeMap<SemanticIndexerKind, Vec<SemanticIndexerVariantPlan>>,
+) -> Result<SemanticVariantIndexerBatchOutcome, SemanticIndexerRunFailure> {
     let root =
         strip_windows_verbatim_prefix(fs::canonicalize(repository_root).map_err(|error| {
             failure(
@@ -280,8 +360,17 @@ async fn run_required_indexers_exhaustive_typed_scoped_internal(
         repository_content_sha256: &repository_digest_before,
         progress_root,
     };
-    for kind in required_indexers(files) {
-        match run_required_indexer_typed(&context, kind).await {
+    let required = required_indexers(files);
+    if let Some(kind) = variant_plans.keys().find(|kind| !required.contains(kind)) {
+        return Err(failure(
+            SemanticIndexerRunFailureKind::InvalidInput,
+            SemanticIndexerRunPhase::RepositoryValidation,
+            Some(*kind),
+            "semantic variant plans include an indexer outside the required language scope",
+        ));
+    }
+    for kind in required {
+        match run_required_indexer_set_typed(&context, kind, variant_plans.get(&kind)).await {
             Ok(index) => {
                 indexes.insert(kind, index);
             }
@@ -313,7 +402,33 @@ async fn run_required_indexers_exhaustive_typed_scoped_internal(
             "semantic indexing changed repository content outside Sniff's private runtime paths",
         ));
     }
-    Ok(SemanticIndexerBatchOutcome { indexes, failures })
+    Ok(SemanticVariantIndexerBatchOutcome { indexes, failures })
+}
+
+fn into_unqualified_batch_outcome(
+    outcome: SemanticVariantIndexerBatchOutcome,
+) -> Result<SemanticIndexerBatchOutcome, SemanticIndexerRunFailure> {
+    let indexes = outcome
+        .indexes
+        .into_iter()
+        .map(|(kind, indexes)| {
+            indexes
+                .into_unqualified()
+                .map(|index| (kind, index))
+                .map_err(|detail| {
+                    failure(
+                        SemanticIndexerRunFailureKind::InvalidInput,
+                        SemanticIndexerRunPhase::OutputValidation,
+                        Some(kind),
+                        detail,
+                    )
+                })
+        })
+        .collect::<Result<BTreeMap<_, _>, _>>()?;
+    Ok(SemanticIndexerBatchOutcome {
+        indexes,
+        failures: outcome.failures,
+    })
 }
 
 #[cfg(test)]
@@ -361,7 +476,18 @@ pub(crate) async fn run_required_indexer_with_store_for_test(
         repository_content_sha256: &repository_digest,
         progress_root: None,
     };
-    let run_result = run_required_indexer_typed(&context, kind).await;
+    let run_result = run_required_indexer_set_typed(&context, kind, None)
+        .await
+        .and_then(|indexes| {
+            indexes.into_unqualified().map_err(|detail| {
+                failure(
+                    SemanticIndexerRunFailureKind::InvalidInput,
+                    SemanticIndexerRunPhase::OutputValidation,
+                    Some(kind),
+                    detail,
+                )
+            })
+        });
     let cleanup_result = recovery.finish().map_err(|detail| {
         failure(
             SemanticIndexerRunFailureKind::InfrastructureFailed,
@@ -373,10 +499,19 @@ pub(crate) async fn run_required_indexer_with_store_for_test(
     combine_typed_run_and_integrity(run_result, cleanup_result)
 }
 
-async fn run_required_indexer_typed(
+async fn run_required_indexer_set_typed(
     context: &RequiredIndexerRunContext<'_>,
     kind: SemanticIndexerKind,
-) -> Result<SemanticIndex, SemanticIndexerRunFailure> {
+    variant_plans: Option<&Vec<SemanticIndexerVariantPlan>>,
+) -> Result<SemanticIndexSet, SemanticIndexerRunFailure> {
+    if variant_plans.is_some() && kind != SemanticIndexerKind::Go {
+        return Err(failure(
+            SemanticIndexerRunFailureKind::InvalidInput,
+            SemanticIndexerRunPhase::RepositoryValidation,
+            Some(kind),
+            "this semantic indexer does not yet support qualified compiler variants",
+        ));
+    }
     let RequiredIndexerRunContext {
         root,
         files,
@@ -421,7 +556,7 @@ async fn run_required_indexer_typed(
         eprintln!("[sniff] semantic indexer start: {}", spec.display_name);
     }
     if kind == SemanticIndexerKind::Go {
-        let run_result = go_runner::run_required_go_indexer(go_runner::GoIndexerRunInputs {
+        let inputs = go_runner::GoIndexerRunInputs {
             spec,
             root,
             installed: &installed,
@@ -430,8 +565,15 @@ async fn run_required_indexer_typed(
             recovery,
             repository_content_sha256,
             progress_root,
-        })
-        .await;
+        };
+        let run_result = match variant_plans {
+            Some(plans) => go_runner::run_required_go_indexer_variants(inputs, plans).await,
+            None => go_runner::run_required_go_indexer(inputs)
+                .await
+                .map(|index| SemanticIndexSet::Unqualified {
+                    index: Box::new(index),
+                }),
+        };
         let installation_result = store.verify(spec).map(|_| ()).map_err(|error| {
             failure(
                 SemanticIndexerRunFailureKind::InfrastructureFailed,
@@ -524,7 +666,9 @@ async fn run_required_indexer_typed(
             ),
         ));
     }
-    result
+    result.map(|index| SemanticIndexSet::Unqualified {
+        index: Box::new(index),
+    })
 }
 
 pub(crate) fn files_for_indexer(

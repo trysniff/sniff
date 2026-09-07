@@ -26,6 +26,139 @@ pub enum SemanticIndexVariant {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SemanticIndexerVariantPlan {
+    pub identity: SemanticVariantId,
+    pub dimensions: BTreeMap<String, String>,
+    pub environment: BTreeMap<String, String>,
+    pub selected_documents: BTreeSet<RepositoryPath>,
+    pub ignored_documents: BTreeSet<RepositoryPath>,
+}
+
+impl SemanticIndexerVariantPlan {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.identity.0.trim().is_empty()
+            || self.dimensions.is_empty()
+            || self.environment.is_empty()
+            || self
+                .dimensions
+                .iter()
+                .any(|(name, value)| name.trim().is_empty() || value.trim().is_empty())
+            || self
+                .environment
+                .iter()
+                .any(|(name, value)| name.trim().is_empty() || value.contains('\0'))
+            || self
+                .selected_documents
+                .iter()
+                .chain(&self.ignored_documents)
+                .any(|path| path.0.trim().is_empty())
+            || !self.selected_documents.is_disjoint(&self.ignored_documents)
+        {
+            return Err(format!(
+                "semantic compiler variant plan {} is incomplete",
+                self.identity.0
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn index_variant(&self) -> SemanticIndexVariant {
+        SemanticIndexVariant::Qualified {
+            identity: self.identity.clone(),
+            dimensions: self.dimensions.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "mode", rename_all = "snake_case")]
+pub enum SemanticIndexSet {
+    Unqualified {
+        index: Box<SemanticIndex>,
+    },
+    Qualified {
+        variants: BTreeMap<SemanticVariantId, QualifiedSemanticIndex>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct QualifiedSemanticIndex {
+    pub index: SemanticIndex,
+    pub ignored_documents: BTreeSet<RepositoryPath>,
+}
+
+impl SemanticIndexSet {
+    pub fn validate(&self) -> Result<(), String> {
+        match self {
+            Self::Unqualified { index } => {
+                if index.variant != SemanticIndexVariant::Unqualified {
+                    return Err(
+                        "unqualified semantic index set contains a qualified index".to_string()
+                    );
+                }
+            }
+            Self::Qualified { variants } => {
+                if variants.is_empty() {
+                    return Err("qualified semantic index set contains no variants".to_string());
+                }
+                for (identity, qualified) in variants {
+                    let index = &qualified.index;
+                    let SemanticIndexVariant::Qualified {
+                        identity: index_identity,
+                        dimensions,
+                    } = &index.variant
+                    else {
+                        return Err(format!(
+                            "qualified semantic index set contains unqualified variant {}",
+                            identity.0
+                        ));
+                    };
+                    if identity != index_identity
+                        || identity.0.trim().is_empty()
+                        || dimensions.is_empty()
+                        || dimensions
+                            .iter()
+                            .any(|(name, value)| name.trim().is_empty() || value.trim().is_empty())
+                    {
+                        return Err(format!(
+                            "qualified semantic index set has an invalid variant {}",
+                            identity.0
+                        ));
+                    }
+                    if !index
+                        .documents
+                        .keys()
+                        .all(|document| !qualified.ignored_documents.contains(document))
+                        || qualified
+                            .ignored_documents
+                            .iter()
+                            .any(|document| document.0.trim().is_empty())
+                    {
+                        return Err(format!(
+                            "qualified semantic index {} has conflicting document coverage",
+                            identity.0
+                        ));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub fn into_unqualified(self) -> Result<SemanticIndex, String> {
+        self.validate()?;
+        match self {
+            Self::Unqualified { index } => Ok(*index),
+            Self::Qualified { .. } => {
+                Err("qualified semantic indexes cannot be flattened".to_string())
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SemanticIndex {
     pub format_version: u32,
     pub repository_root: String,
@@ -315,4 +448,59 @@ pub enum SemanticUnresolvedEdgeKind {
     Ownership,
     Implementation,
     TestProduction,
+}
+
+#[cfg(test)]
+mod variant_tests {
+    use super::*;
+
+    fn plan() -> SemanticIndexerVariantPlan {
+        SemanticIndexerVariantPlan {
+            identity: SemanticVariantId("variant-a".to_string()),
+            dimensions: BTreeMap::from([
+                ("GOARCH".to_string(), "amd64".to_string()),
+                ("GOOS".to_string(), "linux".to_string()),
+            ]),
+            environment: BTreeMap::from([
+                ("CGO_ENABLED".to_string(), "0".to_string()),
+                ("GOARCH".to_string(), "amd64".to_string()),
+                ("GOOS".to_string(), "linux".to_string()),
+            ]),
+            selected_documents: BTreeSet::from([RepositoryPath("api_linux.go".to_string())]),
+            ignored_documents: BTreeSet::from([RepositoryPath("api_windows.go".to_string())]),
+        }
+    }
+
+    #[test]
+    fn compiler_variant_plan_binds_identity_dimensions_and_document_partition() {
+        let plan = plan();
+
+        plan.validate().unwrap();
+        assert_eq!(
+            plan.index_variant(),
+            SemanticIndexVariant::Qualified {
+                identity: SemanticVariantId("variant-a".to_string()),
+                dimensions: plan.dimensions.clone(),
+            }
+        );
+    }
+
+    #[test]
+    fn compiler_variant_plan_rejects_overlapping_document_states() {
+        let mut plan = plan();
+        plan.ignored_documents = plan.selected_documents.clone();
+
+        let error = plan.validate().unwrap_err();
+
+        assert!(error.contains("incomplete"), "{error}");
+    }
+
+    #[test]
+    fn compiler_variant_plan_allows_an_explicit_empty_world() {
+        let mut plan = plan();
+        plan.selected_documents.clear();
+        plan.ignored_documents.clear();
+
+        plan.validate().unwrap();
+    }
 }

@@ -1,5 +1,5 @@
 use super::strip_windows_verbatim_prefix;
-use crate::semantic_index::{RepositoryPath, SemanticIndex};
+use crate::semantic_index::{RepositoryPath, SemanticIndex, SemanticIndexVariant};
 use crate::semantic_indexer_manifest::SemanticIndexerKind;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -7,8 +7,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const PROGRESS_SCHEMA_VERSION: u32 = 2;
-const PROGRESS_CONTRACT: &str = "semantic-indexer-unit-progress-v2";
+const PROGRESS_SCHEMA_VERSION: u32 = 3;
+const PROGRESS_CONTRACT: &str = "semantic-indexer-unit-progress-v3";
 const SCOPE_FILE: &str = "scope.json";
 const SCOPE_TEMP_FILE: &str = "scope.json.tmp";
 const UNITS_DIRECTORY: &str = "units";
@@ -80,6 +80,7 @@ pub(super) struct SemanticProgressScope {
     runtime_sha256: String,
     repository_content_sha256: String,
     file_scope_sha256: String,
+    variant: SemanticIndexVariant,
     build_context: BTreeMap<String, String>,
     build_context_output_sha256: String,
     package_inventory_sha256: String,
@@ -95,6 +96,7 @@ pub(super) struct SemanticProgressScopeInputs {
     pub(super) runtime_sha256: String,
     pub(super) repository_content_sha256: String,
     pub(super) file_scope_sha256: String,
+    pub(super) variant: SemanticIndexVariant,
     pub(super) build_context: BTreeMap<String, String>,
     pub(super) build_context_output_sha256: String,
     pub(super) package_inventory_sha256: String,
@@ -113,6 +115,7 @@ impl SemanticProgressScope {
             runtime_sha256: inputs.runtime_sha256,
             repository_content_sha256: inputs.repository_content_sha256,
             file_scope_sha256: inputs.file_scope_sha256,
+            variant: inputs.variant,
             build_context: inputs.build_context,
             build_context_output_sha256: inputs.build_context_output_sha256,
             package_inventory_sha256: inputs.package_inventory_sha256,
