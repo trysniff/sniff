@@ -3,6 +3,7 @@ use crate::semantic_indexer_manifest::{
     required_indexers, rust_analyzer_download_for,
 };
 use crate::types::FileRecord;
+use base64::Engine;
 
 fn file(language: &str) -> FileRecord {
     FileRecord {
@@ -82,17 +83,50 @@ fn version_matching_is_exact_or_token_exact() {
 #[test]
 fn pinned_sources_have_expected_distribution_contracts() {
     let javascript = pinned_indexer(SemanticIndexerKind::TypeScriptJavaScript).unwrap();
-    assert!(matches!(
-        javascript.source,
-        IndexerInstallSource::Npm {
-            package: "@sourcegraph/scip-typescript",
-            integrity_sha512: _
-        }
-    ));
+    let IndexerInstallSource::NpmTarballs { packages } = javascript.source else {
+        panic!("scip-typescript must use pinned npm tarballs");
+    };
+    assert_eq!(
+        packages
+            .iter()
+            .map(|package| (package.name, package.version))
+            .collect::<Vec<_>>(),
+        [
+            ("@sourcegraph/scip-typescript", "0.4.0"),
+            ("commander", "12.1.0"),
+            ("google-protobuf", "3.21.4"),
+            ("progress", "2.0.3"),
+            ("typescript", "5.6.2"),
+        ]
+    );
+    assert!(packages.iter().all(|package| {
+        package.url.starts_with("https://registry.npmjs.org/")
+            && base64::engine::general_purpose::STANDARD
+                .decode(package.integrity_sha512)
+                .is_ok_and(|integrity| integrity.len() == 64)
+    }));
     assert!(matches!(
         javascript.version_output,
         VersionOutput::Exact("0.4.0")
     ));
+
+    let python = pinned_indexer(SemanticIndexerKind::Python).unwrap();
+    let IndexerInstallSource::NpmTarballs { packages } = python.source else {
+        panic!("scip-python must use its pinned self-contained npm tarball");
+    };
+    assert_eq!(
+        packages
+            .iter()
+            .map(|package| (package.name, package.version))
+            .collect::<Vec<_>>(),
+        [("@sourcegraph/scip-python", "0.6.6")]
+    );
+    assert!(packages.iter().all(|package| {
+        package.url.starts_with("https://registry.npmjs.org/")
+            && base64::engine::general_purpose::STANDARD
+                .decode(package.integrity_sha512)
+                .is_ok_and(|integrity| integrity.len() == 64)
+    }));
 
     let kotlin = pinned_indexer(SemanticIndexerKind::Kotlin).unwrap();
     assert!(matches!(
