@@ -1,7 +1,8 @@
 use super::{
     HistoricalV2PublicSurfaceChange, HistoricalV2PublicSurfaceDelta,
     HistoricalV2PublicSurfaceEntry, HistoricalV2SemanticPublicRootOrigin,
-    HistoricalV2SemanticSnapshotCensus, IntentionalBoundarySemanticSymbolFacts,
+    HistoricalV2SemanticSnapshotCensus, HistoricalV2SemanticVariantCondition,
+    IntentionalBoundarySemanticSymbolFacts,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -29,7 +30,16 @@ fn surface_entries(
     let symbols = semantic
         .symbols
         .iter()
-        .map(|entry| ((entry.indexer, entry.symbol.symbol_id.as_str()), entry))
+        .map(|entry| {
+            (
+                (
+                    entry.indexer,
+                    &entry.variant,
+                    entry.symbol.symbol_id.as_str(),
+                ),
+                entry,
+            )
+        })
         .collect::<BTreeMap<_, _>>();
     let mut aggregates = BTreeMap::new();
     for root in &semantic.public_roots {
@@ -45,13 +55,14 @@ fn surface_entries(
             } => (module_exposure_id, surface_slot_id, "python"),
         };
         let entry = symbols
-            .get(&(root.indexer, root.module_symbol_id.as_str()))
+            .get(&(root.indexer, &root.variant, root.module_symbol_id.as_str()))
             .ok_or_else(|| {
                 "historical-v2 package public root references a missing surface symbol".to_string()
             })?;
         record_surface_binding(
             &mut aggregates,
             root.indexer,
+            HistoricalV2SemanticVariantCondition::from(&root.variant),
             surface_slot_id,
             exposure_id,
             &entry.symbol.symbol_id,
@@ -64,6 +75,7 @@ fn surface_entries(
             record_symbol_free_surface(
                 &mut aggregates,
                 super::IntentionalBoundaryIndexerKind::Go,
+                HistoricalV2SemanticVariantCondition::from(&root.variant),
                 &root.surface_slot_id,
                 target_id,
                 fingerprint.clone(),
@@ -76,13 +88,18 @@ fn surface_entries(
         .filter(|binding| binding.externally_reachable)
     {
         let entry = symbols
-            .get(&(binding.indexer, binding.symbol_id.as_str()))
+            .get(&(
+                binding.indexer,
+                &binding.variant,
+                binding.symbol_id.as_str(),
+            ))
             .ok_or_else(|| {
                 "historical-v2 public binding references a missing surface symbol".to_string()
             })?;
         record_surface_binding(
             &mut aggregates,
             binding.indexer,
+            HistoricalV2SemanticVariantCondition::from(&binding.variant),
             &binding.surface_unit_id,
             &binding.declaration_unit_id,
             &entry.symbol.symbol_id,
@@ -125,13 +142,14 @@ fn semantic_fingerprint(symbol: &IntentionalBoundarySemanticSymbolFacts) -> Resu
 fn record_surface_binding(
     aggregates: &mut BTreeMap<SurfaceKey, SurfaceAggregate>,
     indexer: super::IntentionalBoundaryIndexerKind,
+    variant: HistoricalV2SemanticVariantCondition,
     surface_unit_id: &str,
     declaration_unit_id: &str,
     symbol_id: &str,
     compiler_fingerprint_sha256: String,
 ) {
     let aggregate = aggregates
-        .entry((indexer, surface_unit_id.to_string()))
+        .entry((indexer, variant, surface_unit_id.to_string()))
         .or_default();
     aggregate
         .declaration_unit_ids
@@ -145,12 +163,13 @@ fn record_surface_binding(
 fn record_symbol_free_surface(
     aggregates: &mut BTreeMap<SurfaceKey, SurfaceAggregate>,
     indexer: super::IntentionalBoundaryIndexerKind,
+    variant: HistoricalV2SemanticVariantCondition,
     surface_unit_id: &str,
     declaration_unit_id: &str,
     compiler_fingerprint_sha256: String,
 ) {
     let aggregate = aggregates
-        .entry((indexer, surface_unit_id.to_string()))
+        .entry((indexer, variant, surface_unit_id.to_string()))
         .or_default();
     aggregate
         .declaration_unit_ids
@@ -166,8 +185,9 @@ fn finish_surface_entries(
     aggregates
         .into_iter()
         .map(
-            |((indexer, surface_unit_id), aggregate)| HistoricalV2PublicSurfaceEntry {
+            |((indexer, variant, surface_unit_id), aggregate)| HistoricalV2PublicSurfaceEntry {
                 indexer,
+                variant,
                 surface_unit_id,
                 declaration_unit_ids: aggregate.declaration_unit_ids.into_iter().collect(),
                 symbol_ids: aggregate.symbol_ids.into_iter().collect(),
@@ -203,6 +223,7 @@ fn diff_entries(
             (base.compiler_fingerprint_sha256s != patched.compiler_fingerprint_sha256s).then(|| {
                 HistoricalV2PublicSurfaceChange {
                     indexer: base.indexer,
+                    variant: base.variant.clone(),
                     surface_unit_id: base.surface_unit_id.clone(),
                     base_symbol_ids: base.symbol_ids.clone(),
                     patched_symbol_ids: patched.symbol_ids.clone(),
@@ -228,18 +249,36 @@ fn diff_entries(
     Ok(delta)
 }
 
-type SurfaceKey = (super::IntentionalBoundaryIndexerKind, String);
+type SurfaceKey = (
+    super::IntentionalBoundaryIndexerKind,
+    HistoricalV2SemanticVariantCondition,
+    String,
+);
 
 fn entry_map(
     entries: &[HistoricalV2PublicSurfaceEntry],
 ) -> Result<
-    BTreeMap<(super::IntentionalBoundaryIndexerKind, &str), &HistoricalV2PublicSurfaceEntry>,
+    BTreeMap<
+        (
+            super::IntentionalBoundaryIndexerKind,
+            &HistoricalV2SemanticVariantCondition,
+            &str,
+        ),
+        &HistoricalV2PublicSurfaceEntry,
+    >,
     String,
 > {
     let mut map = BTreeMap::new();
     for entry in entries {
         if map
-            .insert((entry.indexer, entry.surface_unit_id.as_str()), entry)
+            .insert(
+                (
+                    entry.indexer,
+                    &entry.variant,
+                    entry.surface_unit_id.as_str(),
+                ),
+                entry,
+            )
             .is_some()
         {
             return Err("historical-v2 public surface repeats a symbol".to_string());
@@ -272,6 +311,7 @@ mod tests {
         IntentionalBoundarySemanticSignatureFacts, IntentionalBoundarySemanticSurface,
         IntentionalBoundarySemanticSymbolCategory, IntentionalBoundarySemanticVisibility,
     };
+    use crate::semantic_index::SemanticIndexVariant;
 
     #[test]
     fn moved_definitions_do_not_change_the_stable_surface_entry() {
@@ -292,6 +332,41 @@ mod tests {
         .expect("surface delta");
         assert!(!delta.preserved);
         assert_eq!(delta.changed.len(), 1);
+    }
+
+    #[test]
+    fn compiler_variant_identity_churn_does_not_change_a_stable_condition() {
+        let base = surface_entries(&snapshot_with_qualified_node_root(
+            "base-execution",
+            "linux",
+        ))
+        .unwrap();
+        let patched = surface_entries(&snapshot_with_qualified_node_root(
+            "patched-execution",
+            "linux",
+        ))
+        .unwrap();
+
+        assert!(diff_entries(base, patched).unwrap().preserved);
+    }
+
+    #[test]
+    fn changing_a_compiler_variant_condition_changes_the_public_surface() {
+        let base = surface_entries(&snapshot_with_qualified_node_root(
+            "base-execution",
+            "linux",
+        ))
+        .unwrap();
+        let patched = surface_entries(&snapshot_with_qualified_node_root(
+            "patched-execution",
+            "windows",
+        ))
+        .unwrap();
+
+        let delta = diff_entries(base, patched).unwrap();
+        assert!(!delta.preserved);
+        assert_eq!(delta.removed.len(), 1);
+        assert_eq!(delta.added.len(), 1);
     }
 
     #[test]
@@ -326,6 +401,7 @@ mod tests {
             record_surface_binding(
                 &mut aggregates,
                 IntentionalBoundaryIndexerKind::TypeScriptJavaScript,
+                HistoricalV2SemanticVariantCondition::Unqualified,
                 "surface",
                 declaration,
                 "compiler-symbol",
@@ -489,6 +565,7 @@ mod tests {
     fn surface_entry(symbol: &str, fingerprint: char) -> HistoricalV2PublicSurfaceEntry {
         HistoricalV2PublicSurfaceEntry {
             indexer: IntentionalBoundaryIndexerKind::Rust,
+            variant: HistoricalV2SemanticVariantCondition::Unqualified,
             surface_unit_id: "surface".to_string(),
             declaration_unit_ids: vec!["declaration".to_string()],
             symbol_ids: vec![symbol.to_string()],
@@ -538,6 +615,21 @@ mod tests {
         )
     }
 
+    fn snapshot_with_qualified_node_root(
+        identity: &str,
+        target: &str,
+    ) -> HistoricalV2SemanticSnapshotCensus {
+        let mut snapshot =
+            snapshot_with_node_root("src/index.ts", "package-root", "exposure", "module");
+        let variant = SemanticIndexVariant::Qualified {
+            identity: crate::semantic_index::SemanticVariantId(identity.to_string()),
+            dimensions: BTreeMap::from([("target".to_string(), target.to_string())]),
+        };
+        snapshot.public_roots[0].variant = variant.clone();
+        snapshot.symbols[0].variant = variant;
+        snapshot
+    }
+
     fn snapshot_with_python_root(
         repository_path: &str,
         surface_slot_id: &str,
@@ -571,11 +663,13 @@ mod tests {
         snapshot.symbols.clear();
         snapshot.symbol_count = 0;
         snapshot.go_package_roots = vec![HistoricalV2SemanticGoPackageRoot {
+            variant: SemanticIndexVariant::Unqualified,
             variant_target_ids: vec![target_id.to_string()],
             surface_slot_id: surface_slot_id.to_string(),
             module_path: "example.test/fixture".to_string(),
             import_path: "example.test/fixture/api".to_string(),
             source_repository_paths: vec![repository_path.to_string()],
+            ignored_source_repository_paths: Vec::new(),
         }];
         snapshot.go_package_root_count = 1;
         snapshot
@@ -608,6 +702,7 @@ mod tests {
             public_bindings: Vec::new(),
             public_roots: vec![HistoricalV2SemanticPublicRoot {
                 indexer,
+                variant: SemanticIndexVariant::Unqualified,
                 repository_path: repository_path.to_string(),
                 module_symbol_id: symbol_id.to_string(),
                 compiler_definition,
@@ -617,6 +712,7 @@ mod tests {
             public_reexport_hops: Vec::new(),
             symbols: vec![HistoricalV2SemanticSymbol {
                 indexer,
+                variant: SemanticIndexVariant::Unqualified,
                 is_public_surface: false,
                 is_public_root_evidence: true,
                 is_reexport_evidence: false,

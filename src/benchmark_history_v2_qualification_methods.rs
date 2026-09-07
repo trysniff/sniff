@@ -1,3 +1,4 @@
+use super::history_v2_semantic::effective_method_status;
 use super::{
     HistoricalDiffHunk, HistoricalRevisionSide, HistoricalV2ChangedMethod,
     HistoricalV2ChangedMethodResolutionFailure, HistoricalV2SemanticMethodStatus,
@@ -60,7 +61,7 @@ pub(super) fn collect_side_methods(
             .methods
             .iter()
             .find(|semantic| semantic.parser_unit_id == method.parser_unit_id);
-        match semantic.map(|semantic| (&semantic.indexer, &semantic.status)) {
+        match semantic.map(|semantic| (semantic.indexer, effective_method_status(semantic))) {
             Some((indexer, HistoricalV2SemanticMethodStatus::Resolved { symbol_id, .. })) => {
                 changed.insert(
                     key,
@@ -73,8 +74,8 @@ pub(super) fn collect_side_methods(
                         start_line: method.start_line,
                         end_line: method.end_line,
                         source_sha256: method.source_sha256.clone(),
-                        indexer: *indexer,
-                        compiler_symbol_id: symbol_id.clone(),
+                        indexer,
+                        compiler_symbol_id: symbol_id,
                     },
                 );
             }
@@ -85,9 +86,7 @@ pub(super) fn collect_side_methods(
                         side,
                         path,
                         method,
-                        HistoricalV2ChangedMethodResolutionFailure::CompilerExcluded {
-                            reason: reason.clone(),
-                        },
+                        HistoricalV2ChangedMethodResolutionFailure::CompilerExcluded { reason },
                     ),
                 );
             }
@@ -106,9 +105,9 @@ pub(super) fn collect_side_methods(
                         path,
                         method,
                         HistoricalV2ChangedMethodResolutionFailure::Unresolved {
-                            reason: *reason,
-                            raw_target: raw_target.clone(),
-                            detail: detail.clone(),
+                            reason,
+                            raw_target,
+                            detail,
                         },
                     ),
                 );

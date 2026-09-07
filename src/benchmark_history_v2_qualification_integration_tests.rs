@@ -3,14 +3,15 @@ use crate::benchmark::{
     HISTORICAL_V2_ASSESSMENT_IDENTITY_SCHEMA_VERSION,
     HISTORICAL_V2_SELECTED_PAYLOADS_SCHEMA_VERSION, HISTORICAL_V2_SEMANTIC_CENSUS_SCHEMA_VERSION,
     HistoricalV2MaterializedRoots, HistoricalV2SelectedPayloads, HistoricalV2SemanticCensus,
-    HistoricalV2SemanticMethod, HistoricalV2SemanticMethodStatus,
-    HistoricalV2SemanticPublicBinding, HistoricalV2SemanticPublicBindingKind,
-    HistoricalV2SemanticSnapshotCensus, HistoricalV2SemanticSymbol, HistoricalV2SourceCensus,
-    IntentionalBoundaryIndexerKind, IntentionalBoundarySemanticOrigin,
-    IntentionalBoundarySemanticResolution, IntentionalBoundarySemanticSymbolCategory,
-    IntentionalBoundarySemanticSymbolFacts, IntentionalBoundarySemanticVisibility,
-    census_historical_v2_sources,
+    HistoricalV2SemanticMethod, HistoricalV2SemanticMethodObservation,
+    HistoricalV2SemanticMethodStatus, HistoricalV2SemanticPublicBinding,
+    HistoricalV2SemanticPublicBindingKind, HistoricalV2SemanticSnapshotCensus,
+    HistoricalV2SemanticSymbol, HistoricalV2SourceCensus, IntentionalBoundaryIndexerKind,
+    IntentionalBoundarySemanticOrigin, IntentionalBoundarySemanticResolution,
+    IntentionalBoundarySemanticSymbolCategory, IntentionalBoundarySemanticSymbolFacts,
+    IntentionalBoundarySemanticVisibility, census_historical_v2_sources,
 };
+use crate::semantic_index::SemanticIndexVariant;
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::Path;
@@ -191,13 +192,17 @@ fn semantic_snapshot(
                 start_line: method.start_line,
                 end_line: method.end_line,
                 indexer: IntentionalBoundaryIndexerKind::Go,
-                status: HistoricalV2SemanticMethodStatus::Resolved {
-                    symbol_id: symbol.symbol_id.clone(),
-                    joined_definition: None,
-                },
+                observations: vec![HistoricalV2SemanticMethodObservation {
+                    variant: SemanticIndexVariant::Unqualified,
+                    status: HistoricalV2SemanticMethodStatus::Resolved {
+                        symbol_id: symbol.symbol_id.clone(),
+                        joined_definition: None,
+                    },
+                }],
             });
             symbols.push(HistoricalV2SemanticSymbol {
                 indexer: IntentionalBoundaryIndexerKind::Go,
+                variant: SemanticIndexVariant::Unqualified,
                 is_public_surface: true,
                 is_public_root_evidence: false,
                 is_reexport_evidence: false,
@@ -205,6 +210,7 @@ fn semantic_snapshot(
             });
             public_bindings.push(HistoricalV2SemanticPublicBinding {
                 indexer: IntentionalBoundaryIndexerKind::Go,
+                variant: SemanticIndexVariant::Unqualified,
                 surface_unit_id: declaration.surface_unit_id.clone(),
                 declaration_unit_id: declaration.declaration_unit_id.clone(),
                 origin_declaration_unit_id: declaration.declaration_unit_id.clone(),

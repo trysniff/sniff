@@ -21,54 +21,165 @@ pub(super) fn validate_complete_reexport_expansions(
     source: &HistoricalV2SourceSnapshotCensus,
     semantic: &HistoricalV2SemanticSnapshotCensus,
     public_surface_document_paths: &BTreeSet<&str>,
-    public_root_paths: &BTreeSet<String>,
 ) -> Result<(), String> {
-    let files = source
+    let source_files = source
         .source_files
         .iter()
         .filter(|file| public_surface_document_paths.contains(file.repository_path.as_str()))
         .map(|file| (file.repository_path.as_str(), file))
         .collect::<BTreeMap<_, _>>();
-    let direct_bindings = semantic
-        .public_bindings
-        .iter()
-        .filter(|binding| {
-            matches!(
-                binding.binding,
-                HistoricalV2SemanticPublicBindingKind::Definition
-                    | HistoricalV2SemanticPublicBindingKind::Reference
-            )
-        })
-        .map(|binding| (binding.declaration_unit_id.as_str(), binding))
-        .collect::<BTreeMap<_, _>>();
-    let hops = semantic
-        .public_reexport_hops
-        .iter()
-        .map(|hop| (hop.reexport_unit_id.as_str(), hop))
-        .collect::<BTreeMap<_, _>>();
-
-    let mut cache = BTreeMap::new();
     let mut expected = BTreeSet::new();
-    for file in files
-        .values()
-        .filter(|file| {
-            !matches!(
-                file.language.as_str(),
-                "typescript" | "javascript" | "python"
-            )
-        })
-        .filter(|file| file.language != "rust" || public_root_paths.contains(&file.repository_path))
-    {
-        for slot in resolve_expected_file(
-            file,
-            &files,
-            &direct_bindings,
-            &hops,
-            &mut cache,
-            &mut Vec::new(),
-        )? {
-            if slot.binding.binding == HistoricalV2SemanticPublicBindingKind::ReexportExpansion {
-                expected.insert(slot.binding);
+    let mut expected_package_exposures = BTreeSet::new();
+    for committed in &semantic.indexers {
+        let variant = &committed.variant;
+        let indexed_paths = committed
+            .indexed_document_paths
+            .iter()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>();
+        let files = source_files
+            .iter()
+            .filter(|(path, _)| indexed_paths.contains(**path))
+            .map(|(path, file)| (*path, *file))
+            .collect::<BTreeMap<_, _>>();
+        let direct_bindings = semantic
+            .public_bindings
+            .iter()
+            .filter(|binding| {
+                binding.variant == *variant
+                    && matches!(
+                        binding.binding,
+                        HistoricalV2SemanticPublicBindingKind::Definition
+                            | HistoricalV2SemanticPublicBindingKind::Reference
+                    )
+            })
+            .map(|binding| (binding.declaration_unit_id.as_str(), binding))
+            .collect::<BTreeMap<_, _>>();
+        let hops = semantic
+            .public_reexport_hops
+            .iter()
+            .filter(|hop| hop.variant == *variant)
+            .map(|hop| (hop.reexport_unit_id.as_str(), hop))
+            .collect::<BTreeMap<_, _>>();
+        let variant_public_root_paths = semantic
+            .public_roots
+            .iter()
+            .filter(|root| root.variant == *variant)
+            .map(|root| root.repository_path.as_str())
+            .collect::<BTreeSet<_>>();
+        let mut cache = BTreeMap::new();
+        for file in files
+            .values()
+            .filter(|file| {
+                !matches!(
+                    file.language.as_str(),
+                    "typescript" | "javascript" | "python"
+                )
+            })
+            .filter(|file| {
+                file.language != "rust"
+                    || variant_public_root_paths.contains(file.repository_path.as_str())
+            })
+        {
+            for slot in resolve_expected_file(
+                file,
+                &files,
+                &direct_bindings,
+                &hops,
+                &mut cache,
+                &mut Vec::new(),
+            )? {
+                if slot.binding.binding == HistoricalV2SemanticPublicBindingKind::ReexportExpansion
+                {
+                    expected.insert(slot.binding);
+                }
+            }
+        }
+        if committed.census.indexer
+            == super::super::IntentionalBoundaryIndexerKind::TypeScriptJavaScript
+        {
+            for exposure in &source.node_package_surfaces.exposures {
+                if exposure.target_status != HistoricalV2NodePackageTargetStatus::TrackedRegularFile
+                {
+                    return Err(
+                        "historical-v2 semantic validation found an unresolved Node package root"
+                            .to_string(),
+                    );
+                }
+                let file = files
+                    .get(exposure.target_repository_path.as_str())
+                    .copied()
+                    .ok_or_else(|| {
+                        "historical-v2 semantic validation omitted a Node package target"
+                            .to_string()
+                    })?;
+                if !matches!(file.language.as_str(), "typescript" | "javascript") {
+                    return Err(
+                        "historical-v2 semantic validation found a non-JavaScript Node package target"
+                            .to_string(),
+                    );
+                }
+                for slot in resolve_expected_file(
+                    file,
+                    &files,
+                    &direct_bindings,
+                    &hops,
+                    &mut cache,
+                    &mut Vec::new(),
+                )?
+                .into_iter()
+                .filter(|slot| slot.owner.is_none())
+                {
+                    expected_package_exposures.insert(expected_node_package_slot(exposure, slot)?);
+                }
+            }
+        }
+        if committed.census.indexer == super::super::IntentionalBoundaryIndexerKind::Python {
+            for root in semantic
+                .public_roots
+                .iter()
+                .filter(|root| root.variant == *variant)
+            {
+                let super::super::HistoricalV2SemanticPublicRootOrigin::PythonDistributionModule {
+                    module_exposure_id,
+                    ..
+                } = &root.origin
+                else {
+                    continue;
+                };
+                let module = source
+                    .python_distribution_surfaces
+                    .modules
+                    .iter()
+                    .find(|module| module.module_exposure_id == *module_exposure_id)
+                    .ok_or_else(|| {
+                        "historical-v2 semantic validation invented a Python distribution root"
+                            .to_string()
+                    })?;
+                let file = files
+                    .get(root.repository_path.as_str())
+                    .copied()
+                    .ok_or_else(|| {
+                        "historical-v2 semantic validation omitted a Python distribution root"
+                            .to_string()
+                    })?;
+                for slot in resolve_expected_file(
+                    file,
+                    &files,
+                    &direct_bindings,
+                    &hops,
+                    &mut cache,
+                    &mut Vec::new(),
+                )?
+                .into_iter()
+                .filter(|slot| slot.owner.is_none())
+                {
+                    expected_package_exposures.insert(expected_python_package_slot(
+                        module,
+                        &root.repository_path,
+                        slot,
+                    )?);
+                }
             }
         }
     }
@@ -84,80 +195,6 @@ pub(super) fn validate_complete_reexport_expansions(
         return Err(
             "historical-v2 compiler re-export expansion set is incomplete or invented".to_string(),
         );
-    }
-    let mut expected_package_exposures = BTreeSet::new();
-    for exposure in &source.node_package_surfaces.exposures {
-        if exposure.target_status != HistoricalV2NodePackageTargetStatus::TrackedRegularFile {
-            return Err(
-                "historical-v2 semantic validation found an unresolved Node package root"
-                    .to_string(),
-            );
-        }
-        let file = files
-            .get(exposure.target_repository_path.as_str())
-            .copied()
-            .ok_or_else(|| {
-                "historical-v2 semantic validation omitted a Node package target".to_string()
-            })?;
-        if !matches!(file.language.as_str(), "typescript" | "javascript") {
-            return Err(
-                "historical-v2 semantic validation found a non-JavaScript Node package target"
-                    .to_string(),
-            );
-        }
-        for slot in resolve_expected_file(
-            file,
-            &files,
-            &direct_bindings,
-            &hops,
-            &mut cache,
-            &mut Vec::new(),
-        )?
-        .into_iter()
-        .filter(|slot| slot.owner.is_none())
-        {
-            expected_package_exposures.insert(expected_node_package_slot(exposure, slot)?);
-        }
-    }
-    for root in &semantic.public_roots {
-        let super::super::HistoricalV2SemanticPublicRootOrigin::PythonDistributionModule {
-            module_exposure_id,
-            ..
-        } = &root.origin
-        else {
-            continue;
-        };
-        let module = source
-            .python_distribution_surfaces
-            .modules
-            .iter()
-            .find(|module| module.module_exposure_id == *module_exposure_id)
-            .ok_or_else(|| {
-                "historical-v2 semantic validation invented a Python distribution root".to_string()
-            })?;
-        let file = files
-            .get(root.repository_path.as_str())
-            .copied()
-            .ok_or_else(|| {
-                "historical-v2 semantic validation omitted a Python distribution root".to_string()
-            })?;
-        for slot in resolve_expected_file(
-            file,
-            &files,
-            &direct_bindings,
-            &hops,
-            &mut cache,
-            &mut Vec::new(),
-        )?
-        .into_iter()
-        .filter(|slot| slot.owner.is_none())
-        {
-            expected_package_exposures.insert(expected_python_package_slot(
-                module,
-                &root.repository_path,
-                slot,
-            )?);
-        }
     }
     let actual_package_exposures = semantic
         .public_bindings
@@ -444,6 +481,7 @@ fn expected_expanded_slot(
         kind,
         binding: HistoricalV2SemanticPublicBinding {
             indexer: hop.indexer,
+            variant: hop.variant.clone(),
             surface_unit_id,
             declaration_unit_id,
             origin_declaration_unit_id: target.binding.origin_declaration_unit_id,

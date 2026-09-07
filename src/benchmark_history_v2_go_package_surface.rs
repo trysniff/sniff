@@ -22,6 +22,7 @@ pub(super) struct HistoricalV2GoPackageExposure {
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) struct HistoricalV2GoPackageVariantExposure {
+    pub(super) execution_id: String,
     pub(super) target_id: String,
     pub(super) variant: IntentionalBoundaryProjectModelVariant,
     pub(super) source_repository_paths: Vec<String>,
@@ -158,6 +159,7 @@ pub(super) fn go_package_exposures(
         exposure
             .variants
             .push(HistoricalV2GoPackageVariantExposure {
+                execution_id: target.execution_id.clone(),
                 target_id: target.target_id.clone(),
                 variant: execution.variant.clone(),
                 source_repository_paths: repository_paths.clone(),

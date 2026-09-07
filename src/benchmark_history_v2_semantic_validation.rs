@@ -7,19 +7,20 @@ use super::super::{
     HistoricalV2SemanticMethodStatus, HistoricalV2SemanticPublicBinding,
     HistoricalV2SemanticPublicBindingKind, HistoricalV2SemanticPublicReexportHop,
     HistoricalV2SemanticPublicRootOrigin, HistoricalV2SemanticSnapshotCensus,
-    HistoricalV2SemanticSymbol, HistoricalV2SourceCensus, HistoricalV2SourceFile,
-    HistoricalV2SourcePublicBindingKind, HistoricalV2SourcePublicDeclaration,
-    HistoricalV2SourcePublicNamespace, HistoricalV2SourcePublicReexport,
-    HistoricalV2SourcePublicReexportKind, HistoricalV2SourcePublicSymbolKind,
-    HistoricalV2SourceSemanticCoverage, HistoricalV2SourceSnapshotCensus,
-    IntentionalBoundaryIndexerKind, IntentionalBoundarySemanticOrigin,
-    IntentionalBoundarySemanticRange, IntentionalBoundarySemanticSymbolCategory,
-    validate_historical_v2_source_census,
+    HistoricalV2SemanticSymbol, HistoricalV2SemanticVariantCondition, HistoricalV2SourceCensus,
+    HistoricalV2SourceFile, HistoricalV2SourcePublicBindingKind,
+    HistoricalV2SourcePublicDeclaration, HistoricalV2SourcePublicNamespace,
+    HistoricalV2SourcePublicReexport, HistoricalV2SourcePublicReexportKind,
+    HistoricalV2SourcePublicSymbolKind, HistoricalV2SourceSemanticCoverage,
+    HistoricalV2SourceSnapshotCensus, IntentionalBoundaryIndexerKind,
+    IntentionalBoundarySemanticOrigin, IntentionalBoundarySemanticRange,
+    IntentionalBoundarySemanticSymbolCategory, validate_historical_v2_source_census,
 };
 use super::{
     SEMANTIC_CENSUS_CONTRACT, indexer_for_language, indexer_kind, semantic_census_sha256,
     semantic_scope, semantic_snapshot_sha256,
 };
+use crate::semantic_index::SemanticIndexVariant;
 use crate::semantic_indexer_manifest::SemanticIndexerKind;
 use scip::types::descriptor::Suffix;
 use std::collections::{BTreeMap, BTreeSet};
@@ -103,7 +104,11 @@ pub(super) fn validate_snapshot(
         .copied()
         .map(indexer_kind)
         .collect::<BTreeSet<_>>();
-    let actual_indexers = validate_indexers(semantic)?;
+    let committed_variants = validate_indexers(source, semantic, required_document_paths)?;
+    let actual_indexers = committed_variants
+        .iter()
+        .map(|(indexer, _)| *indexer)
+        .collect::<BTreeSet<_>>();
     if actual_indexers != expected_indexers {
         return Err("historical-v2 semantic snapshot indexer coverage changed".to_string());
     }
@@ -113,14 +118,19 @@ pub(super) fn validate_snapshot(
         .iter()
         .map(|file| file.repository_path.as_str())
         .collect::<BTreeSet<_>>();
-    let symbols = validate_symbols(semantic, &actual_indexers, &all_source_paths)?;
+    let symbols = validate_symbols(
+        semantic,
+        &actual_indexers,
+        &committed_variants,
+        &all_source_paths,
+    )?;
     let public_surface_document_paths = validate_public_surface_document_paths(
         source,
         semantic,
         &actual_indexers,
         required_document_paths,
     )?;
-    let (public_root_paths, public_root_symbols) = validate_public_roots(
+    let public_root_symbols = validate_public_roots(
         source,
         semantic,
         &actual_indexers,
@@ -131,6 +141,7 @@ pub(super) fn validate_snapshot(
         source,
         semantic,
         &actual_indexers,
+        &committed_variants,
         &public_surface_document_paths,
     )?;
     let (reexports, reexport_symbols) = validate_reexport_hops(
@@ -148,57 +159,116 @@ pub(super) fn validate_snapshot(
         &symbols,
         &reexports,
         &public_surface_document_paths,
-        &public_root_paths,
     )?;
     let referenced_symbols = validate_methods(
         source,
         semantic,
         &actual_indexers,
+        &committed_variants,
         &symbols,
         &all_source_paths,
     )?;
     if semantic.symbols.iter().any(|entry| {
-        !binding_symbols.contains(&(entry.indexer, entry.symbol.symbol_id.as_str()))
-            && !reexport_symbols.contains(&(entry.indexer, entry.symbol.symbol_id.as_str()))
-            && !public_root_symbols.contains(&(entry.indexer, entry.symbol.symbol_id.as_str()))
-            && !referenced_symbols.contains(&(entry.indexer, entry.symbol.symbol_id.as_str()))
+        let key = (
+            entry.indexer,
+            &entry.variant,
+            entry.symbol.symbol_id.as_str(),
+        );
+        !binding_symbols.contains(&key)
+            && !reexport_symbols.contains(&key)
+            && !public_root_symbols.contains(&key)
+            && !referenced_symbols.contains(&key)
     }) {
         return Err("historical-v2 semantic snapshot contains an unrelated symbol".to_string());
     }
     if semantic.symbols.iter().any(|entry| {
         entry.is_public_root_evidence
-            != public_root_symbols.contains(&(entry.indexer, entry.symbol.symbol_id.as_str()))
+            != public_root_symbols.contains(&(
+                entry.indexer,
+                &entry.variant,
+                entry.symbol.symbol_id.as_str(),
+            ))
     }) {
         return Err("historical-v2 public root evidence classification changed".to_string());
     }
     if semantic.symbols.iter().any(|entry| {
         entry.is_reexport_evidence
-            != reexport_symbols.contains(&(entry.indexer, entry.symbol.symbol_id.as_str()))
+            != reexport_symbols.contains(&(
+                entry.indexer,
+                &entry.variant,
+                entry.symbol.symbol_id.as_str(),
+            ))
     }) {
         return Err("historical-v2 re-export evidence classification changed".to_string());
     }
     Ok(())
 }
 
-fn validate_indexers(
-    semantic: &HistoricalV2SemanticSnapshotCensus,
-) -> Result<BTreeSet<IntentionalBoundaryIndexerKind>, String> {
-    if semantic
-        .indexers
-        .windows(2)
-        .any(|pair| pair[0].indexer >= pair[1].indexer)
-    {
+fn validate_indexers<'a>(
+    source: &HistoricalV2SourceSnapshotCensus,
+    semantic: &'a HistoricalV2SemanticSnapshotCensus,
+    required_document_paths: &BTreeSet<String>,
+) -> Result<BTreeSet<(IntentionalBoundaryIndexerKind, &'a SemanticIndexVariant)>, String> {
+    if semantic.indexers.windows(2).any(|pair| {
+        (pair[0].census.indexer, &pair[0].variant) >= (pair[1].census.indexer, &pair[1].variant)
+    }) {
         return Err("historical-v2 semantic indexers are not canonical".to_string());
     }
-    let indexers = semantic
-        .indexers
-        .iter()
-        .map(|indexer| indexer.indexer)
-        .collect::<BTreeSet<_>>();
+    let mut indexers = BTreeSet::new();
+    let mut modes = BTreeMap::new();
+    let mut conditions = BTreeSet::new();
     for indexer in &semantic.indexers {
-        if indexer.tool_name.trim().is_empty()
-            || !is_sha256(&indexer.semantic_facts_sha256)
-            || !is_sha256(&indexer.diagnostics_sha256)
+        validate_variant(&indexer.variant)?;
+        let indexed = indexer
+            .indexed_document_paths
+            .iter()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>();
+        let ignored = indexer
+            .ignored_document_paths
+            .iter()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>();
+        let qualified = matches!(indexer.variant, SemanticIndexVariant::Qualified { .. });
+        let expected_paths = source
+            .source_files
+            .iter()
+            .filter(|file| {
+                file.semantic_coverage == HistoricalV2SourceSemanticCoverage::Required
+                    && indexer_for_language(&file.language).map(indexer_kind)
+                        == Ok(indexer.census.indexer)
+            })
+            .map(|file| file.repository_path.as_str())
+            .collect::<BTreeSet<_>>();
+        let required_paths = required_document_paths
+            .iter()
+            .filter(|path| expected_paths.contains(path.as_str()))
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>();
+        if indexer.census.tool_name.trim().is_empty()
+            || !is_sha256(&indexer.census.semantic_facts_sha256)
+            || !is_sha256(&indexer.census.diagnostics_sha256)
+            || indexer.census.document_count != indexed.len()
+            || indexed.len() != indexer.indexed_document_paths.len()
+            || ignored.len() != indexer.ignored_document_paths.len()
+            || !indexed.is_disjoint(&ignored)
+            || indexed.iter().chain(&ignored).any(|path| {
+                path.trim().is_empty() || path.starts_with("../") || path.contains('\0')
+            })
+            || (!qualified && !ignored.is_empty())
+            || !indexed.is_subset(&expected_paths)
+            || !ignored.is_subset(&expected_paths)
+            || (qualified
+                && indexed.union(&ignored).copied().collect::<BTreeSet<_>>() != expected_paths)
+            || (!qualified && !required_paths.is_subset(&indexed))
+            || modes
+                .insert(indexer.census.indexer, qualified)
+                .is_some_and(|existing| existing != qualified)
+            || !indexers.insert((indexer.census.indexer, &indexer.variant))
+            || !conditions.insert((
+                indexer.census.indexer,
+                HistoricalV2SemanticVariantCondition::from(&indexer.variant),
+            ))
         {
             return Err("historical-v2 semantic indexer commitment is invalid".to_string());
         }
@@ -206,9 +276,30 @@ fn validate_indexers(
     Ok(indexers)
 }
 
-type SymbolKey<'a> = (IntentionalBoundaryIndexerKind, &'a str);
-type ReexportMap<'a> = BTreeMap<
+fn validate_variant(variant: &SemanticIndexVariant) -> Result<(), String> {
+    if let SemanticIndexVariant::Qualified {
+        identity,
+        dimensions,
+    } = variant
+        && (identity.0.trim().is_empty()
+            || dimensions.is_empty()
+            || dimensions
+                .iter()
+                .any(|(name, value)| name.trim().is_empty() || value.trim().is_empty()))
+    {
+        return Err("historical-v2 semantic compiler variant is invalid".to_string());
+    }
+    Ok(())
+}
+
+type IndexerVariantKey<'a> = (IntentionalBoundaryIndexerKind, &'a SemanticIndexVariant);
+type SymbolKey<'a> = (
+    IntentionalBoundaryIndexerKind,
+    &'a SemanticIndexVariant,
     &'a str,
+);
+type ReexportMap<'a> = BTreeMap<
+    (&'a SemanticIndexVariant, &'a str),
     (
         &'a HistoricalV2SourceFile,
         &'a HistoricalV2SourcePublicReexport,
@@ -282,7 +373,7 @@ fn validate_public_roots<'a>(
     indexers: &BTreeSet<IntentionalBoundaryIndexerKind>,
     symbols: &BTreeMap<SymbolKey<'a>, &'a HistoricalV2SemanticSymbol>,
     public_surface_document_paths: &BTreeSet<&str>,
-) -> Result<(BTreeSet<String>, BTreeSet<SymbolKey<'a>>), String> {
+) -> Result<BTreeSet<SymbolKey<'a>>, String> {
     let expected_rust_roots = if indexers.contains(&IntentionalBoundaryIndexerKind::Rust) {
         super::public_surface::rust_public_library_target_roots(source)?
             .into_iter()
@@ -356,13 +447,12 @@ fn validate_public_roots<'a>(
         .iter()
         .map(|file| (file.repository_path.as_str(), file))
         .collect::<BTreeMap<_, _>>();
-    let mut paths = BTreeSet::new();
     let mut rust_paths = BTreeSet::new();
     let mut node_exposure_ids = BTreeSet::new();
     let mut python_exposure_ids = BTreeSet::new();
     let mut root_symbols = BTreeSet::new();
     for root in &semantic.public_roots {
-        let symbol_key = (root.indexer, root.module_symbol_id.as_str());
+        let symbol_key = (root.indexer, &root.variant, root.module_symbol_id.as_str());
         let symbol = symbols
             .get(&symbol_key)
             .ok_or_else(|| "historical-v2 public root references a missing symbol".to_string())?;
@@ -398,7 +488,7 @@ fn validate_public_roots<'a>(
                     || parsed.scheme != "rust-analyzer"
                     || descriptor.name != "crate"
                     || descriptor.suffix.enum_value().ok() != Some(Suffix::Namespace)
-                    || !rust_paths.insert(root.repository_path.clone())
+                    || !rust_paths.insert((&root.variant, root.repository_path.as_str()))
                 {
                     return Err(
                         "historical-v2 Rust public root changed compiler identity".to_string()
@@ -424,7 +514,7 @@ fn validate_public_roots<'a>(
                         != HistoricalV2NodePackageTargetStatus::TrackedRegularFile
                     || exposure.target_repository_path != root.repository_path
                     || exposure.surface_slot_id != *surface_slot_id
-                    || !node_exposure_ids.insert(exposure_id.as_str())
+                    || !node_exposure_ids.insert((&root.variant, exposure_id.as_str()))
                 {
                     return Err(
                         "historical-v2 Node public root changed compiler identity".to_string()
@@ -463,7 +553,7 @@ fn validate_public_roots<'a>(
                     || symbol.symbol.owner.is_some()
                     || module.surface_slot_id != *surface_slot_id
                     || module.member_sha256.as_deref() != Some(file.source_sha256.as_str())
-                    || !python_exposure_ids.insert(module_exposure_id.as_str())
+                    || !python_exposure_ids.insert((&root.variant, module_exposure_id.as_str()))
                 {
                     return Err(
                         "historical-v2 Python public root changed compiler identity".to_string()
@@ -471,37 +561,85 @@ fn validate_public_roots<'a>(
                 }
             }
         }
-        paths.insert(root.repository_path.clone());
         root_symbols.insert(symbol_key);
     }
-    if rust_paths != expected_rust_roots {
+    let expected_rust_variant_paths = semantic
+        .indexers
+        .iter()
+        .filter(|indexer| indexer.census.indexer == IntentionalBoundaryIndexerKind::Rust)
+        .flat_map(|indexer| {
+            expected_rust_roots
+                .iter()
+                .filter(|path| indexer.indexed_document_paths.contains(path))
+                .map(move |path| (&indexer.variant, path.as_str()))
+        })
+        .collect::<BTreeSet<_>>();
+    if rust_paths != expected_rust_variant_paths {
         return Err(
             "historical-v2 Rust public roots disagree with Cargo library targets".to_string(),
         );
     }
-    if node_exposure_ids.len() != expected_node_roots.len()
-        || !expected_node_roots
-            .keys()
-            .all(|exposure_id| node_exposure_ids.contains(exposure_id))
-    {
+    let expected_node_exposure_ids = semantic
+        .indexers
+        .iter()
+        .filter(|indexer| {
+            indexer.census.indexer == IntentionalBoundaryIndexerKind::TypeScriptJavaScript
+        })
+        .flat_map(|indexer| {
+            expected_node_roots
+                .keys()
+                .filter(|exposure_id| {
+                    expected_node_roots
+                        .get(*exposure_id)
+                        .is_some_and(|exposure| {
+                            indexer
+                                .indexed_document_paths
+                                .contains(&exposure.target_repository_path)
+                        })
+                })
+                .map(move |exposure_id| (&indexer.variant, *exposure_id))
+        })
+        .collect::<BTreeSet<_>>();
+    if node_exposure_ids != expected_node_exposure_ids {
         return Err("historical-v2 Node public roots disagree with package exposures".to_string());
     }
-    if python_exposure_ids.len() != expected_python_roots.len()
-        || !expected_python_roots
-            .keys()
-            .all(|exposure_id| python_exposure_ids.contains(exposure_id))
-    {
+    let expected_python_exposure_ids = semantic
+        .indexers
+        .iter()
+        .filter(|indexer| indexer.census.indexer == IntentionalBoundaryIndexerKind::Python)
+        .flat_map(|indexer| {
+            expected_python_roots
+                .keys()
+                .filter(|exposure_id| {
+                    expected_python_roots
+                        .get(*exposure_id)
+                        .is_some_and(|module| {
+                            module.member_sha256.as_deref().is_some_and(|hash| {
+                                source_files.values().any(|file| {
+                                    file.source_sha256 == hash
+                                        && indexer
+                                            .indexed_document_paths
+                                            .contains(&file.repository_path)
+                                })
+                            })
+                        })
+                })
+                .map(move |exposure_id| (&indexer.variant, *exposure_id))
+        })
+        .collect::<BTreeSet<_>>();
+    if python_exposure_ids != expected_python_exposure_ids {
         return Err(
             "historical-v2 Python public roots disagree with distribution modules".to_string(),
         );
     }
-    Ok((paths, root_symbols))
+    Ok(root_symbols)
 }
 
 fn validate_go_package_roots(
     source: &HistoricalV2SourceSnapshotCensus,
     semantic: &HistoricalV2SemanticSnapshotCensus,
     indexers: &BTreeSet<IntentionalBoundaryIndexerKind>,
+    committed_variants: &BTreeSet<IndexerVariantKey<'_>>,
     public_surface_document_paths: &BTreeSet<&str>,
 ) -> Result<(), String> {
     if semantic.go_package_root_count != semantic.go_package_roots.len()
@@ -513,11 +651,20 @@ fn validate_go_package_roots(
         return Err("historical-v2 Go package root census is noncanonical".to_string());
     }
 
+    let go_variants = committed_variants
+        .iter()
+        .filter(|(indexer, _)| *indexer == IntentionalBoundaryIndexerKind::Go)
+        .map(|(_, variant)| *variant)
+        .collect::<Vec<_>>();
     let mut expected = if indexers.contains(&IntentionalBoundaryIndexerKind::Go) {
-        go_package_exposures(&source.go_project_model)?
+        let packages = go_package_exposures(&source.go_project_model)?;
+        let mut roots = Vec::new();
+        for package in packages
             .into_iter()
             .filter(|package| package.externally_reachable)
-            .map(|package| {
+        {
+            if go_variants.len() == 1 && matches!(go_variants[0], SemanticIndexVariant::Unqualified)
+            {
                 let mut variant_target_ids = package
                     .variants
                     .iter()
@@ -529,34 +676,75 @@ fn validate_go_package_roots(
                     .variants
                     .iter()
                     .filter(|variant| variant.externally_reachable)
-                    .flat_map(|variant| {
-                        variant
-                            .source_repository_paths
-                            .iter()
-                            .chain(&variant.ignored_source_repository_paths)
-                    })
+                    .flat_map(|variant| variant.source_repository_paths.iter())
                     .cloned()
                     .collect::<Vec<_>>();
                 source_repository_paths.sort();
                 source_repository_paths.dedup();
-                if !source_repository_paths
+                let mut ignored_source_repository_paths = package
+                    .variants
                     .iter()
-                    .all(|path| public_surface_document_paths.contains(path.as_str()))
-                {
-                    return Err(format!(
-                        "historical-v2 Go package {} has compiler-invisible public source",
-                        package.import_path
-                    ));
-                }
-                Ok(HistoricalV2SemanticGoPackageRoot {
+                    .filter(|variant| variant.externally_reachable)
+                    .flat_map(|variant| variant.ignored_source_repository_paths.iter())
+                    .cloned()
+                    .collect::<Vec<_>>();
+                ignored_source_repository_paths.sort();
+                ignored_source_repository_paths.dedup();
+                roots.push(HistoricalV2SemanticGoPackageRoot {
+                    variant: SemanticIndexVariant::Unqualified,
                     variant_target_ids,
                     surface_slot_id: package.surface_slot_id,
                     module_path: package.module_path,
                     import_path: package.import_path,
                     source_repository_paths,
-                })
-            })
-            .collect::<Result<Vec<_>, String>>()?
+                    ignored_source_repository_paths,
+                });
+                continue;
+            }
+            for package_variant in package
+                .variants
+                .iter()
+                .filter(|variant| variant.externally_reachable)
+            {
+                let semantic_variant = go_variants
+                    .iter()
+                    .copied()
+                    .find(|variant| {
+                        matches!(
+                            variant,
+                            SemanticIndexVariant::Qualified { identity, .. }
+                                if identity.0 == package_variant.execution_id
+                        )
+                    })
+                    .ok_or_else(|| {
+                        format!(
+                            "historical-v2 Go package {} has no committed compiler variant {}",
+                            package.import_path, package_variant.execution_id
+                        )
+                    })?;
+                roots.push(HistoricalV2SemanticGoPackageRoot {
+                    variant: semantic_variant.clone(),
+                    variant_target_ids: vec![package_variant.target_id.clone()],
+                    surface_slot_id: package.surface_slot_id.clone(),
+                    module_path: package.module_path.clone(),
+                    import_path: package.import_path.clone(),
+                    source_repository_paths: package_variant.source_repository_paths.clone(),
+                    ignored_source_repository_paths: package_variant
+                        .ignored_source_repository_paths
+                        .clone(),
+                });
+            }
+        }
+        if !roots
+            .iter()
+            .flat_map(|root| &root.source_repository_paths)
+            .all(|path| public_surface_document_paths.contains(path.as_str()))
+        {
+            return Err(
+                "historical-v2 Go package has compiler-invisible public source".to_string(),
+            );
+        }
+        roots
     } else {
         Vec::new()
     };
@@ -609,6 +797,7 @@ fn python_distribution_module_is_external_entry(
 fn validate_symbols<'a>(
     semantic: &'a HistoricalV2SemanticSnapshotCensus,
     indexers: &BTreeSet<IntentionalBoundaryIndexerKind>,
+    committed_variants: &BTreeSet<IndexerVariantKey<'a>>,
     all_source_paths: &BTreeSet<&str>,
 ) -> Result<BTreeMap<SymbolKey<'a>, &'a HistoricalV2SemanticSymbol>, String> {
     if semantic.symbol_count != semantic.symbols.len()
@@ -625,9 +814,10 @@ fn validate_symbols<'a>(
     let mut previous = None;
     for entry in &semantic.symbols {
         let symbol = &entry.symbol;
-        let key = (entry.indexer, symbol.symbol_id.as_str());
+        let key = (entry.indexer, &entry.variant, symbol.symbol_id.as_str());
         if previous.is_some_and(|previous| previous >= key)
             || !indexers.contains(&entry.indexer)
+            || !committed_variants.contains(&(entry.indexer, &entry.variant))
             || symbol.symbol_id.trim().is_empty()
             || symbol.provider_identity.trim().is_empty()
             || symbol.provider_kind.trim().is_empty()
@@ -656,10 +846,10 @@ fn validate_reexport_hops<'a>(
     public_surface_document_paths: &BTreeSet<&str>,
 ) -> Result<(ReexportMap<'a>, BTreeSet<SymbolKey<'a>>), String> {
     if semantic.public_reexport_hop_count != semantic.public_reexport_hops.len()
-        || semantic
-            .public_reexport_hops
-            .windows(2)
-            .any(|pair| pair[0].reexport_unit_id >= pair[1].reexport_unit_id)
+        || semantic.public_reexport_hops.windows(2).any(|pair| {
+            (&pair[0].variant, &pair[0].reexport_unit_id)
+                >= (&pair[1].variant, &pair[1].reexport_unit_id)
+        })
     {
         return Err("historical-v2 public re-export hop count or order changed".to_string());
     }
@@ -699,7 +889,7 @@ fn validate_reexport_hops<'a>(
             .ok_or_else(|| "historical-v2 compiler invented a public re-export hop".to_string())?;
         let expected_anchor =
             source_reexport_semantic_range(&file.repository_path, reexport, hop.position_encoding);
-        let symbol_key = (hop.indexer, hop.module_symbol_id.as_str());
+        let symbol_key = (hop.indexer, &hop.variant, hop.module_symbol_id.as_str());
         let symbol = symbols.get(&symbol_key).ok_or_else(|| {
             "historical-v2 public re-export hop references a missing module symbol".to_string()
         })?;
@@ -724,13 +914,17 @@ fn validate_reexport_hops<'a>(
         {
             return Err("historical-v2 public re-export hop changed compiler identity".to_string());
         }
-        validated.insert(hop.reexport_unit_id.as_str(), (file, reexport, hop));
+        validated.insert(
+            (&hop.variant, hop.reexport_unit_id.as_str()),
+            (file, reexport, hop),
+        );
         reexport_symbols.insert(symbol_key);
     }
-    if !mandatory
-        .iter()
-        .all(|reexport_id| validated.contains_key(reexport_id))
-    {
+    if !mandatory.iter().all(|reexport_id| {
+        validated
+            .keys()
+            .any(|(_, actual_id)| actual_id == reexport_id)
+    }) {
         return Err("historical-v2 compiler omitted a public re-export hop".to_string());
     }
     Ok((validated, reexport_symbols))
@@ -743,7 +937,6 @@ fn validate_public_bindings<'a>(
     symbols: &BTreeMap<SymbolKey<'a>, &'a HistoricalV2SemanticSymbol>,
     reexports: &ReexportMap<'a>,
     public_surface_document_paths: &BTreeSet<&str>,
-    public_root_paths: &BTreeSet<String>,
 ) -> Result<BTreeSet<SymbolKey<'a>>, String> {
     if semantic.public_binding_count != semantic.public_bindings.len() {
         return Err("historical-v2 public binding count changed".to_string());
@@ -795,6 +988,11 @@ fn validate_public_bindings<'a>(
     let mut bound_declarations = BTreeSet::new();
     let mut binding_symbols = BTreeSet::new();
     let mut public_symbols = BTreeSet::new();
+    let public_root_variants = semantic
+        .public_roots
+        .iter()
+        .map(|root| (&root.variant, root.repository_path.as_str()))
+        .collect::<BTreeSet<_>>();
     let direct_pairs = semantic
         .public_bindings
         .iter()
@@ -807,15 +1005,58 @@ fn validate_public_bindings<'a>(
         })
         .map(|binding| {
             (
+                &binding.variant,
                 binding.declaration_unit_id.as_str(),
                 binding.symbol_id.as_str(),
             )
         })
         .collect::<BTreeSet<_>>();
+    let expected_direct_declarations = semantic
+        .indexers
+        .iter()
+        .flat_map(|committed| {
+            source
+                .source_files
+                .iter()
+                .filter(move |file| {
+                    indexer_for_language(&file.language).map(indexer_kind)
+                        == Ok(committed.census.indexer)
+                        && committed
+                            .indexed_document_paths
+                            .contains(&file.repository_path)
+                })
+                .flat_map(move |file| {
+                    file.public_declarations.iter().map(move |declaration| {
+                        (
+                            committed.variant.clone(),
+                            declaration.declaration_unit_id.clone(),
+                        )
+                    })
+                })
+        })
+        .collect::<BTreeSet<_>>();
+    let actual_direct_declarations = semantic
+        .public_bindings
+        .iter()
+        .filter(|binding| {
+            matches!(
+                binding.binding,
+                HistoricalV2SemanticPublicBindingKind::Definition
+                    | HistoricalV2SemanticPublicBindingKind::Reference
+            )
+        })
+        .map(|binding| (binding.variant.clone(), binding.declaration_unit_id.clone()))
+        .collect::<BTreeSet<_>>();
+    if expected_direct_declarations != actual_direct_declarations {
+        return Err(
+            "historical-v2 direct public binding compiler-variant coverage changed".to_string(),
+        );
+    }
     let mut previous = None;
     for binding in &semantic.public_bindings {
         let key = (
             binding.indexer,
+            &binding.variant,
             binding.surface_unit_id.as_str(),
             binding.declaration_unit_id.as_str(),
             binding.symbol_id.as_str(),
@@ -823,7 +1064,11 @@ fn validate_public_bindings<'a>(
         if previous.is_some_and(|previous| previous >= key) {
             return Err("historical-v2 public bindings are not canonical".to_string());
         }
-        let symbol_key = (binding.indexer, binding.symbol_id.as_str());
+        let symbol_key = (
+            binding.indexer,
+            &binding.variant,
+            binding.symbol_id.as_str(),
+        );
         let symbol = symbols.get(&symbol_key).ok_or_else(|| {
             "historical-v2 public binding references a missing symbol".to_string()
         })?;
@@ -860,7 +1105,7 @@ fn validate_public_bindings<'a>(
                 ) {
                     (None, None, None) => true,
                     (Some(owner_id), Some(actual_anchor), Some(expected_anchor)) => symbols
-                        .get(&(binding.indexer, owner_id))
+                        .get(&(binding.indexer, &binding.variant, owner_id))
                         .is_some_and(|owner| {
                             actual_anchor == expected_anchor
                                 && owner.symbol.origin
@@ -876,7 +1121,7 @@ fn validate_public_bindings<'a>(
                 let expected_reachability = match binding.indexer {
                     IntentionalBoundaryIndexerKind::Rust => {
                         binding.owner_symbol_id.is_none()
-                            && public_root_paths.contains(*repository_path)
+                            && public_root_variants.contains(&(&binding.variant, *repository_path))
                     }
                     IntentionalBoundaryIndexerKind::TypeScriptJavaScript
                     | IntentionalBoundaryIndexerKind::Python => false,
@@ -912,7 +1157,8 @@ fn validate_public_bindings<'a>(
                     || (binding.binding == HistoricalV2SemanticPublicBindingKind::Definition
                         && !symbol.symbol.definitions.contains(&binding.compiler_anchor))
                     || !compatible_public_symbol_kind(declaration.kind, symbol.symbol.category)
-                    || !bound_declarations.insert(binding.declaration_unit_id.as_str())
+                    || !bound_declarations
+                        .insert((&binding.variant, binding.declaration_unit_id.as_str()))
                 {
                     return Err(
                         "historical-v2 public binding changed compiler identity".to_string()
@@ -931,7 +1177,7 @@ fn validate_public_bindings<'a>(
                     &expected,
                     reexports,
                     &direct_pairs,
-                    public_root_paths,
+                    &public_root_variants,
                 )?;
             }
             HistoricalV2SemanticPublicBindingKind::OwnerExpansion => {
@@ -977,19 +1223,26 @@ fn validate_public_bindings<'a>(
         }
         previous = Some(key);
     }
-    if !required_declarations.is_subset(&bound_declarations) {
+    if !required_declarations.iter().all(|declaration| {
+        bound_declarations
+            .iter()
+            .any(|(_, bound)| bound == declaration)
+    }) {
         return Err("historical-v2 changed public declaration has no compiler binding".to_string());
     }
     super::public_surface_validation::validate_complete_reexport_expansions(
         source,
         semantic,
         public_surface_document_paths,
-        public_root_paths,
     )?;
     validate_complete_owner_expansions(source, semantic)?;
     if semantic.symbols.iter().any(|entry| {
         entry.is_public_surface
-            != public_symbols.contains(&(entry.indexer, entry.symbol.symbol_id.as_str()))
+            != public_symbols.contains(&(
+                entry.indexer,
+                &entry.variant,
+                entry.symbol.symbol_id.as_str(),
+            ))
     }) {
         return Err("historical-v2 public semantic symbol classification changed".to_string());
     }
@@ -1040,6 +1293,7 @@ fn validate_complete_owner_expansions(
             .ok_or_else(|| "historical-v2 owner member has no source owner".to_string())?;
         for owner in owners.iter().filter(|owner| {
             owner.indexer == member.indexer
+                && owner.variant == member.variant
                 && Some(owner.symbol_id.as_str()) == member.owner_symbol_id.as_deref()
         }) {
             let surface_unit_id = super::super::history_v2_source_census::historical_public_owner_member_surface_unit_id(
@@ -1086,7 +1340,7 @@ fn validate_node_package_binding<'a>(
     symbol: &HistoricalV2SemanticSymbol,
     declarations: &DeclarationMap<'a>,
     reexports: &ReexportMap<'a>,
-    direct_pairs: &BTreeSet<(&str, &str)>,
+    direct_pairs: &BTreeSet<(&SemanticIndexVariant, &str, &str)>,
 ) -> Result<(), String> {
     let exposure_id = binding
         .package_exposure_id
@@ -1116,6 +1370,7 @@ fn validate_node_package_binding<'a>(
         || symbol.symbol.origin != IntentionalBoundarySemanticOrigin::Repository
         || !compatible_public_symbol_kind(origin.kind, symbol.symbol.category)
         || !direct_pairs.contains(&(
+            &binding.variant,
             binding.origin_declaration_unit_id.as_str(),
             binding.symbol_id.as_str(),
         ))
@@ -1130,7 +1385,7 @@ fn validate_node_package_binding<'a>(
             return Err("historical-v2 Node package binding contains a cycle".to_string());
         }
         let (file, _, hop) = reexports
-            .get(reexport_id.as_str())
+            .get(&(&binding.variant, reexport_id.as_str()))
             .copied()
             .ok_or_else(|| {
                 "historical-v2 Node package binding references an omitted public re-export hop"
@@ -1150,7 +1405,10 @@ fn validate_node_package_binding<'a>(
     let mut namespace = origin.namespace;
     let mut kind = origin.kind;
     for reexport_id in binding.reexport_path.iter().rev() {
-        let (_, reexport, _) = reexports.get(reexport_id.as_str()).copied().unwrap();
+        let (_, reexport, _) = reexports
+            .get(&(&binding.variant, reexport_id.as_str()))
+            .copied()
+            .unwrap();
         match reexport.kind {
             HistoricalV2SourcePublicReexportKind::Wildcard => {
                 if name == "default" {
@@ -1188,7 +1446,10 @@ fn validate_node_package_binding<'a>(
     )?;
     let (expected_encoding, expected_anchor) =
         if let Some(reexport_id) = binding.reexport_path.first() {
-            let hop = reexports.get(reexport_id.as_str()).unwrap().2;
+            let hop = reexports
+                .get(&(&binding.variant, reexport_id.as_str()))
+                .unwrap()
+                .2;
             (hop.position_encoding, hop.compiler_anchor.clone())
         } else {
             (
@@ -1212,7 +1473,7 @@ fn validate_python_package_binding<'a>(
     symbol: &HistoricalV2SemanticSymbol,
     declarations: &DeclarationMap<'a>,
     reexports: &ReexportMap<'a>,
-    direct_pairs: &BTreeSet<(&str, &str)>,
+    direct_pairs: &BTreeSet<(&SemanticIndexVariant, &str, &str)>,
 ) -> Result<(), String> {
     let exposure_id = binding.package_exposure_id.as_deref().ok_or_else(|| {
         "historical-v2 Python package binding has no module exposure identity".to_string()
@@ -1252,6 +1513,7 @@ fn validate_python_package_binding<'a>(
         || symbol.symbol.origin != IntentionalBoundarySemanticOrigin::Repository
         || !compatible_public_symbol_kind(origin.kind, symbol.symbol.category)
         || !direct_pairs.contains(&(
+            &binding.variant,
             binding.origin_declaration_unit_id.as_str(),
             binding.symbol_id.as_str(),
         ))
@@ -1266,7 +1528,7 @@ fn validate_python_package_binding<'a>(
             return Err("historical-v2 Python package binding contains a cycle".to_string());
         }
         let (file, _, hop) = reexports
-            .get(reexport_id.as_str())
+            .get(&(&binding.variant, reexport_id.as_str()))
             .copied()
             .ok_or_else(|| {
                 "historical-v2 Python package binding references an omitted public re-export hop"
@@ -1286,7 +1548,10 @@ fn validate_python_package_binding<'a>(
     let mut namespace = origin.namespace;
     let mut kind = origin.kind;
     for reexport_id in binding.reexport_path.iter().rev() {
-        let (_, reexport, _) = reexports.get(reexport_id.as_str()).copied().unwrap();
+        let (_, reexport, _) = reexports
+            .get(&(&binding.variant, reexport_id.as_str()))
+            .copied()
+            .unwrap();
         match reexport.kind {
             HistoricalV2SourcePublicReexportKind::Wildcard => {
                 if name == "default" {
@@ -1327,7 +1592,10 @@ fn validate_python_package_binding<'a>(
         )?;
     let (expected_encoding, expected_anchor) =
         if let Some(reexport_id) = binding.reexport_path.first() {
-            let hop = reexports.get(reexport_id.as_str()).unwrap().2;
+            let hop = reexports
+                .get(&(&binding.variant, reexport_id.as_str()))
+                .unwrap()
+                .2;
             (hop.position_encoding, hop.compiler_anchor.clone())
         } else {
             (
@@ -1350,8 +1618,8 @@ fn validate_expanded_public_binding<'a>(
     symbol: &HistoricalV2SemanticSymbol,
     declarations: &DeclarationMap<'a>,
     reexports: &ReexportMap<'a>,
-    direct_pairs: &BTreeSet<(&str, &str)>,
-    public_root_paths: &BTreeSet<String>,
+    direct_pairs: &BTreeSet<(&SemanticIndexVariant, &str, &str)>,
+    public_root_variants: &BTreeSet<(&SemanticIndexVariant, &str)>,
 ) -> Result<(), String> {
     let (origin_path, origin_indexer, origin) = declarations
         .get(binding.origin_declaration_unit_id.as_str())
@@ -1364,6 +1632,7 @@ fn validate_expanded_public_binding<'a>(
         || symbol.symbol.origin != IntentionalBoundarySemanticOrigin::Repository
         || !compatible_public_symbol_kind(origin.kind, symbol.symbol.category)
         || !direct_pairs.contains(&(
+            &binding.variant,
             binding.origin_declaration_unit_id.as_str(),
             binding.symbol_id.as_str(),
         ))
@@ -1378,7 +1647,7 @@ fn validate_expanded_public_binding<'a>(
             return Err("historical-v2 re-export expansion contains a cycle".to_string());
         }
         let (file, _, hop) = reexports
-            .get(reexport_id.as_str())
+            .get(&(&binding.variant, reexport_id.as_str()))
             .copied()
             .ok_or_else(|| "historical-v2 re-export expansion invented a hop".to_string())?;
         if file.repository_path != current_path || hop.indexer != binding.indexer {
@@ -1395,7 +1664,10 @@ fn validate_expanded_public_binding<'a>(
     let mut namespace = origin.namespace;
     let mut kind = origin.kind;
     for reexport_id in binding.reexport_path.iter().rev() {
-        let (file, reexport, _) = reexports.get(reexport_id.as_str()).copied().unwrap();
+        let (file, reexport, _) = reexports
+            .get(&(&binding.variant, reexport_id.as_str()))
+            .copied()
+            .unwrap();
         match reexport.kind {
             HistoricalV2SourcePublicReexportKind::Wildcard => {
                 if name == "default" {
@@ -1431,11 +1703,11 @@ fn validate_expanded_public_binding<'a>(
         }
     }
     let outer_hop = reexports
-        .get(binding.reexport_path[0].as_str())
+        .get(&(&binding.variant, binding.reexport_path[0].as_str()))
         .map(|(_, _, hop)| *hop)
         .unwrap();
     if binding.indexer == IntentionalBoundaryIndexerKind::Rust
-        && !public_root_paths.contains(&binding.repository_path)
+        && !public_root_variants.contains(&(&binding.variant, binding.repository_path.as_str()))
     {
         return Err(
             "historical-v2 Rust re-export expansion does not start at a public root".to_string(),
@@ -1597,6 +1869,7 @@ fn validate_methods<'a>(
     source: &'a HistoricalV2SourceSnapshotCensus,
     semantic: &'a HistoricalV2SemanticSnapshotCensus,
     indexers: &BTreeSet<IntentionalBoundaryIndexerKind>,
+    committed_variants: &BTreeSet<IndexerVariantKey<'a>>,
     symbols: &BTreeMap<SymbolKey<'a>, &'a HistoricalV2SemanticSymbol>,
     source_paths: &BTreeSet<&str>,
 ) -> Result<BTreeSet<SymbolKey<'a>>, String> {
@@ -1646,46 +1919,78 @@ fn validate_methods<'a>(
             || method.start_line != expected.2
             || method.end_line != expected.3
             || method.indexer != expected.4
-            || !(indexers.contains(&method.indexer)
-                || matches!(
-                    method.status,
-                    HistoricalV2SemanticMethodStatus::CompilerExcluded { .. }
-                ))
         {
             return Err("historical-v2 semantic method identity changed".to_string());
         }
-        match &method.status {
-            HistoricalV2SemanticMethodStatus::Resolved {
-                symbol_id,
-                joined_definition,
-            } => {
-                let key = (method.indexer, symbol_id.as_str());
-                if symbol_id.trim().is_empty()
-                    || !symbols.contains_key(&key)
-                    || joined_definition
-                        .iter()
-                        .any(|location| !valid_location(location, source_paths))
-                {
-                    return Err(
-                        "historical-v2 resolved method has invalid compiler evidence".to_string(),
-                    );
+        let actual_variants = method
+            .observations
+            .iter()
+            .map(|observation| &observation.variant)
+            .collect::<BTreeSet<_>>();
+        let expected_variants = committed_variants
+            .iter()
+            .filter(|(indexer, _)| *indexer == method.indexer)
+            .map(|(_, variant)| *variant)
+            .collect::<BTreeSet<_>>();
+        let untouched = !indexers.contains(&method.indexer);
+        if method.observations.is_empty()
+            || method
+                .observations
+                .windows(2)
+                .any(|pair| pair[0].variant >= pair[1].variant)
+            || (!untouched && actual_variants != expected_variants)
+            || (untouched
+                && (method.observations.len() != 1
+                    || method.observations[0].variant != SemanticIndexVariant::Unqualified
+                    || !matches!(
+                        method.observations[0].status,
+                        HistoricalV2SemanticMethodStatus::CompilerExcluded { .. }
+                    )))
+        {
+            return Err(
+                "historical-v2 semantic method compiler-variant coverage changed".to_string(),
+            );
+        }
+        for observation in &method.observations {
+            match &observation.status {
+                HistoricalV2SemanticMethodStatus::Resolved {
+                    symbol_id,
+                    joined_definition,
+                } => {
+                    let key = (method.indexer, &observation.variant, symbol_id.as_str());
+                    if symbol_id.trim().is_empty()
+                        || !symbols.contains_key(&key)
+                        || joined_definition
+                            .iter()
+                            .any(|location| !valid_location(location, source_paths))
+                    {
+                        return Err(
+                            "historical-v2 resolved method has invalid compiler evidence"
+                                .to_string(),
+                        );
+                    }
+                    referenced_symbols.insert(key);
                 }
-                referenced_symbols.insert(key);
-                resolved += 1;
+                HistoricalV2SemanticMethodStatus::CompilerExcluded { reason } => {
+                    if reason.trim().is_empty() {
+                        return Err(
+                            "historical-v2 compiler-excluded method has no evidence".to_string()
+                        );
+                    }
+                }
+                HistoricalV2SemanticMethodStatus::Unresolved { detail, .. } => {
+                    if detail.trim().is_empty() {
+                        return Err("historical-v2 unresolved method has no evidence".to_string());
+                    }
+                }
             }
-            HistoricalV2SemanticMethodStatus::CompilerExcluded { reason } => {
-                if reason.trim().is_empty() {
-                    return Err(
-                        "historical-v2 compiler-excluded method has no evidence".to_string()
-                    );
-                }
+        }
+        match super::effective_method_status(method) {
+            HistoricalV2SemanticMethodStatus::Resolved { .. } => resolved += 1,
+            HistoricalV2SemanticMethodStatus::CompilerExcluded { .. } => {
                 compiler_excluded += 1;
             }
-            HistoricalV2SemanticMethodStatus::Unresolved { detail, .. } => {
-                if detail.trim().is_empty() {
-                    return Err("historical-v2 unresolved method has no evidence".to_string());
-                }
-            }
+            HistoricalV2SemanticMethodStatus::Unresolved { .. } => {}
         }
     }
     let unresolved = semantic

@@ -2,11 +2,12 @@ use super::super::HistoricalV2SemanticPublicBindingKind;
 use super::super::IntentionalBoundaryProjectModelGoArchitecture;
 use super::*;
 use crate::semantic_index::{
-    RepositoryPath, SemanticCallEdge, SemanticDispatch, SemanticDocument, SemanticIndexProvenance,
-    SemanticLocation, SemanticOccurrence, SemanticOccurrenceRole, SemanticPosition,
-    SemanticPositionEncoding, SemanticResolution, SemanticSourceRange, SemanticSurface,
-    SemanticSymbol, SemanticSymbolCategory, SemanticSymbolId, SemanticSymbolKind,
-    SemanticSymbolOrigin, SemanticTextEncoding, SemanticVisibility,
+    QualifiedSemanticIndex, RepositoryPath, SemanticCallEdge, SemanticDispatch, SemanticDocument,
+    SemanticIndexProvenance, SemanticIndexSet, SemanticIndexVariant, SemanticLocation,
+    SemanticOccurrence, SemanticOccurrenceRole, SemanticPosition, SemanticPositionEncoding,
+    SemanticResolution, SemanticSourceRange, SemanticSurface, SemanticSymbol,
+    SemanticSymbolCategory, SemanticSymbolId, SemanticSymbolKind, SemanticSymbolOrigin,
+    SemanticTextEncoding, SemanticVariantId, SemanticVisibility,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -352,7 +353,7 @@ fn commits_exact_compiler_facts_for_every_historical_method() {
     assert_eq!(snapshot.compiler_excluded_method_count, 0);
     assert_eq!(snapshot.unresolved_method_count, 0);
     assert_eq!(snapshot.methods[0].parser_unit_id, "h2m-v1:fixture");
-    assert_eq!(snapshot.indexers[0].tool_name, "fixture-indexer");
+    assert_eq!(snapshot.indexers[0].census.tool_name, "fixture-indexer");
     assert_eq!(snapshot.symbol_count, 2);
     assert_eq!(snapshot.public_symbol_count, 1);
     assert_eq!(snapshot.public_root_count, 1);
@@ -366,6 +367,73 @@ fn commits_exact_compiler_facts_for_every_historical_method() {
         &fixture_required_paths(&fixture.source),
     )
     .unwrap();
+}
+
+#[test]
+fn qualified_compiler_worlds_remain_distinct_through_validation() {
+    let fixture = fixture();
+    let unqualified = fixture.indexes[&SemanticIndexerKind::Rust].clone();
+    let variants = [("fixture-linux", "linux"), ("fixture-windows", "windows")]
+        .into_iter()
+        .map(|(identity, target)| {
+            let identity = SemanticVariantId(identity.to_string());
+            let mut index = unqualified.clone();
+            index.variant = SemanticIndexVariant::Qualified {
+                identity: identity.clone(),
+                dimensions: BTreeMap::from([("target".to_string(), target.to_string())]),
+            };
+            (
+                identity,
+                QualifiedSemanticIndex {
+                    index,
+                    ignored_documents: BTreeSet::new(),
+                },
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let sets = BTreeMap::from([(
+        SemanticIndexerKind::Rust,
+        SemanticIndexSet::Qualified { variants },
+    )]);
+
+    let snapshot = build_semantic_snapshot_from_sets(
+        fixture.root.path(),
+        &fixture.source,
+        &fixture.files,
+        &fixture_changed_indexers(),
+        &fixture_required_paths(&fixture.source),
+        &sets,
+    )
+    .expect("qualified semantic snapshot");
+
+    assert_eq!(snapshot.indexers.len(), 2);
+    assert_eq!(snapshot.methods.len(), 1);
+    assert_eq!(snapshot.methods[0].observations.len(), 2);
+    assert_eq!(snapshot.symbols.len(), 4);
+    assert_eq!(snapshot.public_roots.len(), 2);
+    assert_eq!(snapshot.public_bindings.len(), 2);
+    validation::validate_snapshot(
+        &fixture.source,
+        &snapshot,
+        &fixture_changed_indexers(),
+        &fixture_required_paths(&fixture.source),
+    )
+    .expect("qualified semantic validation");
+
+    let mut tampered = snapshot;
+    tampered.methods[0].observations.pop();
+    tampered.semantic_snapshot_sha256 = semantic_snapshot_sha256(&tampered).unwrap();
+    let error = validation::validate_snapshot(
+        &fixture.source,
+        &tampered,
+        &fixture_changed_indexers(),
+        &fixture_required_paths(&fixture.source),
+    )
+    .unwrap_err();
+    assert!(
+        error.contains("compiler-variant coverage changed"),
+        "{error}"
+    );
 }
 
 #[test]
@@ -405,7 +473,7 @@ fn high_degree_graph_is_hash_committed_without_per_method_edge_copies() {
 
     assert_eq!(snapshot.methods.len(), 1);
     assert_eq!(snapshot.symbol_count, 2);
-    assert_eq!(snapshot.indexers[0].call_count, 10_000);
+    assert_eq!(snapshot.indexers[0].census.call_count, 10_000);
     assert!(serde_json::to_vec(&snapshot).unwrap().len() < 16 * 1024);
     validation::validate_snapshot(
         &fixture.source,
@@ -1681,7 +1749,10 @@ fn semantic_validation_rejects_recommitted_missing_public_binding() {
     )
     .unwrap_err();
 
-    assert!(error.contains("has no compiler binding"), "{error}");
+    assert!(
+        error.contains("direct public binding compiler-variant coverage changed"),
+        "{error}"
+    );
 }
 
 #[test]
@@ -2118,7 +2189,7 @@ fn unchanged_compiler_invisible_document_is_explicitly_excluded() {
     assert_eq!(snapshot.resolved_method_count, 0);
     assert_eq!(snapshot.compiler_excluded_method_count, 1);
     assert!(matches!(
-        &snapshot.methods[0].status,
+        &effective_method_status(&snapshot.methods[0]),
         HistoricalV2SemanticMethodStatus::CompilerExcluded { reason }
             if reason == UNCHANGED_DOCUMENT_EXCLUSION
     ));
@@ -2167,7 +2238,7 @@ fn untouched_language_methods_are_explicitly_excluded_without_an_indexer() {
     assert!(snapshot.indexers.is_empty());
     assert_eq!(snapshot.compiler_excluded_method_count, 1);
     assert!(matches!(
-        &snapshot.methods[0].status,
+        &effective_method_status(&snapshot.methods[0]),
         HistoricalV2SemanticMethodStatus::CompilerExcluded { reason }
             if reason == UNTOUCHED_LANGUAGE_EXCLUSION
     ));

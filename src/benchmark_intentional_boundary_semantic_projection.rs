@@ -309,6 +309,7 @@ pub(in crate::benchmark::release) fn summarize_index(
 ) -> Result<IntentionalBoundarySemanticIndexerCensus, String> {
     let facts = serde_json::to_vec(&(
         index.format_version,
+        &index.variant,
         &index.provenance.format,
         &index.provenance.tool_name,
         &index.provenance.tool_version,

@@ -3,15 +3,46 @@ use super::{
     IntentionalBoundarySemanticRange, IntentionalBoundarySemanticSymbolFacts,
     IntentionalBoundarySemanticUnresolvedReason,
 };
-use crate::semantic_index::SemanticPositionEncoding;
+use crate::semantic_index::{SemanticIndexVariant, SemanticPositionEncoding};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
-pub const HISTORICAL_V2_SEMANTIC_CENSUS_SCHEMA_VERSION: u32 = 17;
+pub const HISTORICAL_V2_SEMANTIC_CENSUS_SCHEMA_VERSION: u32 = 18;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HistoricalV2SemanticIndexerVariantCensus {
+    pub variant: SemanticIndexVariant,
+    pub indexed_document_paths: Vec<String>,
+    pub ignored_document_paths: Vec<String>,
+    pub census: IntentionalBoundarySemanticIndexerCensus,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(tag = "mode", rename_all = "snake_case")]
+pub enum HistoricalV2SemanticVariantCondition {
+    Unqualified,
+    Qualified {
+        dimensions: BTreeMap<String, String>,
+    },
+}
+
+impl From<&SemanticIndexVariant> for HistoricalV2SemanticVariantCondition {
+    fn from(variant: &SemanticIndexVariant) -> Self {
+        match variant {
+            SemanticIndexVariant::Unqualified => Self::Unqualified,
+            SemanticIndexVariant::Qualified { dimensions, .. } => Self::Qualified {
+                dimensions: dimensions.clone(),
+            },
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HistoricalV2SemanticSymbol {
     pub indexer: IntentionalBoundaryIndexerKind,
+    pub variant: SemanticIndexVariant,
     pub is_public_surface: bool,
     pub is_public_root_evidence: bool,
     pub is_reexport_evidence: bool,
@@ -37,6 +68,13 @@ pub enum HistoricalV2SemanticMethodStatus {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct HistoricalV2SemanticMethodObservation {
+    pub variant: SemanticIndexVariant,
+    pub status: HistoricalV2SemanticMethodStatus,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct HistoricalV2SemanticMethod {
     pub parser_unit_id: String,
     pub repository_path: String,
@@ -44,7 +82,7 @@ pub struct HistoricalV2SemanticMethod {
     pub start_line: usize,
     pub end_line: usize,
     pub indexer: IntentionalBoundaryIndexerKind,
-    pub status: HistoricalV2SemanticMethodStatus,
+    pub observations: Vec<HistoricalV2SemanticMethodObservation>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -61,6 +99,7 @@ pub enum HistoricalV2SemanticPublicBindingKind {
 #[serde(deny_unknown_fields)]
 pub struct HistoricalV2SemanticPublicBinding {
     pub indexer: IntentionalBoundaryIndexerKind,
+    pub variant: SemanticIndexVariant,
     pub surface_unit_id: String,
     pub declaration_unit_id: String,
     pub origin_declaration_unit_id: String,
@@ -81,6 +120,7 @@ pub struct HistoricalV2SemanticPublicBinding {
 #[serde(deny_unknown_fields)]
 pub struct HistoricalV2SemanticPublicReexportHop {
     pub indexer: IntentionalBoundaryIndexerKind,
+    pub variant: SemanticIndexVariant,
     pub reexport_unit_id: String,
     pub repository_path: String,
     pub target_repository_path: String,
@@ -93,6 +133,7 @@ pub struct HistoricalV2SemanticPublicReexportHop {
 #[serde(deny_unknown_fields)]
 pub struct HistoricalV2SemanticPublicRoot {
     pub indexer: IntentionalBoundaryIndexerKind,
+    pub variant: SemanticIndexVariant,
     pub repository_path: String,
     pub module_symbol_id: String,
     pub compiler_definition: IntentionalBoundarySemanticRange,
@@ -116,11 +157,13 @@ pub enum HistoricalV2SemanticPublicRootOrigin {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HistoricalV2SemanticGoPackageRoot {
+    pub variant: SemanticIndexVariant,
     pub variant_target_ids: Vec<String>,
     pub surface_slot_id: String,
     pub module_path: String,
     pub import_path: String,
     pub source_repository_paths: Vec<String>,
+    pub ignored_source_repository_paths: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -130,7 +173,7 @@ pub struct HistoricalV2SemanticSnapshotCensus {
     pub source_snapshot_census_sha256: String,
     pub required_document_paths: Vec<String>,
     pub public_surface_document_paths: Vec<String>,
-    pub indexers: Vec<IntentionalBoundarySemanticIndexerCensus>,
+    pub indexers: Vec<HistoricalV2SemanticIndexerVariantCensus>,
     pub methods: Vec<HistoricalV2SemanticMethod>,
     pub public_bindings: Vec<HistoricalV2SemanticPublicBinding>,
     pub public_roots: Vec<HistoricalV2SemanticPublicRoot>,
