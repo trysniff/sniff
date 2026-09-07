@@ -1100,6 +1100,11 @@ __all__ = ["PublicWidget", "Extra", "namespace"]
                 "shared/tool.py",
                 "def inspect(value: str) -> str:\n    return value\n",
             ),
+            (
+                "standalone.py",
+                "def ping(value: str) -> str:\n    return value\n",
+            ),
+            ("standalone_stub.pyi", "def pong(value: str) -> str: ...\n"),
         ],
         &[
             ("pkg/reexports.py", ".extra", "pkg/extra.py"),
@@ -1244,6 +1249,20 @@ __all__ = ["PublicWidget", "Extra", "namespace"]
             && binding.binding == HistoricalV2SemanticPublicBindingKind::PackageExposure
             && binding.externally_reachable
     }));
+    for path in ["standalone.py", "standalone_stub.pyi"] {
+        assert!(snapshot.public_roots.iter().any(|root| {
+            root.repository_path == path
+                && matches!(
+                    root.origin,
+                    super::super::HistoricalV2SemanticPublicRootOrigin::PythonDistributionModule { .. }
+                )
+        }));
+        assert!(snapshot.public_bindings.iter().any(|binding| {
+            binding.repository_path == path
+                && binding.binding == HistoricalV2SemanticPublicBindingKind::PackageExposure
+                && binding.externally_reachable
+        }));
+    }
     assert!(snapshot.symbols.iter().all(|symbol| {
         symbol.symbol.display_name.as_deref() != Some("_PRIVATE_CONSTANT")
             || !symbol.is_public_surface
@@ -3300,6 +3319,60 @@ fn python_stub_only_distribution_root_is_compiler_bound() {
             && binding.binding == HistoricalV2SemanticPublicBindingKind::PackageExposure
             && binding.externally_reachable
     }));
+    validation::validate_snapshot(
+        &fixture.source,
+        &snapshot,
+        &changed_indexers,
+        &required_paths,
+    )
+    .unwrap();
+}
+
+#[test]
+fn python_top_level_source_and_stub_modules_are_compiler_bound() {
+    let fixture = python_surface_fixture(
+        &[
+            (
+                "standalone.py",
+                "def ping(value: str) -> str:\n    return value\n",
+            ),
+            ("standalone_stub.pyi", "def pong(value: str) -> str: ...\n"),
+        ],
+        &[],
+    );
+    let changed_indexers = BTreeSet::from([SemanticIndexerKind::Python]);
+    let required_paths = fixture_required_paths(&fixture.source);
+
+    let snapshot = build_semantic_snapshot(
+        fixture.root.path(),
+        &fixture.source,
+        &fixture.files,
+        &changed_indexers,
+        &required_paths,
+        &fixture.indexes,
+    )
+    .unwrap();
+
+    assert_eq!(snapshot.public_root_count, 2);
+    assert_eq!(
+        snapshot
+            .public_roots
+            .iter()
+            .map(|root| root.repository_path.as_str())
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from(["standalone.py", "standalone_stub.pyi"])
+    );
+    assert_eq!(
+        snapshot
+            .public_bindings
+            .iter()
+            .filter(|binding| {
+                binding.binding == HistoricalV2SemanticPublicBindingKind::PackageExposure
+                    && binding.externally_reachable
+            })
+            .count(),
+        2
+    );
     validation::validate_snapshot(
         &fixture.source,
         &snapshot,
