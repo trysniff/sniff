@@ -1,8 +1,9 @@
 use super::*;
 use crate::benchmark::release::{
     INTENTIONAL_BOUNDARY_PROJECT_MODEL_CENSUS_SCHEMA_VERSION,
-    IntentionalBoundaryProjectModelExecution, IntentionalBoundaryProjectModelTarget,
-    IntentionalBoundaryProjectModelUnresolvedReason, IntentionalBoundaryProjectModelVariant,
+    IntentionalBoundaryProjectModelExecution, IntentionalBoundaryProjectModelGoArchitecture,
+    IntentionalBoundaryProjectModelTarget, IntentionalBoundaryProjectModelUnresolvedReason,
+    IntentionalBoundaryProjectModelVariant,
 };
 
 fn model(
@@ -24,6 +25,7 @@ fn model(
                     goarch: "amd64".to_string(),
                     cgo_enabled: false,
                     build_tags: Vec::new(),
+                    architecture: IntentionalBoundaryProjectModelGoArchitecture::Default,
                 },
                 invocation_anchor_repository_path: "go.mod".to_string(),
                 invocation_anchor_object_id: "d".repeat(40),

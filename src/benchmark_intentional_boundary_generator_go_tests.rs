@@ -1,7 +1,8 @@
 use super::*;
 use crate::benchmark::release::{
-    IntentionalBoundaryIndexerKind, IntentionalBoundaryProjectModelCensus,
-    IntentionalBoundaryProjectModelExecution, IntentionalBoundaryProjectModelTarget,
+    INTENTIONAL_BOUNDARY_PROJECT_MODEL_CENSUS_SCHEMA_VERSION, IntentionalBoundaryIndexerKind,
+    IntentionalBoundaryProjectModelCensus, IntentionalBoundaryProjectModelExecution,
+    IntentionalBoundaryProjectModelGoArchitecture, IntentionalBoundaryProjectModelTarget,
     IntentionalBoundaryProjectModelVariant, IntentionalBoundarySemanticCensus,
     IntentionalBoundarySemanticIndexerCensus, IntentionalBoundarySemanticMethod,
     IntentionalBoundarySemanticMethodStatus, IntentionalBoundarySemanticOrigin,
@@ -56,7 +57,7 @@ fn project_models(module: &str, sources: &[&str]) -> IntentionalBoundaryProjectM
         .map(|path| (*path).to_string())
         .collect::<Vec<_>>();
     IntentionalBoundaryProjectModelCensus {
-        schema_version: 4,
+        schema_version: INTENTIONAL_BOUNDARY_PROJECT_MODEL_CENSUS_SCHEMA_VERSION,
         project_model_contract: "test".to_string(),
         repository: "owner/repository".to_string(),
         revision: "1".repeat(40),
@@ -69,6 +70,7 @@ fn project_models(module: &str, sources: &[&str]) -> IntentionalBoundaryProjectM
                 goarch: "amd64".to_string(),
                 cgo_enabled: false,
                 build_tags: Vec::new(),
+                architecture: IntentionalBoundaryProjectModelGoArchitecture::Default,
             },
             invocation_anchor_repository_path: module.to_string(),
             invocation_anchor_object_id: "3".repeat(40),
@@ -526,6 +528,7 @@ fn real_fixture() -> RealFixture {
             goarch: "amd64".to_string(),
             cgo_enabled: false,
             build_tags: Vec::new(),
+            architecture: IntentionalBoundaryProjectModelGoArchitecture::Default,
         },
         go_list_output(root.path()).as_bytes(),
     )

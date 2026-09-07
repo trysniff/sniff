@@ -8,6 +8,7 @@ use crate::benchmark::release::{
     IntentionalBoundarySemanticVisibility, IntentionalBoundarySourceCensus,
 };
 use std::cell::Cell;
+use std::collections::BTreeSet;
 use std::fs;
 use std::process::Command;
 use tempfile::TempDir;
@@ -27,6 +28,7 @@ fn go_variant_for(
         goarch: goarch.to_string(),
         cgo_enabled,
         build_tags: build_tags.iter().map(|tag| (*tag).to_string()).collect(),
+        architecture: IntentionalBoundaryProjectModelGoArchitecture::Default,
     }
 }
 
@@ -68,6 +70,14 @@ fn repository() -> (TempDir, IntentionalBoundaryRepositoryInventory) {
         ("api/api.go", "package api\nfunc Public() {}\n"),
         ("api/more.go", "package api\nfunc More() {}\n"),
         ("api/api_windows.go", "package api\nfunc WindowsOnly() {}\n"),
+        (
+            "api/api_amd64_v3.go",
+            "//go:build amd64.v3\n\npackage api\nfunc Amd64V3() {}\n",
+        ),
+        (
+            "api/api_amd64_before_v3.go",
+            "//go:build amd64 && !amd64.v3\n\npackage api\nfunc Amd64BeforeV3() {}\n",
+        ),
         (
             "cmd/tool/main.go",
             "package main\nfunc helper() {}\nfunc main() {}\n",
@@ -170,8 +180,8 @@ fn go_list_output_at(root: &Path, manifest: &str, emitted_root: Option<&str>) ->
                     package_directory: "api",
                     import_path: "example.com/sample/api",
                     name: "api",
-                    go_files: &["api.go", "more.go"],
-                    ignored_go_files: &["api_windows.go"],
+                    go_files: &["api.go", "api_amd64_before_v3.go", "more.go"],
+                    ignored_go_files: &["api_amd64_v3.go", "api_windows.go"],
                 },
             ),
             package_json(
@@ -337,8 +347,14 @@ fn normalizes_go_packages_as_exact_multi_file_boundaries() {
         .iter()
         .find(|target| target.target_name.ends_with("/api"))
         .unwrap();
-    assert_eq!(api.source_repository_paths, ["api/api.go", "api/more.go"]);
-    assert_eq!(api.ignored_source_repository_paths, ["api/api_windows.go"]);
+    assert_eq!(
+        api.source_repository_paths,
+        ["api/api.go", "api/api_amd64_before_v3.go", "api/more.go",]
+    );
+    assert_eq!(
+        api.ignored_source_repository_paths,
+        ["api/api_amd64_v3.go", "api/api_windows.go"]
+    );
     assert!(matches!(
         api.target_status,
         TargetStatus::Boundary {
@@ -458,12 +474,35 @@ fn go_project_model_identity_includes_the_exact_build_variant() {
         &output,
     )
     .unwrap();
+    let tuned = parse_intentional_boundary_go_list(
+        root.path(),
+        &inventory,
+        "go.mod",
+        &"b".repeat(64),
+        IntentionalBoundaryProjectModelVariant::Go {
+            goos: "linux".to_string(),
+            goarch: "amd64".to_string(),
+            cgo_enabled: false,
+            build_tags: Vec::new(),
+            architecture: IntentionalBoundaryProjectModelGoArchitecture::Explicit {
+                environment_variable: "GOAMD64".to_string(),
+                value: "v3".to_string(),
+            },
+        },
+        &output,
+    )
+    .unwrap();
 
     assert_ne!(
         linux.executions[0].execution_id,
         windows.executions[0].execution_id
     );
     assert_ne!(linux.targets[0].target_id, windows.targets[0].target_id);
+    assert_ne!(
+        linux.executions[0].execution_id,
+        tuned.executions[0].execution_id
+    );
+    assert_ne!(linux.targets[0].target_id, tuned.targets[0].target_id);
     assert_eq!(
         linux.executions[0].normalized_model_sha256,
         windows.executions[0].normalized_model_sha256
@@ -487,13 +526,47 @@ fn go_project_model_rejects_an_untyped_default_variant() {
 }
 
 #[test]
+fn go_project_model_rejects_invalid_architecture_configuration() {
+    let (root, inventory) = repository();
+    for architecture in [
+        IntentionalBoundaryProjectModelGoArchitecture::Explicit {
+            environment_variable: "GOARM64".to_string(),
+            value: "v8.0".to_string(),
+        },
+        IntentionalBoundaryProjectModelGoArchitecture::Explicit {
+            environment_variable: "GOAMD64".to_string(),
+            value: "fast".to_string(),
+        },
+    ] {
+        let result = parse_intentional_boundary_go_list(
+            root.path(),
+            &inventory,
+            "go.mod",
+            &"b".repeat(64),
+            IntentionalBoundaryProjectModelVariant::Go {
+                goos: "linux".to_string(),
+                goarch: "amd64".to_string(),
+                cgo_enabled: false,
+                build_tags: Vec::new(),
+                architecture,
+            },
+            &go_list_output(root.path(), "go.mod"),
+        );
+        assert!(result.is_err());
+    }
+}
+
+#[test]
 fn plans_every_toolchain_platform_and_only_supported_cgo_worlds() {
     let variants = parse_go_dist_variants(
         r#"[
             {"GOOS":"linux","GOARCH":"amd64","CgoSupported":true,"FirstClass":true},
             {"GOOS":"wasip1","GOARCH":"wasm","CgoSupported":false,"FirstClass":false}
         ]"#,
-        &[],
+        &GoConstraintTagDomain {
+            custom_build_tags: Vec::new(),
+            architecture_feature_tags: Vec::new(),
+        },
     )
     .unwrap();
 
@@ -516,7 +589,16 @@ fn rejects_broken_repeated_or_unbounded_toolchain_platforms() {
             {"GOOS":"linux","GOARCH":"amd64","CgoSupported":true,"FirstClass":true}
         ]"#.to_string(),
     ] {
-        assert!(parse_go_dist_variants(&output, &[]).is_err());
+        assert!(
+            parse_go_dist_variants(
+                &output,
+                &GoConstraintTagDomain {
+                    custom_build_tags: Vec::new(),
+                    architecture_feature_tags: Vec::new(),
+                },
+            )
+            .is_err()
+        );
     }
 
     let unbounded_tags = (0..12)
@@ -525,7 +607,24 @@ fn rejects_broken_repeated_or_unbounded_toolchain_platforms() {
     assert!(
         parse_go_dist_variants(
             r#"[{"GOOS":"linux","GOARCH":"amd64","CgoSupported":false,"FirstClass":true}]"#,
-            &unbounded_tags,
+            &GoConstraintTagDomain {
+                custom_build_tags: unbounded_tags,
+                architecture_feature_tags: Vec::new(),
+            },
+        )
+        .is_err()
+    );
+
+    let unbounded_architecture_features = (0..12)
+        .map(|index| format!("wasm.feature{index}"))
+        .collect::<Vec<_>>();
+    assert!(
+        parse_go_dist_variants(
+            r#"[{"GOOS":"wasip1","GOARCH":"wasm","CgoSupported":false,"FirstClass":false}]"#,
+            &GoConstraintTagDomain {
+                custom_build_tags: Vec::new(),
+                architecture_feature_tags: unbounded_architecture_features,
+            },
         )
         .is_err()
     );
@@ -559,7 +658,10 @@ fn discovers_only_ordinary_custom_tags_from_exact_constraint_output() {
             platforms,
         )
         .unwrap(),
-        ["enterprise", "purego"]
+        GoConstraintTagDomain {
+            custom_build_tags: vec!["enterprise".to_string(), "purego".to_string()],
+            architecture_feature_tags: Vec::new(),
+        }
     );
 }
 
@@ -569,7 +671,7 @@ fn rejects_constraint_output_that_needs_unmodeled_compiler_modes() {
         {"GOOS":"linux","GOARCH":"amd64","CgoSupported":true,"FirstClass":true}
     ]"#;
     for tag in [
-        "amd64.v3",
+        "gccgo",
         "goexperiment.arenas",
         "race",
         "msan",
@@ -594,13 +696,141 @@ fn rejects_constraint_output_that_needs_unmodeled_compiler_modes() {
 }
 
 #[test]
+fn separates_architecture_features_from_custom_build_tags() {
+    let platforms = r#"[
+        {"GOOS":"linux","GOARCH":"amd64","CgoSupported":true,"FirstClass":true},
+        {"GOOS":"wasip1","GOARCH":"wasm","CgoSupported":false,"FirstClass":false}
+    ]"#;
+    let output = serde_json::json!({
+        "schema_version": 1,
+        "files": [
+            {
+                "repository_path": "api/api.go",
+                "tags": ["amd64.v2", "amd64.v3", "enterprise"]
+            },
+            {
+                "repository_path": "api/wasm.go",
+                "tags": ["wasm.satconv", "wasm.signext"]
+            }
+        ]
+    });
+
+    assert_eq!(
+        parse_go_constraint_tags(
+            &serde_json::to_string(&output).unwrap(),
+            &["api/api.go".to_string(), "api/wasm.go".to_string()],
+            platforms,
+        )
+        .unwrap(),
+        GoConstraintTagDomain {
+            custom_build_tags: vec!["enterprise".to_string()],
+            architecture_feature_tags: vec![
+                "amd64.v2".to_string(),
+                "amd64.v3".to_string(),
+                "wasm.satconv".to_string(),
+                "wasm.signext".to_string(),
+            ],
+        }
+    );
+}
+
+#[test]
+fn architecture_features_expand_to_distinct_compiler_contexts() {
+    let variants = parse_go_dist_variants(
+        r#"[
+            {"GOOS":"linux","GOARCH":"amd64","CgoSupported":false,"FirstClass":true},
+            {"GOOS":"wasip1","GOARCH":"wasm","CgoSupported":false,"FirstClass":false}
+        ]"#,
+        &GoConstraintTagDomain {
+            custom_build_tags: Vec::new(),
+            architecture_feature_tags: vec![
+                "amd64.v2".to_string(),
+                "amd64.v3".to_string(),
+                "wasm.satconv".to_string(),
+                "wasm.signext".to_string(),
+            ],
+        },
+    )
+    .unwrap();
+
+    let amd64 = variants
+        .iter()
+        .filter_map(|variant| match variant {
+            IntentionalBoundaryProjectModelVariant::Go {
+                goarch,
+                architecture,
+                ..
+            } if goarch == "amd64" => Some(architecture.clone()),
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        amd64,
+        BTreeSet::from([
+            IntentionalBoundaryProjectModelGoArchitecture::Default,
+            IntentionalBoundaryProjectModelGoArchitecture::Explicit {
+                environment_variable: "GOAMD64".to_string(),
+                value: "v1".to_string(),
+            },
+            IntentionalBoundaryProjectModelGoArchitecture::Explicit {
+                environment_variable: "GOAMD64".to_string(),
+                value: "v2".to_string(),
+            },
+            IntentionalBoundaryProjectModelGoArchitecture::Explicit {
+                environment_variable: "GOAMD64".to_string(),
+                value: "v3".to_string(),
+            },
+        ])
+    );
+
+    let wasm = variants
+        .iter()
+        .filter_map(|variant| match variant {
+            IntentionalBoundaryProjectModelVariant::Go {
+                goarch,
+                architecture,
+                ..
+            } if goarch == "wasm" => Some(architecture.clone()),
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>();
+    assert_eq!(wasm.len(), 4);
+    assert!(
+        wasm.contains(&IntentionalBoundaryProjectModelGoArchitecture::Explicit {
+            environment_variable: "GOWASM".to_string(),
+            value: "satconv,signext".to_string(),
+        })
+    );
+}
+
+#[test]
+fn rejects_unknown_architecture_feature_shapes() {
+    let platforms = r#"[{"GOOS":"linux","GOARCH":"amd64","CgoSupported":false,"FirstClass":true}]"#;
+    let output = serde_json::json!({
+        "schema_version": 1,
+        "files": [{"repository_path": "api/api.go", "tags": ["amd64.fast"]}]
+    });
+
+    let error = parse_go_constraint_tags(
+        &serde_json::to_string(&output).unwrap(),
+        &["api/api.go".to_string()],
+        platforms,
+    )
+    .unwrap_err();
+    assert!(error.contains("amd64.fast"), "{error}");
+}
+
+#[test]
 fn custom_tags_expand_to_every_boolean_assignment() {
     let variants = parse_go_dist_variants(
         r#"[
             {"GOOS":"linux","GOARCH":"amd64","CgoSupported":true,"FirstClass":true},
             {"GOOS":"wasip1","GOARCH":"wasm","CgoSupported":false,"FirstClass":false}
         ]"#,
-        &["enterprise".to_string(), "purego".to_string()],
+        &GoConstraintTagDomain {
+            custom_build_tags: vec!["enterprise".to_string(), "purego".to_string()],
+            architecture_feature_tags: Vec::new(),
+        },
     )
     .unwrap();
 
@@ -770,6 +1000,8 @@ fn collector_executes_every_tracked_go_module_exactly_once() {
                     source_paths,
                     [
                         "api/api.go",
+                        "api/api_amd64_before_v3.go",
+                        "api/api_amd64_v3.go",
                         "api/api_windows.go",
                         "api/more.go",
                         "cmd/tool/main.go",
@@ -898,6 +1130,53 @@ fn real_go_list_is_sandboxed_or_fails_as_typed_unavailable() {
             execution.variant,
             IntentionalBoundaryProjectModelVariant::Go { .. }
         )));
+        for (level, included, excluded) in [
+            ("v2", "api/api_amd64_before_v3.go", "api/api_amd64_v3.go"),
+            ("v3", "api/api_amd64_v3.go", "api/api_amd64_before_v3.go"),
+        ] {
+            let execution = census
+                .executions
+                .iter()
+                .find(|execution| {
+                    matches!(
+                        &execution.variant,
+                        IntentionalBoundaryProjectModelVariant::Go {
+                            goos,
+                            goarch,
+                            cgo_enabled: false,
+                            architecture: IntentionalBoundaryProjectModelGoArchitecture::Explicit {
+                                environment_variable,
+                                value,
+                            },
+                            ..
+                        } if goos == "linux"
+                            && goarch == "amd64"
+                            && environment_variable == "GOAMD64"
+                            && value == level
+                    )
+                })
+                .unwrap_or_else(|| panic!("missing Linux/amd64/{level} execution"));
+            let package = census
+                .targets
+                .iter()
+                .find(|target| {
+                    target.execution_id == execution.execution_id
+                        && target.target_name == "example.com/sample/api"
+                })
+                .unwrap_or_else(|| panic!("missing Linux/amd64/{level} API package"));
+            assert!(
+                package
+                    .source_repository_paths
+                    .iter()
+                    .any(|path| path == included)
+            );
+            assert!(
+                !package
+                    .source_repository_paths
+                    .iter()
+                    .any(|path| path == excluded)
+            );
+        }
         validate_intentional_boundary_project_model_census_commitment(&inventory, &census).unwrap();
     } else {
         let error = result.unwrap_err();

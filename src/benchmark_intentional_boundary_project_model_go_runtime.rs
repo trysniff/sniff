@@ -389,7 +389,7 @@ fn run_go_lists(
             "Go toolchain identity changed between platform and constraint discovery",
         ));
     }
-    let build_tags = parse_go_constraint_tags(
+    let tag_domain = parse_go_constraint_tags(
         &constraint_execution.output.stdout,
         source_repository_paths,
         &platform_execution.output.stdout,
@@ -402,7 +402,7 @@ fn run_go_lists(
             detail,
         )
     })?;
-    let variants = parse_go_dist_variants(&platform_execution.output.stdout, &build_tags).map_err(
+    let variants = parse_go_dist_variants(&platform_execution.output.stdout, &tag_domain).map_err(
         |detail| {
             go_error(
                 ProjectModelDerivationErrorKind::ProviderOutputIncomplete,
@@ -419,6 +419,7 @@ fn run_go_lists(
             goarch,
             cgo_enabled,
             build_tags,
+            architecture,
         } = &variant
         else {
             unreachable!("Go platform planning only emits Go variants");
@@ -437,7 +438,7 @@ fn run_go_lists(
             logical_command.push(format!("-tags={}", build_tags.join(",")));
         }
         logical_command.push("./...".to_string());
-        let explicit_context = vec![
+        let mut explicit_context = vec![
             (
                 "CGO_ENABLED".to_string(),
                 if *cgo_enabled { "1" } else { "0" }.to_string(),
@@ -445,6 +446,13 @@ fn run_go_lists(
             ("GOARCH".to_string(), goarch.clone()),
             ("GOOS".to_string(), goos.clone()),
         ];
+        if let IntentionalBoundaryProjectModelGoArchitecture::Explicit {
+            environment_variable,
+            value,
+        } = architecture
+        {
+            explicit_context.push((environment_variable.clone(), value.clone()));
+        }
         let list_execution = run_go_project_model_command(
             root,
             &cache,

@@ -2,13 +2,13 @@
 use super::intentional_boundary_project_model::validate_intentional_boundary_project_model_census_commitment;
 use super::intentional_boundary_project_model::{
     compute_execution_id, compute_normalized_model_sha256, compute_target_id,
-    finish_project_model_census, is_sha256, regular_inventory_entry,
+    finish_project_model_census, is_sha256, regular_inventory_entry, valid_execution_variant,
 };
 use super::{
     BoundaryGitEntryKind, IntentionalBoundaryManifestDeclarationKind,
     IntentionalBoundaryManifestTarget, IntentionalBoundaryProjectModelCensus,
-    IntentionalBoundaryProjectModelExecution, IntentionalBoundaryProjectModelProvider as Provider,
-    IntentionalBoundaryProjectModelTarget,
+    IntentionalBoundaryProjectModelExecution, IntentionalBoundaryProjectModelGoArchitecture,
+    IntentionalBoundaryProjectModelProvider as Provider, IntentionalBoundaryProjectModelTarget,
     IntentionalBoundaryProjectModelTargetStatus as TargetStatus,
     IntentionalBoundaryProjectModelUnresolvedReason as UnresolvedReason,
     IntentionalBoundaryProjectModelVariant, IntentionalBoundaryRepositoryInventory,
@@ -20,10 +20,13 @@ use std::fs;
 use std::path::{Component, Path, PathBuf};
 
 pub(super) const GO_LIST_COMMAND_CONTRACT: &str =
-    "go-list-json-find-mod-readonly-buildvcs-off-exact-constraint-variants-v3";
+    "go-list-json-find-mod-readonly-buildvcs-off-exact-constraint-variants-v4";
 
 #[path = "benchmark_intentional_boundary_project_model_go_variants.rs"]
 mod variants;
+pub(super) use variants::{
+    go_architecture_environment_variable, valid_go_architecture_configuration,
+};
 
 #[path = "benchmark_intentional_boundary_project_model_go_runtime.rs"]
 mod runtime;
@@ -32,7 +35,9 @@ pub(super) use runtime::census_intentional_boundary_go_project_models_typed;
 #[cfg(test)]
 use runtime::{GoListExecutionOutput, census_go_project_models_with_executor};
 #[cfg(test)]
-use variants::{GO_VARIANT_LIMIT, parse_go_constraint_tags, parse_go_dist_variants};
+use variants::{
+    GO_VARIANT_LIMIT, GoConstraintTagDomain, parse_go_constraint_tags, parse_go_dist_variants,
+};
 
 #[path = "benchmark_intentional_boundary_project_model_go_validation.rs"]
 mod validation;
@@ -101,6 +106,9 @@ pub fn parse_intentional_boundary_go_list(
     }
     if !matches!(variant, IntentionalBoundaryProjectModelVariant::Go { .. }) {
         return Err("Go project-model execution omitted its build variant".to_string());
+    }
+    if !valid_execution_variant(Provider::GoList, &variant) {
+        return Err("Go project-model execution has an invalid build variant".to_string());
     }
     let canonical_root = canonical_path(root, "Go project-model repository root")?;
     let invocation_entry = regular_inventory_entry(

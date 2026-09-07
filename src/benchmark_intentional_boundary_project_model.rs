@@ -2,7 +2,8 @@ use super::intentional_boundary_project_model_cargo::{
     CARGO_COMMAND_CONTRACT, validate_cargo_target_classification,
 };
 use super::intentional_boundary_project_model_go::{
-    GO_LIST_COMMAND_CONTRACT, validate_go_target_classification,
+    GO_LIST_COMMAND_CONTRACT, go_architecture_environment_variable,
+    valid_go_architecture_configuration, validate_go_target_classification,
 };
 use super::intentional_boundary_project_model_gradle::{
     GRADLE_TOOLING_COMMAND_CONTRACT, validate_gradle_target_classification,
@@ -10,7 +11,7 @@ use super::intentional_boundary_project_model_gradle::{
 use super::{
     BoundaryGitEntryKind, INTENTIONAL_BOUNDARY_PROJECT_MODEL_CENSUS_SCHEMA_VERSION,
     IntentionalBoundaryProjectModelCensus, IntentionalBoundaryProjectModelExecution,
-    IntentionalBoundaryProjectModelProducerTask,
+    IntentionalBoundaryProjectModelGoArchitecture, IntentionalBoundaryProjectModelProducerTask,
     IntentionalBoundaryProjectModelProvider as Provider, IntentionalBoundaryProjectModelTarget,
     IntentionalBoundaryProjectModelTargetStatus as TargetStatus,
     IntentionalBoundaryProjectModelVariant, IntentionalBoundaryRepositoryInventory,
@@ -21,7 +22,7 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path};
 
-pub(super) const PROJECT_MODEL_CONTRACT: &str = "sniffbench-intentional-boundary-project-model-v4";
+pub(super) const PROJECT_MODEL_CONTRACT: &str = "sniffbench-intentional-boundary-project-model-v5";
 
 #[derive(Serialize)]
 struct NormalizedTarget<'a> {
@@ -57,7 +58,7 @@ pub(super) fn compute_normalized_model_sha256(
         .collect::<Result<Vec<_>, String>>()?;
     normalized_targets.sort();
     hash_json(&(
-        "sniffbench-intentional-boundary-normalized-project-model-v4",
+        "sniffbench-intentional-boundary-normalized-project-model-v5",
         provider,
         covered_manifest_repository_paths,
         normalized_targets,
@@ -74,9 +75,9 @@ pub(super) fn compute_execution_id(
     normalized_model_sha256: &str,
 ) -> Result<String, String> {
     Ok(format!(
-        "ibpme-v4:{}",
+        "ibpme-v5:{}",
         hash_json(&(
-            "sniffbench-intentional-boundary-project-model-execution-v4",
+            "sniffbench-intentional-boundary-project-model-execution-v5",
             provider,
             invocation_anchor_repository_path,
             invocation_anchor_object_id,
@@ -92,9 +93,9 @@ pub(super) fn compute_target_id(
     target: &IntentionalBoundaryProjectModelTarget,
 ) -> Result<String, String> {
     Ok(format!(
-        "ibpmt-v4:{}",
+        "ibpmt-v5:{}",
         hash_json(&(
-            "sniffbench-intentional-boundary-project-model-target-v4",
+            "sniffbench-intentional-boundary-project-model-target-v5",
             &target.execution_id,
             normalized_target(target),
         ))?
@@ -306,7 +307,7 @@ fn validate_target_classification(
     }
 }
 
-fn valid_execution_variant(
+pub(super) fn valid_execution_variant(
     provider: Provider,
     variant: &IntentionalBoundaryProjectModelVariant,
 ) -> bool {
@@ -317,6 +318,7 @@ fn valid_execution_variant(
                 goos,
                 goarch,
                 build_tags,
+                architecture,
                 ..
             },
         ) => {
@@ -329,12 +331,30 @@ fn valid_execution_variant(
                             .chars()
                             .all(|value| value.is_alphanumeric() || matches!(value, '_' | '.'))
                 })
+                && valid_go_architecture(goarch, architecture)
         }
         (
             Provider::CargoMetadata | Provider::GradleToolingApi,
             IntentionalBoundaryProjectModelVariant::Default,
         ) => true,
         _ => false,
+    }
+}
+
+fn valid_go_architecture(
+    goarch: &str,
+    architecture: &IntentionalBoundaryProjectModelGoArchitecture,
+) -> bool {
+    match architecture {
+        IntentionalBoundaryProjectModelGoArchitecture::Default => true,
+        IntentionalBoundaryProjectModelGoArchitecture::Explicit {
+            environment_variable,
+            value,
+        } => {
+            go_architecture_environment_variable(goarch) == Some(environment_variable.as_str())
+                && !value.is_empty()
+                && valid_go_architecture_configuration(goarch, value)
+        }
     }
 }
 

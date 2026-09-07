@@ -1,5 +1,6 @@
 use super::*;
 use crate::benchmark::release::{
+    INTENTIONAL_BOUNDARY_PROJECT_MODEL_CENSUS_SCHEMA_VERSION,
     IntentionalBoundaryManifestDeclaration, IntentionalBoundaryManifestDeclarationKind,
     IntentionalBoundaryManifestProvider, IntentionalBoundaryManifestTarget,
     IntentionalBoundaryProjectModelExecution, IntentionalBoundaryProjectModelTargetStatus,
@@ -109,7 +110,7 @@ fn fixture() -> (
         },
     };
     let census = IntentionalBoundaryProjectModelCensus {
-        schema_version: 4,
+        schema_version: INTENTIONAL_BOUNDARY_PROJECT_MODEL_CENSUS_SCHEMA_VERSION,
         project_model_contract: "fixture".to_string(),
         repository: inventory.repository.clone(),
         revision,
