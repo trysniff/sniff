@@ -1,7 +1,8 @@
 use super::*;
 use crate::semantic_index::{
-    RepositoryPath, SEMANTIC_INDEX_FORMAT_VERSION, SemanticIndexProvenance,
-    SemanticIndexerContribution, SemanticRelationshipKind, SemanticResolution, SemanticSymbolId,
+    QualifiedSemanticIndex, RepositoryPath, SEMANTIC_INDEX_FORMAT_VERSION, SemanticIndexProvenance,
+    SemanticIndexSet, SemanticIndexerContribution, SemanticIndexerVariantPlan,
+    SemanticRelationshipKind, SemanticResolution, SemanticSymbolId, SemanticVariantId,
 };
 use crate::semantic_indexer_installation::SemanticIndexerStore;
 
@@ -60,6 +61,86 @@ fn empty_index(root: &Path) -> SemanticIndex {
         test_relationships: BTreeSet::new(),
         unresolved_edges: BTreeSet::new(),
     }
+}
+
+fn variant_plan(
+    identity: &str,
+    selected_documents: &[&str],
+    ignored_documents: &[&str],
+) -> SemanticIndexerVariantPlan {
+    SemanticIndexerVariantPlan {
+        identity: SemanticVariantId(identity.to_string()),
+        dimensions: BTreeMap::from([
+            ("goarch".to_string(), "amd64".to_string()),
+            ("goos".to_string(), "linux".to_string()),
+        ]),
+        environment: BTreeMap::from([
+            ("CGO_ENABLED".to_string(), "0".to_string()),
+            ("GOARCH".to_string(), "amd64".to_string()),
+            ("GOFLAGS".to_string(), String::new()),
+            ("GOOS".to_string(), "linux".to_string()),
+        ]),
+        selected_documents: selected_documents
+            .iter()
+            .map(|path| RepositoryPath((*path).to_string()))
+            .collect(),
+        ignored_documents: ignored_documents
+            .iter()
+            .map(|path| RepositoryPath((*path).to_string()))
+            .collect(),
+    }
+}
+
+fn package_inventory(
+    selected_documents: &[&str],
+    ignored_documents: &[&str],
+) -> super::go_shards::GoPackageInventory {
+    super::go_shards::GoPackageInventory {
+        packages: if selected_documents.is_empty() && ignored_documents.is_empty() {
+            Vec::new()
+        } else {
+            vec![super::go_shards::GoPackage {
+                import_path: "example.test/fixture".to_string(),
+                source_documents: selected_documents
+                    .iter()
+                    .map(|path| RepositoryPath((*path).to_string()))
+                    .collect(),
+                source_bytes: 1,
+            }]
+        },
+        ignored_documents: ignored_documents
+            .iter()
+            .map(|path| RepositoryPath((*path).to_string()))
+            .collect(),
+    }
+}
+
+#[test]
+fn go_variant_inventory_requires_exact_nonempty_document_sets() {
+    let plan = variant_plan("linux", &["fixture/main.go"], &["fixture/windows.go"]);
+    let exact = package_inventory(&["fixture/main.go"], &["fixture/windows.go"]);
+    validate_go_variant_inventory(&plan, &exact).unwrap();
+
+    let drifted = package_inventory(&["fixture/invented.go"], &["fixture/other.go"]);
+    let error = validate_go_variant_inventory(&plan, &drifted).unwrap_err();
+
+    assert!(error.contains("missing_selected=[\"fixture/main.go\"]"));
+    assert!(error.contains("invented_selected=[\"fixture/invented.go\"]"));
+    assert!(error.contains("missing_ignored=[\"fixture/windows.go\"]"));
+    assert!(error.contains("invented_ignored=[\"fixture/other.go\"]"));
+}
+
+#[test]
+fn empty_go_variant_uses_the_committed_ignored_ledger_without_inventing_paths() {
+    let plan = variant_plan("linux-empty", &[], &["fixture/only_windows.go"]);
+    validate_go_variant_inventory(&plan, &package_inventory(&[], &[])).unwrap();
+    validate_go_variant_inventory(&plan, &package_inventory(&[], &["fixture/only_windows.go"]))
+        .unwrap();
+
+    let invented = package_inventory(&[], &["fixture/invented.go"]);
+    let error = validate_go_variant_inventory(&plan, &invented).unwrap_err();
+
+    assert!(error.contains("invented_ignored=[\"fixture/invented.go\"]"));
 }
 
 #[test]
@@ -226,4 +307,75 @@ async fn live_multi_shard_go_index_preserves_calls_and_structural_implementation
             && relationship.source == dog
             && relationship.target == speaker
     }));
+}
+
+#[tokio::test]
+#[ignore = "requires Go and the installed pinned Go semantic indexer"]
+async fn live_empty_go_variant_is_recorded_without_a_scip_invocation() {
+    let repository = tempfile::tempdir().unwrap();
+    fs::write(
+        repository.path().join("go.mod"),
+        "module example.test/empty\n\ngo 1.22\n",
+    )
+    .unwrap();
+    let files = vec![write_go_file(
+        repository.path(),
+        "only_windows.go",
+        "package empty\n\nfunc WindowsOnly() {}\n",
+    )];
+    let plan = variant_plan("linux-empty", &[], &["only_windows.go"]);
+    let spec = pinned_indexer(SemanticIndexerKind::Go).unwrap();
+    let store = SemanticIndexerStore::for_user().unwrap();
+    let installed = store.verify(spec).unwrap();
+    let recovery = SemanticIndexerRecoveryGuard::begin(repository.path()).unwrap();
+    let repository_content_sha256 =
+        repository_snapshot::repository_content_digest(repository.path()).unwrap();
+    let inputs = GoIndexerRunInputs {
+        spec,
+        root: repository.path(),
+        installed: &installed,
+        files: &files,
+        required_documents: &[],
+        recovery: &recovery,
+        repository_content_sha256: &repository_content_sha256,
+        progress_root: None,
+    };
+
+    let result = run_required_go_indexer_variants_with_limits(
+        &inputs,
+        std::slice::from_ref(&plan),
+        GoShardLimits {
+            target_source_bytes: u64::MAX,
+            max_packages: 1,
+        },
+    )
+    .await;
+    recovery.finish().unwrap();
+    let SemanticIndexSet::Qualified { variants } = result.unwrap() else {
+        panic!("expected a qualified Go semantic index set");
+    };
+    let QualifiedSemanticIndex {
+        index,
+        ignored_documents,
+    } = variants.get(&plan.identity).unwrap();
+
+    assert_eq!(index.provenance.format, "go-compiler-empty-world");
+    assert_eq!(index.provenance.tool_name, "go");
+    assert_eq!(index.variant, plan.index_variant());
+    assert!(index.documents.is_empty());
+    assert!(index.symbols.is_empty());
+    assert_eq!(ignored_documents, &plan.ignored_documents);
+    assert_eq!(index.provenance.invocations.len(), 2);
+    assert_eq!(
+        index
+            .provenance
+            .invocations
+            .iter()
+            .map(|invocation| invocation.contribution)
+            .collect::<Vec<_>>(),
+        vec![
+            SemanticIndexerContribution::BuildContextDiscovery,
+            SemanticIndexerContribution::PackageInventory,
+        ]
+    );
 }
