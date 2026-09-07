@@ -191,7 +191,7 @@ impl ReviewFixture {
         };
         let mut bundle = HistoricalV2SourceReviewBundle {
             schema_version: HISTORICAL_V2_SOURCE_REVIEW_BUNDLE_SCHEMA_VERSION,
-            bundle_contract: "sniffbench-historical-v2-source-review-v2".to_string(),
+            bundle_contract: "sniffbench-historical-v2-source-review-v3".to_string(),
             protocol_sha256: protocol.protocol_sha256.clone(),
             selection_sha256: "c".repeat(64),
             assessment_identity_sha256: "d".repeat(64),

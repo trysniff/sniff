@@ -1,7 +1,7 @@
 use super::{BoundaryGitEntryKind, HistoricalRevisionSide, HistoricalV2ExecutionCommandEvidence};
 use serde::{Deserialize, Serialize};
 
-pub const HISTORICAL_V2_SOURCE_REVIEW_BUNDLE_SCHEMA_VERSION: u32 = 2;
+pub const HISTORICAL_V2_SOURCE_REVIEW_BUNDLE_SCHEMA_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
