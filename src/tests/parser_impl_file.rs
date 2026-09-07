@@ -764,6 +764,44 @@ fn uppercase_extensions_are_supported() {
     fs::remove_dir_all(&root).ok();
 }
 
+#[test]
+fn python_stubs_are_semantic_sources_without_reviewable_methods() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!("sniff-python-stub-{nanos}"));
+    fs::create_dir_all(&root).unwrap();
+    let file_path = root.join("api.pyi");
+    fs::write(
+        &file_path,
+        "class Client:\n    def send(self, value: str) -> str: ...\n\ndef parse(value: str) -> str: ...\n",
+    )
+    .unwrap();
+
+    let file_path_str = file_path.to_string_lossy().to_string();
+    let record = parse_file_checked(&file_path_str).expect("valid Python stub should parse");
+    let symbols = parse_file_symbols_checked(&file_path_str)
+        .expect("valid Python stub should contribute semantic symbols");
+
+    assert_eq!(record.language, "python");
+    assert!(record.methods.is_empty());
+    assert!(
+        symbols
+            .definitions
+            .iter()
+            .any(|definition| definition.name == "parse")
+    );
+    assert!(
+        symbols
+            .definitions
+            .iter()
+            .any(|definition| definition.name == "send")
+    );
+
+    fs::remove_dir_all(root).ok();
+}
+
 fn write_rust_fixture() -> (std::path::PathBuf, String) {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
