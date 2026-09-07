@@ -47,10 +47,29 @@ pub(super) fn go_semantic_variant_plans(
             .flat_map(|target| target.source_repository_paths.iter())
             .map(|path| RepositoryPath(path.clone()))
             .collect::<BTreeSet<_>>();
-        let ignored_documents = targets
+        let module_documents = model
+            .targets
             .iter()
-            .flat_map(|target| target.ignored_source_repository_paths.iter())
+            .filter(|target| {
+                target.manifest_repository_path == execution.invocation_anchor_repository_path
+            })
+            .flat_map(|target| {
+                target
+                    .source_repository_paths
+                    .iter()
+                    .chain(&target.ignored_source_repository_paths)
+            })
             .map(|path| RepositoryPath(path.clone()))
+            .collect::<BTreeSet<_>>();
+        let ignored_documents = module_documents
+            .difference(&selected_documents)
+            .cloned()
+            .chain(targets.iter().flat_map(|target| {
+                target
+                    .ignored_source_repository_paths
+                    .iter()
+                    .map(|path| RepositoryPath(path.clone()))
+            }))
             .collect::<BTreeSet<_>>();
         let tags = serde_json::to_string(build_tags)
             .map_err(|error| format!("failed to serialize Go build tags: {error}"))?;
@@ -135,6 +154,37 @@ mod tests {
             plans[0]
                 .selected_documents
                 .contains(&RepositoryPath("api/api_amd64.go".to_string()))
+        );
+    }
+
+    #[test]
+    fn source_selected_by_one_go_execution_is_ignored_by_an_empty_execution() {
+        let mut model = go_model();
+        let mut empty_execution = model.executions[0].clone();
+        empty_execution.execution_id = "go-windows-arm64-empty".to_string();
+        empty_execution.variant = IntentionalBoundaryProjectModelVariant::Go {
+            goos: "windows".to_string(),
+            goarch: "arm64".to_string(),
+            cgo_enabled: false,
+            build_tags: Vec::new(),
+            architecture: IntentionalBoundaryProjectModelGoArchitecture::Default,
+        };
+        empty_execution.target_count = 0;
+        model.executions.push(empty_execution);
+
+        let plans = go_semantic_variant_plans(&model).unwrap();
+        let empty = plans
+            .iter()
+            .find(|plan| plan.identity.0 == "go-windows-arm64-empty")
+            .unwrap();
+
+        assert!(empty.selected_documents.is_empty());
+        assert_eq!(
+            empty.ignored_documents,
+            BTreeSet::from([
+                RepositoryPath("api/api_amd64.go".to_string()),
+                RepositoryPath("api/api_windows.go".to_string()),
+            ])
         );
     }
 

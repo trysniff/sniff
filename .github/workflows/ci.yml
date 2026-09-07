@@ -201,6 +201,9 @@ jobs:
           cargo test --lib --locked \
             semantic_indexer_runner::go_runner::tests::live_multi_shard_go_index_preserves_calls_and_structural_implementations \
             -- --exact --ignored --test-threads=1 --nocapture
+          cargo test --lib --locked \
+            semantic_indexer_runner::go_runner::tests::live_empty_go_variant_is_recorded_without_a_scip_invocation \
+            -- --exact --ignored --test-threads=1 --nocapture
 
   historical-v2-command-recovery:
     name: historical-v2-command-recovery

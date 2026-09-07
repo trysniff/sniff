@@ -324,6 +324,7 @@ async fn run_go_compiler_world(
     let inventory_arguments = vec![
         "list".to_string(),
         format!("-json={GO_LIST_FIELDS}"),
+        "-find".to_string(),
         "-mod=readonly".to_string(),
         "-buildvcs=false".to_string(),
         "./...".to_string(),
@@ -349,7 +350,7 @@ async fn run_go_compiler_world(
         .await?
     };
     let inventory_invocation = package_inventory_invocation(
-        inventory_arguments,
+        inventory_arguments.clone(),
         context.clone(),
         inventory_output.stdout_sha256.clone(),
     );
@@ -359,10 +360,52 @@ async fn run_go_compiler_world(
         validate_go_variant_inventory(plan, &inventory)
             .map_err(|detail| go_output_validation_failure(spec, detail, &inventory_output))?;
     }
+    if inventory
+        .packages
+        .iter()
+        .all(|package| package.source_documents.is_empty())
+    {
+        let plan = plan.ok_or_else(|| {
+            go_snapshot_assembly_failure(
+                spec,
+                "unqualified Go semantic indexing selected no repository package",
+            )
+        })?;
+        let index = SemanticIndex {
+            format_version: crate::semantic_index::SEMANTIC_INDEX_FORMAT_VERSION,
+            repository_root: root.to_string_lossy().replace('\\', "/"),
+            provenance: crate::semantic_index::SemanticIndexProvenance {
+                format: "go-compiler-empty-world".to_string(),
+                tool_name: "go".to_string(),
+                tool_version: None,
+                arguments: inventory_arguments,
+                source_text_encoding: None,
+                invocations: vec![context_invocation, inventory_invocation],
+                diagnostics: Vec::new(),
+            },
+            variant,
+            documents: BTreeMap::new(),
+            symbols: BTreeMap::new(),
+            relationships: BTreeSet::new(),
+            imports: BTreeSet::new(),
+            calls: BTreeSet::new(),
+            test_relationships: BTreeSet::new(),
+            unresolved_edges: BTreeSet::new(),
+        };
+        return Ok(GoCompilerWorld {
+            index,
+            ignored_documents: plan.ignored_documents.clone(),
+        });
+    }
     let package_inventory_sha256 =
         canonical_sha256(&inventory).map_err(|detail| go_progress_failure(spec, detail))?;
     let ignored_documents = inventory.ignored_documents.clone();
-    let shards = plan_go_package_shards_with_limits(inventory.packages, shard_limits)
+    let selected_packages = inventory
+        .packages
+        .into_iter()
+        .filter(|package| !package.source_documents.is_empty())
+        .collect();
+    let shards = plan_go_package_shards_with_limits(selected_packages, shard_limits)
         .map_err(|detail| go_snapshot_assembly_failure(spec, detail))?;
 
     let document_units = shards
@@ -533,9 +576,30 @@ fn validate_go_variant_inventory(
         .iter()
         .flat_map(|package| package.source_documents.iter().cloned())
         .collect::<BTreeSet<_>>();
+    let compiler_world_is_empty = selected.is_empty();
+    if compiler_world_is_empty && plan.selected_documents.is_empty() {
+        let invented_ignored = inventory
+            .ignored_documents
+            .difference(&plan.ignored_documents)
+            .map(|path| path.0.as_str())
+            .take(8)
+            .collect::<Vec<_>>();
+        if invented_ignored.is_empty() {
+            return Ok(());
+        }
+        return Err(format!(
+            "Go semantic inventory invented ignored documents for empty variant {}; invented_ignored={invented_ignored:?}",
+            plan.identity.0
+        ));
+    }
     let missing_selected = plan
         .selected_documents
         .difference(&selected)
+        .map(|path| path.0.as_str())
+        .take(8)
+        .collect::<Vec<_>>();
+    let invented_selected = selected
+        .difference(&plan.selected_documents)
         .map(|path| path.0.as_str())
         .take(8)
         .collect::<Vec<_>>();
@@ -545,11 +609,21 @@ fn validate_go_variant_inventory(
         .map(|path| path.0.as_str())
         .take(8)
         .collect::<Vec<_>>();
-    if missing_selected.is_empty() && missing_ignored.is_empty() {
+    let invented_ignored = inventory
+        .ignored_documents
+        .difference(&plan.ignored_documents)
+        .map(|path| path.0.as_str())
+        .take(8)
+        .collect::<Vec<_>>();
+    if missing_selected.is_empty()
+        && invented_selected.is_empty()
+        && missing_ignored.is_empty()
+        && invented_ignored.is_empty()
+    {
         return Ok(());
     }
     Err(format!(
-        "Go semantic inventory disagrees with committed variant {}; missing_selected={missing_selected:?}, missing_ignored={missing_ignored:?}",
+        "Go semantic inventory disagrees with committed variant {}; missing_selected={missing_selected:?}, invented_selected={invented_selected:?}, missing_ignored={missing_ignored:?}, invented_ignored={invented_ignored:?}",
         plan.identity.0
     ))
 }

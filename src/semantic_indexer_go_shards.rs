@@ -144,9 +144,9 @@ pub(super) fn parse_go_package_inventory(
                 item.import_path
             ));
         }
-        if source_documents.is_empty() {
+        if source_documents.is_empty() && ignored_documents.is_empty() {
             return Err(format!(
-                "Go package {} has no compiler-selected source documents",
+                "Go package {} has neither selected nor ignored source documents",
                 item.import_path
             ));
         }
@@ -193,9 +193,6 @@ pub(super) fn parse_go_package_inventory(
                 item.import_path
             ));
         }
-    }
-    if packages.is_empty() {
-        return Err("Go package inventory selected no repository packages".to_string());
     }
     Ok(GoPackageInventory {
         packages: packages.into_values().collect(),
@@ -385,6 +382,33 @@ mod tests {
             packages.ignored_documents,
             BTreeSet::from([RepositoryPath("a/a_windows.go".to_string())])
         );
+    }
+
+    #[test]
+    fn preserves_a_compiler_package_with_only_ignored_sources() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir(root.path().join("empty")).unwrap();
+        fs::write(root.path().join("empty/only_windows.go"), "package empty\n").unwrap();
+        let output = r#"{"ImportPath":"example.test/empty","Dir":"/workspace/empty","IgnoredGoFiles":["only_windows.go"]}"#;
+
+        let inventory = parse_go_package_inventory(root.path(), output).unwrap();
+
+        assert_eq!(inventory.packages.len(), 1);
+        assert!(inventory.packages[0].source_documents.is_empty());
+        assert_eq!(
+            inventory.ignored_documents,
+            BTreeSet::from([RepositoryPath("empty/only_windows.go".to_string())])
+        );
+    }
+
+    #[test]
+    fn preserves_a_compiler_world_with_no_packages() {
+        let root = tempfile::tempdir().unwrap();
+
+        let inventory = parse_go_package_inventory(root.path(), "").unwrap();
+
+        assert!(inventory.packages.is_empty());
+        assert!(inventory.ignored_documents.is_empty());
     }
 
     #[test]
