@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-pub const HISTORICAL_V2_PYTHON_DISTRIBUTION_SURFACE_CENSUS_SCHEMA_VERSION: u32 = 1;
+pub const HISTORICAL_V2_PYTHON_DISTRIBUTION_SURFACE_CENSUS_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -30,6 +30,13 @@ pub struct HistoricalV2PythonBuildRequirement {
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct HistoricalV2PythonImportDeclaration {
+    pub import_name: String,
+    pub private: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct HistoricalV2PythonDistribution {
     pub distribution_id: String,
     pub manifest_repository_path: String,
@@ -46,6 +53,9 @@ pub struct HistoricalV2PythonDistribution {
     pub distribution_name: String,
     pub normalized_distribution_name: String,
     pub distribution_version: String,
+    pub metadata_version: String,
+    pub import_names: Vec<HistoricalV2PythonImportDeclaration>,
+    pub import_namespaces: Vec<HistoricalV2PythonImportDeclaration>,
     pub wheel_root: HistoricalV2PythonWheelRoot,
     pub metadata_member_path: String,
     pub wheel_metadata_member_path: String,

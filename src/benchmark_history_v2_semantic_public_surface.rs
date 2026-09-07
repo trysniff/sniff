@@ -104,7 +104,7 @@ pub(super) fn bind_public_surface(
         .collect::<BTreeSet<_>>();
     let python_roots = python_modules
         .iter()
-        .filter(|module| module.module.is_distribution_root)
+        .filter(|module| python_distribution_module_is_external_entry(module.module, source))
         .collect::<Vec<_>>();
     for (repository_path, (symbol, definition)) in &rust_roots {
         retain_symbol(symbols, indexer_kind(kind), symbol, false, true, false)?;
@@ -496,6 +496,42 @@ pub(super) fn python_distribution_module_has_compiler_source(
     }
 }
 
+pub(super) fn python_distribution_module_is_external_entry(
+    module: &HistoricalV2PythonDistributionModule,
+    source: &HistoricalV2SourceSnapshotCensus,
+) -> bool {
+    let external_entry = module.is_distribution_root
+        || module
+            .import_name
+            .rsplit_once('.')
+            .is_some_and(|(parent, _)| {
+                source
+                    .python_distribution_surfaces
+                    .modules
+                    .iter()
+                    .any(|candidate| {
+                        candidate.distribution_id == module.distribution_id
+                            && candidate.import_name == parent
+                            && candidate.kind == HistoricalV2PythonModuleKind::NamespacePackage
+                    })
+            });
+    external_entry
+        && !source
+            .python_distribution_surfaces
+            .distributions
+            .iter()
+            .find(|distribution| distribution.distribution_id == module.distribution_id)
+            .is_some_and(|distribution| {
+                distribution
+                    .import_names
+                    .iter()
+                    .chain(&distribution.import_namespaces)
+                    .any(|declaration| {
+                        declaration.import_name == module.import_name && declaration.private
+                    })
+            })
+}
+
 fn compiler_python_distribution_modules<'a>(
     source: &'a HistoricalV2SourceSnapshotCensus,
     index: &'a SemanticIndex,
@@ -514,12 +550,6 @@ fn compiler_python_distribution_modules<'a>(
     for module in &source.python_distribution_surfaces.modules {
         match module.kind {
             HistoricalV2PythonModuleKind::NamespacePackage => {
-                if module.is_distribution_root {
-                    return Err(format!(
-                        "historical-v2 Python namespace distribution root has no compiler definition: {}",
-                        module.import_name
-                    ));
-                }
                 continue;
             }
             HistoricalV2PythonModuleKind::ExtensionModule => {

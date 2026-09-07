@@ -126,7 +126,7 @@ fn fixture_python_distribution_surfaces(
     let (distributions, modules, module_count_by_kind) = sources
         .map(|sources| {
             let distribution_id = "fixture-python-distribution".to_string();
-            let modules = sources
+            let mut modules = sources
                 .iter()
                 .map(|(repository_path, source)| {
                     let (import_name, kind) = python_fixture_module_identity(repository_path);
@@ -145,6 +145,48 @@ fn fixture_python_distribution_surfaces(
                     }
                 })
                 .collect::<Vec<_>>();
+            let concrete_packages = modules
+                .iter()
+                .filter(|module| {
+                    matches!(
+                        module.kind,
+                        super::super::HistoricalV2PythonModuleKind::SourcePackageInit
+                            | super::super::HistoricalV2PythonModuleKind::StubPackageInit
+                    )
+                })
+                .map(|module| module.import_name.clone())
+                .collect::<BTreeSet<_>>();
+            let module_names = modules
+                .iter()
+                .map(|module| module.import_name.clone())
+                .collect::<BTreeSet<_>>();
+            let namespaces = module_names
+                .iter()
+                .flat_map(|module_name| {
+                    let segments = module_name.split('.').collect::<Vec<_>>();
+                    (1..segments.len()).map(move |end| segments[..end].join("."))
+                })
+                .filter(|prefix| {
+                    !concrete_packages.contains(prefix) && !module_names.contains(prefix)
+                })
+                .collect::<BTreeSet<_>>();
+            modules.extend(namespaces.into_iter().map(|import_name| {
+                let kind = super::super::HistoricalV2PythonModuleKind::NamespacePackage;
+                super::super::HistoricalV2PythonDistributionModule {
+                    module_exposure_id: format!("fixture-python-module-{import_name}-{kind:?}"),
+                    surface_slot_id: format!("fixture-python-slot-{import_name}-{kind:?}"),
+                    distribution_id: distribution_id.clone(),
+                    normalized_distribution_name: "fixture".to_string(),
+                    is_distribution_root: !import_name.contains('.'),
+                    import_name,
+                    kind,
+                    archive_member_path: None,
+                    installed_path: None,
+                    member_sha256: None,
+                    member_byte_length: None,
+                }
+            }));
+            modules.sort();
             let module_count_by_kind =
                 modules.iter().fold(BTreeMap::new(), |mut counts, module| {
                     *counts.entry(module.kind).or_insert(0) += 1;
@@ -169,6 +211,9 @@ fn fixture_python_distribution_surfaces(
                 distribution_name: "fixture".to_string(),
                 normalized_distribution_name: "fixture".to_string(),
                 distribution_version: "1.0.0".to_string(),
+                metadata_version: "2.4".to_string(),
+                import_names: Vec::new(),
+                import_namespaces: Vec::new(),
                 wheel_root: super::super::HistoricalV2PythonWheelRoot::Purelib,
                 metadata_member_path: "fixture-1.0.0.dist-info/METADATA".to_string(),
                 wheel_metadata_member_path: "fixture-1.0.0.dist-info/WHEEL".to_string(),
@@ -1047,6 +1092,10 @@ __all__ = ["PublicWidget", "Extra", "namespace"]
                 "typed/__init__.pyi",
                 "class Client:\n    def send(self, value: str) -> str: ...\n",
             ),
+            (
+                "shared/client/__init__.py",
+                "def connect(value: str) -> str:\n    return value\n",
+            ),
         ],
         &[
             ("pkg/reexports.py", ".extra", "pkg/extra.py"),
@@ -1167,6 +1216,18 @@ __all__ = ["PublicWidget", "Extra", "namespace"]
             .flat_map(|symbol| &symbol.symbol.signatures)
             .any(|signature| signature.text.contains("def send("))
     );
+    assert!(snapshot.public_roots.iter().any(|root| {
+        root.repository_path == "shared/client/__init__.py"
+            && matches!(
+                root.origin,
+                super::super::HistoricalV2SemanticPublicRootOrigin::PythonDistributionModule { .. }
+            )
+    }));
+    assert!(snapshot.public_bindings.iter().any(|binding| {
+        binding.repository_path == "shared/client/__init__.py"
+            && binding.binding == HistoricalV2SemanticPublicBindingKind::PackageExposure
+            && binding.externally_reachable
+    }));
     assert!(snapshot.symbols.iter().all(|symbol| {
         symbol.symbol.display_name.as_deref() != Some("_PRIVATE_CONSTANT")
             || !symbol.is_public_surface
@@ -2884,29 +2945,279 @@ fn python_distribution_missing_or_ambiguous_compiler_root_fails_closed() {
 
 #[test]
 fn python_distribution_uncovered_public_variants_fail_closed() {
-    for (kind, expected) in [
-        (
-            super::super::HistoricalV2PythonModuleKind::ExtensionModule,
-            "extension module",
-        ),
-        (
-            super::super::HistoricalV2PythonModuleKind::NamespacePackage,
-            "namespace distribution root",
-        ),
-    ] {
-        let mut fixture = python_surface_fixture(&[("pkg/__init__.py", "value: int = 1\n")], &[]);
-        fixture.source.python_distribution_surfaces.modules[0].kind = kind;
-        let error = build_semantic_snapshot(
-            fixture.root.path(),
-            &fixture.source,
-            &fixture.files,
-            &BTreeSet::from([SemanticIndexerKind::Python]),
-            &fixture_required_paths(&fixture.source),
-            &fixture.indexes,
-        )
-        .unwrap_err();
-        assert!(error.contains(expected), "{error}");
-    }
+    let mut fixture = python_surface_fixture(&[("pkg/__init__.py", "value: int = 1\n")], &[]);
+    fixture.source.python_distribution_surfaces.modules[0].kind =
+        super::super::HistoricalV2PythonModuleKind::ExtensionModule;
+    let error = build_semantic_snapshot(
+        fixture.root.path(),
+        &fixture.source,
+        &fixture.files,
+        &BTreeSet::from([SemanticIndexerKind::Python]),
+        &fixture_required_paths(&fixture.source),
+        &fixture.indexes,
+    )
+    .unwrap_err();
+    assert!(error.contains("extension module"), "{error}");
+}
+
+#[test]
+fn python_namespace_distribution_exposes_its_first_concrete_descendant() {
+    let fixture = python_surface_fixture(
+        &[
+            (
+                "shared/client/__init__.py",
+                "from .api import parse\n__all__ = ['parse']\n",
+            ),
+            (
+                "shared/client/api.py",
+                "def parse(value: str) -> str:\n    return value\n",
+            ),
+        ],
+        &[("shared/client/__init__.py", ".api", "shared/client/api.py")],
+    );
+    let changed_indexers = BTreeSet::from([SemanticIndexerKind::Python]);
+    let required_paths = fixture_required_paths(&fixture.source);
+
+    let snapshot = build_semantic_snapshot(
+        fixture.root.path(),
+        &fixture.source,
+        &fixture.files,
+        &changed_indexers,
+        &required_paths,
+        &fixture.indexes,
+    )
+    .unwrap();
+
+    assert_eq!(snapshot.public_root_count, 1);
+    assert_eq!(
+        snapshot.public_roots[0].repository_path,
+        "shared/client/__init__.py"
+    );
+    assert!(
+        !snapshot
+            .public_roots
+            .iter()
+            .any(|root| { root.repository_path == "shared/client/api.py" })
+    );
+    let parse_declaration = fixture
+        .source
+        .source_files
+        .iter()
+        .find(|file| file.repository_path == "shared/client/__init__.py")
+        .and_then(|file| {
+            file.public_declarations
+                .iter()
+                .find(|declaration| declaration.name == "parse")
+        })
+        .unwrap();
+    assert!(snapshot.public_bindings.iter().any(|binding| {
+        binding.repository_path == "shared/client/__init__.py"
+            && binding.binding == HistoricalV2SemanticPublicBindingKind::PackageExposure
+            && binding.origin_declaration_unit_id == parse_declaration.declaration_unit_id
+            && binding.reexport_path.is_empty()
+            && binding.externally_reachable
+    }));
+    validation::validate_snapshot(
+        &fixture.source,
+        &snapshot,
+        &changed_indexers,
+        &required_paths,
+    )
+    .unwrap();
+}
+
+#[test]
+fn python_namespace_distribution_exposes_every_concrete_portion() {
+    let fixture = python_surface_fixture(
+        &[
+            (
+                "shared/alpha/__init__.py",
+                "def alpha() -> str:\n    return 'alpha'\n",
+            ),
+            ("shared/beta/__init__.pyi", "def beta() -> str: ...\n"),
+        ],
+        &[],
+    );
+    let changed_indexers = BTreeSet::from([SemanticIndexerKind::Python]);
+    let required_paths = fixture_required_paths(&fixture.source);
+
+    let snapshot = build_semantic_snapshot(
+        fixture.root.path(),
+        &fixture.source,
+        &fixture.files,
+        &changed_indexers,
+        &required_paths,
+        &fixture.indexes,
+    )
+    .unwrap();
+
+    assert_eq!(snapshot.public_root_count, 2);
+    assert_eq!(
+        snapshot
+            .public_roots
+            .iter()
+            .map(|root| root.repository_path.as_str())
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from(["shared/alpha/__init__.py", "shared/beta/__init__.pyi"])
+    );
+    assert_eq!(
+        snapshot
+            .public_bindings
+            .iter()
+            .filter(|binding| {
+                binding.binding == HistoricalV2SemanticPublicBindingKind::PackageExposure
+                    && binding.externally_reachable
+            })
+            .count(),
+        2
+    );
+    validation::validate_snapshot(
+        &fixture.source,
+        &snapshot,
+        &changed_indexers,
+        &required_paths,
+    )
+    .unwrap();
+}
+
+#[test]
+fn python_nested_namespace_distribution_exposes_its_concrete_portion() {
+    let fixture = python_surface_fixture(
+        &[(
+            "company/plugins/payment/__init__.py",
+            "def charge() -> str:\n    return 'charged'\n",
+        )],
+        &[],
+    );
+    let changed_indexers = BTreeSet::from([SemanticIndexerKind::Python]);
+    let required_paths = fixture_required_paths(&fixture.source);
+
+    let snapshot = build_semantic_snapshot(
+        fixture.root.path(),
+        &fixture.source,
+        &fixture.files,
+        &changed_indexers,
+        &required_paths,
+        &fixture.indexes,
+    )
+    .unwrap();
+
+    assert_eq!(snapshot.public_root_count, 1);
+    assert_eq!(
+        snapshot.public_roots[0].repository_path,
+        "company/plugins/payment/__init__.py"
+    );
+    validation::validate_snapshot(
+        &fixture.source,
+        &snapshot,
+        &changed_indexers,
+        &required_paths,
+    )
+    .unwrap();
+}
+
+#[test]
+fn python_private_import_metadata_excludes_the_external_root() {
+    let mut fixture = python_surface_fixture(
+        &[(
+            "privatepkg/__init__.py",
+            "def internal() -> str:\n    return 'internal'\n",
+        )],
+        &[],
+    );
+    fixture.source.python_distribution_surfaces.distributions[0].metadata_version =
+        "2.5".to_string();
+    fixture.source.python_distribution_surfaces.distributions[0]
+        .import_names
+        .push(super::super::HistoricalV2PythonImportDeclaration {
+            import_name: "privatepkg".to_string(),
+            private: true,
+        });
+    let changed_indexers = BTreeSet::from([SemanticIndexerKind::Python]);
+    let required_paths = fixture_required_paths(&fixture.source);
+
+    let snapshot = build_semantic_snapshot(
+        fixture.root.path(),
+        &fixture.source,
+        &fixture.files,
+        &changed_indexers,
+        &required_paths,
+        &fixture.indexes,
+    )
+    .unwrap();
+
+    assert_eq!(snapshot.public_root_count, 0);
+    assert!(snapshot.public_roots.is_empty());
+    assert!(snapshot.public_bindings.iter().all(|binding| {
+        binding.repository_path != "privatepkg/__init__.py" || !binding.externally_reachable
+    }));
+    validation::validate_snapshot(
+        &fixture.source,
+        &snapshot,
+        &changed_indexers,
+        &required_paths,
+    )
+    .unwrap();
+}
+
+#[test]
+fn semantic_validation_rejects_an_omitted_python_namespace_portion() {
+    let fixture = python_surface_fixture(
+        &[
+            (
+                "shared/alpha/__init__.py",
+                "def alpha() -> str:\n    return 'alpha'\n",
+            ),
+            (
+                "shared/beta/__init__.py",
+                "def beta() -> str:\n    return 'beta'\n",
+            ),
+        ],
+        &[],
+    );
+    let changed_indexers = BTreeSet::from([SemanticIndexerKind::Python]);
+    let required_paths = fixture_required_paths(&fixture.source);
+    let mut snapshot = build_semantic_snapshot(
+        fixture.root.path(),
+        &fixture.source,
+        &fixture.files,
+        &changed_indexers,
+        &required_paths,
+        &fixture.indexes,
+    )
+    .unwrap();
+    let omitted = snapshot
+        .public_roots
+        .iter()
+        .find(|root| root.repository_path == "shared/beta/__init__.py")
+        .unwrap()
+        .clone();
+    snapshot
+        .public_roots
+        .retain(|root| root.repository_path != omitted.repository_path);
+    snapshot.public_root_count = snapshot.public_roots.len();
+    snapshot
+        .symbols
+        .iter_mut()
+        .find(|entry| {
+            entry.indexer == omitted.indexer && entry.symbol.symbol_id == omitted.module_symbol_id
+        })
+        .unwrap()
+        .is_public_root_evidence = false;
+    snapshot.semantic_snapshot_sha256 = semantic_snapshot_sha256(&snapshot).unwrap();
+
+    let error = validation::validate_snapshot(
+        &fixture.source,
+        &snapshot,
+        &changed_indexers,
+        &required_paths,
+    )
+    .unwrap_err();
+
+    assert!(
+        error.contains("Python public roots disagree with distribution modules"),
+        "{error}"
+    );
 }
 
 #[test]

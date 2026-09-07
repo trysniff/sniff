@@ -7,7 +7,7 @@ use super::{
     BoundaryGitEntryKind, HISTORICAL_V2_PYTHON_DISTRIBUTION_SURFACE_CENSUS_SCHEMA_VERSION,
     HistoricalV2PythonBuildRequirement, HistoricalV2PythonDistribution,
     HistoricalV2PythonDistributionModule, HistoricalV2PythonDistributionSurfaceCensus,
-    HistoricalV2PythonModuleKind, HistoricalV2PythonWheelRoot,
+    HistoricalV2PythonImportDeclaration, HistoricalV2PythonModuleKind, HistoricalV2PythonWheelRoot,
     IntentionalBoundaryRepositoryInventory,
 };
 use base64::Engine;
@@ -20,7 +20,7 @@ use std::path::{Component, Path};
 use std::str::FromStr;
 
 const PYTHON_DISTRIBUTION_SURFACE_CONTRACT: &str =
-    "sniffbench-historical-v2-python-distribution-surfaces-v1";
+    "sniffbench-historical-v2-python-distribution-surfaces-v2";
 pub(super) const PYTHON_WHEEL_BUILD_COMMAND_CONTRACT: &str =
     "pep517-wheel-isolated-python-offline-v1";
 const MAX_WHEEL_MEMBER_BYTES: u64 = 128 * 1024 * 1024;
@@ -56,6 +56,9 @@ struct ParsedWheel {
     distribution_name: String,
     normalized_distribution_name: String,
     distribution_version: String,
+    metadata_version: String,
+    import_names: Vec<HistoricalV2PythonImportDeclaration>,
+    import_namespaces: Vec<HistoricalV2PythonImportDeclaration>,
     wheel_root: HistoricalV2PythonWheelRoot,
     metadata_member_path: String,
     wheel_metadata_member_path: String,
@@ -101,7 +104,7 @@ where
         let wheel_byte_length = u64::try_from(output.wheel_bytes.len())
             .map_err(|_| "Python wheel byte length exceeds u64".to_string())?;
         let distribution_id = hash_json(&(
-            "sniffbench-historical-v2-python-distribution-v1",
+            "sniffbench-historical-v2-python-distribution-v2",
             &manifest.repository_path,
             &manifest.object_id,
             &manifest.source_sha256,
@@ -113,12 +116,17 @@ where
             &output.wheel_filename,
             &wheel_sha256,
             wheel_byte_length,
-            &parsed.distribution_name,
-            &parsed.normalized_distribution_name,
-            &parsed.distribution_version,
-            parsed.wheel_root,
+            (
+                &parsed.distribution_name,
+                &parsed.normalized_distribution_name,
+                &parsed.distribution_version,
+                &parsed.metadata_version,
+                &parsed.import_names,
+                &parsed.import_namespaces,
+                parsed.wheel_root,
+            ),
         ))
-        .map(|hash| format!("h2pyd-v1:{hash}"))?;
+        .map(|hash| format!("h2pyd-v2:{hash}"))?;
         let module_start = modules.len();
         for parsed_module in parsed.modules {
             let surface_slot_id = python_module_surface_slot_id(
@@ -166,6 +174,9 @@ where
             distribution_name: parsed.distribution_name,
             normalized_distribution_name: parsed.normalized_distribution_name,
             distribution_version: parsed.distribution_version,
+            metadata_version: parsed.metadata_version,
+            import_names: parsed.import_names,
+            import_namespaces: parsed.import_namespaces,
             wheel_root: parsed.wheel_root,
             metadata_member_path: parsed.metadata_member_path,
             wheel_metadata_member_path: parsed.wheel_metadata_member_path,
@@ -483,11 +494,19 @@ fn parse_wheel(filename: &str, bytes: &[u8]) -> Result<ParsedWheel, String> {
             .ok_or_else(|| "Python wheel METADATA disappeared".to_string())?,
         "METADATA",
     )?;
-    let distribution_name = unique_header(&metadata, "Metadata-Version", "METADATA")
-        .and_then(|_| unique_header(&metadata, "Name", "METADATA"))?
-        .to_string();
+    let metadata_version = unique_header(&metadata, "Metadata-Version", "METADATA")?.to_string();
+    let supports_import_declarations = metadata_supports_import_declarations(&metadata_version)?;
+    let distribution_name = unique_header(&metadata, "Name", "METADATA")?.to_string();
     let distribution_version = unique_header(&metadata, "Version", "METADATA")?.to_string();
     let normalized_distribution_name = normalize_distribution_name(&distribution_name)?;
+    let import_names = parse_import_declarations(&metadata, "Import-Name", true)?;
+    let import_namespaces = parse_import_declarations(&metadata, "Import-Namespace", false)?;
+    if !supports_import_declarations && (!import_names.is_empty() || !import_namespaces.is_empty())
+    {
+        return Err(format!(
+            "Python wheel METADATA {metadata_version} cannot declare Import-Name or Import-Namespace"
+        ));
+    }
     validate_wheel_filename(
         filename,
         &normalized_distribution_name,
@@ -510,10 +529,14 @@ fn parse_wheel(filename: &str, bytes: &[u8]) -> Result<ParsedWheel, String> {
         value => return Err(format!("invalid Python Root-Is-Purelib value: {value}")),
     };
     let modules = parse_wheel_modules(&members, dist_info, &normalized_distribution_name)?;
+    validate_import_declarations(&import_names, &import_namespaces, &modules)?;
     Ok(ParsedWheel {
         distribution_name,
         normalized_distribution_name,
         distribution_version,
+        metadata_version,
+        import_names,
+        import_namespaces,
         wheel_root,
         metadata_member_path,
         wheel_metadata_member_path,
@@ -658,8 +681,10 @@ fn parse_email_headers(bytes: &[u8], label: &str) -> Result<BTreeMap<String, Vec
         let (name, value) = line
             .split_once(':')
             .ok_or_else(|| format!("Python wheel {label} contains a malformed header"))?;
-        if name.is_empty() || value.trim().is_empty() {
-            return Err(format!("Python wheel {label} contains an empty header"));
+        if name.is_empty() {
+            return Err(format!(
+                "Python wheel {label} contains an empty header name"
+            ));
         }
         if !name
             .bytes()
@@ -693,6 +718,138 @@ fn unique_header<'a>(
         ));
     };
     Ok(value)
+}
+
+fn metadata_supports_import_declarations(version: &str) -> Result<bool, String> {
+    match version {
+        "1.0" | "1.1" | "1.2" | "2.1" | "2.2" | "2.3" | "2.4" => Ok(false),
+        "2.5" | "2.6" => Ok(true),
+        _ => Err(format!(
+            "unsupported Python core Metadata-Version: {version}"
+        )),
+    }
+}
+
+fn parse_import_declarations(
+    headers: &BTreeMap<String, Vec<String>>,
+    field: &str,
+    allow_empty: bool,
+) -> Result<Vec<HistoricalV2PythonImportDeclaration>, String> {
+    let mut declarations = headers
+        .get(&field.to_ascii_lowercase())
+        .map(Vec::as_slice)
+        .unwrap_or_default()
+        .iter()
+        .map(|value| {
+            let (import_name, private) = match value.split_once(';') {
+                Some((name, modifier)) if modifier.trim() == "private" => (name.trim(), true),
+                Some(_) => {
+                    return Err(format!(
+                        "Python wheel METADATA contains an invalid {field} modifier"
+                    ));
+                }
+                None => (value.trim(), false),
+            };
+            if import_name.is_empty() {
+                if !allow_empty || private {
+                    return Err(format!(
+                        "Python wheel METADATA contains an invalid empty {field}"
+                    ));
+                }
+            } else {
+                validate_import_name(import_name, field)?;
+            }
+            Ok(HistoricalV2PythonImportDeclaration {
+                import_name: import_name.to_string(),
+                private,
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    declarations.sort();
+    if declarations
+        .windows(2)
+        .any(|pair| pair[0].import_name == pair[1].import_name)
+    {
+        return Err(format!(
+            "Python wheel METADATA repeats an {field} declaration"
+        ));
+    }
+    Ok(declarations)
+}
+
+fn validate_import_name(import_name: &str, field: &str) -> Result<(), String> {
+    if import_name
+        .split('.')
+        .any(|segment| !is_python_identifier(segment))
+    {
+        return Err(format!(
+            "Python wheel METADATA contains an invalid {field}: {import_name:?}"
+        ));
+    }
+    let probe = format!("import {import_name}\n");
+    rustpython_parser::parse(&probe, rustpython_parser::Mode::Module, "<wheel-metadata>").map_err(
+        |_| format!("Python wheel METADATA contains an invalid {field}: {import_name:?}"),
+    )?;
+    Ok(())
+}
+
+fn is_python_identifier(segment: &str) -> bool {
+    let mut characters = segment.chars();
+    characters
+        .next()
+        .is_some_and(|character| character == '_' || unicode_ident::is_xid_start(character))
+        && characters.all(|character| character == '_' || unicode_ident::is_xid_continue(character))
+}
+
+fn validate_import_declarations(
+    import_names: &[HistoricalV2PythonImportDeclaration],
+    import_namespaces: &[HistoricalV2PythonImportDeclaration],
+    modules: &[ParsedWheelModule],
+) -> Result<(), String> {
+    if import_names
+        .iter()
+        .any(|declaration| declaration.import_name.is_empty())
+    {
+        if import_names.len() != 1 || !import_namespaces.is_empty() || !modules.is_empty() {
+            return Err(
+                "Python wheel declares no import names but installs importable modules".to_string(),
+            );
+        }
+        return Ok(());
+    }
+    let exclusive = import_names
+        .iter()
+        .map(|declaration| declaration.import_name.as_str())
+        .collect::<BTreeSet<_>>();
+    let namespaces = import_namespaces
+        .iter()
+        .map(|declaration| declaration.import_name.as_str())
+        .collect::<BTreeSet<_>>();
+    if !exclusive.is_disjoint(&namespaces) {
+        return Err(
+            "Python wheel METADATA lists the same import in Import-Name and Import-Namespace"
+                .to_string(),
+        );
+    }
+    for module in modules {
+        if exclusive.contains(module.import_name.as_str())
+            && module.kind == HistoricalV2PythonModuleKind::NamespacePackage
+        {
+            return Err(format!(
+                "Python wheel METADATA declares namespace {} as an exclusive Import-Name",
+                module.import_name
+            ));
+        }
+        if namespaces.contains(module.import_name.as_str())
+            && module.kind != HistoricalV2PythonModuleKind::NamespacePackage
+        {
+            return Err(format!(
+                "Python wheel METADATA declares concrete module {} as an Import-Namespace",
+                module.import_name
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn normalize_distribution_name(name: &str) -> Result<String, String> {

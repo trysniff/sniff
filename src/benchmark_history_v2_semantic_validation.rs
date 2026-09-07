@@ -1,18 +1,18 @@
 use super::super::{
     HISTORICAL_V2_SEMANTIC_CENSUS_SCHEMA_VERSION, HistoricalV2Materialization,
     HistoricalV2MaterializedRoots, HistoricalV2NodePackageTargetStatus,
-    HistoricalV2PublicSurfaceCoverage, HistoricalV2SemanticCensus,
-    HistoricalV2SemanticMethodStatus, HistoricalV2SemanticPublicBinding,
-    HistoricalV2SemanticPublicBindingKind, HistoricalV2SemanticPublicReexportHop,
-    HistoricalV2SemanticPublicRootOrigin, HistoricalV2SemanticSnapshotCensus,
-    HistoricalV2SemanticSymbol, HistoricalV2SourceCensus, HistoricalV2SourceFile,
-    HistoricalV2SourcePublicBindingKind, HistoricalV2SourcePublicDeclaration,
-    HistoricalV2SourcePublicNamespace, HistoricalV2SourcePublicReexport,
-    HistoricalV2SourcePublicReexportKind, HistoricalV2SourcePublicSymbolKind,
-    HistoricalV2SourceSemanticCoverage, HistoricalV2SourceSnapshotCensus,
-    IntentionalBoundaryIndexerKind, IntentionalBoundarySemanticOrigin,
-    IntentionalBoundarySemanticRange, IntentionalBoundarySemanticSymbolCategory,
-    validate_historical_v2_source_census,
+    HistoricalV2PublicSurfaceCoverage, HistoricalV2PythonDistributionModule,
+    HistoricalV2PythonModuleKind, HistoricalV2SemanticCensus, HistoricalV2SemanticMethodStatus,
+    HistoricalV2SemanticPublicBinding, HistoricalV2SemanticPublicBindingKind,
+    HistoricalV2SemanticPublicReexportHop, HistoricalV2SemanticPublicRootOrigin,
+    HistoricalV2SemanticSnapshotCensus, HistoricalV2SemanticSymbol, HistoricalV2SourceCensus,
+    HistoricalV2SourceFile, HistoricalV2SourcePublicBindingKind,
+    HistoricalV2SourcePublicDeclaration, HistoricalV2SourcePublicNamespace,
+    HistoricalV2SourcePublicReexport, HistoricalV2SourcePublicReexportKind,
+    HistoricalV2SourcePublicSymbolKind, HistoricalV2SourceSemanticCoverage,
+    HistoricalV2SourceSnapshotCensus, IntentionalBoundaryIndexerKind,
+    IntentionalBoundarySemanticOrigin, IntentionalBoundarySemanticRange,
+    IntentionalBoundarySemanticSymbolCategory, validate_historical_v2_source_census,
 };
 use super::{
     SEMANTIC_CENSUS_CONTRACT, indexer_for_language, indexer_kind, semantic_census_sha256,
@@ -299,12 +299,13 @@ fn validate_public_roots<'a>(
             .python_distribution_surfaces
             .modules
             .iter()
-            .filter(|module| module.is_distribution_root)
+            .filter(|module| python_distribution_module_is_external_entry(module, source))
             .filter(|module| {
-                !super::public_surface::python_distribution_module_has_compiler_source(
-                    module,
-                    &source.python_distribution_surfaces.modules,
-                )
+                module.kind != HistoricalV2PythonModuleKind::NamespacePackage
+                    && !super::public_surface::python_distribution_module_has_compiler_source(
+                        module,
+                        &source.python_distribution_surfaces.modules,
+                    )
             })
             .count();
         if unsupported_roots != 0 {
@@ -317,7 +318,13 @@ fn validate_public_roots<'a>(
             .python_distribution_surfaces
             .modules
             .iter()
-            .filter(|module| module.is_distribution_root)
+            .filter(|module| {
+                python_distribution_module_is_external_entry(module, source)
+                    && super::public_surface::python_distribution_module_has_compiler_source(
+                        module,
+                        &source.python_distribution_surfaces.modules,
+                    )
+            })
             .map(|module| (module.module_exposure_id.as_str(), module))
             .collect::<BTreeMap<_, _>>()
     } else {
@@ -481,6 +488,42 @@ fn validate_public_roots<'a>(
         );
     }
     Ok((paths, root_symbols))
+}
+
+fn python_distribution_module_is_external_entry(
+    module: &HistoricalV2PythonDistributionModule,
+    source: &HistoricalV2SourceSnapshotCensus,
+) -> bool {
+    let external_entry = module.is_distribution_root
+        || module
+            .import_name
+            .rsplit_once('.')
+            .is_some_and(|(parent, _)| {
+                source
+                    .python_distribution_surfaces
+                    .modules
+                    .iter()
+                    .any(|candidate| {
+                        candidate.distribution_id == module.distribution_id
+                            && candidate.import_name == parent
+                            && candidate.kind == HistoricalV2PythonModuleKind::NamespacePackage
+                    })
+            });
+    external_entry
+        && !source
+            .python_distribution_surfaces
+            .distributions
+            .iter()
+            .find(|distribution| distribution.distribution_id == module.distribution_id)
+            .is_some_and(|distribution| {
+                distribution
+                    .import_names
+                    .iter()
+                    .chain(&distribution.import_namespaces)
+                    .any(|declaration| {
+                        declaration.import_name == module.import_name && declaration.private
+                    })
+            })
 }
 
 fn validate_symbols<'a>(
@@ -1097,7 +1140,7 @@ fn validate_python_package_binding<'a>(
         || origin_indexer != IntentionalBoundaryIndexerKind::Python
         || binding.binding != HistoricalV2SemanticPublicBindingKind::PackageExposure
         || !binding.externally_reachable
-        || !module.is_distribution_root
+        || !python_distribution_module_is_external_entry(module, source)
         || module.member_sha256.as_deref() != Some(root_file.source_sha256.as_str())
         || binding.owner_symbol_id.is_some()
         || binding.owner_compiler_anchor.is_some()

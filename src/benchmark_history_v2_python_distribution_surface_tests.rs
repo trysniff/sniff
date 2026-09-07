@@ -79,10 +79,14 @@ version = "1.2.3"
 }
 
 fn wheel_files() -> BTreeMap<String, Vec<u8>> {
+    wheel_files_with_metadata(b"Metadata-Version: 2.4\nName: Example_Package\nVersion: 1.2.3\n\n")
+}
+
+fn wheel_files_with_metadata(metadata: &[u8]) -> BTreeMap<String, Vec<u8>> {
     BTreeMap::from([
         (
             "example_package-1.2.3.dist-info/METADATA".to_string(),
-            b"Metadata-Version: 2.4\nName: Example_Package\nVersion: 1.2.3\n\n".to_vec(),
+            metadata.to_vec(),
         ),
         (
             "example_package-1.2.3.dist-info/WHEEL".to_string(),
@@ -222,6 +226,96 @@ fn python_distribution_census_commits_verified_wheel_modules() {
     )
     .unwrap_err();
     assert!(error.contains("census changed"), "{error}");
+}
+
+#[test]
+fn python_wheel_commits_core_metadata_import_declarations() {
+    let files = wheel_files_with_metadata(
+        b"Metadata-Version: 2.5\nName: Example_Package\nVersion: 1.2.3\nImport-Namespace: namespace\nImport-Name: namespace.child\nImport-Name: pkg\nImport-Name: single ; private\nImport-Name: extra\n\n",
+    );
+
+    let wheel = parse_wheel(
+        "example_package-1.2.3-py3-none-any.whl",
+        &build_wheel(files),
+    )
+    .unwrap();
+
+    assert_eq!(wheel.metadata_version, "2.5");
+    assert_eq!(
+        wheel
+            .import_names
+            .iter()
+            .map(|declaration| (declaration.import_name.as_str(), declaration.private))
+            .collect::<Vec<_>>(),
+        vec![
+            ("extra", false),
+            ("namespace.child", false),
+            ("pkg", false),
+            ("single", true),
+        ]
+    );
+    assert_eq!(wheel.import_namespaces.len(), 1);
+    assert_eq!(wheel.import_namespaces[0].import_name, "namespace");
+    assert!(!wheel.import_namespaces[0].private);
+}
+
+#[test]
+fn python_wheel_rejects_import_metadata_before_version_2_5() {
+    let files = wheel_files_with_metadata(
+        b"Metadata-Version: 2.4\nName: Example_Package\nVersion: 1.2.3\nImport-Name: pkg\n\n",
+    );
+
+    let error = parse_wheel(
+        "example_package-1.2.3-py3-none-any.whl",
+        &build_wheel(files),
+    )
+    .unwrap_err();
+
+    assert!(error.contains("cannot declare Import-Name"), "{error}");
+}
+
+#[test]
+fn python_wheel_rejects_contradictory_import_metadata() {
+    for (metadata, expected) in [
+        (
+            b"Metadata-Version: 2.5\nName: Example_Package\nVersion: 1.2.3\nImport-Name: namespace\nImport-Namespace: namespace\n\n".as_slice(),
+            "same import",
+        ),
+        (
+            b"Metadata-Version: 2.5\nName: Example_Package\nVersion: 1.2.3\nImport-Name: namespace\n\n".as_slice(),
+            "namespace namespace as an exclusive",
+        ),
+        (
+            b"Metadata-Version: 2.5\nName: Example_Package\nVersion: 1.2.3\nImport-Namespace: pkg\n\n".as_slice(),
+            "concrete module pkg as an Import-Namespace",
+        ),
+        (
+            b"Metadata-Version: 2.5\nName: Example_Package\nVersion: 1.2.3\nImport-Name:\n\n".as_slice(),
+            "declares no import names",
+        ),
+    ] {
+        let error = parse_wheel(
+            "example_package-1.2.3-py3-none-any.whl",
+            &build_wheel(wheel_files_with_metadata(metadata)),
+        )
+        .unwrap_err();
+        assert!(error.contains(expected), "{error}");
+    }
+}
+
+#[test]
+fn python_wheel_rejects_invalid_import_metadata_syntax() {
+    for declaration in ["pkg..api", "pkg,other", "pkg ; internal", "; private"] {
+        let metadata = format!(
+            "Metadata-Version: 2.5\nName: Example_Package\nVersion: 1.2.3\nImport-Name: {declaration}\n\n"
+        );
+        let error = parse_wheel(
+            "example_package-1.2.3-py3-none-any.whl",
+            &build_wheel(wheel_files_with_metadata(metadata.as_bytes())),
+        )
+        .unwrap_err();
+        assert!(error.contains("invalid"), "{error}");
+    }
 }
 
 #[test]
