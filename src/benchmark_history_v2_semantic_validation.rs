@@ -302,7 +302,7 @@ fn validate_public_roots<'a>(
             .filter(|module| python_distribution_module_is_external_entry(module, source))
             .filter(|module| {
                 module.kind != HistoricalV2PythonModuleKind::NamespacePackage
-                    && !super::public_surface::python_distribution_module_has_compiler_source(
+                    && !super::public_surface::python_distribution_import_has_compiler_source(
                         module,
                         &source.python_distribution_surfaces.modules,
                     )
@@ -320,7 +320,7 @@ fn validate_public_roots<'a>(
             .iter()
             .filter(|module| {
                 python_distribution_module_is_external_entry(module, source)
-                    && super::public_surface::python_distribution_module_has_compiler_source(
+                    && super::public_surface::python_distribution_module_is_selected_compiler_source(
                         module,
                         &source.python_distribution_surfaces.modules,
                     )
@@ -1141,6 +1141,10 @@ fn validate_python_package_binding<'a>(
         || binding.binding != HistoricalV2SemanticPublicBindingKind::PackageExposure
         || !binding.externally_reachable
         || !python_distribution_module_is_external_entry(module, source)
+        || !super::public_surface::python_distribution_module_is_selected_compiler_source(
+            module,
+            &source.python_distribution_surfaces.modules,
+        )
         || module.member_sha256.as_deref() != Some(root_file.source_sha256.as_str())
         || binding.owner_symbol_id.is_some()
         || binding.owner_compiler_anchor.is_some()

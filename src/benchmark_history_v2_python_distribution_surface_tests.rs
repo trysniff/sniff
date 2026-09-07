@@ -443,6 +443,56 @@ fn python_wheel_rejects_dynamic_import_paths_and_module_package_collisions() {
         error.contains("both module and package identities"),
         "{error}"
     );
+
+    let mut incompatible_variants = wheel_files();
+    incompatible_variants.insert("pkg.py".to_string(), b"VALUE = 3\n".to_vec());
+    let error = parse_wheel(
+        "example_package-1.2.3-py3-none-any.whl",
+        &build_wheel(incompatible_variants),
+    )
+    .unwrap_err();
+    assert!(
+        error.contains("incompatible package and module variants"),
+        "{error}"
+    );
+}
+
+#[test]
+fn python_wheel_preserves_a_native_extension_and_its_stub() {
+    let mut files = wheel_files();
+    files.insert(
+        "native.pyi".to_string(),
+        b"def execute() -> int: ...\n".to_vec(),
+    );
+    files.insert(
+        "native.cp311-win_amd64.pyd".to_string(),
+        b"fixture-native-extension".to_vec(),
+    );
+    files.insert(
+        "example_package-1.2.3.dist-info/WHEEL".to_string(),
+        b"Wheel-Version: 1.0\nGenerator: fixture\nRoot-Is-Purelib: false\nTag: cp311-cp311-win_amd64\n\n"
+            .to_vec(),
+    );
+
+    let wheel = parse_wheel(
+        "example_package-1.2.3-cp311-cp311-win_amd64.whl",
+        &build_wheel(files),
+    )
+    .unwrap();
+    let native_kinds = wheel
+        .modules
+        .iter()
+        .filter(|module| module.import_name == "native")
+        .map(|module| module.kind)
+        .collect::<BTreeSet<_>>();
+
+    assert_eq!(
+        native_kinds,
+        BTreeSet::from([
+            HistoricalV2PythonModuleKind::StubModule,
+            HistoricalV2PythonModuleKind::ExtensionModule,
+        ])
+    );
 }
 
 #[test]
