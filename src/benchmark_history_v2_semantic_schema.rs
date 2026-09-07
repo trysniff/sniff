@@ -6,7 +6,7 @@ use super::{
 use crate::semantic_index::SemanticPositionEncoding;
 use serde::{Deserialize, Serialize};
 
-pub const HISTORICAL_V2_SEMANTIC_CENSUS_SCHEMA_VERSION: u32 = 16;
+pub const HISTORICAL_V2_SEMANTIC_CENSUS_SCHEMA_VERSION: u32 = 17;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

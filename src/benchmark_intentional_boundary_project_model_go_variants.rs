@@ -1,5 +1,7 @@
 use super::super::intentional_boundary_project_model::hash_json;
-use super::IntentionalBoundaryProjectModelVariant;
+use super::{
+    IntentionalBoundaryProjectModelGoArchitecture, IntentionalBoundaryProjectModelVariant,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::fs;
@@ -53,6 +55,12 @@ pub(super) struct GoConstraintInvocation {
     pub(super) request_repository_path: String,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub(super) struct GoConstraintTagDomain {
+    pub(super) custom_build_tags: Vec<String>,
+    pub(super) architecture_feature_tags: Vec<String>,
+}
+
 pub(super) fn stage_go_constraint_invocation(
     root: &Path,
     cache: &Path,
@@ -93,7 +101,7 @@ pub(super) fn parse_go_constraint_tags(
     stdout: &str,
     source_repository_paths: &[String],
     platform_stdout: &str,
-) -> Result<Vec<String>, String> {
+) -> Result<GoConstraintTagDomain, String> {
     let response: GoConstraintResponse = serde_json::from_str(stdout)
         .map_err(|error| format!("Go constraint discovery returned invalid JSON: {error}"))?;
     if response.schema_version != GO_CONSTRAINT_SCHEMA_VERSION
@@ -111,6 +119,7 @@ pub(super) fn parse_go_constraint_tags(
         .map(|platform| platform.goarch.as_str())
         .collect::<BTreeSet<_>>();
     let mut custom = BTreeSet::new();
+    let mut architecture_features = BTreeSet::new();
     for (file, expected_path) in response.files.iter().zip(source_repository_paths) {
         if file.repository_path != *expected_path
             || file.tags.windows(2).any(|pair| pair[0] >= pair[1])
@@ -124,39 +133,123 @@ pub(super) fn parse_go_constraint_tags(
                 return Err("Go constraint discovery returned an invalid tag".to_string());
             }
             if platform_tags.contains(tag)
-                || matches!(tag.as_str(), "cgo" | "gc" | "gccgo" | "unix")
+                || matches!(tag.as_str(), "cgo" | "gc" | "unix")
                 || is_go_release_tag(tag)
                 || tag == "ignore"
             {
                 continue;
             }
-            if matches!(tag.as_str(), "race" | "msan" | "asan" | "fuzz")
+            if matches!(tag.as_str(), "gccgo" | "race" | "msan" | "asan" | "fuzz")
                 || tag.starts_with("goexperiment.")
-                || architecture_tags
-                    .iter()
-                    .any(|architecture| tag.starts_with(&format!("{architecture}.")))
             {
                 return Err(format!(
                     "Go source requires unsupported compiler build mode tag {tag}"
                 ));
             }
+            if let Some((architecture, feature)) = tag.split_once('.')
+                && architecture_tags.contains(architecture)
+            {
+                if go_architecture_environment_variable(architecture).is_none() {
+                    return Err(format!(
+                        "Go source requires an unsupported architecture feature tag {tag}"
+                    ));
+                }
+                if !valid_architecture_feature(architecture, feature) {
+                    return Err(format!(
+                        "Go source requires an unsupported architecture feature tag {tag}"
+                    ));
+                }
+                architecture_features.insert(tag.clone());
+                continue;
+            }
             custom.insert(tag.clone());
         }
     }
-    Ok(custom.into_iter().collect())
+    Ok(GoConstraintTagDomain {
+        custom_build_tags: custom.into_iter().collect(),
+        architecture_feature_tags: architecture_features.into_iter().collect(),
+    })
+}
+
+fn valid_architecture_feature(goarch: &str, feature: &str) -> bool {
+    match goarch {
+        "386" => matches!(feature, "sse2" | "softfloat"),
+        "amd64" => version_level(feature, 'v').is_some_and(|level| level >= 1),
+        "arm" => feature.parse::<u32>().is_ok_and(|level| level >= 5),
+        "arm64" => feature
+            .strip_prefix('v')
+            .and_then(|level| level.split_once('.'))
+            .is_some_and(|(major, minor)| {
+                major.parse::<u32>().is_ok_and(|major| major >= 8) && minor.parse::<u32>().is_ok()
+            }),
+        "mips" | "mipsle" | "mips64" | "mips64le" => {
+            matches!(feature, "hardfloat" | "softfloat")
+        }
+        "ppc64" | "ppc64le" => feature
+            .strip_prefix("power")
+            .and_then(|level| level.parse::<u32>().ok())
+            .is_some_and(|level| level >= 8),
+        "riscv64" => feature
+            .strip_prefix("rva")
+            .and_then(|level| level.strip_suffix("u64"))
+            .is_some_and(|level| {
+                !level.is_empty() && level.bytes().all(|byte| byte.is_ascii_digit())
+            }),
+        "wasm" => matches!(feature, "satconv" | "signext"),
+        _ => false,
+    }
+}
+
+pub(in crate::benchmark::release) fn valid_go_architecture_configuration(
+    goarch: &str,
+    value: &str,
+) -> bool {
+    if goarch != "wasm" {
+        return valid_architecture_feature(goarch, value);
+    }
+    let features = value.split(',').collect::<Vec<_>>();
+    !features.is_empty()
+        && !features.iter().any(|feature| feature.is_empty())
+        && !features.windows(2).any(|pair| pair[0] >= pair[1])
+        && features
+            .iter()
+            .all(|feature| valid_architecture_feature(goarch, feature))
+}
+
+fn version_level(value: &str, prefix: char) -> Option<u32> {
+    value.strip_prefix(prefix)?.parse().ok()
 }
 
 pub(super) fn parse_go_dist_variants(
     stdout: &str,
-    build_tags: &[String],
+    tag_domain: &GoConstraintTagDomain,
 ) -> Result<Vec<IntentionalBoundaryProjectModelVariant>, String> {
+    let build_tags = &tag_domain.custom_build_tags;
     if build_tags.windows(2).any(|pair| pair[0] >= pair[1]) {
         return Err("Go custom build tags are not strictly ordered".to_string());
     }
+    if tag_domain
+        .architecture_feature_tags
+        .windows(2)
+        .any(|pair| pair[0] >= pair[1])
+    {
+        return Err("Go architecture feature tags are not strictly ordered".to_string());
+    }
     let platforms = parse_go_dist_platforms(stdout)?;
-    let platform_context_count = platforms.iter().try_fold(0usize, |count, platform| {
-        count.checked_add(if platform.cgo_supported { 2 } else { 1 })
-    });
+    let architecture_contexts = platforms
+        .iter()
+        .map(|platform| {
+            architecture_configurations(&platform.goarch, &tag_domain.architecture_feature_tags)
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    let platform_context_count = platforms.iter().zip(&architecture_contexts).try_fold(
+        0usize,
+        |count, (platform, architectures)| {
+            (if platform.cgo_supported { 2usize } else { 1 })
+                .checked_mul(architectures.len())
+                .and_then(|platform_count| count.checked_add(platform_count))
+        },
+    );
     let shift = u32::try_from(build_tags.len())
         .map_err(|_| "Go custom build-tag domain is unbounded".to_string())?;
     let assignments = 1usize
@@ -172,25 +265,28 @@ pub(super) fn parse_go_dist_variants(
     }
 
     let mut variants = Vec::with_capacity(variant_count);
-    for platform in platforms {
+    for (platform, architectures) in platforms.into_iter().zip(architecture_contexts) {
         for cgo_enabled in
             [false, true]
                 .into_iter()
                 .take(if platform.cgo_supported { 2 } else { 1 })
         {
-            for assignment in 0..assignments {
-                let selected_tags = build_tags
-                    .iter()
-                    .enumerate()
-                    .filter(|(index, _)| assignment & (1usize << index) != 0)
-                    .map(|(_, tag)| tag.clone())
-                    .collect();
-                variants.push(IntentionalBoundaryProjectModelVariant::Go {
-                    goos: platform.goos.clone(),
-                    goarch: platform.goarch.clone(),
-                    cgo_enabled,
-                    build_tags: selected_tags,
-                });
+            for architecture in &architectures {
+                for assignment in 0..assignments {
+                    let selected_tags = build_tags
+                        .iter()
+                        .enumerate()
+                        .filter(|(index, _)| assignment & (1usize << index) != 0)
+                        .map(|(_, tag)| tag.clone())
+                        .collect();
+                    variants.push(IntentionalBoundaryProjectModelVariant::Go {
+                        goos: platform.goos.clone(),
+                        goarch: platform.goarch.clone(),
+                        cgo_enabled,
+                        build_tags: selected_tags,
+                        architecture: architecture.clone(),
+                    });
+                }
             }
         }
     }
@@ -199,6 +295,154 @@ pub(super) fn parse_go_dist_variants(
         return Err("Go platform discovery repeated a build variant".to_string());
     }
     Ok(variants)
+}
+
+fn architecture_configurations(
+    goarch: &str,
+    architecture_feature_tags: &[String],
+) -> Result<Vec<IntentionalBoundaryProjectModelGoArchitecture>, String> {
+    let prefix = format!("{goarch}.");
+    let features = architecture_feature_tags
+        .iter()
+        .filter_map(|tag| tag.strip_prefix(&prefix))
+        .collect::<Vec<_>>();
+    let mut contexts = BTreeSet::from([IntentionalBoundaryProjectModelGoArchitecture::Default]);
+    if features.is_empty() {
+        return Ok(contexts.into_iter().collect());
+    }
+    let environment_variable = go_architecture_environment_variable(goarch).ok_or_else(|| {
+        format!("Go architecture {goarch} has feature tags but no modeled environment variable")
+    })?;
+    if goarch == "wasm" {
+        let shift = u32::try_from(features.len())
+            .map_err(|_| "Go WebAssembly feature domain is unbounded".to_string())?;
+        let assignments = 1usize
+            .checked_shl(shift)
+            .ok_or_else(|| "Go WebAssembly feature domain is unbounded".to_string())?;
+        if assignments > GO_VARIANT_LIMIT {
+            return Err(format!(
+                "Go WebAssembly feature domain requires {assignments} contexts, exceeding the limit of {GO_VARIANT_LIMIT}"
+            ));
+        }
+        for assignment in 1..assignments {
+            let value = features
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| assignment & (1usize << index) != 0)
+                .map(|(_, feature)| *feature)
+                .collect::<Vec<_>>()
+                .join(",");
+            contexts.insert(explicit_architecture(environment_variable, value));
+        }
+        return Ok(contexts.into_iter().collect());
+    }
+
+    for feature in features {
+        contexts.insert(explicit_architecture(environment_variable, feature));
+        if let Some(alternate) = architecture_alternate(goarch, feature)? {
+            contexts.insert(explicit_architecture(environment_variable, alternate));
+        }
+        if contexts.len() > GO_VARIANT_LIMIT {
+            return Err(format!(
+                "Go architecture feature domain requires more than {GO_VARIANT_LIMIT} contexts"
+            ));
+        }
+    }
+    Ok(contexts.into_iter().collect())
+}
+
+fn explicit_architecture(
+    environment_variable: &str,
+    value: impl Into<String>,
+) -> IntentionalBoundaryProjectModelGoArchitecture {
+    IntentionalBoundaryProjectModelGoArchitecture::Explicit {
+        environment_variable: environment_variable.to_string(),
+        value: value.into(),
+    }
+}
+
+fn architecture_alternate(goarch: &str, feature: &str) -> Result<Option<String>, String> {
+    let alternate = match goarch {
+        "386" => Some(if feature == "sse2" {
+            "softfloat".to_string()
+        } else {
+            "sse2".to_string()
+        }),
+        "amd64" => numeric_predecessor(feature, 'v', 1),
+        "arm" => integer_predecessor(feature, 5),
+        "arm64" => arm64_predecessor(feature)?,
+        "mips" | "mipsle" | "mips64" | "mips64le" => Some(
+            if feature == "hardfloat" {
+                "softfloat"
+            } else {
+                "hardfloat"
+            }
+            .to_string(),
+        ),
+        "ppc64" | "ppc64le" => feature
+            .strip_prefix("power")
+            .and_then(|value| integer_predecessor(value, 8))
+            .map(|value| format!("power{value}")),
+        "riscv64" => match feature {
+            "rva23u64" => Some("rva22u64".to_string()),
+            "rva22u64" => Some("rva20u64".to_string()),
+            "rva20u64" => None,
+            _ => Some("rva20u64".to_string()),
+        },
+        _ => {
+            return Err(format!(
+                "Go architecture feature {goarch}.{feature} has no exact context mapping"
+            ));
+        }
+    };
+    Ok(alternate)
+}
+
+fn numeric_predecessor(value: &str, prefix: char, minimum: u32) -> Option<String> {
+    let number = version_level(value, prefix)?;
+    (number > minimum).then(|| format!("{prefix}{}", number - 1))
+}
+
+fn integer_predecessor(value: &str, minimum: u32) -> Option<String> {
+    let number = value.parse::<u32>().ok()?;
+    (number > minimum).then(|| (number - 1).to_string())
+}
+
+fn arm64_predecessor(value: &str) -> Result<Option<String>, String> {
+    let Some((major, minor)) = value
+        .strip_prefix('v')
+        .and_then(|value| value.split_once('.'))
+    else {
+        return Ok(Some("v8.0".to_string()));
+    };
+    let major = major
+        .parse::<u32>()
+        .map_err(|_| format!("invalid Go ARM64 feature level {value}"))?;
+    let minor = minor
+        .parse::<u32>()
+        .map_err(|_| format!("invalid Go ARM64 feature level {value}"))?;
+    Ok(match (major, minor) {
+        (8, 0) => None,
+        (_, 0) => Some(format!("v{}.9", major.saturating_sub(1))),
+        _ => Some(format!("v{major}.{}", minor - 1)),
+    })
+}
+
+pub(in crate::benchmark::release) fn go_architecture_environment_variable(
+    goarch: &str,
+) -> Option<&'static str> {
+    match goarch {
+        "386" => Some("GO386"),
+        "amd64" => Some("GOAMD64"),
+        "arm" => Some("GOARM"),
+        "arm64" => Some("GOARM64"),
+        "mips" | "mipsle" => Some("GOMIPS"),
+        "mips64" | "mips64le" => Some("GOMIPS64"),
+        "ppc64" | "ppc64le" => Some("GOPPC64"),
+        "riscv64" => Some("GORISCV64"),
+        "wasm" => Some("GOWASM"),
+        _ => None,
+    }
 }
 
 fn parse_go_dist_platforms(stdout: &str) -> Result<Vec<GoDistPlatform>, String> {

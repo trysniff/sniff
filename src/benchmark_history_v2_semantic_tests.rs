@@ -1,4 +1,5 @@
 use super::super::HistoricalV2SemanticPublicBindingKind;
+use super::super::IntentionalBoundaryProjectModelGoArchitecture;
 use super::*;
 use crate::semantic_index::{
     RepositoryPath, SemanticCallEdge, SemanticDispatch, SemanticDocument, SemanticIndexProvenance,
@@ -113,6 +114,7 @@ fn fixture_go_project_model(
                     goarch: "amd64".to_string(),
                     cgo_enabled: false,
                     build_tags: Vec::new(),
+                    architecture: IntentionalBoundaryProjectModelGoArchitecture::Default,
                 },
                 invocation_anchor_repository_path: "go.mod".to_string(),
                 invocation_anchor_object_id: "0".repeat(40),
