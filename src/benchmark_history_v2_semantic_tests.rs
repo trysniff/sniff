@@ -1096,6 +1096,10 @@ __all__ = ["PublicWidget", "Extra", "namespace"]
                 "shared/client/__init__.py",
                 "def connect(value: str) -> str:\n    return value\n",
             ),
+            (
+                "shared/tool.py",
+                "def inspect(value: str) -> str:\n    return value\n",
+            ),
         ],
         &[
             ("pkg/reexports.py", ".extra", "pkg/extra.py"),
@@ -1225,6 +1229,18 @@ __all__ = ["PublicWidget", "Extra", "namespace"]
     }));
     assert!(snapshot.public_bindings.iter().any(|binding| {
         binding.repository_path == "shared/client/__init__.py"
+            && binding.binding == HistoricalV2SemanticPublicBindingKind::PackageExposure
+            && binding.externally_reachable
+    }));
+    assert!(snapshot.public_roots.iter().any(|root| {
+        root.repository_path == "shared/tool.py"
+            && matches!(
+                root.origin,
+                super::super::HistoricalV2SemanticPublicRootOrigin::PythonDistributionModule { .. }
+            )
+    }));
+    assert!(snapshot.public_bindings.iter().any(|binding| {
+        binding.repository_path == "shared/tool.py"
             && binding.binding == HistoricalV2SemanticPublicBindingKind::PackageExposure
             && binding.externally_reachable
     }));
@@ -3015,6 +3031,44 @@ fn python_namespace_distribution_exposes_its_first_concrete_descendant() {
             && binding.binding == HistoricalV2SemanticPublicBindingKind::PackageExposure
             && binding.origin_declaration_unit_id == parse_declaration.declaration_unit_id
             && binding.reexport_path.is_empty()
+            && binding.externally_reachable
+    }));
+    validation::validate_snapshot(
+        &fixture.source,
+        &snapshot,
+        &changed_indexers,
+        &required_paths,
+    )
+    .unwrap();
+}
+
+#[test]
+fn python_namespace_distribution_exposes_a_leaf_module_portion() {
+    let fixture = python_surface_fixture(
+        &[(
+            "shared/tool.py",
+            "def inspect(value: str) -> str:\n    return value\n",
+        )],
+        &[],
+    );
+    let changed_indexers = BTreeSet::from([SemanticIndexerKind::Python]);
+    let required_paths = fixture_required_paths(&fixture.source);
+
+    let snapshot = build_semantic_snapshot(
+        fixture.root.path(),
+        &fixture.source,
+        &fixture.files,
+        &changed_indexers,
+        &required_paths,
+        &fixture.indexes,
+    )
+    .unwrap();
+
+    assert_eq!(snapshot.public_root_count, 1);
+    assert_eq!(snapshot.public_roots[0].repository_path, "shared/tool.py");
+    assert!(snapshot.public_bindings.iter().any(|binding| {
+        binding.repository_path == "shared/tool.py"
+            && binding.binding == HistoricalV2SemanticPublicBindingKind::PackageExposure
             && binding.externally_reachable
     }));
     validation::validate_snapshot(
