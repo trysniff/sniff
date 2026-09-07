@@ -5,6 +5,7 @@ pub fn validate_intentional_boundary_go_list(
     inventory: &IntentionalBoundaryRepositoryInventory,
     invocation_manifest_repository_path: &str,
     toolchain_identity_sha256: &str,
+    variant: IntentionalBoundaryProjectModelVariant,
     stdout: &[u8],
     census: &IntentionalBoundaryProjectModelCensus,
 ) -> Result<(), String> {
@@ -13,6 +14,7 @@ pub fn validate_intentional_boundary_go_list(
         inventory,
         invocation_manifest_repository_path,
         toolchain_identity_sha256,
+        variant,
         stdout,
     )?;
     if census != &expected {

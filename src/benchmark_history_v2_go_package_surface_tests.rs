@@ -48,6 +48,7 @@ fn target(
             "package_archive".to_string()
         }],
         source_repository_paths: vec![source.to_string()],
+        ignored_source_repository_paths: Vec::new(),
         producer_tasks: Vec::new(),
         required_features: Vec::new(),
         target_status: IntentionalBoundaryProjectModelTargetStatus::Boundary {

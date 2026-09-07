@@ -3,8 +3,9 @@ use crate::benchmark::release::{
     IntentionalBoundaryManifestDeclaration, IntentionalBoundaryManifestDeclarationKind,
     IntentionalBoundaryManifestProvider, IntentionalBoundaryManifestTarget,
     IntentionalBoundaryProjectModelExecution, IntentionalBoundaryProjectModelTargetStatus,
-    IntentionalBoundarySemanticRange, census_intentional_boundary_gradle_project_models,
-    census_intentional_boundary_repository, inventory_intentional_boundary_repository,
+    IntentionalBoundaryProjectModelVariant, IntentionalBoundarySemanticRange,
+    census_intentional_boundary_gradle_project_models, census_intentional_boundary_repository,
+    inventory_intentional_boundary_repository,
 };
 use std::collections::BTreeMap;
 use std::fs;
@@ -97,6 +98,7 @@ fn fixture() -> (
         provider_kinds: vec!["application".to_string()],
         provider_output_types: vec!["jvm_application".to_string()],
         source_repository_paths: vec!["src/main/kotlin/Generated.kt".to_string()],
+        ignored_source_repository_paths: Vec::new(),
         producer_tasks: vec![task],
         required_features: Vec::new(),
         target_status: IntentionalBoundaryProjectModelTargetStatus::Boundary {
@@ -107,7 +109,7 @@ fn fixture() -> (
         },
     };
     let census = IntentionalBoundaryProjectModelCensus {
-        schema_version: 3,
+        schema_version: 4,
         project_model_contract: "fixture".to_string(),
         repository: inventory.repository.clone(),
         revision,
@@ -115,6 +117,7 @@ fn fixture() -> (
         executions: vec![IntentionalBoundaryProjectModelExecution {
             execution_id,
             provider: IntentionalBoundaryProjectModelProvider::GradleToolingApi,
+            variant: IntentionalBoundaryProjectModelVariant::Default,
             invocation_anchor_repository_path: "settings.gradle.kts".to_string(),
             invocation_anchor_object_id: "b".repeat(40),
             toolchain_identity_sha256: "c".repeat(64),

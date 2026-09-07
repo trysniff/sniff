@@ -12,6 +12,24 @@ use std::fs;
 use std::process::Command;
 use tempfile::TempDir;
 
+fn go_variant() -> IntentionalBoundaryProjectModelVariant {
+    go_variant_for("linux", "amd64", false, &[])
+}
+
+fn go_variant_for(
+    goos: &str,
+    goarch: &str,
+    cgo_enabled: bool,
+    build_tags: &[&str],
+) -> IntentionalBoundaryProjectModelVariant {
+    IntentionalBoundaryProjectModelVariant::Go {
+        goos: goos.to_string(),
+        goarch: goarch.to_string(),
+        cgo_enabled,
+        build_tags: build_tags.iter().map(|tag| (*tag).to_string()).collect(),
+    }
+}
+
 fn git(root: &Path, args: &[&str]) -> String {
     let output = Command::new("git")
         .arg("-C")
@@ -307,6 +325,7 @@ fn normalizes_go_packages_as_exact_multi_file_boundaries() {
         &inventory,
         "go.mod",
         &"a".repeat(64),
+        go_variant(),
         &output,
     )
     .unwrap();
@@ -318,10 +337,8 @@ fn normalizes_go_packages_as_exact_multi_file_boundaries() {
         .iter()
         .find(|target| target.target_name.ends_with("/api"))
         .unwrap();
-    assert_eq!(
-        api.source_repository_paths,
-        ["api/api.go", "api/api_windows.go", "api/more.go"]
-    );
+    assert_eq!(api.source_repository_paths, ["api/api.go", "api/more.go"]);
+    assert_eq!(api.ignored_source_repository_paths, ["api/api_windows.go"]);
     assert!(matches!(
         api.target_status,
         TargetStatus::Boundary {
@@ -352,6 +369,7 @@ fn normalizes_go_packages_as_exact_multi_file_boundaries() {
         &inventory,
         "go.mod",
         &"a".repeat(64),
+        go_variant(),
         &output,
         &census,
     )
@@ -369,6 +387,7 @@ fn maps_sandbox_emitted_paths_back_to_the_immutable_snapshot() {
         &inventory,
         "go.mod",
         &"a".repeat(64),
+        go_variant(),
         &output,
     )
     .unwrap();
@@ -400,6 +419,7 @@ fn go_project_model_identity_ignores_checkout_location() {
         &inventory,
         "go.mod",
         &"b".repeat(64),
+        go_variant(),
         &go_list_output(root.path(), "go.mod"),
     )
     .unwrap();
@@ -408,11 +428,62 @@ fn go_project_model_identity_ignores_checkout_location() {
         &inventory,
         "go.mod",
         &"b".repeat(64),
+        go_variant(),
         &go_list_output(clone.path(), "go.mod"),
     )
     .unwrap();
 
     assert_eq!(left, right);
+}
+
+#[test]
+fn go_project_model_identity_includes_the_exact_build_variant() {
+    let (root, inventory) = repository();
+    let output = go_list_output(root.path(), "go.mod");
+    let linux = parse_intentional_boundary_go_list(
+        root.path(),
+        &inventory,
+        "go.mod",
+        &"b".repeat(64),
+        go_variant_for("linux", "amd64", false, &[]),
+        &output,
+    )
+    .unwrap();
+    let windows = parse_intentional_boundary_go_list(
+        root.path(),
+        &inventory,
+        "go.mod",
+        &"b".repeat(64),
+        go_variant_for("windows", "amd64", false, &[]),
+        &output,
+    )
+    .unwrap();
+
+    assert_ne!(
+        linux.executions[0].execution_id,
+        windows.executions[0].execution_id
+    );
+    assert_ne!(linux.targets[0].target_id, windows.targets[0].target_id);
+    assert_eq!(
+        linux.executions[0].normalized_model_sha256,
+        windows.executions[0].normalized_model_sha256
+    );
+}
+
+#[test]
+fn go_project_model_rejects_an_untyped_default_variant() {
+    let (root, inventory) = repository();
+    let error = parse_intentional_boundary_go_list(
+        root.path(),
+        &inventory,
+        "go.mod",
+        &"b".repeat(64),
+        IntentionalBoundaryProjectModelVariant::Default,
+        &go_list_output(root.path(), "go.mod"),
+    )
+    .unwrap_err();
+
+    assert!(error.contains("omitted its build variant"), "{error}");
 }
 
 #[test]
@@ -437,6 +508,7 @@ fn records_untracked_go_sources_as_unresolved_without_losing_commitment() {
         &inventory,
         "go.mod",
         &"c".repeat(64),
+        go_variant(),
         serde_json::to_string(&package).unwrap().as_bytes(),
     )
     .unwrap();
@@ -474,6 +546,7 @@ fn rejects_incomplete_or_malformed_go_project_models() {
         &inventory,
         "go.mod",
         &"d".repeat(64),
+        go_variant(),
         serde_json::to_string(&package).unwrap().as_bytes(),
     )
     .unwrap_err();
@@ -484,6 +557,7 @@ fn rejects_incomplete_or_malformed_go_project_models() {
         &inventory,
         "go.mod",
         &"d".repeat(64),
+        go_variant(),
         br#"{"Dir": "unfinished""#,
     )
     .unwrap_err();
@@ -508,6 +582,7 @@ fn rejects_incomplete_or_malformed_go_project_models() {
         &inventory,
         "go.mod",
         &"d".repeat(64),
+        go_variant(),
         serde_json::to_string(&escaped).unwrap().as_bytes(),
     )
     .unwrap_err();
@@ -529,6 +604,7 @@ fn collector_executes_every_tracked_go_module_exactly_once() {
             manifests.push(manifest.to_string());
             Ok(GoListExecutionOutput {
                 toolchain_identity_sha256: "e".repeat(64),
+                variant: go_variant(),
                 stdout: String::from_utf8(go_list_output(execution_root, manifest)).unwrap(),
             })
         },
@@ -554,6 +630,7 @@ fn collector_rejects_repository_mutation_by_go_list_boundary() {
             fs::write(root.path().join("api/api.go"), "package api\n").unwrap();
             Ok(GoListExecutionOutput {
                 toolchain_identity_sha256: "f".repeat(64),
+                variant: go_variant(),
                 stdout: String::from_utf8(go_list_output(root.path(), manifest)).unwrap(),
             })
         },
@@ -571,6 +648,7 @@ fn binds_go_package_source_sets_to_exact_compiler_subjects() {
         &inventory,
         "go.mod",
         &"1".repeat(64),
+        go_variant(),
         &go_list_output(root.path(), "go.mod"),
     )
     .unwrap();
@@ -599,7 +677,7 @@ fn binds_go_package_source_sets_to_exact_compiler_subjects() {
     assert!(subject_names.iter().any(|name| name.ends_with(" Public")));
     assert!(subject_names.iter().any(|name| name.ends_with(" More")));
     assert!(
-        subject_names
+        !subject_names
             .iter()
             .any(|name| name.ends_with(" WindowsOnly"))
     );

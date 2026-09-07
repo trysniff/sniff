@@ -2,13 +2,14 @@ use super::*;
 use crate::benchmark::release::{
     IntentionalBoundaryIndexerKind, IntentionalBoundaryProjectModelCensus,
     IntentionalBoundaryProjectModelExecution, IntentionalBoundaryProjectModelTarget,
-    IntentionalBoundarySemanticCensus, IntentionalBoundarySemanticIndexerCensus,
-    IntentionalBoundarySemanticMethod, IntentionalBoundarySemanticMethodStatus,
-    IntentionalBoundarySemanticOrigin, IntentionalBoundarySemanticRange,
-    IntentionalBoundarySemanticSymbolCategory, IntentionalBoundarySemanticSymbolFacts,
-    IntentionalBoundarySemanticVisibility, bind_intentional_boundary_manifests,
-    census_intentional_boundary_go_ast, census_intentional_boundary_manifests,
-    census_intentional_boundary_repository, extract_intentional_boundary_compiler_and_ast_evidence,
+    IntentionalBoundaryProjectModelVariant, IntentionalBoundarySemanticCensus,
+    IntentionalBoundarySemanticIndexerCensus, IntentionalBoundarySemanticMethod,
+    IntentionalBoundarySemanticMethodStatus, IntentionalBoundarySemanticOrigin,
+    IntentionalBoundarySemanticRange, IntentionalBoundarySemanticSymbolCategory,
+    IntentionalBoundarySemanticSymbolFacts, IntentionalBoundarySemanticVisibility,
+    bind_intentional_boundary_manifests, census_intentional_boundary_go_ast,
+    census_intentional_boundary_manifests, census_intentional_boundary_repository,
+    extract_intentional_boundary_compiler_and_ast_evidence,
     inventory_intentional_boundary_repository, parse_intentional_boundary_go_list,
 };
 use std::fs;
@@ -55,7 +56,7 @@ fn project_models(module: &str, sources: &[&str]) -> IntentionalBoundaryProjectM
         .map(|path| (*path).to_string())
         .collect::<Vec<_>>();
     IntentionalBoundaryProjectModelCensus {
-        schema_version: 3,
+        schema_version: 4,
         project_model_contract: "test".to_string(),
         repository: "owner/repository".to_string(),
         revision: "1".repeat(40),
@@ -63,6 +64,12 @@ fn project_models(module: &str, sources: &[&str]) -> IntentionalBoundaryProjectM
         executions: vec![IntentionalBoundaryProjectModelExecution {
             execution_id: execution_id.clone(),
             provider: Provider::GoList,
+            variant: IntentionalBoundaryProjectModelVariant::Go {
+                goos: "linux".to_string(),
+                goarch: "amd64".to_string(),
+                cgo_enabled: false,
+                build_tags: Vec::new(),
+            },
             invocation_anchor_repository_path: module.to_string(),
             invocation_anchor_object_id: "3".repeat(40),
             toolchain_identity_sha256: "4".repeat(64),
@@ -83,6 +90,7 @@ fn project_models(module: &str, sources: &[&str]) -> IntentionalBoundaryProjectM
             provider_kinds: vec!["package".to_string()],
             provider_output_types: vec!["package_archive".to_string()],
             source_repository_paths: source_repository_paths.clone(),
+            ignored_source_repository_paths: Vec::new(),
             producer_tasks: Vec::new(),
             required_features: Vec::new(),
             target_status: IntentionalBoundaryProjectModelTargetStatus::Boundary {
@@ -513,6 +521,12 @@ fn real_fixture() -> RealFixture {
         &inventory,
         "go.mod",
         &"7".repeat(64),
+        IntentionalBoundaryProjectModelVariant::Go {
+            goos: "linux".to_string(),
+            goarch: "amd64".to_string(),
+            cgo_enabled: false,
+            build_tags: Vec::new(),
+        },
         go_list_output(root.path()).as_bytes(),
     )
     .unwrap();

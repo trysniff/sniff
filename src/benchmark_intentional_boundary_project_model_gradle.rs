@@ -158,6 +158,7 @@ pub fn parse_intentional_boundary_gradle_tooling_model(
         &invocation_entry.object_id,
         toolchain_identity_sha256,
         GRADLE_TOOLING_COMMAND_CONTRACT,
+        &super::IntentionalBoundaryProjectModelVariant::Default,
         &normalized_model_sha256,
     )?;
     for target in &mut targets {
@@ -171,6 +172,7 @@ pub fn parse_intentional_boundary_gradle_tooling_model(
     let execution = IntentionalBoundaryProjectModelExecution {
         execution_id,
         provider: Provider::GradleToolingApi,
+        variant: super::IntentionalBoundaryProjectModelVariant::Default,
         invocation_anchor_repository_path: invocation_settings_repository_path.to_string(),
         invocation_anchor_object_id: invocation_entry.object_id.clone(),
         toolchain_identity_sha256: toolchain_identity_sha256.to_string(),
@@ -280,6 +282,7 @@ fn normalize_project(
             provider_kinds,
             provider_output_types,
             source_repository_paths,
+            ignored_source_repository_paths: Vec::new(),
             producer_tasks,
             required_features: Vec::new(),
             target_status,
