@@ -1,3 +1,6 @@
+use super::super::history_v2_go_package_surface::{
+    HistoricalV2GoPackageExposure, go_package_exposures, go_package_source_map,
+};
 use super::super::{
     HistoricalV2NodePackageExposure, HistoricalV2NodePackageTargetStatus,
     HistoricalV2PublicSurfaceCoverage, HistoricalV2PythonDistributionModule,
@@ -106,6 +109,12 @@ pub(super) fn bind_public_surface(
         .iter()
         .filter(|module| python_distribution_module_is_external_entry(module.module, source))
         .collect::<Vec<_>>();
+    let go_packages = if kind == SemanticIndexerKind::Go {
+        go_package_exposures(&source.go_project_model)?
+    } else {
+        Vec::new()
+    };
+    let go_sources = go_package_source_map(&go_packages)?;
     for (repository_path, (symbol, definition)) in &rust_roots {
         retain_symbol(symbols, indexer_kind(kind), symbol, false, true, false)?;
         roots.push(HistoricalV2SemanticPublicRoot {
@@ -163,6 +172,9 @@ pub(super) fn bind_public_surface(
         let file_externally_reachable = match kind {
             SemanticIndexerKind::Rust => rust_roots.contains_key(&file.repository_path),
             SemanticIndexerKind::TypeScriptJavaScript | SemanticIndexerKind::Python => false,
+            SemanticIndexerKind::Go => {
+                go_file_is_externally_reachable(&file.repository_path, &go_sources)?
+            }
             _ => true,
         };
         for declaration in &file.public_declarations {
@@ -265,6 +277,7 @@ pub(super) fn bind_public_surface(
         .filter(|file| match kind {
             SemanticIndexerKind::Rust => rust_roots.contains_key(&file.repository_path),
             SemanticIndexerKind::TypeScriptJavaScript | SemanticIndexerKind::Python => false,
+            SemanticIndexerKind::Go => false,
             _ => true,
         })
     {
@@ -373,6 +386,23 @@ pub(super) fn bind_public_surface(
     }
     expand_owner_surfaces(source, index, symbols, bindings)?;
     Ok(())
+}
+
+fn go_file_is_externally_reachable(
+    repository_path: &str,
+    sources: &BTreeMap<&str, &HistoricalV2GoPackageExposure>,
+) -> Result<bool, String> {
+    if repository_path.ends_with("_test.go") {
+        return Ok(false);
+    }
+    sources
+        .get(repository_path)
+        .map(|exposure| exposure.externally_reachable)
+        .ok_or_else(|| {
+            format!(
+                "historical-v2 required Go source has no compiler package exposure: {repository_path}"
+            )
+        })
 }
 
 fn expand_owner_surfaces(

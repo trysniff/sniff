@@ -1,3 +1,4 @@
+use super::history_v2_go_package_surface::{go_package_exposures, go_package_source_map};
 use super::history_v2_node_package_surface::{
     census_historical_v2_node_package_surfaces,
     validate_historical_v2_node_package_surface_census_commitment,
@@ -431,6 +432,8 @@ fn project_snapshot(
     {
         return Err("historical-v2 source snapshot inputs disagree".to_string());
     }
+    let go_packages = go_package_exposures(&go_project_model)?;
+    let go_sources = go_package_source_map(&go_packages)?;
     let mut source_files = Vec::with_capacity(parser_census.source_files.len());
     let mut method_counts_by_language = BTreeMap::<String, usize>::new();
     let mut public_declaration_count = 0_usize;
@@ -487,8 +490,33 @@ fn project_snapshot(
         *method_counts_by_language
             .entry(source.language.clone())
             .or_default() += methods.len();
+        let semantic_coverage = source_semantic_coverage(&source.repository_path, &bytes);
+        let public_module_identity = if source.language == "go"
+            && semantic_coverage == HistoricalV2SourceSemanticCoverage::Required
+            && !source.repository_path.ends_with("_test.go")
+        {
+            Some(
+                go_sources
+                    .get(source.repository_path.as_str())
+                    .ok_or_else(|| {
+                        format!(
+                            "historical-v2 required Go source has no compiler package ownership: {}",
+                            source.repository_path
+                        )
+                    })?
+                    .import_path
+                    .as_str(),
+            )
+        } else {
+            None
+        };
         let (public_surface_coverage, public_declarations, public_reexports) =
-            source_public_declarations(&source.repository_path, &source.language, &bytes)?;
+            source_public_declarations_with_module_identity(
+                &source.repository_path,
+                &source.language,
+                &bytes,
+                public_module_identity,
+            )?;
         public_declaration_count = public_declaration_count
             .checked_add(public_declarations.len())
             .ok_or_else(|| "historical-v2 public declaration count overflowed".to_string())?;
@@ -502,7 +530,7 @@ fn project_snapshot(
             source_sha256: source.source_sha256.clone(),
             non_whitespace_lines: non_whitespace_lines(&bytes)?,
             language: source.language.clone(),
-            semantic_coverage: source_semantic_coverage(&source.repository_path, &bytes),
+            semantic_coverage,
             methods,
             public_surface_coverage,
             public_declarations,
@@ -542,10 +570,27 @@ fn project_snapshot(
     Ok(snapshot)
 }
 
+#[cfg(test)]
 pub(super) fn source_public_declarations(
     repository_path: &str,
     language: &str,
     source: &[u8],
+) -> Result<
+    (
+        HistoricalV2PublicSurfaceCoverage,
+        Vec<HistoricalV2SourcePublicDeclaration>,
+        Vec<HistoricalV2SourcePublicReexport>,
+    ),
+    String,
+> {
+    source_public_declarations_with_module_identity(repository_path, language, source, None)
+}
+
+pub(super) fn source_public_declarations_with_module_identity(
+    repository_path: &str,
+    language: &str,
+    source: &[u8],
+    module_identity: Option<&str>,
 ) -> Result<
     (
         HistoricalV2PublicSurfaceCoverage,
@@ -643,7 +688,9 @@ pub(super) fn source_public_declarations(
                     HistoricalV2SourcePublicNamespace::StaticMember
                 }
             };
-            let module_identity = public_module_identity(repository_path, language);
+            let module_identity = module_identity
+                .map(str::to_string)
+                .unwrap_or_else(|| public_module_identity(repository_path, language));
             let surface_unit_id = historical_public_surface_unit_id(
                 language,
                 &module_identity,

@@ -59,6 +59,56 @@ fn fixture_cargo_project_model(
     }
 }
 
+fn fixture_go_project_model(
+    revision: &str,
+    inventory_sha256: &str,
+    source_repository_paths: &[String],
+) -> super::super::IntentionalBoundaryProjectModelCensus {
+    use super::super::{
+        IntentionalBoundaryManifestDeclarationKind, IntentionalBoundaryManifestTarget,
+        IntentionalBoundaryProjectModelProvider, IntentionalBoundaryProjectModelTarget,
+        IntentionalBoundaryProjectModelTargetStatus,
+    };
+
+    let targets = if source_repository_paths.is_empty() {
+        Vec::new()
+    } else {
+        vec![IntentionalBoundaryProjectModelTarget {
+            target_id: "fixture-go-target".to_string(),
+            execution_id: "fixture-go-execution".to_string(),
+            provider: IntentionalBoundaryProjectModelProvider::GoList,
+            manifest_repository_path: "go.mod".to_string(),
+            manifest_object_id: "0".repeat(40),
+            package_name: "example.test/fixture".to_string(),
+            package_version: "git:fixture".to_string(),
+            target_name: "example.test/fixture/api".to_string(),
+            provider_kinds: vec!["package".to_string()],
+            provider_output_types: vec!["package_archive".to_string()],
+            source_repository_paths: source_repository_paths.to_vec(),
+            producer_tasks: Vec::new(),
+            required_features: Vec::new(),
+            target_status: IntentionalBoundaryProjectModelTargetStatus::Boundary {
+                declaration_kind: IntentionalBoundaryManifestDeclarationKind::PublishedModule,
+                target: IntentionalBoundaryManifestTarget::RepositoryPaths {
+                    repository_paths: source_repository_paths.to_vec(),
+                },
+            },
+        }]
+    };
+    super::super::IntentionalBoundaryProjectModelCensus {
+        schema_version: super::super::INTENTIONAL_BOUNDARY_PROJECT_MODEL_CENSUS_SCHEMA_VERSION,
+        project_model_contract: "fixture".to_string(),
+        repository: "example/repo".to_string(),
+        revision: revision.to_string(),
+        inventory_sha256: inventory_sha256.to_string(),
+        executions: Vec::new(),
+        targets,
+        execution_count_by_provider: BTreeMap::new(),
+        target_count_by_status: BTreeMap::new(),
+        project_model_census_sha256: "f".repeat(64),
+    }
+}
+
 fn fixture_node_package_surfaces(
     revision: &str,
     inventory_sha256: &str,
@@ -4163,6 +4213,140 @@ fn rust_module_reference_without_a_namespace_surface_fails_closed() {
     );
 }
 
+#[test]
+fn go_package_reachability_comes_from_the_compiler_project_model() {
+    use super::super::{
+        IntentionalBoundaryManifestDeclarationKind, IntentionalBoundaryManifestTarget,
+        IntentionalBoundaryProjectModelTargetStatus,
+    };
+
+    for (case, configure, expected_reachable) in [
+        ("package", None, true),
+        (
+            "internal",
+            Some(("example.test/fixture/internal/store", false)),
+            false,
+        ),
+        (
+            "command",
+            Some(("example.test/fixture/cmd/tool", true)),
+            false,
+        ),
+    ] {
+        let mut fixture = compiler_surface_fixture(
+            "go",
+            SemanticIndexerKind::Go,
+            SemanticPositionEncoding::Utf8,
+            &[("api.go", "package api\n\nfunc Public() {}\n")],
+            &[],
+        );
+        if let Some((import_path, command)) = configure {
+            let target = &mut fixture.source.go_project_model.targets[0];
+            target.target_name = import_path.to_string();
+            if command {
+                target.provider_kinds = vec!["main".to_string()];
+                target.provider_output_types = vec!["executable".to_string()];
+                target.target_status = IntentionalBoundaryProjectModelTargetStatus::Boundary {
+                    declaration_kind: IntentionalBoundaryManifestDeclarationKind::RuntimeEntrypoint,
+                    target: IntentionalBoundaryManifestTarget::RepositoryPaths {
+                        repository_paths: target.source_repository_paths.clone(),
+                    },
+                };
+            }
+        }
+        let semantic = build_semantic_snapshot(
+            fixture.root.path(),
+            &fixture.source,
+            &fixture.files,
+            &BTreeSet::from([SemanticIndexerKind::Go]),
+            &fixture_required_paths(&fixture.source),
+            &fixture.indexes,
+        )
+        .unwrap_or_else(|error| panic!("{case} fixture failed: {error}"));
+        let binding = semantic
+            .public_bindings
+            .iter()
+            .find(|binding| binding.repository_path == "api.go")
+            .expect("Go public declaration binding");
+        assert_eq!(binding.externally_reachable, expected_reachable, "{case}");
+    }
+}
+
+#[test]
+fn go_surface_identity_survives_moving_a_declaration_between_package_files() {
+    let first = compiler_surface_fixture(
+        "go",
+        SemanticIndexerKind::Go,
+        SemanticPositionEncoding::Utf8,
+        &[("first.go", "package api\n\nfunc Public() {}\n")],
+        &[],
+    );
+    let moved = compiler_surface_fixture(
+        "go",
+        SemanticIndexerKind::Go,
+        SemanticPositionEncoding::Utf8,
+        &[("nested/second.go", "package api\n\nfunc Public() {}\n")],
+        &[],
+    );
+
+    assert_eq!(
+        first.source.source_files[0].public_declarations[0].surface_unit_id,
+        moved.source.source_files[0].public_declarations[0].surface_unit_id
+    );
+    assert_ne!(
+        first.source.source_files[0].public_declarations[0].declaration_unit_id,
+        moved.source.source_files[0].public_declarations[0].declaration_unit_id
+    );
+}
+
+#[test]
+fn go_public_reachability_validation_rejects_missing_or_invented_package_exposure() {
+    let mut fixture = compiler_surface_fixture(
+        "go",
+        SemanticIndexerKind::Go,
+        SemanticPositionEncoding::Utf8,
+        &[("internal/store.go", "package store\n\nfunc Public() {}\n")],
+        &[],
+    );
+    fixture.source.go_project_model.targets[0].target_name =
+        "example.test/fixture/internal/store".to_string();
+    let changed_indexers = BTreeSet::from([SemanticIndexerKind::Go]);
+    let required_paths = fixture_required_paths(&fixture.source);
+    let mut semantic = build_semantic_snapshot(
+        fixture.root.path(),
+        &fixture.source,
+        &fixture.files,
+        &changed_indexers,
+        &required_paths,
+        &fixture.indexes,
+    )
+    .unwrap();
+    assert!(!semantic.public_bindings[0].externally_reachable);
+
+    semantic.public_bindings[0].externally_reachable = true;
+    semantic.semantic_snapshot_sha256 = semantic_snapshot_sha256(&semantic).unwrap();
+    let error = validation::validate_snapshot(
+        &fixture.source,
+        &semantic,
+        &changed_indexers,
+        &required_paths,
+    )
+    .unwrap_err();
+    assert!(error.contains("changed compiler identity"), "{error}");
+
+    fixture.source.go_project_model.targets.clear();
+    let error = build_semantic_snapshot(
+        fixture.root.path(),
+        &fixture.source,
+        &fixture.files,
+        &changed_indexers,
+        &required_paths,
+        &fixture.indexes,
+    )
+    .unwrap_err();
+    assert!(error.contains("no compiler package exposure"), "{error}");
+}
+
 fn rust_surface_fixture(
     sources: &[(&str, &str)],
     module_targets: &[(&str, &str, &str)],
@@ -4257,11 +4441,13 @@ fn compiler_surface_fixture(
                 },
             )
             .collect::<Vec<_>>();
+        let module_identity = (language == "go").then_some("example.test/fixture/api");
         let (coverage, public_declarations, public_reexports) =
-            super::super::history_v2_source_census::source_public_declarations(
+            super::super::history_v2_source_census::source_public_declarations_with_module_identity(
                 repository_path,
                 language,
                 source_text.as_bytes(),
+                module_identity,
             )
             .unwrap();
         let document_path = RepositoryPath((*repository_path).to_string());
@@ -4564,7 +4750,15 @@ fn compiler_surface_fixture(
             &"b".repeat(64),
             rust_library_root,
         ),
-        go_project_model: fixture_cargo_project_model(&"a".repeat(40), &"b".repeat(64), None),
+        go_project_model: fixture_go_project_model(
+            &"a".repeat(40),
+            &"b".repeat(64),
+            &source_files
+                .iter()
+                .filter(|file| file.language == "go" && !file.repository_path.ends_with("_test.go"))
+                .map(|file| file.repository_path.clone())
+                .collect::<Vec<_>>(),
+        ),
         node_package_surfaces: fixture_node_package_surfaces(
             &"a".repeat(40),
             &"b".repeat(64),

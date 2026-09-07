@@ -1,3 +1,4 @@
+use super::super::history_v2_go_package_surface::{go_package_exposures, go_package_source_map};
 use super::super::{
     HISTORICAL_V2_SEMANTIC_CENSUS_SCHEMA_VERSION, HistoricalV2Materialization,
     HistoricalV2MaterializedRoots, HistoricalV2NodePackageTargetStatus,
@@ -668,6 +669,12 @@ fn validate_public_bindings<'a>(
     if semantic.public_binding_count != semantic.public_bindings.len() {
         return Err("historical-v2 public binding count changed".to_string());
     }
+    let go_packages = if indexers.contains(&IntentionalBoundaryIndexerKind::Go) {
+        go_package_exposures(&source.go_project_model)?
+    } else {
+        Vec::new()
+    };
+    let go_sources = go_package_source_map(&go_packages)?;
     let mut expected = DeclarationMap::new();
     let mut required_declarations = BTreeSet::new();
     for file in source
@@ -794,6 +801,20 @@ fn validate_public_bindings<'a>(
                     }
                     IntentionalBoundaryIndexerKind::TypeScriptJavaScript
                     | IntentionalBoundaryIndexerKind::Python => false,
+                    IntentionalBoundaryIndexerKind::Go => {
+                        if repository_path.ends_with("_test.go") {
+                            false
+                        } else {
+                            go_sources
+                                .get(*repository_path)
+                                .ok_or_else(|| {
+                                    format!(
+                                        "historical-v2 required Go source has no compiler package exposure: {repository_path}"
+                                    )
+                                })?
+                                .externally_reachable
+                        }
+                    }
                     _ => true,
                 };
                 if binding.indexer != *indexer
