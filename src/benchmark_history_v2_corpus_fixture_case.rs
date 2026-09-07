@@ -75,7 +75,7 @@ pub(super) fn source_bundle(
     changed_methods.sort();
     HistoricalV2SourceReviewBundle {
         schema_version: HISTORICAL_V2_SOURCE_REVIEW_BUNDLE_SCHEMA_VERSION,
-        bundle_contract: "sniffbench-historical-v2-source-review-v1".to_string(),
+        bundle_contract: "sniffbench-historical-v2-source-review-v2".to_string(),
         protocol_sha256: protocol.protocol_sha256.clone(),
         selection_sha256: SELECTION_SHA256.to_string(),
         assessment_identity_sha256: hash_text(&format!("assessment-{language}-{slot_number}")),
