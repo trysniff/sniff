@@ -2290,6 +2290,7 @@ fn fixture() -> Fixture {
             &"b".repeat(64),
             Some("src/lib.rs"),
         ),
+        go_project_model: fixture_cargo_project_model(&"a".repeat(40), &"b".repeat(64), None),
         node_package_surfaces: fixture_node_package_surfaces(
             &"a".repeat(40),
             &"b".repeat(64),
@@ -2457,6 +2458,7 @@ fn reference_fixture() -> Fixture {
         inventory_sha256: "b".repeat(64),
         parser_census_sha256: "c".repeat(64),
         cargo_project_model: fixture_cargo_project_model(&"a".repeat(40), &"b".repeat(64), None),
+        go_project_model: fixture_cargo_project_model(&"a".repeat(40), &"b".repeat(64), None),
         node_package_surfaces: fixture_node_package_surfaces(
             &"a".repeat(40),
             &"b".repeat(64),
@@ -4562,6 +4564,7 @@ fn compiler_surface_fixture(
             &"b".repeat(64),
             rust_library_root,
         ),
+        go_project_model: fixture_cargo_project_model(&"a".repeat(40), &"b".repeat(64), None),
         node_package_surfaces: fixture_node_package_surfaces(
             &"a".repeat(40),
             &"b".repeat(64),

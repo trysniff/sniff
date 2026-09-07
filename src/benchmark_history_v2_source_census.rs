@@ -11,6 +11,7 @@ use super::intentional_boundary_inventory::{
     read_intentional_boundary_git_blobs, supported_source_git_blob_requests,
 };
 use super::intentional_boundary_project_model_cargo::census_intentional_boundary_cargo_project_models_typed;
+use super::intentional_boundary_project_model_go::census_intentional_boundary_go_project_models_typed;
 use super::intentional_boundary_project_model_outcome::{
     ProjectModelDerivationError, ProjectModelDerivationErrorKind,
 };
@@ -37,7 +38,7 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::path::Path;
 
-const SOURCE_CENSUS_CONTRACT: &str = "sniffbench-historical-v2-source-census-v14";
+const SOURCE_CENSUS_CONTRACT: &str = "sniffbench-historical-v2-source-census-v15";
 pub(super) const PARSER_ERROR_LIMIT: usize = 4 * 1024;
 type SourceCensusStageResult =
     HistoricalV2StageResult<HistoricalV2SourceCensus, HistoricalV2SourceCensusExclusion>;
@@ -119,6 +120,20 @@ pub fn census_historical_v2_sources_typed(
         &patched_inventory,
     )
     .map_err(project_model_stage_error)?;
+    let base_go_project_model = census_intentional_boundary_go_project_models_typed(
+        &inventory_repository,
+        &materialization.base_revision,
+        &roots.base_root,
+        &base_inventory,
+    )
+    .map_err(project_model_stage_error)?;
+    let patched_go_project_model = census_intentional_boundary_go_project_models_typed(
+        &inventory_repository,
+        &materialization.patched_commit_oid,
+        &roots.patched_root,
+        &patched_inventory,
+    )
+    .map_err(project_model_stage_error)?;
     let base_node_package_surfaces = census_historical_v2_node_package_surfaces(
         &inventory_repository,
         &materialization.base_revision,
@@ -158,6 +173,7 @@ pub fn census_historical_v2_sources_typed(
             &base_inventory,
             &base_parser_census,
             base_cargo_project_model,
+            base_go_project_model,
             base_node_package_surfaces,
             base_python_distribution_surfaces,
         )
@@ -167,6 +183,7 @@ pub fn census_historical_v2_sources_typed(
             &patched_inventory,
             &patched_parser_census,
             patched_cargo_project_model,
+            patched_go_project_model,
             patched_node_package_surfaces,
             patched_python_distribution_surfaces,
         )
@@ -225,6 +242,10 @@ pub fn validate_historical_v2_source_census_commitment(
         &base_inventory,
         &census.base.cargo_project_model,
     )?;
+    validate_intentional_boundary_project_model_census_commitment(
+        &base_inventory,
+        &census.base.go_project_model,
+    )?;
     validate_historical_v2_node_package_surface_census_commitment(
         &roots.base_root,
         &base_inventory,
@@ -249,6 +270,10 @@ pub fn validate_historical_v2_source_census_commitment(
         &patched_inventory,
         &census.patched.cargo_project_model,
     )?;
+    validate_intentional_boundary_project_model_census_commitment(
+        &patched_inventory,
+        &census.patched.go_project_model,
+    )?;
     let base_parser_census = census_intentional_boundary_repository(
         &inventory_repository,
         &materialization.base_revision,
@@ -266,6 +291,7 @@ pub fn validate_historical_v2_source_census_commitment(
         &base_inventory,
         &base_parser_census,
         census.base.cargo_project_model.clone(),
+        census.base.go_project_model.clone(),
         census.base.node_package_surfaces.clone(),
         census.base.python_distribution_surfaces.clone(),
     )?;
@@ -274,6 +300,7 @@ pub fn validate_historical_v2_source_census_commitment(
         &patched_inventory,
         &patched_parser_census,
         census.patched.cargo_project_model.clone(),
+        census.patched.go_project_model.clone(),
         census.patched.node_package_surfaces.clone(),
         census.patched.python_distribution_surfaces.clone(),
     )?;
@@ -394,6 +421,7 @@ fn project_snapshot(
     inventory: &IntentionalBoundaryRepositoryInventory,
     parser_census: &IntentionalBoundarySourceCensus,
     cargo_project_model: IntentionalBoundaryProjectModelCensus,
+    go_project_model: IntentionalBoundaryProjectModelCensus,
     node_package_surfaces: HistoricalV2NodePackageSurfaceCensus,
     python_distribution_surfaces: HistoricalV2PythonDistributionSurfaceCensus,
 ) -> Result<HistoricalV2SourceSnapshotCensus, String> {
@@ -498,6 +526,7 @@ fn project_snapshot(
         inventory_sha256: inventory.inventory_sha256.clone(),
         parser_census_sha256: parser_census.census_sha256.clone(),
         cargo_project_model,
+        go_project_model,
         node_package_surfaces,
         python_distribution_surfaces,
         tracked_entry_count: inventory.tracked_entries.len(),
@@ -914,6 +943,7 @@ fn snapshot_census_sha256(value: &HistoricalV2SourceSnapshotCensus) -> Result<St
         &value.inventory_sha256,
         &value.parser_census_sha256,
         &value.cargo_project_model,
+        &value.go_project_model,
         &value.node_package_surfaces,
         &value.python_distribution_surfaces,
         value.tracked_entry_count,

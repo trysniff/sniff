@@ -63,6 +63,7 @@ fn source_snapshot(revision: &str, digest_character: char) -> HistoricalV2Source
         inventory_sha256: digest('1'),
         parser_census_sha256: digest('2'),
         cargo_project_model: empty_cargo_project_model(revision),
+        go_project_model: empty_cargo_project_model(revision),
         node_package_surfaces: empty_node_package_surfaces(revision),
         python_distribution_surfaces: empty_python_distribution_surfaces(revision),
         tracked_entry_count: 0,
