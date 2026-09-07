@@ -518,8 +518,28 @@ fn validate_go_package_roots(
             .into_iter()
             .filter(|package| package.externally_reachable)
             .map(|package| {
-                if !package
-                    .source_repository_paths
+                let mut variant_target_ids = package
+                    .variants
+                    .iter()
+                    .filter(|variant| variant.externally_reachable)
+                    .map(|variant| variant.target_id.clone())
+                    .collect::<Vec<_>>();
+                variant_target_ids.sort();
+                let mut source_repository_paths = package
+                    .variants
+                    .iter()
+                    .filter(|variant| variant.externally_reachable)
+                    .flat_map(|variant| {
+                        variant
+                            .source_repository_paths
+                            .iter()
+                            .chain(&variant.ignored_source_repository_paths)
+                    })
+                    .cloned()
+                    .collect::<Vec<_>>();
+                source_repository_paths.sort();
+                source_repository_paths.dedup();
+                if !source_repository_paths
                     .iter()
                     .all(|path| public_surface_document_paths.contains(path.as_str()))
                 {
@@ -529,11 +549,11 @@ fn validate_go_package_roots(
                     ));
                 }
                 Ok(HistoricalV2SemanticGoPackageRoot {
-                    target_id: package.target_id,
+                    variant_target_ids,
                     surface_slot_id: package.surface_slot_id,
                     module_path: package.module_path,
                     import_path: package.import_path,
-                    source_repository_paths: package.source_repository_paths,
+                    source_repository_paths,
                 })
             })
             .collect::<Result<Vec<_>, String>>()?

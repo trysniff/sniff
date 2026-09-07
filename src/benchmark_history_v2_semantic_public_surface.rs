@@ -123,7 +123,28 @@ pub(super) fn bind_public_surface(
             .iter()
             .filter(|package| package.externally_reachable)
         {
-            for repository_path in &package.source_repository_paths {
+            let mut variant_target_ids = package
+                .variants
+                .iter()
+                .filter(|variant| variant.externally_reachable)
+                .map(|variant| variant.target_id.clone())
+                .collect::<Vec<_>>();
+            variant_target_ids.sort();
+            let mut source_repository_paths = package
+                .variants
+                .iter()
+                .filter(|variant| variant.externally_reachable)
+                .flat_map(|variant| {
+                    variant
+                        .source_repository_paths
+                        .iter()
+                        .chain(&variant.ignored_source_repository_paths)
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            source_repository_paths.sort();
+            source_repository_paths.dedup();
+            for repository_path in &source_repository_paths {
                 if !index
                     .documents
                     .contains_key(&RepositoryPath(repository_path.clone()))
@@ -135,11 +156,11 @@ pub(super) fn bind_public_surface(
                 }
             }
             go_package_roots.push(HistoricalV2SemanticGoPackageRoot {
-                target_id: package.target_id.clone(),
+                variant_target_ids,
                 surface_slot_id: package.surface_slot_id.clone(),
                 module_path: package.module_path.clone(),
                 import_path: package.import_path.clone(),
-                source_repository_paths: package.source_repository_paths.clone(),
+                source_repository_paths,
             });
         }
     }

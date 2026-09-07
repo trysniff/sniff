@@ -27,7 +27,10 @@ mod runtime;
 pub use runtime::census_intentional_boundary_go_project_models;
 pub(super) use runtime::census_intentional_boundary_go_project_models_typed;
 #[cfg(test)]
-use runtime::{GoListExecutionOutput, census_go_project_models_with_executor};
+use runtime::{
+    GO_VARIANT_LIMIT, GoListExecutionOutput, census_go_project_models_with_executor,
+    parse_go_dist_variants,
+};
 
 #[path = "benchmark_intentional_boundary_project_model_go_validation.rs"]
 mod validation;

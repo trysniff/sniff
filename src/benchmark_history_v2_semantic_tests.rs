@@ -67,8 +67,9 @@ fn fixture_go_project_model(
 ) -> super::super::IntentionalBoundaryProjectModelCensus {
     use super::super::{
         IntentionalBoundaryManifestDeclarationKind, IntentionalBoundaryManifestTarget,
-        IntentionalBoundaryProjectModelProvider, IntentionalBoundaryProjectModelTarget,
-        IntentionalBoundaryProjectModelTargetStatus,
+        IntentionalBoundaryProjectModelExecution, IntentionalBoundaryProjectModelProvider,
+        IntentionalBoundaryProjectModelTarget, IntentionalBoundaryProjectModelTargetStatus,
+        IntentionalBoundaryProjectModelVariant,
     };
 
     let targets = if source_repository_paths.is_empty() {
@@ -103,7 +104,26 @@ fn fixture_go_project_model(
         repository: "example/repo".to_string(),
         revision: revision.to_string(),
         inventory_sha256: inventory_sha256.to_string(),
-        executions: Vec::new(),
+        executions: (!source_repository_paths.is_empty())
+            .then(|| IntentionalBoundaryProjectModelExecution {
+                execution_id: "fixture-go-execution".to_string(),
+                provider: IntentionalBoundaryProjectModelProvider::GoList,
+                variant: IntentionalBoundaryProjectModelVariant::Go {
+                    goos: "linux".to_string(),
+                    goarch: "amd64".to_string(),
+                    cgo_enabled: false,
+                    build_tags: Vec::new(),
+                },
+                invocation_anchor_repository_path: "go.mod".to_string(),
+                invocation_anchor_object_id: "0".repeat(40),
+                toolchain_identity_sha256: "e".repeat(64),
+                command_contract: "fixture".to_string(),
+                normalized_model_sha256: "f".repeat(64),
+                covered_manifest_repository_paths: vec!["go.mod".to_string()],
+                target_count: 1,
+            })
+            .into_iter()
+            .collect(),
         targets,
         execution_count_by_provider: BTreeMap::new(),
         target_count_by_status: BTreeMap::new(),

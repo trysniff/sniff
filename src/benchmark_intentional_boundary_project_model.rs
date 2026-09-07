@@ -320,14 +320,14 @@ fn valid_execution_variant(
                 ..
             },
         ) => {
-            !goos.trim().is_empty()
-                && !goarch.trim().is_empty()
+            valid_go_platform_component(goos)
+                && valid_go_platform_component(goarch)
                 && sorted_unique(build_tags)
                 && build_tags.iter().all(|tag| {
                     !tag.trim().is_empty()
                         && tag
-                            .bytes()
-                            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+                            .chars()
+                            .all(|value| value.is_alphanumeric() || matches!(value, '_' | '.'))
                 })
         }
         (
@@ -336,6 +336,13 @@ fn valid_execution_variant(
         ) => true,
         _ => false,
     }
+}
+
+fn valid_go_platform_component(value: &str) -> bool {
+    !value.is_empty()
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
 }
 
 fn normalized_target(target: &IntentionalBoundaryProjectModelTarget) -> NormalizedTarget<'_> {
