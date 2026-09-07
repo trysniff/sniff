@@ -2480,6 +2480,7 @@ fn fixture() -> Fixture {
             }],
             diagnostics: Vec::new(),
         },
+        variant: crate::semantic_index::SemanticIndexVariant::Unqualified,
         documents: BTreeMap::from([(
             document.clone(),
             SemanticDocument {
@@ -2626,6 +2627,7 @@ fn reference_fixture() -> Fixture {
             }],
             diagnostics: Vec::new(),
         },
+        variant: crate::semantic_index::SemanticIndexVariant::Unqualified,
         documents: BTreeMap::from([(
             document_path.clone(),
             SemanticDocument {
@@ -4905,6 +4907,7 @@ fn compiler_surface_fixture(
             }],
             diagnostics: Vec::new(),
         },
+        variant: crate::semantic_index::SemanticIndexVariant::Unqualified,
         documents,
         symbols,
         relationships: BTreeSet::new(),

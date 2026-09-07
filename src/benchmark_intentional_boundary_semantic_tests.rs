@@ -151,6 +151,7 @@ fn fixture() -> (
             }],
             diagnostics: Vec::new(),
         },
+        variant: crate::semantic_index::SemanticIndexVariant::Unqualified,
         documents: BTreeMap::from([(
             document.clone(),
             SemanticDocument {

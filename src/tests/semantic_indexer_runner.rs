@@ -812,6 +812,7 @@ fn expected_document_validation_checks_only_the_declared_required_subset() {
             }],
             diagnostics: Vec::new(),
         },
+        variant: crate::semantic_index::SemanticIndexVariant::Unqualified,
         documents: BTreeMap::new(),
         symbols: BTreeMap::new(),
         relationships: BTreeSet::new(),

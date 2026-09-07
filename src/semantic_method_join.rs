@@ -688,6 +688,7 @@ mod tests {
                 }],
                 diagnostics: Vec::new(),
             },
+            variant: crate::semantic_index::SemanticIndexVariant::Unqualified,
             documents: BTreeMap::from([(
                 document_path.clone(),
                 SemanticDocument {
@@ -945,6 +946,7 @@ mod tests {
                 }],
                 diagnostics: Vec::new(),
             },
+            variant: crate::semantic_index::SemanticIndexVariant::Unqualified,
             documents: BTreeMap::from([(
                 document_path.clone(),
                 SemanticDocument {

@@ -222,6 +222,9 @@ fn validate_compatible_provenance(
     if merged.repository_root != incoming.repository_root {
         return Err("semantic indexes have different repository roots".to_string());
     }
+    if merged.variant != incoming.variant {
+        return Err("semantic indexes belong to different compiler variants".to_string());
+    }
     if left.format != right.format
         || left.tool_name != right.tool_name
         || left.tool_version != right.tool_version
@@ -241,6 +244,18 @@ fn validate_index(index: &SemanticIndex) -> Result<(), String> {
     }
     if index.provenance.invocations.is_empty() {
         return Err("semantic index provenance omitted compiler invocations".to_string());
+    }
+    if let crate::semantic_index::SemanticIndexVariant::Qualified {
+        identity,
+        dimensions,
+    } = &index.variant
+        && (identity.0.trim().is_empty()
+            || dimensions.is_empty()
+            || dimensions
+                .iter()
+                .any(|(name, value)| name.trim().is_empty() || value.trim().is_empty()))
+    {
+        return Err("semantic index has an invalid compiler variant".to_string());
     }
     for invocation in &index.provenance.invocations {
         if invocation.output_sha256.len() != 64
@@ -490,6 +505,7 @@ mod tests {
                 invocations: vec![invocation(argument, digest)],
                 diagnostics: Vec::new(),
             },
+            variant: crate::semantic_index::SemanticIndexVariant::Unqualified,
             documents: BTreeMap::from([(document.path.clone(), document)]),
             symbols: BTreeMap::new(),
             relationships: BTreeSet::new(),
@@ -576,6 +592,35 @@ mod tests {
             &merged.calls.iter().next().unwrap().callee,
             &SemanticResolution::Resolved { value: shared }
         );
+    }
+
+    #[test]
+    fn document_shards_reject_cross_variant_merges() {
+        let mut first = index("a.go", "./a", 'a');
+        first.variant = crate::semantic_index::SemanticIndexVariant::Qualified {
+            identity: crate::semantic_index::SemanticVariantId("variant-a".to_string()),
+            dimensions: BTreeMap::from([("GOAMD64".to_string(), "v2".to_string())]),
+        };
+        let mut second = index("b.go", "./b", 'b');
+        second.variant = crate::semantic_index::SemanticIndexVariant::Qualified {
+            identity: crate::semantic_index::SemanticVariantId("variant-b".to_string()),
+            dimensions: BTreeMap::from([("GOAMD64".to_string(), "v3".to_string())]),
+        };
+
+        let error = merge_document_shards([first, second]).unwrap_err();
+        assert!(error.contains("different compiler variants"), "{error}");
+    }
+
+    #[test]
+    fn rejects_malformed_qualified_variant_identity() {
+        let mut malformed = index("a.go", "./a", 'a');
+        malformed.variant = crate::semantic_index::SemanticIndexVariant::Qualified {
+            identity: crate::semantic_index::SemanticVariantId(String::new()),
+            dimensions: BTreeMap::from([("GOAMD64".to_string(), "v2".to_string())]),
+        };
+
+        let error = begin_document_shard(malformed).unwrap_err();
+        assert!(error.contains("invalid compiler variant"), "{error}");
     }
 
     #[test]

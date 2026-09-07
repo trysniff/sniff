@@ -51,6 +51,7 @@ fn empty_index(root: &Path) -> SemanticIndex {
             invocations: Vec::new(),
             diagnostics: Vec::new(),
         },
+        variant: crate::semantic_index::SemanticIndexVariant::Unqualified,
         documents: BTreeMap::new(),
         symbols: BTreeMap::new(),
         relationships: BTreeSet::new(),
