@@ -132,7 +132,7 @@ fn fixture_python_distribution_surfaces(
                     let (import_name, kind) = python_fixture_module_identity(repository_path);
                     super::super::HistoricalV2PythonDistributionModule {
                         module_exposure_id: format!("fixture-python-module-{import_name}-{kind:?}"),
-                        surface_slot_id: format!("fixture-python-slot-{import_name}-{kind:?}"),
+                        surface_slot_id: format!("fixture-python-slot-{import_name}"),
                         distribution_id: distribution_id.clone(),
                         normalized_distribution_name: "fixture".to_string(),
                         is_distribution_root: !import_name.contains('.'),
@@ -174,7 +174,7 @@ fn fixture_python_distribution_surfaces(
                 let kind = super::super::HistoricalV2PythonModuleKind::NamespacePackage;
                 super::super::HistoricalV2PythonDistributionModule {
                     module_exposure_id: format!("fixture-python-module-{import_name}-{kind:?}"),
-                    surface_slot_id: format!("fixture-python-slot-{import_name}-{kind:?}"),
+                    surface_slot_id: format!("fixture-python-slot-{import_name}"),
                     distribution_id: distribution_id.clone(),
                     normalized_distribution_name: "fixture".to_string(),
                     is_distribution_root: !import_name.contains('.'),
@@ -1105,6 +1105,11 @@ __all__ = ["PublicWidget", "Extra", "namespace"]
                 "def ping(value: str) -> str:\n    return value\n",
             ),
             ("standalone_stub.pyi", "def pong(value: str) -> str: ...\n"),
+            (
+                "paired.py",
+                "def choose(value: object) -> object:\n    return value\n",
+            ),
+            ("paired.pyi", "def choose(value: str) -> str: ...\n"),
         ],
         &[
             ("pkg/reexports.py", ".extra", "pkg/extra.py"),
@@ -1263,6 +1268,17 @@ __all__ = ["PublicWidget", "Extra", "namespace"]
                 && binding.externally_reachable
         }));
     }
+    let paired_roots = snapshot
+        .public_roots
+        .iter()
+        .filter(|root| matches!(root.repository_path.as_str(), "paired.py" | "paired.pyi"))
+        .collect::<Vec<_>>();
+    assert_eq!(paired_roots.len(), 1, "{paired_roots:#?}");
+    assert_eq!(paired_roots[0].repository_path, "paired.pyi");
+    assert_eq!(
+        paired_roots[0].compiler_definition.repository_path,
+        "paired.pyi"
+    );
     assert!(snapshot.symbols.iter().all(|symbol| {
         symbol.symbol.display_name.as_deref() != Some("_PRIVATE_CONSTANT")
             || !symbol.is_public_surface
@@ -3383,7 +3399,7 @@ fn python_top_level_source_and_stub_modules_are_compiler_bound() {
 }
 
 #[test]
-fn python_mixed_source_and_stub_distribution_root_fails_closed() {
+fn python_stub_precedes_matching_source_distribution_root() {
     let fixture = python_surface_fixture(
         &[
             (
@@ -3394,21 +3410,104 @@ fn python_mixed_source_and_stub_distribution_root_fails_closed() {
         ],
         &[],
     );
+    let changed_indexers = BTreeSet::from([SemanticIndexerKind::Python]);
+    let required_paths = fixture_required_paths(&fixture.source);
+    let source_slot = fixture
+        .source
+        .python_distribution_surfaces
+        .modules
+        .iter()
+        .find(|module| module.kind == super::super::HistoricalV2PythonModuleKind::SourcePackageInit)
+        .unwrap()
+        .surface_slot_id
+        .clone();
+    let stub_slot = fixture
+        .source
+        .python_distribution_surfaces
+        .modules
+        .iter()
+        .find(|module| module.kind == super::super::HistoricalV2PythonModuleKind::StubPackageInit)
+        .unwrap()
+        .surface_slot_id
+        .clone();
 
-    let error = build_semantic_snapshot(
+    let snapshot = build_semantic_snapshot(
         fixture.root.path(),
         &fixture.source,
         &fixture.files,
-        &BTreeSet::from([SemanticIndexerKind::Python]),
-        &fixture_required_paths(&fixture.source),
+        &changed_indexers,
+        &required_paths,
         &fixture.indexes,
     )
-    .unwrap_err();
+    .unwrap();
 
-    assert!(
-        error.contains("mixed source and stub module has no single compiler surface"),
-        "{error}"
+    assert_eq!(source_slot, stub_slot);
+    assert_eq!(snapshot.public_root_count, 1);
+    assert_eq!(snapshot.public_roots[0].repository_path, "pkg/__init__.pyi");
+    assert!(snapshot.public_roots[0].compiler_definition.repository_path == "pkg/__init__.pyi");
+    validation::validate_snapshot(
+        &fixture.source,
+        &snapshot,
+        &changed_indexers,
+        &required_paths,
+    )
+    .unwrap();
+}
+
+#[test]
+fn python_stub_is_the_compiler_interface_for_a_native_extension() {
+    let mut fixture = python_surface_fixture(
+        &[("native.pyi", "def execute(value: str) -> str: ...\n")],
+        &[],
     );
+    let stub = fixture.source.python_distribution_surfaces.modules[0].clone();
+    fixture.source.python_distribution_surfaces.modules.push(
+        super::super::HistoricalV2PythonDistributionModule {
+            module_exposure_id: "fixture-python-native-extension".to_string(),
+            surface_slot_id: stub.surface_slot_id.clone(),
+            distribution_id: stub.distribution_id.clone(),
+            normalized_distribution_name: stub.normalized_distribution_name.clone(),
+            import_name: stub.import_name.clone(),
+            kind: super::super::HistoricalV2PythonModuleKind::ExtensionModule,
+            is_distribution_root: true,
+            archive_member_path: Some("native.cp311-win_amd64.pyd".to_string()),
+            installed_path: Some("native.cp311-win_amd64.pyd".to_string()),
+            member_sha256: Some("7".repeat(64)),
+            member_byte_length: Some(1),
+        },
+    );
+    fixture.source.python_distribution_surfaces.modules.sort();
+    fixture.source.python_distribution_surfaces.distributions[0].module_count = 2;
+    fixture
+        .source
+        .python_distribution_surfaces
+        .module_count_by_kind
+        .insert(
+            super::super::HistoricalV2PythonModuleKind::ExtensionModule,
+            1,
+        );
+    let changed_indexers = BTreeSet::from([SemanticIndexerKind::Python]);
+    let required_paths = fixture_required_paths(&fixture.source);
+
+    let snapshot = build_semantic_snapshot(
+        fixture.root.path(),
+        &fixture.source,
+        &fixture.files,
+        &changed_indexers,
+        &required_paths,
+        &fixture.indexes,
+    )
+    .unwrap();
+
+    assert_eq!(snapshot.public_root_count, 1);
+    assert_eq!(snapshot.public_roots[0].repository_path, "native.pyi");
+    validation::validate_snapshot(
+        &fixture.source,
+        &snapshot,
+        &changed_indexers,
+        &required_paths,
+    )
+    .unwrap();
 }
 
 #[test]

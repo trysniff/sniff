@@ -132,10 +132,9 @@ where
             let surface_slot_id = python_module_surface_slot_id(
                 &parsed.normalized_distribution_name,
                 &parsed_module.import_name,
-                parsed_module.kind,
             )?;
             let module_exposure_id = hash_json(&(
-                "sniffbench-historical-v2-python-module-exposure-v1",
+                "sniffbench-historical-v2-python-module-exposure-v2",
                 &distribution_id,
                 &surface_slot_id,
                 &parsed_module.archive_member_path,
@@ -143,7 +142,7 @@ where
                 &parsed_module.member_sha256,
                 parsed_module.member_byte_length,
             ))
-            .map(|hash| format!("h2pyme-v1:{hash}"))?;
+            .map(|hash| format!("h2pyme-v2:{hash}"))?;
             modules.push(HistoricalV2PythonDistributionModule {
                 module_exposure_id,
                 surface_slot_id,
@@ -1005,7 +1004,46 @@ fn parse_wheel_modules(
             "Python distribution {normalized_distribution_name} repeats an importable module variant"
         ));
     }
+    validate_python_module_variant_shapes(&modules, normalized_distribution_name)?;
     Ok(modules)
+}
+
+fn validate_python_module_variant_shapes(
+    modules: &[ParsedWheelModule],
+    normalized_distribution_name: &str,
+) -> Result<(), String> {
+    let mut kinds_by_import = BTreeMap::<&str, BTreeSet<HistoricalV2PythonModuleKind>>::new();
+    for module in modules {
+        kinds_by_import
+            .entry(module.import_name.as_str())
+            .or_default()
+            .insert(module.kind);
+    }
+    for (import_name, kinds) in kinds_by_import {
+        let has_package = kinds.iter().any(|kind| {
+            matches!(
+                kind,
+                HistoricalV2PythonModuleKind::SourcePackageInit
+                    | HistoricalV2PythonModuleKind::StubPackageInit
+            )
+        });
+        let has_module = kinds.iter().any(|kind| {
+            matches!(
+                kind,
+                HistoricalV2PythonModuleKind::SourceModule
+                    | HistoricalV2PythonModuleKind::StubModule
+                    | HistoricalV2PythonModuleKind::ExtensionModule
+            )
+        });
+        if (has_package && has_module)
+            || (kinds.contains(&HistoricalV2PythonModuleKind::NamespacePackage) && kinds.len() != 1)
+        {
+            return Err(format!(
+                "Python distribution {normalized_distribution_name} installs incompatible package and module variants for {import_name}"
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn installed_python_path(archive_path: &str, dist_info: &str) -> Result<Option<String>, String> {
@@ -1099,15 +1137,13 @@ fn import_name_from_path(path: &str) -> Result<String, String> {
 fn python_module_surface_slot_id(
     normalized_distribution_name: &str,
     import_name: &str,
-    kind: HistoricalV2PythonModuleKind,
 ) -> Result<String, String> {
     hash_json(&(
-        "sniffbench-historical-v2-python-module-surface-slot-v1",
+        "sniffbench-historical-v2-python-module-surface-slot-v2",
         normalized_distribution_name,
         import_name,
-        kind,
     ))
-    .map(|hash| format!("h2pyms-v1:{hash}"))
+    .map(|hash| format!("h2pyms-v2:{hash}"))
 }
 
 fn python_distribution_surface_census_sha256(

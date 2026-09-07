@@ -474,26 +474,38 @@ struct CompilerPythonDistributionModule<'a> {
     definition: &'a SemanticLocation,
 }
 
-pub(super) fn python_distribution_module_has_compiler_source(
+pub(super) fn python_distribution_module_is_selected_compiler_source(
     module: &HistoricalV2PythonDistributionModule,
     modules: &[HistoricalV2PythonDistributionModule],
 ) -> bool {
+    let has_stub = modules.iter().any(|candidate| {
+        candidate.distribution_id == module.distribution_id
+            && candidate.import_name == module.import_name
+            && matches!(
+                candidate.kind,
+                HistoricalV2PythonModuleKind::StubModule
+                    | HistoricalV2PythonModuleKind::StubPackageInit
+            )
+    });
     match module.kind {
         HistoricalV2PythonModuleKind::SourceModule
-        | HistoricalV2PythonModuleKind::SourcePackageInit => true,
+        | HistoricalV2PythonModuleKind::SourcePackageInit => !has_stub,
         HistoricalV2PythonModuleKind::StubModule
-        | HistoricalV2PythonModuleKind::StubPackageInit => !modules.iter().any(|candidate| {
-            candidate.distribution_id == module.distribution_id
-                && candidate.import_name == module.import_name
-                && matches!(
-                    candidate.kind,
-                    HistoricalV2PythonModuleKind::SourceModule
-                        | HistoricalV2PythonModuleKind::SourcePackageInit
-                )
-        }),
+        | HistoricalV2PythonModuleKind::StubPackageInit => true,
         HistoricalV2PythonModuleKind::NamespacePackage
         | HistoricalV2PythonModuleKind::ExtensionModule => false,
     }
+}
+
+pub(super) fn python_distribution_import_has_compiler_source(
+    module: &HistoricalV2PythonDistributionModule,
+    modules: &[HistoricalV2PythonDistributionModule],
+) -> bool {
+    modules.iter().any(|candidate| {
+        candidate.distribution_id == module.distribution_id
+            && candidate.import_name == module.import_name
+            && python_distribution_module_is_selected_compiler_source(candidate, modules)
+    })
 }
 
 pub(super) fn python_distribution_module_is_external_entry(
@@ -553,20 +565,14 @@ fn compiler_python_distribution_modules<'a>(
                 continue;
             }
             HistoricalV2PythonModuleKind::ExtensionModule => {
-                return Err(format!(
-                    "historical-v2 Python extension module has no exact source provenance: {}",
-                    module.import_name
-                ));
-            }
-            HistoricalV2PythonModuleKind::StubModule
-            | HistoricalV2PythonModuleKind::StubPackageInit
-                if !python_distribution_module_has_compiler_source(
+                if python_distribution_import_has_compiler_source(
                     module,
                     &source.python_distribution_surfaces.modules,
-                ) =>
-            {
+                ) {
+                    continue;
+                }
                 return Err(format!(
-                    "historical-v2 Python mixed source and stub module has no single compiler surface: {}",
+                    "historical-v2 Python extension module has no exact compiler-source interface: {}",
                     module.import_name
                 ));
             }
@@ -574,6 +580,12 @@ fn compiler_python_distribution_modules<'a>(
             | HistoricalV2PythonModuleKind::SourcePackageInit
             | HistoricalV2PythonModuleKind::StubModule
             | HistoricalV2PythonModuleKind::StubPackageInit => {}
+        }
+        if !python_distribution_module_is_selected_compiler_source(
+            module,
+            &source.python_distribution_surfaces.modules,
+        ) {
+            continue;
         }
         let member_sha256 = module.member_sha256.as_deref().ok_or_else(|| {
             format!(
