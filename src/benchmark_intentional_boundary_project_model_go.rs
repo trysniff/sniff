@@ -20,17 +20,19 @@ use std::fs;
 use std::path::{Component, Path, PathBuf};
 
 pub(super) const GO_LIST_COMMAND_CONTRACT: &str =
-    "go-list-json-find-mod-readonly-buildvcs-off-explicit-variant-v2";
+    "go-list-json-find-mod-readonly-buildvcs-off-exact-constraint-variants-v3";
+
+#[path = "benchmark_intentional_boundary_project_model_go_variants.rs"]
+mod variants;
 
 #[path = "benchmark_intentional_boundary_project_model_go_runtime.rs"]
 mod runtime;
 pub use runtime::census_intentional_boundary_go_project_models;
 pub(super) use runtime::census_intentional_boundary_go_project_models_typed;
 #[cfg(test)]
-use runtime::{
-    GO_VARIANT_LIMIT, GoListExecutionOutput, census_go_project_models_with_executor,
-    parse_go_dist_variants,
-};
+use runtime::{GoListExecutionOutput, census_go_project_models_with_executor};
+#[cfg(test)]
+use variants::{GO_VARIANT_LIMIT, parse_go_constraint_tags, parse_go_dist_variants};
 
 #[path = "benchmark_intentional_boundary_project_model_go_validation.rs"]
 mod validation;
