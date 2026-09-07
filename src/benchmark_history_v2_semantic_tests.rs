@@ -195,14 +195,23 @@ fn fixture_python_distribution_surfaces(
 fn python_fixture_module_identity(
     repository_path: &str,
 ) -> (String, super::super::HistoricalV2PythonModuleKind) {
-    let module = repository_path.strip_suffix(".py").unwrap();
+    let (module, stub) = repository_path
+        .strip_suffix(".pyi")
+        .map(|module| (module, true))
+        .or_else(|| {
+            repository_path
+                .strip_suffix(".py")
+                .map(|module| (module, false))
+        })
+        .unwrap();
     let is_init = module.ends_with("/__init__") || module == "__init__";
     let module = module.strip_suffix("/__init__").unwrap_or(module);
     let import_name = module.replace('/', ".");
-    let kind = if is_init {
-        super::super::HistoricalV2PythonModuleKind::SourcePackageInit
-    } else {
-        super::super::HistoricalV2PythonModuleKind::SourceModule
+    let kind = match (stub, is_init) {
+        (false, false) => super::super::HistoricalV2PythonModuleKind::SourceModule,
+        (false, true) => super::super::HistoricalV2PythonModuleKind::SourcePackageInit,
+        (true, false) => super::super::HistoricalV2PythonModuleKind::StubModule,
+        (true, true) => super::super::HistoricalV2PythonModuleKind::StubPackageInit,
     };
     (import_name, kind)
 }
@@ -1034,6 +1043,10 @@ __all__ = ["PublicWidget", "Extra", "namespace"]
 __all__ = ["PublicWidget", "Extra", "namespace"]
 "#,
             ),
+            (
+                "typed/__init__.pyi",
+                "class Client:\n    def send(self, value: str) -> str: ...\n",
+            ),
         ],
         &[
             ("pkg/reexports.py", ".extra", "pkg/extra.py"),
@@ -1135,6 +1148,25 @@ __all__ = ["PublicWidget", "Extra", "namespace"]
             && binding.binding == HistoricalV2SemanticPublicBindingKind::PackageExposure
             && binding.reexport_path.len() == 2
     }));
+    assert!(snapshot.public_roots.iter().any(|root| {
+        root.repository_path == "typed/__init__.pyi"
+            && matches!(
+                root.origin,
+                super::super::HistoricalV2SemanticPublicRootOrigin::PythonDistributionModule { .. }
+            )
+    }));
+    assert!(snapshot.public_bindings.iter().any(|binding| {
+        binding.repository_path == "typed/__init__.pyi"
+            && binding.binding == HistoricalV2SemanticPublicBindingKind::PackageExposure
+            && binding.externally_reachable
+    }));
+    assert!(
+        snapshot
+            .symbols
+            .iter()
+            .flat_map(|symbol| &symbol.symbol.signatures)
+            .any(|signature| signature.text.contains("def send("))
+    );
     assert!(snapshot.symbols.iter().all(|symbol| {
         symbol.symbol.display_name.as_deref() != Some("_PRIVATE_CONSTANT")
             || !symbol.is_public_surface
@@ -2854,10 +2886,6 @@ fn python_distribution_missing_or_ambiguous_compiler_root_fails_closed() {
 fn python_distribution_uncovered_public_variants_fail_closed() {
     for (kind, expected) in [
         (
-            super::super::HistoricalV2PythonModuleKind::StubPackageInit,
-            "stub module",
-        ),
-        (
             super::super::HistoricalV2PythonModuleKind::ExtensionModule,
             "extension module",
         ),
@@ -2879,6 +2907,70 @@ fn python_distribution_uncovered_public_variants_fail_closed() {
         .unwrap_err();
         assert!(error.contains(expected), "{error}");
     }
+}
+
+#[test]
+fn python_stub_only_distribution_root_is_compiler_bound() {
+    let fixture = python_surface_fixture(
+        &[("pkg/__init__.pyi", "def parse(value: str) -> str: ...\n")],
+        &[],
+    );
+    let changed_indexers = BTreeSet::from([SemanticIndexerKind::Python]);
+    let required_paths = fixture_required_paths(&fixture.source);
+
+    let snapshot = build_semantic_snapshot(
+        fixture.root.path(),
+        &fixture.source,
+        &fixture.files,
+        &changed_indexers,
+        &required_paths,
+        &fixture.indexes,
+    )
+    .unwrap();
+
+    assert_eq!(snapshot.public_root_count, 1);
+    assert_eq!(snapshot.public_roots[0].repository_path, "pkg/__init__.pyi");
+    assert!(snapshot.public_bindings.iter().any(|binding| {
+        binding.repository_path == "pkg/__init__.pyi"
+            && binding.binding == HistoricalV2SemanticPublicBindingKind::PackageExposure
+            && binding.externally_reachable
+    }));
+    validation::validate_snapshot(
+        &fixture.source,
+        &snapshot,
+        &changed_indexers,
+        &required_paths,
+    )
+    .unwrap();
+}
+
+#[test]
+fn python_mixed_source_and_stub_distribution_root_fails_closed() {
+    let fixture = python_surface_fixture(
+        &[
+            (
+                "pkg/__init__.py",
+                "def parse(value: str) -> str:\n    return value\n",
+            ),
+            ("pkg/__init__.pyi", "def parse(value: str) -> str: ...\n"),
+        ],
+        &[],
+    );
+
+    let error = build_semantic_snapshot(
+        fixture.root.path(),
+        &fixture.source,
+        &fixture.files,
+        &BTreeSet::from([SemanticIndexerKind::Python]),
+        &fixture_required_paths(&fixture.source),
+        &fixture.indexes,
+    )
+    .unwrap_err();
+
+    assert!(
+        error.contains("mixed source and stub module has no single compiler surface"),
+        "{error}"
+    );
 }
 
 #[test]

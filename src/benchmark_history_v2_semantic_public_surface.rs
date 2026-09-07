@@ -474,6 +474,28 @@ struct CompilerPythonDistributionModule<'a> {
     definition: &'a SemanticLocation,
 }
 
+pub(super) fn python_distribution_module_has_compiler_source(
+    module: &HistoricalV2PythonDistributionModule,
+    modules: &[HistoricalV2PythonDistributionModule],
+) -> bool {
+    match module.kind {
+        HistoricalV2PythonModuleKind::SourceModule
+        | HistoricalV2PythonModuleKind::SourcePackageInit => true,
+        HistoricalV2PythonModuleKind::StubModule
+        | HistoricalV2PythonModuleKind::StubPackageInit => !modules.iter().any(|candidate| {
+            candidate.distribution_id == module.distribution_id
+                && candidate.import_name == module.import_name
+                && matches!(
+                    candidate.kind,
+                    HistoricalV2PythonModuleKind::SourceModule
+                        | HistoricalV2PythonModuleKind::SourcePackageInit
+                )
+        }),
+        HistoricalV2PythonModuleKind::NamespacePackage
+        | HistoricalV2PythonModuleKind::ExtensionModule => false,
+    }
+}
+
 fn compiler_python_distribution_modules<'a>(
     source: &'a HistoricalV2SourceSnapshotCensus,
     index: &'a SemanticIndex,
@@ -507,18 +529,25 @@ fn compiler_python_distribution_modules<'a>(
                 ));
             }
             HistoricalV2PythonModuleKind::StubModule
-            | HistoricalV2PythonModuleKind::StubPackageInit => {
+            | HistoricalV2PythonModuleKind::StubPackageInit
+                if !python_distribution_module_has_compiler_source(
+                    module,
+                    &source.python_distribution_surfaces.modules,
+                ) =>
+            {
                 return Err(format!(
-                    "historical-v2 Python stub module is not covered by the compiler source census: {}",
+                    "historical-v2 Python mixed source and stub module has no single compiler surface: {}",
                     module.import_name
                 ));
             }
             HistoricalV2PythonModuleKind::SourceModule
-            | HistoricalV2PythonModuleKind::SourcePackageInit => {}
+            | HistoricalV2PythonModuleKind::SourcePackageInit
+            | HistoricalV2PythonModuleKind::StubModule
+            | HistoricalV2PythonModuleKind::StubPackageInit => {}
         }
         let member_sha256 = module.member_sha256.as_deref().ok_or_else(|| {
             format!(
-                "historical-v2 Python source module has no wheel member hash: {}",
+                "historical-v2 Python compiler-source module has no wheel member hash: {}",
                 module.import_name
             )
         })?;
