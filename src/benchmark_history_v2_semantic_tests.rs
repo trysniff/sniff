@@ -34,6 +34,7 @@ fn fixture_cargo_project_model(
                 provider_kinds: vec!["lib".to_string()],
                 provider_output_types: vec!["lib".to_string()],
                 source_repository_paths: vec![repository_path.to_string()],
+                ignored_source_repository_paths: Vec::new(),
                 producer_tasks: Vec::new(),
                 required_features: Vec::new(),
                 target_status: IntentionalBoundaryProjectModelTargetStatus::Boundary {
@@ -85,6 +86,7 @@ fn fixture_go_project_model(
             provider_kinds: vec!["package".to_string()],
             provider_output_types: vec!["package_archive".to_string()],
             source_repository_paths: source_repository_paths.to_vec(),
+            ignored_source_repository_paths: Vec::new(),
             producer_tasks: Vec::new(),
             required_features: Vec::new(),
             target_status: IntentionalBoundaryProjectModelTargetStatus::Boundary {

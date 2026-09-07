@@ -11,7 +11,8 @@ use super::{
     IntentionalBoundaryProjectModelTarget,
     IntentionalBoundaryProjectModelTargetStatus as TargetStatus,
     IntentionalBoundaryProjectModelUnresolvedReason as UnresolvedReason,
-    IntentionalBoundaryRepositoryInventory, validate_intentional_boundary_repository_inventory,
+    IntentionalBoundaryProjectModelVariant, IntentionalBoundaryRepositoryInventory,
+    validate_intentional_boundary_repository_inventory,
 };
 use serde::Deserialize;
 use std::collections::BTreeSet;
@@ -19,7 +20,7 @@ use std::fs;
 use std::path::{Component, Path, PathBuf};
 
 pub(super) const GO_LIST_COMMAND_CONTRACT: &str =
-    "go-list-json-find-mod-readonly-buildvcs-off-workspace-off-v1";
+    "go-list-json-find-mod-readonly-buildvcs-off-explicit-variant-v2";
 
 #[path = "benchmark_intentional_boundary_project_model_go_runtime.rs"]
 mod runtime;
@@ -87,10 +88,14 @@ pub fn parse_intentional_boundary_go_list(
     inventory: &IntentionalBoundaryRepositoryInventory,
     invocation_manifest_repository_path: &str,
     toolchain_identity_sha256: &str,
+    variant: IntentionalBoundaryProjectModelVariant,
     stdout: &[u8],
 ) -> Result<IntentionalBoundaryProjectModelCensus, String> {
     if !is_sha256(toolchain_identity_sha256) {
         return Err("Go toolchain identity is not SHA-256".to_string());
+    }
+    if !matches!(variant, IntentionalBoundaryProjectModelVariant::Go { .. }) {
+        return Err("Go project-model execution omitted its build variant".to_string());
     }
     let canonical_root = canonical_path(root, "Go project-model repository root")?;
     let invocation_entry = regular_inventory_entry(
@@ -139,6 +144,7 @@ pub fn parse_intentional_boundary_go_list(
         &invocation_entry.object_id,
         toolchain_identity_sha256,
         GO_LIST_COMMAND_CONTRACT,
+        &variant,
         &normalized_model_sha256,
     )?;
     for target in &mut targets {
@@ -152,6 +158,7 @@ pub fn parse_intentional_boundary_go_list(
     let execution = IntentionalBoundaryProjectModelExecution {
         execution_id,
         provider: Provider::GoList,
+        variant,
         invocation_anchor_repository_path: invocation_manifest_repository_path.to_string(),
         invocation_anchor_object_id: invocation_entry.object_id.clone(),
         toolchain_identity_sha256: toolchain_identity_sha256.to_string(),
@@ -232,13 +239,32 @@ fn normalize_package(
 
     let mut source_names = package.go_files;
     source_names.extend(package.cgo_files);
-    source_names.extend(package.ignored_go_files);
     source_names.sort();
-    if source_names.windows(2).any(|pair| pair[0] == pair[1]) {
+    let mut ignored_source_names = package.ignored_go_files;
+    ignored_source_names.sort();
+    let all_source_names = source_names
+        .iter()
+        .chain(&ignored_source_names)
+        .collect::<BTreeSet<_>>();
+    if source_names.windows(2).any(|pair| pair[0] == pair[1])
+        || ignored_source_names
+            .windows(2)
+            .any(|pair| pair[0] == pair[1])
+        || all_source_names.len() != source_names.len() + ignored_source_names.len()
+    {
         return Err("go list repeated a production source filename".to_string());
     }
     let source_repository_paths =
         normalize_source_set(context.root, &package_directory, &source_names)?;
+    let ignored_source_repository_paths =
+        normalize_source_set(context.root, &package_directory, &ignored_source_names)?;
+    for path in &ignored_source_repository_paths {
+        regular_inventory_entry(
+            context.inventory,
+            path,
+            "Go compiler-ignored production source",
+        )?;
+    }
     let provider_kind = if package.name == "main" {
         "main"
     } else {
@@ -269,6 +295,7 @@ fn normalize_package(
         provider_kinds,
         provider_output_types,
         source_repository_paths,
+        ignored_source_repository_paths,
         producer_tasks: Vec::new(),
         required_features: Vec::new(),
         target_status,
@@ -357,6 +384,13 @@ pub(super) fn validate_go_target_classification(
         || !target.required_features.is_empty()
         || target.provider_kinds.len() != 1
         || target.provider_output_types.len() != 1
+    {
+        return false;
+    }
+    if target
+        .ignored_source_repository_paths
+        .iter()
+        .any(|path| regular_inventory_entry(inventory, path, "Go ignored source").is_err())
     {
         return false;
     }

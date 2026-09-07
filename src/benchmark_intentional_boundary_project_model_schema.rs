@@ -2,7 +2,7 @@ use super::{IntentionalBoundaryManifestDeclarationKind, IntentionalBoundaryManif
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-pub const INTENTIONAL_BOUNDARY_PROJECT_MODEL_CENSUS_SCHEMA_VERSION: u32 = 3;
+pub const INTENTIONAL_BOUNDARY_PROJECT_MODEL_CENSUS_SCHEMA_VERSION: u32 = 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -10,6 +10,18 @@ pub enum IntentionalBoundaryProjectModelProvider {
     CargoMetadata,
     GoList,
     GradleToolingApi,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum IntentionalBoundaryProjectModelVariant {
+    Default,
+    Go {
+        goos: String,
+        goarch: String,
+        cgo_enabled: bool,
+        build_tags: Vec<String>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -70,6 +82,7 @@ pub struct IntentionalBoundaryProjectModelTarget {
     pub provider_kinds: Vec<String>,
     pub provider_output_types: Vec<String>,
     pub source_repository_paths: Vec<String>,
+    pub ignored_source_repository_paths: Vec<String>,
     pub producer_tasks: Vec<IntentionalBoundaryProjectModelProducerTask>,
     pub required_features: Vec<String>,
     pub target_status: IntentionalBoundaryProjectModelTargetStatus,
@@ -80,6 +93,7 @@ pub struct IntentionalBoundaryProjectModelTarget {
 pub struct IntentionalBoundaryProjectModelExecution {
     pub execution_id: String,
     pub provider: IntentionalBoundaryProjectModelProvider,
+    pub variant: IntentionalBoundaryProjectModelVariant,
     pub invocation_anchor_repository_path: String,
     pub invocation_anchor_object_id: String,
     pub toolchain_identity_sha256: String,

@@ -36,7 +36,21 @@ impl Drop for GoListCallRuntime {
 
 pub(super) struct GoListExecutionOutput {
     pub(super) toolchain_identity_sha256: String,
+    pub(super) variant: IntentionalBoundaryProjectModelVariant,
     pub(super) stdout: String,
+}
+
+#[derive(serde::Deserialize)]
+#[allow(non_snake_case)]
+struct GoBuildContextOutput {
+    GOOS: String,
+    GOARCH: String,
+    CGO_ENABLED: String,
+}
+
+struct GoCommandExecution {
+    toolchain_identity_sha256: String,
+    output: crate::sandbox::SandboxOutput,
 }
 
 pub fn census_intentional_boundary_go_project_models(
@@ -183,6 +197,7 @@ where
             inventory,
             manifest_path,
             &output.toolchain_identity_sha256,
+            output.variant,
             output.stdout.as_bytes(),
         )
         .map_err(|detail| {
@@ -260,6 +275,60 @@ fn run_go_list(
     let module_directory = manifest_repository_path
         .rsplit_once('/')
         .map_or(".", |(directory, _)| directory);
+    let context_command = vec![
+        "go".to_string(),
+        "-C".to_string(),
+        module_directory.to_string(),
+        "env".to_string(),
+        "-json".to_string(),
+        "GOOS".to_string(),
+        "GOARCH".to_string(),
+        "CGO_ENABLED".to_string(),
+    ];
+    let context_execution = run_go_project_model_command(
+        root,
+        &cache,
+        manifest_repository_path,
+        context_command,
+        &[],
+        ProjectModelDerivationErrorKind::InfrastructureFailed,
+        "sandboxed Go build-context discovery",
+    )?;
+    let context: GoBuildContextOutput = serde_json::from_str(&context_execution.output.stdout)
+        .map_err(|error| {
+            go_error(
+                ProjectModelDerivationErrorKind::ProviderOutputIncomplete,
+                IntentionalBoundaryProjectModelFailurePhase::OutputValidation,
+                Some(manifest_repository_path),
+                format!("Go build-context discovery returned invalid JSON: {error}"),
+            )
+        })?;
+    let cgo_enabled = match context.CGO_ENABLED.as_str() {
+        "0" => false,
+        "1" => true,
+        _ => {
+            return Err(go_error(
+                ProjectModelDerivationErrorKind::ProviderOutputIncomplete,
+                IntentionalBoundaryProjectModelFailurePhase::OutputValidation,
+                Some(manifest_repository_path),
+                "Go build-context discovery returned an invalid CGO_ENABLED value",
+            ));
+        }
+    };
+    if context.GOOS.trim().is_empty() || context.GOARCH.trim().is_empty() {
+        return Err(go_error(
+            ProjectModelDerivationErrorKind::ProviderOutputIncomplete,
+            IntentionalBoundaryProjectModelFailurePhase::OutputValidation,
+            Some(manifest_repository_path),
+            "Go build-context discovery omitted GOOS or GOARCH",
+        ));
+    }
+    let variant = IntentionalBoundaryProjectModelVariant::Go {
+        goos: context.GOOS.clone(),
+        goarch: context.GOARCH.clone(),
+        cgo_enabled,
+        build_tags: Vec::new(),
+    };
     let logical_command = vec![
         "go".to_string(),
         "-C".to_string(),
@@ -271,7 +340,45 @@ fn run_go_list(
         "-buildvcs=false".to_string(),
         "./...".to_string(),
     ];
-    let mut plan = prepare_historical_runtime(root, &cache, &logical_command).map_err(|error| {
+    let explicit_context = vec![
+        ("CGO_ENABLED".to_string(), context.CGO_ENABLED),
+        ("GOARCH".to_string(), context.GOARCH),
+        ("GOOS".to_string(), context.GOOS),
+    ];
+    let list_execution = run_go_project_model_command(
+        root,
+        &cache,
+        manifest_repository_path,
+        logical_command,
+        &explicit_context,
+        ProjectModelDerivationErrorKind::ProviderRejectedRepository,
+        "sandboxed go list",
+    )?;
+    if context_execution.toolchain_identity_sha256 != list_execution.toolchain_identity_sha256 {
+        return Err(go_error(
+            ProjectModelDerivationErrorKind::InfrastructureFailed,
+            IntentionalBoundaryProjectModelFailurePhase::IntegrityVerification,
+            Some(manifest_repository_path),
+            "Go toolchain identity changed between context discovery and package selection",
+        ));
+    }
+    Ok(GoListExecutionOutput {
+        toolchain_identity_sha256: list_execution.toolchain_identity_sha256,
+        variant,
+        stdout: list_execution.output.stdout,
+    })
+}
+
+fn run_go_project_model_command(
+    root: &Path,
+    cache: &Path,
+    manifest_repository_path: &str,
+    logical_command: Vec<String>,
+    explicit_context: &[(String, String)],
+    nonzero_kind: ProjectModelDerivationErrorKind,
+    label: &str,
+) -> Result<GoCommandExecution, ProjectModelDerivationError> {
+    let mut plan = prepare_historical_runtime(root, cache, &logical_command).map_err(|error| {
         project_model_runtime_plan_error(
             Provider::GoList,
             manifest_repository_path,
@@ -281,11 +388,13 @@ fn run_go_list(
     })?;
     plan.command.env.extend([
         ("GOENV".to_string(), "off".to_string()),
+        ("GOFLAGS".to_string(), String::new()),
         ("GOPROXY".to_string(), "off".to_string()),
         ("GOSUMDB".to_string(), "off".to_string()),
         ("GOTOOLCHAIN".to_string(), "local".to_string()),
         ("GOWORK".to_string(), "off".to_string()),
     ]);
+    plan.command.env.extend(explicit_context.iter().cloned());
     plan.command.env.sort_by(|left, right| left.0.cmp(&right.0));
     if plan
         .command
@@ -297,7 +406,7 @@ fn run_go_list(
             ProjectModelDerivationErrorKind::InfrastructureFailed,
             IntentionalBoundaryProjectModelFailurePhase::RuntimePreparation,
             Some(manifest_repository_path),
-            "go list runtime environment contains duplicate names",
+            "Go project-model runtime environment contains duplicate names",
         ));
     }
     plan.command.allow_network = false;
@@ -312,7 +421,7 @@ fn run_go_list(
         project_model_sandbox_error(
             Provider::GoList,
             manifest_repository_path,
-            "sandboxed go list failed",
+            &format!("{label} failed"),
             error,
         )
     })?;
@@ -322,14 +431,14 @@ fn run_go_list(
             Provider::GoList,
             IntentionalBoundaryProjectModelFailurePhase::Execution,
             manifest_repository_path,
-            "sandboxed go list timed out",
+            format!("{label} timed out"),
             output,
         ));
     }
     if output.status_code != Some(0) {
         let stderr = output.stderr.trim();
         let detail = format!(
-            "sandboxed go list exited with status {}{}",
+            "{label} exited with status {}{}",
             output
                 .status_code
                 .map_or_else(|| "unknown".to_string(), |status| status.to_string()),
@@ -340,7 +449,7 @@ fn run_go_list(
             }
         );
         return Err(project_model_process_error(
-            ProjectModelDerivationErrorKind::ProviderRejectedRepository,
+            nonzero_kind,
             Provider::GoList,
             IntentionalBoundaryProjectModelFailurePhase::Execution,
             manifest_repository_path,
@@ -348,9 +457,9 @@ fn run_go_list(
             output,
         ));
     }
-    Ok(GoListExecutionOutput {
+    Ok(GoCommandExecution {
         toolchain_identity_sha256,
-        stdout: output.stdout,
+        output,
     })
 }
 
