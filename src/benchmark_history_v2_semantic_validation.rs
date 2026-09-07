@@ -1,7 +1,7 @@
 use super::super::{
     HISTORICAL_V2_SEMANTIC_CENSUS_SCHEMA_VERSION, HistoricalV2Materialization,
     HistoricalV2MaterializedRoots, HistoricalV2NodePackageTargetStatus,
-    HistoricalV2PublicSurfaceCoverage, HistoricalV2PythonModuleKind, HistoricalV2SemanticCensus,
+    HistoricalV2PublicSurfaceCoverage, HistoricalV2SemanticCensus,
     HistoricalV2SemanticMethodStatus, HistoricalV2SemanticPublicBinding,
     HistoricalV2SemanticPublicBindingKind, HistoricalV2SemanticPublicReexportHop,
     HistoricalV2SemanticPublicRootOrigin, HistoricalV2SemanticSnapshotCensus,
@@ -301,10 +301,9 @@ fn validate_public_roots<'a>(
             .iter()
             .filter(|module| module.is_distribution_root)
             .filter(|module| {
-                !matches!(
-                    module.kind,
-                    HistoricalV2PythonModuleKind::SourceModule
-                        | HistoricalV2PythonModuleKind::SourcePackageInit
+                !super::public_surface::python_distribution_module_has_compiler_source(
+                    module,
+                    &source.python_distribution_surfaces.modules,
                 )
             })
             .count();
