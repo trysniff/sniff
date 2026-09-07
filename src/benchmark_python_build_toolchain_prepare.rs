@@ -160,6 +160,8 @@ fn prepare_store_entry(
         &request.package_index,
     )?;
     create_environment_from_wheelhouse(root, cache, STATIC_WHEELHOUSE, STATIC_LOCK)?;
+    let resolver_environment_sha256 =
+        python_environment_tree_sha256(&cache.join(RESOLVER_ENVIRONMENT))?;
 
     let dynamic_result = cache.join(DYNAMIC_REQUIREMENTS);
     let dynamic_argument = sandbox_relative(root, &dynamic_result)?;
@@ -176,6 +178,12 @@ fn prepare_store_entry(
         ],
         "Python dynamic build-requirements hook",
     )?;
+    if python_environment_tree_sha256(&cache.join(RESOLVER_ENVIRONMENT))?
+        != resolver_environment_sha256
+    {
+        return Err("Python build backend changed the private resolver environment".to_string());
+    }
+    verify_resolver_assets(cache)?;
     let dynamic_requirements = read_dynamic_requirements(&dynamic_result)?;
 
     remove_directory(
@@ -234,6 +242,7 @@ fn resolve_wheelhouse(
     provenance: &str,
     package_index: &str,
 ) -> Result<(), String> {
+    verify_resolver_assets(cache)?;
     fs::create_dir(cache.join(wheelhouse))
         .map_err(|error| format!("failed to create Python wheelhouse: {error}"))?;
     let wheelhouse_argument = sandbox_relative(root, &cache.join(wheelhouse))?;
@@ -491,6 +500,7 @@ fn run_resolver_python_output(
     allow_network: bool,
     label: &str,
 ) -> Result<CommandOutput, String> {
+    verify_resolver_assets(cache)?;
     let mut command = vec!["{sniff_resolver_python}".to_string()];
     command.extend(arguments.iter().map(|argument| argument.to_string()));
     run_command(root, cache, &command, allow_network, label)
@@ -578,6 +588,35 @@ fn write_pip_wheel(cache: &Path) -> Result<(), String> {
             path.display()
         )
     })
+}
+
+fn verify_resolver_assets(cache: &Path) -> Result<(), String> {
+    for (name, expected) in [
+        (PIP_RUNNER_NAME, PIP_RUNNER.as_bytes()),
+        (
+            RUNTIME_CONTRACT_RUNNER_NAME,
+            RUNTIME_CONTRACT_RUNNER.as_bytes(),
+        ),
+        (WHEELHOUSE_RUNNER_NAME, WHEELHOUSE_RUNNER.as_bytes()),
+        (PIP_WHEEL_NAME, PIP_WHEEL),
+    ] {
+        let path = cache.join(name);
+        let metadata = fs::symlink_metadata(&path).map_err(|error| {
+            format!("failed to inspect private Python runtime asset {name}: {error}")
+        })?;
+        if !metadata.is_file() || metadata.file_type().is_symlink() {
+            return Err(format!(
+                "private Python runtime asset is not a regular file: {name}"
+            ));
+        }
+        let actual = fs::read(&path).map_err(|error| {
+            format!("failed to read private Python runtime asset {name}: {error}")
+        })?;
+        if actual != expected {
+            return Err(format!("private Python runtime asset changed: {name}"));
+        }
+    }
+    Ok(())
 }
 
 fn write_requirements(path: &Path, requirements: &[String]) -> Result<(), String> {
@@ -801,5 +840,25 @@ mod tests {
             "{}",
             String::from_utf8_lossy(&output.stderr)
         );
+    }
+
+    #[test]
+    fn resolver_asset_verification_rejects_helper_tampering() {
+        let root = tempfile::tempdir().unwrap();
+        write_helper(root.path(), PIP_RUNNER_NAME, PIP_RUNNER).unwrap();
+        write_helper(
+            root.path(),
+            RUNTIME_CONTRACT_RUNNER_NAME,
+            RUNTIME_CONTRACT_RUNNER,
+        )
+        .unwrap();
+        write_helper(root.path(), WHEELHOUSE_RUNNER_NAME, WHEELHOUSE_RUNNER).unwrap();
+        write_pip_wheel(root.path()).unwrap();
+        verify_resolver_assets(root.path()).unwrap();
+
+        fs::write(root.path().join(PIP_RUNNER_NAME), "changed").unwrap();
+
+        let error = verify_resolver_assets(root.path()).unwrap_err();
+        assert!(error.contains("runtime asset changed"), "{error}");
     }
 }

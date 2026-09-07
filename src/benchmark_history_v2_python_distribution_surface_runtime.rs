@@ -171,6 +171,7 @@ fn run_python_wheel_build_with_store_and_index(
     if toolchain.requirements_contract != requirements_contract {
         return Err("prepared Python requirements contract path changed".to_string());
     }
+    verify_backend_runner(&runner)?;
     let logical_command = vec![
         "{sniff_private_python}".to_string(),
         "-I".to_string(),
@@ -258,6 +259,20 @@ fn run_python_wheel_build_with_store_and_index(
     })
 }
 
+fn verify_backend_runner(path: &Path) -> Result<(), String> {
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|error| format!("failed to inspect Python wheel backend runner: {error}"))?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return Err("Python wheel backend runner is not a regular file".to_string());
+    }
+    let actual = fs::read(path)
+        .map_err(|error| format!("failed to read Python wheel backend runner: {error}"))?;
+    if actual != PYTHON_WHEEL_BACKEND_RUNNER {
+        return Err("Python build backend changed the wheel backend runner".to_string());
+    }
+    Ok(())
+}
+
 fn read_python_build_manifest(
     checkout: &Path,
     manifest_repository_path: &str,
@@ -338,6 +353,21 @@ def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
     return filename
 "#;
 
+    const RESOLVER_TAMPERING_BACKEND: &str = r#"from pathlib import Path
+import sys
+
+
+def get_requires_for_build_wheel(config_settings=None):
+    cache = Path(sys.executable).resolve().parents[2]
+    with (cache / "pip-env" / "pyvenv.cfg").open("a", encoding="utf-8") as target:
+        target.write("tampered = true\n")
+    return []
+
+
+def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+    raise RuntimeError("build must not run after resolver tampering")
+"#;
+
     fn run_backend_runner(root: &Path) -> Output {
         fs::write(root.join("pep517_runner.py"), PYTHON_WHEEL_BACKEND_RUNNER).unwrap();
         fs::write(
@@ -359,6 +389,30 @@ def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
             .current_dir(root)
             .output()
             .unwrap()
+    }
+
+    fn commit_fixture_repository(root: &Path) -> String {
+        let git = |args: &[&str]| {
+            let output = Command::new("git")
+                .arg("-C")
+                .arg(root)
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "git {} failed: {}",
+                args.join(" "),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            String::from_utf8(output.stdout).unwrap().trim().to_string()
+        };
+        git(&["init", "--quiet"]);
+        git(&["config", "user.name", "SniffBench"]);
+        git(&["config", "user.email", "bench@example.invalid"]);
+        git(&["add", "."]);
+        git(&["commit", "--quiet", "-m", "fixture"]);
+        git(&["rev-parse", "HEAD"])
     }
 
     #[test]
@@ -385,6 +439,22 @@ def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
                 .contains("build backend was not loaded from a declared backend-path"),
             "{}",
             String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    fn backend_runner_verification_rejects_tampering() {
+        let root = tempfile::tempdir().unwrap();
+        let runner = root.path().join("pep517_runner.py");
+        fs::write(&runner, PYTHON_WHEEL_BACKEND_RUNNER).unwrap();
+        verify_backend_runner(&runner).unwrap();
+
+        fs::write(&runner, b"changed").unwrap();
+
+        let error = verify_backend_runner(&runner).unwrap_err();
+        assert!(
+            error.contains("changed the wheel backend runner"),
+            "{error}"
         );
     }
 
@@ -428,27 +498,7 @@ def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
         .unwrap();
         fs::write(root.path().join("fixture_backend.py"), FIXTURE_BACKEND).unwrap();
 
-        let git = |args: &[&str]| {
-            let output = Command::new("git")
-                .arg("-C")
-                .arg(root.path())
-                .args(args)
-                .output()
-                .unwrap();
-            assert!(
-                output.status.success(),
-                "git {} failed: {}",
-                args.join(" "),
-                String::from_utf8_lossy(&output.stderr)
-            );
-            String::from_utf8(output.stdout).unwrap().trim().to_string()
-        };
-        git(&["init", "--quiet"]);
-        git(&["config", "user.name", "SniffBench"]);
-        git(&["config", "user.email", "bench@example.invalid"]);
-        git(&["add", "."]);
-        git(&["commit", "--quiet", "-m", "fixture"]);
-        let revision = git(&["rev-parse", "HEAD"]);
+        let revision = commit_fixture_repository(root.path());
         let snapshot = IntentionalBoundaryRuntimeSnapshot::create(
             root.path(),
             &revision,
@@ -469,6 +519,35 @@ def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
     }
 
     #[test]
+    fn production_runtime_rejects_backend_resolver_tampering() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(
+            root.path().join("pyproject.toml"),
+            "[build-system]\nrequires = []\nbuild-backend = 'fixture_backend'\nbackend-path = ['.']\n",
+        )
+        .unwrap();
+        fs::write(
+            root.path().join("fixture_backend.py"),
+            RESOLVER_TAMPERING_BACKEND,
+        )
+        .unwrap();
+        let revision = commit_fixture_repository(root.path());
+        let snapshot = IntentionalBoundaryRuntimeSnapshot::create(
+            root.path(),
+            &revision,
+            "sniff-python-resolver-tampering-test",
+        )
+        .unwrap();
+
+        let error = run_python_wheel_build(&snapshot, &revision, "pyproject.toml").unwrap_err();
+
+        assert!(
+            error.contains("changed the private resolver environment"),
+            "{error}"
+        );
+    }
+
+    #[test]
     #[ignore = "requires a networked Python package repository"]
     fn production_runtime_builds_with_external_pep517_requirements() {
         let root = tempfile::tempdir().unwrap();
@@ -483,22 +562,7 @@ def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
             "[build-system]\nrequires = ['hatchling==1.27.0']\nbuild-backend = 'hatchling.build'\n\n[project]\nname = 'fixture-package'\nversion = '1.0.0'\n",
         )
         .unwrap();
-        let git = |args: &[&str]| {
-            let output = Command::new("git")
-                .arg("-C")
-                .arg(root.path())
-                .args(args)
-                .output()
-                .unwrap();
-            assert!(output.status.success());
-            String::from_utf8(output.stdout).unwrap().trim().to_string()
-        };
-        git(&["init", "--quiet"]);
-        git(&["config", "user.name", "SniffBench"]);
-        git(&["config", "user.email", "bench@example.invalid"]);
-        git(&["add", "."]);
-        git(&["commit", "--quiet", "-m", "fixture"]);
-        let revision = git(&["rev-parse", "HEAD"]);
+        let revision = commit_fixture_repository(root.path());
         let snapshot = IntentionalBoundaryRuntimeSnapshot::create(
             root.path(),
             &revision,
