@@ -1111,6 +1111,7 @@ fn binds_go_package_source_sets_to_exact_compiler_subjects() {
 
 #[test]
 fn real_go_list_is_sandboxed_or_fails_as_typed_unavailable() {
+    let _sandbox_guard = crate::sandbox::sandbox_test_resource_guard();
     let (root, inventory) = repository();
     let go_available = Command::new("go")
         .arg("version")

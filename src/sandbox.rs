@@ -9,6 +9,8 @@ use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
+#[cfg(test)]
+use std::sync::{Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -24,6 +26,17 @@ pub(crate) const DEFAULT_MEMORY_LIMIT: u64 = 4 * 1024 * 1024 * 1024;
 #[cfg(not(any(unix, windows)))]
 pub(crate) const DEFAULT_MEMORY_LIMIT: u64 = 1024 * 1024 * 1024;
 pub(crate) const DEFAULT_PROCESS_LIMIT: u32 = 128;
+
+#[cfg(test)]
+static SANDBOX_TEST_RESOURCE_LOCK: Mutex<()> = Mutex::new(());
+
+#[cfg(test)]
+pub(crate) fn sandbox_test_resource_guard() -> MutexGuard<'static, ()> {
+    // Hosted kernels account namespace and process limits across the whole test process.
+    SANDBOX_TEST_RESOURCE_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 #[cfg(all(target_os = "linux", not(target_env = "musl")))]
 type UnixResource = libc::__rlimit_resource_t;
