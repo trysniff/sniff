@@ -1,5 +1,7 @@
 use super::*;
-use crate::semantic_index::{SemanticIndexerContribution, SemanticIndexerInvocation};
+use crate::semantic_index::{
+    SemanticIndexerContribution, SemanticIndexerInvocation, SemanticIndexerVariantPlan,
+};
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
@@ -18,6 +20,7 @@ pub(super) struct GoScipExecution<'a> {
     pub(super) installed: &'a InstalledIndexer,
     pub(super) expected_languages: &'a BTreeMap<RepositoryPath, String>,
     pub(super) context: &'a BTreeMap<String, String>,
+    pub(super) variant: &'a crate::semantic_index::SemanticIndexVariant,
 }
 
 pub(super) async fn discover_go_build_context(
@@ -64,6 +67,62 @@ pub(super) async fn discover_go_build_context(
         ("GOFLAGS".to_string(), context.GOFLAGS),
         ("GOOS".to_string(), context.GOOS),
     ]);
+    let invocation = command_invocation(
+        arguments,
+        context.clone(),
+        output.stdout_sha256,
+        SemanticIndexerContribution::BuildContextDiscovery,
+    );
+    Ok((context, invocation))
+}
+
+pub(super) async fn resolve_go_variant_context(
+    spec: PinnedIndexer,
+    root: &Path,
+    installed: &InstalledIndexer,
+    plan: &SemanticIndexerVariantPlan,
+) -> Result<(BTreeMap<String, String>, SemanticIndexerInvocation), SemanticIndexerRunFailure> {
+    plan.validate().map_err(|detail| {
+        indexer_failure(
+            spec,
+            SemanticIndexerRunFailureKind::InvalidInput,
+            SemanticIndexerRunPhase::RepositoryValidation,
+            detail,
+        )
+    })?;
+    let mut names = plan.environment.keys().cloned().collect::<Vec<_>>();
+    names.sort();
+    let arguments = ["env".to_string(), "-json".to_string()]
+        .into_iter()
+        .chain(names)
+        .collect::<Vec<_>>();
+    let output = run_go_tool_with_environment(
+        spec,
+        root,
+        installed,
+        arguments.clone(),
+        "Go variant-context validation",
+        &plan.environment,
+    )
+    .await?;
+    let context: BTreeMap<String, String> =
+        serde_json::from_str(&output.stdout).map_err(|error| {
+            go_output_validation_failure(
+                spec,
+                format!("Go variant-context validation returned invalid JSON: {error}"),
+                &output,
+            )
+        })?;
+    if context != plan.environment {
+        return Err(go_output_validation_failure(
+            spec,
+            format!(
+                "Go toolchain resolved variant {} differently from its committed environment",
+                plan.identity.0
+            ),
+            &output,
+        ));
+    }
     let invocation = command_invocation(
         arguments,
         context.clone(),
@@ -145,6 +204,14 @@ pub(super) async fn run_go_scip(
             detail,
         )
     })?;
+    let prepared = apply_go_environment(prepared, execution.context).map_err(|detail| {
+        indexer_failure(
+            spec,
+            SemanticIndexerRunFailureKind::InvalidInput,
+            SemanticIndexerRunPhase::Preparation,
+            detail,
+        )
+    })?;
     let output = run_with_runtime_identity(prepared, spec.display_name)
         .await
         .map_err(|detail| {
@@ -188,6 +255,7 @@ pub(super) async fn run_go_scip(
             })?;
         invocation.arguments = invocation_arguments;
         invocation.context = execution.context.clone();
+        index.variant = execution.variant.clone();
         Ok(index)
     })
     .map_err(|detail| go_output_validation_failure(spec, detail, &output));
@@ -249,15 +317,43 @@ pub(super) async fn run_go_tool(
     arguments: Vec<String>,
     operation: &str,
 ) -> Result<crate::sandbox::SandboxOutput, SemanticIndexerRunFailure> {
-    let mut prepared = build_indexer_sandbox_command(spec, root, installed, Vec::new(), None)
-        .map_err(|detail| {
+    run_go_tool_with_environment(
+        spec,
+        root,
+        installed,
+        arguments,
+        operation,
+        &BTreeMap::new(),
+    )
+    .await
+}
+
+pub(super) async fn run_go_tool_with_environment(
+    spec: PinnedIndexer,
+    root: &Path,
+    installed: &InstalledIndexer,
+    arguments: Vec<String>,
+    operation: &str,
+    environment: &BTreeMap<String, String>,
+) -> Result<crate::sandbox::SandboxOutput, SemanticIndexerRunFailure> {
+    let prepared = build_indexer_sandbox_command(spec, root, installed, Vec::new(), None).map_err(
+        |detail| {
             indexer_failure(
                 spec,
                 SemanticIndexerRunFailureKind::InfrastructureFailed,
                 SemanticIndexerRunPhase::Preparation,
                 detail,
             )
-        })?;
+        },
+    )?;
+    let mut prepared = apply_go_environment(prepared, environment).map_err(|detail| {
+        indexer_failure(
+            spec,
+            SemanticIndexerRunFailureKind::InvalidInput,
+            SemanticIndexerRunPhase::Preparation,
+            detail,
+        )
+    })?;
     prepared.command.program = go_dependency_program(installed)
         .map_err(|detail| {
             indexer_failure(
@@ -282,6 +378,33 @@ pub(super) async fn run_go_tool(
             )
         })?;
     require_go_command_success(spec, output, operation)
+}
+
+fn apply_go_environment(
+    mut prepared: PreparedIndexerCommand,
+    environment: &BTreeMap<String, String>,
+) -> Result<PreparedIndexerCommand, String> {
+    for (name, value) in environment {
+        if name.trim().is_empty()
+            || name.contains('=')
+            || name.contains('\0')
+            || value.contains('\0')
+        {
+            return Err("Go compiler variant contains an invalid environment entry".to_string());
+        }
+        if prepared
+            .command
+            .env
+            .iter()
+            .any(|(existing, _)| existing == name)
+        {
+            return Err(format!(
+                "Go compiler variant attempts to override protected environment variable {name}"
+            ));
+        }
+        prepared.command.env.push((name.clone(), value.clone()));
+    }
+    Ok(prepared)
 }
 
 fn require_go_command_success(

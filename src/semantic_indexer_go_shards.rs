@@ -23,6 +23,12 @@ pub(super) struct GoPackage {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct GoPackageInventory {
+    pub(super) packages: Vec<GoPackage>,
+    pub(super) ignored_documents: BTreeSet<RepositoryPath>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(super) struct GoPackageShard {
     pub(super) packages: Vec<GoPackage>,
     pub(super) source_bytes: u64,
@@ -57,12 +63,14 @@ struct GoListPackage {
     test_go_files: Vec<String>,
     #[serde(default)]
     x_test_go_files: Vec<String>,
+    #[serde(default)]
+    ignored_go_files: Vec<String>,
 }
 
 pub(super) fn parse_go_package_inventory(
     repository_root: &Path,
     output: &str,
-) -> Result<Vec<GoPackage>, String> {
+) -> Result<GoPackageInventory, String> {
     let root = fs::canonicalize(repository_root).map_err(|error| {
         format!(
             "failed to resolve staged Go repository root {}: {error}",
@@ -71,6 +79,7 @@ pub(super) fn parse_go_package_inventory(
     })?;
     let mut packages = BTreeMap::new();
     let mut document_owners = BTreeMap::<RepositoryPath, String>::new();
+    let mut ignored_document_owners = BTreeMap::<RepositoryPath, String>::new();
     let stream = serde_json::Deserializer::from_str(output).into_iter::<GoListPackage>();
     for item in stream {
         let item =
@@ -109,6 +118,32 @@ pub(super) fn parse_go_package_inventory(
                 .ok_or_else(|| format!("Go package {} source size overflowed", item.import_path))?;
             source_documents.insert(relative);
         }
+        let mut ignored_documents = BTreeSet::new();
+        for file_name in &item.ignored_go_files {
+            require_plain_file_name(file_name)?;
+            let relative = relative_directory.join(file_name);
+            let relative = RepositoryPath(relative.to_string_lossy().replace('\\', "/"));
+            let source = root.join(Path::new(&relative.0));
+            let metadata = fs::symlink_metadata(&source).map_err(|error| {
+                format!(
+                    "Go package {} lists unreadable ignored source {}: {error}",
+                    item.import_path, relative.0
+                )
+            })?;
+            if !metadata.is_file() || metadata.file_type().is_symlink() {
+                return Err(format!(
+                    "Go package {} ignored source is not a plain file: {}",
+                    item.import_path, relative.0
+                ));
+            }
+            ignored_documents.insert(relative);
+        }
+        if !source_documents.is_disjoint(&ignored_documents) {
+            return Err(format!(
+                "Go package {} selected and ignored the same source document",
+                item.import_path
+            ));
+        }
         if source_documents.is_empty() {
             return Err(format!(
                 "Go package {} has no compiler-selected source documents",
@@ -116,10 +151,33 @@ pub(super) fn parse_go_package_inventory(
             ));
         }
         for document in &source_documents {
+            if let Some(owner) = ignored_document_owners.get(document) {
+                return Err(format!(
+                    "Go source document {} is ignored by {owner} and selected by {}",
+                    document.0, item.import_path
+                ));
+            }
             if let Some(owner) = document_owners.insert(document.clone(), item.import_path.clone())
             {
                 return Err(format!(
                     "Go source document {} belongs to both {owner} and {}",
+                    document.0, item.import_path
+                ));
+            }
+        }
+        for document in ignored_documents {
+            if let Some(owner) = document_owners.get(&document) {
+                return Err(format!(
+                    "Go source document {} is selected by {owner} and ignored by {}",
+                    document.0, item.import_path
+                ));
+            }
+            if let Some(owner) =
+                ignored_document_owners.insert(document.clone(), item.import_path.clone())
+                && owner != item.import_path
+            {
+                return Err(format!(
+                    "Go ignored source document {} belongs to both {owner} and {}",
                     document.0, item.import_path
                 ));
             }
@@ -139,7 +197,10 @@ pub(super) fn parse_go_package_inventory(
     if packages.is_empty() {
         return Err("Go package inventory selected no repository packages".to_string());
     }
-    Ok(packages.into_values().collect())
+    Ok(GoPackageInventory {
+        packages: packages.into_values().collect(),
+        ignored_documents: ignored_document_owners.into_keys().collect(),
+    })
 }
 
 pub(super) fn plan_go_package_shards_with_limits(
@@ -306,19 +367,24 @@ mod tests {
         fs::create_dir(root.path().join("b")).unwrap();
         fs::write(root.path().join("a/a.go"), "package a\n").unwrap();
         fs::write(root.path().join("a/a_test.go"), "package a\n").unwrap();
+        fs::write(root.path().join("a/a_windows.go"), "package a\n").unwrap();
         fs::write(root.path().join("b/b.go"), "package b\n").unwrap();
         let output = concat!(
-            r#"{"ImportPath":"example.test/a","Dir":"/workspace/a","GoFiles":["a.go"],"TestGoFiles":["a_test.go"]}"#,
+            r#"{"ImportPath":"example.test/a","Dir":"/workspace/a","GoFiles":["a.go"],"TestGoFiles":["a_test.go"],"IgnoredGoFiles":["a_windows.go"]}"#,
             r#"{"ImportPath":"example.test/b","Dir":"/workspace/b","GoFiles":["b.go"]}"#,
         );
 
         let packages = parse_go_package_inventory(root.path(), output).unwrap();
 
-        assert_eq!(packages.len(), 2);
-        assert_eq!(packages[0].import_path, "example.test/a");
-        assert_eq!(packages[0].source_documents.len(), 2);
-        assert_eq!(packages[0].source_bytes, 20);
-        assert_eq!(packages[1].source_bytes, 10);
+        assert_eq!(packages.packages.len(), 2);
+        assert_eq!(packages.packages[0].import_path, "example.test/a");
+        assert_eq!(packages.packages[0].source_documents.len(), 2);
+        assert_eq!(packages.packages[0].source_bytes, 20);
+        assert_eq!(packages.packages[1].source_bytes, 10);
+        assert_eq!(
+            packages.ignored_documents,
+            BTreeSet::from([RepositoryPath("a/a_windows.go".to_string())])
+        );
     }
 
     #[test]

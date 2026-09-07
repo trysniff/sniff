@@ -1,5 +1,5 @@
 use super::{PinnedIndexer, SemanticIndexerKind};
-use crate::semantic_index::SemanticIndex;
+use crate::semantic_index::{SemanticIndex, SemanticIndexSet};
 use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -48,6 +48,12 @@ pub(crate) struct SemanticIndexerRunFailure {
 #[derive(Debug)]
 pub(crate) struct SemanticIndexerBatchOutcome {
     pub(crate) indexes: BTreeMap<SemanticIndexerKind, SemanticIndex>,
+    pub(crate) failures: Vec<SemanticIndexerRunFailure>,
+}
+
+#[derive(Debug)]
+pub(crate) struct SemanticVariantIndexerBatchOutcome {
+    pub(crate) indexes: BTreeMap<SemanticIndexerKind, SemanticIndexSet>,
     pub(crate) failures: Vec<SemanticIndexerRunFailure>,
 }
 

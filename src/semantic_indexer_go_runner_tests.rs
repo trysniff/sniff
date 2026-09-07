@@ -94,6 +94,7 @@ async fn completed_progress_unit_skips_the_compiler_invocation() {
         runtime_sha256: digest('2'),
         repository_content_sha256: digest('3'),
         file_scope_sha256: digest('4'),
+        variant: crate::semantic_index::SemanticIndexVariant::Unqualified,
         build_context: BTreeMap::from([("GOOS".to_string(), "linux".to_string())]),
         build_context_output_sha256: digest('5'),
         package_inventory_sha256: digest('6'),

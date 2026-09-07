@@ -1,5 +1,6 @@
 use super::*;
 
+#[cfg(test)]
 pub(super) fn resolve_indexer_run(
     side: HistoricalV2SemanticSnapshotSide,
     revision: &str,
@@ -7,6 +8,37 @@ pub(super) fn resolve_indexer_run(
     failures: &mut Vec<HistoricalV2SemanticCensusFailureEvidence>,
     stage_errors: &mut Vec<HistoricalV2SlotStageError>,
 ) -> Option<BTreeMap<SemanticIndexerKind, SemanticIndex>> {
+    match result {
+        Ok(outcome) if outcome.failures.is_empty() => Some(outcome.indexes),
+        Ok(outcome) => {
+            for failure in outcome.failures {
+                match indexer_failure_evidence(side, revision, failure) {
+                    Ok(evidence) => failures.push(evidence),
+                    Err(error) => stage_errors.push(error),
+                }
+            }
+            None
+        }
+        Err(failure) => match indexer_failure_evidence(side, revision, failure) {
+            Ok(evidence) => {
+                failures.push(evidence);
+                None
+            }
+            Err(error) => {
+                stage_errors.push(error);
+                None
+            }
+        },
+    }
+}
+
+pub(super) fn resolve_variant_indexer_run(
+    side: HistoricalV2SemanticSnapshotSide,
+    revision: &str,
+    result: Result<SemanticVariantIndexerBatchOutcome, SemanticIndexerRunFailure>,
+    failures: &mut Vec<HistoricalV2SemanticCensusFailureEvidence>,
+    stage_errors: &mut Vec<HistoricalV2SlotStageError>,
+) -> Option<BTreeMap<SemanticIndexerKind, SemanticIndexSet>> {
     match result {
         Ok(outcome) if outcome.failures.is_empty() => Some(outcome.indexes),
         Ok(outcome) => {

@@ -160,12 +160,13 @@ pub(super) async fn census_semantic_snapshot(
     let indexer_root = progress.map(|progress| progress.indexer_root(inputs.side));
     let run = run_scoped_indexers(
         inputs.root,
+        inputs.source,
         &scoped_files,
         &required_documents,
         indexer_root.as_deref(),
     )
     .await;
-    let Some(indexes) = resolve_indexer_run(
+    let Some(indexes) = resolve_variant_indexer_run(
         inputs.side,
         &inputs.source.revision,
         run,
@@ -177,13 +178,13 @@ pub(super) async fn census_semantic_snapshot(
     let snapshot = resolve_snapshot_build(
         inputs.side,
         &inputs.source.revision,
-        build_semantic_snapshot(
+        build_semantic_snapshot_from_index_sets(
             inputs.root,
             inputs.source,
             &all_files,
             changed_indexers,
             inputs.required_paths,
-            &indexes,
+            indexes,
         ),
         failures,
     );
@@ -205,25 +206,46 @@ pub(super) async fn census_semantic_snapshot(
 
 async fn run_scoped_indexers(
     repository_root: &Path,
+    source: &HistoricalV2SourceSnapshotCensus,
     files: &[FileRecord],
     required_documents: &[FileRecord],
     progress_root: Option<&Path>,
-) -> Result<SemanticIndexerBatchOutcome, SemanticIndexerRunFailure> {
+) -> Result<SemanticVariantIndexerBatchOutcome, SemanticIndexerRunFailure> {
+    let mut variants = BTreeMap::new();
+    if files
+        .iter()
+        .any(|file| indexer_for_language(&file.language) == Ok(SemanticIndexerKind::Go))
+    {
+        variants.insert(
+            SemanticIndexerKind::Go,
+            variants::go_semantic_variant_plans(&source.go_project_model).map_err(|detail| {
+                SemanticIndexerRunFailure {
+                    kind: SemanticIndexerRunFailureKind::InvalidInput,
+                    phase: SemanticIndexerRunPhase::RepositoryValidation,
+                    indexer: Some(SemanticIndexerKind::Go),
+                    detail,
+                    process: None,
+                }
+            })?,
+        );
+    }
     match progress_root {
         Some(progress_root) => {
-            crate::semantic_indexer_runner::run_required_indexers_exhaustive_typed_scoped_resumable(
+            crate::semantic_indexer_runner::run_required_indexers_exhaustive_typed_scoped_resumable_with_variants(
                 repository_root,
                 files,
                 required_documents,
                 progress_root,
+                &variants,
             )
             .await
         }
         None => {
-            crate::semantic_indexer_runner::run_required_indexers_exhaustive_typed_scoped(
+            crate::semantic_indexer_runner::run_required_indexers_exhaustive_typed_scoped_with_variants(
                 repository_root,
                 files,
                 required_documents,
+                &variants,
             )
             .await
         }
