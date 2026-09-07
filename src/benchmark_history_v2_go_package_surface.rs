@@ -117,9 +117,9 @@ pub(super) fn go_package_exposures(
     Ok(exposures)
 }
 
-pub(super) fn go_package_source_map<'a>(
-    exposures: &'a [HistoricalV2GoPackageExposure],
-) -> Result<BTreeMap<&'a str, &'a HistoricalV2GoPackageExposure>, String> {
+pub(super) fn go_package_source_map(
+    exposures: &[HistoricalV2GoPackageExposure],
+) -> Result<BTreeMap<&str, &HistoricalV2GoPackageExposure>, String> {
     let mut sources = BTreeMap::new();
     for exposure in exposures {
         for source in &exposure.source_repository_paths {

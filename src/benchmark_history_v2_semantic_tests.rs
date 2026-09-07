@@ -4269,7 +4269,91 @@ fn go_package_reachability_comes_from_the_compiler_project_model() {
             .find(|binding| binding.repository_path == "api.go")
             .expect("Go public declaration binding");
         assert_eq!(binding.externally_reachable, expected_reachable, "{case}");
+        assert_eq!(
+            semantic.go_package_roots.len(),
+            usize::from(expected_reachable),
+            "{case}"
+        );
+        validation::validate_snapshot(
+            &fixture.source,
+            &semantic,
+            &BTreeSet::from([SemanticIndexerKind::Go]),
+            &fixture_required_paths(&fixture.source),
+        )
+        .unwrap_or_else(|error| panic!("{case} validation failed: {error}"));
     }
+}
+
+#[test]
+fn empty_go_package_is_a_compiler_backed_public_root() {
+    let fixture = compiler_surface_fixture(
+        "go",
+        SemanticIndexerKind::Go,
+        SemanticPositionEncoding::Utf8,
+        &[("api.go", "package api\n")],
+        &[],
+    );
+    let changed_indexers = BTreeSet::from([SemanticIndexerKind::Go]);
+    let required_paths = fixture_required_paths(&fixture.source);
+    let semantic = build_semantic_snapshot(
+        fixture.root.path(),
+        &fixture.source,
+        &fixture.files,
+        &changed_indexers,
+        &required_paths,
+        &fixture.indexes,
+    )
+    .unwrap();
+
+    assert!(semantic.public_bindings.is_empty());
+    assert_eq!(semantic.go_package_roots.len(), 1);
+    let root = &semantic.go_package_roots[0];
+    assert_eq!(root.import_path, "example.test/fixture/api");
+    assert_eq!(root.source_repository_paths, ["api.go"]);
+    validation::validate_snapshot(
+        &fixture.source,
+        &semantic,
+        &changed_indexers,
+        &required_paths,
+    )
+    .unwrap();
+}
+
+#[test]
+fn go_package_root_validation_rejects_omitted_compiler_exposure() {
+    let fixture = compiler_surface_fixture(
+        "go",
+        SemanticIndexerKind::Go,
+        SemanticPositionEncoding::Utf8,
+        &[("api.go", "package api\n")],
+        &[],
+    );
+    let changed_indexers = BTreeSet::from([SemanticIndexerKind::Go]);
+    let required_paths = fixture_required_paths(&fixture.source);
+    let mut semantic = build_semantic_snapshot(
+        fixture.root.path(),
+        &fixture.source,
+        &fixture.files,
+        &changed_indexers,
+        &required_paths,
+        &fixture.indexes,
+    )
+    .unwrap();
+    semantic.go_package_roots.clear();
+    semantic.go_package_root_count = 0;
+    semantic.semantic_snapshot_sha256 = semantic_snapshot_sha256(&semantic).unwrap();
+
+    let error = validation::validate_snapshot(
+        &fixture.source,
+        &semantic,
+        &changed_indexers,
+        &required_paths,
+    )
+    .unwrap_err();
+    assert!(
+        error.contains("Go package roots disagree with compiler package exposures"),
+        "{error}"
+    );
 }
 
 #[test]

@@ -58,6 +58,15 @@ fn surface_entries(
             package_root_fingerprint(root_kind, surface_slot_id)?,
         );
     }
+    for root in &semantic.go_package_roots {
+        record_symbol_free_surface(
+            &mut aggregates,
+            super::IntentionalBoundaryIndexerKind::Go,
+            &root.surface_slot_id,
+            &root.target_id,
+            package_root_fingerprint("go", &root.surface_slot_id)?,
+        );
+    }
     for binding in semantic
         .public_bindings
         .iter()
@@ -125,6 +134,24 @@ fn record_surface_binding(
         .declaration_unit_ids
         .insert(declaration_unit_id.to_string());
     aggregate.symbol_ids.insert(symbol_id.to_string());
+    aggregate
+        .compiler_fingerprint_sha256s
+        .insert(compiler_fingerprint_sha256);
+}
+
+fn record_symbol_free_surface(
+    aggregates: &mut BTreeMap<SurfaceKey, SurfaceAggregate>,
+    indexer: super::IntentionalBoundaryIndexerKind,
+    surface_unit_id: &str,
+    declaration_unit_id: &str,
+    compiler_fingerprint_sha256: String,
+) {
+    let aggregate = aggregates
+        .entry((indexer, surface_unit_id.to_string()))
+        .or_default();
+    aggregate
+        .declaration_unit_ids
+        .insert(declaration_unit_id.to_string());
     aggregate
         .compiler_fingerprint_sha256s
         .insert(compiler_fingerprint_sha256);
@@ -233,7 +260,9 @@ fn hash_json(value: &impl Serialize) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::benchmark::release::HistoricalV2SemanticPublicRoot;
+    use crate::benchmark::release::{
+        HistoricalV2SemanticGoPackageRoot, HistoricalV2SemanticPublicRoot,
+    };
     use crate::benchmark::{
         HistoricalV2SemanticSymbol, IntentionalBoundaryIndexerKind,
         IntentionalBoundarySemanticOrigin, IntentionalBoundarySemanticRange,
@@ -417,6 +446,43 @@ mod tests {
         assert!(!diff_entries(Vec::new(), root).unwrap().preserved);
     }
 
+    #[test]
+    fn empty_go_package_root_is_a_symbol_free_public_surface() {
+        let entries =
+            surface_entries(&snapshot_with_go_root("package-root", "target-a", "api.go")).unwrap();
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].surface_unit_id, "package-root");
+        assert_eq!(entries[0].declaration_unit_ids, ["target-a"]);
+        assert!(entries[0].symbol_ids.is_empty());
+        assert_eq!(entries[0].compiler_fingerprint_sha256s.len(), 1);
+    }
+
+    #[test]
+    fn moving_an_empty_go_package_preserves_its_public_slot() {
+        let base =
+            surface_entries(&snapshot_with_go_root("package-root", "target-a", "api.go")).unwrap();
+        let patched = surface_entries(&snapshot_with_go_root(
+            "package-root",
+            "target-b",
+            "nested/api.go",
+        ))
+        .unwrap();
+
+        let delta = diff_entries(base, patched).unwrap();
+        assert!(delta.preserved);
+        assert!(delta.changed.is_empty());
+    }
+
+    #[test]
+    fn adding_or_removing_an_empty_go_package_changes_the_surface() {
+        let root =
+            surface_entries(&snapshot_with_go_root("package-root", "target-a", "api.go")).unwrap();
+
+        assert!(!diff_entries(root.clone(), Vec::new()).unwrap().preserved);
+        assert!(!diff_entries(Vec::new(), root).unwrap().preserved);
+    }
+
     fn surface_entry(symbol: &str, fingerprint: char) -> HistoricalV2PublicSurfaceEntry {
         HistoricalV2PublicSurfaceEntry {
             indexer: IntentionalBoundaryIndexerKind::Rust,
@@ -486,6 +552,32 @@ mod tests {
         )
     }
 
+    fn snapshot_with_go_root(
+        surface_slot_id: &str,
+        target_id: &str,
+        repository_path: &str,
+    ) -> HistoricalV2SemanticSnapshotCensus {
+        let mut snapshot = snapshot_with_package_root(
+            repository_path,
+            "discarded-module-symbol",
+            IntentionalBoundaryIndexerKind::Rust,
+            HistoricalV2SemanticPublicRootOrigin::RustCargoLibrary,
+        );
+        snapshot.public_roots.clear();
+        snapshot.public_root_count = 0;
+        snapshot.symbols.clear();
+        snapshot.symbol_count = 0;
+        snapshot.go_package_roots = vec![HistoricalV2SemanticGoPackageRoot {
+            target_id: target_id.to_string(),
+            surface_slot_id: surface_slot_id.to_string(),
+            module_path: "example.test/fixture".to_string(),
+            import_path: "example.test/fixture/api".to_string(),
+            source_repository_paths: vec![repository_path.to_string()],
+        }];
+        snapshot.go_package_root_count = 1;
+        snapshot
+    }
+
     fn snapshot_with_package_root(
         repository_path: &str,
         symbol_id: &str,
@@ -518,6 +610,7 @@ mod tests {
                 compiler_definition,
                 origin,
             }],
+            go_package_roots: Vec::new(),
             public_reexport_hops: Vec::new(),
             symbols: vec![HistoricalV2SemanticSymbol {
                 indexer,
@@ -529,6 +622,7 @@ mod tests {
             symbol_count: 1,
             public_binding_count: 0,
             public_root_count: 1,
+            go_package_root_count: 0,
             public_reexport_hop_count: 0,
             public_symbol_count: 0,
             resolved_method_count: 0,

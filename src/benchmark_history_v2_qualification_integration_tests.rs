@@ -228,6 +228,8 @@ fn semantic_snapshot(
         public_bindings,
         public_root_count: 0,
         public_roots: Vec::new(),
+        go_package_root_count: 0,
+        go_package_roots: Vec::new(),
         public_reexport_hop_count: 0,
         public_reexport_hops: Vec::new(),
         symbol_count: symbols.len(),

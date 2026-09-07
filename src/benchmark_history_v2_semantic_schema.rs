@@ -6,7 +6,7 @@ use super::{
 use crate::semantic_index::SemanticPositionEncoding;
 use serde::{Deserialize, Serialize};
 
-pub const HISTORICAL_V2_SEMANTIC_CENSUS_SCHEMA_VERSION: u32 = 14;
+pub const HISTORICAL_V2_SEMANTIC_CENSUS_SCHEMA_VERSION: u32 = 15;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -113,6 +113,16 @@ pub enum HistoricalV2SemanticPublicRootOrigin {
     },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HistoricalV2SemanticGoPackageRoot {
+    pub target_id: String,
+    pub surface_slot_id: String,
+    pub module_path: String,
+    pub import_path: String,
+    pub source_repository_paths: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HistoricalV2SemanticSnapshotCensus {
@@ -124,11 +134,13 @@ pub struct HistoricalV2SemanticSnapshotCensus {
     pub methods: Vec<HistoricalV2SemanticMethod>,
     pub public_bindings: Vec<HistoricalV2SemanticPublicBinding>,
     pub public_roots: Vec<HistoricalV2SemanticPublicRoot>,
+    pub go_package_roots: Vec<HistoricalV2SemanticGoPackageRoot>,
     pub public_reexport_hops: Vec<HistoricalV2SemanticPublicReexportHop>,
     pub symbols: Vec<HistoricalV2SemanticSymbol>,
     pub symbol_count: usize,
     pub public_binding_count: usize,
     pub public_root_count: usize,
+    pub go_package_root_count: usize,
     pub public_reexport_hop_count: usize,
     pub public_symbol_count: usize,
     pub resolved_method_count: usize,
