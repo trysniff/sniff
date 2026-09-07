@@ -169,6 +169,9 @@ pub use history_v2_python_distribution_surface_schema::*;
 #[path = "benchmark_history_v2_python_distribution_surface.rs"]
 mod history_v2_python_distribution_surface;
 
+#[path = "benchmark_history_v2_go_package_surface.rs"]
+mod history_v2_go_package_surface;
+
 #[path = "benchmark_python_build_requirement.rs"]
 mod python_build_requirement;
 
