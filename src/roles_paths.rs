@@ -63,7 +63,6 @@ pub fn is_generated_path(normalized: &str, name: &str) -> bool {
         || name.contains(".generated.")
         || name.starts_with("generated.")
         || name == "generated"
-        || name.ends_with(".pyi")
 }
 
 pub fn is_entrypoint_path(normalized: &str, name: &str) -> bool {
@@ -187,11 +186,12 @@ mod tests {
     }
 
     #[test]
-    fn python_stub_files_are_treated_as_generated() {
-        assert!(is_generated_path(
+    fn python_stub_extensions_do_not_imply_generated_code() {
+        assert!(!is_generated_path(
             "src/typedpkg/__init__.pyi",
             "__init__.pyi"
         ));
-        assert!(is_generated_path("src/typedpkg/api.pyi", "api.pyi"));
+        assert!(!is_generated_path("src/typedpkg/api.pyi", "api.pyi"));
+        assert!(is_generated_path("src/generated/api.pyi", "api.pyi"));
     }
 }

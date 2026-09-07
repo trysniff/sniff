@@ -247,7 +247,12 @@ fn semantic_coverage_excludes_only_committed_generated_and_vendored_evidence() {
         source_semantic_coverage("third_party/client.js", b"export function run() {}\n"),
         HistoricalV2SourceSemanticCoverage::VendoredPath
     );
-    for path in ["src/admin.js", "src/minimal.js", "src/client.js"] {
+    for path in [
+        "src/admin.js",
+        "src/minimal.js",
+        "src/client.js",
+        "src/typedpkg/__init__.pyi",
+    ] {
         assert_eq!(
             source_semantic_coverage(path, b"export function run() {}\n"),
             HistoricalV2SourceSemanticCoverage::Required,
