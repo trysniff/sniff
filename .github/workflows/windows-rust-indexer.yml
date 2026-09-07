@@ -79,12 +79,49 @@ jobs:
             throw "Clean rebuild was not reproducible: $firstHash != $secondHash"
           }
       - name: Generate SPDX SBOM
-        uses: anchore/sbom-action@v0
+        if: matrix.architecture == 'x86_64'
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610
         with:
           path: ${{ runner.temp }}/sniff-rust-indexer-output/sniff-rust-indexer-${{ matrix.target }}
           format: spdx-json
           output-file: ${{ runner.temp }}/sniff-rust-indexer-output/sniff-rust-indexer-${{ matrix.target }}.spdx.json
           upload-artifact: false
+      - name: Generate SPDX SBOM on Windows ARM64
+        if: matrix.architecture == 'aarch64'
+        shell: pwsh
+        run: |
+          $version = "1.42.3"
+          $archive = Join-Path $env:RUNNER_TEMP "syft_${version}_windows_arm64.zip"
+          $toolDirectory = Join-Path $env:RUNNER_TEMP "syft-${version}-windows-arm64"
+          $expectedHash = "76db35f9ec13628e8465685e9773e7de4f57efe1f05bb99959fdde59bdef5f6a"
+          $url = "https://github.com/anchore/syft/releases/download/v${version}/syft_${version}_windows_arm64.zip"
+
+          curl.exe --fail --silent --show-error --location --output $archive $url
+          if ($LASTEXITCODE -ne 0) {
+            throw "Could not download the pinned Windows ARM64 Syft archive"
+          }
+
+          $actualHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $archive).Hash.ToLowerInvariant()
+          if ($actualHash -ne $expectedHash) {
+            throw "Pinned Syft archive checksum mismatch: $actualHash"
+          }
+
+          New-Item -ItemType Directory -Force -Path $toolDirectory | Out-Null
+          tar.exe -xf $archive -C $toolDirectory
+          if ($LASTEXITCODE -ne 0) {
+            throw "Could not extract the pinned Windows ARM64 Syft archive"
+          }
+
+          $source = Join-Path `
+            $env:RUNNER_TEMP `
+            "sniff-rust-indexer-output\sniff-rust-indexer-${{ matrix.target }}"
+          $output = Join-Path `
+            $env:RUNNER_TEMP `
+            "sniff-rust-indexer-output\sniff-rust-indexer-${{ matrix.target }}.spdx.json"
+          & (Join-Path $toolDirectory "syft.exe") scan "dir:$source" -o "spdx-json=$output"
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $output)) {
+            throw "Native Windows ARM64 Syft did not produce the required SPDX SBOM"
+          }
       - name: Prove full SCIP indexing inside AppContainer
         shell: pwsh
         run: |
