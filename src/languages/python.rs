@@ -4,7 +4,7 @@ pub(super) fn adapter() -> LanguageAdapter {
     language_adapter!(
         "python",
         "tree-sitter-python",
-        [".py"],
+        [".py", ".pyi"],
         ["function_definition", "decorated_definition"],
         [],
         "name",

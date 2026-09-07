@@ -9,10 +9,10 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::path::Path;
 
-pub const INTENTIONAL_BOUNDARY_SOURCE_CENSUS_SCHEMA_VERSION: u32 = 1;
-pub(super) const SOURCE_CENSUS_CONTRACT: &str = "sniffbench-intentional-boundary-source-census-v1";
+pub const INTENTIONAL_BOUNDARY_SOURCE_CENSUS_SCHEMA_VERSION: u32 = 2;
+pub(super) const SOURCE_CENSUS_CONTRACT: &str = "sniffbench-intentional-boundary-source-census-v2";
 pub(super) const INTENTIONAL_BOUNDARY_SOURCE_EXTENSION_CONTRACT: &str =
-    "sniff-supported-source-extensions-v1:go,js,jsx,kt,kts,py,rs,ts,tsx";
+    "sniff-supported-source-extensions-v2:go,js,jsx,kt,kts,py,pyi,rs,ts,tsx";
 pub(super) const INTENTIONAL_BOUNDARY_PARSER_ERROR_LIMIT: usize = 4 * 1024;
 type SourceFailureEvidence = IntentionalBoundarySourceCensusFailureEvidence;
 

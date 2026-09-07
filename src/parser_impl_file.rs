@@ -24,6 +24,13 @@ fn load_file_context_checked(file_path: &str) -> Result<(Vec<u8>, LanguageAdapte
     Ok((source_bytes, adapter))
 }
 
+fn is_python_stub(file_path: &str) -> bool {
+    Path::new(file_path)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("pyi"))
+}
+
 pub(in crate::parser) fn parse_file(file_path: &str) -> FileRecord {
     let mut record = FileRecord {
         file_path: file_path.to_string(),
@@ -39,6 +46,9 @@ pub(in crate::parser) fn parse_file(file_path: &str) -> FileRecord {
     record.source = String::from_utf8_lossy(&source_bytes).into_owned();
     record.language = adapter.name.clone();
     let _ = methods::parse_methods_for_language(&mut record, file_path, &adapter);
+    if is_python_stub(file_path) {
+        record.methods.clear();
+    }
 
     record
 }
@@ -77,6 +87,9 @@ fn parse_source_with_adapter_checked(
         methods: Vec::new(),
     };
     methods::parse_methods_for_language(&mut record, file_path, adapter)?;
+    if is_python_stub(file_path) {
+        record.methods.clear();
+    }
     Ok(record)
 }
 

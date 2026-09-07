@@ -54,6 +54,7 @@ fn repository() -> (TempDir, String) {
         ],
     );
     fs::create_dir_all(root.path().join("src/generated")).unwrap();
+    fs::create_dir_all(root.path().join("stubs")).unwrap();
     fs::create_dir_all(root.path().join("tests")).unwrap();
     fs::write(
         root.path().join("src/lib.rs"),
@@ -68,6 +69,11 @@ fn repository() -> (TempDir, String) {
     fs::write(
         root.path().join("tests/value.rs"),
         "#[test] fn behavior() { assert_eq!(1, 1); }\n",
+    )
+    .unwrap();
+    fs::write(
+        root.path().join("stubs/api.pyi"),
+        "def declared(value: str) -> str: ...\n",
     )
     .unwrap();
     fs::write(root.path().join("README.md"), "fixture\n").unwrap();
@@ -95,8 +101,8 @@ fn censuses_every_supported_committed_source_without_walker_roles() {
     )
     .unwrap();
 
-    assert_eq!(census.tracked_entry_count, 4);
-    assert_eq!(census.source_file_count, 3);
+    assert_eq!(census.tracked_entry_count, 5);
+    assert_eq!(census.source_file_count, 4);
     assert_eq!(census.method_count, 3);
     assert_eq!(
         census
@@ -104,8 +110,20 @@ fn censuses_every_supported_committed_source_without_walker_roles() {
             .iter()
             .map(|file| file.repository_path.as_str())
             .collect::<Vec<_>>(),
-        ["src/generated/model.rs", "src/lib.rs", "tests/value.rs"]
+        [
+            "src/generated/model.rs",
+            "src/lib.rs",
+            "stubs/api.pyi",
+            "tests/value.rs"
+        ]
     );
+    let stub = census
+        .source_files
+        .iter()
+        .find(|file| file.repository_path == "stubs/api.pyi")
+        .unwrap();
+    assert_eq!(stub.language, "python");
+    assert!(stub.methods.is_empty());
     validate_intentional_boundary_source_census(
         "github.com/example/census",
         &revision,

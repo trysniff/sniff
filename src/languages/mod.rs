@@ -48,7 +48,7 @@ pub fn get_adapter(extension: &str) -> Option<LanguageAdapter> {
         "js" | "jsx" => Some(javascript::adapter()),
         "ts" | "tsx" => Some(typescript::adapter()),
         "kt" | "kts" => Some(kotlin::adapter()),
-        "py" => Some(python::adapter()),
+        "py" | "pyi" => Some(python::adapter()),
         "go" => Some(go::adapter()),
         "rs" => Some(rust::adapter()),
         _ => None,
