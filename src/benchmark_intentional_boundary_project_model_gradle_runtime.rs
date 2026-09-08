@@ -19,7 +19,7 @@ const GRADLE_TOOLING_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 const GRADLE_TOOLING_OUTPUT_LIMIT: usize = 64 * 1024 * 1024;
 const GRADLE_MACOS_JAVA_TOOL_OPTIONS: &str = "-Djava.net.preferIPv4Stack=true";
 const GRADLE_DEPENDENCY_PREPARATION_CONTRACT: &str =
-    "source-minimized-secret-scrubbed-gradle-help-v1";
+    "source-minimized-secret-scrubbed-gradle-help-v2";
 const GRADLE_CLIENT_SOURCE: &str =
     include_str!("../assets/gradle-tooling/sniff-project-model-client.groovy");
 const GRADLE_INIT_SOURCE: &str =
@@ -480,6 +480,7 @@ fn prepare_gradle_tooling_cache(
         "--no-daemon".to_string(),
         "--no-build-cache".to_string(),
         "--no-configuration-cache".to_string(),
+        "--stacktrace".to_string(),
         "--project-cache-dir".to_string(),
         project_cache_argument,
         "help".to_string(),
@@ -509,11 +510,25 @@ fn prepare_gradle_tooling_cache(
         let detail = if output.timed_out {
             "sandboxed Gradle dependency preparation timed out".to_string()
         } else {
+            let stderr = output.stderr.trim();
+            let stdout = output.stdout.trim();
+            let diagnostics = if !stderr.is_empty() {
+                diagnostic_tail(stderr)
+            } else if !stdout.is_empty() {
+                diagnostic_tail(stdout)
+            } else {
+                String::new()
+            };
             format!(
-                "sandboxed Gradle dependency preparation exited with status {}",
+                "sandboxed Gradle dependency preparation exited with status {}{}",
                 output
                     .status_code
-                    .map_or_else(|| "unknown".to_string(), |status| status.to_string())
+                    .map_or_else(|| "unknown".to_string(), |status| status.to_string()),
+                if diagnostics.is_empty() {
+                    String::new()
+                } else {
+                    format!(": {diagnostics}")
+                }
             )
         };
         return Err(project_model_process_error(

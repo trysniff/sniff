@@ -76,8 +76,21 @@ impl SandboxDriveMapping {
         process_spec.env = process_spec
             .env
             .iter()
-            .map(|(name, value)| (name.clone(), self.rewrite(value, &original_root)))
+            .map(|(name, value)| {
+                (
+                    name.clone(),
+                    self.rewrite_environment_value(name, value, &original_root),
+                )
+            })
             .collect();
+    }
+
+    fn rewrite_environment_value(&self, name: &str, value: &str, original_root: &Path) -> String {
+        if name.eq_ignore_ascii_case("LOCALAPPDATA") {
+            value.to_string()
+        } else {
+            self.rewrite(value, original_root)
+        }
     }
 
     fn rewrite(&self, value: &str, original_root: &Path) -> String {
@@ -213,7 +226,7 @@ fn rewrite_root_path(value: &str, root: &Path, drive: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{recorded_mapping_root, rewrite_root_path};
+    use super::{SandboxDriveMapping, recorded_mapping_root, rewrite_root_path};
     use std::path::Path;
 
     #[test]
@@ -232,6 +245,26 @@ mod tests {
         assert_eq!(
             rewrite_root_path(r"C:\work\repository-copy\file", root, "Z:"),
             r"C:\work\repository-copy\file"
+        );
+    }
+
+    #[test]
+    fn appcontainer_local_app_data_keeps_its_validated_physical_identity() {
+        let mapping = SandboxDriveMapping {
+            drive: "Z:".to_string(),
+            root: std::path::PathBuf::from(r"C:\work\repository"),
+            active: false,
+        };
+        let root = Path::new(r"C:\work\repository");
+        let value = r"C:\work\repository\cache\home";
+
+        assert_eq!(
+            mapping.rewrite_environment_value("LOCALAPPDATA", value, root),
+            value
+        );
+        assert_eq!(
+            mapping.rewrite_environment_value("HOME", value, root),
+            r"Z:\cache\home"
         );
     }
 
