@@ -196,6 +196,12 @@ jobs:
             benchmark::release::history_v2_semantic::tests::pinned_typescript_provider_drives_recursive_public_reexports \
             -- --exact --ignored --test-threads=1 --nocapture
           cargo test --lib --locked \
+            benchmark::release::intentional_boundary_project_model_typescript::tests::real_pinned_compiler_api_emits_the_reference_world \
+            -- --exact --ignored --test-threads=1 --nocapture
+          cargo test --lib --locked \
+            semantic_indexer_runner::typescript_runner::tests::live_project_reference_world_is_indexed_as_one_qualified_variant \
+            -- --exact --ignored --test-threads=1 --nocapture
+          cargo test --lib --locked \
             benchmark::release::history_v2_semantic::tests::pinned_python_provider_drives_signatures_and_recursive_public_surfaces \
             -- --exact --ignored --test-threads=1 --nocapture
           cargo test --lib --locked \
