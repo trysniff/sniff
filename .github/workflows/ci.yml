@@ -199,6 +199,18 @@ jobs:
             benchmark::release::intentional_boundary_project_model_typescript::tests::real_pinned_compiler_api_emits_the_reference_world \
             -- --exact --ignored --test-threads=1 --nocapture
           cargo test --lib --locked \
+            benchmark::release::history_v2_node_consumer_profile::tests::real_typescript_and_node_resolvers_select_the_active_conditions \
+            -- --exact --ignored --test-threads=1 --nocapture
+          cargo test --lib --locked \
+            benchmark::release::history_v2_node_consumer_profile::tests::real_resolvers_preserve_null_array_fallback_identity_without_executing_targets \
+            -- --exact --ignored --test-threads=1 --nocapture
+          cargo test --lib --locked \
+            benchmark::release::history_v2_node_consumer_profile::tests::real_resolvers_apply_legacy_typings_and_main_precedence \
+            -- --exact --ignored --test-threads=1 --nocapture
+          cargo test --lib --locked \
+            benchmark::release::history_v2_node_consumer_profile::tests::real_compiler_maps_generated_declarations_back_to_exact_source_identity \
+            -- --exact --ignored --test-threads=1 --nocapture
+          cargo test --lib --locked \
             semantic_indexer_runner::typescript_runner::tests::live_project_reference_world_is_indexed_as_one_qualified_variant \
             -- --exact --ignored --test-threads=1 --nocapture
           cargo test --lib --locked \
