@@ -1,4 +1,8 @@
 use super::history_v2_go_package_surface::{go_package_exposures, go_package_source_map};
+use super::history_v2_node_consumer_profile::{
+    census_historical_v2_node_consumer_profiles,
+    validate_historical_v2_node_consumer_profile_census_commitment,
+};
 use super::history_v2_node_package_surface::{
     census_historical_v2_node_package_surfaces,
     validate_historical_v2_node_package_surface_census_commitment,
@@ -19,20 +23,21 @@ use super::intentional_boundary_project_model_outcome::{
 use super::intentional_boundary_project_model_typescript::census_intentional_boundary_typescript_project_models_typed;
 use super::{
     BoundaryGitEntryKind, HISTORICAL_V2_SOURCE_CENSUS_SCHEMA_VERSION, HistoricalV2Materialization,
-    HistoricalV2MaterializedRoots, HistoricalV2NodePackageSurfaceCensus,
-    HistoricalV2PublicSurfaceCoverage, HistoricalV2PythonDistributionSurfaceCensus,
-    HistoricalV2SlotStage, HistoricalV2SlotStageError, HistoricalV2SlotStageErrorKind,
-    HistoricalV2SourceByteRange, HistoricalV2SourceCensus, HistoricalV2SourceCensusExclusion,
-    HistoricalV2SourceCensusFailureEvidence, HistoricalV2SourceFile,
-    HistoricalV2SourceIdentifierPositions, HistoricalV2SourceMethod, HistoricalV2SourcePosition,
-    HistoricalV2SourcePositionRange, HistoricalV2SourcePublicBindingKind,
-    HistoricalV2SourcePublicDeclaration, HistoricalV2SourcePublicNamespace,
-    HistoricalV2SourcePublicReexport, HistoricalV2SourcePublicReexportKind,
-    HistoricalV2SourcePublicSymbolKind, HistoricalV2SourceSemanticCoverage,
-    HistoricalV2SourceSnapshotCensus, HistoricalV2SourceSnapshotSide, HistoricalV2StageResult,
-    IntentionalBoundaryProjectModelCensus, IntentionalBoundaryRepositoryInventory,
-    IntentionalBoundarySourceCensus, census_intentional_boundary_repository,
-    inventory_intentional_boundary_repository, validate_historical_v2_materialization,
+    HistoricalV2MaterializedRoots, HistoricalV2NodeConsumerProfileCensus,
+    HistoricalV2NodePackageSurfaceCensus, HistoricalV2PublicSurfaceCoverage,
+    HistoricalV2PythonDistributionSurfaceCensus, HistoricalV2SlotStage, HistoricalV2SlotStageError,
+    HistoricalV2SlotStageErrorKind, HistoricalV2SourceByteRange, HistoricalV2SourceCensus,
+    HistoricalV2SourceCensusExclusion, HistoricalV2SourceCensusFailureEvidence,
+    HistoricalV2SourceFile, HistoricalV2SourceIdentifierPositions, HistoricalV2SourceMethod,
+    HistoricalV2SourcePosition, HistoricalV2SourcePositionRange,
+    HistoricalV2SourcePublicBindingKind, HistoricalV2SourcePublicDeclaration,
+    HistoricalV2SourcePublicNamespace, HistoricalV2SourcePublicReexport,
+    HistoricalV2SourcePublicReexportKind, HistoricalV2SourcePublicSymbolKind,
+    HistoricalV2SourceSemanticCoverage, HistoricalV2SourceSnapshotCensus,
+    HistoricalV2SourceSnapshotSide, HistoricalV2StageResult, IntentionalBoundaryProjectModelCensus,
+    IntentionalBoundaryRepositoryInventory, IntentionalBoundarySourceCensus,
+    census_intentional_boundary_repository, inventory_intentional_boundary_repository,
+    validate_historical_v2_materialization,
     validate_intentional_boundary_project_model_census_commitment,
 };
 use serde::Serialize;
@@ -40,7 +45,7 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::path::Path;
 
-const SOURCE_CENSUS_CONTRACT: &str = "sniffbench-historical-v2-source-census-v16";
+const SOURCE_CENSUS_CONTRACT: &str = "sniffbench-historical-v2-source-census-v17";
 pub(super) const PARSER_ERROR_LIMIT: usize = 4 * 1024;
 type SourceCensusStageResult =
     HistoricalV2StageResult<HistoricalV2SourceCensus, HistoricalV2SourceCensusExclusion>;
@@ -170,6 +175,20 @@ pub fn census_historical_v2_sources_typed(
         &patched_inventory,
     )
     .map_err(infrastructure)?;
+    let base_node_consumer_profiles = census_historical_v2_node_consumer_profiles(
+        &roots.base_root,
+        &base_inventory,
+        &base_node_package_surfaces,
+        &base_typescript_project_model,
+    )
+    .map_err(infrastructure)?;
+    let patched_node_consumer_profiles = census_historical_v2_node_consumer_profiles(
+        &roots.patched_root,
+        &patched_inventory,
+        &patched_node_package_surfaces,
+        &patched_typescript_project_model,
+    )
+    .map_err(infrastructure)?;
     let base_python_distribution_surfaces = census_historical_v2_python_distribution_surfaces(
         &inventory_repository,
         &materialization.base_revision,
@@ -199,6 +218,7 @@ pub fn census_historical_v2_sources_typed(
                 go_project_model: base_go_project_model,
                 typescript_project_model: base_typescript_project_model,
                 node_package_surfaces: base_node_package_surfaces,
+                node_consumer_profiles: base_node_consumer_profiles,
                 python_distribution_surfaces: base_python_distribution_surfaces,
             },
         )
@@ -212,6 +232,7 @@ pub fn census_historical_v2_sources_typed(
                 go_project_model: patched_go_project_model,
                 typescript_project_model: patched_typescript_project_model,
                 node_package_surfaces: patched_node_package_surfaces,
+                node_consumer_profiles: patched_node_consumer_profiles,
                 python_distribution_surfaces: patched_python_distribution_surfaces,
             },
         )
@@ -283,6 +304,12 @@ pub fn validate_historical_v2_source_census_commitment(
         &base_inventory,
         &census.base.node_package_surfaces,
     )?;
+    validate_historical_v2_node_consumer_profile_census_commitment(
+        &base_inventory,
+        &census.base.node_package_surfaces,
+        &census.base.typescript_project_model,
+        &census.base.node_consumer_profiles,
+    )?;
     validate_historical_v2_python_distribution_surface_census_commitment(
         &roots.base_root,
         &base_inventory,
@@ -297,6 +324,12 @@ pub fn validate_historical_v2_source_census_commitment(
         &roots.patched_root,
         &patched_inventory,
         &census.patched.node_package_surfaces,
+    )?;
+    validate_historical_v2_node_consumer_profile_census_commitment(
+        &patched_inventory,
+        &census.patched.node_package_surfaces,
+        &census.patched.typescript_project_model,
+        &census.patched.node_consumer_profiles,
     )?;
     validate_intentional_boundary_project_model_census_commitment(
         &patched_inventory,
@@ -331,6 +364,7 @@ pub fn validate_historical_v2_source_census_commitment(
             go_project_model: census.base.go_project_model.clone(),
             typescript_project_model: census.base.typescript_project_model.clone(),
             node_package_surfaces: census.base.node_package_surfaces.clone(),
+            node_consumer_profiles: census.base.node_consumer_profiles.clone(),
             python_distribution_surfaces: census.base.python_distribution_surfaces.clone(),
         },
     )?;
@@ -343,6 +377,7 @@ pub fn validate_historical_v2_source_census_commitment(
             go_project_model: census.patched.go_project_model.clone(),
             typescript_project_model: census.patched.typescript_project_model.clone(),
             node_package_surfaces: census.patched.node_package_surfaces.clone(),
+            node_consumer_profiles: census.patched.node_consumer_profiles.clone(),
             python_distribution_surfaces: census.patched.python_distribution_surfaces.clone(),
         },
     )?;
@@ -472,6 +507,7 @@ struct ProjectSnapshotSemanticInputs {
     go_project_model: IntentionalBoundaryProjectModelCensus,
     typescript_project_model: IntentionalBoundaryProjectModelCensus,
     node_package_surfaces: HistoricalV2NodePackageSurfaceCensus,
+    node_consumer_profiles: HistoricalV2NodeConsumerProfileCensus,
     python_distribution_surfaces: HistoricalV2PythonDistributionSurfaceCensus,
 }
 
@@ -486,6 +522,7 @@ fn project_snapshot(
         go_project_model,
         typescript_project_model,
         node_package_surfaces,
+        node_consumer_profiles,
         python_distribution_surfaces,
     } = semantic;
     if inventory.revision != parser_census.revision
@@ -619,6 +656,7 @@ fn project_snapshot(
         go_project_model,
         typescript_project_model,
         node_package_surfaces,
+        node_consumer_profiles,
         python_distribution_surfaces,
         tracked_entry_count: inventory.tracked_entries.len(),
         source_file_count: source_files.len(),
@@ -1056,6 +1094,7 @@ fn snapshot_census_sha256(value: &HistoricalV2SourceSnapshotCensus) -> Result<St
         &value.go_project_model,
         &value.typescript_project_model,
         &value.node_package_surfaces,
+        &value.node_consumer_profiles,
         &value.python_distribution_surfaces,
         value.tracked_entry_count,
         &value.source_files,

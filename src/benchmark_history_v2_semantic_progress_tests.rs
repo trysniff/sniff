@@ -1,8 +1,10 @@
 use super::*;
 use crate::benchmark::{
+    HISTORICAL_V2_NODE_CONSUMER_PROFILE_CENSUS_SCHEMA_VERSION,
     HISTORICAL_V2_NODE_PACKAGE_SURFACE_CENSUS_SCHEMA_VERSION,
     HISTORICAL_V2_PYTHON_DISTRIBUTION_SURFACE_CENSUS_SCHEMA_VERSION,
-    HistoricalV2NodePackageSurfaceCensus, HistoricalV2PythonDistributionSurfaceCensus,
+    HistoricalV2NodeConsumerProfileCensus, HistoricalV2NodePackageSurfaceCensus,
+    HistoricalV2PythonDistributionSurfaceCensus,
     INTENTIONAL_BOUNDARY_PROJECT_MODEL_CENSUS_SCHEMA_VERSION,
     IntentionalBoundaryProjectModelCensus,
 };
@@ -41,6 +43,25 @@ fn empty_node_package_surfaces(revision: &str) -> HistoricalV2NodePackageSurface
     }
 }
 
+fn empty_node_consumer_profiles(revision: &str) -> HistoricalV2NodeConsumerProfileCensus {
+    HistoricalV2NodeConsumerProfileCensus {
+        schema_version: HISTORICAL_V2_NODE_CONSUMER_PROFILE_CENSUS_SCHEMA_VERSION,
+        contract: "fixture".to_string(),
+        repository: "example/repository".to_string(),
+        revision: revision.to_string(),
+        inventory_sha256: digest('1'),
+        node_package_surface_census_sha256: digest('9'),
+        typescript_project_model_census_sha256: digest('0'),
+        typescript_compiler_version: None,
+        node_runtime_version: None,
+        node_runtime_sha256: None,
+        profiles: Vec::new(),
+        profile_count_by_mode: BTreeMap::new(),
+        unresolved_resolution_count: 0,
+        census_sha256: digest('a'),
+    }
+}
+
 fn empty_python_distribution_surfaces(
     revision: &str,
 ) -> HistoricalV2PythonDistributionSurfaceCensus {
@@ -66,6 +87,7 @@ fn source_snapshot(revision: &str, digest_character: char) -> HistoricalV2Source
         go_project_model: empty_cargo_project_model(revision),
         typescript_project_model: empty_cargo_project_model(revision),
         node_package_surfaces: empty_node_package_surfaces(revision),
+        node_consumer_profiles: empty_node_consumer_profiles(revision),
         python_distribution_surfaces: empty_python_distribution_surfaces(revision),
         tracked_entry_count: 0,
         source_files: Vec::new(),

@@ -7,7 +7,7 @@ use crate::semantic_index::{SemanticIndexVariant, SemanticPositionEncoding};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-pub const HISTORICAL_V2_SEMANTIC_CENSUS_SCHEMA_VERSION: u32 = 18;
+pub const HISTORICAL_V2_SEMANTIC_CENSUS_SCHEMA_VERSION: u32 = 19;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -144,7 +144,8 @@ pub struct HistoricalV2SemanticPublicRoot {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum HistoricalV2SemanticPublicRootOrigin {
     RustCargoLibrary,
-    NodePackageExposure {
+    NodePackageConsumerProfile {
+        consumer_profile_id: String,
         exposure_id: String,
         surface_slot_id: String,
     },
