@@ -85,7 +85,7 @@ class SniffGradleModelBuilder implements ToolingModelBuilder {
         List<SniffGradleProjectModelData> projects = gradleProjects.collect { project -> projectModel(project) }
         attachProducerTasks(gradleProjects, projects)
         new SniffGradleBuildModelData(
-            contract: "sniff-gradle-tooling-project-model-v5",
+            contract: "sniff-gradle-tooling-project-model-v6",
             gradleVersion: root.gradle.gradleVersion,
             settingsDirectory: root.gradle.startParameter.currentDir.canonicalPath,
             projects: projects,
@@ -146,6 +146,7 @@ class SniffGradleModelBuilder implements ToolingModelBuilder {
         List<SniffKotlinTargetData> kotlinTargets = kotlinTargetValues
             .sort { left, right -> left.name <=> right.name }
             .collect { target ->
+                String targetName = kotlinJvm ? target.platformType.toString() : target.targetName
                 List<SniffKotlinCompilationData> compilations = target.compilations
                     .toList()
                     .sort { left, right -> left.name <=> right.name }
@@ -157,7 +158,7 @@ class SniffGradleModelBuilder implements ToolingModelBuilder {
                         )
                     }
                 new SniffKotlinTargetData(
-                    name: target.name,
+                    name: targetName,
                     platformType: target.platformType.toString(),
                     publishable: target.publishable,
                     componentNames: target.components.collect { component -> component.name }.toSorted(),
