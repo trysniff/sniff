@@ -2,6 +2,7 @@ use super::super::history_v2_go_package_surface::{
     HistoricalV2GoPackageExposure, go_package_exposures, go_package_source_map,
 };
 use super::super::{
+    HistoricalV2NodeConsumerProfile, HistoricalV2NodeConsumerResolution,
     HistoricalV2NodePackageExposure, HistoricalV2NodePackageTargetStatus,
     HistoricalV2PublicSurfaceCoverage, HistoricalV2PythonDistributionModule,
     HistoricalV2PythonModuleKind, HistoricalV2SemanticGoPackageRoot,
@@ -30,6 +31,11 @@ use crate::types::FileRecord;
 use scip::types::descriptor::Suffix;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
+
+#[path = "benchmark_history_v2_semantic_public_surface_node.rs"]
+mod node;
+
+use node::*;
 pub(super) struct PublicSurfaceBindingInputs<'a> {
     pub(super) root: &'a Path,
     pub(super) source: &'a HistoricalV2SourceSnapshotCensus,
@@ -229,9 +235,10 @@ pub(super) fn bind_public_surface(
             repository_path: root.exposure.target_repository_path.clone(),
             module_symbol_id: root.symbol.id.0.clone(),
             compiler_definition: flatten_location(root.definition),
-            origin: HistoricalV2SemanticPublicRootOrigin::NodePackageExposure {
+            origin: HistoricalV2SemanticPublicRootOrigin::NodePackageConsumerProfile {
+                consumer_profile_id: root.profile.profile_id.clone(),
                 exposure_id: root.exposure.exposure_id.clone(),
-                surface_slot_id: root.exposure.surface_slot_id.clone(),
+                surface_slot_id: root.profile.consumer_surface_slot_id.clone(),
             },
         });
     }
@@ -452,7 +459,7 @@ pub(super) fn bind_public_surface(
             &mut Vec::new(),
         )?;
         for slot in slots.into_iter().filter(|slot| slot.owner.is_none()) {
-            let expanded = expand_node_package_slot(root.exposure, slot)?;
+            let expanded = expand_node_package_slot(root.profile, root.exposure, slot)?;
             let symbol = index
                 .symbols
                 .get(&crate::semantic_index::SemanticSymbolId(
@@ -637,12 +644,6 @@ fn expand_owner_surfaces(
     Ok(())
 }
 
-struct CompilerNodePublicRoot<'a> {
-    exposure: &'a HistoricalV2NodePackageExposure,
-    symbol: &'a SemanticSymbol,
-    definition: &'a SemanticLocation,
-}
-
 struct CompilerPythonDistributionModule<'a> {
     module: &'a HistoricalV2PythonDistributionModule,
     symbol: &'a SemanticSymbol,
@@ -825,95 +826,13 @@ fn compiler_python_distribution_modules<'a>(
     Ok(resolved)
 }
 
-fn compiler_node_public_roots<'a>(
-    source: &'a HistoricalV2SourceSnapshotCensus,
-    index: &'a SemanticIndex,
-) -> Result<Vec<CompilerNodePublicRoot<'a>>, String> {
-    if source.node_package_surfaces.revision != source.revision
-        || source.node_package_surfaces.inventory_sha256 != source.inventory_sha256
-    {
-        return Err("historical-v2 Node package surface identity changed".to_string());
-    }
-    let source_files = source
-        .source_files
-        .iter()
-        .map(|file| (file.repository_path.as_str(), file))
-        .collect::<BTreeMap<_, _>>();
-    let mut roots = Vec::new();
-    for exposure in &source.node_package_surfaces.exposures {
-        if exposure.target_status != HistoricalV2NodePackageTargetStatus::TrackedRegularFile {
-            return Err(format!(
-                "historical-v2 Node package exposure has no tracked compiler root: {}",
-                exposure.exposure_id
-            ));
-        }
-        let file = source_files
-            .get(exposure.target_repository_path.as_str())
-            .copied()
-            .ok_or_else(|| {
-                format!(
-                    "historical-v2 Node package target is absent from source census: {}",
-                    exposure.target_repository_path
-                )
-            })?;
-        if !matches!(file.language.as_str(), "typescript" | "javascript")
-            || file.semantic_coverage != HistoricalV2SourceSemanticCoverage::Required
-            || exposure.target_object_id.as_deref() != Some(file.object_id.as_str())
-        {
-            return Err(format!(
-                "historical-v2 Node package target is not required compiler source: {}",
-                exposure.target_repository_path
-            ));
-        }
-        let candidates = index
-            .symbols
-            .values()
-            .filter(|symbol| {
-                symbol.origin == SemanticSymbolOrigin::Repository
-                    && symbol.ambiguity_notes.is_empty()
-                    && symbol.owner.is_none()
-                    && symbol.kind.category == SemanticSymbolCategory::Module
-            })
-            .filter_map(|symbol| {
-                let parsed = scip::symbol::parse_symbol(&symbol.provider_identity).ok()?;
-                (parsed.scheme == "scip-typescript").then_some((symbol, parsed))
-            })
-            .flat_map(|(symbol, _)| {
-                symbol
-                    .definitions
-                    .iter()
-                    .filter(|definition| definition.document.0 == exposure.target_repository_path)
-                    .map(move |definition| (symbol, definition))
-            })
-            .collect::<Vec<_>>();
-        let [(symbol, definition)] = candidates.as_slice() else {
-            return Err(format!(
-                "historical-v2 compiler resolved Node package exposure {} to {} root module definitions",
-                exposure.exposure_id,
-                candidates.len()
-            ));
-        };
-        if !index.documents.contains_key(&definition.document) {
-            return Err(format!(
-                "historical-v2 compiler omitted Node package root document {}",
-                exposure.target_repository_path
-            ));
-        }
-        roots.push(CompilerNodePublicRoot {
-            exposure,
-            symbol,
-            definition,
-        });
-    }
-    Ok(roots)
-}
-
 fn expand_node_package_slot(
+    profile: &HistoricalV2NodeConsumerProfile,
     exposure: &HistoricalV2NodePackageExposure,
     target: ResolvedPublicSlot,
 ) -> Result<ResolvedPublicSlot, String> {
     let surface_unit_id = historical_node_package_public_surface_unit_id(
-        &exposure.surface_slot_id,
+        &profile.consumer_surface_slot_id,
         &target.name,
         target.owner.as_deref(),
         target.namespace,
@@ -929,7 +848,14 @@ fn expand_node_package_slot(
     let mut binding = target.binding;
     binding.surface_unit_id = surface_unit_id;
     binding.declaration_unit_id = declaration_unit_id;
-    binding.repository_path = exposure.target_repository_path.clone();
+    let HistoricalV2NodeConsumerResolution::Resolved {
+        resolved_repository_path,
+        ..
+    } = &profile.compiler
+    else {
+        return Err("historical-v2 Node package profile became unresolved".to_string());
+    };
+    binding.repository_path = resolved_repository_path.clone();
     binding.binding = HistoricalV2SemanticPublicBindingKind::PackageExposure;
     binding.externally_reachable = true;
     binding.package_exposure_id = Some(exposure.exposure_id.clone());

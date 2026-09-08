@@ -1,10 +1,11 @@
 use super::super::{
-    HistoricalV2NodePackageExposure, HistoricalV2NodePackageTargetStatus,
-    HistoricalV2PythonDistributionModule, HistoricalV2SemanticPublicBinding,
-    HistoricalV2SemanticPublicBindingKind, HistoricalV2SemanticPublicReexportHop,
-    HistoricalV2SemanticSnapshotCensus, HistoricalV2SourceFile, HistoricalV2SourcePublicNamespace,
-    HistoricalV2SourcePublicReexport, HistoricalV2SourcePublicReexportKind,
-    HistoricalV2SourcePublicSymbolKind, HistoricalV2SourceSnapshotCensus,
+    HistoricalV2NodeConsumerProfile, HistoricalV2NodeConsumerResolution,
+    HistoricalV2NodePackageExposure, HistoricalV2PythonDistributionModule,
+    HistoricalV2SemanticPublicBinding, HistoricalV2SemanticPublicBindingKind,
+    HistoricalV2SemanticPublicReexportHop, HistoricalV2SemanticSnapshotCensus,
+    HistoricalV2SourceFile, HistoricalV2SourcePublicNamespace, HistoricalV2SourcePublicReexport,
+    HistoricalV2SourcePublicReexportKind, HistoricalV2SourcePublicSymbolKind,
+    HistoricalV2SourceSnapshotCensus,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -98,16 +99,62 @@ pub(super) fn validate_complete_reexport_expansions(
         if committed.census.indexer
             == super::super::IntentionalBoundaryIndexerKind::TypeScriptJavaScript
         {
-            for exposure in &source.node_package_surfaces.exposures {
-                if exposure.target_status != HistoricalV2NodePackageTargetStatus::TrackedRegularFile
-                {
+            if matches!(
+                variant,
+                crate::semantic_index::SemanticIndexVariant::Qualified { .. }
+            ) && source
+                .node_consumer_profiles
+                .profiles
+                .iter()
+                .any(|profile| profile.project_model_execution_id.is_none())
+            {
+                return Err(
+                    "historical-v2 semantic validation found a Node profile without a compiler world"
+                        .to_string(),
+                );
+            }
+            for profile in source
+                .node_consumer_profiles
+                .profiles
+                .iter()
+                .filter(|profile| match variant {
+                    crate::semantic_index::SemanticIndexVariant::Qualified { identity, .. } => {
+                        profile.project_model_execution_id.as_deref() == Some(identity.0.as_str())
+                    }
+                    crate::semantic_index::SemanticIndexVariant::Unqualified => true,
+                })
+            {
+                let HistoricalV2NodeConsumerResolution::Resolved {
+                    selected_exposure_id,
+                    resolved_repository_path,
+                    ..
+                } = &profile.compiler
+                else {
                     return Err(
-                        "historical-v2 semantic validation found an unresolved Node package root"
+                        "historical-v2 semantic validation found an unresolved Node compiler profile"
+                            .to_string(),
+                    );
+                };
+                if !matches!(
+                    profile.runtime,
+                    HistoricalV2NodeConsumerResolution::Resolved { .. }
+                ) {
+                    return Err(
+                        "historical-v2 semantic validation found an unresolved Node runtime profile"
                             .to_string(),
                     );
                 }
+                let exposure = source
+                    .node_package_surfaces
+                    .exposures
+                    .iter()
+                    .find(|exposure| exposure.exposure_id == *selected_exposure_id)
+                    .ok_or_else(|| {
+                        "historical-v2 semantic validation found an unknown selected Node branch"
+                            .to_string()
+                    })?;
                 let file = files
-                    .get(exposure.target_repository_path.as_str())
+                    .get(resolved_repository_path.as_str())
                     .copied()
                     .ok_or_else(|| {
                         "historical-v2 semantic validation omitted a Node package target"
@@ -130,7 +177,8 @@ pub(super) fn validate_complete_reexport_expansions(
                 .into_iter()
                 .filter(|slot| slot.owner.is_none())
                 {
-                    expected_package_exposures.insert(expected_node_package_slot(exposure, slot)?);
+                    expected_package_exposures
+                        .insert(expected_node_package_slot(profile, exposure, slot)?);
                 }
             }
         }
@@ -242,11 +290,12 @@ fn expected_python_package_slot(
 }
 
 fn expected_node_package_slot(
+    profile: &HistoricalV2NodeConsumerProfile,
     exposure: &HistoricalV2NodePackageExposure,
     target: ExpectedPublicSlot,
 ) -> Result<HistoricalV2SemanticPublicBinding, String> {
     let surface_unit_id = super::public_surface::historical_node_package_public_surface_unit_id(
-        &exposure.surface_slot_id,
+        &profile.consumer_surface_slot_id,
         &target.name,
         target.owner.as_deref(),
         target.namespace,
@@ -262,7 +311,14 @@ fn expected_node_package_slot(
     let mut binding = target.binding;
     binding.surface_unit_id = surface_unit_id;
     binding.declaration_unit_id = declaration_unit_id;
-    binding.repository_path = exposure.target_repository_path.clone();
+    let HistoricalV2NodeConsumerResolution::Resolved {
+        resolved_repository_path,
+        ..
+    } = &profile.compiler
+    else {
+        return Err("historical-v2 Node package profile became unresolved".to_string());
+    };
+    binding.repository_path = resolved_repository_path.clone();
     binding.binding = HistoricalV2SemanticPublicBindingKind::PackageExposure;
     binding.externally_reachable = true;
     binding.package_exposure_id = Some(exposure.exposure_id.clone());

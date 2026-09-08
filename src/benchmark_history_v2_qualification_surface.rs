@@ -45,7 +45,8 @@ fn surface_entries(
     for root in &semantic.public_roots {
         let (exposure_id, surface_slot_id, root_kind) = match &root.origin {
             HistoricalV2SemanticPublicRootOrigin::RustCargoLibrary => continue,
-            HistoricalV2SemanticPublicRootOrigin::NodePackageExposure {
+            HistoricalV2SemanticPublicRootOrigin::NodePackageConsumerProfile {
+                consumer_profile_id: _,
                 exposure_id,
                 surface_slot_id,
             } => (exposure_id, surface_slot_id, "node"),
@@ -608,7 +609,8 @@ mod tests {
             repository_path,
             symbol_id,
             IntentionalBoundaryIndexerKind::TypeScriptJavaScript,
-            HistoricalV2SemanticPublicRootOrigin::NodePackageExposure {
+            HistoricalV2SemanticPublicRootOrigin::NodePackageConsumerProfile {
+                consumer_profile_id: "profile".to_string(),
                 exposure_id: exposure_id.to_string(),
                 surface_slot_id: surface_slot_id.to_string(),
             },

@@ -1,7 +1,7 @@
 use super::super::history_v2_go_package_surface::{go_package_exposures, go_package_source_map};
 use super::super::{
     HISTORICAL_V2_SEMANTIC_CENSUS_SCHEMA_VERSION, HistoricalV2Materialization,
-    HistoricalV2MaterializedRoots, HistoricalV2NodePackageTargetStatus,
+    HistoricalV2MaterializedRoots, HistoricalV2NodeConsumerResolution,
     HistoricalV2PublicSurfaceCoverage, HistoricalV2PythonDistributionModule,
     HistoricalV2PythonModuleKind, HistoricalV2SemanticCensus, HistoricalV2SemanticGoPackageRoot,
     HistoricalV2SemanticMethodStatus, HistoricalV2SemanticPublicBinding,
@@ -385,10 +385,10 @@ fn validate_public_roots<'a>(
     let expected_node_roots =
         if indexers.contains(&IntentionalBoundaryIndexerKind::TypeScriptJavaScript) {
             source
-                .node_package_surfaces
-                .exposures
+                .node_consumer_profiles
+                .profiles
                 .iter()
-                .map(|exposure| (exposure.exposure_id.as_str(), exposure))
+                .map(|profile| (profile.profile_id.as_str(), profile))
                 .collect::<BTreeMap<_, _>>()
         } else {
             BTreeMap::new()
@@ -448,7 +448,7 @@ fn validate_public_roots<'a>(
         .map(|file| (file.repository_path.as_str(), file))
         .collect::<BTreeMap<_, _>>();
     let mut rust_paths = BTreeSet::new();
-    let mut node_exposure_ids = BTreeSet::new();
+    let mut node_profile_ids = BTreeSet::new();
     let mut python_exposure_ids = BTreeSet::new();
     let mut root_symbols = BTreeSet::new();
     for root in &semantic.public_roots {
@@ -495,26 +495,46 @@ fn validate_public_roots<'a>(
                     );
                 }
             }
-            HistoricalV2SemanticPublicRootOrigin::NodePackageExposure {
+            HistoricalV2SemanticPublicRootOrigin::NodePackageConsumerProfile {
+                consumer_profile_id,
                 exposure_id,
                 surface_slot_id,
             } => {
-                let exposure = expected_node_roots
-                    .get(exposure_id.as_str())
+                let profile = expected_node_roots
+                    .get(consumer_profile_id.as_str())
                     .ok_or_else(|| {
-                        "historical-v2 Node public root invented a package exposure".to_string()
+                        "historical-v2 Node public root invented a consumer profile".to_string()
                     })?;
+                let HistoricalV2NodeConsumerResolution::Resolved {
+                    selected_exposure_id,
+                    resolved_repository_path,
+                    resolved_object_id,
+                    ..
+                } = &profile.compiler
+                else {
+                    return Err(
+                        "historical-v2 Node public root used an unresolved compiler profile"
+                            .to_string(),
+                    );
+                };
                 if root.indexer != IntentionalBoundaryIndexerKind::TypeScriptJavaScript
                     || source_languages
                         .get(root.repository_path.as_str())
                         .is_none_or(|language| !matches!(*language, "typescript" | "javascript"))
                     || parsed.scheme != "scip-typescript"
                     || symbol.symbol.owner.is_some()
-                    || exposure.target_status
-                        != HistoricalV2NodePackageTargetStatus::TrackedRegularFile
-                    || exposure.target_repository_path != root.repository_path
-                    || exposure.surface_slot_id != *surface_slot_id
-                    || !node_exposure_ids.insert((&root.variant, exposure_id.as_str()))
+                    || selected_exposure_id != exposure_id
+                    || resolved_repository_path != &root.repository_path
+                    || resolved_object_id.as_deref()
+                        != source_files
+                            .get(root.repository_path.as_str())
+                            .map(|file| file.object_id.as_str())
+                    || profile.consumer_surface_slot_id != *surface_slot_id
+                    || !matches!(
+                        profile.runtime,
+                        HistoricalV2NodeConsumerResolution::Resolved { .. }
+                    )
+                    || !node_profile_ids.insert((&root.variant, consumer_profile_id.as_str()))
                 {
                     return Err(
                         "historical-v2 Node public root changed compiler identity".to_string()
@@ -579,29 +599,57 @@ fn validate_public_roots<'a>(
             "historical-v2 Rust public roots disagree with Cargo library targets".to_string(),
         );
     }
-    let expected_node_exposure_ids = semantic
-        .indexers
-        .iter()
-        .filter(|indexer| {
-            indexer.census.indexer == IntentionalBoundaryIndexerKind::TypeScriptJavaScript
-        })
-        .flat_map(|indexer| {
-            expected_node_roots
-                .keys()
-                .filter(|exposure_id| {
-                    expected_node_roots
-                        .get(*exposure_id)
-                        .is_some_and(|exposure| {
-                            indexer
-                                .indexed_document_paths
-                                .contains(&exposure.target_repository_path)
-                        })
-                })
-                .map(move |exposure_id| (&indexer.variant, *exposure_id))
-        })
-        .collect::<BTreeSet<_>>();
-    if node_exposure_ids != expected_node_exposure_ids {
-        return Err("historical-v2 Node public roots disagree with package exposures".to_string());
+    let mut expected_node_profile_ids = BTreeSet::new();
+    for indexer in semantic.indexers.iter().filter(|indexer| {
+        indexer.census.indexer == IntentionalBoundaryIndexerKind::TypeScriptJavaScript
+    }) {
+        if matches!(indexer.variant, SemanticIndexVariant::Qualified { .. })
+            && expected_node_roots
+                .values()
+                .any(|profile| profile.project_model_execution_id.is_none())
+        {
+            return Err(
+                "historical-v2 Node consumer profile has no compiler-world identity".to_string(),
+            );
+        }
+        for (profile_id, profile) in &expected_node_roots {
+            let execution_matches = match &indexer.variant {
+                SemanticIndexVariant::Qualified { identity, .. } => {
+                    profile.project_model_execution_id.as_deref() == Some(identity.0.as_str())
+                }
+                SemanticIndexVariant::Unqualified => true,
+            };
+            if !execution_matches {
+                continue;
+            }
+            let HistoricalV2NodeConsumerResolution::Resolved {
+                resolved_repository_path,
+                ..
+            } = &profile.compiler
+            else {
+                return Err(
+                    "historical-v2 Node consumer compiler profile is unresolved".to_string()
+                );
+            };
+            if !matches!(
+                profile.runtime,
+                HistoricalV2NodeConsumerResolution::Resolved { .. }
+            ) {
+                return Err("historical-v2 Node consumer runtime profile is unresolved".to_string());
+            }
+            if !indexer
+                .indexed_document_paths
+                .contains(resolved_repository_path)
+            {
+                return Err(
+                    "historical-v2 Node consumer compiler target was not indexed".to_string(),
+                );
+            }
+            expected_node_profile_ids.insert((&indexer.variant, *profile_id));
+        }
+    }
+    if node_profile_ids != expected_node_profile_ids {
+        return Err("historical-v2 Node public roots disagree with consumer profiles".to_string());
     }
     let expected_python_exposure_ids = semantic
         .indexers
@@ -1346,12 +1394,34 @@ fn validate_node_package_binding<'a>(
         .package_exposure_id
         .as_deref()
         .ok_or_else(|| "historical-v2 Node package binding has no exposure identity".to_string())?;
-    let exposure = source
+    let _exposure = source
         .node_package_surfaces
         .exposures
         .iter()
         .find(|exposure| exposure.exposure_id == exposure_id)
         .ok_or_else(|| "historical-v2 Node package binding invented an exposure".to_string())?;
+    let matching_profiles = source
+        .node_consumer_profiles
+        .profiles
+        .iter()
+        .filter(|profile| match &binding.variant {
+            SemanticIndexVariant::Qualified { identity, .. } => {
+                profile.project_model_execution_id.as_deref() == Some(identity.0.as_str())
+            }
+            SemanticIndexVariant::Unqualified => true,
+        })
+        .filter(|profile| {
+            matches!(
+                &profile.compiler,
+                HistoricalV2NodeConsumerResolution::Resolved {
+                    selected_exposure_id,
+                    resolved_repository_path,
+                    ..
+                } if selected_exposure_id == exposure_id
+                    && resolved_repository_path == &binding.repository_path
+            )
+        })
+        .collect::<Vec<_>>();
     let (origin_path, origin_indexer, origin) = declarations
         .get(binding.origin_declaration_unit_id.as_str())
         .copied()
@@ -1362,8 +1432,7 @@ fn validate_node_package_binding<'a>(
         || origin_indexer != IntentionalBoundaryIndexerKind::TypeScriptJavaScript
         || binding.binding != HistoricalV2SemanticPublicBindingKind::PackageExposure
         || !binding.externally_reachable
-        || binding.repository_path != exposure.target_repository_path
-        || exposure.target_status != HistoricalV2NodePackageTargetStatus::TrackedRegularFile
+        || matching_profiles.is_empty()
         || binding.owner_symbol_id.is_some()
         || binding.owner_compiler_anchor.is_some()
         || binding.exposing_owner_declaration_unit_id.is_some()
@@ -1430,15 +1499,28 @@ fn validate_node_package_binding<'a>(
     if owner.is_some() {
         return Err("historical-v2 Node package binding exposed a member directly".to_string());
     }
-    let expected_surface = super::public_surface::historical_node_package_public_surface_unit_id(
-        &exposure.surface_slot_id,
-        &name,
-        None,
-        namespace,
-        kind,
-    )?;
+    let matching_surfaces = matching_profiles
+        .iter()
+        .map(|profile| {
+            super::public_surface::historical_node_package_public_surface_unit_id(
+                &profile.consumer_surface_slot_id,
+                &name,
+                None,
+                namespace,
+                kind,
+            )
+            .map(|surface| (*profile, surface))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let selected_surfaces = matching_surfaces
+        .iter()
+        .filter(|(_, surface)| surface == &binding.surface_unit_id)
+        .collect::<Vec<_>>();
+    let [(_, expected_surface)] = selected_surfaces.as_slice() else {
+        return Err("historical-v2 Node package binding changed public identity".to_string());
+    };
     let expected_declaration = super::public_surface::node_package_expansion_declaration_unit_id(
-        &expected_surface,
+        expected_surface,
         exposure_id,
         &binding.origin_declaration_unit_id,
         &binding.symbol_id,
@@ -1457,7 +1539,7 @@ fn validate_node_package_binding<'a>(
                 declaration_semantic_range(origin_path, origin, binding.position_encoding),
             )
         };
-    if binding.surface_unit_id != expected_surface
+    if binding.surface_unit_id != *expected_surface
         || binding.declaration_unit_id != expected_declaration
         || binding.position_encoding != expected_encoding
         || binding.compiler_anchor != expected_anchor

@@ -1,4 +1,5 @@
 use super::super::HistoricalV2SemanticPublicBindingKind;
+use super::super::HistoricalV2TypeScriptModuleResolution;
 use super::super::IntentionalBoundaryProjectModelGoArchitecture;
 use super::*;
 use crate::semantic_index::{
@@ -190,6 +191,81 @@ fn fixture_node_package_surfaces(
         exposures,
         exposure_count_by_entry_kind,
         census_sha256: "9".repeat(64),
+    }
+}
+
+fn fixture_node_consumer_profiles(
+    revision: &str,
+    inventory_sha256: &str,
+    compiler_root: Option<(&str, &str)>,
+) -> super::super::HistoricalV2NodeConsumerProfileCensus {
+    use super::super::{
+        HistoricalV2NodeConsumerMode, HistoricalV2NodeConsumerProfile,
+        HistoricalV2NodeConsumerResolution,
+    };
+
+    let profiles = compiler_root
+        .into_iter()
+        .flat_map(|(repository_path, object_id)| {
+            [HistoricalV2NodeConsumerMode::Import]
+                .into_iter()
+                .map(move |mode| {
+                    let mode_name = match mode {
+                        HistoricalV2NodeConsumerMode::Import => "import",
+                        HistoricalV2NodeConsumerMode::Require => "require",
+                    };
+                    let resolution = HistoricalV2NodeConsumerResolution::Resolved {
+                        selected_exposure_id: "fixture-node-package-exposure".to_string(),
+                        selected_surface_slot_id: "fixture-node-package-surface-slot".to_string(),
+                        declared_target_repository_path: repository_path.to_string(),
+                        resolved_repository_path: repository_path.to_string(),
+                        resolved_object_id: Some(object_id.to_string()),
+                        compiler_source_substitution: false,
+                        evidence_sha256: "6".repeat(64),
+                    };
+                    HistoricalV2NodeConsumerProfile {
+                        profile_id: format!("fixture-node-consumer-{mode_name}"),
+                        consumer_surface_slot_id: format!("fixture-node-surface-{mode_name}"),
+                        manifest_repository_path: "package.json".to_string(),
+                        manifest_object_id: "8".repeat(40),
+                        package_name: Some("fixture".to_string()),
+                        public_subpath: ".".to_string(),
+                        specifier: Some("fixture".to_string()),
+                        mode,
+                        project_model_execution_id: None,
+                        compiler_project_config_repository_path: None,
+                        compiler_options_sha256: Some("5".repeat(64)),
+                        toolchain_identity_sha256: Some("4".repeat(64)),
+                        compiler_module_resolution: Some(
+                            HistoricalV2TypeScriptModuleResolution::NodeNext,
+                        ),
+                        compiler_conditions: vec![mode_name.to_string(), "types".to_string()],
+                        custom_conditions: Vec::new(),
+                        declared_exposure_ids: vec!["fixture-node-package-exposure".to_string()],
+                        compiler: resolution.clone(),
+                        runtime: resolution,
+                    }
+                })
+        })
+        .collect::<Vec<_>>();
+    super::super::HistoricalV2NodeConsumerProfileCensus {
+        schema_version: super::super::HISTORICAL_V2_NODE_CONSUMER_PROFILE_CENSUS_SCHEMA_VERSION,
+        contract: "fixture".to_string(),
+        repository: "example/repo".to_string(),
+        revision: revision.to_string(),
+        inventory_sha256: inventory_sha256.to_string(),
+        node_package_surface_census_sha256: "9".repeat(64),
+        typescript_project_model_census_sha256: "f".repeat(64),
+        typescript_compiler_version: None,
+        node_runtime_version: (!profiles.is_empty()).then(|| "22.0.0".to_string()),
+        node_runtime_sha256: (!profiles.is_empty()).then(|| "3".repeat(64)),
+        profile_count_by_mode: [HistoricalV2NodeConsumerMode::Import]
+            .into_iter()
+            .filter_map(|mode| (!profiles.is_empty()).then_some((mode, 1)))
+            .collect(),
+        unresolved_resolution_count: 0,
+        profiles,
+        census_sha256: "2".repeat(64),
     }
 }
 
@@ -872,6 +948,35 @@ fn two_node_package_slots_for_one_module_remain_distinct() {
         .node_package_surfaces
         .exposure_count_by_entry_kind
         .insert(super::super::HistoricalV2NodePackageEntryKind::Exports, 2);
+    let mut second_profile = fixture.source.node_consumer_profiles.profiles[0].clone();
+    second_profile.profile_id = "fixture-node-consumer-feature".to_string();
+    second_profile.consumer_surface_slot_id = "fixture-node-surface-feature".to_string();
+    second_profile.public_subpath = "./feature".to_string();
+    second_profile.specifier = Some("fixture/feature".to_string());
+    second_profile.declared_exposure_ids =
+        vec!["fixture-node-package-exposure-feature".to_string()];
+    for resolution in [&mut second_profile.compiler, &mut second_profile.runtime] {
+        let super::super::HistoricalV2NodeConsumerResolution::Resolved {
+            selected_exposure_id,
+            selected_surface_slot_id,
+            ..
+        } = resolution
+        else {
+            unreachable!()
+        };
+        *selected_exposure_id = "fixture-node-package-exposure-feature".to_string();
+        *selected_surface_slot_id = "fixture-node-package-surface-slot-feature".to_string();
+    }
+    fixture
+        .source
+        .node_consumer_profiles
+        .profiles
+        .push(second_profile);
+    fixture
+        .source
+        .node_consumer_profiles
+        .profile_count_by_mode
+        .insert(super::super::HistoricalV2NodeConsumerMode::Import, 2);
     let changed_indexers = BTreeSet::from([SemanticIndexerKind::TypeScriptJavaScript]);
     let snapshot = build_semantic_snapshot(
         fixture.root.path(),
@@ -926,7 +1031,7 @@ fn unresolved_node_package_target_fails_closed() {
     )
     .unwrap_err();
 
-    assert!(error.contains("has no tracked compiler root"), "{error}");
+    assert!(error.contains("declaration provenance changed"), "{error}");
 }
 
 #[test]
@@ -2446,6 +2551,11 @@ fn fixture() -> Fixture {
             &"b".repeat(64),
             None,
         ),
+        node_consumer_profiles: fixture_node_consumer_profiles(
+            &"a".repeat(40),
+            &"b".repeat(64),
+            None,
+        ),
         python_distribution_surfaces: fixture_python_distribution_surfaces(
             &"a".repeat(40),
             &"b".repeat(64),
@@ -2616,6 +2726,11 @@ fn reference_fixture() -> Fixture {
             None,
         ),
         node_package_surfaces: fixture_node_package_surfaces(
+            &"a".repeat(40),
+            &"b".repeat(64),
+            Some(("src/index.ts", &"d".repeat(40))),
+        ),
+        node_consumer_profiles: fixture_node_consumer_profiles(
             &"a".repeat(40),
             &"b".repeat(64),
             Some(("src/index.ts", &"d".repeat(40))),
@@ -4956,6 +5071,13 @@ fn compiler_surface_fixture(
             None,
         ),
         node_package_surfaces: fixture_node_package_surfaces(
+            &"a".repeat(40),
+            &"b".repeat(64),
+            node_package_root
+                .as_ref()
+                .map(|(repository_path, object_id)| (*repository_path, object_id.as_str())),
+        ),
+        node_consumer_profiles: fixture_node_consumer_profiles(
             &"a".repeat(40),
             &"b".repeat(64),
             node_package_root

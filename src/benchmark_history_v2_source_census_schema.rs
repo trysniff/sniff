@@ -1,11 +1,11 @@
 use super::{
-    HistoricalV2NodePackageSurfaceCensus, HistoricalV2PythonDistributionSurfaceCensus,
-    IntentionalBoundaryProjectModelCensus,
+    HistoricalV2NodeConsumerProfileCensus, HistoricalV2NodePackageSurfaceCensus,
+    HistoricalV2PythonDistributionSurfaceCensus, IntentionalBoundaryProjectModelCensus,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-pub const HISTORICAL_V2_SOURCE_CENSUS_SCHEMA_VERSION: u32 = 16;
+pub const HISTORICAL_V2_SOURCE_CENSUS_SCHEMA_VERSION: u32 = 17;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -157,6 +157,7 @@ pub struct HistoricalV2SourceSnapshotCensus {
     pub go_project_model: IntentionalBoundaryProjectModelCensus,
     pub typescript_project_model: IntentionalBoundaryProjectModelCensus,
     pub node_package_surfaces: HistoricalV2NodePackageSurfaceCensus,
+    pub node_consumer_profiles: HistoricalV2NodeConsumerProfileCensus,
     pub python_distribution_surfaces: HistoricalV2PythonDistributionSurfaceCensus,
     pub tracked_entry_count: usize,
     pub source_files: Vec<HistoricalV2SourceFile>,
