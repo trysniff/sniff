@@ -23,10 +23,10 @@ use super::{
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::{Component, Path};
 
-pub(super) const PROJECT_MODEL_CONTRACT: &str = "sniffbench-intentional-boundary-project-model-v6";
+pub(super) const PROJECT_MODEL_CONTRACT: &str = "sniffbench-intentional-boundary-project-model-v7";
 
 #[derive(Serialize)]
 struct NormalizedTarget<'a> {
@@ -62,7 +62,7 @@ pub(super) fn compute_normalized_model_sha256(
         .collect::<Result<Vec<_>, String>>()?;
     normalized_targets.sort();
     hash_json(&(
-        "sniffbench-intentional-boundary-normalized-project-model-v6",
+        "sniffbench-intentional-boundary-normalized-project-model-v7",
         provider,
         covered_manifest_repository_paths,
         normalized_targets,
@@ -79,9 +79,9 @@ pub(super) fn compute_execution_id(
     normalized_model_sha256: &str,
 ) -> Result<String, String> {
     Ok(format!(
-        "ibpme-v6:{}",
+        "ibpme-v7:{}",
         hash_json(&(
-            "sniffbench-intentional-boundary-project-model-execution-v6",
+            "sniffbench-intentional-boundary-project-model-execution-v7",
             provider,
             invocation_anchor_repository_path,
             invocation_anchor_object_id,
@@ -97,9 +97,9 @@ pub(super) fn compute_target_id(
     target: &IntentionalBoundaryProjectModelTarget,
 ) -> Result<String, String> {
     Ok(format!(
-        "ibpmt-v6:{}",
+        "ibpmt-v7:{}",
         hash_json(&(
-            "sniffbench-intentional-boundary-project-model-target-v6",
+            "sniffbench-intentional-boundary-project-model-target-v7",
             &target.execution_id,
             normalized_target(target),
         ))?
@@ -233,6 +233,8 @@ pub fn validate_intentional_boundary_project_model_census_commitment(
                 &execution.variant,
                 &execution.normalized_model_sha256,
             )? != execution.execution_id
+            || (execution.provider == Provider::GradleToolingApi
+                && !validate_gradle_variant_inventory(inventory, execution, &targets))
         {
             return Err(
                 "intentional-boundary project-model execution commitment changed".to_string(),
@@ -345,10 +347,11 @@ pub(super) fn valid_execution_variant(
                 })
                 && valid_go_architecture(goarch, architecture)
         }
+        (Provider::CargoMetadata, IntentionalBoundaryProjectModelVariant::Default) => true,
         (
-            Provider::CargoMetadata | Provider::GradleToolingApi,
-            IntentionalBoundaryProjectModelVariant::Default,
-        ) => true,
+            Provider::GradleToolingApi,
+            IntentionalBoundaryProjectModelVariant::Gradle { kotlin_projects },
+        ) => valid_gradle_variant(kotlin_projects),
         (
             Provider::TypeScriptCompilerApi,
             IntentionalBoundaryProjectModelVariant::TypeScript {
@@ -384,6 +387,165 @@ pub(super) fn valid_execution_variant(
         }
         _ => false,
     }
+}
+
+fn valid_gradle_variant(
+    projects: &[super::IntentionalBoundaryProjectModelGradleKotlinProject],
+) -> bool {
+    projects.windows(2).all(|pair| pair[0] < pair[1])
+        && projects.iter().all(|project| {
+            !project.project_path.trim().is_empty()
+                && project
+                    .component_names
+                    .windows(2)
+                    .all(|pair| pair[0] < pair[1])
+                && project
+                    .component_names
+                    .iter()
+                    .all(|component| !component.trim().is_empty())
+                && project
+                    .publications
+                    .windows(2)
+                    .all(|pair| pair[0] < pair[1])
+                && project.publications.iter().all(valid_gradle_publication)
+                && project.source_sets.windows(2).all(|pair| pair[0] < pair[1])
+                && project.targets.windows(2).all(|pair| pair[0] < pair[1])
+                && valid_gradle_source_set_graph(project)
+                && project.source_sets.iter().all(|source_set| {
+                    !source_set.name.trim().is_empty()
+                        && source_set
+                            .source_repository_paths
+                            .windows(2)
+                            .all(|pair| pair[0] < pair[1])
+                        && source_set
+                            .source_repository_paths
+                            .iter()
+                            .all(|path| is_safe_repository_path(path))
+                        && source_set
+                            .depends_on_source_sets
+                            .windows(2)
+                            .all(|pair| pair[0] < pair[1])
+                        && source_set.depends_on_source_sets.iter().all(|dependency| {
+                            dependency != &source_set.name
+                                && project
+                                    .source_sets
+                                    .binary_search_by(|candidate| candidate.name.cmp(dependency))
+                                    .is_ok()
+                        })
+                })
+                && project.targets.iter().all(|target| {
+                    !target.name.trim().is_empty()
+                        && !target.platform_type.trim().is_empty()
+                        && target
+                            .component_names
+                            .windows(2)
+                            .all(|pair| pair[0] < pair[1])
+                        && target.component_names.iter().all(|component| {
+                            !component.trim().is_empty()
+                                && project.component_names.binary_search(component).is_ok()
+                        })
+                        && (!target.publishable || !target.component_names.is_empty())
+                        && target.compilations.windows(2).all(|pair| pair[0] < pair[1])
+                        && target.compilations.iter().all(|compilation| {
+                            !compilation.name.trim().is_empty()
+                                && !compilation.default_source_set.trim().is_empty()
+                                && compilation
+                                    .source_sets
+                                    .windows(2)
+                                    .all(|pair| pair[0] < pair[1])
+                                && compilation
+                                    .source_sets
+                                    .binary_search(&compilation.default_source_set)
+                                    .is_ok()
+                                && compilation.source_sets.iter().all(|source_set| {
+                                    project
+                                        .source_sets
+                                        .binary_search_by(|candidate| {
+                                            candidate.name.cmp(source_set)
+                                        })
+                                        .is_ok()
+                                })
+                        })
+                })
+        })
+}
+
+fn valid_gradle_publication(
+    publication: &super::IntentionalBoundaryProjectModelGradlePublication,
+) -> bool {
+    if publication.name.trim().is_empty() || publication.publication_type.trim().is_empty() {
+        return false;
+    }
+    let coordinates = [
+        publication.group_id.as_deref(),
+        publication.artifact_id.as_deref(),
+        publication.version.as_deref(),
+    ];
+    coordinates.iter().all(|value| value.is_none())
+        || coordinates
+            .iter()
+            .all(|value| value.is_some_and(|value| !value.trim().is_empty()))
+}
+
+pub(super) fn valid_gradle_source_set_graph(
+    project: &super::IntentionalBoundaryProjectModelGradleKotlinProject,
+) -> bool {
+    let mut remaining_dependencies = vec![0usize; project.source_sets.len()];
+    let mut dependents = vec![Vec::new(); project.source_sets.len()];
+    for (source_index, source_set) in project.source_sets.iter().enumerate() {
+        remaining_dependencies[source_index] = source_set.depends_on_source_sets.len();
+        for dependency in &source_set.depends_on_source_sets {
+            let Ok(dependency_index) = project
+                .source_sets
+                .binary_search_by(|candidate| candidate.name.cmp(dependency))
+            else {
+                return false;
+            };
+            if dependency_index == source_index {
+                return false;
+            }
+            dependents[dependency_index].push(source_index);
+        }
+    }
+    let mut ready = remaining_dependencies
+        .iter()
+        .enumerate()
+        .filter_map(|(index, remaining)| (*remaining == 0).then_some(index))
+        .collect::<VecDeque<_>>();
+    let mut visited = 0usize;
+    while let Some(index) = ready.pop_front() {
+        visited += 1;
+        for dependent in &dependents[index] {
+            remaining_dependencies[*dependent] -= 1;
+            if remaining_dependencies[*dependent] == 0 {
+                ready.push_back(*dependent);
+            }
+        }
+    }
+    visited == project.source_sets.len()
+}
+
+fn validate_gradle_variant_inventory(
+    inventory: &IntentionalBoundaryRepositoryInventory,
+    execution: &IntentionalBoundaryProjectModelExecution,
+    targets: &[IntentionalBoundaryProjectModelTarget],
+) -> bool {
+    let IntentionalBoundaryProjectModelVariant::Gradle { kotlin_projects } = &execution.variant
+    else {
+        return false;
+    };
+    kotlin_projects.iter().all(|project| {
+        targets
+            .iter()
+            .filter(|target| target.target_name == project.project_path)
+            .count()
+            == 1
+            && project.source_sets.iter().all(|source_set| {
+                source_set.source_repository_paths.iter().all(|path| {
+                    regular_inventory_entry(inventory, path, "Gradle Kotlin source").is_ok()
+                })
+            })
+    })
 }
 
 fn valid_go_architecture(

@@ -2,7 +2,7 @@ use super::{IntentionalBoundaryManifestDeclarationKind, IntentionalBoundaryManif
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-pub const INTENTIONAL_BOUNDARY_PROJECT_MODEL_CENSUS_SCHEMA_VERSION: u32 = 6;
+pub const INTENTIONAL_BOUNDARY_PROJECT_MODEL_CENSUS_SCHEMA_VERSION: u32 = 7;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -32,9 +32,58 @@ pub struct IntentionalBoundaryProjectModelTypeScriptProject {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IntentionalBoundaryProjectModelGradlePublication {
+    pub name: String,
+    pub publication_type: String,
+    pub group_id: Option<String>,
+    pub artifact_id: Option<String>,
+    pub version: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IntentionalBoundaryProjectModelKotlinSourceSet {
+    pub name: String,
+    pub source_repository_paths: Vec<String>,
+    pub depends_on_source_sets: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IntentionalBoundaryProjectModelKotlinCompilation {
+    pub name: String,
+    pub default_source_set: String,
+    pub source_sets: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IntentionalBoundaryProjectModelKotlinTarget {
+    pub name: String,
+    pub platform_type: String,
+    pub publishable: bool,
+    pub component_names: Vec<String>,
+    pub compilations: Vec<IntentionalBoundaryProjectModelKotlinCompilation>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IntentionalBoundaryProjectModelGradleKotlinProject {
+    pub project_path: String,
+    pub component_names: Vec<String>,
+    pub publications: Vec<IntentionalBoundaryProjectModelGradlePublication>,
+    pub source_sets: Vec<IntentionalBoundaryProjectModelKotlinSourceSet>,
+    pub targets: Vec<IntentionalBoundaryProjectModelKotlinTarget>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum IntentionalBoundaryProjectModelVariant {
     Default,
+    Gradle {
+        kotlin_projects: Vec<IntentionalBoundaryProjectModelGradleKotlinProject>,
+    },
     Go {
         goos: String,
         goarch: String,

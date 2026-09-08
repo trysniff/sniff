@@ -314,7 +314,7 @@ mod tests {
             },
         };
         IntentionalBoundaryProjectModelCensus {
-            schema_version: 6,
+            schema_version: 7,
             project_model_contract: "fixture".to_string(),
             repository: "example/repo".to_string(),
             revision: "a".repeat(40),

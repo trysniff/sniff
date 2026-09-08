@@ -1,11 +1,12 @@
 use super::*;
 use crate::benchmark::release::{
     IntentionalBoundaryIndexerKind, IntentionalBoundaryProjectModelBindingOutcome,
-    IntentionalBoundarySemanticCensus, IntentionalBoundarySemanticIndexerCensus,
-    IntentionalBoundarySemanticMethod, IntentionalBoundarySemanticMethodStatus,
-    IntentionalBoundarySemanticOrigin, IntentionalBoundarySemanticRange,
-    IntentionalBoundarySemanticSymbolCategory, IntentionalBoundarySemanticSymbolFacts,
-    IntentionalBoundarySemanticVisibility, IntentionalBoundarySourceCensus,
+    IntentionalBoundaryProjectModelVariant, IntentionalBoundarySemanticCensus,
+    IntentionalBoundarySemanticIndexerCensus, IntentionalBoundarySemanticMethod,
+    IntentionalBoundarySemanticMethodStatus, IntentionalBoundarySemanticOrigin,
+    IntentionalBoundarySemanticRange, IntentionalBoundarySemanticSymbolCategory,
+    IntentionalBoundarySemanticSymbolFacts, IntentionalBoundarySemanticVisibility,
+    IntentionalBoundarySourceCensus,
 };
 use std::fs;
 use std::process::Command;
@@ -60,7 +61,19 @@ fn repository() -> (TempDir, IntentionalBoundaryRepositoryInventory) {
         ),
         (
             "library/build.gradle.kts",
-            "plugins { `java-library`; kotlin(\"jvm\") version \"2.2.0\" }\n",
+            concat!(
+                "plugins { `java-library`; `maven-publish`; kotlin(\"jvm\") version \"2.2.0\" }\n",
+                "group = \"com.example\"\n",
+                "version = \"1.2.3\"\n",
+                "publishing {\n",
+                "    publications {\n",
+                "        create<org.gradle.api.publish.maven.MavenPublication>(\"mavenJava\") {\n",
+                "            from(components[\"java\"])\n",
+                "            artifactId = \"library-api\"\n",
+                "        }\n",
+                "    }\n",
+                "}\n",
+            ),
         ),
         (
             "library/src/main/kotlin/Api.kt",
@@ -185,7 +198,11 @@ fn project_json(
             .iter()
             .map(|source| model_path(root, emitted_root, source))
             .collect::<Vec<_>>(),
-        "producer_tasks": []
+        "producer_tasks": [],
+        "component_names": [],
+        "publications": [],
+        "kotlin_source_sets": [],
+        "kotlin_targets": []
     })
 }
 
@@ -195,7 +212,7 @@ fn tooling_output(root: &Path) -> Vec<u8> {
 
 fn tooling_output_at(root: &Path, emitted_root: Option<&str>) -> Vec<u8> {
     serde_json::to_vec(&serde_json::json!({
-        "contract": "sniff-gradle-tooling-project-model-v4",
+        "contract": "sniff-gradle-tooling-project-model-v5",
         "tooling_api_version": "8.8",
         "gradle_version": "8.8",
         "settings_directory": model_path(root, emitted_root, ""),
@@ -254,6 +271,81 @@ fn tooling_output_with_library_producer(root: &Path, emitted_root: Option<&str>)
     model["projects"][2]["producer_tasks"] =
         serde_json::Value::Array(vec![library_producer(root, emitted_root)]);
     serde_json::to_vec(&model).unwrap()
+}
+
+fn tooling_output_with_kotlin_project(root: &Path) -> Vec<u8> {
+    let mut model: serde_json::Value = serde_json::from_slice(&tooling_output(root)).unwrap();
+    let library = &mut model["projects"][2];
+    library["provider_kinds"] = serde_json::json!([
+        "java_library",
+        "kotlin_jvm",
+        "kotlin_library",
+        "publication"
+    ]);
+    library["component_names"] = serde_json::json!(["java"]);
+    library["publications"] = serde_json::json!([{
+        "name": "mavenJava",
+        "publication_type": "org.gradle.api.publish.maven.internal.publication.DefaultMavenPublication",
+        "group_id": "com.example",
+        "artifact_id": "library-api",
+        "version": "1.2.3"
+    }]);
+    library["kotlin_source_sets"] = serde_json::json!([
+        {
+            "name": "main",
+            "source_files": [
+                emitted_path(root, "library/src/main/kotlin/Api.kt"),
+                emitted_path(root, "library/src/main/kotlin/More.kt")
+            ],
+            "depends_on_source_sets": []
+        },
+        {
+            "name": "test",
+            "source_files": [],
+            "depends_on_source_sets": []
+        }
+    ]);
+    library["kotlin_targets"] = serde_json::json!([{
+        "name": "main",
+        "platform_type": "jvm",
+        "publishable": true,
+        "component_names": ["java"],
+        "compilations": [
+            {
+                "name": "main",
+                "default_source_set": "main",
+                "source_sets": ["main"]
+            },
+            {
+                "name": "test",
+                "default_source_set": "test",
+                "source_sets": ["main", "test"]
+            }
+        ]
+    }]);
+    serde_json::to_vec(&model).unwrap()
+}
+
+fn recommit_project_model_variant(
+    inventory: &IntentionalBoundaryRepositoryInventory,
+    mut census: IntentionalBoundaryProjectModelCensus,
+) -> IntentionalBoundaryProjectModelCensus {
+    let execution = &mut census.executions[0];
+    execution.execution_id = compute_execution_id(
+        execution.provider,
+        &execution.invocation_anchor_repository_path,
+        &execution.invocation_anchor_object_id,
+        &execution.toolchain_identity_sha256,
+        &execution.command_contract,
+        &execution.variant,
+        &execution.normalized_model_sha256,
+    )
+    .unwrap();
+    for target in &mut census.targets {
+        target.execution_id = execution.execution_id.clone();
+        target.target_id = compute_target_id(target).unwrap();
+    }
+    finish_project_model_census(inventory, census.executions, census.targets).unwrap()
 }
 
 fn semantic_censuses(
@@ -411,6 +503,112 @@ fn normalizes_gradle_roles_and_exact_production_source_sets() {
     )
     .unwrap();
     validate_intentional_boundary_project_model_census_commitment(&inventory, &census).unwrap();
+}
+
+#[test]
+fn commits_exact_kotlin_targets_compilations_source_sets_and_publications() {
+    let (root, inventory) = repository();
+    let census = parse_intentional_boundary_gradle_tooling_model(
+        root.path(),
+        &inventory,
+        "settings.gradle.kts",
+        &"a".repeat(64),
+        &tooling_output_with_kotlin_project(root.path()),
+    )
+    .unwrap();
+
+    let super::super::IntentionalBoundaryProjectModelVariant::Gradle { kotlin_projects } =
+        &census.executions[0].variant
+    else {
+        panic!("Gradle execution did not retain its typed Kotlin project model");
+    };
+    assert_eq!(kotlin_projects.len(), 1);
+    let project = &kotlin_projects[0];
+    assert_eq!(project.project_path, ":library");
+    assert_eq!(
+        project.publications[0].artifact_id.as_deref(),
+        Some("library-api")
+    );
+    assert_eq!(project.targets[0].platform_type, "jvm");
+    assert!(project.targets[0].publishable);
+    assert_eq!(project.targets[0].compilations[0].name, "main");
+    assert_eq!(
+        project.source_sets[0].source_repository_paths,
+        [
+            "library/src/main/kotlin/Api.kt",
+            "library/src/main/kotlin/More.kt"
+        ]
+    );
+    validate_intentional_boundary_project_model_census_commitment(&inventory, &census).unwrap();
+}
+
+#[test]
+fn rejects_kotlin_compilation_with_unknown_source_set() {
+    let (root, inventory) = repository();
+    let mut model: serde_json::Value =
+        serde_json::from_slice(&tooling_output_with_kotlin_project(root.path())).unwrap();
+    model["projects"][2]["kotlin_targets"][0]["compilations"][0]["source_sets"] =
+        serde_json::json!(["invented", "main"]);
+
+    let error = parse_intentional_boundary_gradle_tooling_model(
+        root.path(),
+        &inventory,
+        "settings.gradle.kts",
+        &"a".repeat(64),
+        serde_json::to_string(&model).unwrap().as_bytes(),
+    )
+    .unwrap_err();
+
+    assert!(
+        error.contains("source-set closure is incomplete"),
+        "{error}"
+    );
+}
+
+#[test]
+fn rejects_transitive_kotlin_source_set_cycles() {
+    let (root, inventory) = repository();
+    let mut model: serde_json::Value =
+        serde_json::from_slice(&tooling_output_with_kotlin_project(root.path())).unwrap();
+    model["projects"][2]["kotlin_source_sets"][0]["depends_on_source_sets"] =
+        serde_json::json!(["test"]);
+    model["projects"][2]["kotlin_source_sets"][1]["depends_on_source_sets"] =
+        serde_json::json!(["main"]);
+
+    let error = parse_intentional_boundary_gradle_tooling_model(
+        root.path(),
+        &inventory,
+        "settings.gradle.kts",
+        &"a".repeat(64),
+        serde_json::to_string(&model).unwrap().as_bytes(),
+    )
+    .unwrap_err();
+
+    assert!(error.contains("dependency graph is cyclic"), "{error}");
+}
+
+#[test]
+fn commitment_rejects_rehashed_invalid_kotlin_variant_evidence() {
+    let (root, inventory) = repository();
+    let mut census = parse_intentional_boundary_gradle_tooling_model(
+        root.path(),
+        &inventory,
+        "settings.gradle.kts",
+        &"a".repeat(64),
+        &tooling_output_with_kotlin_project(root.path()),
+    )
+    .unwrap();
+    let IntentionalBoundaryProjectModelVariant::Gradle { kotlin_projects } =
+        &mut census.executions[0].variant
+    else {
+        panic!("expected typed Gradle variant");
+    };
+    kotlin_projects[0].publications[0].artifact_id = Some(String::new());
+    let census = recommit_project_model_variant(&inventory, census);
+
+    let error = validate_intentional_boundary_project_model_census_commitment(&inventory, &census)
+        .unwrap_err();
+    assert!(error.contains("execution changed"), "{error}");
 }
 
 #[test]
@@ -904,4 +1102,71 @@ fn real_gradle_tooling_model_is_sandboxed_or_typed_unavailable() {
             "unexpected missing-Gradle error: {error}"
         );
     }
+}
+
+#[test]
+#[ignore = "requires Gradle 8.8, JDK 17, and Kotlin plugin dependency access"]
+fn real_gradle_tooling_model_commits_kotlin_publication_and_compilation_facts() {
+    let (root, inventory) = repository();
+    let census = census_intentional_boundary_gradle_project_models(
+        &inventory.repository,
+        &inventory.revision,
+        root.path(),
+        &inventory,
+    )
+    .unwrap();
+    validate_intentional_boundary_project_model_census_commitment(&inventory, &census).unwrap();
+
+    let execution = census
+        .executions
+        .iter()
+        .find(|execution| {
+            matches!(
+                &execution.variant,
+                IntentionalBoundaryProjectModelVariant::Gradle { kotlin_projects }
+                    if kotlin_projects.iter().any(|project| project.project_path == ":library")
+            )
+        })
+        .expect("Gradle execution containing :library");
+    let IntentionalBoundaryProjectModelVariant::Gradle { kotlin_projects } = &execution.variant
+    else {
+        unreachable!();
+    };
+    let project = kotlin_projects
+        .iter()
+        .find(|project| project.project_path == ":library")
+        .expect("typed Kotlin :library project");
+    assert!(project.component_names.iter().any(|name| name == "java"));
+    let publication = project
+        .publications
+        .iter()
+        .find(|publication| publication.name == "mavenJava")
+        .expect("real Maven publication");
+    assert_eq!(publication.group_id.as_deref(), Some("com.example"));
+    assert_eq!(publication.artifact_id.as_deref(), Some("library-api"));
+    assert_eq!(publication.version.as_deref(), Some("1.2.3"));
+    let target = project
+        .targets
+        .iter()
+        .find(|target| target.publishable)
+        .expect("publishable Kotlin target");
+    assert!(!target.component_names.is_empty());
+    let main = target
+        .compilations
+        .iter()
+        .find(|compilation| compilation.name == "main")
+        .expect("main Kotlin compilation");
+    assert!(main.source_sets.iter().any(|name| name == "main"));
+    let main_source_set = project
+        .source_sets
+        .iter()
+        .find(|source_set| source_set.name == "main")
+        .expect("main Kotlin source set");
+    assert_eq!(
+        main_source_set.source_repository_paths,
+        [
+            "library/src/main/kotlin/Api.kt",
+            "library/src/main/kotlin/More.kt"
+        ]
+    );
 }
