@@ -155,7 +155,7 @@ impl HistoricalV2SemanticProgress {
     fn validate_side_entries(&self, side: HistoricalV2SemanticSnapshotSide) -> Result<(), String> {
         require_allowed_entries(
             &self.side_root(side),
-            &["go", SNAPSHOT_FILE, SNAPSHOT_TEMP_FILE],
+            &["go", "typescript", SNAPSHOT_FILE, SNAPSHOT_TEMP_FILE],
             "historical-v2 semantic side progress",
         )
     }

@@ -229,6 +229,22 @@ async fn run_scoped_indexers(
             })?,
         );
     }
+    if files.iter().any(|file| {
+        indexer_for_language(&file.language) == Ok(SemanticIndexerKind::TypeScriptJavaScript)
+    }) {
+        variants.insert(
+            SemanticIndexerKind::TypeScriptJavaScript,
+            variants::typescript_semantic_variant_plans(&source.typescript_project_model).map_err(
+                |detail| SemanticIndexerRunFailure {
+                    kind: SemanticIndexerRunFailureKind::InvalidInput,
+                    phase: SemanticIndexerRunPhase::RepositoryValidation,
+                    indexer: Some(SemanticIndexerKind::TypeScriptJavaScript),
+                    detail,
+                    process: None,
+                },
+            )?,
+        );
+    }
     match progress_root {
         Some(progress_root) => {
             crate::semantic_indexer_runner::run_required_indexers_exhaustive_typed_scoped_resumable_with_variants(

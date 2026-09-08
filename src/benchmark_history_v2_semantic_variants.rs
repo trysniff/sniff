@@ -120,8 +120,80 @@ pub(super) fn go_semantic_variant_plans(
             identity: SemanticVariantId(execution.execution_id.clone()),
             dimensions,
             environment,
+            compiler_project: None,
             selected_documents,
             ignored_documents,
+        };
+        plan.validate()?;
+        plans.push(plan);
+    }
+    plans.sort_by(|left, right| left.identity.cmp(&right.identity));
+    Ok(plans)
+}
+
+pub(super) fn typescript_semantic_variant_plans(
+    model: &IntentionalBoundaryProjectModelCensus,
+) -> Result<Vec<SemanticIndexerVariantPlan>, String> {
+    let mut plans = Vec::with_capacity(model.executions.len());
+    let mut identities = BTreeSet::new();
+    for execution in &model.executions {
+        if execution.provider != IntentionalBoundaryProjectModelProvider::TypeScriptCompilerApi {
+            return Err(
+                "historical-v2 TypeScript variant ledger mixed project-model providers".to_string(),
+            );
+        }
+        let IntentionalBoundaryProjectModelVariant::TypeScript {
+            root_config_repository_path,
+            compiler_version,
+            projects,
+            selected_source_repository_paths,
+            ignored_source_repository_paths,
+        } = &execution.variant
+        else {
+            return Err(
+                "historical-v2 TypeScript variant ledger contains an untyped variant".to_string(),
+            );
+        };
+        if !identities.insert(execution.execution_id.as_str()) {
+            return Err(
+                "historical-v2 TypeScript variant ledger repeats an execution identity".to_string(),
+            );
+        }
+        let target_count = model
+            .targets
+            .iter()
+            .filter(|target| target.execution_id == execution.execution_id)
+            .count();
+        if target_count != execution.target_count || target_count != projects.len() {
+            return Err(format!(
+                "historical-v2 TypeScript variant {} changed its compiler-project count",
+                execution.execution_id
+            ));
+        }
+        let dimensions = BTreeMap::from([
+            ("compiler_version".to_string(), compiler_version.clone()),
+            (
+                "root_config".to_string(),
+                root_config_repository_path
+                    .clone()
+                    .unwrap_or_else(|| "<inferred>".to_string()),
+            ),
+        ]);
+        let plan = SemanticIndexerVariantPlan {
+            identity: SemanticVariantId(execution.execution_id.clone()),
+            dimensions,
+            environment: BTreeMap::new(),
+            compiler_project: root_config_repository_path.clone().map(RepositoryPath),
+            selected_documents: selected_source_repository_paths
+                .iter()
+                .cloned()
+                .map(RepositoryPath)
+                .collect(),
+            ignored_documents: ignored_source_repository_paths
+                .iter()
+                .cloned()
+                .map(RepositoryPath)
+                .collect(),
         };
         plan.validate()?;
         plans.push(plan);
@@ -188,6 +260,48 @@ mod tests {
         );
     }
 
+    #[test]
+    fn typescript_plan_uses_only_stable_compiler_world_dimensions() {
+        let mut model = go_model();
+        let execution = &mut model.executions[0];
+        execution.execution_id = "typescript-world".to_string();
+        execution.provider = IntentionalBoundaryProjectModelProvider::TypeScriptCompilerApi;
+        execution.variant = IntentionalBoundaryProjectModelVariant::TypeScript {
+            root_config_repository_path: Some("tsconfig.json".to_string()),
+            compiler_version: "5.6.2".to_string(),
+            projects: vec![
+                crate::benchmark::release::IntentionalBoundaryProjectModelTypeScriptProject {
+                    config_repository_path: Some("tsconfig.json".to_string()),
+                    config_object_id: Some("c".repeat(40)),
+                    config_reads: Vec::new(),
+                    project_references: Vec::new(),
+                    effective_compiler_options_json: "{}".to_string(),
+                    source_repository_paths: vec!["src/index.ts".to_string()],
+                },
+            ],
+            selected_source_repository_paths: vec!["src/index.ts".to_string()],
+            ignored_source_repository_paths: vec!["src/browser.ts".to_string()],
+        };
+        let target = &mut model.targets[0];
+        target.execution_id = execution.execution_id.clone();
+        target.provider = IntentionalBoundaryProjectModelProvider::TypeScriptCompilerApi;
+
+        let plans = typescript_semantic_variant_plans(&model).unwrap();
+
+        assert_eq!(plans.len(), 1);
+        assert_eq!(
+            plans[0].dimensions,
+            BTreeMap::from([
+                ("compiler_version".to_string(), "5.6.2".to_string()),
+                ("root_config".to_string(), "tsconfig.json".to_string()),
+            ])
+        );
+        assert_eq!(
+            plans[0].compiler_project,
+            Some(RepositoryPath("tsconfig.json".to_string()))
+        );
+    }
+
     fn go_model() -> IntentionalBoundaryProjectModelCensus {
         let variant = IntentionalBoundaryProjectModelVariant::Go {
             goos: "linux".to_string(),
@@ -200,7 +314,7 @@ mod tests {
             },
         };
         IntentionalBoundaryProjectModelCensus {
-            schema_version: 5,
+            schema_version: 6,
             project_model_contract: "fixture".to_string(),
             repository: "example/repo".to_string(),
             revision: "a".repeat(40),
