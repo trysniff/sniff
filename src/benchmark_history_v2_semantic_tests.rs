@@ -2436,6 +2436,11 @@ fn fixture() -> Fixture {
             Some("src/lib.rs"),
         ),
         go_project_model: fixture_cargo_project_model(&"a".repeat(40), &"b".repeat(64), None),
+        typescript_project_model: fixture_cargo_project_model(
+            &"a".repeat(40),
+            &"b".repeat(64),
+            None,
+        ),
         node_package_surfaces: fixture_node_package_surfaces(
             &"a".repeat(40),
             &"b".repeat(64),
@@ -2605,6 +2610,11 @@ fn reference_fixture() -> Fixture {
         parser_census_sha256: "c".repeat(64),
         cargo_project_model: fixture_cargo_project_model(&"a".repeat(40), &"b".repeat(64), None),
         go_project_model: fixture_cargo_project_model(&"a".repeat(40), &"b".repeat(64), None),
+        typescript_project_model: fixture_cargo_project_model(
+            &"a".repeat(40),
+            &"b".repeat(64),
+            None,
+        ),
         node_package_surfaces: fixture_node_package_surfaces(
             &"a".repeat(40),
             &"b".repeat(64),
@@ -4939,6 +4949,11 @@ fn compiler_surface_fixture(
                 .filter(|file| file.language == "go" && !file.repository_path.ends_with("_test.go"))
                 .map(|file| file.repository_path.clone())
                 .collect::<Vec<_>>(),
+        ),
+        typescript_project_model: fixture_cargo_project_model(
+            &"a".repeat(40),
+            &"b".repeat(64),
+            None,
         ),
         node_package_surfaces: fixture_node_package_surfaces(
             &"a".repeat(40),

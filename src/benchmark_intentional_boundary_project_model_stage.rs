@@ -11,6 +11,7 @@ use super::intentional_boundary_project_model_stage_commitment::{
 use super::intentional_boundary_project_model_stage_support::{
     ProjectModelProviderRun, ResolvedProjectModelRun, failure_key, resolve_project_model_runs,
 };
+use super::intentional_boundary_project_model_typescript::census_intentional_boundary_typescript_project_models_typed;
 use super::{
     INTENTIONAL_BOUNDARY_PROJECT_MODEL_EXCLUSION_SCHEMA_VERSION,
     INTENTIONAL_BOUNDARY_PROJECT_MODEL_STAGE_SCHEMA_VERSION, IntentionalBoundaryAstCensusStage,
@@ -58,13 +59,15 @@ pub async fn census_intentional_boundary_project_model_stage(
         manifest_stage,
         base_evidence_stage,
     )?;
-    let required_providers = manifest_required_providers(manifest_stage);
+    let required_providers = required_project_model_providers(manifest_stage, source_census);
+    let typescript_sources = typescript_source_paths(source_census);
     let runs = collect_provider_runs(
         &required_providers,
         &materialization.repository,
         &materialization.revision,
         root,
         inventory,
+        &typescript_sources,
     );
     finish_project_model_stage(
         task,
@@ -185,7 +188,8 @@ pub(super) fn validate_committed_project_model_stage(
         || stage.ast_census_stage_sha256 != ast_census.stage_sha256
         || stage.manifest_stage_sha256 != manifest_stage.stage_sha256
         || stage.base_evidence_stage_sha256 != base_evidence_stage.stage_sha256
-        || stage.required_providers != manifest_required_providers(manifest_stage)
+        || stage.required_providers
+            != required_project_model_providers(manifest_stage, source_census)
         || stage.stage_sha256 != stage_sha256(stage)?
     {
         return Err(invalid(
@@ -211,7 +215,7 @@ pub(super) fn finish_project_model_stage(
 ) -> Result<IntentionalBoundaryProjectModelStageOutcome, IntentionalBoundaryProjectModelStageError>
 {
     if required_providers.windows(2).any(|pair| pair[0] >= pair[1])
-        || required_providers != manifest_required_providers(manifest_stage)
+        || required_providers != required_project_model_providers(manifest_stage, source_census)
         || runs
             .iter()
             .map(|(provider, _)| *provider)
@@ -377,10 +381,11 @@ fn exclusion(
     Ok(exclusion)
 }
 
-fn manifest_required_providers(
+fn required_project_model_providers(
     manifest_stage: &IntentionalBoundaryManifestStage,
+    source_census: &IntentionalBoundarySourceCensusStage,
 ) -> Vec<IntentionalBoundaryProjectModelProvider> {
-    manifest_stage
+    let mut providers = manifest_stage
         .manifest_census
         .documents
         .iter()
@@ -398,8 +403,20 @@ fn manifest_required_providers(
             | IntentionalBoundaryManifestProvider::PythonProjectManifest
             | IntentionalBoundaryManifestProvider::GoGenerateSource => None,
         })
-        .collect::<BTreeSet<_>>()
-        .into_iter()
+        .collect::<BTreeSet<_>>();
+    if !typescript_source_paths(source_census).is_empty() {
+        providers.insert(IntentionalBoundaryProjectModelProvider::TypeScriptCompilerApi);
+    }
+    providers.into_iter().collect()
+}
+
+fn typescript_source_paths(source_census: &IntentionalBoundarySourceCensusStage) -> Vec<String> {
+    source_census
+        .source_census
+        .source_files
+        .iter()
+        .filter(|source| matches!(source.language.as_str(), "javascript" | "typescript"))
+        .map(|source| source.repository_path.clone())
         .collect()
 }
 
@@ -409,6 +426,7 @@ fn collect_provider_runs(
     revision: &str,
     root: &Path,
     inventory: &IntentionalBoundaryRepositoryInventory,
+    typescript_sources: &[String],
 ) -> Vec<ProjectModelProviderRun> {
     providers
         .iter()
@@ -427,6 +445,15 @@ fn collect_provider_runs(
                 IntentionalBoundaryProjectModelProvider::GradleToolingApi => {
                     census_intentional_boundary_gradle_project_models_typed(
                         repository, revision, root, inventory,
+                    )
+                }
+                IntentionalBoundaryProjectModelProvider::TypeScriptCompilerApi => {
+                    census_intentional_boundary_typescript_project_models_typed(
+                        repository,
+                        revision,
+                        root,
+                        inventory,
+                        typescript_sources,
                     )
                 }
             };
