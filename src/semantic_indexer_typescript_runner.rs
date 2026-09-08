@@ -146,9 +146,9 @@ async fn run_or_resume_variant(
         Some(&expected_languages),
         missing_position_encoding(spec.kind),
     )
-    .and_then(|mut index| {
+    .map(|mut index| {
         index.variant = plan.index_variant();
-        Ok(index)
+        index
     })
     .map_err(|detail| variant_output_failure(spec, detail, Some(process.clone())))
     .and_then(|index| {

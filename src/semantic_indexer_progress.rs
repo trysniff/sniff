@@ -436,9 +436,8 @@ fn normalize_repository_root(
     repository_root: &Path,
 ) -> Result<SemanticIndex, String> {
     let expected = canonical_root_text(repository_root)?;
-    if strip_windows_verbatim_prefix(PathBuf::from(&payload.repository_root))
-        != PathBuf::from(&expected)
-    {
+    let actual = strip_windows_verbatim_prefix(PathBuf::from(&payload.repository_root));
+    if actual.as_path() != Path::new(&expected) {
         return Err(format!(
             "semantic progress payload repository root changed: expected {expected}, found {}",
             payload.repository_root
