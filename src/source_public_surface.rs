@@ -6,6 +6,9 @@ mod go;
 #[path = "source_public_surface_js_ts.rs"]
 mod js_ts;
 
+#[path = "source_public_surface_kotlin.rs"]
+mod kotlin;
+
 #[path = "source_public_surface_python.rs"]
 mod python;
 
@@ -101,6 +104,7 @@ pub(crate) fn census_source_public_surface(
         .name;
     let mut surface = match language.as_str() {
         "go" => go::census(file_path, source)?,
+        "kotlin" => kotlin::census(file_path, source)?,
         "python" => python::census(file_path, source)?,
         "rust" => rust::census(file_path, source)?,
         "typescript" | "javascript" => js_ts::census(file_path, source)?,
