@@ -135,6 +135,114 @@ fn fixture_go_project_model(
     }
 }
 
+fn fixture_kotlin_project_model(
+    revision: &str,
+    inventory_sha256: &str,
+    source_repository_paths: &[String],
+) -> super::super::IntentionalBoundaryProjectModelCensus {
+    use super::super::{
+        IntentionalBoundaryManifestDeclarationKind, IntentionalBoundaryManifestTarget,
+        IntentionalBoundaryProjectModelExecution,
+        IntentionalBoundaryProjectModelGradleKotlinProject,
+        IntentionalBoundaryProjectModelKotlinCompilation,
+        IntentionalBoundaryProjectModelKotlinSourceSet,
+        IntentionalBoundaryProjectModelKotlinTarget, IntentionalBoundaryProjectModelProvider,
+        IntentionalBoundaryProjectModelTarget, IntentionalBoundaryProjectModelTargetStatus,
+        IntentionalBoundaryProjectModelVariant,
+    };
+
+    let execution_id = "fixture-gradle-execution".to_string();
+    let target_id = "fixture-gradle-target".to_string();
+    let main_source_repository_paths = source_repository_paths
+        .iter()
+        .filter(|path| path.contains("/main/"))
+        .cloned()
+        .collect::<Vec<_>>();
+    let test_source_repository_paths = source_repository_paths
+        .iter()
+        .filter(|path| path.contains("/test/"))
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut source_sets = vec![IntentionalBoundaryProjectModelKotlinSourceSet {
+        name: "main".to_string(),
+        source_repository_paths: main_source_repository_paths.clone(),
+        depends_on_source_sets: Vec::new(),
+    }];
+    if !test_source_repository_paths.is_empty() {
+        source_sets.push(IntentionalBoundaryProjectModelKotlinSourceSet {
+            name: "test".to_string(),
+            source_repository_paths: test_source_repository_paths,
+            depends_on_source_sets: Vec::new(),
+        });
+    }
+    let kotlin_target = IntentionalBoundaryProjectModelKotlinTarget {
+        name: "main".to_string(),
+        platform_type: "jvm".to_string(),
+        publishable: true,
+        component_names: vec!["java".to_string()],
+        compilations: vec![IntentionalBoundaryProjectModelKotlinCompilation {
+            name: "main".to_string(),
+            default_source_set: "main".to_string(),
+            source_sets: vec!["main".to_string()],
+        }],
+    };
+    super::super::IntentionalBoundaryProjectModelCensus {
+        schema_version: super::super::INTENTIONAL_BOUNDARY_PROJECT_MODEL_CENSUS_SCHEMA_VERSION,
+        project_model_contract: "fixture".to_string(),
+        repository: "example/repo".to_string(),
+        revision: revision.to_string(),
+        inventory_sha256: inventory_sha256.to_string(),
+        executions: vec![IntentionalBoundaryProjectModelExecution {
+            execution_id: execution_id.clone(),
+            provider: IntentionalBoundaryProjectModelProvider::GradleToolingApi,
+            variant: IntentionalBoundaryProjectModelVariant::Gradle {
+                kotlin_projects: vec![IntentionalBoundaryProjectModelGradleKotlinProject {
+                    project_path: ":library".to_string(),
+                    component_names: vec!["java".to_string()],
+                    publications: Vec::new(),
+                    source_sets,
+                    targets: vec![kotlin_target],
+                }],
+            },
+            invocation_anchor_repository_path: "settings.gradle.kts".to_string(),
+            invocation_anchor_object_id: "0".repeat(40),
+            toolchain_identity_sha256: "e".repeat(64),
+            command_contract: "fixture".to_string(),
+            normalized_model_sha256: "f".repeat(64),
+            covered_manifest_repository_paths: vec![
+                "build.gradle.kts".to_string(),
+                "settings.gradle.kts".to_string(),
+            ],
+            target_count: 1,
+        }],
+        targets: vec![IntentionalBoundaryProjectModelTarget {
+            target_id,
+            execution_id,
+            provider: IntentionalBoundaryProjectModelProvider::GradleToolingApi,
+            manifest_repository_path: "build.gradle.kts".to_string(),
+            manifest_object_id: "1".repeat(40),
+            package_name: "com.example:library".to_string(),
+            package_version: "1.0.0".to_string(),
+            target_name: ":library".to_string(),
+            provider_kinds: vec!["kotlin_jvm".to_string(), "kotlin_library".to_string()],
+            provider_output_types: vec!["jvm_library".to_string()],
+            source_repository_paths: main_source_repository_paths.clone(),
+            ignored_source_repository_paths: Vec::new(),
+            producer_tasks: Vec::new(),
+            required_features: Vec::new(),
+            target_status: IntentionalBoundaryProjectModelTargetStatus::Boundary {
+                declaration_kind: IntentionalBoundaryManifestDeclarationKind::PublishedModule,
+                target: IntentionalBoundaryManifestTarget::RepositoryPaths {
+                    repository_paths: main_source_repository_paths,
+                },
+            },
+        }],
+        execution_count_by_provider: BTreeMap::new(),
+        target_count_by_status: BTreeMap::new(),
+        project_model_census_sha256: "f".repeat(64),
+    }
+}
+
 fn fixture_node_package_surfaces(
     revision: &str,
     inventory_sha256: &str,
@@ -2541,6 +2649,7 @@ fn fixture() -> Fixture {
             Some("src/lib.rs"),
         ),
         go_project_model: fixture_cargo_project_model(&"a".repeat(40), &"b".repeat(64), None),
+        gradle_project_model: fixture_cargo_project_model(&"a".repeat(40), &"b".repeat(64), None),
         typescript_project_model: fixture_cargo_project_model(
             &"a".repeat(40),
             &"b".repeat(64),
@@ -2720,6 +2829,7 @@ fn reference_fixture() -> Fixture {
         parser_census_sha256: "c".repeat(64),
         cargo_project_model: fixture_cargo_project_model(&"a".repeat(40), &"b".repeat(64), None),
         go_project_model: fixture_cargo_project_model(&"a".repeat(40), &"b".repeat(64), None),
+        gradle_project_model: fixture_cargo_project_model(&"a".repeat(40), &"b".repeat(64), None),
         typescript_project_model: fixture_cargo_project_model(
             &"a".repeat(40),
             &"b".repeat(64),
@@ -4507,6 +4617,180 @@ fn go_package_reachability_comes_from_the_compiler_project_model() {
 }
 
 #[test]
+fn kotlin_reachability_comes_only_from_publishable_main_compilations() {
+    let fixture = compiler_surface_fixture(
+        "kotlin",
+        SemanticIndexerKind::Kotlin,
+        SemanticPositionEncoding::Utf16,
+        &[
+            (
+                "library/src/main/kotlin/example/Api.kt",
+                "package example\n\nfun publicApi() = Unit\nclass Service {\n    fun run() = Unit\n}\n",
+            ),
+            (
+                "library/src/test/kotlin/example/ApiTest.kt",
+                "package example\n\nfun testOnly() = Unit\n",
+            ),
+        ],
+        &[],
+    );
+    let changed_indexers = BTreeSet::from([SemanticIndexerKind::Kotlin]);
+    let required_paths = fixture_required_paths(&fixture.source);
+    let semantic = build_semantic_snapshot(
+        fixture.root.path(),
+        &fixture.source,
+        &fixture.files,
+        &changed_indexers,
+        &required_paths,
+        &fixture.indexes,
+    )
+    .unwrap();
+
+    assert_eq!(semantic.kotlin_compilation_roots.len(), 1);
+    assert_eq!(
+        semantic.kotlin_compilation_roots[0].source_repository_paths,
+        ["library/src/main/kotlin/example/Api.kt"]
+    );
+    assert!(semantic.public_bindings.iter().any(|binding| {
+        binding.repository_path == "library/src/main/kotlin/example/Api.kt"
+            && binding.binding == HistoricalV2SemanticPublicBindingKind::PackageExposure
+            && binding.externally_reachable
+    }));
+    assert!(semantic.public_bindings.iter().all(|binding| {
+        binding.repository_path != "library/src/test/kotlin/example/ApiTest.kt"
+            || !binding.externally_reachable
+    }));
+    validation::validate_snapshot(
+        &fixture.source,
+        &semantic,
+        &changed_indexers,
+        &required_paths,
+    )
+    .unwrap();
+}
+
+#[test]
+fn kotlin_public_surface_fails_closed_without_exact_gradle_ownership() {
+    let mut fixture = compiler_surface_fixture(
+        "kotlin",
+        SemanticIndexerKind::Kotlin,
+        SemanticPositionEncoding::Utf16,
+        &[(
+            "library/src/main/kotlin/example/Api.kt",
+            "package example\n\nfun publicApi() = Unit\n",
+        )],
+        &[],
+    );
+    fixture.source.gradle_project_model = fixture_cargo_project_model(
+        &fixture.source.revision,
+        &fixture.source.inventory_sha256,
+        None,
+    );
+    let error = build_semantic_snapshot(
+        fixture.root.path(),
+        &fixture.source,
+        &fixture.files,
+        &BTreeSet::from([SemanticIndexerKind::Kotlin]),
+        &fixture_required_paths(&fixture.source),
+        &fixture.indexes,
+    )
+    .unwrap_err();
+    assert!(
+        error.contains("no exact Gradle source-set ownership"),
+        "{error}"
+    );
+}
+
+#[test]
+fn kotlin_public_surface_validation_rejects_a_rehashed_omitted_root() {
+    let fixture = compiler_surface_fixture(
+        "kotlin",
+        SemanticIndexerKind::Kotlin,
+        SemanticPositionEncoding::Utf16,
+        &[(
+            "library/src/main/kotlin/example/Api.kt",
+            "package example\n\nfun publicApi() = Unit\n",
+        )],
+        &[],
+    );
+    let changed_indexers = BTreeSet::from([SemanticIndexerKind::Kotlin]);
+    let required_paths = fixture_required_paths(&fixture.source);
+    let mut semantic = build_semantic_snapshot(
+        fixture.root.path(),
+        &fixture.source,
+        &fixture.files,
+        &changed_indexers,
+        &required_paths,
+        &fixture.indexes,
+    )
+    .unwrap();
+    assert_eq!(semantic.kotlin_compilation_roots.len(), 1);
+    semantic.kotlin_compilation_roots.clear();
+    semantic.kotlin_compilation_root_count = 0;
+    semantic.semantic_snapshot_sha256 = semantic_snapshot_sha256(&semantic).unwrap();
+
+    let error = validation::validate_snapshot(
+        &fixture.source,
+        &semantic,
+        &changed_indexers,
+        &required_paths,
+    )
+    .unwrap_err();
+    assert!(
+        error.contains("Kotlin compilation roots disagree with the Gradle project model"),
+        "{error}"
+    );
+}
+
+#[test]
+fn kotlin_public_surface_validation_rejects_a_rehashed_omitted_package_exposure() {
+    let fixture = compiler_surface_fixture(
+        "kotlin",
+        SemanticIndexerKind::Kotlin,
+        SemanticPositionEncoding::Utf16,
+        &[(
+            "library/src/main/kotlin/example/Api.kt",
+            "package example\n\nfun publicApi() = Unit\n",
+        )],
+        &[],
+    );
+    let changed_indexers = BTreeSet::from([SemanticIndexerKind::Kotlin]);
+    let required_paths = fixture_required_paths(&fixture.source);
+    let mut semantic = build_semantic_snapshot(
+        fixture.root.path(),
+        &fixture.source,
+        &fixture.files,
+        &changed_indexers,
+        &required_paths,
+        &fixture.indexes,
+    )
+    .unwrap();
+    let index = semantic
+        .public_bindings
+        .iter()
+        .position(|binding| {
+            binding.binding == HistoricalV2SemanticPublicBindingKind::PackageExposure
+                && binding.package_exposure_id.is_some()
+        })
+        .expect("Kotlin package exposure");
+    semantic.public_bindings.remove(index);
+    semantic.public_binding_count = semantic.public_bindings.len();
+    semantic.semantic_snapshot_sha256 = semantic_snapshot_sha256(&semantic).unwrap();
+
+    let error = validation::validate_snapshot(
+        &fixture.source,
+        &semantic,
+        &changed_indexers,
+        &required_paths,
+    )
+    .unwrap_err();
+    assert!(
+        error.contains("package exposure set is incomplete"),
+        "{error}"
+    );
+}
+
+#[test]
 fn empty_go_package_is_a_compiler_backed_public_root() {
     let fixture = compiler_surface_fixture(
         "go",
@@ -5065,6 +5349,19 @@ fn compiler_surface_fixture(
                 .map(|file| file.repository_path.clone())
                 .collect::<Vec<_>>(),
         ),
+        gradle_project_model: if language == "kotlin" {
+            fixture_kotlin_project_model(
+                &"a".repeat(40),
+                &"b".repeat(64),
+                &source_files
+                    .iter()
+                    .filter(|file| file.language == "kotlin")
+                    .map(|file| file.repository_path.clone())
+                    .collect::<Vec<_>>(),
+            )
+        } else {
+            fixture_cargo_project_model(&"a".repeat(40), &"b".repeat(64), None)
+        },
         typescript_project_model: fixture_cargo_project_model(
             &"a".repeat(40),
             &"b".repeat(64),

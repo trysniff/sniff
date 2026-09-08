@@ -36,7 +36,7 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-const SEMANTIC_CENSUS_CONTRACT: &str = "sniffbench-historical-v2-compiler-semantic-census-v19";
+const SEMANTIC_CENSUS_CONTRACT: &str = "sniffbench-historical-v2-compiler-semantic-census-v20";
 const UNCHANGED_DOCUMENT_EXCLUSION: &str =
     "compiler omitted an unchanged source document outside the exact historical patch";
 const VARIANT_DOCUMENT_EXCLUSION: &str =
@@ -285,6 +285,7 @@ fn build_semantic_snapshot_from_sets(
     let mut public_bindings = Vec::new();
     let mut public_roots = Vec::new();
     let mut go_package_roots = Vec::new();
+    let mut kotlin_compilation_roots = Vec::new();
     let mut public_reexport_hops = BTreeMap::new();
     let mut public_surface_document_paths = BTreeSet::new();
     let mut indexers = Vec::new();
@@ -308,6 +309,7 @@ fn build_semantic_snapshot_from_sets(
                     public_bindings: &mut public_bindings,
                     public_roots: &mut public_roots,
                     go_package_roots: &mut go_package_roots,
+                    kotlin_compilation_roots: &mut kotlin_compilation_roots,
                     public_reexport_hops: &mut public_reexport_hops,
                     public_surface_document_paths: &mut public_surface_document_paths,
                     indexers: &mut indexers,
@@ -332,6 +334,7 @@ fn build_semantic_snapshot_from_sets(
                             public_bindings: &mut public_bindings,
                             public_roots: &mut public_roots,
                             go_package_roots: &mut go_package_roots,
+                            kotlin_compilation_roots: &mut kotlin_compilation_roots,
                             public_reexport_hops: &mut public_reexport_hops,
                             public_surface_document_paths: &mut public_surface_document_paths,
                             indexers: &mut indexers,
@@ -384,6 +387,7 @@ fn build_semantic_snapshot_from_sets(
     public_bindings.sort();
     public_roots.sort();
     go_package_roots.sort();
+    kotlin_compilation_roots.sort();
     if public_roots.windows(2).any(|pair| pair[0] == pair[1]) {
         return Err("historical-v2 public roots are repeated".to_string());
     }
@@ -436,6 +440,8 @@ fn build_semantic_snapshot_from_sets(
         public_roots,
         go_package_root_count: go_package_roots.len(),
         go_package_roots,
+        kotlin_compilation_root_count: kotlin_compilation_roots.len(),
+        kotlin_compilation_roots,
         public_reexport_hop_count: public_reexport_hops.len(),
         public_reexport_hops,
         symbol_count: symbols.len(),
@@ -473,6 +479,7 @@ struct SemanticVariantOutputs<'a> {
     public_bindings: &'a mut Vec<super::HistoricalV2SemanticPublicBinding>,
     public_roots: &'a mut Vec<super::HistoricalV2SemanticPublicRoot>,
     go_package_roots: &'a mut Vec<super::HistoricalV2SemanticGoPackageRoot>,
+    kotlin_compilation_roots: &'a mut Vec<super::HistoricalV2SemanticKotlinCompilationRoot>,
     public_reexport_hops: &'a mut BTreeMap<
         (SemanticIndexVariant, String),
         super::HistoricalV2SemanticPublicReexportHop,
@@ -501,6 +508,7 @@ fn process_semantic_variant(
         public_bindings,
         public_roots,
         go_package_roots,
+        kotlin_compilation_roots,
         public_reexport_hops,
         public_surface_document_paths,
         indexers,
@@ -565,6 +573,7 @@ fn process_semantic_variant(
     let mut variant_bindings = Vec::new();
     let mut variant_roots = Vec::new();
     let mut variant_go_roots = Vec::new();
+    let mut variant_kotlin_roots = Vec::new();
     bind_public_surface(
         PublicSurfaceBindingInputs {
             root,
@@ -578,6 +587,7 @@ fn process_semantic_variant(
             bindings: &mut variant_bindings,
             roots: &mut variant_roots,
             go_package_roots: &mut variant_go_roots,
+            kotlin_compilation_roots: &mut variant_kotlin_roots,
             reexport_hops: public_reexport_hops,
             public_surface_document_paths,
         },
@@ -585,6 +595,7 @@ fn process_semantic_variant(
     public_bindings.extend(variant_bindings);
     public_roots.extend(variant_roots);
     go_package_roots.extend(variant_go_roots);
+    kotlin_compilation_roots.extend(variant_kotlin_roots);
     let mut indexed_document_paths = index
         .documents
         .keys()

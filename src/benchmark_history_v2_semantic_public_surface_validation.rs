@@ -230,6 +230,37 @@ pub(super) fn validate_complete_reexport_expansions(
                 }
             }
         }
+        if committed.census.indexer == super::super::IntentionalBoundaryIndexerKind::Kotlin {
+            for root in semantic
+                .kotlin_compilation_roots
+                .iter()
+                .filter(|root| root.variant == *variant)
+            {
+                for repository_path in &root.source_repository_paths {
+                    let file = files
+                        .get(repository_path.as_str())
+                        .copied()
+                        .ok_or_else(|| {
+                            "historical-v2 semantic validation omitted a Kotlin compilation source"
+                                .to_string()
+                        })?;
+                    for slot in resolve_expected_file(
+                        file,
+                        &files,
+                        &direct_bindings,
+                        &hops,
+                        &mut cache,
+                        &mut Vec::new(),
+                    )?
+                    .into_iter()
+                    .filter(|slot| slot.owner.is_none())
+                    {
+                        expected_package_exposures
+                            .insert(expected_kotlin_package_slot(root, slot)?);
+                    }
+                }
+            }
+        }
     }
     let actual = semantic
         .public_bindings
@@ -286,6 +317,34 @@ fn expected_python_package_slot(
     binding.binding = HistoricalV2SemanticPublicBindingKind::PackageExposure;
     binding.externally_reachable = true;
     binding.package_exposure_id = Some(module.module_exposure_id.clone());
+    Ok(binding)
+}
+
+fn expected_kotlin_package_slot(
+    root: &super::super::HistoricalV2SemanticKotlinCompilationRoot,
+    target: ExpectedPublicSlot,
+) -> Result<HistoricalV2SemanticPublicBinding, String> {
+    let surface_unit_id =
+        super::public_surface::historical_kotlin_compilation_public_surface_unit_id(
+            &root.surface_slot_id,
+            &target.name,
+            target.owner.as_deref(),
+            target.namespace,
+            target.kind,
+        )?;
+    let declaration_unit_id =
+        super::public_surface::kotlin_compilation_expansion_declaration_unit_id(
+            &surface_unit_id,
+            &root.surface_slot_id,
+            &target.binding.origin_declaration_unit_id,
+            &target.binding.symbol_id,
+        )?;
+    let mut binding = target.binding;
+    binding.surface_unit_id = surface_unit_id;
+    binding.declaration_unit_id = declaration_unit_id;
+    binding.binding = HistoricalV2SemanticPublicBindingKind::PackageExposure;
+    binding.externally_reachable = true;
+    binding.package_exposure_id = Some(root.surface_slot_id.clone());
     Ok(binding)
 }
 
