@@ -92,6 +92,7 @@ pub(super) fn run(spec: &SandboxCommand) -> Result<SandboxOutput, SandboxError> 
         .extend(effective_spec.executable_paths.iter().cloned());
     extend_executable_mapping_roots(&mut effective_spec)?;
     let profile_name = unique_profile_name();
+    prepare_private_app_container_directories(&effective_spec, &profile_name)?;
     let recovery_ledger = RecoveryLedger::recover_and_begin(&profile_name)?;
     let profile_name_w = wide_null(&profile_name);
     let display_name = wide_null("Sniff temporary sandbox");
@@ -452,11 +453,7 @@ fn resolve_program(program: &str) -> Result<std::path::PathBuf, SandboxError> {
     })?;
     for directory in std::env::split_paths(&path) {
         let base = directory.join(program);
-        for candidate in [
-            base.clone(),
-            base.with_extension("exe"),
-            base.with_extension("cmd"),
-        ] {
+        for candidate in windows_program_candidates(&base) {
             if candidate.is_file() {
                 return std::fs::canonicalize(&candidate)
                     .map(normalize_windows_path)
@@ -472,6 +469,91 @@ fn resolve_program(program: &str) -> Result<std::path::PathBuf, SandboxError> {
     Err(SandboxError::Failed(format!(
         "sandbox program {program} was not found on the host PATH"
     )))
+}
+
+fn windows_program_candidates(base: &Path) -> Vec<PathBuf> {
+    if base.extension().is_some() {
+        return vec![base.to_path_buf()];
+    }
+    vec![
+        base.with_extension("exe"),
+        base.with_extension("cmd"),
+        base.with_extension("bat"),
+        base.to_path_buf(),
+    ]
+}
+
+fn prepare_private_app_container_directories(
+    spec: &SandboxCommand,
+    profile_name: &str,
+) -> Result<(), SandboxError> {
+    let mut values = spec
+        .env
+        .iter()
+        .filter(|(name, _)| name.eq_ignore_ascii_case("LOCALAPPDATA"))
+        .map(|(_, value)| value);
+    let Some(local_app_data) = values.next() else {
+        return Ok(());
+    };
+    if values.next().is_some() || local_app_data.is_empty() {
+        return Err(SandboxError::Invalid(
+            "Windows sandbox has duplicate or empty LOCALAPPDATA".to_string(),
+        ));
+    }
+    let local_app_data = PathBuf::from(local_app_data);
+    let metadata = std::fs::symlink_metadata(&local_app_data).map_err(|error| {
+        SandboxError::Invalid(format!(
+            "inspect Windows sandbox LOCALAPPDATA failed: {error}"
+        ))
+    })?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return Err(SandboxError::Invalid(
+            "Windows sandbox LOCALAPPDATA is not a trusted directory".to_string(),
+        ));
+    }
+    let local_app_data =
+        normalize_windows_path(std::fs::canonicalize(&local_app_data).map_err(|error| {
+            SandboxError::Invalid(format!(
+                "resolve Windows sandbox LOCALAPPDATA failed: {error}"
+            ))
+        })?);
+    let root = normalize_windows_path(std::fs::canonicalize(&spec.root).map_err(|error| {
+        SandboxError::Invalid(format!("resolve Windows sandbox root failed: {error}"))
+    })?);
+    if !local_app_data.starts_with(&root) {
+        return Err(SandboxError::Invalid(
+            "Windows sandbox LOCALAPPDATA escapes its root".to_string(),
+        ));
+    }
+    let mut writable = false;
+    for path in &spec.writable_paths {
+        let path = normalize_windows_path(std::fs::canonicalize(path).map_err(|error| {
+            SandboxError::Invalid(format!(
+                "resolve Windows sandbox writable path failed: {error}"
+            ))
+        })?);
+        if local_app_data.starts_with(path) {
+            writable = true;
+            break;
+        }
+    }
+    if !writable {
+        return Err(SandboxError::Invalid(
+            "Windows sandbox LOCALAPPDATA is outside its writable paths".to_string(),
+        ));
+    }
+    std::fs::create_dir_all(
+        local_app_data
+            .join("Packages")
+            .join(profile_name)
+            .join("AC")
+            .join("Temp"),
+    )
+    .map_err(|error| {
+        SandboxError::Failed(format!(
+            "create private Windows AppContainer temp directory failed: {error}"
+        ))
+    })
 }
 
 fn is_system_program(program: &Path) -> Result<bool, SandboxError> {
@@ -1659,7 +1741,8 @@ mod tests {
         CREATE_SUSPENDED, CapabilitySid, SANDBOX_PROCESS_CREATION_FLAGS,
         ensure_persistent_executable_acl, ensure_persistent_read_acl, explicit_acl_paths,
         extend_executable_mapping_roots, native_acl_path, persistent_acl_exists,
-        persistent_read_acl_exists, revoke_acl, sid_string, update_acl_entry,
+        persistent_read_acl_exists, prepare_private_app_container_directories, revoke_acl,
+        sid_string, update_acl_entry, windows_program_candidates,
     };
     use std::path::{Path, PathBuf};
     use windows_sys::Win32::Security::EqualSid;
@@ -1667,6 +1750,78 @@ mod tests {
     #[test]
     fn appcontainer_process_starts_suspended_before_job_assignment() {
         assert_ne!(SANDBOX_PROCESS_CREATION_FLAGS & CREATE_SUSPENDED, 0);
+    }
+
+    #[test]
+    fn private_appcontainer_temp_is_created_under_writable_local_app_data() {
+        let directory = tempfile::tempdir().unwrap();
+        let cache = directory.path().join("cache");
+        let local_app_data = cache.join("home");
+        std::fs::create_dir_all(&local_app_data).unwrap();
+        let spec = crate::sandbox::SandboxCommand {
+            root: directory.path().to_path_buf(),
+            workdir: PathBuf::from("."),
+            program: "cmd.exe".to_string(),
+            args: Vec::new(),
+            read_only_paths: Vec::new(),
+            writable_paths: vec![cache],
+            persistent_read_only_paths: Vec::new(),
+            persistent_executable_paths: Vec::new(),
+            executable_paths: Vec::new(),
+            windows_virtualized_paths: Vec::new(),
+            env: vec![(
+                "LOCALAPPDATA".to_string(),
+                local_app_data.to_string_lossy().into_owned(),
+            )],
+            allow_network: false,
+            timeout: std::time::Duration::from_secs(1),
+            output_limit: 1024,
+            memory_limit: 1024,
+            process_limit: 1,
+        };
+
+        prepare_private_app_container_directories(&spec, "SniffSandbox-Test").unwrap();
+
+        assert!(
+            local_app_data
+                .join("Packages")
+                .join("SniffSandbox-Test")
+                .join("AC")
+                .join("Temp")
+                .is_dir()
+        );
+
+        let outside = tempfile::tempdir().unwrap();
+        let mut escaped = spec;
+        escaped.env = vec![(
+            "LOCALAPPDATA".to_string(),
+            outside.path().to_string_lossy().into_owned(),
+        )];
+        assert!(matches!(
+            prepare_private_app_container_directories(&escaped, "SniffSandbox-Escaped"),
+            Err(crate::sandbox::SandboxError::Invalid(message))
+                if message == "Windows sandbox LOCALAPPDATA escapes its root"
+        ));
+    }
+
+    #[test]
+    fn sandbox_program_candidates_prefer_windows_launchers_and_preserve_explicit_names() {
+        let bare = Path::new(r"C:\tools\gradle\bin\gradle");
+        assert_eq!(
+            windows_program_candidates(bare),
+            vec![
+                bare.with_extension("exe"),
+                bare.with_extension("cmd"),
+                bare.with_extension("bat"),
+                bare.to_path_buf(),
+            ]
+        );
+
+        let explicit = Path::new(r"C:\tools\gradle\bin\gradle.bat");
+        assert_eq!(
+            windows_program_candidates(explicit),
+            vec![explicit.to_path_buf()]
+        );
     }
 
     #[test]

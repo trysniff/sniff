@@ -194,12 +194,7 @@ pub(super) fn resolve_on_path(program: &str) -> Result<PathBuf, HistoricalRuntim
     for directory in std::env::split_paths(&path) {
         let base = directory.join(program);
         #[cfg(windows)]
-        let candidates = [
-            base.clone(),
-            base.with_extension("exe"),
-            base.with_extension("cmd"),
-            base.with_extension("bat"),
-        ];
+        let candidates = windows_runtime_program_candidates(&base);
         #[cfg(not(windows))]
         let candidates = [base];
         for candidate in candidates {
@@ -211,6 +206,19 @@ pub(super) fn resolve_on_path(program: &str) -> Result<PathBuf, HistoricalRuntim
     Err(unavailable(format!(
         "required runtime {program} is unavailable"
     )))
+}
+
+#[cfg(windows)]
+fn windows_runtime_program_candidates(base: &Path) -> Vec<PathBuf> {
+    if base.extension().is_some() {
+        return vec![base.to_path_buf()];
+    }
+    vec![
+        base.with_extension("exe"),
+        base.with_extension("cmd"),
+        base.with_extension("bat"),
+        base.to_path_buf(),
+    ]
 }
 
 pub(super) fn repository_program(
@@ -479,6 +487,8 @@ fn normalize_path(path: PathBuf) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::executable_installation_root;
+    #[cfg(windows)]
+    use super::windows_runtime_program_candidates;
 
     #[test]
     fn executable_in_bin_uses_its_installation_prefix() {
@@ -499,5 +509,26 @@ mod tests {
             executable_installation_root(&root.path().join("node.exe"), "Node runtime").unwrap();
 
         assert_eq!(resolved, root.path());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_runtime_candidates_prefer_native_and_batch_launchers_over_unix_shims() {
+        let base = std::path::Path::new(r"C:\tools\gradle\bin\gradle");
+
+        assert_eq!(
+            windows_runtime_program_candidates(base),
+            vec![
+                base.with_extension("exe"),
+                base.with_extension("cmd"),
+                base.with_extension("bat"),
+                base.to_path_buf(),
+            ]
+        );
+        let explicit = std::path::Path::new(r"C:\tools\gradle\bin\gradle.bat");
+        assert_eq!(
+            windows_runtime_program_candidates(explicit),
+            vec![explicit.to_path_buf()]
+        );
     }
 }
