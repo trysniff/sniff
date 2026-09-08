@@ -6,16 +6,16 @@ use super::super::{
     HistoricalV2NodePackageExposure, HistoricalV2NodePackageTargetStatus,
     HistoricalV2PublicSurfaceCoverage, HistoricalV2PythonDistributionModule,
     HistoricalV2PythonModuleKind, HistoricalV2SemanticGoPackageRoot,
-    HistoricalV2SemanticPublicBinding, HistoricalV2SemanticPublicBindingKind,
-    HistoricalV2SemanticPublicReexportHop, HistoricalV2SemanticPublicRoot,
-    HistoricalV2SemanticPublicRootOrigin, HistoricalV2SemanticSymbol, HistoricalV2SourceFile,
-    HistoricalV2SourcePublicBindingKind, HistoricalV2SourcePublicDeclaration,
-    HistoricalV2SourcePublicNamespace, HistoricalV2SourcePublicReexport,
-    HistoricalV2SourcePublicReexportKind, HistoricalV2SourcePublicSymbolKind,
-    HistoricalV2SourceSemanticCoverage, HistoricalV2SourceSnapshotCensus,
-    IntentionalBoundaryIndexerKind, IntentionalBoundaryManifestDeclarationKind,
-    IntentionalBoundaryManifestTarget, IntentionalBoundaryProjectModelProvider,
-    IntentionalBoundaryProjectModelTargetStatus,
+    HistoricalV2SemanticKotlinCompilationRoot, HistoricalV2SemanticPublicBinding,
+    HistoricalV2SemanticPublicBindingKind, HistoricalV2SemanticPublicReexportHop,
+    HistoricalV2SemanticPublicRoot, HistoricalV2SemanticPublicRootOrigin,
+    HistoricalV2SemanticSymbol, HistoricalV2SourceFile, HistoricalV2SourcePublicBindingKind,
+    HistoricalV2SourcePublicDeclaration, HistoricalV2SourcePublicNamespace,
+    HistoricalV2SourcePublicReexport, HistoricalV2SourcePublicReexportKind,
+    HistoricalV2SourcePublicSymbolKind, HistoricalV2SourceSemanticCoverage,
+    HistoricalV2SourceSnapshotCensus, IntentionalBoundaryIndexerKind,
+    IntentionalBoundaryManifestDeclarationKind, IntentionalBoundaryManifestTarget,
+    IntentionalBoundaryProjectModelProvider, IntentionalBoundaryProjectModelTargetStatus,
 };
 use super::{
     file_repository_path, flatten_location, hash_json, indexer_for_language, indexer_kind,
@@ -35,6 +35,14 @@ use std::path::Path;
 #[path = "benchmark_history_v2_semantic_public_surface_node.rs"]
 mod node;
 
+#[path = "benchmark_history_v2_semantic_public_surface_kotlin.rs"]
+mod kotlin;
+
+use kotlin::compiler_kotlin_public_compilations;
+pub(super) use kotlin::{
+    expected_kotlin_public_compilations, historical_kotlin_compilation_public_surface_unit_id,
+    kotlin_compilation_expansion_declaration_unit_id,
+};
 use node::*;
 pub(super) struct PublicSurfaceBindingInputs<'a> {
     pub(super) root: &'a Path,
@@ -52,6 +60,7 @@ pub(super) struct PublicSurfaceBindingOutputs<'a> {
     pub(super) bindings: &'a mut Vec<HistoricalV2SemanticPublicBinding>,
     pub(super) roots: &'a mut Vec<HistoricalV2SemanticPublicRoot>,
     pub(super) go_package_roots: &'a mut Vec<HistoricalV2SemanticGoPackageRoot>,
+    pub(super) kotlin_compilation_roots: &'a mut Vec<HistoricalV2SemanticKotlinCompilationRoot>,
     pub(super) reexport_hops:
         &'a mut BTreeMap<(SemanticIndexVariant, String), HistoricalV2SemanticPublicReexportHop>,
     pub(super) public_surface_document_paths: &'a mut BTreeSet<String>,
@@ -73,6 +82,7 @@ pub(super) fn bind_public_surface(
         bindings,
         roots,
         go_package_roots,
+        kotlin_compilation_roots,
         reexport_hops,
         public_surface_document_paths,
     } = outputs;
@@ -128,6 +138,12 @@ pub(super) fn bind_public_surface(
         Vec::new()
     };
     let go_sources = go_package_source_map(&go_packages)?;
+    let kotlin_roots = if kind == SemanticIndexerKind::Kotlin {
+        compiler_kotlin_public_compilations(source, index)?
+    } else {
+        Vec::new()
+    };
+    kotlin_compilation_roots.extend(kotlin_roots.iter().cloned());
     if kind == SemanticIndexerKind::Go {
         for package in go_packages
             .iter()
@@ -284,11 +300,12 @@ pub(super) fn bind_public_surface(
         })?;
         let file_externally_reachable = match kind {
             SemanticIndexerKind::Rust => rust_roots.contains_key(&file.repository_path),
-            SemanticIndexerKind::TypeScriptJavaScript | SemanticIndexerKind::Python => false,
+            SemanticIndexerKind::TypeScriptJavaScript
+            | SemanticIndexerKind::Python
+            | SemanticIndexerKind::Kotlin => false,
             SemanticIndexerKind::Go => {
                 go_file_is_externally_reachable(&file.repository_path, &go_sources)?
             }
-            _ => true,
         };
         for declaration in &file.public_declarations {
             let location = declaration_location(
@@ -392,9 +409,10 @@ pub(super) fn bind_public_surface(
         .filter(|file| public_surface_document_paths.contains(file.repository_path.as_str()))
         .filter(|file| match kind {
             SemanticIndexerKind::Rust => rust_roots.contains_key(&file.repository_path),
-            SemanticIndexerKind::TypeScriptJavaScript | SemanticIndexerKind::Python => false,
+            SemanticIndexerKind::TypeScriptJavaScript
+            | SemanticIndexerKind::Python
+            | SemanticIndexerKind::Kotlin => false,
             SemanticIndexerKind::Go => false,
-            _ => true,
         })
     {
         let slots = resolve_file_public_slots(
@@ -524,6 +542,50 @@ pub(super) fn bind_public_surface(
             bindings.push(expanded.binding);
         }
     }
+    for root in &kotlin_roots {
+        for repository_path in &root.source_repository_paths {
+            let file = source_files.get(repository_path.as_str()).copied().ok_or_else(|| {
+                format!(
+                    "historical-v2 Kotlin compilation root is absent from source census: {repository_path}"
+                )
+            })?;
+            let slots = resolve_file_public_slots(
+                file,
+                &source_files,
+                &records,
+                &direct_bindings,
+                kind,
+                index,
+                symbols,
+                reexport_hops,
+                &python_shipped_paths,
+                &mut cache,
+                &mut Vec::new(),
+            )?;
+            for slot in slots.into_iter().filter(|slot| slot.owner.is_none()) {
+                let expanded = expand_kotlin_compilation_slot(root, slot)?;
+                let symbol = index
+                    .symbols
+                    .get(&crate::semantic_index::SemanticSymbolId(
+                        expanded.binding.symbol_id.clone(),
+                    ))
+                    .ok_or_else(|| {
+                        "historical-v2 Kotlin compilation expansion points to a missing compiler symbol"
+                            .to_string()
+                    })?;
+                retain_symbol(
+                    symbols,
+                    indexer_kind(kind),
+                    &index.variant,
+                    symbol,
+                    true,
+                    false,
+                    false,
+                )?;
+                bindings.push(expanded.binding);
+            }
+        }
+    }
     expand_owner_surfaces(source, index, symbols, bindings)?;
     Ok(())
 }
@@ -628,7 +690,7 @@ fn expand_owner_surfaces(
                 expansion.symbol_id.clone(),
             ))
             .ok_or_else(|| {
-                "historical-v2 Rust owner surface points to a missing compiler symbol".to_string()
+                "historical-v2 compiler owner surface points to a missing symbol".to_string()
             })?;
         retain_symbol(
             symbols,
@@ -894,6 +956,38 @@ fn expand_python_distribution_slot(
     binding.binding = HistoricalV2SemanticPublicBindingKind::PackageExposure;
     binding.externally_reachable = true;
     binding.package_exposure_id = Some(module.module_exposure_id.clone());
+    Ok(ResolvedPublicSlot {
+        name: target.name,
+        owner: target.owner,
+        namespace: target.namespace,
+        kind: target.kind,
+        binding,
+    })
+}
+
+fn expand_kotlin_compilation_slot(
+    root: &HistoricalV2SemanticKotlinCompilationRoot,
+    target: ResolvedPublicSlot,
+) -> Result<ResolvedPublicSlot, String> {
+    let surface_unit_id = historical_kotlin_compilation_public_surface_unit_id(
+        &root.surface_slot_id,
+        &target.name,
+        target.owner.as_deref(),
+        target.namespace,
+        target.kind,
+    )?;
+    let declaration_unit_id = kotlin_compilation_expansion_declaration_unit_id(
+        &surface_unit_id,
+        &root.surface_slot_id,
+        &target.binding.origin_declaration_unit_id,
+        &target.binding.symbol_id,
+    )?;
+    let mut binding = target.binding;
+    binding.surface_unit_id = surface_unit_id;
+    binding.declaration_unit_id = declaration_unit_id;
+    binding.binding = HistoricalV2SemanticPublicBindingKind::PackageExposure;
+    binding.externally_reachable = true;
+    binding.package_exposure_id = Some(root.surface_slot_id.clone());
     Ok(ResolvedPublicSlot {
         name: target.name,
         owner: target.owner,

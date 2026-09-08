@@ -144,6 +144,12 @@ pub(super) fn validate_snapshot(
         &committed_variants,
         &public_surface_document_paths,
     )?;
+    validate_kotlin_compilation_roots(
+        source,
+        semantic,
+        &actual_indexers,
+        &public_surface_document_paths,
+    )?;
     let (reexports, reexport_symbols) = validate_reexport_hops(
         source,
         semantic,
@@ -806,6 +812,59 @@ fn validate_go_package_roots(
     Ok(())
 }
 
+fn validate_kotlin_compilation_roots(
+    source: &HistoricalV2SourceSnapshotCensus,
+    semantic: &HistoricalV2SemanticSnapshotCensus,
+    indexers: &BTreeSet<IntentionalBoundaryIndexerKind>,
+    public_surface_document_paths: &BTreeSet<&str>,
+) -> Result<(), String> {
+    if semantic.kotlin_compilation_root_count != semantic.kotlin_compilation_roots.len()
+        || semantic
+            .kotlin_compilation_roots
+            .windows(2)
+            .any(|pair| pair[0] >= pair[1])
+    {
+        return Err("historical-v2 Kotlin compilation root census is noncanonical".to_string());
+    }
+    let mut expected = Vec::new();
+    if indexers.contains(&IntentionalBoundaryIndexerKind::Kotlin) {
+        for committed in semantic
+            .indexers
+            .iter()
+            .filter(|indexer| indexer.census.indexer == IntentionalBoundaryIndexerKind::Kotlin)
+        {
+            let indexed_paths = committed
+                .indexed_document_paths
+                .iter()
+                .cloned()
+                .map(crate::semantic_index::RepositoryPath)
+                .collect::<BTreeSet<_>>();
+            expected.extend(super::public_surface::expected_kotlin_public_compilations(
+                source,
+                &committed.variant,
+                &indexed_paths,
+            )?);
+        }
+    }
+    expected.sort();
+    if expected
+        .iter()
+        .flat_map(|root| &root.source_repository_paths)
+        .any(|path| !public_surface_document_paths.contains(path.as_str()))
+    {
+        return Err(
+            "historical-v2 Kotlin compilation has compiler-invisible public source".to_string(),
+        );
+    }
+    if semantic.kotlin_compilation_roots != expected {
+        return Err(
+            "historical-v2 Kotlin compilation roots disagree with the Gradle project model"
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
 fn python_distribution_module_is_external_entry(
     module: &HistoricalV2PythonDistributionModule,
     source: &HistoricalV2SourceSnapshotCensus,
@@ -1172,7 +1231,8 @@ fn validate_public_bindings<'a>(
                             && public_root_variants.contains(&(&binding.variant, *repository_path))
                     }
                     IntentionalBoundaryIndexerKind::TypeScriptJavaScript
-                    | IntentionalBoundaryIndexerKind::Python => false,
+                    | IntentionalBoundaryIndexerKind::Python
+                    | IntentionalBoundaryIndexerKind::Kotlin => false,
                     IntentionalBoundaryIndexerKind::Go => {
                         if repository_path.ends_with("_test.go") {
                             false
@@ -1187,7 +1247,6 @@ fn validate_public_bindings<'a>(
                                 .externally_reachable
                         }
                     }
-                    _ => true,
                 };
                 if binding.indexer != *indexer
                     || binding.surface_unit_id != declaration.surface_unit_id
@@ -1255,6 +1314,16 @@ fn validate_public_bindings<'a>(
                         symbol,
                         &expected,
                         reexports,
+                        &direct_pairs,
+                    )?;
+                }
+                IntentionalBoundaryIndexerKind::Kotlin => {
+                    validate_kotlin_package_binding(
+                        source,
+                        semantic,
+                        binding,
+                        symbol,
+                        &expected,
                         &direct_pairs,
                     )?;
                 }
@@ -1691,6 +1760,90 @@ fn validate_python_package_binding<'a>(
         || binding.compiler_anchor != expected_anchor
     {
         return Err("historical-v2 Python package binding changed public identity".to_string());
+    }
+    Ok(())
+}
+
+fn validate_kotlin_package_binding<'a>(
+    source: &HistoricalV2SourceSnapshotCensus,
+    semantic: &HistoricalV2SemanticSnapshotCensus,
+    binding: &HistoricalV2SemanticPublicBinding,
+    symbol: &HistoricalV2SemanticSymbol,
+    declarations: &DeclarationMap<'a>,
+    direct_pairs: &BTreeSet<(&SemanticIndexVariant, &str, &str)>,
+) -> Result<(), String> {
+    let exposure_id = binding.package_exposure_id.as_deref().ok_or_else(|| {
+        "historical-v2 Kotlin package binding has no compilation exposure identity".to_string()
+    })?;
+    let matching_roots = semantic
+        .kotlin_compilation_roots
+        .iter()
+        .filter(|root| root.variant == binding.variant && root.surface_slot_id == exposure_id)
+        .collect::<Vec<_>>();
+    let [root] = matching_roots.as_slice() else {
+        return Err(
+            "historical-v2 Kotlin package binding invented or ambiguously selected a compilation root"
+                .to_string(),
+        );
+    };
+    let (origin_path, origin_indexer, origin) = declarations
+        .get(binding.origin_declaration_unit_id.as_str())
+        .copied()
+        .ok_or_else(|| {
+            "historical-v2 Kotlin package binding has no origin declaration".to_string()
+        })?;
+    let source_file = source
+        .source_files
+        .iter()
+        .find(|file| file.repository_path == binding.repository_path)
+        .ok_or_else(|| "historical-v2 Kotlin compilation source disappeared".to_string())?;
+    if binding.indexer != IntentionalBoundaryIndexerKind::Kotlin
+        || origin_indexer != IntentionalBoundaryIndexerKind::Kotlin
+        || binding.binding != HistoricalV2SemanticPublicBindingKind::PackageExposure
+        || !binding.externally_reachable
+        || source_file.language != "kotlin"
+        || origin_path != binding.repository_path
+        || root
+            .source_repository_paths
+            .binary_search(&binding.repository_path)
+            .is_err()
+        || binding.owner_symbol_id.is_some()
+        || binding.owner_compiler_anchor.is_some()
+        || binding.exposing_owner_declaration_unit_id.is_some()
+        || !binding.reexport_path.is_empty()
+        || symbol.symbol.origin != IntentionalBoundarySemanticOrigin::Repository
+        || !compatible_public_symbol_kind(origin.kind, symbol.symbol.category)
+        || !direct_pairs.contains(&(
+            &binding.variant,
+            binding.origin_declaration_unit_id.as_str(),
+            binding.symbol_id.as_str(),
+        ))
+    {
+        return Err("historical-v2 Kotlin package binding changed compiler identity".to_string());
+    }
+    let expected_surface =
+        super::public_surface::historical_kotlin_compilation_public_surface_unit_id(
+            &root.surface_slot_id,
+            &origin.name,
+            origin.owner.as_deref(),
+            origin.namespace,
+            origin.kind,
+        )?;
+    let expected_declaration =
+        super::public_surface::kotlin_compilation_expansion_declaration_unit_id(
+            &expected_surface,
+            &root.surface_slot_id,
+            &binding.origin_declaration_unit_id,
+            &binding.symbol_id,
+        )?;
+    let expected_anchor =
+        declaration_semantic_range(origin_path, origin, binding.position_encoding);
+    if origin.owner.is_some()
+        || binding.surface_unit_id != expected_surface
+        || binding.declaration_unit_id != expected_declaration
+        || binding.compiler_anchor != expected_anchor
+    {
+        return Err("historical-v2 Kotlin package binding changed public identity".to_string());
     }
     Ok(())
 }

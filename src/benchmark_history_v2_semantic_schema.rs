@@ -7,7 +7,7 @@ use crate::semantic_index::{SemanticIndexVariant, SemanticPositionEncoding};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-pub const HISTORICAL_V2_SEMANTIC_CENSUS_SCHEMA_VERSION: u32 = 19;
+pub const HISTORICAL_V2_SEMANTIC_CENSUS_SCHEMA_VERSION: u32 = 20;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -167,6 +167,21 @@ pub struct HistoricalV2SemanticGoPackageRoot {
     pub ignored_source_repository_paths: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HistoricalV2SemanticKotlinCompilationRoot {
+    pub variant: SemanticIndexVariant,
+    pub project_model_execution_id: String,
+    pub project_model_target_id: String,
+    pub surface_slot_id: String,
+    pub project_path: String,
+    pub target_name: String,
+    pub platform_type: String,
+    pub component_names: Vec<String>,
+    pub source_set_names: Vec<String>,
+    pub source_repository_paths: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HistoricalV2SemanticSnapshotCensus {
@@ -179,12 +194,14 @@ pub struct HistoricalV2SemanticSnapshotCensus {
     pub public_bindings: Vec<HistoricalV2SemanticPublicBinding>,
     pub public_roots: Vec<HistoricalV2SemanticPublicRoot>,
     pub go_package_roots: Vec<HistoricalV2SemanticGoPackageRoot>,
+    pub kotlin_compilation_roots: Vec<HistoricalV2SemanticKotlinCompilationRoot>,
     pub public_reexport_hops: Vec<HistoricalV2SemanticPublicReexportHop>,
     pub symbols: Vec<HistoricalV2SemanticSymbol>,
     pub symbol_count: usize,
     pub public_binding_count: usize,
     pub public_root_count: usize,
     pub go_package_root_count: usize,
+    pub kotlin_compilation_root_count: usize,
     pub public_reexport_hop_count: usize,
     pub public_symbol_count: usize,
     pub resolved_method_count: usize,

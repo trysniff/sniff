@@ -17,6 +17,7 @@ use super::intentional_boundary_inventory::{
 };
 use super::intentional_boundary_project_model_cargo::census_intentional_boundary_cargo_project_models_typed;
 use super::intentional_boundary_project_model_go::census_intentional_boundary_go_project_models_typed;
+use super::intentional_boundary_project_model_gradle::census_intentional_boundary_gradle_project_models_typed;
 use super::intentional_boundary_project_model_outcome::{
     ProjectModelDerivationError, ProjectModelDerivationErrorKind,
 };
@@ -45,7 +46,7 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::path::Path;
 
-const SOURCE_CENSUS_CONTRACT: &str = "sniffbench-historical-v2-source-census-v17";
+const SOURCE_CENSUS_CONTRACT: &str = "sniffbench-historical-v2-source-census-v18";
 pub(super) const PARSER_ERROR_LIMIT: usize = 4 * 1024;
 type SourceCensusStageResult =
     HistoricalV2StageResult<HistoricalV2SourceCensus, HistoricalV2SourceCensusExclusion>;
@@ -141,6 +142,20 @@ pub fn census_historical_v2_sources_typed(
         &patched_inventory,
     )
     .map_err(project_model_stage_error)?;
+    let base_gradle_project_model = census_intentional_boundary_gradle_project_models_typed(
+        &inventory_repository,
+        &materialization.base_revision,
+        &roots.base_root,
+        &base_inventory,
+    )
+    .map_err(project_model_stage_error)?;
+    let patched_gradle_project_model = census_intentional_boundary_gradle_project_models_typed(
+        &inventory_repository,
+        &materialization.patched_commit_oid,
+        &roots.patched_root,
+        &patched_inventory,
+    )
+    .map_err(project_model_stage_error)?;
     let base_typescript_sources = typescript_project_sources(&base_parser_census);
     let patched_typescript_sources = typescript_project_sources(&patched_parser_census);
     let base_typescript_project_model =
@@ -216,6 +231,7 @@ pub fn census_historical_v2_sources_typed(
             ProjectSnapshotSemanticInputs {
                 cargo_project_model: base_cargo_project_model,
                 go_project_model: base_go_project_model,
+                gradle_project_model: base_gradle_project_model,
                 typescript_project_model: base_typescript_project_model,
                 node_package_surfaces: base_node_package_surfaces,
                 node_consumer_profiles: base_node_consumer_profiles,
@@ -230,6 +246,7 @@ pub fn census_historical_v2_sources_typed(
             ProjectSnapshotSemanticInputs {
                 cargo_project_model: patched_cargo_project_model,
                 go_project_model: patched_go_project_model,
+                gradle_project_model: patched_gradle_project_model,
                 typescript_project_model: patched_typescript_project_model,
                 node_package_surfaces: patched_node_package_surfaces,
                 node_consumer_profiles: patched_node_consumer_profiles,
@@ -297,6 +314,10 @@ pub fn validate_historical_v2_source_census_commitment(
     )?;
     validate_intentional_boundary_project_model_census_commitment(
         &base_inventory,
+        &census.base.gradle_project_model,
+    )?;
+    validate_intentional_boundary_project_model_census_commitment(
+        &base_inventory,
         &census.base.typescript_project_model,
     )?;
     validate_historical_v2_node_package_surface_census_commitment(
@@ -341,6 +362,10 @@ pub fn validate_historical_v2_source_census_commitment(
     )?;
     validate_intentional_boundary_project_model_census_commitment(
         &patched_inventory,
+        &census.patched.gradle_project_model,
+    )?;
+    validate_intentional_boundary_project_model_census_commitment(
+        &patched_inventory,
         &census.patched.typescript_project_model,
     )?;
     let base_parser_census = census_intentional_boundary_repository(
@@ -362,6 +387,7 @@ pub fn validate_historical_v2_source_census_commitment(
         ProjectSnapshotSemanticInputs {
             cargo_project_model: census.base.cargo_project_model.clone(),
             go_project_model: census.base.go_project_model.clone(),
+            gradle_project_model: census.base.gradle_project_model.clone(),
             typescript_project_model: census.base.typescript_project_model.clone(),
             node_package_surfaces: census.base.node_package_surfaces.clone(),
             node_consumer_profiles: census.base.node_consumer_profiles.clone(),
@@ -375,6 +401,7 @@ pub fn validate_historical_v2_source_census_commitment(
         ProjectSnapshotSemanticInputs {
             cargo_project_model: census.patched.cargo_project_model.clone(),
             go_project_model: census.patched.go_project_model.clone(),
+            gradle_project_model: census.patched.gradle_project_model.clone(),
             typescript_project_model: census.patched.typescript_project_model.clone(),
             node_package_surfaces: census.patched.node_package_surfaces.clone(),
             node_consumer_profiles: census.patched.node_consumer_profiles.clone(),
@@ -505,6 +532,7 @@ fn typescript_project_sources(census: &IntentionalBoundarySourceCensus) -> Vec<S
 struct ProjectSnapshotSemanticInputs {
     cargo_project_model: IntentionalBoundaryProjectModelCensus,
     go_project_model: IntentionalBoundaryProjectModelCensus,
+    gradle_project_model: IntentionalBoundaryProjectModelCensus,
     typescript_project_model: IntentionalBoundaryProjectModelCensus,
     node_package_surfaces: HistoricalV2NodePackageSurfaceCensus,
     node_consumer_profiles: HistoricalV2NodeConsumerProfileCensus,
@@ -520,6 +548,7 @@ fn project_snapshot(
     let ProjectSnapshotSemanticInputs {
         cargo_project_model,
         go_project_model,
+        gradle_project_model,
         typescript_project_model,
         node_package_surfaces,
         node_consumer_profiles,
@@ -654,6 +683,7 @@ fn project_snapshot(
         parser_census_sha256: parser_census.census_sha256.clone(),
         cargo_project_model,
         go_project_model,
+        gradle_project_model,
         typescript_project_model,
         node_package_surfaces,
         node_consumer_profiles,
@@ -702,7 +732,7 @@ pub(super) fn source_public_declarations_with_module_identity(
 > {
     if !matches!(
         language,
-        "go" | "python" | "rust" | "typescript" | "javascript"
+        "go" | "kotlin" | "python" | "rust" | "typescript" | "javascript"
     ) {
         return Ok((
             HistoricalV2PublicSurfaceCoverage::UnsupportedLanguage,
@@ -1086,24 +1116,9 @@ fn method_unit_id(
 }
 
 fn snapshot_census_sha256(value: &HistoricalV2SourceSnapshotCensus) -> Result<String, String> {
-    hash_json(&(
-        &value.revision,
-        &value.inventory_sha256,
-        &value.parser_census_sha256,
-        &value.cargo_project_model,
-        &value.go_project_model,
-        &value.typescript_project_model,
-        &value.node_package_surfaces,
-        &value.node_consumer_profiles,
-        &value.python_distribution_surfaces,
-        value.tracked_entry_count,
-        &value.source_files,
-        value.source_file_count,
-        &value.method_counts_by_language,
-        value.method_count,
-        value.public_declaration_count,
-        value.public_reexport_count,
-    ))
+    let mut committed = value.clone();
+    committed.snapshot_census_sha256.clear();
+    hash_json(&committed)
 }
 
 fn source_census_sha256(value: &HistoricalV2SourceCensus) -> Result<String, String> {
