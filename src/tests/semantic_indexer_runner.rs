@@ -815,9 +815,13 @@ fn expected_document_validation_checks_only_the_declared_required_subset() {
         language: "python".to_string(),
         methods: Vec::new(),
     };
+    let canonical_root = std::fs::canonicalize(root.path())
+        .unwrap()
+        .to_string_lossy()
+        .replace('\\', "/");
     let empty_index = || SemanticIndex {
         format_version: crate::semantic_index::SEMANTIC_INDEX_FORMAT_VERSION,
-        repository_root: root.path().to_string_lossy().into_owned(),
+        repository_root: canonical_root.clone(),
         provenance: SemanticIndexProvenance {
             format: "scip".to_string(),
             tool_name: "fixture".to_string(),
