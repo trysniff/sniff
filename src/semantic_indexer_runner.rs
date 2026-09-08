@@ -157,6 +157,25 @@ mod go_runner;
 mod go_shards;
 #[path = "semantic_indexer_gradle_preparation.rs"]
 mod gradle_preparation;
+
+pub(crate) fn stage_gradle_control_plane_for_project_model(
+    repository: &Path,
+    target: &Path,
+) -> Result<(), String> {
+    gradle_preparation::stage_control_plane(repository, target).map_err(|error| match error {
+        gradle_preparation::KotlinDependencyPreparationError::RepositoryRejected(detail)
+        | gradle_preparation::KotlinDependencyPreparationError::InfrastructureFailed(detail) => {
+            detail
+        }
+    })
+}
+
+pub(crate) fn promote_gradle_cache_for_project_model(
+    source: &Path,
+    destination: &Path,
+) -> Result<String, String> {
+    gradle_preparation::transfer_cache(source, destination)
+}
 use go_project::require_go_project_root;
 #[cfg(windows)]
 #[path = "semantic_indexer_gradle_windows.rs"]
@@ -2318,6 +2337,7 @@ async fn prepare_kotlin_dependency_cache(
         .into());
     }
     gradle_preparation::transfer_cache(&preparation_cache, &root.join(INDEXER_CACHE_DIR))
+        .map(|_| ())
         .map_err(gradle_preparation::KotlinDependencyPreparationError::from)
 }
 

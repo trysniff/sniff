@@ -27,6 +27,38 @@ class SniffGradleProjectModelData implements Serializable {
     List<String> providerKinds
     List<String> productionSourceFiles
     List<SniffGradleProducerTaskData> producerTasks
+    List<String> componentNames
+    List<SniffGradlePublicationData> publications
+    List<SniffKotlinSourceSetData> kotlinSourceSets
+    List<SniffKotlinTargetData> kotlinTargets
+}
+
+class SniffGradlePublicationData implements Serializable {
+    String name
+    String publicationType
+    String groupId
+    String artifactId
+    String version
+}
+
+class SniffKotlinSourceSetData implements Serializable {
+    String name
+    List<String> sourceFiles
+    List<String> dependsOnSourceSets
+}
+
+class SniffKotlinCompilationData implements Serializable {
+    String name
+    String defaultSourceSet
+    List<String> sourceSets
+}
+
+class SniffKotlinTargetData implements Serializable {
+    String name
+    String platformType
+    boolean publishable
+    List<String> componentNames
+    List<SniffKotlinCompilationData> compilations
 }
 
 class SniffGradleBuildModelData implements Serializable {
@@ -53,7 +85,7 @@ class SniffGradleModelBuilder implements ToolingModelBuilder {
         List<SniffGradleProjectModelData> projects = gradleProjects.collect { project -> projectModel(project) }
         attachProducerTasks(gradleProjects, projects)
         new SniffGradleBuildModelData(
-            contract: "sniff-gradle-tooling-project-model-v4",
+            contract: "sniff-gradle-tooling-project-model-v5",
             gradleVersion: root.gradle.gradleVersion,
             settingsDirectory: root.gradle.startParameter.currentDir.canonicalPath,
             projects: projects,
@@ -75,6 +107,68 @@ class SniffGradleModelBuilder implements ToolingModelBuilder {
         if (publishing != null && !publishing.publications.empty) {
             kinds.add("publication")
         }
+        boolean kotlinJvm = project.pluginManager.hasPlugin("org.jetbrains.kotlin.jvm")
+        boolean kotlinMultiplatform = project.pluginManager.hasPlugin("org.jetbrains.kotlin.multiplatform")
+        if (kotlinJvm) {
+            kinds.add("kotlin_jvm")
+        }
+        if (kotlinMultiplatform) {
+            kinds.add("kotlin_multiplatform")
+        }
+        if (kotlinJvm && kotlinMultiplatform) {
+            throw new IllegalStateException("project ${project.path} applies conflicting Kotlin JVM and multiplatform plugins")
+        }
+
+        def kotlin = project.extensions.findByName("kotlin")
+        if ((kotlinJvm || kotlinMultiplatform) && kotlin == null) {
+            throw new IllegalStateException("project ${project.path} applies Kotlin without a Kotlin project extension")
+        }
+        List<SniffKotlinSourceSetData> kotlinSourceSets = kotlin == null ? [] : kotlin.sourceSets
+            .toList()
+            .sort { left, right -> left.name <=> right.name }
+            .collect { sourceSet ->
+                Set<String> files = new TreeSet<>()
+                sourceSet.kotlin.files.each { file ->
+                    String name = file.name.toLowerCase(Locale.ROOT)
+                    if (file.isFile() && (name.endsWith(".kt") || name.endsWith(".kts"))) {
+                        files.add(file.canonicalPath)
+                    }
+                }
+                new SniffKotlinSourceSetData(
+                    name: sourceSet.name,
+                    sourceFiles: files.toList(),
+                    dependsOnSourceSets: sourceSet.dependsOn.collect { dependency -> dependency.name }.toSorted(),
+                )
+            }
+        List<Object> kotlinTargetValues = kotlin == null
+            ? []
+            : (kotlinMultiplatform ? kotlin.targets.toList() : [kotlin.target])
+        List<SniffKotlinTargetData> kotlinTargets = kotlinTargetValues
+            .sort { left, right -> left.name <=> right.name }
+            .collect { target ->
+                List<SniffKotlinCompilationData> compilations = target.compilations
+                    .toList()
+                    .sort { left, right -> left.name <=> right.name }
+                    .collect { compilation ->
+                        new SniffKotlinCompilationData(
+                            name: compilation.name,
+                            defaultSourceSet: compilation.defaultSourceSet.name,
+                            sourceSets: compilation.allKotlinSourceSets.collect { sourceSet -> sourceSet.name }.toSorted(),
+                        )
+                    }
+                new SniffKotlinTargetData(
+                    name: target.name,
+                    platformType: target.platformType.toString(),
+                    publishable: target.publishable,
+                    componentNames: target.components.collect { component -> component.name }.toSorted(),
+                    compilations: compilations,
+                )
+            }
+        if (!project.pluginManager.hasPlugin("application") && kotlinTargets.any { target ->
+            target.publishable && !target.componentNames.empty && target.compilations.any { compilation -> compilation.name == "main" }
+        }) {
+            kinds.add("kotlin_library")
+        }
         if (kinds.empty) {
             kinds.add("unclassified")
         }
@@ -88,6 +182,27 @@ class SniffGradleModelBuilder implements ToolingModelBuilder {
                 sourceFiles.add(file.canonicalPath)
             }
         }
+        Set<String> mainKotlinSourceSets = kotlinTargets
+            .collectMany { target -> target.compilations.findAll { compilation -> compilation.name == "main" } }
+            .collectMany { compilation -> compilation.sourceSets }
+            .toSet()
+        kotlinSourceSets
+            .findAll { sourceSet -> mainKotlinSourceSets.contains(sourceSet.name) }
+            .each { sourceSet -> sourceFiles.addAll(sourceSet.sourceFiles) }
+
+        List<SniffGradlePublicationData> publications = publishing == null ? [] : publishing.publications
+            .toList()
+            .sort { left, right -> left.name <=> right.name }
+            .collect { publication ->
+                boolean maven = publication.hasProperty("groupId") && publication.hasProperty("artifactId") && publication.hasProperty("version")
+                new SniffGradlePublicationData(
+                    name: publication.name,
+                    publicationType: publication.class.name.replaceFirst(/_Decorated$/, ""),
+                    groupId: maven ? publication.groupId?.toString() : null,
+                    artifactId: maven ? publication.artifactId?.toString() : null,
+                    version: maven ? publication.version?.toString() : null,
+                )
+            }
 
         new SniffGradleProjectModelData(
             projectPath: project.path,
@@ -100,6 +215,10 @@ class SniffGradleModelBuilder implements ToolingModelBuilder {
             providerKinds: kinds.toList(),
             productionSourceFiles: sourceFiles.toList(),
             producerTasks: [],
+            componentNames: project.components.collect { component -> component.name }.toSorted(),
+            publications: publications,
+            kotlinSourceSets: kotlinSourceSets,
+            kotlinTargets: kotlinTargets,
         )
     }
 

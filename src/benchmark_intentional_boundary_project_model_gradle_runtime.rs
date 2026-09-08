@@ -18,6 +18,8 @@ use std::time::Duration;
 const GRADLE_TOOLING_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 const GRADLE_TOOLING_OUTPUT_LIMIT: usize = 64 * 1024 * 1024;
 const GRADLE_MACOS_JAVA_TOOL_OPTIONS: &str = "-Djava.net.preferIPv4Stack=true";
+const GRADLE_DEPENDENCY_PREPARATION_CONTRACT: &str =
+    "source-minimized-secret-scrubbed-gradle-help-v1";
 const GRADLE_CLIENT_SOURCE: &str =
     include_str!("../assets/gradle-tooling/sniff-project-model-client.groovy");
 const GRADLE_INIT_SOURCE: &str =
@@ -282,12 +284,14 @@ fn run_gradle_tooling_model(
     })?;
     let cache = runtime.path().join("cache");
     let gradle_home = cache.join("gradle-user-home");
-    fs::create_dir_all(&gradle_home).map_err(|error| {
+    let dependency_preparation_identity =
+        prepare_gradle_tooling_cache(root, runtime.path(), settings_repository_path, &gradle_home)?;
+    fs::create_dir_all(&cache).map_err(|error| {
         gradle_error(
             ProjectModelDerivationErrorKind::InfrastructureFailed,
             IntentionalBoundaryProjectModelFailurePhase::RuntimePreparation,
             Some(settings_repository_path),
-            format!("failed to create private Gradle Tooling API cache: {error}"),
+            format!("failed to create private Gradle Tooling API runtime: {error}"),
         )
     })?;
     let client = cache.join("sniff-project-model-client.groovy");
@@ -353,8 +357,10 @@ fn run_gradle_tooling_model(
     plan.command.timeout = GRADLE_TOOLING_TIMEOUT;
     plan.command.output_limit = GRADLE_TOOLING_OUTPUT_LIMIT;
     let toolchain_identity_sha256 = hash_json(&(
-        "sniffbench-gradle-tooling-runtime-v4",
+        "sniffbench-gradle-tooling-runtime-v6",
         &plan.runtime_identity,
+        GRADLE_DEPENDENCY_PREPARATION_CONTRACT,
+        dependency_preparation_identity,
         GRADLE_MACOS_JAVA_TOOL_OPTIONS,
         GRADLE_CLIENT_SOURCE,
         GRADLE_INIT_SOURCE,
@@ -418,6 +424,131 @@ fn run_gradle_tooling_model(
     Ok(GradleToolingExecutionOutput {
         toolchain_identity_sha256,
         stdout: output.stdout,
+    })
+}
+
+fn prepare_gradle_tooling_cache(
+    root: &Path,
+    runtime_root: &Path,
+    settings_repository_path: &str,
+    destination: &Path,
+) -> Result<String, ProjectModelDerivationError> {
+    let preparation_root = runtime_root
+        .join(".sniff-indexer-tmp")
+        .join("project-model-dependency-preparation");
+    crate::semantic_indexer_runner::stage_gradle_control_plane_for_project_model(
+        root,
+        &preparation_root,
+    )
+    .map_err(|detail| {
+        gradle_error(
+            ProjectModelDerivationErrorKind::InfrastructureFailed,
+            IntentionalBoundaryProjectModelFailurePhase::RuntimePreparation,
+            Some(settings_repository_path),
+            detail,
+        )
+    })?;
+    let runtime_cache = preparation_root.join(".sniff-project-model-preparation");
+    fs::create_dir_all(&runtime_cache).map_err(|error| {
+        gradle_error(
+            ProjectModelDerivationErrorKind::InfrastructureFailed,
+            IntentionalBoundaryProjectModelFailurePhase::RuntimePreparation,
+            Some(settings_repository_path),
+            format!("failed to create Gradle dependency-preparation runtime: {error}"),
+        )
+    })?;
+    let project_directory = settings_repository_path
+        .rsplit_once('/')
+        .map_or(".", |(directory, _)| directory);
+    let project_cache = runtime_cache.join("project-cache");
+    let project_cache_argument = project_cache
+        .strip_prefix(&preparation_root)
+        .map_err(|_| {
+            gradle_error(
+                ProjectModelDerivationErrorKind::InfrastructureFailed,
+                IntentionalBoundaryProjectModelFailurePhase::RuntimePreparation,
+                Some(settings_repository_path),
+                "Gradle dependency-preparation project cache escaped its source-minimized root",
+            )
+        })?
+        .to_string_lossy()
+        .into_owned();
+    let logical_command = vec![
+        "{sniff_gradle}".to_string(),
+        "--project-dir".to_string(),
+        project_directory.to_string(),
+        "--no-daemon".to_string(),
+        "--no-build-cache".to_string(),
+        "--no-configuration-cache".to_string(),
+        "--project-cache-dir".to_string(),
+        project_cache_argument,
+        "help".to_string(),
+    ];
+    let mut plan = prepare_historical_runtime(&preparation_root, &runtime_cache, &logical_command)
+        .map_err(|error| {
+            project_model_runtime_plan_error(
+                Provider::GradleToolingApi,
+                settings_repository_path,
+                "Gradle dependency-preparation runtime",
+                error,
+            )
+        })?;
+    plan.command.allow_network = true;
+    plan.command.timeout = GRADLE_TOOLING_TIMEOUT;
+    plan.command.output_limit = GRADLE_TOOLING_OUTPUT_LIMIT;
+    let runtime_identity = plan.runtime_identity.clone();
+    let output = crate::sandbox::run(&plan.command).map_err(|error| {
+        project_model_sandbox_error(
+            Provider::GradleToolingApi,
+            settings_repository_path,
+            "sandboxed Gradle dependency preparation failed",
+            error,
+        )
+    })?;
+    if output.timed_out || output.status_code != Some(0) {
+        let detail = if output.timed_out {
+            "sandboxed Gradle dependency preparation timed out".to_string()
+        } else {
+            format!(
+                "sandboxed Gradle dependency preparation exited with status {}",
+                output
+                    .status_code
+                    .map_or_else(|| "unknown".to_string(), |status| status.to_string())
+            )
+        };
+        return Err(project_model_process_error(
+            ProjectModelDerivationErrorKind::InfrastructureFailed,
+            Provider::GradleToolingApi,
+            IntentionalBoundaryProjectModelFailurePhase::RuntimePreparation,
+            settings_repository_path,
+            detail,
+            output,
+        ));
+    }
+    let cache_tree_sha256 = crate::semantic_indexer_runner::promote_gradle_cache_for_project_model(
+        &runtime_cache.join("gradle"),
+        destination,
+    )
+    .map_err(|detail| {
+        gradle_error(
+            ProjectModelDerivationErrorKind::InfrastructureFailed,
+            IntentionalBoundaryProjectModelFailurePhase::RuntimePreparation,
+            Some(settings_repository_path),
+            detail,
+        )
+    })?;
+    hash_json(&(
+        GRADLE_DEPENDENCY_PREPARATION_CONTRACT,
+        runtime_identity,
+        cache_tree_sha256,
+    ))
+    .map_err(|detail| {
+        gradle_error(
+            ProjectModelDerivationErrorKind::InfrastructureFailed,
+            IntentionalBoundaryProjectModelFailurePhase::RuntimePreparation,
+            Some(settings_repository_path),
+            detail,
+        )
     })
 }
 

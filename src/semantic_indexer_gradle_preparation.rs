@@ -19,7 +19,7 @@ pub(super) fn stage_control_plane(
 pub(super) fn transfer_cache(
     source: &std::path::Path,
     destination: &std::path::Path,
-) -> Result<(), String> {
+) -> Result<String, String> {
     cache::transfer_cache(source, destination)
 }
 

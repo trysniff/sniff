@@ -42,13 +42,20 @@ pub(super) fn classify_target(
     let has_library = provider_kinds.iter().any(|kind| {
         matches!(
             kind.as_str(),
-            "gradle_plugin" | "java_library" | "publication"
+            "gradle_plugin" | "java_library" | "kotlin_library" | "publication"
         )
     });
     let has_unknown = provider_kinds.iter().any(|kind| {
         !matches!(
             kind.as_str(),
-            "application" | "gradle_plugin" | "java_library" | "publication" | "unclassified"
+            "application"
+                | "gradle_plugin"
+                | "java_library"
+                | "kotlin_jvm"
+                | "kotlin_library"
+                | "kotlin_multiplatform"
+                | "publication"
+                | "unclassified"
         )
     });
     if has_unknown || provider_kinds == ["unclassified"] {
@@ -82,7 +89,7 @@ pub(super) fn output_types(provider_kinds: &[String]) -> Vec<String> {
     if provider_kinds.iter().any(|kind| {
         matches!(
             kind.as_str(),
-            "gradle_plugin" | "java_library" | "publication"
+            "gradle_plugin" | "java_library" | "kotlin_library" | "publication"
         )
     }) {
         values.push("jvm_library".to_string());

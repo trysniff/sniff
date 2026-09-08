@@ -192,9 +192,11 @@ fn cache_transfer_removes_preparation_paths_and_preserves_dependencies() {
     )
     .unwrap();
 
-    transfer_cache(&source, &destination).unwrap();
+    let tree_sha256 = transfer_cache(&source, &destination).unwrap();
 
     assert!(!source.exists());
+    assert_eq!(tree_sha256.len(), 64);
+    assert!(tree_sha256.bytes().all(|byte| byte.is_ascii_hexdigit()));
     assert_eq!(
         fs::read(destination.join("modules/files/dependency.jar")).unwrap(),
         b"dependency"

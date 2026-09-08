@@ -12,6 +12,38 @@ interface SniffGradleProjectModel {
     List<String> getProviderKinds()
     List<String> getProductionSourceFiles()
     List<? extends SniffGradleProducerTaskModel> getProducerTasks()
+    List<String> getComponentNames()
+    List<? extends SniffGradlePublicationModel> getPublications()
+    List<? extends SniffKotlinSourceSetModel> getKotlinSourceSets()
+    List<? extends SniffKotlinTargetModel> getKotlinTargets()
+}
+
+interface SniffGradlePublicationModel {
+    String getName()
+    String getPublicationType()
+    String getGroupId()
+    String getArtifactId()
+    String getVersion()
+}
+
+interface SniffKotlinSourceSetModel {
+    String getName()
+    List<String> getSourceFiles()
+    List<String> getDependsOnSourceSets()
+}
+
+interface SniffKotlinCompilationModel {
+    String getName()
+    String getDefaultSourceSet()
+    List<String> getSourceSets()
+}
+
+interface SniffKotlinTargetModel {
+    String getName()
+    String getPlatformType()
+    boolean getPublishable()
+    List<String> getComponentNames()
+    List<? extends SniffKotlinCompilationModel> getCompilations()
 }
 
 interface SniffGradleProducerTaskModel {
@@ -86,6 +118,30 @@ try {
                 task_type: task.taskType,
                 output_files: task.outputFiles,
                 production_source_files: task.productionSourceFiles,
+            ] },
+            component_names: project.componentNames,
+            publications: project.publications.collect { publication -> [
+                name: publication.name,
+                publication_type: publication.publicationType,
+                group_id: publication.groupId,
+                artifact_id: publication.artifactId,
+                version: publication.version,
+            ] },
+            kotlin_source_sets: project.kotlinSourceSets.collect { sourceSet -> [
+                name: sourceSet.name,
+                source_files: sourceSet.sourceFiles,
+                depends_on_source_sets: sourceSet.dependsOnSourceSets,
+            ] },
+            kotlin_targets: project.kotlinTargets.collect { target -> [
+                name: target.name,
+                platform_type: target.platformType,
+                publishable: target.publishable,
+                component_names: target.componentNames,
+                compilations: target.compilations.collect { compilation -> [
+                    name: compilation.name,
+                    default_source_set: compilation.defaultSourceSet,
+                    source_sets: compilation.sourceSets,
+                ] },
             ] },
         ] },
     ]

@@ -89,7 +89,7 @@ fn fixture() -> (
         .object_id
         .clone();
     let project_model = IntentionalBoundaryProjectModelCensus {
-        schema_version: 6,
+        schema_version: 7,
         project_model_contract: "fixture".to_string(),
         repository: repository.to_string(),
         revision,
@@ -192,7 +192,7 @@ fn custom_fixture(
         .object_id
         .clone();
     let project_model = IntentionalBoundaryProjectModelCensus {
-        schema_version: 6,
+        schema_version: 7,
         project_model_contract: "fixture".to_string(),
         repository: repository.to_string(),
         revision,

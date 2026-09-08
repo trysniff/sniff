@@ -233,7 +233,7 @@ fn gradle_configuration_reaches_evidence_as_a_project_model_contract() {
             .into_owned()
     };
     let model = serde_json::to_vec(&serde_json::json!({
-        "contract": "sniff-gradle-tooling-project-model-v4",
+        "contract": "sniff-gradle-tooling-project-model-v5",
         "tooling_api_version": "8.8",
         "gradle_version": "8.8",
         "settings_directory": canonical(""),
@@ -252,7 +252,11 @@ fn gradle_configuration_reaches_evidence_as_a_project_model_contract() {
                 "task_type": "org.gradle.api.DefaultTask",
                 "output_files": [canonical("src/main/kotlin/Generated.kt")],
                 "production_source_files": [canonical("src/main/kotlin/Generated.kt")]
-            }]
+            }],
+            "component_names": [],
+            "publications": [],
+            "kotlin_source_sets": [],
+            "kotlin_targets": []
         }]
     }))
     .unwrap();
