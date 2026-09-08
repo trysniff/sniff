@@ -233,7 +233,7 @@ fn gradle_configuration_reaches_evidence_as_a_project_model_contract() {
             .into_owned()
     };
     let model = serde_json::to_vec(&serde_json::json!({
-        "contract": "sniff-gradle-tooling-project-model-v5",
+        "contract": "sniff-gradle-tooling-project-model-v6",
         "tooling_api_version": "8.8",
         "gradle_version": "8.8",
         "settings_directory": canonical(""),

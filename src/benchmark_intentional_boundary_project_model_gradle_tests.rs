@@ -212,7 +212,7 @@ fn tooling_output(root: &Path) -> Vec<u8> {
 
 fn tooling_output_at(root: &Path, emitted_root: Option<&str>) -> Vec<u8> {
     serde_json::to_vec(&serde_json::json!({
-        "contract": "sniff-gradle-tooling-project-model-v5",
+        "contract": "sniff-gradle-tooling-project-model-v6",
         "tooling_api_version": "8.8",
         "gradle_version": "8.8",
         "settings_directory": model_path(root, emitted_root, ""),
@@ -1150,6 +1150,7 @@ fn real_gradle_tooling_model_commits_kotlin_publication_and_compilation_facts() 
         .iter()
         .find(|target| target.publishable)
         .expect("publishable Kotlin target");
+    assert_eq!(target.name, "jvm");
     assert!(!target.component_names.is_empty());
     let main = target
         .compilations
