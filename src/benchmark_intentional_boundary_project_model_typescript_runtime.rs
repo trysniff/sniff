@@ -7,7 +7,7 @@ use super::super::intentional_boundary_runtime_snapshot::{
     IntentionalBoundaryRuntimeSnapshot, allocate_runtime_directory,
 };
 use super::super::non_blind_history_runtime::prepare_historical_runtime;
-use super::super::non_blind_history_runtime_support::resolve_on_path;
+use super::super::non_blind_history_runtime_support::{resolve_on_path, sandbox_repository_path};
 use super::{Provider, TypeScriptCompilerExecutionOutput};
 use crate::semantic_indexer_installation::SemanticIndexerStore;
 use crate::semantic_indexer_manifest::{SemanticIndexerKind, pinned_indexer};
@@ -161,9 +161,9 @@ pub(super) fn run_typescript_project_model(
         ]);
     }
     logical_command.extend([
-        sidecar.to_string_lossy().into_owned(),
+        sandbox_repository_path(snapshot.path(), &sidecar),
         typescript.to_string_lossy().into_owned(),
-        input_path.to_string_lossy().into_owned(),
+        sandbox_repository_path(snapshot.path(), &input_path),
     ]);
     let mut plan =
         prepare_historical_runtime(snapshot.path(), &cache, &logical_command).map_err(|error| {
