@@ -179,7 +179,7 @@ fn settings_without_a_compilable_gradle_project_are_repository_rejections() {
 fn cache_transfer_removes_preparation_paths_and_preserves_dependencies() {
     let repository = tempfile::tempdir().unwrap();
     let source = repository.path().join("preparation-cache");
-    let destination = repository.path().join("offline-cache");
+    let destination = repository.path().join("nested/offline-cache");
     fs::create_dir_all(source.join("modules/files")).unwrap();
     fs::create_dir_all(source.join(".tmp")).unwrap();
     fs::create_dir_all(source.join("project-cache")).unwrap();
