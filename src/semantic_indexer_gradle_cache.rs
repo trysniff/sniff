@@ -23,6 +23,18 @@ pub(super) fn transfer_cache(source: &Path, destination: &Path) -> Result<String
     })?;
     prune_ephemeral_cache_state(&source)?;
     let tree_sha256 = validate_cache_tree(&source)?;
+    let destination_parent = destination.parent().ok_or_else(|| {
+        format!(
+            "Kotlin dependency cache destination has no parent: {}",
+            destination.display()
+        )
+    })?;
+    fs::create_dir_all(destination_parent).map_err(|error| {
+        format!(
+            "failed to create Kotlin dependency cache parent {}: {error}",
+            destination_parent.display()
+        )
+    })?;
     fs::rename(&source, destination).map_err(|error| {
         format!(
             "failed to promote the validated Kotlin dependency cache from {} to {}: {error}",
