@@ -158,6 +158,14 @@ mod history_v2_node_package_surface_schema;
 
 pub use history_v2_node_package_surface_schema::*;
 
+#[path = "benchmark_history_v2_node_consumer_profile_schema.rs"]
+mod history_v2_node_consumer_profile_schema;
+
+pub use history_v2_node_consumer_profile_schema::*;
+
+#[path = "benchmark_history_v2_node_consumer_profile.rs"]
+mod history_v2_node_consumer_profile;
+
 #[path = "benchmark_history_v2_node_package_surface.rs"]
 mod history_v2_node_package_surface;
 
