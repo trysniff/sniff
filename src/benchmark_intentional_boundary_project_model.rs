@@ -8,6 +8,10 @@ use super::intentional_boundary_project_model_go::{
 use super::intentional_boundary_project_model_gradle::{
     GRADLE_TOOLING_COMMAND_CONTRACT, validate_gradle_target_classification,
 };
+use super::intentional_boundary_project_model_typescript::{
+    TYPESCRIPT_PROJECT_MODEL_COMMAND_CONTRACT, validate_typescript_target_classification,
+    validate_typescript_variant_inventory,
+};
 use super::{
     BoundaryGitEntryKind, INTENTIONAL_BOUNDARY_PROJECT_MODEL_CENSUS_SCHEMA_VERSION,
     IntentionalBoundaryProjectModelCensus, IntentionalBoundaryProjectModelExecution,
@@ -22,7 +26,7 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path};
 
-pub(super) const PROJECT_MODEL_CONTRACT: &str = "sniffbench-intentional-boundary-project-model-v5";
+pub(super) const PROJECT_MODEL_CONTRACT: &str = "sniffbench-intentional-boundary-project-model-v6";
 
 #[derive(Serialize)]
 struct NormalizedTarget<'a> {
@@ -58,7 +62,7 @@ pub(super) fn compute_normalized_model_sha256(
         .collect::<Result<Vec<_>, String>>()?;
     normalized_targets.sort();
     hash_json(&(
-        "sniffbench-intentional-boundary-normalized-project-model-v5",
+        "sniffbench-intentional-boundary-normalized-project-model-v6",
         provider,
         covered_manifest_repository_paths,
         normalized_targets,
@@ -75,9 +79,9 @@ pub(super) fn compute_execution_id(
     normalized_model_sha256: &str,
 ) -> Result<String, String> {
     Ok(format!(
-        "ibpme-v5:{}",
+        "ibpme-v6:{}",
         hash_json(&(
-            "sniffbench-intentional-boundary-project-model-execution-v5",
+            "sniffbench-intentional-boundary-project-model-execution-v6",
             provider,
             invocation_anchor_repository_path,
             invocation_anchor_object_id,
@@ -93,9 +97,9 @@ pub(super) fn compute_target_id(
     target: &IntentionalBoundaryProjectModelTarget,
 ) -> Result<String, String> {
     Ok(format!(
-        "ibpmt-v5:{}",
+        "ibpmt-v6:{}",
         hash_json(&(
-            "sniffbench-intentional-boundary-project-model-target-v5",
+            "sniffbench-intentional-boundary-project-model-target-v6",
             &target.execution_id,
             normalized_target(target),
         ))?
@@ -174,11 +178,14 @@ pub fn validate_intentional_boundary_project_model_census_commitment(
             Provider::CargoMetadata => CARGO_COMMAND_CONTRACT,
             Provider::GoList => GO_LIST_COMMAND_CONTRACT,
             Provider::GradleToolingApi => GRADLE_TOOLING_COMMAND_CONTRACT,
+            Provider::TypeScriptCompilerApi => TYPESCRIPT_PROJECT_MODEL_COMMAND_CONTRACT,
         };
         if execution.command_contract != command_contract
             || !is_sha256(&execution.toolchain_identity_sha256)
             || !is_sha256(&execution.normalized_model_sha256)
             || !valid_execution_variant(execution.provider, &execution.variant)
+            || (execution.provider == Provider::TypeScriptCompilerApi
+                && !validate_typescript_variant_inventory(inventory, &execution.variant))
         {
             return Err("intentional-boundary project-model execution changed".to_string());
         }
@@ -232,19 +239,20 @@ pub fn validate_intentional_boundary_project_model_census_commitment(
             );
         }
     }
-    let execution_ids = census
-        .executions
-        .iter()
-        .map(|execution| execution.execution_id.as_str())
-        .collect::<BTreeSet<_>>();
     for target in &census.targets {
+        let Some(execution) = census
+            .executions
+            .iter()
+            .find(|execution| execution.execution_id == target.execution_id)
+        else {
+            return Err("intentional-boundary project-model target changed execution".to_string());
+        };
         let manifest = regular_inventory_entry(
             inventory,
             &target.manifest_repository_path,
             "project-model target manifest",
         )?;
-        if !execution_ids.contains(target.execution_id.as_str())
-            || manifest.object_id != target.manifest_object_id
+        if manifest.object_id != target.manifest_object_id
             || target.package_name.trim().is_empty()
             || target.package_version.trim().is_empty()
             || target.target_name.trim().is_empty()
@@ -273,7 +281,7 @@ pub fn validate_intentional_boundary_project_model_census_commitment(
                 .ignored_source_repository_paths
                 .iter()
                 .any(|path| !is_safe_repository_path(path))
-            || !validate_target_classification(inventory, target)
+            || !validate_target_classification(inventory, target, execution)
             || compute_target_id(target)? != target.target_id
         {
             return Err("intentional-boundary project-model target commitment changed".to_string());
@@ -299,11 +307,15 @@ pub fn validate_intentional_boundary_project_model_census_commitment(
 fn validate_target_classification(
     inventory: &IntentionalBoundaryRepositoryInventory,
     target: &IntentionalBoundaryProjectModelTarget,
+    execution: &IntentionalBoundaryProjectModelExecution,
 ) -> bool {
     match target.provider {
         Provider::CargoMetadata => validate_cargo_target_classification(inventory, target),
         Provider::GoList => validate_go_target_classification(inventory, target),
         Provider::GradleToolingApi => validate_gradle_target_classification(inventory, target),
+        Provider::TypeScriptCompilerApi => {
+            validate_typescript_target_classification(inventory, target, execution)
+        }
     }
 }
 
@@ -337,6 +349,39 @@ pub(super) fn valid_execution_variant(
             Provider::CargoMetadata | Provider::GradleToolingApi,
             IntentionalBoundaryProjectModelVariant::Default,
         ) => true,
+        (
+            Provider::TypeScriptCompilerApi,
+            IntentionalBoundaryProjectModelVariant::TypeScript {
+                root_config_repository_path,
+                compiler_version,
+                projects,
+                selected_source_repository_paths,
+                ignored_source_repository_paths,
+            },
+        ) => {
+            !compiler_version.trim().is_empty()
+                && !projects.is_empty()
+                && projects.windows(2).all(|pair| pair[0] < pair[1])
+                && selected_source_repository_paths
+                    .windows(2)
+                    .all(|pair| pair[0] < pair[1])
+                && ignored_source_repository_paths
+                    .windows(2)
+                    .all(|pair| pair[0] < pair[1])
+                && selected_source_repository_paths
+                    .iter()
+                    .all(|path| ignored_source_repository_paths.binary_search(path).is_err())
+                && match root_config_repository_path {
+                    Some(root) => projects
+                        .iter()
+                        .any(|project| project.config_repository_path.as_ref() == Some(root)),
+                    None => {
+                        projects.len() == 1
+                            && projects[0].config_repository_path.is_none()
+                            && projects[0].config_object_id.is_none()
+                    }
+                }
+        }
         _ => false,
     }
 }

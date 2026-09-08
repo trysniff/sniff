@@ -643,6 +643,9 @@ mod intentional_boundary_project_model_gradle;
 
 pub use intentional_boundary_project_model_gradle::*;
 
+#[path = "benchmark_intentional_boundary_project_model_typescript.rs"]
+mod intentional_boundary_project_model_typescript;
+
 #[path = "benchmark_intentional_boundary_project_model_binding_schema.rs"]
 mod intentional_boundary_project_model_binding_schema;
 

@@ -2,7 +2,7 @@ use super::{IntentionalBoundaryManifestDeclarationKind, IntentionalBoundaryManif
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-pub const INTENTIONAL_BOUNDARY_PROJECT_MODEL_CENSUS_SCHEMA_VERSION: u32 = 5;
+pub const INTENTIONAL_BOUNDARY_PROJECT_MODEL_CENSUS_SCHEMA_VERSION: u32 = 6;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -10,6 +10,25 @@ pub enum IntentionalBoundaryProjectModelProvider {
     CargoMetadata,
     GoList,
     GradleToolingApi,
+    TypeScriptCompilerApi,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IntentionalBoundaryProjectModelTypeScriptConfigRead {
+    pub repository_path: String,
+    pub object_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IntentionalBoundaryProjectModelTypeScriptProject {
+    pub config_repository_path: Option<String>,
+    pub config_object_id: Option<String>,
+    pub config_reads: Vec<IntentionalBoundaryProjectModelTypeScriptConfigRead>,
+    pub project_references: Vec<String>,
+    pub effective_compiler_options_json: String,
+    pub source_repository_paths: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -22,6 +41,13 @@ pub enum IntentionalBoundaryProjectModelVariant {
         cgo_enabled: bool,
         build_tags: Vec<String>,
         architecture: IntentionalBoundaryProjectModelGoArchitecture,
+    },
+    TypeScript {
+        root_config_repository_path: Option<String>,
+        compiler_version: String,
+        projects: Vec<IntentionalBoundaryProjectModelTypeScriptProject>,
+        selected_source_repository_paths: Vec<String>,
+        ignored_source_repository_paths: Vec<String>,
     },
 }
 
@@ -41,6 +67,7 @@ pub enum IntentionalBoundaryProjectModelNonBoundaryReason {
     ExampleTarget,
     TestTarget,
     BenchmarkTarget,
+    CompilerProject,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
