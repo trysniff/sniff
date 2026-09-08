@@ -30,6 +30,20 @@ fn second_unit() -> SemanticProgressUnit {
     .unwrap()
 }
 
+#[test]
+fn compiler_world_progress_allows_an_explicit_empty_document_partition() {
+    let unit = SemanticProgressUnit::new(
+        "compiler-world".to_string(),
+        "compiler-project",
+        vec!["index".to_string(), "tsconfig.json".to_string()],
+        &BTreeSet::new(),
+        true,
+    )
+    .unwrap();
+
+    assert!(unit.expected_documents.is_empty());
+}
+
 fn scope(unit: SemanticProgressUnit) -> SemanticProgressScope {
     scope_with_units(vec![unit])
 }
@@ -43,10 +57,10 @@ fn scope_with_units(units: Vec<SemanticProgressUnit>) -> SemanticProgressScope {
         repository_content_sha256: digest('3'),
         file_scope_sha256: digest('4'),
         variant: crate::semantic_index::SemanticIndexVariant::Unqualified,
-        build_context: BTreeMap::from([("GOOS".to_string(), "linux".to_string())]),
-        build_context_output_sha256: digest('5'),
-        package_inventory_sha256: digest('6'),
-        shard_plan_sha256: digest('7'),
+        compiler_context: BTreeMap::from([("GOOS".to_string(), "linux".to_string())]),
+        compiler_context_sha256: digest('5'),
+        document_partition_sha256: digest('6'),
+        unit_plan_sha256: digest('7'),
         units,
     })
     .unwrap()
@@ -101,6 +115,22 @@ fn completed_unit_survives_repository_relocation() {
         resumed.repository_root,
         canonical_root_text(second.path()).unwrap()
     );
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_verbatim_payload_root_normalizes_to_the_same_repository() {
+    let repository = tempfile::tempdir().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let unit = unit();
+    let scope = scope(unit.clone());
+    let store = SemanticProgressStore::open(state.path(), scope).unwrap();
+    let mut payload = index(repository.path());
+    payload.repository_root = format!("//?/{}", payload.repository_root.replace('\\', "/"));
+
+    store.publish(&unit, repository.path(), &payload).unwrap();
+
+    assert!(store.load(&unit, repository.path()).unwrap().is_some());
 }
 
 #[test]

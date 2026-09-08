@@ -467,10 +467,10 @@ async fn run_go_compiler_world(
                 repository_content_sha256: repository_content_sha256.to_string(),
                 file_scope_sha256,
                 variant: variant.clone(),
-                build_context: context.clone(),
-                build_context_output_sha256: context_invocation.output_sha256.clone(),
-                package_inventory_sha256,
-                shard_plan_sha256,
+                compiler_context: context.clone(),
+                compiler_context_sha256: context_invocation.output_sha256.clone(),
+                document_partition_sha256: package_inventory_sha256,
+                unit_plan_sha256: shard_plan_sha256,
                 units: assembly_units.clone(),
             })
             .map_err(|detail| go_progress_failure(spec, detail))?;
@@ -633,7 +633,8 @@ fn go_progress_root(
     progress_root: &Path,
     plan: Option<&SemanticIndexerVariantPlan>,
 ) -> Result<PathBuf, SemanticIndexerRunFailure> {
-    let root = progress_root.join("go");
+    let root = ensure_semantic_progress_family(progress_root, "go")
+        .map_err(|detail| go_progress_failure(spec, detail))?;
     let Some(plan) = plan else {
         return Ok(root);
     };

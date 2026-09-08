@@ -7,8 +7,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const PROGRESS_SCHEMA_VERSION: u32 = 3;
-const PROGRESS_CONTRACT: &str = "semantic-indexer-unit-progress-v3";
+const PROGRESS_SCHEMA_VERSION: u32 = 4;
+const PROGRESS_CONTRACT: &str = "semantic-indexer-unit-progress-v4";
 const SCOPE_FILE: &str = "scope.json";
 const SCOPE_TEMP_FILE: &str = "scope.json.tmp";
 const UNITS_DIRECTORY: &str = "units";
@@ -49,7 +49,6 @@ impl SemanticProgressUnit {
         require_safe_unit_id(&self.unit_id)?;
         if self.contribution.is_empty()
             || self.patterns.is_empty()
-            || self.expected_documents.is_empty()
             || !is_sha256(&self.input_sha256)
         {
             return Err(format!(
@@ -81,10 +80,10 @@ pub(super) struct SemanticProgressScope {
     repository_content_sha256: String,
     file_scope_sha256: String,
     variant: SemanticIndexVariant,
-    build_context: BTreeMap<String, String>,
-    build_context_output_sha256: String,
-    package_inventory_sha256: String,
-    shard_plan_sha256: String,
+    compiler_context: BTreeMap<String, String>,
+    compiler_context_sha256: String,
+    document_partition_sha256: String,
+    unit_plan_sha256: String,
     units: Vec<SemanticProgressUnit>,
     scope_sha256: String,
 }
@@ -97,10 +96,10 @@ pub(super) struct SemanticProgressScopeInputs {
     pub(super) repository_content_sha256: String,
     pub(super) file_scope_sha256: String,
     pub(super) variant: SemanticIndexVariant,
-    pub(super) build_context: BTreeMap<String, String>,
-    pub(super) build_context_output_sha256: String,
-    pub(super) package_inventory_sha256: String,
-    pub(super) shard_plan_sha256: String,
+    pub(super) compiler_context: BTreeMap<String, String>,
+    pub(super) compiler_context_sha256: String,
+    pub(super) document_partition_sha256: String,
+    pub(super) unit_plan_sha256: String,
     pub(super) units: Vec<SemanticProgressUnit>,
 }
 
@@ -116,10 +115,10 @@ impl SemanticProgressScope {
             repository_content_sha256: inputs.repository_content_sha256,
             file_scope_sha256: inputs.file_scope_sha256,
             variant: inputs.variant,
-            build_context: inputs.build_context,
-            build_context_output_sha256: inputs.build_context_output_sha256,
-            package_inventory_sha256: inputs.package_inventory_sha256,
-            shard_plan_sha256: inputs.shard_plan_sha256,
+            compiler_context: inputs.compiler_context,
+            compiler_context_sha256: inputs.compiler_context_sha256,
+            document_partition_sha256: inputs.document_partition_sha256,
+            unit_plan_sha256: inputs.unit_plan_sha256,
             units: inputs.units,
             scope_sha256: String::new(),
         };
@@ -149,9 +148,9 @@ impl SemanticProgressScope {
             || !is_sha256(&self.runtime_sha256)
             || !is_sha256(&self.repository_content_sha256)
             || !is_sha256(&self.file_scope_sha256)
-            || !is_sha256(&self.build_context_output_sha256)
-            || !is_sha256(&self.package_inventory_sha256)
-            || !is_sha256(&self.shard_plan_sha256)
+            || !is_sha256(&self.compiler_context_sha256)
+            || !is_sha256(&self.document_partition_sha256)
+            || !is_sha256(&self.unit_plan_sha256)
             || self.units.is_empty()
         {
             return Err("semantic progress scope is incomplete".to_string());
@@ -437,7 +436,9 @@ fn normalize_repository_root(
     repository_root: &Path,
 ) -> Result<SemanticIndex, String> {
     let expected = canonical_root_text(repository_root)?;
-    if payload.repository_root != expected {
+    if strip_windows_verbatim_prefix(PathBuf::from(&payload.repository_root))
+        != PathBuf::from(&expected)
+    {
         return Err(format!(
             "semantic progress payload repository root changed: expected {expected}, found {}",
             payload.repository_root
@@ -459,7 +460,7 @@ fn bind_repository_root(payload: &mut SemanticIndex, repository_root: &Path) -> 
 fn canonical_root_text(root: &Path) -> Result<String, String> {
     fs::canonicalize(root)
         .map(strip_windows_verbatim_prefix)
-        .map(|path| path.to_string_lossy().into_owned())
+        .map(|path| path.to_string_lossy().replace('\\', "/"))
         .map_err(|error| {
             format!(
                 "failed to resolve semantic progress repository root {}: {error}",

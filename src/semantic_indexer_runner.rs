@@ -1,7 +1,7 @@
 use crate::sandbox::{SandboxCommand, sandbox_path};
 use crate::semantic_index::{
-    RepositoryPath, SemanticIndex, SemanticIndexSet, SemanticIndexerVariantPlan,
-    SemanticPositionEncoding,
+    QualifiedSemanticIndex, RepositoryPath, SemanticIndex, SemanticIndexSet,
+    SemanticIndexerVariantPlan, SemanticPositionEncoding,
 };
 use crate::semantic_indexer_installation::{InstalledIndexer, SemanticIndexerStore};
 use crate::semantic_indexer_manifest::{
@@ -34,60 +34,101 @@ mod recovery;
 #[path = "semantic_indexer_progress.rs"]
 mod progress;
 
+#[path = "semantic_indexer_typescript_runner.rs"]
+mod typescript_runner;
+
 pub(crate) use recovery::recover_interrupted_semantic_indexing;
 use recovery::{INDEXER_CACHE_DIR, INDEXER_TEMP_DIR, SemanticIndexerRecoveryGuard};
+use typescript_runner::{
+    run_typescript_variants, variant_arguments as typescript_variant_arguments,
+};
 
 pub(crate) fn recover_semantic_indexer_progress(progress_root: &Path) -> Result<(), String> {
-    let go_root = progress_root.join("go");
-    if !go_root.exists() {
-        return Ok(());
+    for family in ["go", "typescript"] {
+        recover_semantic_progress_family(progress_root, family)?;
     }
-    let metadata = fs::symlink_metadata(&go_root).map_err(|error| {
-        format!(
-            "failed to inspect Go semantic progress root {}: {error}",
-            go_root.display()
-        )
-    })?;
+    Ok(())
+}
+
+fn recover_semantic_progress_family(progress_root: &Path, family: &str) -> Result<(), String> {
+    let family_root = progress_root.join(family);
+    let metadata = match fs::symlink_metadata(&family_root) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(format!(
+                "failed to inspect {family} semantic progress root {}: {error}",
+                family_root.display()
+            ));
+        }
+    };
     if !metadata.is_dir() || metadata.file_type().is_symlink() {
         return Err(format!(
-            "Go semantic progress root is not a plain directory: {}",
-            go_root.display()
+            "{family} semantic progress root is not a plain directory: {}",
+            family_root.display()
         ));
     }
-    if go_root.join("scope.json").exists() {
-        return progress::SemanticProgressStore::recover_existing(&go_root);
+    if family_root.join("scope.json").exists() {
+        return progress::SemanticProgressStore::recover_existing(&family_root);
     }
-    for entry in fs::read_dir(&go_root).map_err(|error| {
+    for entry in fs::read_dir(&family_root).map_err(|error| {
         format!(
-            "failed to enumerate Go semantic progress root {}: {error}",
-            go_root.display()
+            "failed to enumerate {family} semantic progress root {}: {error}",
+            family_root.display()
         )
     })? {
         let entry = entry.map_err(|error| {
             format!(
-                "failed to inspect Go semantic progress root {}: {error}",
-                go_root.display()
+                "failed to inspect {family} semantic progress root {}: {error}",
+                family_root.display()
             )
         })?;
         let name = entry
             .file_name()
             .into_string()
-            .map_err(|_| "Go semantic variant progress has a non-UTF-8 name".to_string())?;
+            .map_err(|_| format!("{family} semantic variant progress has a non-UTF-8 name"))?;
         let metadata = fs::symlink_metadata(entry.path()).map_err(|error| {
             format!(
-                "failed to inspect Go semantic variant progress {}: {error}",
+                "failed to inspect {family} semantic variant progress {}: {error}",
                 entry.path().display()
             )
         })?;
         if !metadata.is_dir() || metadata.file_type().is_symlink() || !is_lower_sha256(&name) {
             return Err(format!(
-                "Go semantic variant progress contains an invalid entry: {}",
+                "{family} semantic variant progress contains an invalid entry: {}",
                 entry.path().display()
             ));
         }
         progress::SemanticProgressStore::recover_existing(&entry.path())?;
     }
     Ok(())
+}
+
+fn ensure_semantic_progress_family(progress_root: &Path, family: &str) -> Result<PathBuf, String> {
+    let family_root = progress_root.join(family);
+    match fs::symlink_metadata(&family_root) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+            return Err(format!(
+                "{family} semantic progress root is not a plain directory: {}",
+                family_root.display()
+            ));
+        }
+        Ok(_) => return Ok(family_root),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(format!(
+                "failed to inspect {family} semantic progress root {}: {error}",
+                family_root.display()
+            ));
+        }
+    }
+    fs::create_dir(&family_root).map_err(|error| {
+        format!(
+            "failed to create {family} semantic progress root {}: {error}",
+            family_root.display()
+        )
+    })?;
+    Ok(family_root)
 }
 
 fn is_lower_sha256(value: &str) -> bool {
@@ -504,7 +545,12 @@ async fn run_required_indexer_set_typed(
     kind: SemanticIndexerKind,
     variant_plans: Option<&Vec<SemanticIndexerVariantPlan>>,
 ) -> Result<SemanticIndexSet, SemanticIndexerRunFailure> {
-    if variant_plans.is_some() && kind != SemanticIndexerKind::Go {
+    if variant_plans.is_some()
+        && !matches!(
+            kind,
+            SemanticIndexerKind::Go | SemanticIndexerKind::TypeScriptJavaScript
+        )
+    {
         return Err(failure(
             SemanticIndexerRunFailureKind::InvalidInput,
             SemanticIndexerRunPhase::RepositoryValidation,
@@ -591,7 +637,24 @@ async fn run_required_indexer_set_typed(
         }
         return result;
     }
-    let run_result = run_one(spec, root, &installed, files, recovery).await;
+    if kind == SemanticIndexerKind::TypeScriptJavaScript
+        && let Some(plans) = variant_plans
+    {
+        let run_result = run_typescript_variants(context, spec, &installed, plans).await;
+        let installation_result = store.verify(spec).map(|_| ()).map_err(|error| {
+            failure(
+                SemanticIndexerRunFailureKind::InfrastructureFailed,
+                SemanticIndexerRunPhase::IntegrityVerification,
+                Some(kind),
+                format!(
+                    "{} installation changed while it was running: {error}",
+                    spec.display_name
+                ),
+            )
+        });
+        return combine_typed_run_and_integrity(run_result, installation_result);
+    }
+    let run_result = run_one(spec, root, &installed, files, recovery, None).await;
     let installation_result = store.verify(spec).map(|_| ()).map_err(|error| {
         failure(
             SemanticIndexerRunFailureKind::InfrastructureFailed,
@@ -755,6 +818,7 @@ async fn run_one(
     installed: &InstalledIndexer,
     files: &[FileRecord],
     recovery: &SemanticIndexerRecoveryGuard,
+    typescript_plan: Option<&SemanticIndexerVariantPlan>,
 ) -> Result<SemanticIndexerProcessEvidence, SemanticIndexerRunFailure> {
     let execution_root = recovery.prepare_indexer_run().map_err(|detail| {
         indexer_failure(
@@ -764,8 +828,16 @@ async fn run_one(
             detail,
         )
     })?;
-    let run_result =
-        run_one_in_recovery_scope(spec, root, &execution_root, installed, files, recovery).await;
+    let run_result = run_one_in_recovery_scope(
+        spec,
+        root,
+        &execution_root,
+        installed,
+        files,
+        recovery,
+        typescript_plan,
+    )
+    .await;
     let cleanup_result = recovery.finish_indexer_run().map_err(|detail| {
         indexer_failure(
             spec,
@@ -784,6 +856,7 @@ async fn run_one_in_recovery_scope(
     installed: &InstalledIndexer,
     files: &[FileRecord],
     recovery: &SemanticIndexerRecoveryGuard,
+    typescript_plan: Option<&SemanticIndexerVariantPlan>,
 ) -> Result<SemanticIndexerProcessEvidence, SemanticIndexerRunFailure> {
     repository_snapshot::stage_repository_snapshot(root, execution_root).map_err(|detail| {
         indexer_failure(
@@ -858,36 +931,37 @@ async fn run_one_in_recovery_scope(
             detail,
         )
     })?;
-    let temporary_project = if spec.kind == SemanticIndexerKind::TypeScriptJavaScript {
-        prepare_mixed_typescript_javascript_project(spec, root, execution_root, files).map_err(
-            |detail| {
-                indexer_failure(
-                    spec,
-                    SemanticIndexerRunFailureKind::InfrastructureFailed,
-                    SemanticIndexerRunPhase::Preparation,
-                    detail,
-                )
-            },
-        )?
-    } else {
-        #[cfg(windows)]
-        if spec.kind == SemanticIndexerKind::Python {
-            prepare_windows_python_project(root, execution_root, files).map_err(|detail| {
-                indexer_failure(
-                    spec,
-                    SemanticIndexerRunFailureKind::InfrastructureFailed,
-                    SemanticIndexerRunPhase::Preparation,
-                    detail,
-                )
-            })?
+    let temporary_project =
+        if spec.kind == SemanticIndexerKind::TypeScriptJavaScript && typescript_plan.is_none() {
+            prepare_mixed_typescript_javascript_project(spec, root, execution_root, files).map_err(
+                |detail| {
+                    indexer_failure(
+                        spec,
+                        SemanticIndexerRunFailureKind::InfrastructureFailed,
+                        SemanticIndexerRunPhase::Preparation,
+                        detail,
+                    )
+                },
+            )?
         } else {
-            None
-        }
-        #[cfg(not(windows))]
-        {
-            None
-        }
-    };
+            #[cfg(windows)]
+            if spec.kind == SemanticIndexerKind::Python {
+                prepare_windows_python_project(root, execution_root, files).map_err(|detail| {
+                    indexer_failure(
+                        spec,
+                        SemanticIndexerRunFailureKind::InfrastructureFailed,
+                        SemanticIndexerRunPhase::Preparation,
+                        detail,
+                    )
+                })?
+            } else {
+                None
+            }
+            #[cfg(not(windows))]
+            {
+                None
+            }
+        };
     #[cfg(windows)]
     let python_environment = if spec.kind == SemanticIndexerKind::Python {
         Some(
@@ -907,13 +981,16 @@ async fn run_one_in_recovery_scope(
     };
     #[cfg(not(windows))]
     let python_environment: Option<PathBuf> = None;
-    let mut arguments = indexer_arguments_with_workspace(
-        spec,
-        execution_root,
-        root,
-        temporary_project.as_deref(),
-        workspace.as_ref(),
-    )
+    let mut arguments = match typescript_plan {
+        Some(plan) => typescript_variant_arguments(spec, plan),
+        None => indexer_arguments_with_workspace(
+            spec,
+            execution_root,
+            root,
+            temporary_project.as_deref(),
+            workspace.as_ref(),
+        ),
+    }
     .map_err(|detail| {
         indexer_failure(
             spec,
@@ -928,7 +1005,7 @@ async fn run_one_in_recovery_scope(
             environment.to_string_lossy().to_string(),
         ]);
     }
-    let prepared_command = build_indexer_sandbox_command(
+    let mut prepared_command = build_indexer_sandbox_command(
         spec,
         execution_root,
         installed,
@@ -943,6 +1020,31 @@ async fn run_one_in_recovery_scope(
             detail,
         )
     })?;
+    if let Some(plan) = typescript_plan {
+        for (name, value) in &plan.environment {
+            if prepared_command
+                .command
+                .env
+                .iter()
+                .any(|(existing, _)| existing == name)
+            {
+                return Err(indexer_failure(
+                    spec,
+                    SemanticIndexerRunFailureKind::InvalidInput,
+                    SemanticIndexerRunPhase::Preparation,
+                    format!("TypeScript variant repeats sandbox environment variable {name}"),
+                ));
+            }
+            prepared_command
+                .command
+                .env
+                .push((name.clone(), value.clone()));
+        }
+        prepared_command
+            .command
+            .env
+            .sort_by(|left, right| left.0.cmp(&right.0));
+    }
     if std::env::var_os("SNIFF_DEBUG_INDEXERS").is_some() {
         eprintln!(
             "[sniff] semantic indexer sandbox ready: {}",
@@ -3206,7 +3308,13 @@ fn strip_windows_verbatim_prefix(path: PathBuf) -> PathBuf {
     if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
         return PathBuf::from(format!(r"\\{}", rest));
     }
+    if let Some(rest) = text.strip_prefix("//?/UNC/") {
+        return PathBuf::from(format!(r"\\{}", rest.replace('/', r"\")));
+    }
     if let Some(rest) = text.strip_prefix(r"\\?\") {
+        return PathBuf::from(rest);
+    }
+    if let Some(rest) = text.strip_prefix("//?/") {
         return PathBuf::from(rest);
     }
     path
@@ -3230,8 +3338,22 @@ fn validate_expected_documents(
     root: &Path,
     files: &[FileRecord],
     kind: SemanticIndexerKind,
-    index: SemanticIndex,
+    mut index: SemanticIndex,
 ) -> Result<SemanticIndex, String> {
+    let normalized_root =
+        strip_windows_verbatim_prefix(fs::canonicalize(root).map_err(|error| {
+            format!(
+                "failed to resolve semantic repository root {}: {error}",
+                root.display()
+            )
+        })?);
+    if strip_windows_verbatim_prefix(PathBuf::from(&index.repository_root)) != normalized_root {
+        return Err(format!(
+            "{} SCIP output changed the semantic repository root",
+            kind.display_name()
+        ));
+    }
+    index.repository_root = normalized_root.to_string_lossy().replace('\\', "/");
     let expected = files
         .iter()
         .filter(|file| language_kind(file) == Some(kind))

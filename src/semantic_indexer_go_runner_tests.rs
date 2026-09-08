@@ -80,6 +80,7 @@ fn variant_plan(
             ("GOFLAGS".to_string(), String::new()),
             ("GOOS".to_string(), "linux".to_string()),
         ]),
+        compiler_project: None,
         selected_documents: selected_documents
             .iter()
             .map(|path| RepositoryPath((*path).to_string()))
@@ -176,10 +177,10 @@ async fn completed_progress_unit_skips_the_compiler_invocation() {
         repository_content_sha256: digest('3'),
         file_scope_sha256: digest('4'),
         variant: crate::semantic_index::SemanticIndexVariant::Unqualified,
-        build_context: BTreeMap::from([("GOOS".to_string(), "linux".to_string())]),
-        build_context_output_sha256: digest('5'),
-        package_inventory_sha256: digest('6'),
-        shard_plan_sha256: digest('7'),
+        compiler_context: BTreeMap::from([("GOOS".to_string(), "linux".to_string())]),
+        compiler_context_sha256: digest('5'),
+        document_partition_sha256: digest('6'),
+        unit_plan_sha256: digest('7'),
         units: vec![unit.clone()],
     })
     .unwrap();

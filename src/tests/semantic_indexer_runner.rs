@@ -54,6 +54,16 @@ fn qualified_go_progress_rejects_uncommitted_variant_directories() {
     assert!(error.contains("invalid entry"), "{error}");
 }
 
+#[test]
+fn qualified_typescript_progress_rejects_uncommitted_variant_directories() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(root.path().join("typescript").join("not-a-variant-digest")).unwrap();
+
+    let error = recover_semantic_indexer_progress(root.path()).unwrap_err();
+
+    assert!(error.contains("invalid entry"), "{error}");
+}
+
 #[cfg(windows)]
 #[tokio::test]
 #[ignore = "requires a prebuilt AppContainer-compatible rust-analyzer"]
@@ -93,7 +103,7 @@ async fn windows_compatible_rust_analyzer_emits_scip_inside_appcontainer() {
     let recovery = SemanticIndexerRecoveryGuard::begin(repository.path())
         .expect("start semantic recovery lifecycle");
 
-    run_one(spec, repository.path(), &installed, &files, &recovery)
+    run_one(spec, repository.path(), &installed, &files, &recovery, None)
         .await
         .expect("compatibility artifact should index inside AppContainer");
 

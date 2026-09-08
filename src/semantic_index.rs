@@ -31,6 +31,7 @@ pub struct SemanticIndexerVariantPlan {
     pub identity: SemanticVariantId,
     pub dimensions: BTreeMap<String, String>,
     pub environment: BTreeMap<String, String>,
+    pub compiler_project: Option<RepositoryPath>,
     pub selected_documents: BTreeSet<RepositoryPath>,
     pub ignored_documents: BTreeSet<RepositoryPath>,
 }
@@ -39,7 +40,6 @@ impl SemanticIndexerVariantPlan {
     pub fn validate(&self) -> Result<(), String> {
         if self.identity.0.trim().is_empty()
             || self.dimensions.is_empty()
-            || self.environment.is_empty()
             || self
                 .dimensions
                 .iter()
@@ -49,10 +49,14 @@ impl SemanticIndexerVariantPlan {
                 .iter()
                 .any(|(name, value)| name.trim().is_empty() || value.contains('\0'))
             || self
+                .compiler_project
+                .as_ref()
+                .is_some_and(|path| !is_canonical_repository_path(&path.0))
+            || self
                 .selected_documents
                 .iter()
                 .chain(&self.ignored_documents)
-                .any(|path| path.0.trim().is_empty())
+                .any(|path| !is_canonical_repository_path(&path.0))
             || !self.selected_documents.is_disjoint(&self.ignored_documents)
         {
             return Err(format!(
@@ -69,6 +73,20 @@ impl SemanticIndexerVariantPlan {
             dimensions: self.dimensions.clone(),
         }
     }
+}
+
+fn is_canonical_repository_path(path: &str) -> bool {
+    !path.is_empty()
+        && !path.starts_with('/')
+        && !path.contains('\\')
+        && !path.contains('\0')
+        && path
+            .as_bytes()
+            .get(1)
+            .is_none_or(|separator| *separator != b':')
+        && path
+            .split('/')
+            .all(|segment| !segment.is_empty() && segment != "." && segment != "..")
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -466,6 +484,7 @@ mod variant_tests {
                 ("GOARCH".to_string(), "amd64".to_string()),
                 ("GOOS".to_string(), "linux".to_string()),
             ]),
+            compiler_project: None,
             selected_documents: BTreeSet::from([RepositoryPath("api_linux.go".to_string())]),
             ignored_documents: BTreeSet::from([RepositoryPath("api_windows.go".to_string())]),
         }
@@ -502,5 +521,24 @@ mod variant_tests {
         plan.ignored_documents.clear();
 
         plan.validate().unwrap();
+    }
+
+    #[test]
+    fn compiler_variant_plan_rejects_noncanonical_repository_paths() {
+        for invalid in [
+            "../tsconfig.json",
+            "nested/../tsconfig.json",
+            "/tsconfig.json",
+            "C:/repo/tsconfig.json",
+            "nested\\tsconfig.json",
+            "nested//tsconfig.json",
+        ] {
+            let mut plan = plan();
+            plan.compiler_project = Some(RepositoryPath(invalid.to_string()));
+
+            let error = plan.validate().unwrap_err();
+
+            assert!(error.contains("incomplete"), "{invalid}: {error}");
+        }
     }
 }
