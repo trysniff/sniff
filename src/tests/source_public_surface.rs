@@ -480,6 +480,169 @@ fn slice(source: &[u8], range: super::SourceByteRange) -> &str {
 }
 
 #[test]
+fn kotlin_surface_collects_exact_visible_declarations_and_owned_members() {
+    let source = br#"package surface
+
+public typealias Identifier = String
+internal typealias HiddenIdentifier = String
+
+fun topLevel(value: String): String = value
+private fun hiddenTopLevel() = Unit
+fun String.extension(): String = this
+@foo.Bar
+fun annotatedTopLevel() = Unit
+const val TOP_LEVEL_VERSION = 1
+
+class Service(val name: String, private val secret: String, input: String) {
+    val status: String = input
+    internal val hiddenStatus: String = secret
+    protected fun stop() = Unit
+    private fun hidden() = Unit
+
+    class Nested {
+        fun run() = Unit
+    }
+
+    companion object {
+        const val VERSION = 1
+        fun create() = Service("", "", "")
+    }
+}
+
+private class Hidden {
+    fun leaked() = Unit
+}
+
+enum class Mode { Fast, Safe }
+"#;
+
+    let surface = census_source_public_surface("surface.kt", source).expect("Kotlin surface");
+    for declaration in &surface.declarations {
+        assert_eq!(
+            slice(source, declaration.exposed_identifier),
+            declaration.name
+        );
+        assert_eq!(declaration.exposed_identifier, declaration.compiler_anchor);
+        assert_eq!(declaration.binding, SourcePublicBindingKind::Definition);
+        assert_eq!(declaration.source_module, None);
+        if let Some(owner) = declaration.owner.as_deref() {
+            assert_eq!(
+                slice(
+                    source,
+                    declaration
+                        .owner_compiler_anchor
+                        .expect("Kotlin owner anchor")
+                ),
+                owner.rsplit("::").next().unwrap_or(owner)
+            );
+        }
+    }
+    let declaration = |name: &str, owner: Option<&str>| {
+        surface
+            .declarations
+            .iter()
+            .find(|declaration| declaration.name == name && declaration.owner.as_deref() == owner)
+            .unwrap_or_else(|| panic!("missing Kotlin declaration {owner:?}::{name}"))
+    };
+
+    assert_eq!(
+        declaration("Identifier", None).kind,
+        SourcePublicSymbolKind::Type
+    );
+    assert_eq!(
+        declaration("topLevel", None).kind,
+        SourcePublicSymbolKind::Callable
+    );
+    assert_eq!(
+        declaration("extension", None).kind,
+        SourcePublicSymbolKind::Method
+    );
+    assert_eq!(
+        declaration("annotatedTopLevel", None).kind,
+        SourcePublicSymbolKind::Callable
+    );
+    assert_eq!(
+        declaration("TOP_LEVEL_VERSION", None).kind,
+        SourcePublicSymbolKind::Constant
+    );
+    assert_eq!(
+        declaration("Service", None).kind,
+        SourcePublicSymbolKind::Type
+    );
+    assert_eq!(
+        declaration("name", Some("Service")).kind,
+        SourcePublicSymbolKind::Field
+    );
+    assert_eq!(
+        declaration("status", Some("Service")).kind,
+        SourcePublicSymbolKind::Field
+    );
+    assert_eq!(
+        declaration("stop", Some("Service")).kind,
+        SourcePublicSymbolKind::Method
+    );
+    assert_eq!(
+        declaration("Nested", Some("Service")).kind,
+        SourcePublicSymbolKind::Type
+    );
+    assert_eq!(
+        declaration("run", Some("Service::Nested")).kind,
+        SourcePublicSymbolKind::Method
+    );
+    assert_eq!(
+        declaration("VERSION", Some("Service")).namespace,
+        super::SourcePublicNamespace::StaticMember
+    );
+    assert_eq!(
+        declaration("VERSION", Some("Service")).kind,
+        SourcePublicSymbolKind::Constant
+    );
+    assert_eq!(
+        declaration("create", Some("Service")).namespace,
+        super::SourcePublicNamespace::StaticMember
+    );
+    assert_eq!(
+        declaration("Fast", Some("Mode")).kind,
+        SourcePublicSymbolKind::Constant
+    );
+    assert_eq!(
+        declaration("Safe", Some("Mode")).kind,
+        SourcePublicSymbolKind::Constant
+    );
+    for hidden in [
+        "HiddenIdentifier",
+        "hiddenTopLevel",
+        "secret",
+        "input",
+        "hiddenStatus",
+        "hidden",
+        "Hidden",
+        "leaked",
+    ] {
+        assert!(
+            !surface
+                .declarations
+                .iter()
+                .any(|declaration| declaration.name == hidden),
+            "unexpected Kotlin declaration {hidden}"
+        );
+    }
+    assert!(surface.reexports.is_empty());
+}
+
+#[test]
+fn kotlin_surface_rejects_public_destructuring_and_syntax_errors() {
+    let destructuring =
+        census_source_public_surface("surface.kt", b"val (first, second) = pair()\n")
+            .expect_err("public destructuring must fail closed");
+    assert!(destructuring.contains("destructuring"), "{destructuring}");
+
+    let syntax = census_source_public_surface("surface.kt", b"fun broken(\n")
+        .expect_err("syntax errors must fail closed");
+    assert!(syntax.contains("syntax error"), "{syntax}");
+}
+
+#[test]
 fn rust_surface_collects_public_definitions_members_and_reexports() {
     let source = br#"mod hidden;
 pub mod public;
