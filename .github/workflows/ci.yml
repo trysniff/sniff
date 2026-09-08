@@ -41,9 +41,10 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
-    # macOS now completes the library suite near 39 minutes before entering
-    # cross-language dogfood; retain a bounded margin for those final fixtures.
-    timeout-minutes: 60
+    # macOS can spend roughly 53 minutes compiling and completing the library
+    # suite before the cross-language dogfood fixtures run. Keep the whole
+    # exhaustive matrix bounded without truncating those final proofs.
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
