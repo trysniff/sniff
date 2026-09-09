@@ -127,7 +127,7 @@ jobs:
               exit 1
             fi
             case "$COLLECTOR_MIGRATION" in
-              compact-stage-artifact-json-v1|package-scoped-go-dependency-preparation-v1|declared-go-module-dependency-preparation-v1|strict-go-project-root-validation-v1|valid-go-eof-parser-v1|validated-resume-symlink-extraction-v1|committed-git-blob-source-census-v1|bounded-go-semantic-indexing-v1|hosted-semantic-seal-margin-v1|resumable-go-semantic-assembly-v1|finalized-go-semantic-compaction-v1|indexed-semantic-snapshot-projection-v1|batched-source-normalized-semantic-snapshot-v1) ;;
+              compact-stage-artifact-json-v1|package-scoped-go-dependency-preparation-v1|declared-go-module-dependency-preparation-v1|strict-go-project-root-validation-v1|valid-go-eof-parser-v1|validated-resume-symlink-extraction-v1|committed-git-blob-source-census-v1|bounded-go-semantic-indexing-v1|hosted-semantic-seal-margin-v1|resumable-go-semantic-assembly-v1|finalized-go-semantic-compaction-v1|indexed-semantic-snapshot-projection-v1|batched-source-normalized-semantic-snapshot-v1|compiler-public-surface-replay-v1) ;;
               *)
                 echo 'collector_migration is not an allowlisted exact migration' >&2
                 exit 1
@@ -398,6 +398,26 @@ jobs:
             printf 'COLLECTOR_ROOT=%s\n' "$collector_root"
           } >> "$GITHUB_ENV"
 
+      - name: Materialize the immutable frame evidence root
+        shell: bash
+        run: |
+          set -euo pipefail
+          frame_artifact_root="${RUNNER_TEMP}/historical-v2-frame-artifacts"
+          test ! -e "$frame_artifact_root"
+          git init --quiet "$frame_artifact_root"
+          git -C "$frame_artifact_root" config core.autocrlf false
+          git -C "$frame_artifact_root" config core.eol lf
+          git -C "$frame_artifact_root" -c protocol.version=2 fetch \
+            --quiet --no-tags --depth=1 \
+            "https://github.com/${GITHUB_REPOSITORY}.git" \
+            '8681f9c379c4e4817c7ed49f06f47f4c47d1f91b'
+          git -C "$frame_artifact_root" checkout --quiet --detach FETCH_HEAD
+          test "$(git -C "$frame_artifact_root" rev-parse HEAD)" = \
+            '8681f9c379c4e4817c7ed49f06f47f4c47d1f91b'
+          test "$(git -C "$frame_artifact_root" rev-parse --is-shallow-repository)" = 'true'
+          test -z "$(git -C "$frame_artifact_root" status --porcelain=v1 --untracked-files=all)"
+          printf 'FRAME_ARTIFACT_ROOT=%s\n' "$frame_artifact_root" >> "$GITHUB_ENV"
+
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
         with:
           toolchain: "1.96.0"
@@ -537,6 +557,24 @@ jobs:
               --bin sniff --bin sniffbench-frame
           fi
 
+      - name: Replay stale compiler public-surface censuses
+        if: inputs.collector_migration == 'compiler-public-surface-replay-v1'
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$COLLECTOR_ROOT/target/release/sniffbench-frame" \
+            replay-public-surface-census \
+            --protocol "$COLLECTOR_ROOT/sniffbench/historical-v2-protocol.json" \
+            --artifact-root "$FRAME_ARTIFACT_ROOT" \
+            --frame "$FRAME_ROOT/frame.json" \
+            --exclusions "$FRAME_ROOT/exclusions.json" \
+            --selection "$FRAME_ROOT/selection.json" \
+            --payloads "$FRAME_ROOT/selected-payloads.json" \
+            --state-root "$STATE_ROOT" \
+            --work-root "$WORK_ROOT" \
+            --language go \
+            --slot-number 122
+
       - name: Install every pinned semantic indexer
         shell: bash
         run: |
@@ -574,7 +612,7 @@ jobs:
               "${ASSESSMENT_TIMEOUT_MINUTES}m" \
               "$COLLECTOR_ROOT/target/release/sniffbench-frame" run-slots \
                 --protocol "$COLLECTOR_ROOT/sniffbench/historical-v2-protocol.json" \
-                --artifact-root "$COLLECTOR_ROOT" \
+                --artifact-root "$FRAME_ARTIFACT_ROOT" \
                 --frame "$FRAME_ROOT/frame.json" \
                 --exclusions "$FRAME_ROOT/exclusions.json" \
                 --selection "$FRAME_ROOT/selection.json" \
@@ -604,7 +642,7 @@ jobs:
           done
           "$COLLECTOR_ROOT/target/release/sniffbench-frame" recover-slot-work \
             --protocol "$COLLECTOR_ROOT/sniffbench/historical-v2-protocol.json" \
-            --artifact-root "$COLLECTOR_ROOT" \
+            --artifact-root "$FRAME_ARTIFACT_ROOT" \
             --frame "$FRAME_ROOT/frame.json" \
             --exclusions "$FRAME_ROOT/exclusions.json" \
             --selection "$FRAME_ROOT/selection.json" \

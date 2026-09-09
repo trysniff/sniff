@@ -239,6 +239,20 @@ NORMALIZED_SEMANTIC_SNAPSHOT_MIGRATION_SOURCE_ARTIFACT_DIGEST = (
 )
 NORMALIZED_SEMANTIC_SNAPSHOT_MIGRATION_SOURCE_ARTIFACT_SIZE = 337_800_342
 
+PUBLIC_SURFACE_REPLAY_MIGRATION_NAME = "compiler-public-surface-replay-v1"
+PUBLIC_SURFACE_REPLAY_MIGRATION_CONTRACT = (
+    "sniffbench-historical-v2-compiler-public-surface-replay-migration-v1"
+)
+PUBLIC_SURFACE_REPLAY_MIGRATION_FROM_COLLECTOR_SHA = (
+    "a1efdefb64589ff4990df89f6dd2115b4b63e5e4"
+)
+PUBLIC_SURFACE_REPLAY_MIGRATION_SOURCE_RUN_ID = 33_838_973_146
+PUBLIC_SURFACE_REPLAY_MIGRATION_SOURCE_ARTIFACT_ID = 9_924_391_093
+PUBLIC_SURFACE_REPLAY_MIGRATION_SOURCE_ARTIFACT_DIGEST = (
+    "sha256:050cff3a04a2b928c0afc87ba2f2cefa7a7ac983fa6fec4ff3a505906bfd324a"
+)
+PUBLIC_SURFACE_REPLAY_MIGRATION_SOURCE_ARTIFACT_SIZE = 354_317_693
+
 FRAME_FILE_SHA256 = {
     "environment.txt": "2e87f3c3e1b2005f6b6d09b1bf1b82d30a9433636c3c67f0806cc68e80ab6800",
     "exclusions.json": "74bccb100eb48ab87952bd7eec137b2285edbc68d2547715bc0e06a80e029f76",
@@ -667,7 +681,7 @@ def validate_manifest(path: pathlib.Path, frame_run_id: int) -> str:
     schema_version = value.get("schema_version")
     if schema_version == 1:
         expected = _manifest(frame_run_id, collector_sha)
-    elif schema_version in (2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14):
+    elif schema_version in (2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15):
         migrations = value.get("collector_migrations")
         expected_count = schema_version - 1
         if not isinstance(migrations, list) or len(migrations) != expected_count:
@@ -744,6 +758,9 @@ def _migration_record(
     elif migration_name == NORMALIZED_SEMANTIC_SNAPSHOT_MIGRATION_NAME:
         contract = NORMALIZED_SEMANTIC_SNAPSHOT_MIGRATION_CONTRACT
         source_collector_sha = NORMALIZED_SEMANTIC_SNAPSHOT_MIGRATION_FROM_COLLECTOR_SHA
+    elif migration_name == PUBLIC_SURFACE_REPLAY_MIGRATION_NAME:
+        contract = PUBLIC_SURFACE_REPLAY_MIGRATION_CONTRACT
+        source_collector_sha = PUBLIC_SURFACE_REPLAY_MIGRATION_FROM_COLLECTOR_SHA
     else:
         raise ValueError("transport manifest collector migration is not allowlisted")
     return {
@@ -1002,15 +1019,34 @@ def _expected_normalized_semantic_snapshot_migration(
     )
 
 
+def _expected_public_surface_replay_migration(
+    target_collector_sha: str,
+) -> dict[str, Any]:
+    if (
+        target_collector_sha == PUBLIC_SURFACE_REPLAY_MIGRATION_FROM_COLLECTOR_SHA
+        or re.fullmatch(r"[0-9a-f]{40}", target_collector_sha) is None
+    ):
+        raise ValueError("transport manifest collector migration target is invalid")
+    return _migration_record(
+        PUBLIC_SURFACE_REPLAY_MIGRATION_NAME,
+        target_collector_sha,
+        PUBLIC_SURFACE_REPLAY_MIGRATION_SOURCE_RUN_ID,
+        PUBLIC_SURFACE_REPLAY_MIGRATION_FROM_COLLECTOR_SHA,
+        PUBLIC_SURFACE_REPLAY_MIGRATION_SOURCE_ARTIFACT_ID,
+        PUBLIC_SURFACE_REPLAY_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+        PUBLIC_SURFACE_REPLAY_MIGRATION_SOURCE_ARTIFACT_SIZE,
+    )
+
+
 def _validate_collector_migrations(
     migrations: Sequence[Mapping[str, Any]], collector_sha: str
 ) -> None:
-    if len(migrations) not in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13):
+    if len(migrations) not in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14):
         raise ValueError("transport manifest collector migration chain is invalid")
     expected = [_expected_storage_migration()]
     if len(migrations) == 2:
         expected.append(_expected_go_preparation_migration(collector_sha))
-    elif len(migrations) in (3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13):
+    elif len(migrations) in (3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14):
         expected.append(
             _expected_go_preparation_migration(
                 GO_MODULE_DOWNLOAD_MIGRATION_FROM_COLLECTOR_SHA
@@ -1091,7 +1127,7 @@ def _validate_collector_migrations(
         if len(migrations) >= 12:
             indexed_projection_target = (
                 NORMALIZED_SEMANTIC_SNAPSHOT_MIGRATION_FROM_COLLECTOR_SHA
-                if len(migrations) == 13
+                if len(migrations) >= 13
                 else collector_sha
             )
             expected.append(
@@ -1099,12 +1135,19 @@ def _validate_collector_migrations(
                     indexed_projection_target
                 )
             )
-        if len(migrations) == 13:
+        if len(migrations) >= 13:
+            normalized_target = (
+                PUBLIC_SURFACE_REPLAY_MIGRATION_FROM_COLLECTOR_SHA
+                if len(migrations) == 14
+                else collector_sha
+            )
             expected.append(
                 _expected_normalized_semantic_snapshot_migration(
-                    collector_sha
+                    normalized_target
                 )
             )
+        if len(migrations) == 14:
+            expected.append(_expected_public_surface_replay_migration(collector_sha))
     elif collector_sha != STORAGE_MIGRATION_TO_COLLECTOR_SHA:
         raise ValueError("transport manifest collector migration target drifted")
     if [dict(migration) for migration in migrations] != expected:
@@ -1203,6 +1246,12 @@ def migrate_manifest(
         ]
     elif schema_version == 13:
         expected_name = NORMALIZED_SEMANTIC_SNAPSHOT_MIGRATION_NAME
+        migrations = [
+            _require_mapping(item, "transport manifest collector migration")
+            for item in value.get("collector_migrations", [])
+        ]
+    elif schema_version == 14:
+        expected_name = PUBLIC_SURFACE_REPLAY_MIGRATION_NAME
         migrations = [
             _require_mapping(item, "transport manifest collector migration")
             for item in value.get("collector_migrations", [])

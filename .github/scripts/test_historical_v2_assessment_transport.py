@@ -568,6 +568,21 @@ class ManifestTests(unittest.TestCase):
             transport.INDEXED_SEMANTIC_SNAPSHOT_PROJECTION_MIGRATION_SOURCE_ARTIFACT_SIZE,
         )
 
+    @staticmethod
+    def _write_normalized_semantic_snapshot_manifest(path: pathlib.Path) -> None:
+        ManifestTests._write_indexed_semantic_snapshot_projection_manifest(path)
+        transport.migrate_manifest(
+            path,
+            transport.FRAME_RUN_ID,
+            transport.PUBLIC_SURFACE_REPLAY_MIGRATION_FROM_COLLECTOR_SHA,
+            transport.NORMALIZED_SEMANTIC_SNAPSHOT_MIGRATION_NAME,
+            transport.NORMALIZED_SEMANTIC_SNAPSHOT_MIGRATION_SOURCE_RUN_ID,
+            transport.NORMALIZED_SEMANTIC_SNAPSHOT_MIGRATION_FROM_COLLECTOR_SHA,
+            transport.NORMALIZED_SEMANTIC_SNAPSHOT_MIGRATION_SOURCE_ARTIFACT_ID,
+            transport.NORMALIZED_SEMANTIC_SNAPSHOT_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+            transport.NORMALIZED_SEMANTIC_SNAPSHOT_MIGRATION_SOURCE_ARTIFACT_SIZE,
+        )
+
     def test_manifest_round_trips_and_is_create_new(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             path = pathlib.Path(temporary, "manifest.json")
@@ -1703,6 +1718,7 @@ class ManifestTests(unittest.TestCase):
                     transport.NORMALIZED_SEMANTIC_SNAPSHOT_MIGRATION_SOURCE_ARTIFACT_DIGEST,
                     transport.NORMALIZED_SEMANTIC_SNAPSHOT_MIGRATION_SOURCE_ARTIFACT_SIZE,
                 )
+
             self.assertEqual(
                 json.loads(path.read_text(encoding="utf-8")), prior_manifest
             )
@@ -1791,6 +1807,89 @@ class ManifestTests(unittest.TestCase):
                     transport.NORMALIZED_SEMANTIC_SNAPSHOT_MIGRATION_SOURCE_ARTIFACT_ID,
                     transport.NORMALIZED_SEMANTIC_SNAPSHOT_MIGRATION_SOURCE_ARTIFACT_DIGEST,
                     transport.NORMALIZED_SEMANTIC_SNAPSHOT_MIGRATION_SOURCE_ARTIFACT_SIZE,
+                )
+
+    def test_public_surface_replay_migration_is_exact_and_closes_the_chain(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = pathlib.Path(temporary, "manifest.json")
+            self._write_normalized_semantic_snapshot_manifest(path)
+            prior_manifest = json.loads(path.read_text(encoding="utf-8"))
+            prior_records = prior_manifest["collector_migrations"]
+            source = transport.PUBLIC_SURFACE_REPLAY_MIGRATION_FROM_COLLECTOR_SHA
+            target = "4" * 40
+
+            self.assertEqual(
+                transport.migrate_manifest(
+                    path,
+                    transport.FRAME_RUN_ID,
+                    target,
+                    transport.PUBLIC_SURFACE_REPLAY_MIGRATION_NAME,
+                    transport.PUBLIC_SURFACE_REPLAY_MIGRATION_SOURCE_RUN_ID,
+                    source,
+                    transport.PUBLIC_SURFACE_REPLAY_MIGRATION_SOURCE_ARTIFACT_ID,
+                    transport.PUBLIC_SURFACE_REPLAY_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+                    transport.PUBLIC_SURFACE_REPLAY_MIGRATION_SOURCE_ARTIFACT_SIZE,
+                ),
+                target,
+            )
+            value = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(value["schema_version"], 15)
+            self.assertEqual(value["collector_migrations"][:13], prior_records)
+            self.assertEqual(
+                value["collector_migrations"][13],
+                {
+                    "from_collector_sha": source,
+                    "migration_contract": (
+                        transport.PUBLIC_SURFACE_REPLAY_MIGRATION_CONTRACT
+                    ),
+                    "migration_name": transport.PUBLIC_SURFACE_REPLAY_MIGRATION_NAME,
+                    "source_artifact_digest": (
+                        transport.PUBLIC_SURFACE_REPLAY_MIGRATION_SOURCE_ARTIFACT_DIGEST
+                    ),
+                    "source_artifact_id": (
+                        transport.PUBLIC_SURFACE_REPLAY_MIGRATION_SOURCE_ARTIFACT_ID
+                    ),
+                    "source_artifact_size": (
+                        transport.PUBLIC_SURFACE_REPLAY_MIGRATION_SOURCE_ARTIFACT_SIZE
+                    ),
+                    "source_head_sha": source,
+                    "source_run_id": transport.PUBLIC_SURFACE_REPLAY_MIGRATION_SOURCE_RUN_ID,
+                    "to_collector_sha": target,
+                },
+            )
+            self.assertEqual(
+                transport.validate_manifest(path, transport.FRAME_RUN_ID), target
+            )
+
+            for field in value["collector_migrations"][13]:
+                tampered = json.loads(json.dumps(value))
+                tampered["collector_migrations"][13][field] = True
+                path.write_text(json.dumps(tampered), encoding="utf-8")
+                with self.subTest(field=field), self.assertRaises(ValueError):
+                    transport.validate_manifest(path, transport.FRAME_RUN_ID)
+
+            reordered = json.loads(json.dumps(value))
+            reordered["collector_migrations"][12:] = reversed(
+                reordered["collector_migrations"][12:]
+            )
+            path.write_text(json.dumps(reordered), encoding="utf-8")
+            with self.assertRaises(ValueError):
+                transport.validate_manifest(path, transport.FRAME_RUN_ID)
+
+            path.write_text(json.dumps(value), encoding="utf-8")
+            with self.assertRaises(ValueError):
+                transport.migrate_manifest(
+                    path,
+                    transport.FRAME_RUN_ID,
+                    "5" * 40,
+                    transport.PUBLIC_SURFACE_REPLAY_MIGRATION_NAME,
+                    transport.PUBLIC_SURFACE_REPLAY_MIGRATION_SOURCE_RUN_ID,
+                    target,
+                    transport.PUBLIC_SURFACE_REPLAY_MIGRATION_SOURCE_ARTIFACT_ID,
+                    transport.PUBLIC_SURFACE_REPLAY_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+                    transport.PUBLIC_SURFACE_REPLAY_MIGRATION_SOURCE_ARTIFACT_SIZE,
                 )
 
     def test_storage_migration_rejects_unapproved_source_or_name(self) -> None:
@@ -2099,7 +2198,7 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertLess(recover, archive)
         for required in (
             '--protocol "$COLLECTOR_ROOT/sniffbench/historical-v2-protocol.json"',
-            '--artifact-root "$COLLECTOR_ROOT"',
+            '--artifact-root "$FRAME_ARTIFACT_ROOT"',
             '--frame "$FRAME_ROOT/frame.json"',
             '--exclusions "$FRAME_ROOT/exclusions.json"',
             '--selection "$FRAME_ROOT/selection.json"',
@@ -2135,6 +2234,7 @@ class WorkflowContractTests(unittest.TestCase):
             "finalized-go-semantic-compaction-v1",
             "indexed-semantic-snapshot-projection-v1",
             "batched-source-normalized-semantic-snapshot-v1",
+            "compiler-public-surface-replay-v1",
             '"$transport" migrate-manifest',
             '"$PRIOR_HEAD_SHA" "$PRIOR_ARTIFACT_ID"',
             '"$PRIOR_ARTIFACT_DIGEST" "$PRIOR_ARTIFACT_SIZE"',
@@ -2144,14 +2244,30 @@ class WorkflowContractTests(unittest.TestCase):
             'frozen_transport="$collector_root/.github/scripts/historical_v2_assessment_transport.py"',
             'python3 "$frozen_transport" validate-manifest',
             'test "$frozen_collector_sha" = "$collector_sha"',
+            "- name: Materialize the immutable frame evidence root",
+            "'8681f9c379c4e4817c7ed49f06f47f4c47d1f91b'",
+            'config core.autocrlf false',
+            'config core.eol lf',
+            'FRAME_ARTIFACT_ROOT=%s',
             'cd "$COLLECTOR_ROOT"',
+            'replay-public-surface-census',
+            '--state-root "$STATE_ROOT"',
+            '--work-root "$WORK_ROOT"',
+            '--language go',
+            '--slot-number 122',
             '"$COLLECTOR_ROOT/target/release/sniffbench-frame" run-slots',
-            '--artifact-root "$COLLECTOR_ROOT"',
+            '--artifact-root "$FRAME_ARTIFACT_ROOT"',
             'python3 "$COLLECTOR_ROOT/.github/scripts/historical_v2_assessment_transport.py"',
         ):
             self.assertIn(required, workflow)
         self.assertNotIn('target/release/sniffbench-frame run-slots', workflow)
         self.assertNotIn('--artifact-root "$GITHUB_WORKSPACE"', workflow)
+        self.assertNotIn('--artifact-root "$COLLECTOR_ROOT"', workflow)
+        replay = workflow.index("- name: Replay stale compiler public-surface censuses")
+        install = workflow.index("- name: Install every pinned semantic indexer")
+        assess = workflow.index("- name: Assess a bounded resumable slot slice")
+        self.assertLess(replay, install)
+        self.assertLess(install, assess)
 
 
 if __name__ == "__main__":
