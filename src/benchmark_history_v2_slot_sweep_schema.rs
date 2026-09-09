@@ -31,6 +31,24 @@ pub struct HistoricalV2SelectedSlotWorkRecoveryInputs<'a> {
     pub work_root: &'a Path,
 }
 
+pub struct HistoricalV2PublicSurfaceReplayInputs<'a> {
+    pub state_root: &'a Path,
+    pub work_root: &'a Path,
+    pub selection_sha256: &'a str,
+    pub language: &'a str,
+    pub slot_number: usize,
+    pub canonical_repository: &'a str,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HistoricalV2PublicSurfaceReplaySummary {
+    pub language: String,
+    pub slot_number: usize,
+    pub retained_stage: HistoricalV2SlotStage,
+    pub removed_stage_count: usize,
+    pub removed_semantic_progress: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HistoricalV2SelectedSlotWorkRecoverySummary {
     pub selected_slot_count: usize,

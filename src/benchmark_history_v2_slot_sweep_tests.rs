@@ -10,9 +10,10 @@ use crate::benchmark::{
     HistoricalV2IdenticalTestExecutionRequest, HistoricalV2IdenticalTestExecutor,
     HistoricalV2PartitionExclusions, HistoricalV2ProjectedRow,
     HistoricalV2RawIdenticalTestExecution, HistoricalV2RecoverableTestExecutor,
-    HistoricalV2SelectedPayload, HistoricalV2SelectedPayloads, HistoricalV2SlotStageErrorKind,
-    HistoricalV2SlotStageJournal, derive_historical_v2_frame_record, historical_v2_frame_sha256,
-    select_historical_v2_slots,
+    HistoricalV2SelectedPayload, HistoricalV2SelectedPayloads,
+    HistoricalV2SlotStageCheckpointInput, HistoricalV2SlotStageErrorKind,
+    HistoricalV2SlotStageJournal, HistoricalV2SlotStageOutcome, HistoricalV2StageArtifactKind,
+    derive_historical_v2_frame_record, historical_v2_frame_sha256, select_historical_v2_slots,
 };
 use sha2::{Digest, Sha256};
 
@@ -358,6 +359,121 @@ fn selected_slot_work_recovery_rejects_unknown_layout_before_mutation() {
     assert!(error.detail.contains("unselected slot"));
     assert!(repository.join(".sniff-indexer-recovery.json").is_file());
     assert!(repository.join(".sniff-indexer-tmp").is_dir());
+}
+
+#[test]
+fn public_surface_replay_preserves_materializations_and_rewinds_only_stale_censuses() {
+    let fixture = Fixture::new();
+    let mutable = tempfile::tempdir().unwrap();
+    let state_root = mutable.path().join("state");
+    let work_root = mutable.path().join("work");
+    fs::create_dir(&work_root).unwrap();
+    let payload = &fixture.payloads.records[0];
+    let canonical_repository = fixture
+        .selection
+        .slots
+        .iter()
+        .find_map(|slot| match &slot.outcome {
+            HistoricalV2SlotOutcome::Selected {
+                canonical_repository,
+                ..
+            } if slot.language == payload.language && slot.slot_number == payload.slot_number => {
+                Some(canonical_repository.clone())
+            }
+            _ => None,
+        })
+        .unwrap();
+    {
+        let mut journal =
+            HistoricalV2SlotStageJournal::open(&state_root, &payload.language, payload.slot_number)
+                .unwrap();
+        for (stage, artifact_kind) in [
+            (
+                HistoricalV2SlotStage::Payload,
+                HistoricalV2StageArtifactKind::SelectedPayload,
+            ),
+            (
+                HistoricalV2SlotStage::Materialization,
+                HistoricalV2StageArtifactKind::Materialization,
+            ),
+            (
+                HistoricalV2SlotStage::TestMaterialization,
+                HistoricalV2StageArtifactKind::NoTestPatch,
+            ),
+            (
+                HistoricalV2SlotStage::SourceCensus,
+                HistoricalV2StageArtifactKind::SourceCensus,
+            ),
+            (
+                HistoricalV2SlotStage::SemanticCensus,
+                HistoricalV2StageArtifactKind::SemanticCensus,
+            ),
+        ] {
+            journal
+                .append(
+                    HistoricalV2SlotStageCheckpointInput {
+                        selection_sha256: &fixture.selection.selection_sha256,
+                        language: &payload.language,
+                        slot_number: payload.slot_number,
+                        canonical_repository: &canonical_repository,
+                        stage,
+                        outcome: HistoricalV2SlotStageOutcome::Completed {
+                            artifact_kind,
+                            artifact_sha256: "a".repeat(64),
+                        },
+                    },
+                    Some(&serde_json::json!({"stage": format!("{stage:?}")})),
+                )
+                .unwrap();
+        }
+    }
+    let slot_root = work_root
+        .join(&payload.language)
+        .join(format!("slot-{:04}", payload.slot_number));
+    for name in [
+        "base-tested",
+        "patched",
+        "patched-tested",
+        "repository",
+        "semantic-progress",
+    ] {
+        fs::create_dir_all(slot_root.join(name)).unwrap();
+    }
+    fs::write(slot_root.join("semantic-progress/snapshot.json"), b"stale").unwrap();
+
+    let summary =
+        replay_historical_v2_public_surface_census(HistoricalV2PublicSurfaceReplayInputs {
+            state_root: &state_root,
+            work_root: &work_root,
+            selection_sha256: &fixture.selection.selection_sha256,
+            language: &payload.language,
+            slot_number: payload.slot_number,
+            canonical_repository: &canonical_repository,
+        })
+        .unwrap();
+
+    assert_eq!(summary.removed_stage_count, 2);
+    assert!(summary.removed_semantic_progress);
+    assert!(!slot_root.join("semantic-progress").exists());
+    assert!(
+        !slot_root
+            .join(".semantic-progress.public-surface-replay")
+            .exists()
+    );
+    for name in ["base-tested", "patched", "patched-tested", "repository"] {
+        assert!(slot_root.join(name).is_dir(), "{name}");
+    }
+    let journal = HistoricalV2SlotStageJournal::open_existing(
+        &state_root,
+        &payload.language,
+        payload.slot_number,
+    )
+    .unwrap();
+    assert_eq!(journal.history().len(), 3);
+    assert_eq!(
+        journal.history().last().unwrap().checkpoint.stage,
+        HistoricalV2SlotStage::TestMaterialization
+    );
 }
 
 struct Fixture {
