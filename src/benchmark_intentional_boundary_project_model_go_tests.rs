@@ -11,6 +11,8 @@ use crate::benchmark::release::{
 use std::cell::Cell;
 use std::collections::BTreeSet;
 use std::fs;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
 use tempfile::TempDir;
 
@@ -98,6 +100,13 @@ fn repository() -> (TempDir, IntentionalBoundaryRepositoryInventory) {
             fs::create_dir_all(parent).unwrap();
         }
         fs::write(target, source).unwrap();
+    }
+    #[cfg(unix)]
+    {
+        let executable = root.path().join("api/api.go");
+        let mut permissions = fs::metadata(&executable).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(executable, permissions).unwrap();
     }
     git(root.path(), &["add", "."]);
     git(root.path(), &["update-index", "--chmod=+x", "api/api.go"]);
