@@ -1,11 +1,12 @@
 use super::*;
 use crate::benchmark::release::{
-    IntentionalBoundaryIndexerKind, IntentionalBoundaryProjectModelBindingOutcome,
-    IntentionalBoundarySemanticCensus, IntentionalBoundarySemanticIndexerCensus,
-    IntentionalBoundarySemanticMethod, IntentionalBoundarySemanticMethodStatus,
-    IntentionalBoundarySemanticOrigin, IntentionalBoundarySemanticRange,
-    IntentionalBoundarySemanticSymbolCategory, IntentionalBoundarySemanticSymbolFacts,
-    IntentionalBoundarySemanticVisibility, IntentionalBoundarySourceCensus,
+    BoundaryGitEntryKind, IntentionalBoundaryIndexerKind,
+    IntentionalBoundaryProjectModelBindingOutcome, IntentionalBoundarySemanticCensus,
+    IntentionalBoundarySemanticIndexerCensus, IntentionalBoundarySemanticMethod,
+    IntentionalBoundarySemanticMethodStatus, IntentionalBoundarySemanticOrigin,
+    IntentionalBoundarySemanticRange, IntentionalBoundarySemanticSymbolCategory,
+    IntentionalBoundarySemanticSymbolFacts, IntentionalBoundarySemanticVisibility,
+    IntentionalBoundarySourceCensus,
 };
 use std::cell::Cell;
 use std::collections::BTreeSet;
@@ -99,6 +100,7 @@ fn repository() -> (TempDir, IntentionalBoundaryRepositoryInventory) {
         fs::write(target, source).unwrap();
     }
     git(root.path(), &["add", "."]);
+    git(root.path(), &["update-index", "--chmod=+x", "api/api.go"]);
     git(root.path(), &["commit", "--quiet", "-m", "fixture"]);
     let revision = git(root.path(), &["rev-parse", "HEAD"]);
     let inventory = super::super::inventory_intentional_boundary_repository(
@@ -985,6 +987,15 @@ fn rejects_incomplete_or_malformed_go_project_models() {
 #[test]
 fn collector_executes_every_tracked_go_module_exactly_once() {
     let (root, inventory) = repository();
+    assert_eq!(
+        inventory
+            .tracked_entries
+            .iter()
+            .find(|entry| entry.repository_path == "api/api.go")
+            .unwrap()
+            .kind,
+        BoundaryGitEntryKind::ExecutableBlob
+    );
     let call_count = Cell::new(0);
     let mut manifests = Vec::new();
     let census = census_go_project_models_with_executor(

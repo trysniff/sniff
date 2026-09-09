@@ -1,6 +1,6 @@
 use super::{GeneratorCommand, manifest_directory};
 use crate::benchmark::release::{
-    BoundaryGitEntryKind, IntentionalBoundaryIndexerKind, IntentionalBoundaryManifestBindingCensus,
+    IntentionalBoundaryIndexerKind, IntentionalBoundaryManifestBindingCensus,
     IntentionalBoundaryManifestBindingOutcome, IntentionalBoundaryManifestDeclaration,
     IntentionalBoundaryManifestDeclarationKind, IntentionalBoundaryManifestProvider,
     IntentionalBoundaryManifestTarget, IntentionalBoundaryRepositoryInventory,
@@ -127,9 +127,10 @@ fn has_unambiguous_uv_lock(
         .iter()
         .filter(|name| {
             let path = scoped_path(directory, name);
-            inventory.tracked_entries.iter().any(|entry| {
-                entry.repository_path == path && entry.kind == BoundaryGitEntryKind::RegularBlob
-            })
+            inventory
+                .tracked_entries
+                .iter()
+                .any(|entry| entry.repository_path == path && entry.kind.is_file_blob())
         })
         .copied()
         .collect::<Vec<_>>();

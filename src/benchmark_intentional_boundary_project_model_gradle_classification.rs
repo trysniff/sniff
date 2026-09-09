@@ -1,8 +1,7 @@
 use super::producers::validate_producer_tasks;
 use crate::benchmark::release::{
-    BoundaryGitEntryKind, IntentionalBoundaryManifestDeclarationKind,
-    IntentionalBoundaryManifestTarget, IntentionalBoundaryProjectModelProvider as Provider,
-    IntentionalBoundaryProjectModelTarget,
+    IntentionalBoundaryManifestDeclarationKind, IntentionalBoundaryManifestTarget,
+    IntentionalBoundaryProjectModelProvider as Provider, IntentionalBoundaryProjectModelTarget,
     IntentionalBoundaryProjectModelTargetStatus as TargetStatus,
     IntentionalBoundaryProjectModelUnresolvedReason as UnresolvedReason,
     IntentionalBoundaryRepositoryInventory,
@@ -31,7 +30,7 @@ pub(super) fn classify_target(
                     .to_string(),
             );
         };
-        if entry.kind != BoundaryGitEntryKind::RegularBlob {
+        if !entry.kind.is_file_blob() {
             return unresolved(
                 UnresolvedReason::SourceNotRegularBlob,
                 "Gradle production source is not a regular Git blob".to_string(),

@@ -5,9 +5,8 @@ use super::intentional_boundary_project_model::{
     finish_project_model_census, is_sha256, regular_inventory_entry,
 };
 use super::{
-    BoundaryGitEntryKind, IntentionalBoundaryManifestDeclarationKind,
-    IntentionalBoundaryManifestTarget, IntentionalBoundaryProjectModelCensus,
-    IntentionalBoundaryProjectModelExecution,
+    IntentionalBoundaryManifestDeclarationKind, IntentionalBoundaryManifestTarget,
+    IntentionalBoundaryProjectModelCensus, IntentionalBoundaryProjectModelExecution,
     IntentionalBoundaryProjectModelNonBoundaryReason as NonBoundaryReason,
     IntentionalBoundaryProjectModelProvider as Provider, IntentionalBoundaryProjectModelTarget,
     IntentionalBoundaryProjectModelTargetStatus as TargetStatus,
@@ -259,7 +258,7 @@ fn classify_target(
             "Cargo target source is not present in the immutable Git inventory".to_string(),
         );
     };
-    if source_entry.kind != BoundaryGitEntryKind::RegularBlob {
+    if !source_entry.kind.is_file_blob() {
         return unresolved(
             UnresolvedReason::SourceNotRegularBlob,
             "Cargo target source is not a regular Git blob".to_string(),

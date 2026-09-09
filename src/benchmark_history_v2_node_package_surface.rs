@@ -6,11 +6,10 @@ use super::intentional_boundary_manifest::{
     ParsedNodePackageEntryKind, parse_node_package_json, resolve_manifest_path, span_range,
 };
 use super::{
-    BoundaryGitEntryKind, HISTORICAL_V2_NODE_PACKAGE_SURFACE_CENSUS_SCHEMA_VERSION,
-    HistoricalV2NodePackageCondition, HistoricalV2NodePackageDocument,
-    HistoricalV2NodePackageEntryKind, HistoricalV2NodePackageExposure,
-    HistoricalV2NodePackageSurfaceCensus, HistoricalV2NodePackageTargetStatus,
-    IntentionalBoundaryRepositoryInventory,
+    HISTORICAL_V2_NODE_PACKAGE_SURFACE_CENSUS_SCHEMA_VERSION, HistoricalV2NodePackageCondition,
+    HistoricalV2NodePackageDocument, HistoricalV2NodePackageEntryKind,
+    HistoricalV2NodePackageExposure, HistoricalV2NodePackageSurfaceCensus,
+    HistoricalV2NodePackageTargetStatus, IntentionalBoundaryRepositoryInventory,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -36,7 +35,7 @@ pub(super) fn census_historical_v2_node_package_surfaces(
             .next()
             .is_some_and(|name| name == "package.json")
     }) {
-        if entry.kind != BoundaryGitEntryKind::RegularBlob {
+        if !entry.kind.is_file_blob() {
             return Err(format!(
                 "historical-v2 Node package manifest is not a regular Git blob: {}",
                 entry.repository_path
@@ -67,7 +66,7 @@ pub(super) fn census_historical_v2_node_package_surfaces(
                 .iter()
                 .find(|candidate| candidate.repository_path == target_repository_path);
             let (target_status, target_object_id) = match target_entry {
-                Some(target) if target.kind == BoundaryGitEntryKind::RegularBlob => (
+                Some(target) if target.kind.is_file_blob() => (
                     HistoricalV2NodePackageTargetStatus::TrackedRegularFile,
                     Some(target.object_id.clone()),
                 ),

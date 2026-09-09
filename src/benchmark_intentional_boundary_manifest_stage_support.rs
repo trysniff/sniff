@@ -7,10 +7,10 @@ use super::intentional_boundary_manifest_outcome::{
     manifest_invalid, manifest_shape_rejected,
 };
 use super::{
-    BoundaryGitEntryKind, IntentionalBoundaryManifestExclusionReason,
-    IntentionalBoundaryManifestFailureEvidence, IntentionalBoundaryManifestProvider,
-    IntentionalBoundaryManifestStageError, IntentionalBoundaryManifestStageErrorKind,
-    IntentionalBoundaryRepositoryInventory, IntentionalBoundaryTrackedEntry,
+    IntentionalBoundaryManifestExclusionReason, IntentionalBoundaryManifestFailureEvidence,
+    IntentionalBoundaryManifestProvider, IntentionalBoundaryManifestStageError,
+    IntentionalBoundaryManifestStageErrorKind, IntentionalBoundaryRepositoryInventory,
+    IntentionalBoundaryTrackedEntry,
 };
 use sha2::{Digest, Sha256};
 
@@ -68,7 +68,7 @@ fn read_utf8_manifest(
     entry: &IntentionalBoundaryTrackedEntry,
     provider: IntentionalBoundaryManifestProvider,
 ) -> Result<String, ManifestDerivationError> {
-    if entry.kind != BoundaryGitEntryKind::RegularBlob {
+    if !entry.kind.is_file_blob() {
         return Err(manifest_shape_rejected(
             provider,
             &entry.repository_path,

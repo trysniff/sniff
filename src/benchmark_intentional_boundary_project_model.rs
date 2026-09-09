@@ -13,7 +13,7 @@ use super::intentional_boundary_project_model_typescript::{
     validate_typescript_variant_inventory,
 };
 use super::{
-    BoundaryGitEntryKind, INTENTIONAL_BOUNDARY_PROJECT_MODEL_CENSUS_SCHEMA_VERSION,
+    INTENTIONAL_BOUNDARY_PROJECT_MODEL_CENSUS_SCHEMA_VERSION,
     IntentionalBoundaryProjectModelCensus, IntentionalBoundaryProjectModelExecution,
     IntentionalBoundaryProjectModelGoArchitecture, IntentionalBoundaryProjectModelProducerTask,
     IntentionalBoundaryProjectModelProvider as Provider, IntentionalBoundaryProjectModelTarget,
@@ -630,7 +630,7 @@ pub(super) fn regular_inventory_entry<'a>(
         .iter()
         .find(|entry| entry.repository_path == repository_path)
         .ok_or_else(|| format!("{label} is absent from the immutable Git inventory"))?;
-    if entry.kind != BoundaryGitEntryKind::RegularBlob {
+    if !entry.kind.is_file_blob() {
         return Err(format!("{label} is not a regular Git blob"));
     }
     Ok(entry)

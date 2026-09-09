@@ -1,8 +1,8 @@
 use super::manifest_directory;
 use crate::benchmark::release::{
-    BoundaryGitEntryKind, IntentionalBoundaryManifestDeclaration,
-    IntentionalBoundaryManifestDeclarationKind, IntentionalBoundaryManifestProvider,
-    IntentionalBoundaryManifestTarget, IntentionalBoundaryRepositoryInventory,
+    IntentionalBoundaryManifestDeclaration, IntentionalBoundaryManifestDeclarationKind,
+    IntentionalBoundaryManifestProvider, IntentionalBoundaryManifestTarget,
+    IntentionalBoundaryRepositoryInventory,
 };
 use std::collections::BTreeMap;
 
@@ -135,9 +135,10 @@ fn locked_node_manager(
 ) -> Option<NodeManager> {
     let regular = |name: &str| {
         let path = scoped_path(directory, name);
-        inventory.tracked_entries.iter().any(|entry| {
-            entry.repository_path == path && entry.kind == BoundaryGitEntryKind::RegularBlob
-        })
+        inventory
+            .tracked_entries
+            .iter()
+            .any(|entry| entry.repository_path == path && entry.kind.is_file_blob())
     };
     let npm = regular("npm-shrinkwrap.json") || regular("package-lock.json");
     let pnpm = regular("pnpm-lock.yaml");

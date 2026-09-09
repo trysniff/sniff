@@ -1,9 +1,8 @@
 use super::{GeneratorCommand, hash_json};
 use crate::benchmark::release::{
-    BoundaryGitEntryKind, IntentionalBoundaryGeneratorUnresolvedReason,
-    IntentionalBoundaryProjectModelCensus, IntentionalBoundaryProjectModelProducerTask,
-    IntentionalBoundaryProjectModelProvider, IntentionalBoundaryProjectModelTarget,
-    IntentionalBoundaryRepositoryInventory,
+    IntentionalBoundaryGeneratorUnresolvedReason, IntentionalBoundaryProjectModelCensus,
+    IntentionalBoundaryProjectModelProducerTask, IntentionalBoundaryProjectModelProvider,
+    IntentionalBoundaryProjectModelTarget, IntentionalBoundaryRepositoryInventory,
 };
 use std::collections::BTreeMap;
 
@@ -53,7 +52,7 @@ pub(super) fn gradle_generator_command_plan(
         return unsupported("Gradle producer execution changed provider");
     }
     let build_directory = manifest_directory(&execution.invocation_anchor_repository_path);
-    if !has_regular(
+    if !has_file_blob(
         inventory,
         &scoped(build_directory, "gradle/verification-metadata.xml"),
     ) {
@@ -121,17 +120,18 @@ fn has_gradle_lock_state(inventory: &IntentionalBoundaryRepositoryInventory, bui
     let root_lock = scoped(build, "gradle.lockfile");
     let legacy_prefix = scoped(build, "gradle/dependency-locks/");
     inventory.tracked_entries.iter().any(|entry| {
-        entry.kind == BoundaryGitEntryKind::RegularBlob
+        entry.kind.is_file_blob()
             && (entry.repository_path == root_lock
                 || (entry.repository_path.starts_with(&legacy_prefix)
                     && entry.repository_path.ends_with(".lockfile")))
     })
 }
 
-fn has_regular(inventory: &IntentionalBoundaryRepositoryInventory, path: &str) -> bool {
-    inventory.tracked_entries.iter().any(|entry| {
-        entry.repository_path == path && entry.kind == BoundaryGitEntryKind::RegularBlob
-    })
+fn has_file_blob(inventory: &IntentionalBoundaryRepositoryInventory, path: &str) -> bool {
+    inventory
+        .tracked_entries
+        .iter()
+        .any(|entry| entry.repository_path == path && entry.kind.is_file_blob())
 }
 
 fn manifest_directory(path: &str) -> &str {

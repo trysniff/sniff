@@ -4,11 +4,10 @@ use super::super::intentional_boundary_manifest_outcome::{
 };
 use super::{compute_manifest_declaration_id, map_inventory_error, sha256};
 use crate::benchmark::release::{
-    BoundaryGitEntryKind, IntentionalBoundaryGoGenerateDirective,
-    IntentionalBoundaryManifestDeclaration, IntentionalBoundaryManifestDeclarationKind,
-    IntentionalBoundaryManifestDocument, IntentionalBoundaryManifestProvider,
-    IntentionalBoundaryManifestTarget, IntentionalBoundaryRepositoryInventory,
-    IntentionalBoundarySemanticRange,
+    IntentionalBoundaryGoGenerateDirective, IntentionalBoundaryManifestDeclaration,
+    IntentionalBoundaryManifestDeclarationKind, IntentionalBoundaryManifestDocument,
+    IntentionalBoundaryManifestProvider, IntentionalBoundaryManifestTarget,
+    IntentionalBoundaryRepositoryInventory, IntentionalBoundarySemanticRange,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -36,7 +35,7 @@ pub(super) fn parse_go_generate_sources(
         .iter()
         .filter(|entry| entry.repository_path.ends_with(".go"))
     {
-        if entry.kind != BoundaryGitEntryKind::RegularBlob {
+        if !entry.kind.is_file_blob() {
             continue;
         }
         let expected_length = entry.byte_length.ok_or_else(|| {

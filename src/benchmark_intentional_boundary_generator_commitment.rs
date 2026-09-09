@@ -78,7 +78,7 @@ pub(super) fn expected_output(
         .iter()
         .find(|file| file.repository_path == path)
         .ok_or_else(|| format!("generated output is not in the source census: {path}"))?;
-    if entry.kind != BoundaryGitEntryKind::RegularBlob
+    if !entry.kind.is_file_blob()
         || entry.byte_length != Some(source.byte_length)
         || entry.object_id != source.object_id
     {
