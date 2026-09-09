@@ -146,7 +146,7 @@ where
         .iter()
         .filter(|entry| entry.repository_path.rsplit('/').next() == Some("Cargo.toml"))
         .map(|entry| {
-            if entry.kind != BoundaryGitEntryKind::RegularBlob {
+            if !entry.kind.is_file_blob() {
                 return Err(cargo_error(
                     ProjectModelDerivationErrorKind::UnsupportedProjectShape,
                     IntentionalBoundaryProjectModelFailurePhase::RepositoryValidation,

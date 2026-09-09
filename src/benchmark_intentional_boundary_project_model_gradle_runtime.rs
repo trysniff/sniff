@@ -10,7 +10,6 @@ use super::super::intentional_boundary_runtime_snapshot::{
 };
 use super::super::non_blind_history_runtime::prepare_historical_runtime;
 use super::*;
-use crate::benchmark::release::BoundaryGitEntryKind;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -162,7 +161,7 @@ where
             )
         })
         .map(|entry| {
-            if entry.kind != BoundaryGitEntryKind::RegularBlob {
+            if !entry.kind.is_file_blob() {
                 return Err(gradle_error(
                     ProjectModelDerivationErrorKind::UnsupportedProjectShape,
                     IntentionalBoundaryProjectModelFailurePhase::RepositoryValidation,

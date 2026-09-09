@@ -160,7 +160,7 @@ where
         .iter()
         .filter(|entry| entry.repository_path.rsplit('/').next() == Some("go.mod"))
         .map(|entry| {
-            if entry.kind != BoundaryGitEntryKind::RegularBlob {
+            if !entry.kind.is_file_blob() {
                 return Err(go_error(
                     ProjectModelDerivationErrorKind::UnsupportedProjectShape,
                     IntentionalBoundaryProjectModelFailurePhase::RepositoryValidation,
@@ -297,7 +297,7 @@ fn go_module_source_paths(
         {
             continue;
         }
-        if entry.kind != BoundaryGitEntryKind::RegularBlob {
+        if !entry.kind.is_file_blob() {
             return Err(go_error(
                 ProjectModelDerivationErrorKind::UnsupportedProjectShape,
                 IntentionalBoundaryProjectModelFailurePhase::RepositoryValidation,

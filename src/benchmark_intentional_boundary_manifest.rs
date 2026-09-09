@@ -8,12 +8,12 @@ use super::intentional_boundary_manifest_outcome::{
     manifest_shape_rejected,
 };
 use super::{
-    BoundaryGitEntryKind, INTENTIONAL_BOUNDARY_MANIFEST_CENSUS_SCHEMA_VERSION,
-    IntentionalBoundaryInventoryError, IntentionalBoundaryInventoryErrorKind,
-    IntentionalBoundaryManifestCensus, IntentionalBoundaryManifestDeclaration,
-    IntentionalBoundaryManifestDeclarationKind, IntentionalBoundaryManifestDocument,
-    IntentionalBoundaryManifestProvider, IntentionalBoundaryManifestTarget,
-    IntentionalBoundaryRepositoryInventory, IntentionalBoundarySemanticRange,
+    INTENTIONAL_BOUNDARY_MANIFEST_CENSUS_SCHEMA_VERSION, IntentionalBoundaryInventoryError,
+    IntentionalBoundaryInventoryErrorKind, IntentionalBoundaryManifestCensus,
+    IntentionalBoundaryManifestDeclaration, IntentionalBoundaryManifestDeclarationKind,
+    IntentionalBoundaryManifestDocument, IntentionalBoundaryManifestProvider,
+    IntentionalBoundaryManifestTarget, IntentionalBoundaryRepositoryInventory,
+    IntentionalBoundarySemanticRange,
 };
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -62,7 +62,7 @@ pub(super) fn census_intentional_boundary_manifests_typed(
         let Some(provider) = provider_for_path(&entry.repository_path) else {
             continue;
         };
-        if entry.kind != BoundaryGitEntryKind::RegularBlob {
+        if !entry.kind.is_file_blob() {
             return Err(manifest_shape_rejected(
                 provider,
                 &entry.repository_path,

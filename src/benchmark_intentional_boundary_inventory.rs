@@ -38,6 +38,12 @@ pub enum BoundaryGitEntryKind {
     Gitlink,
 }
 
+impl BoundaryGitEntryKind {
+    pub(crate) const fn is_file_blob(self) -> bool {
+        matches!(self, Self::RegularBlob | Self::ExecutableBlob)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct IntentionalBoundaryTrackedEntry {
@@ -953,6 +959,10 @@ mod tests {
         assert_eq!(entries[1].kind, BoundaryGitEntryKind::SymbolicLink);
         assert_eq!(entries[2].kind, BoundaryGitEntryKind::RegularBlob);
         assert_eq!(entries[3].kind, BoundaryGitEntryKind::Gitlink);
+        assert!(entries[0].kind.is_file_blob());
+        assert!(!entries[1].kind.is_file_blob());
+        assert!(entries[2].kind.is_file_blob());
+        assert!(!entries[3].kind.is_file_blob());
         assert_eq!(entries[3].byte_length, None);
 
         let unsafe_tree = format!("100644 blob {blob} 1\t../escape\0");

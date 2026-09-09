@@ -8,8 +8,7 @@ use super::intentional_boundary_project_model_outcome::{
     ProjectModelDerivationError, ProjectModelDerivationErrorKind, project_model_error,
 };
 use super::{
-    BoundaryGitEntryKind, IntentionalBoundaryProjectModelCensus,
-    IntentionalBoundaryProjectModelExecution,
+    IntentionalBoundaryProjectModelCensus, IntentionalBoundaryProjectModelExecution,
     IntentionalBoundaryProjectModelNonBoundaryReason as NonBoundaryReason,
     IntentionalBoundaryProjectModelProvider as Provider, IntentionalBoundaryProjectModelTarget,
     IntentionalBoundaryProjectModelTargetStatus as TargetStatus,
@@ -193,7 +192,7 @@ fn discover_root_config_candidates(
         .iter()
         .filter(|entry| is_config_candidate(&entry.repository_path))
         .map(|entry| {
-            if entry.kind != BoundaryGitEntryKind::RegularBlob {
+            if !entry.kind.is_file_blob() {
                 return Err(typescript_error(
                     ProjectModelDerivationErrorKind::UnsupportedProjectShape,
                     super::IntentionalBoundaryProjectModelFailurePhase::RepositoryValidation,

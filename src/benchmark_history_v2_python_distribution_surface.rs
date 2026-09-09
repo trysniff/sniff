@@ -4,7 +4,7 @@ use super::intentional_boundary_inventory::{
 };
 use super::python_build_requirement::validate_python_build_requirement;
 use super::{
-    BoundaryGitEntryKind, HISTORICAL_V2_PYTHON_DISTRIBUTION_SURFACE_CENSUS_SCHEMA_VERSION,
+    HISTORICAL_V2_PYTHON_DISTRIBUTION_SURFACE_CENSUS_SCHEMA_VERSION,
     HistoricalV2PythonBuildRequirement, HistoricalV2PythonDistribution,
     HistoricalV2PythonDistributionModule, HistoricalV2PythonDistributionSurfaceCensus,
     HistoricalV2PythonImportDeclaration, HistoricalV2PythonModuleKind, HistoricalV2PythonWheelRoot,
@@ -284,7 +284,7 @@ fn python_distribution_manifests(
         .iter()
         .filter(|entry| entry.repository_path.rsplit('/').next() == Some("pyproject.toml"))
     {
-        if entry.kind != BoundaryGitEntryKind::RegularBlob {
+        if !entry.kind.is_file_blob() {
             return Err(format!(
                 "historical-v2 Python project manifest is not a regular Git blob: {}",
                 entry.repository_path

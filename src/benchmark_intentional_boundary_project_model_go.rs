@@ -5,9 +5,9 @@ use super::intentional_boundary_project_model::{
     finish_project_model_census, is_sha256, regular_inventory_entry, valid_execution_variant,
 };
 use super::{
-    BoundaryGitEntryKind, IntentionalBoundaryManifestDeclarationKind,
-    IntentionalBoundaryManifestTarget, IntentionalBoundaryProjectModelCensus,
-    IntentionalBoundaryProjectModelExecution, IntentionalBoundaryProjectModelGoArchitecture,
+    IntentionalBoundaryManifestDeclarationKind, IntentionalBoundaryManifestTarget,
+    IntentionalBoundaryProjectModelCensus, IntentionalBoundaryProjectModelExecution,
+    IntentionalBoundaryProjectModelGoArchitecture,
     IntentionalBoundaryProjectModelProvider as Provider, IntentionalBoundaryProjectModelTarget,
     IntentionalBoundaryProjectModelTargetStatus as TargetStatus,
     IntentionalBoundaryProjectModelUnresolvedReason as UnresolvedReason,
@@ -362,7 +362,7 @@ fn classify_target(
                 "Go package source is not present in the immutable Git inventory".to_string(),
             );
         };
-        if entry.kind != BoundaryGitEntryKind::RegularBlob {
+        if !entry.kind.is_file_blob() {
             return unresolved(
                 UnresolvedReason::SourceNotRegularBlob,
                 "Go package source is not a regular Git blob".to_string(),
