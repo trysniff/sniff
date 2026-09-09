@@ -88,6 +88,11 @@ enum Command {
         #[command(flatten)]
         args: sniffbench_frame_run::RecoverSlotWorkArgs,
     },
+    /// Replay stale source and semantic censuses under the current public-surface schemas.
+    ReplayPublicSurfaceCensus {
+        #[command(flatten)]
+        args: sniffbench_frame_run::ReplayPublicSurfaceCensusArgs,
+    },
 }
 
 #[tokio::main]
@@ -264,6 +269,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Command::RunSlots { args } => sniffbench_frame_run::run(args).await?,
         Command::RecoverSlotWork { args } => sniffbench_frame_run::recover_slot_work(args)?,
+        Command::ReplayPublicSurfaceCensus { args } => {
+            sniffbench_frame_run::replay_public_surface_census(args)?
+        }
     }
     Ok(())
 }

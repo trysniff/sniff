@@ -1,11 +1,15 @@
+use super::invalid_data;
 use clap::{Args, ValueEnum};
 use serde::de::DeserializeOwned;
 use sniff::benchmark::{
     DockerHistoricalV2TestExecutor, HistoricalV2ExclusionManifest, HistoricalV2Frame,
-    HistoricalV2SelectedPayloads, HistoricalV2SelectedSlotSweepInputs,
-    HistoricalV2SelectedSlotWorkRecoveryInputs, HistoricalV2SlotRunDisposition,
-    HistoricalV2SlotSelection, HistoricalV2SlotStageError, HistoricalV2SlotStageErrorKind,
-    recover_historical_v2_selected_slot_work, run_historical_v2_selected_slots_bounded,
+    HistoricalV2PublicSurfaceReplayInputs, HistoricalV2SelectedPayloads,
+    HistoricalV2SelectedSlotSweepInputs, HistoricalV2SelectedSlotWorkRecoveryInputs,
+    HistoricalV2SlotOutcome, HistoricalV2SlotRunDisposition, HistoricalV2SlotSelection,
+    HistoricalV2SlotStageError, HistoricalV2SlotStageErrorKind,
+    recover_historical_v2_selected_slot_work, replay_historical_v2_public_surface_census,
+    run_historical_v2_selected_slots_bounded, validate_historical_v2_protocol,
+    validate_historical_v2_selected_payloads_commitment,
 };
 use std::fs;
 use std::io::{Error as IoError, ErrorKind};
@@ -61,6 +65,30 @@ pub(super) struct RecoverSlotWorkArgs {
     payloads: PathBuf,
     #[arg(long)]
     work_root: PathBuf,
+}
+
+#[derive(Debug, Args)]
+pub(super) struct ReplayPublicSurfaceCensusArgs {
+    #[arg(long)]
+    protocol: PathBuf,
+    #[arg(long)]
+    artifact_root: PathBuf,
+    #[arg(long)]
+    frame: PathBuf,
+    #[arg(long)]
+    exclusions: PathBuf,
+    #[arg(long)]
+    selection: PathBuf,
+    #[arg(long)]
+    payloads: PathBuf,
+    #[arg(long)]
+    state_root: PathBuf,
+    #[arg(long)]
+    work_root: PathBuf,
+    #[arg(long)]
+    language: String,
+    #[arg(long)]
+    slot_number: usize,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -163,6 +191,85 @@ pub(super) fn recover_slot_work(
         summary.selected_slot_count,
         summary.materialized_semantic_root_count,
         summary.recovered_semantic_root_count
+    );
+    Ok(())
+}
+
+pub(super) fn replay_public_surface_census(
+    args: ReplayPublicSurfaceCensusArgs,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let protocol_bytes =
+        read_plain_file(&args.protocol, "historical-v2 protocol", MAX_PROTOCOL_BYTES)?;
+    let protocol = validate_historical_v2_protocol(&protocol_bytes).map_err(invalid_data)?;
+    let frame: HistoricalV2Frame = read_json(&args.frame, "historical-v2 frame")?;
+    let exclusions: HistoricalV2ExclusionManifest =
+        read_json(&args.exclusions, "historical-v2 exclusions")?;
+    let selection: HistoricalV2SlotSelection =
+        read_json(&args.selection, "historical-v2 selection")?;
+    let payloads: HistoricalV2SelectedPayloads =
+        read_json(&args.payloads, "historical-v2 selected payloads")?;
+    sniff::benchmark::validate_historical_v2_slot_selection(
+        &protocol_bytes,
+        &args.artifact_root,
+        &frame,
+        &exclusions,
+        &selection,
+    )
+    .map_err(invalid_data)?;
+    validate_historical_v2_selected_payloads_commitment(
+        &protocol,
+        &frame,
+        &exclusions,
+        &selection,
+        &payloads,
+    )
+    .map_err(invalid_data)?;
+    let payload = payloads
+        .records
+        .iter()
+        .find(|payload| {
+            payload.language == args.language && payload.slot_number == args.slot_number
+        })
+        .ok_or_else(|| invalid_data("historical-v2 replay target is not selected".to_string()))?;
+    let canonical_repository = selection
+        .slots
+        .iter()
+        .find_map(|slot| {
+            if slot.language != payload.language || slot.slot_number != payload.slot_number {
+                return None;
+            }
+            match &slot.outcome {
+                HistoricalV2SlotOutcome::Selected {
+                    global_row_index,
+                    instance_id,
+                    canonical_repository,
+                    ..
+                } if *global_row_index == payload.global_row_index
+                    && instance_id == &payload.instance_id =>
+                {
+                    Some(canonical_repository.as_str())
+                }
+                _ => None,
+            }
+        })
+        .ok_or_else(|| invalid_data("historical-v2 replay identity changed".to_string()))?;
+    let summary =
+        replay_historical_v2_public_surface_census(HistoricalV2PublicSurfaceReplayInputs {
+            state_root: &args.state_root,
+            work_root: &args.work_root,
+            selection_sha256: &selection.selection_sha256,
+            language: &args.language,
+            slot_number: args.slot_number,
+            canonical_repository,
+        })
+        .map_err(stage_error)?;
+    eprintln!(
+        "Historical-v2 public-surface census replay prepared\nTarget: {}/slot-{:04}\nRetained through: {:?}\nRemoved stages: {}\nRemoved semantic progress: {}",
+        summary.language,
+        summary.slot_number,
+        summary.retained_stage,
+        summary.removed_stage_count,
+        summary.removed_semantic_progress
     );
     Ok(())
 }

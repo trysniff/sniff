@@ -1,5 +1,7 @@
+use super::history_v2_slot_store_support::sync_directory;
 use super::{
-    HistoricalV2PayloadStageInputs, HistoricalV2SelectedPayload,
+    HistoricalV2PayloadStageInputs, HistoricalV2PublicSurfaceReplayInputs,
+    HistoricalV2PublicSurfaceReplaySummary, HistoricalV2SelectedPayload,
     HistoricalV2SelectedSlotRunSummary, HistoricalV2SelectedSlotSweepInputs,
     HistoricalV2SelectedSlotSweepSummary, HistoricalV2SelectedSlotWorkRecoveryInputs,
     HistoricalV2SelectedSlotWorkRecoverySummary, HistoricalV2SlotOperations,
@@ -77,6 +79,136 @@ pub fn recover_historical_v2_selected_slot_work(
         materialized_semantic_root_count: layout.semantic_roots.len(),
         recovered_semantic_root_count,
     })
+}
+
+pub fn replay_historical_v2_public_surface_census(
+    inputs: HistoricalV2PublicSurfaceReplayInputs<'_>,
+) -> Result<HistoricalV2PublicSurfaceReplaySummary, HistoricalV2SlotStageError> {
+    let state_root = existing_plain_directory(inputs.state_root, "historical-v2 state root")?;
+    let work_root = existing_plain_directory(inputs.work_root, "historical-v2 work root")?;
+    if overlaps(&state_root, &work_root) {
+        return Err(recovery_invalid(
+            "historical-v2 state and work roots must not overlap",
+        ));
+    }
+
+    let mut journal = HistoricalV2SlotStageJournal::open_existing(
+        &state_root,
+        inputs.language,
+        inputs.slot_number,
+    )?;
+    validate_existing_slot_identity(
+        journal.history(),
+        HistoricalV2SlotRunIdentity {
+            selection_sha256: inputs.selection_sha256,
+            language: inputs.language,
+            slot_number: inputs.slot_number,
+            canonical_repository: inputs.canonical_repository,
+        },
+    )?;
+    let expected_stages = [
+        HistoricalV2SlotStage::Payload,
+        HistoricalV2SlotStage::Materialization,
+        HistoricalV2SlotStage::TestMaterialization,
+        HistoricalV2SlotStage::SourceCensus,
+        HistoricalV2SlotStage::SemanticCensus,
+    ];
+    if journal.history().len() != expected_stages.len()
+        || journal
+            .history()
+            .iter()
+            .zip(expected_stages)
+            .any(|(stored, expected)| {
+                stored.checkpoint.stage != expected
+                    || !matches!(
+                        stored.checkpoint.outcome,
+                        super::HistoricalV2SlotStageOutcome::Completed { .. }
+                    )
+            })
+    {
+        return Err(recovery_invalid(
+            "historical-v2 public-surface replay requires exactly five completed stages",
+        ));
+    }
+
+    let slot_root = exact_replay_slot_root(&work_root, inputs.language, inputs.slot_number)?;
+    let progress_root = slot_root.join("semantic-progress");
+    let progress_root = exact_plain_child(
+        &slot_root,
+        &progress_root,
+        "historical-v2 semantic progress root",
+    )?;
+    let quarantine = slot_root.join(".semantic-progress.public-surface-replay");
+    if fs::symlink_metadata(&quarantine).is_ok() {
+        return Err(recovery_invalid(
+            "historical-v2 public-surface replay quarantine already exists",
+        ));
+    }
+    fs::rename(&progress_root, &quarantine).map_err(|error| {
+        recovery_infrastructure(format!(
+            "failed to quarantine historical-v2 semantic progress: {error}"
+        ))
+    })?;
+    sync_directory(&slot_root).map_err(recovery_infrastructure)?;
+
+    let removed_stage_count =
+        journal.rewind_completed_after(HistoricalV2SlotStage::TestMaterialization)?;
+    let quarantine = exact_plain_child(
+        &slot_root,
+        &quarantine,
+        "historical-v2 public-surface replay quarantine",
+    )?;
+    fs::remove_dir_all(&quarantine).map_err(|error| {
+        recovery_infrastructure(format!(
+            "failed to remove historical-v2 semantic progress quarantine: {error}"
+        ))
+    })?;
+    sync_directory(&slot_root).map_err(recovery_infrastructure)?;
+
+    Ok(HistoricalV2PublicSurfaceReplaySummary {
+        language: inputs.language.to_string(),
+        slot_number: inputs.slot_number,
+        retained_stage: HistoricalV2SlotStage::TestMaterialization,
+        removed_stage_count,
+        removed_semantic_progress: true,
+    })
+}
+
+fn exact_replay_slot_root(
+    work_root: &Path,
+    language: &str,
+    slot_number: usize,
+) -> Result<PathBuf, HistoricalV2SlotStageError> {
+    let language_root = exact_plain_child(
+        work_root,
+        &work_root.join(language),
+        "historical-v2 language work root",
+    )?;
+    let slot_root = exact_plain_child(
+        &language_root,
+        &language_root.join(format!("slot-{slot_number:04}")),
+        "historical-v2 slot work root",
+    )?;
+    let observed = read_plain_directory(&slot_root, "historical-v2 slot work root")?
+        .into_iter()
+        .map(|entry| plain_entry_name(&entry, "historical-v2 slot work entry"))
+        .collect::<Result<BTreeSet<_>, _>>()?;
+    let expected = [
+        "base-tested",
+        "patched",
+        "patched-tested",
+        "repository",
+        "semantic-progress",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect::<BTreeSet<_>>();
+    if observed != expected {
+        return Err(recovery_invalid(
+            "historical-v2 public-surface replay work layout changed",
+        ));
+    }
+    Ok(slot_root)
 }
 
 fn expected_selected_slot_work(
