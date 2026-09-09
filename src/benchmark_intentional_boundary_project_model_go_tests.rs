@@ -1207,3 +1207,78 @@ fn real_go_list_is_sandboxed_or_fails_as_typed_unavailable() {
         );
     }
 }
+
+#[test]
+fn go_dependency_preparation_is_networked_but_project_model_execution_is_offline() {
+    if !Command::new("go")
+        .arg("version")
+        .output()
+        .is_ok_and(|output| output.status.success())
+    {
+        return;
+    }
+    let root = tempfile::tempdir().unwrap();
+    let cache = root.path().join("cache");
+    fs::create_dir(&cache).unwrap();
+    let preparation_command = vec![
+        "go".to_string(),
+        "-C".to_string(),
+        ".".to_string(),
+        "mod".to_string(),
+        "download".to_string(),
+    ];
+    let preparation = prepare_go_command_plan(
+        root.path(),
+        &cache,
+        "go.mod",
+        &preparation_command,
+        &[],
+        GoCommandNetworkPolicy::DependencyPreparation,
+        "test preparation runtime",
+    )
+    .unwrap();
+    assert!(preparation.command.allow_network);
+    assert!(
+        !preparation
+            .command
+            .env
+            .iter()
+            .any(|(name, _)| name == "GOPROXY" || name == "GOSUMDB")
+    );
+
+    let model_command = vec![
+        "go".to_string(),
+        "list".to_string(),
+        "-mod=readonly".to_string(),
+        "./...".to_string(),
+    ];
+    let model = prepare_go_command_plan(
+        root.path(),
+        &cache,
+        "go.mod",
+        &model_command,
+        &[],
+        GoCommandNetworkPolicy::OfflineModel,
+        "test model runtime",
+    )
+    .unwrap();
+    assert!(!model.command.allow_network);
+    for name in ["GOPROXY", "GOSUMDB"] {
+        assert!(
+            model
+                .command
+                .env
+                .iter()
+                .any(|(candidate, value)| { candidate == name && value == "off" })
+        );
+    }
+}
+
+#[test]
+fn go_project_model_identity_commits_to_dependency_preparation() {
+    let runtime = "a".repeat(64);
+    let left = go_project_model_pipeline_identity(&runtime, &"b".repeat(64)).unwrap();
+    let right = go_project_model_pipeline_identity(&runtime, &"c".repeat(64)).unwrap();
+
+    assert_ne!(left, right);
+}
