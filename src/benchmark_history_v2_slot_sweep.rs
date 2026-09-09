@@ -139,10 +139,18 @@ pub fn replay_historical_v2_public_surface_census(
         "historical-v2 semantic progress root",
     )?;
     let quarantine = slot_root.join(".semantic-progress.public-surface-replay");
-    if fs::symlink_metadata(&quarantine).is_ok() {
-        return Err(recovery_invalid(
-            "historical-v2 public-surface replay quarantine already exists",
-        ));
+    match fs::symlink_metadata(&quarantine) {
+        Ok(_) => {
+            return Err(recovery_invalid(
+                "historical-v2 public-surface replay quarantine already exists",
+            ));
+        }
+        Err(error) if error.kind() == ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(recovery_infrastructure(format!(
+                "failed to inspect historical-v2 public-surface replay quarantine: {error}"
+            )));
+        }
     }
     fs::rename(&progress_root, &quarantine).map_err(|error| {
         recovery_infrastructure(format!(
