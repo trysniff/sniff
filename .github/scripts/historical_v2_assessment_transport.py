@@ -270,6 +270,25 @@ EXECUTABLE_BLOB_MIGRATION_SOURCE_ARTIFACT_DIGEST = (
 )
 EXECUTABLE_BLOB_MIGRATION_SOURCE_ARTIFACT_SIZE = 325_146_342
 
+GO_PROJECT_MODEL_DEPENDENCY_MIGRATION_NAME = (
+    "go-project-model-dependency-preparation-v1"
+)
+GO_PROJECT_MODEL_DEPENDENCY_MIGRATION_CONTRACT = (
+    "sniffbench-historical-v2-go-project-model-dependency-preparation-migration-v1"
+)
+GO_PROJECT_MODEL_DEPENDENCY_MIGRATION_FROM_COLLECTOR_SHA = (
+    "35d561b3b2570264f19c7b0b6e5c6bbc91e477c2"
+)
+GO_PROJECT_MODEL_DEPENDENCY_MIGRATION_SOURCE_RUN_ID = 34_398_047_970
+GO_PROJECT_MODEL_DEPENDENCY_MIGRATION_SOURCE_HEAD_SHA = (
+    "35d561b3b2570264f19c7b0b6e5c6bbc91e477c2"
+)
+GO_PROJECT_MODEL_DEPENDENCY_MIGRATION_SOURCE_ARTIFACT_ID = 10_122_421_174
+GO_PROJECT_MODEL_DEPENDENCY_MIGRATION_SOURCE_ARTIFACT_DIGEST = (
+    "sha256:6a991ff985db8756ae0bd6592ab73b60f757e875ef302f77817408f94c4e1133"
+)
+GO_PROJECT_MODEL_DEPENDENCY_MIGRATION_SOURCE_ARTIFACT_SIZE = 325_146_524
+
 FRAME_FILE_SHA256 = {
     "environment.txt": "2e87f3c3e1b2005f6b6d09b1bf1b82d30a9433636c3c67f0806cc68e80ab6800",
     "exclusions.json": "74bccb100eb48ab87952bd7eec137b2285edbc68d2547715bc0e06a80e029f76",
@@ -698,7 +717,7 @@ def validate_manifest(path: pathlib.Path, frame_run_id: int) -> str:
     schema_version = value.get("schema_version")
     if schema_version == 1:
         expected = _manifest(frame_run_id, collector_sha)
-    elif schema_version in (2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16):
+    elif schema_version in (2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17):
         migrations = value.get("collector_migrations")
         expected_count = schema_version - 1
         if not isinstance(migrations, list) or len(migrations) != expected_count:
@@ -781,6 +800,9 @@ def _migration_record(
     elif migration_name == EXECUTABLE_BLOB_MIGRATION_NAME:
         contract = EXECUTABLE_BLOB_MIGRATION_CONTRACT
         source_collector_sha = EXECUTABLE_BLOB_MIGRATION_FROM_COLLECTOR_SHA
+    elif migration_name == GO_PROJECT_MODEL_DEPENDENCY_MIGRATION_NAME:
+        contract = GO_PROJECT_MODEL_DEPENDENCY_MIGRATION_CONTRACT
+        source_collector_sha = GO_PROJECT_MODEL_DEPENDENCY_MIGRATION_FROM_COLLECTOR_SHA
     else:
         raise ValueError("transport manifest collector migration is not allowlisted")
     return {
@@ -1077,15 +1099,35 @@ def _expected_executable_blob_migration(
     )
 
 
+def _expected_go_project_model_dependency_migration(
+    target_collector_sha: str,
+) -> dict[str, Any]:
+    if (
+        target_collector_sha
+        == GO_PROJECT_MODEL_DEPENDENCY_MIGRATION_FROM_COLLECTOR_SHA
+        or re.fullmatch(r"[0-9a-f]{40}", target_collector_sha) is None
+    ):
+        raise ValueError("transport manifest collector migration target is invalid")
+    return _migration_record(
+        GO_PROJECT_MODEL_DEPENDENCY_MIGRATION_NAME,
+        target_collector_sha,
+        GO_PROJECT_MODEL_DEPENDENCY_MIGRATION_SOURCE_RUN_ID,
+        GO_PROJECT_MODEL_DEPENDENCY_MIGRATION_SOURCE_HEAD_SHA,
+        GO_PROJECT_MODEL_DEPENDENCY_MIGRATION_SOURCE_ARTIFACT_ID,
+        GO_PROJECT_MODEL_DEPENDENCY_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+        GO_PROJECT_MODEL_DEPENDENCY_MIGRATION_SOURCE_ARTIFACT_SIZE,
+    )
+
+
 def _validate_collector_migrations(
     migrations: Sequence[Mapping[str, Any]], collector_sha: str
 ) -> None:
-    if len(migrations) not in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15):
+    if len(migrations) not in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16):
         raise ValueError("transport manifest collector migration chain is invalid")
     expected = [_expected_storage_migration()]
     if len(migrations) == 2:
         expected.append(_expected_go_preparation_migration(collector_sha))
-    elif len(migrations) in (3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15):
+    elif len(migrations) in (3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16):
         expected.append(
             _expected_go_preparation_migration(
                 GO_MODULE_DOWNLOAD_MIGRATION_FROM_COLLECTOR_SHA
@@ -1188,14 +1230,25 @@ def _validate_collector_migrations(
         if len(migrations) >= 14:
             public_surface_target = (
                 EXECUTABLE_BLOB_MIGRATION_FROM_COLLECTOR_SHA
-                if len(migrations) == 15
+                if len(migrations) >= 15
                 else collector_sha
             )
             expected.append(
                 _expected_public_surface_replay_migration(public_surface_target)
             )
-        if len(migrations) == 15:
-            expected.append(_expected_executable_blob_migration(collector_sha))
+        if len(migrations) >= 15:
+            executable_blob_target = (
+                GO_PROJECT_MODEL_DEPENDENCY_MIGRATION_FROM_COLLECTOR_SHA
+                if len(migrations) == 16
+                else collector_sha
+            )
+            expected.append(
+                _expected_executable_blob_migration(executable_blob_target)
+            )
+        if len(migrations) == 16:
+            expected.append(
+                _expected_go_project_model_dependency_migration(collector_sha)
+            )
     elif collector_sha != STORAGE_MIGRATION_TO_COLLECTOR_SHA:
         raise ValueError("transport manifest collector migration target drifted")
     if [dict(migration) for migration in migrations] != expected:
@@ -1306,6 +1359,12 @@ def migrate_manifest(
         ]
     elif schema_version == 15:
         expected_name = EXECUTABLE_BLOB_MIGRATION_NAME
+        migrations = [
+            _require_mapping(item, "transport manifest collector migration")
+            for item in value.get("collector_migrations", [])
+        ]
+    elif schema_version == 16:
+        expected_name = GO_PROJECT_MODEL_DEPENDENCY_MIGRATION_NAME
         migrations = [
             _require_mapping(item, "transport manifest collector migration")
             for item in value.get("collector_migrations", [])

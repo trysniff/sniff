@@ -598,6 +598,21 @@ class ManifestTests(unittest.TestCase):
             transport.PUBLIC_SURFACE_REPLAY_MIGRATION_SOURCE_ARTIFACT_SIZE,
         )
 
+    @staticmethod
+    def _write_executable_blob_manifest(path: pathlib.Path) -> None:
+        ManifestTests._write_public_surface_replay_manifest(path)
+        transport.migrate_manifest(
+            path,
+            transport.FRAME_RUN_ID,
+            transport.GO_PROJECT_MODEL_DEPENDENCY_MIGRATION_FROM_COLLECTOR_SHA,
+            transport.EXECUTABLE_BLOB_MIGRATION_NAME,
+            transport.EXECUTABLE_BLOB_MIGRATION_SOURCE_RUN_ID,
+            transport.EXECUTABLE_BLOB_MIGRATION_SOURCE_HEAD_SHA,
+            transport.EXECUTABLE_BLOB_MIGRATION_SOURCE_ARTIFACT_ID,
+            transport.EXECUTABLE_BLOB_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+            transport.EXECUTABLE_BLOB_MIGRATION_SOURCE_ARTIFACT_SIZE,
+        )
+
     def test_manifest_round_trips_and_is_create_new(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             path = pathlib.Path(temporary, "manifest.json")
@@ -1907,7 +1922,7 @@ class ManifestTests(unittest.TestCase):
                     transport.PUBLIC_SURFACE_REPLAY_MIGRATION_SOURCE_ARTIFACT_SIZE,
                 )
 
-    def test_executable_blob_migration_is_exact_and_closes_the_chain(self) -> None:
+    def test_executable_blob_migration_is_exact_and_preserves_the_chain(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             path = pathlib.Path(temporary, "manifest.json")
             self._write_public_surface_replay_manifest(path)
@@ -1986,6 +2001,97 @@ class ManifestTests(unittest.TestCase):
                     transport.EXECUTABLE_BLOB_MIGRATION_SOURCE_ARTIFACT_ID,
                     transport.EXECUTABLE_BLOB_MIGRATION_SOURCE_ARTIFACT_DIGEST,
                     transport.EXECUTABLE_BLOB_MIGRATION_SOURCE_ARTIFACT_SIZE,
+                )
+
+    def test_go_project_model_dependency_migration_is_exact_and_closes_the_chain(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = pathlib.Path(temporary, "manifest.json")
+            self._write_executable_blob_manifest(path)
+            prior_manifest = json.loads(path.read_text(encoding="utf-8"))
+            prior_records = prior_manifest["collector_migrations"]
+            source = (
+                transport.GO_PROJECT_MODEL_DEPENDENCY_MIGRATION_FROM_COLLECTOR_SHA
+            )
+            target = "6" * 40
+
+            self.assertEqual(
+                transport.migrate_manifest(
+                    path,
+                    transport.FRAME_RUN_ID,
+                    target,
+                    transport.GO_PROJECT_MODEL_DEPENDENCY_MIGRATION_NAME,
+                    transport.GO_PROJECT_MODEL_DEPENDENCY_MIGRATION_SOURCE_RUN_ID,
+                    transport.GO_PROJECT_MODEL_DEPENDENCY_MIGRATION_SOURCE_HEAD_SHA,
+                    transport.GO_PROJECT_MODEL_DEPENDENCY_MIGRATION_SOURCE_ARTIFACT_ID,
+                    transport.GO_PROJECT_MODEL_DEPENDENCY_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+                    transport.GO_PROJECT_MODEL_DEPENDENCY_MIGRATION_SOURCE_ARTIFACT_SIZE,
+                ),
+                target,
+            )
+            value = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(value["schema_version"], 17)
+            self.assertEqual(value["collector_migrations"][:15], prior_records)
+            self.assertEqual(
+                value["collector_migrations"][15],
+                {
+                    "from_collector_sha": source,
+                    "migration_contract": (
+                        transport.GO_PROJECT_MODEL_DEPENDENCY_MIGRATION_CONTRACT
+                    ),
+                    "migration_name": (
+                        transport.GO_PROJECT_MODEL_DEPENDENCY_MIGRATION_NAME
+                    ),
+                    "source_artifact_digest": (
+                        transport.GO_PROJECT_MODEL_DEPENDENCY_MIGRATION_SOURCE_ARTIFACT_DIGEST
+                    ),
+                    "source_artifact_id": (
+                        transport.GO_PROJECT_MODEL_DEPENDENCY_MIGRATION_SOURCE_ARTIFACT_ID
+                    ),
+                    "source_artifact_size": (
+                        transport.GO_PROJECT_MODEL_DEPENDENCY_MIGRATION_SOURCE_ARTIFACT_SIZE
+                    ),
+                    "source_head_sha": (
+                        transport.GO_PROJECT_MODEL_DEPENDENCY_MIGRATION_SOURCE_HEAD_SHA
+                    ),
+                    "source_run_id": (
+                        transport.GO_PROJECT_MODEL_DEPENDENCY_MIGRATION_SOURCE_RUN_ID
+                    ),
+                    "to_collector_sha": target,
+                },
+            )
+            self.assertEqual(
+                transport.validate_manifest(path, transport.FRAME_RUN_ID), target
+            )
+
+            for field in value["collector_migrations"][15]:
+                tampered = json.loads(json.dumps(value))
+                tampered["collector_migrations"][15][field] = True
+                path.write_text(json.dumps(tampered), encoding="utf-8")
+                with self.subTest(field=field), self.assertRaises(ValueError):
+                    transport.validate_manifest(path, transport.FRAME_RUN_ID)
+
+            reordered = json.loads(json.dumps(value))
+            reordered["collector_migrations"][14:] = reversed(
+                reordered["collector_migrations"][14:]
+            )
+            path.write_text(json.dumps(reordered), encoding="utf-8")
+            with self.assertRaises(ValueError):
+                transport.validate_manifest(path, transport.FRAME_RUN_ID)
+
+            path.write_text(json.dumps(value), encoding="utf-8")
+            with self.assertRaises(ValueError):
+                transport.migrate_manifest(
+                    path,
+                    transport.FRAME_RUN_ID,
+                    "7" * 40,
+                    transport.GO_PROJECT_MODEL_DEPENDENCY_MIGRATION_NAME,
+                    transport.GO_PROJECT_MODEL_DEPENDENCY_MIGRATION_SOURCE_RUN_ID,
+                    transport.GO_PROJECT_MODEL_DEPENDENCY_MIGRATION_SOURCE_HEAD_SHA,
+                    transport.GO_PROJECT_MODEL_DEPENDENCY_MIGRATION_SOURCE_ARTIFACT_ID,
+                    transport.GO_PROJECT_MODEL_DEPENDENCY_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+                    transport.GO_PROJECT_MODEL_DEPENDENCY_MIGRATION_SOURCE_ARTIFACT_SIZE,
                 )
 
     def test_storage_migration_rejects_unapproved_source_or_name(self) -> None:
