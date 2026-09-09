@@ -396,6 +396,123 @@ fn durable_terminal_exclusion_survives_resume_and_cannot_be_extended() {
     assert!(error.detail.contains("terminal"));
 }
 
+#[test]
+fn durable_journal_rewinds_only_a_fully_validated_completed_suffix() {
+    let temp = tempfile::tempdir().unwrap();
+    let state = temp.path().join("state");
+    {
+        let mut journal = HistoricalV2SlotStageJournal::open(&state, "rust", 1).unwrap();
+        append_completed_stages(&mut journal, 5);
+    }
+    let retained_roots = (1..=3)
+        .map(|sequence| {
+            let root = state.join(format!(
+                "rust/slot-0001/{sequence:04}-{}",
+                ["payload", "materialization", "test-materialization",][sequence - 1]
+            ));
+            (
+                root.clone(),
+                fs::read(root.join("_transaction.json")).unwrap(),
+            )
+        })
+        .collect::<Vec<_>>();
+
+    let mut journal = HistoricalV2SlotStageJournal::open_existing(&state, "rust", 1).unwrap();
+    assert_eq!(
+        journal
+            .rewind_completed_after(HistoricalV2SlotStage::TestMaterialization)
+            .unwrap(),
+        2
+    );
+    assert_eq!(journal.history().len(), 3);
+    assert!(!state.join("rust/slot-0001/0004-source-census").exists());
+    assert!(!state.join("rust/slot-0001/0005-semantic-census").exists());
+    assert!(!state.join("rust/.slot-0001.rewinding").exists());
+    for (root, transaction) in retained_roots {
+        assert_eq!(
+            fs::read(root.join("_transaction.json")).unwrap(),
+            transaction
+        );
+    }
+    drop(journal);
+    assert_eq!(
+        HistoricalV2SlotStageJournal::open_existing(&state, "rust", 1)
+            .unwrap()
+            .history()
+            .len(),
+        3
+    );
+}
+
+#[test]
+fn durable_journal_rewind_rejects_terminal_history_without_mutation() {
+    let temp = tempfile::tempdir().unwrap();
+    let state = temp.path().join("state");
+    {
+        let mut journal = HistoricalV2SlotStageJournal::open(&state, "rust", 1).unwrap();
+        append_completed_stages(&mut journal, 3);
+        journal
+            .append(
+                checkpoint_input(
+                    HistoricalV2SlotStage::SourceCensus,
+                    HistoricalV2SlotStageOutcome::Excluded {
+                        reason: HistoricalV2TerminalExclusionReason::SourceCensus(vec![
+                            HistoricalV2SourceCensusExclusionReason::SupportedSourceIsNotUtf8,
+                        ]),
+                        artifact_kind: HistoricalV2StageArtifactKind::SourceCensusExclusion,
+                        artifact_sha256: HASH_A.to_string(),
+                    },
+                ),
+                Some(&json!({"reason": "supported_source_is_not_utf8"})),
+            )
+            .unwrap();
+    }
+
+    let mut journal = HistoricalV2SlotStageJournal::open_existing(&state, "rust", 1).unwrap();
+    let error = journal
+        .rewind_completed_after(HistoricalV2SlotStage::TestMaterialization)
+        .unwrap_err();
+    assert_eq!(error.kind, HistoricalV2SlotStageErrorKind::InvalidInput);
+    assert!(error.detail.contains("entirely completed"));
+    assert!(state.join("rust/slot-0001/0004-source-census").is_dir());
+    assert!(!state.join("rust/.slot-0001.rewinding").exists());
+}
+
+#[test]
+fn durable_journal_rewind_revalidates_bytes_before_mutation() {
+    let temp = tempfile::tempdir().unwrap();
+    let state = temp.path().join("state");
+    {
+        let mut journal = HistoricalV2SlotStageJournal::open(&state, "rust", 1).unwrap();
+        append_completed_stages(&mut journal, 5);
+    }
+    let mut journal = HistoricalV2SlotStageJournal::open_existing(&state, "rust", 1).unwrap();
+    fs::write(
+        state.join("rust/slot-0001/0005-semantic-census/artifact.json"),
+        b"{}\n",
+    )
+    .unwrap();
+
+    let error = journal
+        .rewind_completed_after(HistoricalV2SlotStage::TestMaterialization)
+        .unwrap_err();
+    assert_eq!(error.kind, HistoricalV2SlotStageErrorKind::InvalidInput);
+    assert!(state.join("rust/slot-0001/0004-source-census").is_dir());
+    assert!(state.join("rust/slot-0001/0005-semantic-census").is_dir());
+    assert!(!state.join("rust/.slot-0001.rewinding").exists());
+}
+
+fn append_completed_stages(journal: &mut HistoricalV2SlotStageJournal, count: usize) {
+    for (stage, artifact_kind) in completed_stages().into_iter().take(count) {
+        journal
+            .append(
+                checkpoint_input(stage, completed(artifact_kind)),
+                Some(&json!({"stage": format!("{stage:?}")})),
+            )
+            .unwrap();
+    }
+}
+
 fn completed_through_assessment_identity() -> Vec<HistoricalV2SlotStageCheckpoint> {
     let mut history = Vec::new();
     for (stage, artifact_kind) in completed_stages().into_iter().take(6) {

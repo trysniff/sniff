@@ -51,8 +51,10 @@ pub struct HistoricalV2StoredSlotStage {
 pub struct HistoricalV2SlotStageJournal {
     language: String,
     slot_number: usize,
+    language_root: PathBuf,
     slot_root: PathBuf,
     staging_root: PathBuf,
+    rewind_root: PathBuf,
     history: Vec<HistoricalV2StoredSlotStage>,
     _lock: SlotFileLock,
 }
@@ -115,13 +117,18 @@ impl HistoricalV2SlotStageJournal {
                 "historical-v2 existing slot has an incomplete transaction",
             ));
         }
+        let rewind_root = language_root.join(format!(".{slot_name}.rewinding"));
+        reject_incomplete_rewind(&rewind_root)
+            .map_err(|detail| HistoricalV2SlotStageError::invalid(stage, detail))?;
         let history = load_history(&slot_root)
             .map_err(|detail| HistoricalV2SlotStageError::invalid(stage, detail))?;
         Ok(Self {
             language: language.to_string(),
             slot_number,
+            language_root,
             slot_root,
             staging_root,
+            rewind_root,
             history,
             _lock: lock,
         })
@@ -180,13 +187,18 @@ impl HistoricalV2SlotStageJournal {
         let staging_root = language_root.join(format!(".{slot_name}.incomplete"));
         remove_incomplete(&language_root, &staging_root)
             .map_err(|detail| HistoricalV2SlotStageError::infrastructure(stage, detail))?;
+        let rewind_root = language_root.join(format!(".{slot_name}.rewinding"));
+        reject_incomplete_rewind(&rewind_root)
+            .map_err(|detail| HistoricalV2SlotStageError::invalid(stage, detail))?;
         let history = load_history(&slot_root)
             .map_err(|detail| HistoricalV2SlotStageError::invalid(stage, detail))?;
         Ok(Self {
             language: language.to_string(),
             slot_number,
+            language_root,
             slot_root,
             staging_root,
+            rewind_root,
             history,
             _lock: lock,
         })
@@ -194,6 +206,95 @@ impl HistoricalV2SlotStageJournal {
 
     pub fn history(&self) -> &[HistoricalV2StoredSlotStage] {
         &self.history
+    }
+
+    pub fn rewind_completed_after(
+        &mut self,
+        retained_stage: HistoricalV2SlotStage,
+    ) -> Result<usize, HistoricalV2SlotStageError> {
+        let current = load_history(&self.slot_root)
+            .map_err(|detail| HistoricalV2SlotStageError::invalid(retained_stage, detail))?;
+        if current != self.history {
+            return Err(HistoricalV2SlotStageError::invalid(
+                retained_stage,
+                "historical-v2 slot journal changed after it was opened",
+            ));
+        }
+        let retained_index = current
+            .iter()
+            .position(|stored| stored.checkpoint.stage == retained_stage)
+            .ok_or_else(|| {
+                HistoricalV2SlotStageError::invalid(
+                    retained_stage,
+                    "historical-v2 rewind stage is not committed",
+                )
+            })?;
+        let removed = current.len().saturating_sub(retained_index + 1);
+        if removed == 0 {
+            return Err(HistoricalV2SlotStageError::invalid(
+                retained_stage,
+                "historical-v2 rewind has no completed suffix",
+            ));
+        }
+        if current.iter().any(|stored| {
+            !matches!(
+                stored.checkpoint.outcome,
+                HistoricalV2SlotStageOutcome::Completed { .. }
+            )
+        }) {
+            return Err(HistoricalV2SlotStageError::invalid(
+                retained_stage,
+                "historical-v2 rewind requires an entirely completed history",
+            ));
+        }
+        reject_incomplete_rewind(&self.rewind_root)
+            .map_err(|detail| HistoricalV2SlotStageError::invalid(retained_stage, detail))?;
+        fs::create_dir(&self.rewind_root).map_err(|error| {
+            HistoricalV2SlotStageError::infrastructure(
+                retained_stage,
+                format!("failed to create historical-v2 rewind quarantine: {error}"),
+            )
+        })?;
+        sync_directory(&self.language_root)
+            .map_err(|detail| HistoricalV2SlotStageError::infrastructure(retained_stage, detail))?;
+
+        for stored in current.iter().skip(retained_index + 1).rev() {
+            let name =
+                transaction_directory_name(stored.checkpoint.sequence, stored.checkpoint.stage);
+            fs::rename(self.slot_root.join(&name), self.rewind_root.join(&name)).map_err(
+                |error| {
+                    HistoricalV2SlotStageError::infrastructure(
+                        retained_stage,
+                        format!("failed to quarantine historical-v2 stage {name}: {error}"),
+                    )
+                },
+            )?;
+            sync_directory(&self.slot_root).map_err(|detail| {
+                HistoricalV2SlotStageError::infrastructure(retained_stage, detail)
+            })?;
+            sync_directory(&self.rewind_root).map_err(|detail| {
+                HistoricalV2SlotStageError::infrastructure(retained_stage, detail)
+            })?;
+        }
+
+        let retained = load_history(&self.slot_root)
+            .map_err(|detail| HistoricalV2SlotStageError::invalid(retained_stage, detail))?;
+        if retained != current[..=retained_index] {
+            return Err(HistoricalV2SlotStageError::invalid(
+                retained_stage,
+                "historical-v2 retained journal prefix changed during rewind",
+            ));
+        }
+        fs::remove_dir_all(&self.rewind_root).map_err(|error| {
+            HistoricalV2SlotStageError::infrastructure(
+                retained_stage,
+                format!("failed to remove historical-v2 rewind quarantine: {error}"),
+            )
+        })?;
+        sync_directory(&self.language_root)
+            .map_err(|detail| HistoricalV2SlotStageError::infrastructure(retained_stage, detail))?;
+        self.history = retained;
+        Ok(removed)
     }
 
     pub fn append<T: Serialize>(
@@ -498,6 +599,16 @@ fn remove_incomplete(language_root: &Path, staging_root: &Path) -> Result<(), St
         format!("failed to remove incomplete historical-v2 stage transaction: {error}")
     })?;
     sync_directory(language_root)
+}
+
+fn reject_incomplete_rewind(rewind_root: &Path) -> Result<(), String> {
+    match fs::symlink_metadata(rewind_root) {
+        Ok(_) => Err("historical-v2 slot has an incomplete rewind transaction".to_string()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!(
+            "failed to inspect historical-v2 rewind transaction: {error}"
+        )),
+    }
 }
 
 #[cfg(test)]
