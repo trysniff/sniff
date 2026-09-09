@@ -19,8 +19,7 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
-pub(super) const GO_LIST_COMMAND_CONTRACT: &str =
-    "go-list-json-find-mod-readonly-buildvcs-off-exact-constraint-variants-v4";
+pub(super) const GO_LIST_COMMAND_CONTRACT: &str = "go-mod-download-then-offline-list-json-find-mod-readonly-buildvcs-off-exact-constraint-variants-v5";
 
 #[path = "benchmark_intentional_boundary_project_model_go_variants.rs"]
 mod variants;
@@ -34,9 +33,15 @@ pub use runtime::census_intentional_boundary_go_project_models;
 pub(super) use runtime::census_intentional_boundary_go_project_models_typed;
 #[cfg(test)]
 use runtime::{GoListExecutionOutput, census_go_project_models_with_executor};
+
+#[path = "benchmark_intentional_boundary_project_model_go_dependency.rs"]
+mod dependency;
+#[cfg(test)]
+use dependency::{GoCommandNetworkPolicy, prepare_go_command_plan};
 #[cfg(test)]
 use variants::{
-    GO_VARIANT_LIMIT, GoConstraintTagDomain, parse_go_constraint_tags, parse_go_dist_variants,
+    GO_VARIANT_LIMIT, GoConstraintTagDomain, go_project_model_pipeline_identity,
+    parse_go_constraint_tags, parse_go_dist_variants,
 };
 
 #[path = "benchmark_intentional_boundary_project_model_go_validation.rs"]

@@ -1,13 +1,14 @@
 use super::super::IntentionalBoundaryProjectModelFailurePhase;
 use super::super::intentional_boundary_project_model_outcome::{
     ProjectModelDerivationError, ProjectModelDerivationErrorKind, legacy_project_model_error,
-    project_model_error, project_model_process_error, project_model_runtime_plan_error,
-    project_model_sandbox_error,
+    project_model_error, project_model_process_error, project_model_sandbox_error,
 };
 use super::super::intentional_boundary_runtime_snapshot::{
     IntentionalBoundaryRuntimeSnapshot, allocate_runtime_directory,
 };
-use super::super::non_blind_history_runtime::prepare_historical_runtime;
+use super::dependency::{
+    GoCommandNetworkPolicy, prepare_go_command_plan, prepare_go_dependency_cache,
+};
 use super::variants::{
     GO_VARIANT_LIMIT, go_project_model_pipeline_identity, parse_go_constraint_tags,
     parse_go_dist_variants, stage_go_constraint_invocation,
@@ -15,10 +16,6 @@ use super::variants::{
 use super::*;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
-
-const GO_LIST_TIMEOUT: Duration = Duration::from_secs(5 * 60);
-const GO_LIST_OUTPUT_LIMIT: usize = 32 * 1024 * 1024;
 
 struct GoListCallRuntime(PathBuf);
 
@@ -47,6 +44,17 @@ pub(super) struct GoListExecutionOutput {
 struct GoCommandExecution {
     toolchain_identity_sha256: String,
     output: crate::sandbox::SandboxOutput,
+}
+
+struct GoProjectModelCommand<'a> {
+    root: &'a Path,
+    cache: &'a Path,
+    manifest_repository_path: &'a str,
+    logical_command: Vec<String>,
+    explicit_context: &'a [(String, String)],
+    dependency_preparation_identity: &'a str,
+    nonzero_kind: ProjectModelDerivationErrorKind,
+    label: &'a str,
 }
 
 pub fn census_intentional_boundary_go_project_models(
@@ -335,6 +343,8 @@ fn run_go_lists(
     let module_directory = manifest_repository_path
         .rsplit_once('/')
         .map_or(".", |(directory, _)| directory);
+    let dependency_preparation_identity =
+        prepare_go_dependency_cache(root, &cache, manifest_repository_path, module_directory)?;
     let platform_command = vec![
         "go".to_string(),
         "-C".to_string(),
@@ -344,15 +354,16 @@ fn run_go_lists(
         "list".to_string(),
         "-json".to_string(),
     ];
-    let platform_execution = run_go_project_model_command(
+    let platform_execution = run_go_project_model_command(GoProjectModelCommand {
         root,
-        &cache,
+        cache: &cache,
         manifest_repository_path,
-        platform_command,
-        &[],
-        ProjectModelDerivationErrorKind::InfrastructureFailed,
-        "sandboxed Go platform discovery",
-    )?;
+        logical_command: platform_command,
+        explicit_context: &[],
+        dependency_preparation_identity: &dependency_preparation_identity,
+        nonzero_kind: ProjectModelDerivationErrorKind::InfrastructureFailed,
+        label: "sandboxed Go platform discovery",
+    })?;
     let constraint_invocation =
         stage_go_constraint_invocation(root, &cache, source_repository_paths).map_err(
             |detail| {
@@ -370,15 +381,17 @@ fn run_go_lists(
         constraint_invocation.helper_repository_path,
         constraint_invocation.request_repository_path,
     ];
-    let constraint_execution = run_go_project_model_command(
+    let constraint_context = [("GO111MODULE".to_string(), "off".to_string())];
+    let constraint_execution = run_go_project_model_command(GoProjectModelCommand {
         root,
-        &cache,
+        cache: &cache,
         manifest_repository_path,
-        constraint_command,
-        &[("GO111MODULE".to_string(), "off".to_string())],
-        ProjectModelDerivationErrorKind::ProviderRejectedRepository,
-        "sandboxed Go constraint discovery",
-    )?;
+        logical_command: constraint_command,
+        explicit_context: &constraint_context,
+        dependency_preparation_identity: &dependency_preparation_identity,
+        nonzero_kind: ProjectModelDerivationErrorKind::ProviderRejectedRepository,
+        label: "sandboxed Go constraint discovery",
+    })?;
     if platform_execution.toolchain_identity_sha256
         != constraint_execution.toolchain_identity_sha256
     {
@@ -453,15 +466,16 @@ fn run_go_lists(
         {
             explicit_context.push((environment_variable.clone(), value.clone()));
         }
-        let list_execution = run_go_project_model_command(
+        let list_execution = run_go_project_model_command(GoProjectModelCommand {
             root,
-            &cache,
+            cache: &cache,
             manifest_repository_path,
             logical_command,
-            &explicit_context,
-            ProjectModelDerivationErrorKind::ProviderRejectedRepository,
-            "sandboxed go list",
-        )?;
+            explicit_context: &explicit_context,
+            dependency_preparation_identity: &dependency_preparation_identity,
+            nonzero_kind: ProjectModelDerivationErrorKind::ProviderRejectedRepository,
+            label: "sandboxed go list",
+        })?;
         if platform_execution.toolchain_identity_sha256 != list_execution.toolchain_identity_sha256
         {
             return Err(go_error(
@@ -481,61 +495,37 @@ fn run_go_lists(
 }
 
 fn run_go_project_model_command(
-    root: &Path,
-    cache: &Path,
-    manifest_repository_path: &str,
-    logical_command: Vec<String>,
-    explicit_context: &[(String, String)],
-    nonzero_kind: ProjectModelDerivationErrorKind,
-    label: &str,
+    command: GoProjectModelCommand<'_>,
 ) -> Result<GoCommandExecution, ProjectModelDerivationError> {
-    let mut plan = prepare_historical_runtime(root, cache, &logical_command).map_err(|error| {
-        project_model_runtime_plan_error(
-            Provider::GoList,
-            manifest_repository_path,
-            "Go project-model runtime",
-            error,
-        )
-    })?;
-    plan.command.env.extend([
-        ("GOENV".to_string(), "off".to_string()),
-        ("GOFLAGS".to_string(), String::new()),
-        ("GOPROXY".to_string(), "off".to_string()),
-        ("GOSUMDB".to_string(), "off".to_string()),
-        ("GOTOOLCHAIN".to_string(), "local".to_string()),
-        ("GOWORK".to_string(), "off".to_string()),
-    ]);
-    plan.command.env.extend(explicit_context.iter().cloned());
-    plan.command.env.sort_by(|left, right| left.0.cmp(&right.0));
-    if plan
-        .command
-        .env
-        .windows(2)
-        .any(|pair| pair[0].0 == pair[1].0)
-    {
-        return Err(go_error(
-            ProjectModelDerivationErrorKind::InfrastructureFailed,
-            IntentionalBoundaryProjectModelFailurePhase::RuntimePreparation,
-            Some(manifest_repository_path),
-            "Go project-model runtime environment contains duplicate names",
-        ));
-    }
-    plan.command.allow_network = false;
-    #[cfg(target_os = "macos")]
-    {
-        plan.command.allow_local_network = false;
-    }
-    plan.command.timeout = GO_LIST_TIMEOUT;
-    plan.command.output_limit = GO_LIST_OUTPUT_LIMIT;
-    let toolchain_identity_sha256 = go_project_model_pipeline_identity(&plan.runtime_identity)
-        .map_err(|detail| {
-            go_error(
-                ProjectModelDerivationErrorKind::InfrastructureFailed,
-                IntentionalBoundaryProjectModelFailurePhase::RuntimePreparation,
-                Some(manifest_repository_path),
-                detail,
-            )
-        })?;
+    let GoProjectModelCommand {
+        root,
+        cache,
+        manifest_repository_path,
+        logical_command,
+        explicit_context,
+        dependency_preparation_identity,
+        nonzero_kind,
+        label,
+    } = command;
+    let plan = prepare_go_command_plan(
+        root,
+        cache,
+        manifest_repository_path,
+        &logical_command,
+        explicit_context,
+        GoCommandNetworkPolicy::OfflineModel,
+        "Go project-model runtime",
+    )?;
+    let toolchain_identity_sha256 =
+        go_project_model_pipeline_identity(&plan.runtime_identity, dependency_preparation_identity)
+            .map_err(|detail| {
+                go_error(
+                    ProjectModelDerivationErrorKind::InfrastructureFailed,
+                    IntentionalBoundaryProjectModelFailurePhase::RuntimePreparation,
+                    Some(manifest_repository_path),
+                    detail,
+                )
+            })?;
     let output = crate::sandbox::run(&plan.command).map_err(|error| {
         project_model_sandbox_error(
             Provider::GoList,

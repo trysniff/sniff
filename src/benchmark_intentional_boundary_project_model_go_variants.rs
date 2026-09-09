@@ -89,10 +89,12 @@ pub(super) fn stage_go_constraint_invocation(
 
 pub(super) fn go_project_model_pipeline_identity(
     toolchain_identity_sha256: &str,
+    dependency_preparation_identity: &str,
 ) -> Result<String, String> {
     hash_json(&(
-        "sniff-go-project-model-pipeline-v1",
+        "sniff-go-project-model-pipeline-v2",
         toolchain_identity_sha256,
+        dependency_preparation_identity,
         GO_CONSTRAINT_HELPER_SOURCE,
     ))
 }
