@@ -289,6 +289,23 @@ GO_PROJECT_MODEL_DEPENDENCY_MIGRATION_SOURCE_ARTIFACT_DIGEST = (
 )
 GO_PROJECT_MODEL_DEPENDENCY_MIGRATION_SOURCE_ARTIFACT_SIZE = 325_146_524
 
+SOURCE_CENSUS_PROGRESS_MIGRATION_NAME = "resumable-source-census-progress-v1"
+SOURCE_CENSUS_PROGRESS_MIGRATION_CONTRACT = (
+    "sniffbench-historical-v2-resumable-source-census-progress-migration-v1"
+)
+SOURCE_CENSUS_PROGRESS_MIGRATION_FROM_COLLECTOR_SHA = (
+    "4ff5bd9541eb38637c36197664d728a13a2d84c5"
+)
+SOURCE_CENSUS_PROGRESS_MIGRATION_SOURCE_RUN_ID = 34_497_607_306
+SOURCE_CENSUS_PROGRESS_MIGRATION_SOURCE_HEAD_SHA = (
+    "c395884d8402931c554fe9c8983c6a79658ae289"
+)
+SOURCE_CENSUS_PROGRESS_MIGRATION_SOURCE_ARTIFACT_ID = 10_161_246_414
+SOURCE_CENSUS_PROGRESS_MIGRATION_SOURCE_ARTIFACT_DIGEST = (
+    "sha256:eac6077b1a99af7047969abcd9381e87a5490e6fb39f5d9c1f45f4c5d31c420b"
+)
+SOURCE_CENSUS_PROGRESS_MIGRATION_SOURCE_ARTIFACT_SIZE = 325_147_098
+
 FRAME_FILE_SHA256 = {
     "environment.txt": "2e87f3c3e1b2005f6b6d09b1bf1b82d30a9433636c3c67f0806cc68e80ab6800",
     "exclusions.json": "74bccb100eb48ab87952bd7eec137b2285edbc68d2547715bc0e06a80e029f76",
@@ -717,7 +734,7 @@ def validate_manifest(path: pathlib.Path, frame_run_id: int) -> str:
     schema_version = value.get("schema_version")
     if schema_version == 1:
         expected = _manifest(frame_run_id, collector_sha)
-    elif schema_version in (2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17):
+    elif schema_version in (2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18):
         migrations = value.get("collector_migrations")
         expected_count = schema_version - 1
         if not isinstance(migrations, list) or len(migrations) != expected_count:
@@ -803,6 +820,9 @@ def _migration_record(
     elif migration_name == GO_PROJECT_MODEL_DEPENDENCY_MIGRATION_NAME:
         contract = GO_PROJECT_MODEL_DEPENDENCY_MIGRATION_CONTRACT
         source_collector_sha = GO_PROJECT_MODEL_DEPENDENCY_MIGRATION_FROM_COLLECTOR_SHA
+    elif migration_name == SOURCE_CENSUS_PROGRESS_MIGRATION_NAME:
+        contract = SOURCE_CENSUS_PROGRESS_MIGRATION_CONTRACT
+        source_collector_sha = SOURCE_CENSUS_PROGRESS_MIGRATION_FROM_COLLECTOR_SHA
     else:
         raise ValueError("transport manifest collector migration is not allowlisted")
     return {
@@ -1119,15 +1139,34 @@ def _expected_go_project_model_dependency_migration(
     )
 
 
+def _expected_source_census_progress_migration(
+    target_collector_sha: str,
+) -> dict[str, Any]:
+    if (
+        target_collector_sha == SOURCE_CENSUS_PROGRESS_MIGRATION_FROM_COLLECTOR_SHA
+        or re.fullmatch(r"[0-9a-f]{40}", target_collector_sha) is None
+    ):
+        raise ValueError("transport manifest collector migration target is invalid")
+    return _migration_record(
+        SOURCE_CENSUS_PROGRESS_MIGRATION_NAME,
+        target_collector_sha,
+        SOURCE_CENSUS_PROGRESS_MIGRATION_SOURCE_RUN_ID,
+        SOURCE_CENSUS_PROGRESS_MIGRATION_SOURCE_HEAD_SHA,
+        SOURCE_CENSUS_PROGRESS_MIGRATION_SOURCE_ARTIFACT_ID,
+        SOURCE_CENSUS_PROGRESS_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+        SOURCE_CENSUS_PROGRESS_MIGRATION_SOURCE_ARTIFACT_SIZE,
+    )
+
+
 def _validate_collector_migrations(
     migrations: Sequence[Mapping[str, Any]], collector_sha: str
 ) -> None:
-    if len(migrations) not in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16):
+    if len(migrations) not in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17):
         raise ValueError("transport manifest collector migration chain is invalid")
     expected = [_expected_storage_migration()]
     if len(migrations) == 2:
         expected.append(_expected_go_preparation_migration(collector_sha))
-    elif len(migrations) in (3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16):
+    elif len(migrations) in (3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17):
         expected.append(
             _expected_go_preparation_migration(
                 GO_MODULE_DOWNLOAD_MIGRATION_FROM_COLLECTOR_SHA
@@ -1239,16 +1278,23 @@ def _validate_collector_migrations(
         if len(migrations) >= 15:
             executable_blob_target = (
                 GO_PROJECT_MODEL_DEPENDENCY_MIGRATION_FROM_COLLECTOR_SHA
-                if len(migrations) == 16
+                if len(migrations) >= 16
                 else collector_sha
             )
             expected.append(
                 _expected_executable_blob_migration(executable_blob_target)
             )
-        if len(migrations) == 16:
-            expected.append(
-                _expected_go_project_model_dependency_migration(collector_sha)
+        if len(migrations) >= 16:
+            dependency_target = (
+                SOURCE_CENSUS_PROGRESS_MIGRATION_FROM_COLLECTOR_SHA
+                if len(migrations) == 17
+                else collector_sha
             )
+            expected.append(
+                _expected_go_project_model_dependency_migration(dependency_target)
+            )
+        if len(migrations) == 17:
+            expected.append(_expected_source_census_progress_migration(collector_sha))
     elif collector_sha != STORAGE_MIGRATION_TO_COLLECTOR_SHA:
         raise ValueError("transport manifest collector migration target drifted")
     if [dict(migration) for migration in migrations] != expected:
@@ -1365,6 +1411,12 @@ def migrate_manifest(
         ]
     elif schema_version == 16:
         expected_name = GO_PROJECT_MODEL_DEPENDENCY_MIGRATION_NAME
+        migrations = [
+            _require_mapping(item, "transport manifest collector migration")
+            for item in value.get("collector_migrations", [])
+        ]
+    elif schema_version == 17:
+        expected_name = SOURCE_CENSUS_PROGRESS_MIGRATION_NAME
         migrations = [
             _require_mapping(item, "transport manifest collector migration")
             for item in value.get("collector_migrations", [])
