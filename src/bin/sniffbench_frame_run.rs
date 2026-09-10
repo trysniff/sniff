@@ -4,9 +4,11 @@ use serde::de::DeserializeOwned;
 use sniff::benchmark::{
     DockerHistoricalV2TestExecutor, HistoricalV2ExclusionManifest, HistoricalV2Frame,
     HistoricalV2PublicSurfaceReplayInputs, HistoricalV2SelectedPayloads,
+    HistoricalV2SelectedSlotStateInspection, HistoricalV2SelectedSlotStateInspectionInputs,
     HistoricalV2SelectedSlotSweepInputs, HistoricalV2SelectedSlotWorkRecoveryInputs,
     HistoricalV2SlotOutcome, HistoricalV2SlotRunDisposition, HistoricalV2SlotSelection,
-    HistoricalV2SlotStageError, HistoricalV2SlotStageErrorKind,
+    HistoricalV2SlotStage, HistoricalV2SlotStageError, HistoricalV2SlotStageErrorKind,
+    HistoricalV2SlotStageOutcome, inspect_historical_v2_selected_slot_state,
     recover_historical_v2_selected_slot_work, replay_historical_v2_public_surface_census,
     run_historical_v2_selected_slots_bounded, validate_historical_v2_protocol,
     validate_historical_v2_selected_payloads_commitment,
@@ -65,6 +67,24 @@ pub(super) struct RecoverSlotWorkArgs {
     payloads: PathBuf,
     #[arg(long)]
     work_root: PathBuf,
+}
+
+#[derive(Debug, Args)]
+pub(super) struct StateStatusArgs {
+    #[arg(long)]
+    protocol: PathBuf,
+    #[arg(long)]
+    artifact_root: PathBuf,
+    #[arg(long)]
+    frame: PathBuf,
+    #[arg(long)]
+    exclusions: PathBuf,
+    #[arg(long)]
+    selection: PathBuf,
+    #[arg(long)]
+    payloads: PathBuf,
+    #[arg(long)]
+    state_root: PathBuf,
 }
 
 #[derive(Debug, Args)]
@@ -195,6 +215,62 @@ pub(super) fn recover_slot_work(
     Ok(())
 }
 
+pub(super) fn state_status(args: StateStatusArgs) -> Result<(), Box<dyn std::error::Error>> {
+    let protocol = read_plain_file(&args.protocol, "historical-v2 protocol", MAX_PROTOCOL_BYTES)?;
+    let frame: HistoricalV2Frame = read_json(&args.frame, "historical-v2 frame")?;
+    let exclusions: HistoricalV2ExclusionManifest =
+        read_json(&args.exclusions, "historical-v2 exclusions")?;
+    let selection: HistoricalV2SlotSelection =
+        read_json(&args.selection, "historical-v2 selection")?;
+    let payloads: HistoricalV2SelectedPayloads =
+        read_json(&args.payloads, "historical-v2 selected payloads")?;
+    let summary =
+        inspect_historical_v2_selected_slot_state(HistoricalV2SelectedSlotStateInspectionInputs {
+            protocol_bytes: &protocol,
+            artifact_root: &args.artifact_root,
+            frame: &frame,
+            exclusions: &exclusions,
+            selection: &selection,
+            payloads: &payloads,
+            state_root: &args.state_root,
+        })
+        .map_err(stage_error)?;
+
+    for slot in summary.slots.iter().filter(|slot| slot_started(slot)) {
+        let latest = slot
+            .latest_committed_stage
+            .map(stage_name)
+            .unwrap_or("none");
+        let next = slot.next_stage.map(stage_name).unwrap_or("none");
+        let outcome = slot
+            .latest_committed_outcome
+            .as_ref()
+            .map(outcome_name)
+            .unwrap_or("none");
+        eprintln!(
+            "{} slot {} | {} | committed {} stage(s) through {} ({}) | next {} | incomplete initialization={} publish={} rewind={}",
+            slot.language,
+            slot.slot_number,
+            slot.canonical_repository,
+            slot.committed_stage_count,
+            latest,
+            outcome,
+            next,
+            slot.incomplete_initialization,
+            slot.incomplete_stage_transaction,
+            slot.incomplete_rewind_transaction,
+        );
+    }
+    eprintln!(
+        "Historical-v2 selected-slot state verified\nSelected: {}\nStarted: {}\nTerminal: {}\nIncomplete: {}",
+        summary.selected_slot_count,
+        summary.started_slot_count,
+        summary.terminal_slot_count,
+        summary.incomplete_slot_count,
+    );
+    Ok(())
+}
+
 pub(super) fn replay_public_surface_census(
     args: ReplayPublicSurfaceCensusArgs,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -278,6 +354,36 @@ pub(super) fn should_report_slot(
     slot: &sniff::benchmark::HistoricalV2SelectedSlotRunSummary,
 ) -> bool {
     !slot.run.executed_stages.is_empty()
+}
+
+fn slot_started(slot: &HistoricalV2SelectedSlotStateInspection) -> bool {
+    slot.committed_stage_count > 0
+        || slot.incomplete_initialization
+        || slot.incomplete_stage_transaction
+        || slot.incomplete_rewind_transaction
+}
+
+fn outcome_name(outcome: &HistoricalV2SlotStageOutcome) -> &'static str {
+    match outcome {
+        HistoricalV2SlotStageOutcome::Completed { .. } => "completed",
+        HistoricalV2SlotStageOutcome::Excluded { .. } => "excluded",
+        HistoricalV2SlotStageOutcome::ReadyForReview => "ready-for-review",
+    }
+}
+
+fn stage_name(stage: HistoricalV2SlotStage) -> &'static str {
+    match stage {
+        HistoricalV2SlotStage::Payload => "payload",
+        HistoricalV2SlotStage::Materialization => "materialization",
+        HistoricalV2SlotStage::TestMaterialization => "test-materialization",
+        HistoricalV2SlotStage::SourceCensus => "source-census",
+        HistoricalV2SlotStage::SemanticCensus => "semantic-census",
+        HistoricalV2SlotStage::AssessmentIdentity => "assessment-identity",
+        HistoricalV2SlotStage::Qualification => "qualification",
+        HistoricalV2SlotStage::TestRecipe => "test-recipe",
+        HistoricalV2SlotStage::IdenticalTests => "identical-tests",
+        HistoricalV2SlotStage::ReadyForReview => "ready-for-review",
+    }
 }
 
 impl From<RunThroughStage> for sniff::benchmark::HistoricalV2SlotStage {

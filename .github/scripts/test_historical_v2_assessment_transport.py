@@ -2418,6 +2418,38 @@ class WorkflowContractTests(unittest.TestCase):
         ):
             self.assertNotIn(provider_variable, seal_body)
 
+    def test_read_only_state_verification_precedes_sealing(self) -> None:
+        workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+        assess = workflow.index("- name: Assess a bounded resumable slot slice")
+        status = workflow.index("- name: Verify resumable assessment state", assess)
+        seal = workflow.index("- name: Seal resumable assessment state", status)
+        status_body = workflow[status:seal]
+
+        self.assertLess(assess, status)
+        self.assertLess(status, seal)
+        self.assertIn('"$COLLECTOR_ROOT/target/release/sniffbench-frame" state-status', status_body)
+        for required in (
+            '--protocol "$COLLECTOR_ROOT/sniffbench/historical-v2-protocol.json"',
+            '--artifact-root "$FRAME_ARTIFACT_ROOT"',
+            '--frame "$FRAME_ROOT/frame.json"',
+            '--exclusions "$FRAME_ROOT/exclusions.json"',
+            '--selection "$FRAME_ROOT/selection.json"',
+            '--payloads "$FRAME_ROOT/selected-payloads.json"',
+            '--state-root "$STATE_ROOT"',
+            '>> "$GITHUB_STEP_SUMMARY"',
+        ):
+            self.assertIn(required, status_body)
+        self.assertNotIn("recover-slot-work", status_body)
+        for provider_variable in (
+            "SNIFF_API_KEY",
+            "SNIFF_ENDPOINT",
+            "SNIFF_MODEL",
+            "DEEPSEEK_API_KEY",
+            "OPENAI_API_KEY",
+            "ANTHROPIC_API_KEY",
+        ):
+            self.assertNotIn(provider_variable, status_body)
+
     def test_resume_freezes_collector_and_migration_is_explicit(self) -> None:
         workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
         for required in (
