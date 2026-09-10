@@ -179,6 +179,38 @@ jobs:
           run-id: ${{ inputs.tools_run_id }}
           digest-mismatch: error
 
+      - name: Verify and isolate the current state observer
+        shell: bash
+        run: |
+          set -euo pipefail
+          tools="${RUNNER_TEMP}/historical-v2-assessment-tools-download"
+          expected="${RUNNER_TEMP}/historical-v2-assessment-tools.entries"
+          printf '%s\n' \
+            'SHA256SUMS' \
+            'collector-sha256' \
+            'sniff' \
+            'sniffbench-frame' \
+            > "$expected"
+          find "$tools" -mindepth 1 -maxdepth 1 -printf '%f\n' \
+            | LC_ALL=C sort | cmp --silent - "$expected"
+          while IFS= read -r name; do
+            test -f "$tools/$name" && test ! -L "$tools/$name"
+          done < "$expected"
+          test "$(cat "$tools/collector-sha256")" = "$GITHUB_SHA"
+          (
+            cd "$tools"
+            sha256sum --check SHA256SUMS
+          )
+
+          observer_root="${RUNNER_TEMP}/historical-v2-state-observer"
+          test ! -e "$observer_root"
+          mkdir "$observer_root"
+          install -m 0755 "$tools/sniffbench-frame" "$observer_root/sniffbench-frame"
+          {
+            printf 'EXACT_TOOLS_ROOT=%s\n' "$tools"
+            printf 'STATE_OBSERVER=%s\n' "$observer_root/sniffbench-frame"
+          } >> "$GITHUB_ENV"
+
       - name: Validate the frozen frame provenance
         if: inputs.resume_run_id == ''
         shell: bash
@@ -530,26 +562,8 @@ jobs:
         run: |
           set -euo pipefail
           if [[ "$COLLECTOR_SHA" == "$GITHUB_SHA" ]]; then
-            tools="${RUNNER_TEMP}/historical-v2-assessment-tools-download"
-            expected="${RUNNER_TEMP}/historical-v2-assessment-tools.entries"
-            printf '%s\n' \
-              'SHA256SUMS' \
-              'collector-sha256' \
-              'sniff' \
-              'sniffbench-frame' \
-              > "$expected"
-            find "$tools" -mindepth 1 -maxdepth 1 -printf '%f\n' \
-              | LC_ALL=C sort | cmp --silent - "$expected"
-            while IFS= read -r name; do
-              test -f "$tools/$name" && test ! -L "$tools/$name"
-            done < "$expected"
-            test "$(cat "$tools/collector-sha256")" = "$COLLECTOR_SHA"
-            (
-              cd "$tools"
-              sha256sum --check SHA256SUMS
-            )
             mkdir -p "$COLLECTOR_ROOT/target/release"
-            install -m 0755 "$tools/sniff" "$tools/sniffbench-frame" \
+            install -m 0755 "$EXACT_TOOLS_ROOT/sniff" "$EXACT_TOOLS_ROOT/sniffbench-frame" \
               "$COLLECTOR_ROOT/target/release/"
           else
             cd "$COLLECTOR_ROOT"
@@ -632,9 +646,10 @@ jobs:
         if: ${{ always() && steps.assess.outcome == 'success' }}
         shell: bash
         run: |
-          set -euo pipefail
+          set -uo pipefail
+          set +e
           status_output="$(
-            "$COLLECTOR_ROOT/target/release/sniffbench-frame" state-status \
+            "$STATE_OBSERVER" state-status \
               --protocol "$COLLECTOR_ROOT/sniffbench/historical-v2-protocol.json" \
               --artifact-root "$FRAME_ARTIFACT_ROOT" \
               --frame "$FRAME_ROOT/frame.json" \
@@ -644,12 +659,18 @@ jobs:
               --state-root "$STATE_ROOT" \
               2>&1
           )"
+          status=$?
+          set -e
           printf '%s\n' "$status_output"
           {
             printf '### Verified selected-slot state\n\n```text\n'
             printf '%s\n' "$status_output"
             printf '```\n'
           } >> "$GITHUB_STEP_SUMMARY"
+          if (( status != 0 )); then
+            echo "state inspection failed with status $status" >&2
+            exit "$status"
+          fi
 
       - name: Seal resumable assessment state
         id: seal
