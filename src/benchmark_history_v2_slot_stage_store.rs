@@ -23,6 +23,7 @@ const ARTIFACT_FILE: &str = "artifact.json";
 const MAX_TRANSACTION_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_CHECKPOINT_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_ARTIFACT_BYTES: u64 = 128 * 1024 * 1024;
+const MAX_SOURCE_CENSUS_ARTIFACT_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_SEMANTIC_CENSUS_ARTIFACT_BYTES: u64 = 512 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -699,11 +700,11 @@ fn committed_file_streaming(path: &Path, name: &str, limit: u64) -> Result<Commi
 
 fn artifact_limit(stage: HistoricalV2SlotStage) -> u64 {
     match stage {
+        HistoricalV2SlotStage::SourceCensus => MAX_SOURCE_CENSUS_ARTIFACT_BYTES,
         HistoricalV2SlotStage::SemanticCensus => MAX_SEMANTIC_CENSUS_ARTIFACT_BYTES,
         HistoricalV2SlotStage::Payload
         | HistoricalV2SlotStage::Materialization
         | HistoricalV2SlotStage::TestMaterialization
-        | HistoricalV2SlotStage::SourceCensus
         | HistoricalV2SlotStage::AssessmentIdentity
         | HistoricalV2SlotStage::Qualification
         | HistoricalV2SlotStage::TestRecipe
@@ -798,23 +799,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn semantic_census_has_the_only_expanded_artifact_bound() {
+    fn evidence_censuses_have_the_only_expanded_artifact_bounds() {
+        assert_eq!(
+            artifact_limit(HistoricalV2SlotStage::SourceCensus),
+            MAX_SOURCE_CENSUS_ARTIFACT_BYTES
+        );
         assert_eq!(
             artifact_limit(HistoricalV2SlotStage::SemanticCensus),
-            512 * 1024 * 1024
+            MAX_SEMANTIC_CENSUS_ARTIFACT_BYTES
         );
         for stage in [
             HistoricalV2SlotStage::Payload,
             HistoricalV2SlotStage::Materialization,
             HistoricalV2SlotStage::TestMaterialization,
-            HistoricalV2SlotStage::SourceCensus,
             HistoricalV2SlotStage::AssessmentIdentity,
             HistoricalV2SlotStage::Qualification,
             HistoricalV2SlotStage::TestRecipe,
             HistoricalV2SlotStage::IdenticalTests,
             HistoricalV2SlotStage::ReadyForReview,
         ] {
-            assert_eq!(artifact_limit(stage), 128 * 1024 * 1024, "{stage:?}");
+            assert_eq!(artifact_limit(stage), MAX_ARTIFACT_BYTES, "{stage:?}");
         }
     }
 }
