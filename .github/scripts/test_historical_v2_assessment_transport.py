@@ -2347,11 +2347,17 @@ class WorkflowContractTests(unittest.TestCase):
             self.assertIn(required, transport_source)
         self.assertIn("github-token: ${{ github.token }}", workflow)
         self.assertIn("repository: ${{ github.repository }}", workflow)
+        observer = workflow.index("Verify and isolate the current state observer")
+        initialize = workflow.index("Initialize or restore assessment roots")
+        self.assertLess(
+            workflow.index("Download the exact assessment tools"), observer
+        )
+        self.assertLess(observer, initialize)
         self.assertIn(
             'if [[ "$COLLECTOR_SHA" == "$GITHUB_SHA" ]]; then', workflow
         )
         self.assertIn(
-            'test "$(cat "$tools/collector-sha256")" = "$COLLECTOR_SHA"',
+            'test "$(cat "$tools/collector-sha256")" = "$GITHUB_SHA"',
             workflow,
         )
         self.assertIn("sha256sum --check", workflow)
@@ -2368,6 +2374,8 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn(
             'test -f "$tools/$name" && test ! -L "$tools/$name"', workflow
         )
+        self.assertIn("STATE_OBSERVER=%s", workflow)
+        self.assertIn("EXACT_TOOLS_ROOT=%s", workflow)
         self.assertIn(
             "cargo build --release --locked --features sniffbench-frame", workflow
         )
@@ -2427,7 +2435,11 @@ class WorkflowContractTests(unittest.TestCase):
 
         self.assertLess(assess, status)
         self.assertLess(status, seal)
-        self.assertIn('"$COLLECTOR_ROOT/target/release/sniffbench-frame" state-status', status_body)
+        self.assertIn('"$STATE_OBSERVER" state-status', status_body)
+        self.assertNotIn(
+            '"$COLLECTOR_ROOT/target/release/sniffbench-frame" state-status',
+            status_body,
+        )
         for required in (
             '--protocol "$COLLECTOR_ROOT/sniffbench/historical-v2-protocol.json"',
             '--artifact-root "$FRAME_ARTIFACT_ROOT"',
@@ -2437,8 +2449,17 @@ class WorkflowContractTests(unittest.TestCase):
             '--payloads "$FRAME_ROOT/selected-payloads.json"',
             '--state-root "$STATE_ROOT"',
             '>> "$GITHUB_STEP_SUMMARY"',
+            "set -uo pipefail",
+            "set +e",
+            "status=$?",
+            "set -e",
+            'exit "$status"',
         ):
             self.assertIn(required, status_body)
+        self.assertLess(
+            status_body.index("printf '%s\\n' \"$status_output\""),
+            status_body.index('exit "$status"'),
+        )
         self.assertNotIn("recover-slot-work", status_body)
         for provider_variable in (
             "SNIFF_API_KEY",
