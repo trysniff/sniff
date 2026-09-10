@@ -9,6 +9,7 @@ import io
 import json
 import os
 import pathlib
+import re
 import tarfile
 import tempfile
 import unittest
@@ -20,6 +21,9 @@ WORKFLOW_PATH = pathlib.Path(__file__).parents[1].joinpath(
 )
 TOOLS_WORKFLOW_PATH = pathlib.Path(__file__).parents[1].joinpath(
     "workflows", "sniffbench-historical-v2-tools.yml"
+)
+GO_DEPENDENCY_PATH = pathlib.Path(__file__).parents[2].joinpath(
+    "src", "benchmark_intentional_boundary_project_model_go_dependency.rs"
 )
 SPEC = importlib.util.spec_from_file_location("assessment_transport", MODULE_PATH)
 if SPEC is None or SPEC.loader is None:
@@ -2240,6 +2244,7 @@ class WorkflowContractTests(unittest.TestCase):
 
     def test_assessment_budget_reserves_time_for_setup_sealing_and_upload(self) -> None:
         workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+        go_dependency = GO_DEPENDENCY_PATH.read_text(encoding="utf-8")
         lines = workflow.splitlines()
         assess = workflow.index("  assess:\n")
         assess_lines = workflow[assess:].splitlines()
@@ -2278,10 +2283,17 @@ class WorkflowContractTests(unittest.TestCase):
         )
 
         self.assertEqual(job_minutes, 30)
-        self.assertEqual(assessment_minutes, 5)
-        self.assertEqual(reserve_minutes, 25)
+        go_timeout = re.search(
+            r"GO_COMMAND_TIMEOUT: Duration = Duration::from_secs\((\d+) \* 60\)",
+            go_dependency,
+        )
+        self.assertIsNotNone(go_timeout)
+
+        self.assertEqual(assessment_minutes, 6)
+        self.assertEqual(reserve_minutes, 24)
         self.assertEqual(heartbeat_seconds, 60)
         self.assertEqual(assessment_minutes + reserve_minutes, job_minutes)
+        self.assertLess(int(go_timeout.group(1)), assessment_minutes)
         self.assertIn(
             '"${ASSESSMENT_TIMEOUT_MINUTES}m" \\',
             workflow,
