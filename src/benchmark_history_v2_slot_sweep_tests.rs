@@ -430,7 +430,7 @@ fn sweep_rejects_overlapping_mutable_roots() {
 }
 
 #[test]
-fn selected_slot_work_recovery_removes_only_marker_proven_semantic_state() {
+fn selected_slot_work_recovery_removes_only_proven_semantic_and_source_state() {
     let fixture = Fixture::new();
     let mutable = tempfile::tempdir().unwrap();
     let work_root = mutable.path().join("work");
@@ -453,6 +453,12 @@ fn selected_slot_work_recovery_removes_only_marker_proven_semantic_state() {
     }
     let interrupted_snapshot = semantic_progress.join("base/snapshot.json.tmp");
     fs::write(&interrupted_snapshot, b"partial").unwrap();
+    let source_progress = slot_root.join("source-progress");
+    for side in ["base", "patched"] {
+        fs::create_dir_all(source_progress.join(side)).unwrap();
+    }
+    let interrupted_source = source_progress.join("patched/go-project-model.json.tmp");
+    fs::write(&interrupted_source, b"partial").unwrap();
     fs::create_dir(slot_root.join("base-tested")).unwrap();
 
     let summary =
@@ -476,6 +482,8 @@ fn selected_slot_work_recovery_removes_only_marker_proven_semantic_state() {
     }
     assert!(semantic_progress.is_dir());
     assert!(!interrupted_snapshot.exists());
+    assert!(source_progress.is_dir());
+    assert!(!interrupted_source.exists());
     assert!(slot_root.join("base-tested").is_dir());
 }
 
@@ -589,10 +597,12 @@ fn public_surface_replay_preserves_materializations_and_rewinds_only_stale_censu
         "patched-tested",
         "repository",
         "semantic-progress",
+        "source-progress",
     ] {
         fs::create_dir_all(slot_root.join(name)).unwrap();
     }
     fs::write(slot_root.join("semantic-progress/snapshot.json"), b"stale").unwrap();
+    fs::write(slot_root.join("source-progress/inventory.json"), b"stale").unwrap();
 
     let summary =
         replay_historical_v2_public_surface_census(HistoricalV2PublicSurfaceReplayInputs {
@@ -607,10 +617,17 @@ fn public_surface_replay_preserves_materializations_and_rewinds_only_stale_censu
 
     assert_eq!(summary.removed_stage_count, 2);
     assert!(summary.removed_semantic_progress);
+    assert!(summary.removed_source_progress);
     assert!(!slot_root.join("semantic-progress").exists());
+    assert!(!slot_root.join("source-progress").exists());
     assert!(
         !slot_root
             .join(".semantic-progress.public-surface-replay")
+            .exists()
+    );
+    assert!(
+        !slot_root
+            .join(".source-progress.public-surface-replay")
             .exists()
     );
     for name in ["base-tested", "patched", "patched-tested", "repository"] {
@@ -626,6 +643,36 @@ fn public_surface_replay_preserves_materializations_and_rewinds_only_stale_censu
     assert_eq!(
         journal.history().last().unwrap().checkpoint.stage,
         HistoricalV2SlotStage::TestMaterialization
+    );
+}
+
+#[test]
+fn public_surface_replay_keeps_the_exact_legacy_layout_compatible() {
+    let mutable = tempfile::tempdir().unwrap();
+    let work_root = mutable.path().join("work");
+    let slot_root = work_root.join("rust").join("slot-0001");
+    for name in [
+        "base-tested",
+        "patched",
+        "patched-tested",
+        "repository",
+        "semantic-progress",
+    ] {
+        fs::create_dir_all(slot_root.join(name)).unwrap();
+    }
+    let work_root = fs::canonicalize(&work_root).unwrap();
+    let slot_root = work_root.join("rust").join("slot-0001");
+
+    assert_eq!(
+        exact_replay_slot_root(&work_root, "rust", 1).unwrap(),
+        fs::canonicalize(&slot_root).unwrap()
+    );
+    fs::create_dir(slot_root.join("unexpected")).unwrap();
+    assert!(
+        exact_replay_slot_root(&work_root, "rust", 1)
+            .unwrap_err()
+            .detail
+            .contains("work layout changed")
     );
 }
 

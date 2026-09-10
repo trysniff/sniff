@@ -14,11 +14,12 @@ use super::{
     HistoricalV2SourceCensus, HistoricalV2StageArtifactKind, HistoricalV2StageResult,
     HistoricalV2TerminalExclusionReason, HistoricalV2TestMaterializedRoots, HistoricalV2TestRecipe,
     HistoricalV2TestRecipeOutcome, bind_historical_v2_assessment_identity,
-    census_historical_v2_semantics_typed_resumable, census_historical_v2_sources_typed,
+    census_historical_v2_semantics_typed_resumable, census_historical_v2_sources_typed_resumable,
     execute_historical_v2_identical_tests, materialize_historical_v2_repository_typed,
     materialize_historical_v2_test_snapshots_typed, prepare_historical_v2_identical_test_plan,
     prepare_historical_v2_test_recipe, qualify_historical_v2_assessment,
-    validate_historical_v2_identical_test_execution, validate_historical_v2_materialization,
+    recover_historical_v2_source_progress, validate_historical_v2_identical_test_execution,
+    validate_historical_v2_materialization,
 };
 use reqwest::Client;
 use std::path::{Path, PathBuf};
@@ -89,6 +90,14 @@ impl<'a, E: HistoricalV2RecoverableTestExecutor> HistoricalV2SlotOperations<'a, 
                     &self.materialized_roots(),
                 )
                 .map(|_| ())
+            }
+            HistoricalV2SlotStage::SourceCensus => {
+                let materialization: HistoricalV2Materialization = artifact(context, 1)?;
+                let roots = self.materialized_roots();
+                validate_historical_v2_materialization(&materialization, &roots)
+                    .map_err(|detail| invalid(context.stage, detail))?;
+                recover_historical_v2_source_progress(&self.source_progress_root())
+                    .map_err(|detail| infrastructure(context.stage, detail))
             }
             HistoricalV2SlotStage::SemanticCensus => {
                 let materialization: HistoricalV2Materialization = artifact(context, 1)?;
@@ -209,7 +218,11 @@ impl<'a, E: HistoricalV2RecoverableTestExecutor> HistoricalV2SlotOperations<'a, 
         context: HistoricalV2SlotStageContext<'_>,
     ) -> Result<HistoricalV2PreparedStage, HistoricalV2SlotStageError> {
         let materialization: HistoricalV2Materialization = artifact(context, 1)?;
-        match census_historical_v2_sources_typed(&materialization, &self.materialized_roots())? {
+        match census_historical_v2_sources_typed_resumable(
+            &materialization,
+            &self.materialized_roots(),
+            &self.source_progress_root(),
+        )? {
             HistoricalV2StageResult::Completed(value) => completed(
                 HistoricalV2StageArtifactKind::SourceCensus,
                 &value.source_census_sha256,
@@ -455,6 +468,10 @@ impl<'a, E: HistoricalV2RecoverableTestExecutor> HistoricalV2SlotOperations<'a, 
 
     fn semantic_progress_root(&self) -> PathBuf {
         self.slot_root().join("semantic-progress")
+    }
+
+    fn source_progress_root(&self) -> PathBuf {
+        self.slot_root().join("source-progress")
     }
 
     fn materialized_roots(&self) -> HistoricalV2MaterializedRoots {

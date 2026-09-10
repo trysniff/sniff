@@ -207,6 +207,10 @@ pub fn recover_historical_v2_selected_slot_work(
         super::history_v2_semantic::recover_historical_v2_semantic_progress(root)
             .map_err(recovery_infrastructure)?;
     }
+    for root in &layout.source_progress_roots {
+        super::history_v2_source_census::recover_historical_v2_source_progress(root)
+            .map_err(recovery_infrastructure)?;
+    }
 
     Ok(HistoricalV2SelectedSlotWorkRecoverySummary {
         selected_slot_count: inputs.payloads.records.len(),
@@ -272,7 +276,13 @@ pub fn replay_historical_v2_public_surface_census(
         &progress_root,
         "historical-v2 semantic progress root",
     )?;
+    let source_progress_root = optional_replay_progress_root(
+        &slot_root,
+        "source-progress",
+        "historical-v2 source progress root",
+    )?;
     let quarantine = slot_root.join(".semantic-progress.public-surface-replay");
+    let source_quarantine = slot_root.join(".source-progress.public-surface-replay");
     match fs::symlink_metadata(&quarantine) {
         Ok(_) => {
             return Err(recovery_invalid(
@@ -286,11 +296,42 @@ pub fn replay_historical_v2_public_surface_census(
             )));
         }
     }
+    if source_progress_root.is_some() {
+        match fs::symlink_metadata(&source_quarantine) {
+            Ok(_) => {
+                return Err(recovery_invalid(
+                    "historical-v2 public-surface source-progress quarantine already exists",
+                ));
+            }
+            Err(error) if error.kind() == ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(recovery_infrastructure(format!(
+                    "failed to inspect historical-v2 public-surface source-progress quarantine: {error}"
+                )));
+            }
+        }
+    }
     fs::rename(&progress_root, &quarantine).map_err(|error| {
         recovery_infrastructure(format!(
             "failed to quarantine historical-v2 semantic progress: {error}"
         ))
     })?;
+    if let Some(source_progress_root) = &source_progress_root {
+        match fs::rename(source_progress_root, &source_quarantine) {
+            Ok(()) => {}
+            Err(error) => {
+                let rollback = fs::rename(&quarantine, &progress_root);
+                return Err(recovery_infrastructure(format!(
+                    "failed to quarantine historical-v2 source progress: {error}; semantic progress rollback: {}",
+                    if rollback.is_ok() {
+                        "complete"
+                    } else {
+                        "failed"
+                    }
+                )));
+            }
+        }
+    }
     sync_directory(&slot_root).map_err(recovery_infrastructure)?;
 
     let removed_stage_count =
@@ -305,6 +346,18 @@ pub fn replay_historical_v2_public_surface_census(
             "failed to remove historical-v2 semantic progress quarantine: {error}"
         ))
     })?;
+    if source_progress_root.is_some() {
+        let source_quarantine = exact_plain_child(
+            &slot_root,
+            &source_quarantine,
+            "historical-v2 public-surface source-progress quarantine",
+        )?;
+        fs::remove_dir_all(&source_quarantine).map_err(|error| {
+            recovery_infrastructure(format!(
+                "failed to remove historical-v2 source progress quarantine: {error}"
+            ))
+        })?;
+    }
     sync_directory(&slot_root).map_err(recovery_infrastructure)?;
 
     Ok(HistoricalV2PublicSurfaceReplaySummary {
@@ -313,7 +366,23 @@ pub fn replay_historical_v2_public_surface_census(
         retained_stage: HistoricalV2SlotStage::TestMaterialization,
         removed_stage_count,
         removed_semantic_progress: true,
+        removed_source_progress: source_progress_root.is_some(),
     })
+}
+
+fn optional_replay_progress_root(
+    slot_root: &Path,
+    name: &str,
+    label: &str,
+) -> Result<Option<PathBuf>, HistoricalV2SlotStageError> {
+    let path = slot_root.join(name);
+    match fs::symlink_metadata(&path) {
+        Ok(_) => exact_plain_child(slot_root, &path, label).map(Some),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(recovery_infrastructure(format!(
+            "failed to inspect {label}: {error}"
+        ))),
+    }
 }
 
 fn exact_replay_slot_root(
@@ -345,7 +414,9 @@ fn exact_replay_slot_root(
     .into_iter()
     .map(str::to_string)
     .collect::<BTreeSet<_>>();
-    if observed != expected {
+    let mut expected_with_source_progress = expected.clone();
+    expected_with_source_progress.insert("source-progress".to_string());
+    if observed != expected && observed != expected_with_source_progress {
         return Err(recovery_invalid(
             "historical-v2 public-surface replay work layout changed",
         ));
@@ -382,6 +453,7 @@ fn validate_selected_slot_work_layout(
 ) -> Result<SelectedSlotWorkLayout, HistoricalV2SlotStageError> {
     let mut semantic_roots = Vec::new();
     let mut semantic_progress_roots = Vec::new();
+    let mut source_progress_roots = Vec::new();
     for language_entry in read_plain_directory(work_root, "historical-v2 work root")? {
         let language = plain_entry_name(&language_entry, "historical-v2 language work root")?;
         let expected_slots = expected.get(&language).ok_or_else(|| {
@@ -437,19 +509,36 @@ fn validate_selected_slot_work_layout(
                     )));
                 }
             }
+            let progress_root = slot_root.join("source-progress");
+            match fs::symlink_metadata(&progress_root) {
+                Ok(_) => source_progress_roots.push(exact_plain_child(
+                    &slot_root,
+                    &progress_root,
+                    "historical-v2 source progress root",
+                )?),
+                Err(error) if error.kind() == ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(recovery_infrastructure(format!(
+                        "failed to inspect historical-v2 source progress root: {error}"
+                    )));
+                }
+            }
         }
     }
     semantic_roots.sort();
     semantic_progress_roots.sort();
+    source_progress_roots.sort();
     Ok(SelectedSlotWorkLayout {
         semantic_roots,
         semantic_progress_roots,
+        source_progress_roots,
     })
 }
 
 struct SelectedSlotWorkLayout {
     semantic_roots: Vec<PathBuf>,
     semantic_progress_roots: Vec<PathBuf>,
+    source_progress_roots: Vec<PathBuf>,
 }
 
 fn read_plain_directory(
