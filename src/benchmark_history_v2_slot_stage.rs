@@ -24,7 +24,10 @@ const STAGES: [HistoricalV2SlotStage; 10] = [
 #[path = "benchmark_history_v2_slot_stage_store.rs"]
 mod store;
 
-pub use store::{HistoricalV2SlotStageJournal, HistoricalV2StoredSlotStage};
+pub use store::{
+    HistoricalV2SlotStageJournal, HistoricalV2SlotStageJournalInspection,
+    HistoricalV2StoredSlotStage,
+};
 
 pub struct HistoricalV2SlotStageCheckpointInput<'a> {
     pub selection_sha256: &'a str,

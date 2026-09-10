@@ -10,7 +10,9 @@ use super::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::fs;
+use sha2::{Digest, Sha256};
+use std::fs::{self, File};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 const TRANSACTION_SCHEMA_VERSION: u32 = 1;
@@ -47,6 +49,21 @@ pub struct HistoricalV2StoredSlotStage {
     pub artifact: Option<Value>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HistoricalV2SlotStageJournalInspection {
+    pub committed_checkpoints: Vec<HistoricalV2SlotStageCheckpoint>,
+    pub incomplete_stage_transaction: bool,
+    pub incomplete_rewind_transaction: bool,
+}
+
+struct ExistingJournalParts {
+    language_root: PathBuf,
+    slot_root: PathBuf,
+    staging_root: PathBuf,
+    rewind_root: PathBuf,
+    lock: SlotFileLock,
+}
+
 #[derive(Debug)]
 pub struct HistoricalV2SlotStageJournal {
     language: String,
@@ -60,77 +77,59 @@ pub struct HistoricalV2SlotStageJournal {
 }
 
 impl HistoricalV2SlotStageJournal {
+    pub fn inspect_existing(
+        root: &Path,
+        language: &str,
+        slot_number: usize,
+    ) -> Result<HistoricalV2SlotStageJournalInspection, HistoricalV2SlotStageError> {
+        let stage = HistoricalV2SlotStage::Payload;
+        let parts = existing_journal_parts(root, language, slot_number)?;
+        let incomplete_stage_transaction = optional_plain_directory(
+            &parts.staging_root,
+            "incomplete historical-v2 stage transaction",
+        )
+        .map_err(|detail| HistoricalV2SlotStageError::invalid(stage, detail))?;
+        let incomplete_rewind_transaction = optional_plain_directory(
+            &parts.rewind_root,
+            "incomplete historical-v2 rewind transaction",
+        )
+        .map_err(|detail| HistoricalV2SlotStageError::invalid(stage, detail))?;
+        let committed_checkpoints = load_checkpoint_history(&parts.slot_root)
+            .map_err(|detail| HistoricalV2SlotStageError::invalid(stage, detail))?;
+        drop(parts.lock);
+        Ok(HistoricalV2SlotStageJournalInspection {
+            committed_checkpoints,
+            incomplete_stage_transaction,
+            incomplete_rewind_transaction,
+        })
+    }
+
     pub fn open_existing(
         root: &Path,
         language: &str,
         slot_number: usize,
     ) -> Result<Self, HistoricalV2SlotStageError> {
         let stage = HistoricalV2SlotStage::Payload;
-        validate_slot_path(language, slot_number)
-            .map_err(|detail| HistoricalV2SlotStageError::invalid(stage, detail))?;
-        require_plain_directory(root, "historical-v2 state root")
-            .map_err(|detail| HistoricalV2SlotStageError::invalid(stage, detail))?;
-        let root = canonical_directory(root, "historical-v2 state root")
-            .map_err(|detail| HistoricalV2SlotStageError::infrastructure(stage, detail))?;
-        let language_root = root.join(language);
-        require_plain_directory(&language_root, "historical-v2 language state")
-            .map_err(|detail| HistoricalV2SlotStageError::invalid(stage, detail))?;
-        let language_root = canonical_directory(&language_root, "historical-v2 language state")
-            .map_err(|detail| HistoricalV2SlotStageError::infrastructure(stage, detail))?;
-        if language_root.parent() != Some(root.as_path()) {
-            return Err(HistoricalV2SlotStageError::invalid(
-                stage,
-                "historical-v2 language state escaped its root",
-            ));
-        }
-        let slot_name = format!("slot-{slot_number:04}");
-        let lock_path = language_root.join(format!("{slot_name}.lock"));
-        let lock_metadata = fs::symlink_metadata(&lock_path).map_err(|error| {
-            HistoricalV2SlotStageError::invalid(
-                stage,
-                format!("historical-v2 existing slot lock is missing: {error}"),
-            )
-        })?;
-        if !lock_metadata.is_file() || lock_metadata.file_type().is_symlink() {
-            return Err(HistoricalV2SlotStageError::invalid(
-                stage,
-                "historical-v2 existing slot lock is not a plain file",
-            ));
-        }
-        let lock = SlotFileLock::acquire(&lock_path)
-            .map_err(|detail| HistoricalV2SlotStageError::infrastructure(stage, detail))?;
-        let slot_root = language_root.join(&slot_name);
-        require_plain_directory(&slot_root, "historical-v2 slot journal")
-            .map_err(|detail| HistoricalV2SlotStageError::invalid(stage, detail))?;
-        let slot_root = canonical_directory(&slot_root, "historical-v2 slot journal")
-            .map_err(|detail| HistoricalV2SlotStageError::infrastructure(stage, detail))?;
-        if slot_root.parent() != Some(language_root.as_path()) {
-            return Err(HistoricalV2SlotStageError::invalid(
-                stage,
-                "historical-v2 slot journal escaped its language root",
-            ));
-        }
-        let staging_root = language_root.join(format!(".{slot_name}.incomplete"));
-        if staging_root.exists() {
+        let parts = existing_journal_parts(root, language, slot_number)?;
+        if parts.staging_root.exists() {
             return Err(HistoricalV2SlotStageError::invalid(
                 stage,
                 "historical-v2 existing slot has an incomplete transaction",
             ));
         }
-        let rewind_root = language_root.join(format!(".{slot_name}.rewinding"));
-        reject_incomplete_rewind(&rewind_root)
+        reject_incomplete_rewind(&parts.rewind_root)
             .map_err(|detail| HistoricalV2SlotStageError::invalid(stage, detail))?;
-        let history = load_history(&slot_root)
+        let history = load_history(&parts.slot_root)
             .map_err(|detail| HistoricalV2SlotStageError::invalid(stage, detail))?;
         Ok(Self {
             language: language.to_string(),
             slot_number,
-            language_root,
-            slot_root,
-            staging_root,
-            rewind_root,
+            language_root: parts.language_root,
+            slot_root: parts.slot_root,
+            staging_root: parts.staging_root,
+            rewind_root: parts.rewind_root,
             history,
-            _lock: lock,
+            _lock: parts.lock,
         })
     }
 
@@ -365,6 +364,74 @@ impl HistoricalV2SlotStageJournal {
     }
 }
 
+fn existing_journal_parts(
+    root: &Path,
+    language: &str,
+    slot_number: usize,
+) -> Result<ExistingJournalParts, HistoricalV2SlotStageError> {
+    let stage = HistoricalV2SlotStage::Payload;
+    validate_slot_path(language, slot_number)
+        .map_err(|detail| HistoricalV2SlotStageError::invalid(stage, detail))?;
+    require_plain_directory(root, "historical-v2 state root")
+        .map_err(|detail| HistoricalV2SlotStageError::invalid(stage, detail))?;
+    let root = canonical_directory(root, "historical-v2 state root")
+        .map_err(|detail| HistoricalV2SlotStageError::infrastructure(stage, detail))?;
+    let language_root = root.join(language);
+    require_plain_directory(&language_root, "historical-v2 language state")
+        .map_err(|detail| HistoricalV2SlotStageError::invalid(stage, detail))?;
+    let language_root = canonical_directory(&language_root, "historical-v2 language state")
+        .map_err(|detail| HistoricalV2SlotStageError::infrastructure(stage, detail))?;
+    if language_root.parent() != Some(root.as_path()) {
+        return Err(HistoricalV2SlotStageError::invalid(
+            stage,
+            "historical-v2 language state escaped its root",
+        ));
+    }
+    let slot_name = format!("slot-{slot_number:04}");
+    let lock_path = language_root.join(format!("{slot_name}.lock"));
+    let lock_metadata = fs::symlink_metadata(&lock_path).map_err(|error| {
+        HistoricalV2SlotStageError::invalid(
+            stage,
+            format!("historical-v2 existing slot lock is missing: {error}"),
+        )
+    })?;
+    if !lock_metadata.is_file() || lock_metadata.file_type().is_symlink() {
+        return Err(HistoricalV2SlotStageError::invalid(
+            stage,
+            "historical-v2 existing slot lock is not a plain file",
+        ));
+    }
+    let lock = SlotFileLock::acquire(&lock_path)
+        .map_err(|detail| HistoricalV2SlotStageError::infrastructure(stage, detail))?;
+    let slot_root = language_root.join(&slot_name);
+    require_plain_directory(&slot_root, "historical-v2 slot journal")
+        .map_err(|detail| HistoricalV2SlotStageError::invalid(stage, detail))?;
+    let slot_root = canonical_directory(&slot_root, "historical-v2 slot journal")
+        .map_err(|detail| HistoricalV2SlotStageError::infrastructure(stage, detail))?;
+    if slot_root.parent() != Some(language_root.as_path()) {
+        return Err(HistoricalV2SlotStageError::invalid(
+            stage,
+            "historical-v2 slot journal escaped its language root",
+        ));
+    }
+    Ok(ExistingJournalParts {
+        staging_root: language_root.join(format!(".{slot_name}.incomplete")),
+        rewind_root: language_root.join(format!(".{slot_name}.rewinding")),
+        language_root,
+        slot_root,
+        lock,
+    })
+}
+
+fn optional_plain_directory(path: &Path, label: &str) -> Result<bool, String> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => Ok(true),
+        Ok(_) => Err(format!("{label} is not a plain directory")),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(format!("failed to inspect {label}: {error}")),
+    }
+}
+
 fn publish_stage<T: Serialize>(
     staging_root: &Path,
     slot_root: &Path,
@@ -404,6 +471,29 @@ fn publish_stage<T: Serialize>(
 }
 
 fn load_history(root: &Path) -> Result<Vec<HistoricalV2StoredSlotStage>, String> {
+    let directories = transaction_directories(root)?;
+    let mut stored = Vec::with_capacity(directories.len());
+    for (sequence, path) in directories {
+        stored.push(load_stage(&path, sequence)?);
+    }
+    let checkpoints = stored
+        .iter()
+        .map(|value| value.checkpoint.clone())
+        .collect::<Vec<_>>();
+    validate_historical_v2_slot_stage_history(&checkpoints)?;
+    Ok(stored)
+}
+
+fn load_checkpoint_history(root: &Path) -> Result<Vec<HistoricalV2SlotStageCheckpoint>, String> {
+    let checkpoints = transaction_directories(root)?
+        .into_iter()
+        .map(|(sequence, path)| load_stage_checkpoint(&path, sequence))
+        .collect::<Result<Vec<_>, _>>()?;
+    validate_historical_v2_slot_stage_history(&checkpoints)?;
+    Ok(checkpoints)
+}
+
+fn transaction_directories(root: &Path) -> Result<Vec<(usize, PathBuf)>, String> {
     let mut directories = Vec::new();
     for entry in fs::read_dir(root)
         .map_err(|error| format!("failed to inspect historical-v2 slot journal: {error}"))?
@@ -423,7 +513,7 @@ fn load_history(root: &Path) -> Result<Vec<HistoricalV2StoredSlotStage>, String>
         directories.push((name, path));
     }
     directories.sort_by(|left, right| left.0.cmp(&right.0));
-    let mut stored = Vec::with_capacity(directories.len());
+    let mut transactions = Vec::with_capacity(directories.len());
     for (index, (name, path)) in directories.into_iter().enumerate() {
         let stage = expected_historical_v2_slot_stage(index)
             .ok_or_else(|| "historical-v2 slot journal has too many stages".to_string())?;
@@ -431,14 +521,50 @@ fn load_history(root: &Path) -> Result<Vec<HistoricalV2StoredSlotStage>, String>
         if name != transaction_directory_name(sequence, stage) {
             return Err("historical-v2 slot journal stage sequence changed".to_string());
         }
-        stored.push(load_stage(&path, sequence)?);
+        transactions.push((sequence, path));
     }
-    let checkpoints = stored
-        .iter()
-        .map(|value| value.checkpoint.clone())
-        .collect::<Vec<_>>();
-    validate_historical_v2_slot_stage_history(&checkpoints)?;
-    Ok(stored)
+    Ok(transactions)
+}
+
+fn load_stage_checkpoint(
+    root: &Path,
+    sequence: usize,
+) -> Result<HistoricalV2SlotStageCheckpoint, String> {
+    require_plain_directory(root, "historical-v2 stage transaction")?;
+    let checkpoint = serde_json::from_slice::<HistoricalV2SlotStageCheckpoint>(&read_limited(
+        &root.join(CHECKPOINT_FILE),
+        MAX_CHECKPOINT_BYTES,
+        "stage checkpoint",
+    )?)
+    .map_err(|error| format!("invalid historical-v2 stage checkpoint: {error}"))?;
+    let has_artifact = !matches!(
+        checkpoint.outcome,
+        HistoricalV2SlotStageOutcome::ReadyForReview
+    );
+    let names = transaction_file_names(root)?;
+    let expected_names = if has_artifact {
+        vec![TRANSACTION_FILE, ARTIFACT_FILE, CHECKPOINT_FILE]
+    } else {
+        vec![TRANSACTION_FILE, CHECKPOINT_FILE]
+    };
+    if names != expected_names {
+        return Err("historical-v2 stage transaction file set changed".to_string());
+    }
+    let transaction = serde_json::from_slice::<StageTransaction>(&read_limited(
+        &root.join(TRANSACTION_FILE),
+        MAX_TRANSACTION_BYTES,
+        "stage transaction",
+    )?)
+    .map_err(|error| format!("invalid historical-v2 stage transaction: {error}"))?;
+    if transaction.schema_version != TRANSACTION_SCHEMA_VERSION
+        || transaction.transaction_contract != TRANSACTION_CONTRACT
+        || transaction.sequence != sequence
+        || transaction.checkpoint_sha256 != checkpoint.checkpoint_sha256
+        || transaction.files != committed_files_streaming(root, has_artifact, checkpoint.stage)?
+    {
+        return Err("historical-v2 stage transaction commitment changed".to_string());
+    }
+    Ok(checkpoint)
 }
 
 fn load_stage(root: &Path, sequence: usize) -> Result<HistoricalV2StoredSlotStage, String> {
@@ -513,6 +639,62 @@ fn committed_files(
             })
         })
         .collect()
+}
+
+fn committed_files_streaming(
+    root: &Path,
+    has_artifact: bool,
+    stage: HistoricalV2SlotStage,
+) -> Result<Vec<CommittedFile>, String> {
+    let mut inputs = vec![(CHECKPOINT_FILE, MAX_CHECKPOINT_BYTES)];
+    if has_artifact {
+        inputs.insert(0, (ARTIFACT_FILE, artifact_limit(stage)));
+    }
+    inputs
+        .into_iter()
+        .map(|(name, limit)| committed_file_streaming(&root.join(name), name, limit))
+        .collect()
+}
+
+fn committed_file_streaming(path: &Path, name: &str, limit: u64) -> Result<CommittedFile, String> {
+    let metadata =
+        fs::symlink_metadata(path).map_err(|error| format!("failed to inspect {name}: {error}"))?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return Err(format!("{name} is not a plain file"));
+    }
+    if metadata.len() > limit {
+        return Err(format!(
+            "{name} exceeds its size limit: {} bytes observed, {limit} bytes allowed",
+            metadata.len()
+        ));
+    }
+    let mut file = File::open(path).map_err(|error| format!("failed to read {name}: {error}"))?;
+    let mut hasher = Sha256::new();
+    let mut byte_count = 0_u64;
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .map_err(|error| format!("failed to read {name}: {error}"))?;
+        if read == 0 {
+            break;
+        }
+        let read_bytes = u64::try_from(read).map_err(|_| format!("{name} size overflowed"))?;
+        byte_count = byte_count
+            .checked_add(read_bytes)
+            .ok_or_else(|| format!("{name} size overflowed"))?;
+        if byte_count > limit {
+            return Err(format!(
+                "{name} exceeds its size limit: more than {limit} bytes observed"
+            ));
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(CommittedFile {
+        name: name.to_string(),
+        sha256: format!("{:x}", hasher.finalize()),
+        byte_count,
+    })
 }
 
 fn artifact_limit(stage: HistoricalV2SlotStage) -> u64 {

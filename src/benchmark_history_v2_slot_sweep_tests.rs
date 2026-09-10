@@ -258,6 +258,159 @@ fn persisted_slot_count(state_root: &Path) -> usize {
         .count()
 }
 
+#[tokio::test]
+async fn state_inspection_reports_exact_committed_and_incomplete_progress() {
+    let fixture = Fixture::new();
+    let client = reqwest::Client::builder().build().unwrap();
+    let mutable = tempfile::tempdir().unwrap();
+    let state_root = mutable.path().join("state");
+    let work_root = mutable.path().join("work");
+    let harness = tempfile::tempdir().unwrap();
+    let executor = ForbiddenExecutor;
+    run_historical_v2_selected_slots_bounded(
+        HistoricalV2SelectedSlotSweepInputs {
+            client: &client,
+            protocol_bytes: PROTOCOL,
+            artifact_root: fixture.artifacts.path(),
+            frame: &fixture.frame,
+            exclusions: &fixture.exclusions,
+            selection: &fixture.selection,
+            payloads: &fixture.payloads,
+            state_root: &state_root,
+            work_root: &work_root,
+            harness_repository_root: harness.path(),
+            test_executor: &executor,
+            through_stage: Some(HistoricalV2SlotStage::Payload),
+        },
+        NonZeroUsize::new(1).unwrap(),
+        None,
+    )
+    .await
+    .unwrap();
+    let payload = &fixture.payloads.records[0];
+    let staging = state_root
+        .join(&payload.language)
+        .join(format!(".slot-{:04}.incomplete", payload.slot_number));
+    fs::create_dir(&staging).unwrap();
+
+    let summary =
+        inspect_historical_v2_selected_slot_state(HistoricalV2SelectedSlotStateInspectionInputs {
+            protocol_bytes: PROTOCOL,
+            artifact_root: fixture.artifacts.path(),
+            frame: &fixture.frame,
+            exclusions: &fixture.exclusions,
+            selection: &fixture.selection,
+            payloads: &fixture.payloads,
+            state_root: &state_root,
+        })
+        .unwrap();
+
+    assert_eq!(summary.selected_slot_count, 1);
+    assert_eq!(summary.started_slot_count, 1);
+    assert_eq!(summary.terminal_slot_count, 0);
+    assert_eq!(summary.incomplete_slot_count, 1);
+    assert_eq!(summary.slots[0].committed_stage_count, 1);
+    assert_eq!(
+        summary.slots[0].latest_committed_stage,
+        Some(HistoricalV2SlotStage::Payload)
+    );
+    assert_eq!(
+        summary.slots[0].next_stage,
+        Some(HistoricalV2SlotStage::Materialization)
+    );
+    assert!(summary.slots[0].incomplete_stage_transaction);
+    assert!(staging.is_dir());
+}
+
+#[test]
+fn state_inspection_reports_unstarted_selected_slots_without_creating_state() {
+    let fixture = Fixture::new();
+    let mutable = tempfile::tempdir().unwrap();
+    let state_root = mutable.path().join("state");
+    fs::create_dir(&state_root).unwrap();
+
+    let summary =
+        inspect_historical_v2_selected_slot_state(HistoricalV2SelectedSlotStateInspectionInputs {
+            protocol_bytes: PROTOCOL,
+            artifact_root: fixture.artifacts.path(),
+            frame: &fixture.frame,
+            exclusions: &fixture.exclusions,
+            selection: &fixture.selection,
+            payloads: &fixture.payloads,
+            state_root: &state_root,
+        })
+        .unwrap();
+
+    assert_eq!(summary.selected_slot_count, 1);
+    assert_eq!(summary.started_slot_count, 0);
+    assert_eq!(summary.incomplete_slot_count, 0);
+    assert_eq!(summary.slots[0].committed_stage_count, 0);
+    assert_eq!(
+        summary.slots[0].next_stage,
+        Some(HistoricalV2SlotStage::Payload)
+    );
+    assert_eq!(fs::read_dir(&state_root).unwrap().count(), 0);
+}
+
+#[test]
+fn state_inspection_reports_interrupted_slot_initialization_without_mutation() {
+    let fixture = Fixture::new();
+    let mutable = tempfile::tempdir().unwrap();
+    let state_root = mutable.path().join("state");
+    let payload = &fixture.payloads.records[0];
+    let language_root = state_root.join(&payload.language);
+    fs::create_dir_all(&language_root).unwrap();
+    let lock = language_root.join(format!("slot-{:04}.lock", payload.slot_number));
+    fs::write(&lock, b"").unwrap();
+
+    let summary =
+        inspect_historical_v2_selected_slot_state(HistoricalV2SelectedSlotStateInspectionInputs {
+            protocol_bytes: PROTOCOL,
+            artifact_root: fixture.artifacts.path(),
+            frame: &fixture.frame,
+            exclusions: &fixture.exclusions,
+            selection: &fixture.selection,
+            payloads: &fixture.payloads,
+            state_root: &state_root,
+        })
+        .unwrap();
+
+    assert_eq!(summary.started_slot_count, 1);
+    assert_eq!(summary.incomplete_slot_count, 1);
+    assert!(summary.slots[0].incomplete_initialization);
+    assert!(lock.is_file());
+    assert!(!language_root.join("slot-0001").exists());
+}
+
+#[test]
+fn state_inspection_rejects_a_slot_journal_without_its_lock() {
+    let fixture = Fixture::new();
+    let mutable = tempfile::tempdir().unwrap();
+    let state_root = mutable.path().join("state");
+    let payload = &fixture.payloads.records[0];
+    fs::create_dir_all(
+        state_root
+            .join(&payload.language)
+            .join(format!("slot-{:04}", payload.slot_number)),
+    )
+    .unwrap();
+
+    let error =
+        inspect_historical_v2_selected_slot_state(HistoricalV2SelectedSlotStateInspectionInputs {
+            protocol_bytes: PROTOCOL,
+            artifact_root: fixture.artifacts.path(),
+            frame: &fixture.frame,
+            exclusions: &fixture.exclusions,
+            selection: &fixture.selection,
+            payloads: &fixture.payloads,
+            state_root: &state_root,
+        })
+        .unwrap_err();
+
+    assert_eq!(error.kind, HistoricalV2SlotStageErrorKind::InvalidInput);
+    assert!(error.detail.contains("impossible initialization shape"));
+}
+
 #[test]
 fn sweep_rejects_overlapping_mutable_roots() {
     let root = tempfile::tempdir().unwrap();

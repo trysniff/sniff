@@ -213,6 +213,66 @@ fn durable_journal_round_trips_each_completed_artifact() {
 }
 
 #[test]
+fn journal_inspection_reports_incomplete_publish_without_removing_it() {
+    let temp = tempfile::tempdir().unwrap();
+    let state = temp.path().join("state");
+    {
+        let mut journal = HistoricalV2SlotStageJournal::open(&state, "rust", 1).unwrap();
+        journal
+            .append(
+                checkpoint_input(
+                    HistoricalV2SlotStage::Payload,
+                    completed(HistoricalV2StageArtifactKind::SelectedPayload),
+                ),
+                Some(&json!({"payload_sha256": HASH_A})),
+            )
+            .unwrap();
+    }
+    let staging = state.join("rust/.slot-0001.incomplete");
+    fs::create_dir(&staging).unwrap();
+    fs::write(staging.join("checkpoint.json"), b"partial checkpoint").unwrap();
+
+    let inspection = HistoricalV2SlotStageJournal::inspect_existing(&state, "rust", 1).unwrap();
+
+    assert_eq!(inspection.committed_checkpoints.len(), 1);
+    assert_eq!(
+        inspection.committed_checkpoints[0].stage,
+        HistoricalV2SlotStage::Payload
+    );
+    assert!(inspection.incomplete_stage_transaction);
+    assert!(!inspection.incomplete_rewind_transaction);
+    assert!(staging.join("checkpoint.json").is_file());
+}
+
+#[test]
+fn journal_inspection_rejects_tampered_committed_artifact() {
+    let temp = tempfile::tempdir().unwrap();
+    let state = temp.path().join("state");
+    {
+        let mut journal = HistoricalV2SlotStageJournal::open(&state, "rust", 1).unwrap();
+        journal
+            .append(
+                checkpoint_input(
+                    HistoricalV2SlotStage::Payload,
+                    completed(HistoricalV2StageArtifactKind::SelectedPayload),
+                ),
+                Some(&json!({"payload_sha256": HASH_A})),
+            )
+            .unwrap();
+    }
+    fs::write(
+        state.join("rust/slot-0001/0001-payload/artifact.json"),
+        b"{}",
+    )
+    .unwrap();
+
+    let error = HistoricalV2SlotStageJournal::inspect_existing(&state, "rust", 1).unwrap_err();
+
+    assert_eq!(error.kind, HistoricalV2SlotStageErrorKind::InvalidInput);
+    assert!(error.detail.contains("commitment changed"));
+}
+
+#[test]
 fn durable_journal_reads_the_pre_migration_pretty_artifact_representation() {
     let temp = tempfile::tempdir().unwrap();
     let state = temp.path().join("state");
