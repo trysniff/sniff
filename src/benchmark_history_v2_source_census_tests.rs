@@ -319,6 +319,59 @@ fn commits_complete_base_and_patched_source_snapshots_deterministically() {
 }
 
 #[test]
+fn resumable_census_reuses_every_completed_source_unit() {
+    let fixture = Fixture::new();
+    let materialized = fixture.materialize("resumable");
+    let state = tempfile::tempdir().unwrap();
+    let progress_root = state.path().join("source-progress");
+    let first = match census_historical_v2_sources_typed_resumable(
+        &materialized.0,
+        &materialized.1,
+        &progress_root,
+    )
+    .unwrap()
+    {
+        HistoricalV2StageResult::Completed(census) => census,
+        HistoricalV2StageResult::Excluded(_) => panic!("clean fixture was excluded"),
+    };
+    let second = match census_historical_v2_sources_typed_resumable(
+        &materialized.0,
+        &materialized.1,
+        &progress_root,
+    )
+    .unwrap()
+    {
+        HistoricalV2StageResult::Completed(census) => census,
+        HistoricalV2StageResult::Excluded(_) => panic!("clean fixture was excluded on resume"),
+    };
+
+    assert_eq!(second, first);
+    for side in ["base", "patched"] {
+        for unit in [
+            "inventory",
+            "inspection",
+            "parser-census",
+            "cargo-project-model",
+            "go-project-model",
+            "gradle-project-model",
+            "typescript-project-model",
+            "node-package-surfaces",
+            "node-consumer-profiles",
+            "python-distribution-surfaces",
+            "snapshot",
+        ] {
+            assert!(
+                progress_root
+                    .join(side)
+                    .join(format!("{unit}.json"))
+                    .is_file(),
+                "missing {side}/{unit} checkpoint"
+            );
+        }
+    }
+}
+
+#[test]
 fn committed_census_accepts_clean_ident_filtered_worktrees() {
     let source = tempfile::tempdir().unwrap();
     git_ok(source.path(), &["init", "-b", "main"]);

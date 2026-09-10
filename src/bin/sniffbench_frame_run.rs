@@ -340,12 +340,13 @@ pub(super) fn replay_public_surface_census(
         })
         .map_err(stage_error)?;
     eprintln!(
-        "Historical-v2 public-surface census replay prepared\nTarget: {}/slot-{:04}\nRetained through: {:?}\nRemoved stages: {}\nRemoved semantic progress: {}",
+        "Historical-v2 public-surface census replay prepared\nTarget: {}/slot-{:04}\nRetained through: {:?}\nRemoved stages: {}\nRemoved semantic progress: {}\nRemoved source progress: {}",
         summary.language,
         summary.slot_number,
         summary.retained_stage,
         summary.removed_stage_count,
-        summary.removed_semantic_progress
+        summary.removed_semantic_progress,
+        summary.removed_source_progress
     );
     Ok(())
 }

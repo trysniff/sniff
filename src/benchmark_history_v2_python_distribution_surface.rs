@@ -222,6 +222,24 @@ fn validate_historical_v2_python_distribution_surface_census_with_executor<F>(
 where
     F: FnMut(&Path, &str) -> Result<PythonWheelBuildOutput, String>,
 {
+    validate_historical_v2_python_distribution_surface_census_commitment_only(inventory, census)?;
+    let expected = census_historical_v2_python_distribution_surfaces_with_executor(
+        &inventory.repository,
+        &inventory.revision,
+        root,
+        inventory,
+        executor,
+    )?;
+    if census != &expected {
+        return Err("historical-v2 Python distribution surface census changed".to_string());
+    }
+    Ok(())
+}
+
+pub(super) fn validate_historical_v2_python_distribution_surface_census_commitment_only(
+    inventory: &IntentionalBoundaryRepositoryInventory,
+    census: &HistoricalV2PythonDistributionSurfaceCensus,
+) -> Result<(), String> {
     if census.schema_version != HISTORICAL_V2_PYTHON_DISTRIBUTION_SURFACE_CENSUS_SCHEMA_VERSION
         || census.contract != PYTHON_DISTRIBUTION_SURFACE_CONTRACT
         || census.repository != inventory.repository
@@ -260,16 +278,6 @@ where
         })
     {
         return Err("historical-v2 Python distribution surface commitment changed".to_string());
-    }
-    let expected = census_historical_v2_python_distribution_surfaces_with_executor(
-        &inventory.repository,
-        &inventory.revision,
-        root,
-        inventory,
-        executor,
-    )?;
-    if census != &expected {
-        return Err("historical-v2 Python distribution surface census changed".to_string());
     }
     Ok(())
 }

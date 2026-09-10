@@ -57,6 +57,7 @@ pub struct HistoricalV2PublicSurfaceReplaySummary {
     pub retained_stage: HistoricalV2SlotStage,
     pub removed_stage_count: usize,
     pub removed_semantic_progress: bool,
+    pub removed_source_progress: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

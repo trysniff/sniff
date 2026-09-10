@@ -10,6 +10,7 @@ use super::history_v2_node_package_surface::{
 use super::history_v2_python_distribution_surface::{
     census_historical_v2_python_distribution_surfaces,
     validate_historical_v2_python_distribution_surface_census_commitment,
+    validate_historical_v2_python_distribution_surface_census_commitment_only,
 };
 use super::history_v2_source_census_exclusion::seal_source_census_exclusion;
 use super::intentional_boundary_inventory::{
@@ -22,6 +23,7 @@ use super::intentional_boundary_project_model_outcome::{
     ProjectModelDerivationError, ProjectModelDerivationErrorKind,
 };
 use super::intentional_boundary_project_model_typescript::census_intentional_boundary_typescript_project_models_typed;
+use super::intentional_boundary_source_census_commitment::validate_source_census_commitment;
 use super::{
     BoundaryGitEntryKind, HISTORICAL_V2_SOURCE_CENSUS_SCHEMA_VERSION, HistoricalV2Materialization,
     HistoricalV2MaterializedRoots, HistoricalV2NodeConsumerProfileCensus,
@@ -40,6 +42,7 @@ use super::{
     census_intentional_boundary_repository, inventory_intentional_boundary_repository,
     validate_historical_v2_materialization,
     validate_intentional_boundary_project_model_census_commitment,
+    validate_intentional_boundary_repository_inventory_commitment_typed,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -50,6 +53,14 @@ const SOURCE_CENSUS_CONTRACT: &str = "sniffbench-historical-v2-source-census-v18
 pub(super) const PARSER_ERROR_LIMIT: usize = 4 * 1024;
 type SourceCensusStageResult =
     HistoricalV2StageResult<HistoricalV2SourceCensus, HistoricalV2SourceCensusExclusion>;
+
+#[path = "benchmark_history_v2_source_progress.rs"]
+mod progress;
+
+#[path = "benchmark_history_v2_source_census_execution.rs"]
+mod execution;
+
+use progress::{HistoricalV2SourceProgress, HistoricalV2SourceProgressUnit};
 
 pub fn census_historical_v2_sources(
     materialization: &HistoricalV2Materialization,
@@ -70,194 +81,19 @@ pub fn census_historical_v2_sources_typed(
     materialization: &HistoricalV2Materialization,
     roots: &HistoricalV2MaterializedRoots,
 ) -> Result<SourceCensusStageResult, HistoricalV2SlotStageError> {
-    validate_historical_v2_materialization(materialization, roots).map_err(invalid)?;
-    let inventory_repository = format!("github.com/{}", materialization.canonical_repository);
-    let base_inventory = inventory_intentional_boundary_repository(
-        &inventory_repository,
-        &materialization.base_revision,
-        &roots.base_root,
-    )
-    .map_err(infrastructure)?;
-    let patched_inventory = inventory_intentional_boundary_repository(
-        &inventory_repository,
-        &materialization.patched_commit_oid,
-        &roots.patched_root,
-    )
-    .map_err(infrastructure)?;
-    let mut failures = inspect_snapshot_sources(
-        HistoricalV2SourceSnapshotSide::Base,
-        &roots.base_root,
-        &base_inventory,
-    )?;
-    failures.extend(inspect_snapshot_sources(
-        HistoricalV2SourceSnapshotSide::Patched,
-        &roots.patched_root,
-        &patched_inventory,
-    )?);
-    if !failures.is_empty() {
-        let exclusion =
-            seal_source_census_exclusion(&materialization.materialization_sha256, failures)
-                .map_err(|error| infrastructure(error.detail))?;
-        return Ok(HistoricalV2StageResult::Excluded(exclusion));
-    }
-    let base_parser_census = census_intentional_boundary_repository(
-        &inventory_repository,
-        &materialization.base_revision,
-        &roots.base_root,
-        &base_inventory,
-    )
-    .map_err(infrastructure)?;
-    let patched_parser_census = census_intentional_boundary_repository(
-        &inventory_repository,
-        &materialization.patched_commit_oid,
-        &roots.patched_root,
-        &patched_inventory,
-    )
-    .map_err(infrastructure)?;
-    let base_cargo_project_model = census_intentional_boundary_cargo_project_models_typed(
-        &inventory_repository,
-        &materialization.base_revision,
-        &roots.base_root,
-        &base_inventory,
-    )
-    .map_err(project_model_stage_error)?;
-    let patched_cargo_project_model = census_intentional_boundary_cargo_project_models_typed(
-        &inventory_repository,
-        &materialization.patched_commit_oid,
-        &roots.patched_root,
-        &patched_inventory,
-    )
-    .map_err(project_model_stage_error)?;
-    let base_go_project_model = census_intentional_boundary_go_project_models_typed(
-        &inventory_repository,
-        &materialization.base_revision,
-        &roots.base_root,
-        &base_inventory,
-    )
-    .map_err(project_model_stage_error)?;
-    let patched_go_project_model = census_intentional_boundary_go_project_models_typed(
-        &inventory_repository,
-        &materialization.patched_commit_oid,
-        &roots.patched_root,
-        &patched_inventory,
-    )
-    .map_err(project_model_stage_error)?;
-    let base_gradle_project_model = census_intentional_boundary_gradle_project_models_typed(
-        &inventory_repository,
-        &materialization.base_revision,
-        &roots.base_root,
-        &base_inventory,
-    )
-    .map_err(project_model_stage_error)?;
-    let patched_gradle_project_model = census_intentional_boundary_gradle_project_models_typed(
-        &inventory_repository,
-        &materialization.patched_commit_oid,
-        &roots.patched_root,
-        &patched_inventory,
-    )
-    .map_err(project_model_stage_error)?;
-    let base_typescript_sources = typescript_project_sources(&base_parser_census);
-    let patched_typescript_sources = typescript_project_sources(&patched_parser_census);
-    let base_typescript_project_model =
-        census_intentional_boundary_typescript_project_models_typed(
-            &inventory_repository,
-            &materialization.base_revision,
-            &roots.base_root,
-            &base_inventory,
-            &base_typescript_sources,
-        )
-        .map_err(project_model_stage_error)?;
-    let patched_typescript_project_model =
-        census_intentional_boundary_typescript_project_models_typed(
-            &inventory_repository,
-            &materialization.patched_commit_oid,
-            &roots.patched_root,
-            &patched_inventory,
-            &patched_typescript_sources,
-        )
-        .map_err(project_model_stage_error)?;
-    let base_node_package_surfaces = census_historical_v2_node_package_surfaces(
-        &inventory_repository,
-        &materialization.base_revision,
-        &roots.base_root,
-        &base_inventory,
-    )
-    .map_err(infrastructure)?;
-    let patched_node_package_surfaces = census_historical_v2_node_package_surfaces(
-        &inventory_repository,
-        &materialization.patched_commit_oid,
-        &roots.patched_root,
-        &patched_inventory,
-    )
-    .map_err(infrastructure)?;
-    let base_node_consumer_profiles = census_historical_v2_node_consumer_profiles(
-        &roots.base_root,
-        &base_inventory,
-        &base_node_package_surfaces,
-        &base_typescript_project_model,
-    )
-    .map_err(infrastructure)?;
-    let patched_node_consumer_profiles = census_historical_v2_node_consumer_profiles(
-        &roots.patched_root,
-        &patched_inventory,
-        &patched_node_package_surfaces,
-        &patched_typescript_project_model,
-    )
-    .map_err(infrastructure)?;
-    let base_python_distribution_surfaces = census_historical_v2_python_distribution_surfaces(
-        &inventory_repository,
-        &materialization.base_revision,
-        &roots.base_root,
-        &base_inventory,
-    )
-    .map_err(infrastructure)?;
-    let patched_python_distribution_surfaces = census_historical_v2_python_distribution_surfaces(
-        &inventory_repository,
-        &materialization.patched_commit_oid,
-        &roots.patched_root,
-        &patched_inventory,
-    )
-    .map_err(infrastructure)?;
+    execution::census_historical_v2_sources_typed_inner(materialization, roots, None)
+}
 
-    let mut census = HistoricalV2SourceCensus {
-        schema_version: HISTORICAL_V2_SOURCE_CENSUS_SCHEMA_VERSION,
-        source_census_contract: SOURCE_CENSUS_CONTRACT.to_string(),
-        canonical_repository: materialization.canonical_repository.clone(),
-        materialization_sha256: materialization.materialization_sha256.clone(),
-        base: project_snapshot(
-            &roots.base_root,
-            &base_inventory,
-            &base_parser_census,
-            ProjectSnapshotSemanticInputs {
-                cargo_project_model: base_cargo_project_model,
-                go_project_model: base_go_project_model,
-                gradle_project_model: base_gradle_project_model,
-                typescript_project_model: base_typescript_project_model,
-                node_package_surfaces: base_node_package_surfaces,
-                node_consumer_profiles: base_node_consumer_profiles,
-                python_distribution_surfaces: base_python_distribution_surfaces,
-            },
-        )
-        .map_err(infrastructure)?,
-        patched: project_snapshot(
-            &roots.patched_root,
-            &patched_inventory,
-            &patched_parser_census,
-            ProjectSnapshotSemanticInputs {
-                cargo_project_model: patched_cargo_project_model,
-                go_project_model: patched_go_project_model,
-                gradle_project_model: patched_gradle_project_model,
-                typescript_project_model: patched_typescript_project_model,
-                node_package_surfaces: patched_node_package_surfaces,
-                node_consumer_profiles: patched_node_consumer_profiles,
-                python_distribution_surfaces: patched_python_distribution_surfaces,
-            },
-        )
-        .map_err(infrastructure)?,
-        source_census_sha256: String::new(),
-    };
-    census.source_census_sha256 = source_census_sha256(&census).map_err(infrastructure)?;
-    Ok(HistoricalV2StageResult::Completed(census))
+pub fn census_historical_v2_sources_typed_resumable(
+    materialization: &HistoricalV2Materialization,
+    roots: &HistoricalV2MaterializedRoots,
+    progress_root: &Path,
+) -> Result<SourceCensusStageResult, HistoricalV2SlotStageError> {
+    execution::census_historical_v2_sources_typed_inner(materialization, roots, Some(progress_root))
+}
+
+pub fn recover_historical_v2_source_progress(root: &Path) -> Result<(), String> {
+    HistoricalV2SourceProgress::recover_existing(root)
 }
 
 pub fn validate_historical_v2_source_census(
