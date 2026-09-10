@@ -83,6 +83,11 @@ enum Command {
         #[command(flatten)]
         args: sniffbench_frame_run::RunSlotsArgs,
     },
+    /// Verify and report persisted fixed-slot state without mutating it.
+    StateStatus {
+        #[command(flatten)]
+        args: sniffbench_frame_run::StateStatusArgs,
+    },
     /// Remove marker-proven transient semantic state before snapshot archival.
     RecoverSlotWork {
         #[command(flatten)]
@@ -268,6 +273,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
         }
         Command::RunSlots { args } => sniffbench_frame_run::run(args).await?,
+        Command::StateStatus { args } => sniffbench_frame_run::state_status(args)?,
         Command::RecoverSlotWork { args } => sniffbench_frame_run::recover_slot_work(args)?,
         Command::ReplayPublicSurfaceCensus { args } => {
             sniffbench_frame_run::replay_public_surface_census(args)?

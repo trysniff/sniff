@@ -628,6 +628,29 @@ jobs:
           set -e
           printf 'status=%s\n' "$status" >> "$GITHUB_OUTPUT"
 
+      - name: Verify resumable assessment state
+        if: ${{ always() && steps.assess.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          status_output="$(
+            "$COLLECTOR_ROOT/target/release/sniffbench-frame" state-status \
+              --protocol "$COLLECTOR_ROOT/sniffbench/historical-v2-protocol.json" \
+              --artifact-root "$FRAME_ARTIFACT_ROOT" \
+              --frame "$FRAME_ROOT/frame.json" \
+              --exclusions "$FRAME_ROOT/exclusions.json" \
+              --selection "$FRAME_ROOT/selection.json" \
+              --payloads "$FRAME_ROOT/selected-payloads.json" \
+              --state-root "$STATE_ROOT" \
+              2>&1
+          )"
+          printf '%s\n' "$status_output"
+          {
+            printf '### Verified selected-slot state\n\n```text\n'
+            printf '%s\n' "$status_output"
+            printf '```\n'
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Seal resumable assessment state
         id: seal
         if: ${{ always() && steps.assess.outcome == 'success' }}

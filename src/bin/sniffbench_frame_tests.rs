@@ -98,6 +98,30 @@ fn run_slots_reports_only_slots_that_executed_in_the_current_slice() {
 }
 
 #[test]
+fn state_status_requires_every_frozen_boundary() {
+    for required in [
+        "--protocol",
+        "--artifact-root",
+        "--frame",
+        "--exclusions",
+        "--selection",
+        "--payloads",
+        "--state-root",
+    ] {
+        let mut arguments = state_status_arguments();
+        let index = arguments
+            .iter()
+            .position(|value| *value == required)
+            .unwrap();
+        arguments.drain(index..=index + 1);
+        assert!(
+            Args::try_parse_from(arguments).is_err(),
+            "{required} was optional"
+        );
+    }
+}
+
+#[test]
 fn recover_slot_work_parses_every_frozen_boundary() {
     let parsed = Args::try_parse_from(recover_slot_work_arguments()).unwrap();
     let Command::RecoverSlotWork { .. } = parsed.command else {
@@ -180,5 +204,26 @@ fn recover_slot_work_arguments() -> Vec<&'static str> {
         "payloads.json",
         "--work-root",
         "work",
+    ]
+}
+
+fn state_status_arguments() -> Vec<&'static str> {
+    vec![
+        "sniffbench-frame",
+        "state-status",
+        "--protocol",
+        "protocol.json",
+        "--artifact-root",
+        "artifacts",
+        "--frame",
+        "frame.json",
+        "--exclusions",
+        "exclusions.json",
+        "--selection",
+        "selection.json",
+        "--payloads",
+        "payloads.json",
+        "--state-root",
+        "state",
     ]
 }
