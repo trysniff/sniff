@@ -2,11 +2,13 @@ use super::history_v2_slot_store_support::sync_directory;
 use super::{
     HistoricalV2PayloadStageInputs, HistoricalV2PublicSurfaceReplayInputs,
     HistoricalV2PublicSurfaceReplaySummary, HistoricalV2SelectedPayload,
-    HistoricalV2SelectedSlotRunSummary, HistoricalV2SelectedSlotSweepInputs,
-    HistoricalV2SelectedSlotSweepSummary, HistoricalV2SelectedSlotWorkRecoveryInputs,
-    HistoricalV2SelectedSlotWorkRecoverySummary, HistoricalV2SlotOperations,
-    HistoricalV2SlotOutcome, HistoricalV2SlotRunDisposition, HistoricalV2SlotRunIdentity,
-    HistoricalV2SlotStage, HistoricalV2SlotStageError, HistoricalV2SlotStageJournal,
+    HistoricalV2SelectedSlotRunSummary, HistoricalV2SelectedSlotStateInspection,
+    HistoricalV2SelectedSlotStateInspectionInputs, HistoricalV2SelectedSlotStateInspectionSummary,
+    HistoricalV2SelectedSlotSweepInputs, HistoricalV2SelectedSlotSweepSummary,
+    HistoricalV2SelectedSlotWorkRecoveryInputs, HistoricalV2SelectedSlotWorkRecoverySummary,
+    HistoricalV2SlotOperations, HistoricalV2SlotOutcome, HistoricalV2SlotRunDisposition,
+    HistoricalV2SlotRunIdentity, HistoricalV2SlotStage, HistoricalV2SlotStageError,
+    HistoricalV2SlotStageJournal, HistoricalV2SlotStageOutcome,
     run_historical_v2_slot_slice_through, validate_historical_v2_protocol,
     validate_historical_v2_selected_payloads_commitment, validate_historical_v2_slot_selection,
 };
@@ -26,6 +28,138 @@ where
     E: super::HistoricalV2RecoverableTestExecutor,
 {
     run_selected_slots(inputs, maximum_new_slots, maximum_new_stages_per_slot).await
+}
+
+pub fn inspect_historical_v2_selected_slot_state(
+    inputs: HistoricalV2SelectedSlotStateInspectionInputs<'_>,
+) -> Result<HistoricalV2SelectedSlotStateInspectionSummary, HistoricalV2SlotStageError> {
+    let protocol = validate_historical_v2_protocol(inputs.protocol_bytes).map_err(invalid)?;
+    validate_historical_v2_slot_selection(
+        inputs.protocol_bytes,
+        inputs.artifact_root,
+        inputs.frame,
+        inputs.exclusions,
+        inputs.selection,
+    )
+    .map_err(invalid)?;
+    validate_historical_v2_selected_payloads_commitment(
+        &protocol,
+        inputs.frame,
+        inputs.exclusions,
+        inputs.selection,
+        inputs.payloads,
+    )
+    .map_err(invalid)?;
+    let state_root = existing_plain_directory(inputs.state_root, "historical-v2 state root")?;
+    validate_existing_language_roots(
+        &state_root,
+        inputs
+            .payloads
+            .records
+            .iter()
+            .map(|payload| payload.language.as_str()),
+    )?;
+    let shapes = inputs
+        .payloads
+        .records
+        .iter()
+        .map(|payload| {
+            validate_slot_entry_shapes(&state_root, &payload.language, payload.slot_number)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let mut slots = Vec::with_capacity(inputs.payloads.records.len());
+    let mut started_slot_count = 0;
+    for (payload, (slot_exists, lock_exists, staging_exists)) in
+        inputs.payloads.records.iter().zip(shapes)
+    {
+        let canonical_repository = selected_repository(inputs.selection, payload)?;
+        let identity = HistoricalV2SlotRunIdentity {
+            selection_sha256: &inputs.selection.selection_sha256,
+            language: &payload.language,
+            slot_number: payload.slot_number,
+            canonical_repository,
+        };
+        if !slot_exists && !lock_exists && !staging_exists {
+            slots.push(unstarted_slot_inspection(payload, canonical_repository));
+            continue;
+        }
+        started_slot_count += 1;
+        if !slot_exists && lock_exists && !staging_exists {
+            slots.push(HistoricalV2SelectedSlotStateInspection {
+                language: payload.language.clone(),
+                slot_number: payload.slot_number,
+                canonical_repository: canonical_repository.to_string(),
+                committed_stage_count: 0,
+                latest_committed_stage: None,
+                latest_committed_outcome: None,
+                next_stage: Some(HistoricalV2SlotStage::Payload),
+                incomplete_initialization: true,
+                incomplete_stage_transaction: false,
+                incomplete_rewind_transaction: false,
+            });
+            continue;
+        }
+        if !slot_exists || !lock_exists {
+            return Err(invalid(
+                "historical-v2 slot state has an impossible initialization shape",
+            ));
+        }
+        let inspection = HistoricalV2SlotStageJournal::inspect_existing(
+            &state_root,
+            &payload.language,
+            payload.slot_number,
+        )?;
+        validate_existing_checkpoint_identity(inspection.committed_checkpoints.first(), identity)?;
+        let latest = inspection.committed_checkpoints.last();
+        let terminal = latest.is_some_and(|checkpoint| {
+            matches!(
+                checkpoint.outcome,
+                HistoricalV2SlotStageOutcome::Excluded { .. }
+                    | HistoricalV2SlotStageOutcome::ReadyForReview
+            )
+        });
+        let next_stage = if terminal {
+            None
+        } else {
+            Some(
+                super::expected_historical_v2_slot_stage(inspection.committed_checkpoints.len())
+                    .ok_or_else(|| invalid("historical-v2 non-terminal slot has no next stage"))?,
+            )
+        };
+        slots.push(HistoricalV2SelectedSlotStateInspection {
+            language: payload.language.clone(),
+            slot_number: payload.slot_number,
+            canonical_repository: canonical_repository.to_string(),
+            committed_stage_count: inspection.committed_checkpoints.len(),
+            latest_committed_stage: latest.map(|checkpoint| checkpoint.stage),
+            latest_committed_outcome: latest.map(|checkpoint| checkpoint.outcome.clone()),
+            next_stage,
+            incomplete_initialization: false,
+            incomplete_stage_transaction: inspection.incomplete_stage_transaction,
+            incomplete_rewind_transaction: inspection.incomplete_rewind_transaction,
+        });
+    }
+
+    let terminal_slot_count = slots
+        .iter()
+        .filter(|slot| slot.next_stage.is_none())
+        .count();
+    let incomplete_slot_count = slots
+        .iter()
+        .filter(|slot| {
+            slot.incomplete_initialization
+                || slot.incomplete_stage_transaction
+                || slot.incomplete_rewind_transaction
+        })
+        .count();
+    Ok(HistoricalV2SelectedSlotStateInspectionSummary {
+        selected_slot_count: slots.len(),
+        started_slot_count,
+        terminal_slot_count,
+        incomplete_slot_count,
+        slots,
+    })
 }
 
 pub fn recover_historical_v2_selected_slot_work(
@@ -563,10 +697,19 @@ fn validate_existing_slot_identity(
     history: &[super::HistoricalV2StoredSlotStage],
     identity: HistoricalV2SlotRunIdentity<'_>,
 ) -> Result<(), HistoricalV2SlotStageError> {
-    let Some(first) = history.first() else {
+    validate_existing_checkpoint_identity(
+        history.first().map(|stored| &stored.checkpoint),
+        identity,
+    )
+}
+
+fn validate_existing_checkpoint_identity(
+    checkpoint: Option<&super::HistoricalV2SlotStageCheckpoint>,
+    identity: HistoricalV2SlotRunIdentity<'_>,
+) -> Result<(), HistoricalV2SlotStageError> {
+    let Some(checkpoint) = checkpoint else {
         return Ok(());
     };
-    let checkpoint = &first.checkpoint;
     if checkpoint.selection_sha256 != identity.selection_sha256
         || checkpoint.language != identity.language
         || checkpoint.slot_number != identity.slot_number
@@ -577,6 +720,24 @@ fn validate_existing_slot_identity(
         ));
     }
     Ok(())
+}
+
+fn unstarted_slot_inspection(
+    payload: &HistoricalV2SelectedPayload,
+    canonical_repository: &str,
+) -> HistoricalV2SelectedSlotStateInspection {
+    HistoricalV2SelectedSlotStateInspection {
+        language: payload.language.clone(),
+        slot_number: payload.slot_number,
+        canonical_repository: canonical_repository.to_string(),
+        committed_stage_count: 0,
+        latest_committed_stage: None,
+        latest_committed_outcome: None,
+        next_stage: Some(HistoricalV2SlotStage::Payload),
+        incomplete_initialization: false,
+        incomplete_stage_transaction: false,
+        incomplete_rewind_transaction: false,
+    }
 }
 
 fn unadmitted_slot_summary() -> super::HistoricalV2SlotRunSummary {
