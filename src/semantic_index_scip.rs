@@ -31,6 +31,22 @@ pub(crate) fn ingest_scip_file_with_expected_languages(
     expected_languages: Option<&BTreeMap<RepositoryPath, String>>,
     missing_position_encoding: Option<crate::semantic_index::SemanticPositionEncoding>,
 ) -> Result<SemanticIndex, String> {
+    ingest_scip_file_with_expected_languages_and_prefix(
+        repository_root,
+        index_path,
+        expected_languages,
+        missing_position_encoding,
+        None,
+    )
+}
+
+pub(crate) fn ingest_scip_file_with_expected_languages_and_prefix(
+    repository_root: &Path,
+    index_path: &Path,
+    expected_languages: Option<&BTreeMap<RepositoryPath, String>>,
+    missing_position_encoding: Option<crate::semantic_index::SemanticPositionEncoding>,
+    document_prefix: Option<&RepositoryPath>,
+) -> Result<SemanticIndex, String> {
     let file = File::open(index_path).map_err(|error| {
         format!(
             "failed to open SCIP index {}: {error}",
@@ -57,11 +73,12 @@ pub(crate) fn ingest_scip_file_with_expected_languages(
         &bytes,
         expected_languages,
         missing_position_encoding,
+        document_prefix,
     )
 }
 
 pub fn ingest_scip_bytes(repository_root: &Path, bytes: &[u8]) -> Result<SemanticIndex, String> {
-    ingest_scip_bytes_with_expected_languages(repository_root, bytes, None, None)
+    ingest_scip_bytes_with_expected_languages(repository_root, bytes, None, None, None)
 }
 
 fn ingest_scip_bytes_with_expected_languages(
@@ -69,6 +86,7 @@ fn ingest_scip_bytes_with_expected_languages(
     bytes: &[u8],
     expected_languages: Option<&BTreeMap<RepositoryPath, String>>,
     missing_position_encoding: Option<crate::semantic_index::SemanticPositionEncoding>,
+    document_prefix: Option<&RepositoryPath>,
 ) -> Result<SemanticIndex, String> {
     if bytes.len() as u64 > MAX_SCIP_INDEX_BYTES {
         return Err(format!(
@@ -96,6 +114,7 @@ fn ingest_scip_bytes_with_expected_languages(
         source,
         expected_languages,
         missing_position_encoding,
+        document_prefix,
         output_sha256,
     )
 }
@@ -119,6 +138,7 @@ fn ingest_index(
     source: Index,
     expected_languages: Option<&BTreeMap<RepositoryPath, String>>,
     missing_position_encoding: Option<crate::semantic_index::SemanticPositionEncoding>,
+    document_prefix: Option<&RepositoryPath>,
     output_sha256: String,
 ) -> Result<SemanticIndex, String> {
     let metadata = source
@@ -146,6 +166,7 @@ fn ingest_index(
             document,
             expected_languages,
             missing_position_encoding,
+            document_prefix,
             is_scip_python(metadata) || is_scip_typescript(metadata),
             is_scip_typescript(metadata),
         )?;
@@ -328,6 +349,7 @@ fn ingest_document(
     document: &Document,
     expected_languages: Option<&BTreeMap<RepositoryPath, String>>,
     missing_position_encoding: Option<crate::semantic_index::SemanticPositionEncoding>,
+    document_prefix: Option<&RepositoryPath>,
     provider_with_local_symbols: bool,
     typescript_provider: bool,
 ) -> Result<(), String> {
@@ -335,6 +357,7 @@ fn ingest_document(
         index,
         &document.relative_path,
         expected_languages,
+        document_prefix,
         typescript_provider,
     )?;
     let path = normalize_typescript_document_path(
@@ -415,10 +438,11 @@ fn normalize_document_path(
     index: &mut SemanticIndex,
     raw: &str,
     expected_languages: Option<&BTreeMap<RepositoryPath, String>>,
+    document_prefix: Option<&RepositoryPath>,
     typescript_provider: bool,
 ) -> Result<RepositoryPath, String> {
     match ranges::normalize_repository_path(raw) {
-        Ok(path) => Ok(path),
+        Ok(path) => prefix_document_path(path, document_prefix),
         Err(error) if typescript_provider => {
             let normalized = raw.replace('\\', "/");
             let normalized = if let Some(path) = normalized.strip_prefix("//?/UNC/") {
@@ -463,6 +487,20 @@ fn normalize_document_path(
         }
         Err(error) => Err(error),
     }
+}
+
+fn prefix_document_path(
+    path: RepositoryPath,
+    prefix: Option<&RepositoryPath>,
+) -> Result<RepositoryPath, String> {
+    let Some(prefix) = prefix else {
+        return Ok(path);
+    };
+    let normalized_prefix = ranges::normalize_repository_path(&prefix.0)?;
+    if normalized_prefix != *prefix {
+        return Err("SCIP document prefix is not canonical".to_string());
+    }
+    ranges::normalize_repository_path(&format!("{}/{}", prefix.0, path.0))
 }
 
 fn normalize_typescript_document_path(

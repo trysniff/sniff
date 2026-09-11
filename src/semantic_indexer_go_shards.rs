@@ -25,7 +25,25 @@ pub(super) struct GoPackage {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(super) struct GoPackageInventory {
     pub(super) packages: Vec<GoPackage>,
+    pub(super) test_documents: BTreeSet<RepositoryPath>,
     pub(super) ignored_documents: BTreeSet<RepositoryPath>,
+}
+
+impl GoPackageInventory {
+    pub(super) fn retain_semantic_documents(
+        &mut self,
+        expected_languages: &BTreeMap<RepositoryPath, String>,
+    ) {
+        for package in &mut self.packages {
+            package
+                .source_documents
+                .retain(|document| expected_languages.contains_key(document));
+        }
+        self.test_documents
+            .retain(|document| expected_languages.contains_key(document));
+        self.ignored_documents
+            .retain(|document| expected_languages.contains_key(document));
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -79,6 +97,7 @@ pub(super) fn parse_go_package_inventory(
     })?;
     let mut packages = BTreeMap::new();
     let mut document_owners = BTreeMap::<RepositoryPath, String>::new();
+    let mut test_documents = BTreeSet::new();
     let mut ignored_document_owners = BTreeMap::<RepositoryPath, String>::new();
     let stream = serde_json::Deserializer::from_str(output).into_iter::<GoListPackage>();
     for item in stream {
@@ -90,14 +109,25 @@ pub(super) fn parse_go_package_inventory(
         let relative_directory = go_package_relative_directory(&root, &item.dir)?;
         let mut source_documents = BTreeSet::new();
         let mut source_bytes = 0u64;
-        for file_name in item
+        for (file_name, is_test) in item
             .go_files
             .iter()
             .chain(&item.cgo_files)
-            .chain(&item.test_go_files)
-            .chain(&item.x_test_go_files)
+            .map(|name| (name, false))
+            .chain(
+                item.test_go_files
+                    .iter()
+                    .chain(&item.x_test_go_files)
+                    .map(|name| (name, true)),
+            )
         {
             require_plain_file_name(file_name)?;
+            if is_test && !file_name.ends_with("_test.go") {
+                return Err(format!(
+                    "Go package {} reports a non-test file in its test source set: {file_name}",
+                    item.import_path
+                ));
+            }
             let relative = relative_directory.join(file_name);
             let relative = RepositoryPath(relative.to_string_lossy().replace('\\', "/"));
             let source = root.join(Path::new(&relative.0));
@@ -116,6 +146,9 @@ pub(super) fn parse_go_package_inventory(
             source_bytes = source_bytes
                 .checked_add(metadata.len())
                 .ok_or_else(|| format!("Go package {} source size overflowed", item.import_path))?;
+            if is_test {
+                test_documents.insert(relative.clone());
+            }
             source_documents.insert(relative);
         }
         let mut ignored_documents = BTreeSet::new();
@@ -196,6 +229,7 @@ pub(super) fn parse_go_package_inventory(
     }
     Ok(GoPackageInventory {
         packages: packages.into_values().collect(),
+        test_documents,
         ignored_documents: ignored_document_owners.into_keys().collect(),
     })
 }
@@ -379,6 +413,10 @@ mod tests {
         assert_eq!(packages.packages[0].source_bytes, 20);
         assert_eq!(packages.packages[1].source_bytes, 10);
         assert_eq!(
+            packages.test_documents,
+            BTreeSet::from([RepositoryPath("a/a_test.go".to_string())])
+        );
+        assert_eq!(
             packages.ignored_documents,
             BTreeSet::from([RepositoryPath("a/a_windows.go".to_string())])
         );
@@ -399,6 +437,7 @@ mod tests {
             inventory.ignored_documents,
             BTreeSet::from([RepositoryPath("empty/only_windows.go".to_string())])
         );
+        assert!(inventory.test_documents.is_empty());
     }
 
     #[test]
@@ -408,7 +447,55 @@ mod tests {
         let inventory = parse_go_package_inventory(root.path(), "").unwrap();
 
         assert!(inventory.packages.is_empty());
+        assert!(inventory.test_documents.is_empty());
         assert!(inventory.ignored_documents.is_empty());
+    }
+
+    #[test]
+    fn semantic_scope_filters_generated_and_vendored_compiler_documents() {
+        let root = tempfile::tempdir().unwrap();
+        for relative in ["pkg/api.go", "pkg/api_test.go", "pkg/generated.go"] {
+            let path = root.path().join(relative);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, "package pkg\n").unwrap();
+        }
+        let output = r#"{"ImportPath":"example.test/pkg","Dir":"/workspace/pkg","GoFiles":["api.go","generated.go"],"TestGoFiles":["api_test.go"]}"#;
+        let mut inventory = parse_go_package_inventory(root.path(), output).unwrap();
+        let expected = BTreeMap::from([
+            (RepositoryPath("pkg/api.go".to_string()), "go".to_string()),
+            (
+                RepositoryPath("pkg/api_test.go".to_string()),
+                "go".to_string(),
+            ),
+        ]);
+
+        inventory.retain_semantic_documents(&expected);
+
+        assert_eq!(
+            inventory.packages[0].source_documents,
+            expected.into_keys().collect()
+        );
+        assert_eq!(
+            inventory.test_documents,
+            BTreeSet::from([RepositoryPath("pkg/api_test.go".to_string())])
+        );
+    }
+
+    #[test]
+    fn test_source_set_rejects_a_non_test_filename() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("ordinary.go"), "package fixture\n").unwrap();
+        let output = format!(
+            r#"{{"ImportPath":"example.test/fixture","Dir":{},"TestGoFiles":["ordinary.go"]}}"#,
+            serde_json::to_string(&root.path().to_string_lossy()).unwrap()
+        );
+
+        let error = parse_go_package_inventory(root.path(), &output).unwrap_err();
+
+        assert!(
+            error.contains("non-test file in its test source set"),
+            "{error}"
+        );
     }
 
     #[test]

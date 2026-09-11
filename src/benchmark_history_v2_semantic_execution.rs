@@ -216,17 +216,25 @@ async fn run_scoped_indexers(
         .iter()
         .any(|file| indexer_for_language(&file.language) == Ok(SemanticIndexerKind::Go))
     {
+        let semantic_documents = source
+            .source_files
+            .iter()
+            .filter(|file| {
+                file.language == "go"
+                    && file.semantic_coverage == super::HistoricalV2SourceSemanticCoverage::Required
+            })
+            .map(|file| crate::semantic_index::RepositoryPath(file.repository_path.clone()))
+            .collect();
         variants.insert(
             SemanticIndexerKind::Go,
-            variants::go_semantic_variant_plans(&source.go_project_model).map_err(|detail| {
-                SemanticIndexerRunFailure {
+            variants::go_semantic_variant_plans(&source.go_project_model, &semantic_documents)
+                .map_err(|detail| SemanticIndexerRunFailure {
                     kind: SemanticIndexerRunFailureKind::InvalidInput,
                     phase: SemanticIndexerRunPhase::RepositoryValidation,
                     indexer: Some(SemanticIndexerKind::Go),
                     detail,
                     process: None,
-                }
-            })?,
+                })?,
         );
     }
     if files.iter().any(|file| {

@@ -7,15 +7,19 @@ use std::collections::{BTreeMap, BTreeSet};
 
 pub(super) fn go_semantic_variant_plans(
     model: &IntentionalBoundaryProjectModelCensus,
+    semantic_documents: &BTreeSet<RepositoryPath>,
 ) -> Result<Vec<SemanticIndexerVariantPlan>, String> {
+    if model
+        .executions
+        .iter()
+        .any(|execution| execution.provider != IntentionalBoundaryProjectModelProvider::GoList)
+    {
+        return Err("historical-v2 Go variant ledger mixed project-model providers".to_string());
+    }
     let mut plans = Vec::with_capacity(model.executions.len());
     let mut identities = BTreeSet::new();
+    let semantic_modules = semantic_go_module_manifests(model, semantic_documents)?;
     for execution in &model.executions {
-        if execution.provider != IntentionalBoundaryProjectModelProvider::GoList {
-            return Err(
-                "historical-v2 Go variant ledger mixed project-model providers".to_string(),
-            );
-        }
         let IntentionalBoundaryProjectModelVariant::Go {
             goos,
             goarch,
@@ -120,15 +124,56 @@ pub(super) fn go_semantic_variant_plans(
             identity: SemanticVariantId(execution.execution_id.clone()),
             dimensions,
             environment,
-            compiler_project: None,
+            compiler_project: Some(RepositoryPath(
+                execution.invocation_anchor_repository_path.clone(),
+            )),
             selected_documents,
             ignored_documents,
         };
         plan.validate()?;
-        plans.push(plan);
+        if semantic_modules.contains(&execution.invocation_anchor_repository_path) {
+            plans.push(plan);
+        }
     }
     plans.sort_by(|left, right| left.identity.cmp(&right.identity));
     Ok(plans)
+}
+
+fn semantic_go_module_manifests(
+    model: &IntentionalBoundaryProjectModelCensus,
+    semantic_documents: &BTreeSet<RepositoryPath>,
+) -> Result<BTreeSet<String>, String> {
+    let manifests = model
+        .executions
+        .iter()
+        .map(|execution| execution.invocation_anchor_repository_path.as_str())
+        .collect::<BTreeSet<_>>();
+    let module_directories = manifests
+        .iter()
+        .map(|manifest| Ok((*manifest, go_module_directory(manifest)?)))
+        .collect::<Result<Vec<_>, String>>()?;
+    let mut selected = BTreeSet::new();
+    for document in semantic_documents {
+        let owner = module_directories
+            .iter()
+            .filter(|(_, directory)| {
+                directory.is_empty() || document.0.starts_with(&format!("{directory}/"))
+            })
+            .max_by_key(|(_, directory)| directory.len());
+        if let Some((manifest, _)) = owner {
+            selected.insert((*manifest).to_string());
+        }
+    }
+    Ok(selected)
+}
+
+fn go_module_directory(manifest: &str) -> Result<&str, String> {
+    if manifest == "go.mod" {
+        return Ok("");
+    }
+    manifest.strip_suffix("/go.mod").ok_or_else(|| {
+        format!("historical-v2 Go compiler project is not an exact go.mod path: {manifest}")
+    })
 }
 
 pub(super) fn typescript_semantic_variant_plans(
@@ -211,17 +256,39 @@ mod tests {
         IntentionalBoundaryProjectModelUnresolvedReason,
     };
 
+    fn semantic_go_documents(
+        model: &IntentionalBoundaryProjectModelCensus,
+    ) -> BTreeSet<RepositoryPath> {
+        model
+            .targets
+            .iter()
+            .flat_map(|target| {
+                target
+                    .source_repository_paths
+                    .iter()
+                    .chain(&target.ignored_source_repository_paths)
+            })
+            .cloned()
+            .map(RepositoryPath)
+            .collect()
+    }
+
     #[test]
     fn exact_go_project_model_variant_becomes_a_semantic_execution_plan() {
         let model = go_model();
+        let semantic_documents = semantic_go_documents(&model);
 
-        let plans = go_semantic_variant_plans(&model).unwrap();
+        let plans = go_semantic_variant_plans(&model, &semantic_documents).unwrap();
 
         assert_eq!(plans.len(), 1);
         assert_eq!(plans[0].identity.0, "go-linux-amd64");
         assert_eq!(plans[0].environment["GOOS"], "linux");
         assert_eq!(plans[0].environment["GOAMD64"], "v3");
         assert_eq!(plans[0].environment["GOFLAGS"], "-tags=enterprise");
+        assert_eq!(
+            plans[0].compiler_project,
+            Some(RepositoryPath("go.mod".to_string()))
+        );
         assert!(
             plans[0]
                 .selected_documents
@@ -243,8 +310,9 @@ mod tests {
         };
         empty_execution.target_count = 0;
         model.executions.push(empty_execution);
+        let semantic_documents = semantic_go_documents(&model);
 
-        let plans = go_semantic_variant_plans(&model).unwrap();
+        let plans = go_semantic_variant_plans(&model, &semantic_documents).unwrap();
         let empty = plans
             .iter()
             .find(|plan| plan.identity.0 == "go-windows-arm64-empty")
@@ -258,6 +326,61 @@ mod tests {
                 RepositoryPath("api/api_windows.go".to_string()),
             ])
         );
+    }
+
+    #[test]
+    fn module_with_no_semantically_required_document_has_no_compiler_world() {
+        let mut model = go_model();
+        let mut execution = model.executions[0].clone();
+        execution.execution_id = "vendored-linux".to_string();
+        execution.invocation_anchor_repository_path = "vendor/example/go.mod".to_string();
+        execution.covered_manifest_repository_paths = vec!["vendor/example/go.mod".to_string()];
+        let mut target = model.targets[0].clone();
+        target.execution_id = execution.execution_id.clone();
+        target.manifest_repository_path = execution.invocation_anchor_repository_path.clone();
+        target.source_repository_paths = vec!["vendor/example/api.go".to_string()];
+        target.ignored_source_repository_paths.clear();
+        model.executions.push(execution);
+        model.targets.push(target);
+        let semantic_documents = BTreeSet::from([
+            RepositoryPath("api/api_amd64.go".to_string()),
+            RepositoryPath("api/api_windows.go".to_string()),
+        ]);
+
+        let plans = go_semantic_variant_plans(&model, &semantic_documents).unwrap();
+
+        assert_eq!(plans.len(), 1);
+        assert_eq!(plans[0].identity.0, "go-linux-amd64");
+    }
+
+    #[test]
+    fn test_only_nested_module_keeps_its_exact_compiler_world() {
+        let mut model = go_model();
+        let mut execution = model.executions[0].clone();
+        execution.execution_id = "test-tools-linux".to_string();
+        execution.invocation_anchor_repository_path = "tools/go.mod".to_string();
+        execution.covered_manifest_repository_paths = vec!["tools/go.mod".to_string()];
+        let mut target = model.targets[0].clone();
+        target.execution_id = execution.execution_id.clone();
+        target.manifest_repository_path = execution.invocation_anchor_repository_path.clone();
+        target.source_repository_paths.clear();
+        target.ignored_source_repository_paths.clear();
+        model.executions.push(execution);
+        model.targets.push(target);
+        let semantic_documents = BTreeSet::from([
+            RepositoryPath("api/api_amd64.go".to_string()),
+            RepositoryPath("tools/pkg/api_test.go".to_string()),
+        ]);
+
+        let plans = go_semantic_variant_plans(&model, &semantic_documents).unwrap();
+
+        assert_eq!(plans.len(), 2);
+        assert!(plans.iter().any(|plan| {
+            plan.identity.0 == "test-tools-linux"
+                && plan.compiler_project == Some(RepositoryPath("tools/go.mod".to_string()))
+                && plan.selected_documents.is_empty()
+                && plan.ignored_documents.is_empty()
+        }));
     }
 
     #[test]

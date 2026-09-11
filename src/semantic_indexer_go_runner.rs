@@ -58,7 +58,8 @@ async fn run_required_go_indexer_with_limits(
         )
     })?;
     let run_result = async {
-        let prepared = prepare_go_recovery_scope(inputs, &execution_root).await?;
+        let prepared = prepare_go_recovery_scope(inputs, &execution_root)?;
+        prepare_go_dependency_cache(inputs.spec, &execution_root, inputs.installed, ".").await?;
         let world = run_go_compiler_world(
             inputs,
             &execution_root,
@@ -101,6 +102,16 @@ async fn run_required_go_indexer_variants_with_limits(
             "qualified Go semantic indexing requires at least one compiler variant".to_string(),
         ));
     }
+    for plan in plans {
+        plan.validate().map_err(|detail| {
+            indexer_failure(
+                inputs.spec,
+                SemanticIndexerRunFailureKind::InvalidInput,
+                SemanticIndexerRunPhase::RepositoryValidation,
+                detail,
+            )
+        })?;
+    }
     validate_variant_progress_directories(inputs.spec, inputs.progress_root, plans)?;
     let execution_root = inputs.recovery.prepare_indexer_run().map_err(|detail| {
         indexer_failure(
@@ -111,18 +122,12 @@ async fn run_required_go_indexer_variants_with_limits(
         )
     })?;
     let run_result = async {
-        let prepared = prepare_go_recovery_scope(inputs, &execution_root).await?;
+        let prepared = prepare_go_recovery_scope(inputs, &execution_root)?;
+        prepare_go_variant_dependency_caches(inputs.spec, &execution_root, inputs.installed, plans)
+            .await?;
         let mut variants = BTreeMap::new();
         let mut selected_documents = BTreeSet::new();
         for plan in plans {
-            plan.validate().map_err(|detail| {
-                indexer_failure(
-                    inputs.spec,
-                    SemanticIndexerRunFailureKind::InvalidInput,
-                    SemanticIndexerRunPhase::RepositoryValidation,
-                    detail,
-                )
-            })?;
             let world = run_go_compiler_world(
                 inputs,
                 &execution_root,
@@ -178,7 +183,7 @@ struct GoCompilerWorld {
     ignored_documents: BTreeSet<RepositoryPath>,
 }
 
-async fn prepare_go_recovery_scope(
+fn prepare_go_recovery_scope(
     inputs: &GoIndexerRunInputs<'_>,
     execution_root: &Path,
 ) -> Result<PreparedGoRun, SemanticIndexerRunFailure> {
@@ -214,7 +219,6 @@ async fn prepare_go_recovery_scope(
                 )
             },
         )?;
-    prepare_go_dependency_cache(inputs.spec, execution_root, inputs.installed).await?;
     let expected_languages = expected_document_languages(
         inputs.root,
         &files_for_indexer(inputs.files, inputs.spec.kind),
@@ -231,6 +235,113 @@ async fn prepare_go_recovery_scope(
         source_digest_before,
         expected_languages,
     })
+}
+
+async fn prepare_go_variant_dependency_caches(
+    spec: PinnedIndexer,
+    execution_root: &Path,
+    installed: &InstalledIndexer,
+    plans: &[SemanticIndexerVariantPlan],
+) -> Result<(), SemanticIndexerRunFailure> {
+    let module_roots = plans
+        .iter()
+        .map(|plan| go_module_root(spec, execution_root, Some(plan)))
+        .collect::<Result<BTreeSet<_>, _>>()?;
+    for module_root in module_roots {
+        prepare_go_dependency_cache(spec, execution_root, installed, &module_root).await?;
+    }
+    Ok(())
+}
+
+fn go_module_root(
+    spec: PinnedIndexer,
+    execution_root: &Path,
+    plan: Option<&SemanticIndexerVariantPlan>,
+) -> Result<String, SemanticIndexerRunFailure> {
+    let Some(plan) = plan else {
+        return Ok(".".to_string());
+    };
+    let project = plan.compiler_project.as_ref().ok_or_else(|| {
+        indexer_failure(
+            spec,
+            SemanticIndexerRunFailureKind::InvalidInput,
+            SemanticIndexerRunPhase::RepositoryValidation,
+            format!(
+                "Go compiler variant {} has no exact go.mod project",
+                plan.identity.0
+            ),
+        )
+    })?;
+    if !project.0.ends_with("go.mod") || project.0.rsplit('/').next() != Some("go.mod") {
+        return Err(indexer_failure(
+            spec,
+            SemanticIndexerRunFailureKind::InvalidInput,
+            SemanticIndexerRunPhase::RepositoryValidation,
+            format!(
+                "Go compiler variant {} project is not go.mod",
+                plan.identity.0
+            ),
+        ));
+    }
+    let manifest = execution_root.join(Path::new(&project.0));
+    let metadata = fs::symlink_metadata(&manifest).map_err(|error| {
+        indexer_failure(
+            spec,
+            SemanticIndexerRunFailureKind::InvalidInput,
+            SemanticIndexerRunPhase::RepositoryValidation,
+            format!(
+                "Go compiler variant {} project cannot be inspected: {error}",
+                plan.identity.0
+            ),
+        )
+    })?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return Err(indexer_failure(
+            spec,
+            SemanticIndexerRunFailureKind::InvalidInput,
+            SemanticIndexerRunPhase::RepositoryValidation,
+            format!(
+                "Go compiler variant {} project is not a plain go.mod file",
+                plan.identity.0
+            ),
+        ));
+    }
+    let canonical_root = fs::canonicalize(execution_root).map_err(|error| {
+        indexer_failure(
+            spec,
+            SemanticIndexerRunFailureKind::InfrastructureFailed,
+            SemanticIndexerRunPhase::RepositoryValidation,
+            format!("failed to resolve staged Go repository root: {error}"),
+        )
+    })?;
+    let canonical_manifest = fs::canonicalize(&manifest).map_err(|error| {
+        indexer_failure(
+            spec,
+            SemanticIndexerRunFailureKind::InvalidInput,
+            SemanticIndexerRunPhase::RepositoryValidation,
+            format!(
+                "Go compiler variant {} project cannot be resolved: {error}",
+                plan.identity.0
+            ),
+        )
+    })?;
+    if !canonical_manifest.starts_with(&canonical_root) {
+        return Err(indexer_failure(
+            spec,
+            SemanticIndexerRunFailureKind::InvalidInput,
+            SemanticIndexerRunPhase::RepositoryValidation,
+            format!(
+                "Go compiler variant {} project escapes the staged repository",
+                plan.identity.0
+            ),
+        ));
+    }
+    let repository_path = project
+        .0
+        .rsplit_once('/')
+        .map_or(".", |(directory, _)| directory)
+        .to_string();
+    Ok(repository_path)
 }
 
 fn verify_go_recovery_scope(
@@ -305,10 +416,12 @@ async fn run_go_compiler_world(
         progress_root,
         ..
     } = *inputs;
+    let module_root = go_module_root(spec, execution_root, plan)?;
     let (context, context_invocation, variant) = match plan {
         Some(plan) => {
             let (context, invocation) =
-                resolve_go_variant_context(spec, execution_root, installed, plan).await?;
+                resolve_go_variant_context(spec, execution_root, installed, plan, &module_root)
+                    .await?;
             (context, invocation, plan.index_variant())
         }
         None => {
@@ -322,6 +435,8 @@ async fn run_go_compiler_world(
         }
     };
     let inventory_arguments = vec![
+        "-C".to_string(),
+        module_root.clone(),
         "list".to_string(),
         format!("-json={GO_LIST_FIELDS}"),
         "-find".to_string(),
@@ -354,18 +469,22 @@ async fn run_go_compiler_world(
         context.clone(),
         inventory_output.stdout_sha256.clone(),
     );
-    let inventory = parse_go_package_inventory(execution_root, &inventory_output.stdout)
+    let mut inventory = parse_go_package_inventory(execution_root, &inventory_output.stdout)
         .map_err(|detail| go_output_validation_failure(spec, detail, &inventory_output))?;
     if let Some(plan) = plan {
         validate_go_variant_inventory(plan, &inventory)
             .map_err(|detail| go_output_validation_failure(spec, detail, &inventory_output))?;
     }
+    let package_inventory_sha256 =
+        canonical_sha256(&inventory).map_err(|detail| go_progress_failure(spec, detail))?;
+    inventory.retain_semantic_documents(expected_languages);
+    let ignored_documents = inventory.ignored_documents.clone();
     if inventory
         .packages
         .iter()
         .all(|package| package.source_documents.is_empty())
     {
-        let plan = plan.ok_or_else(|| {
+        plan.ok_or_else(|| {
             go_snapshot_assembly_failure(
                 spec,
                 "unqualified Go semantic indexing selected no repository package",
@@ -394,12 +513,9 @@ async fn run_go_compiler_world(
         };
         return Ok(GoCompilerWorld {
             index,
-            ignored_documents: plan.ignored_documents.clone(),
+            ignored_documents,
         });
     }
-    let package_inventory_sha256 =
-        canonical_sha256(&inventory).map_err(|detail| go_progress_failure(spec, detail))?;
-    let ignored_documents = inventory.ignored_documents.clone();
     let selected_packages = inventory
         .packages
         .into_iter()
@@ -486,6 +602,7 @@ async fn run_go_compiler_world(
         spec,
         repository_root: root,
         execution_root,
+        module_root: &module_root,
         installed,
         expected_languages,
         context: &context,
@@ -576,6 +693,10 @@ fn validate_go_variant_inventory(
         .iter()
         .flat_map(|package| package.source_documents.iter().cloned())
         .collect::<BTreeSet<_>>();
+    let production_selected = selected
+        .difference(&inventory.test_documents)
+        .cloned()
+        .collect::<BTreeSet<_>>();
     let compiler_world_is_empty = selected.is_empty();
     if compiler_world_is_empty && plan.selected_documents.is_empty() {
         let invented_ignored = inventory
@@ -594,11 +715,11 @@ fn validate_go_variant_inventory(
     }
     let missing_selected = plan
         .selected_documents
-        .difference(&selected)
+        .difference(&production_selected)
         .map(|path| path.0.as_str())
         .take(8)
         .collect::<Vec<_>>();
-    let invented_selected = selected
+    let invented_selected = production_selected
         .difference(&plan.selected_documents)
         .map(|path| path.0.as_str())
         .take(8)

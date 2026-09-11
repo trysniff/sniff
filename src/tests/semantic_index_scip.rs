@@ -70,6 +70,53 @@ fn ingest(root: &Path, source: &Index) -> Result<SemanticIndex, String> {
 }
 
 #[test]
+fn nested_module_document_prefix_is_canonical_and_exact() {
+    assert_eq!(
+        prefix_document_path(
+            RepositoryPath("pkg/api.go".to_string()),
+            Some(&RepositoryPath("tools".to_string())),
+        )
+        .unwrap(),
+        RepositoryPath("tools/pkg/api.go".to_string())
+    );
+    assert!(
+        prefix_document_path(
+            RepositoryPath("pkg/api.go".to_string()),
+            Some(&RepositoryPath("../tools".to_string())),
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn nested_module_prefix_is_applied_before_expected_document_filtering() {
+    let root = root("nested-go-module");
+    fs::create_dir_all(root.join("tools/pkg")).unwrap();
+    fs::write(root.join("tools/pkg/api.go"), "package pkg\n").unwrap();
+    let mut source = base_index();
+    source.documents.push(document("pkg/api.go"));
+    source.documents[0].language = "go".to_string();
+    let expected = BTreeMap::from([(
+        RepositoryPath("tools/pkg/api.go".to_string()),
+        "go".to_string(),
+    )]);
+
+    let index = ingest_scip_bytes_with_expected_languages(
+        &root,
+        &source.write_to_bytes().unwrap(),
+        Some(&expected),
+        None,
+        Some(&RepositoryPath("tools".to_string())),
+    )
+    .unwrap();
+
+    assert_eq!(
+        index.documents.into_keys().collect::<Vec<_>>(),
+        [RepositoryPath("tools/pkg/api.go".to_string())]
+    );
+}
+
+#[test]
 fn imports_global_identities_definitions_references_and_relationships() {
     let root = root("global");
     let mut index = base_index();
