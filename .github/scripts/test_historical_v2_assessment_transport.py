@@ -677,6 +677,21 @@ class ManifestTests(unittest.TestCase):
             transport.EXACT_GO_SEMANTIC_COMPILER_WORLD_MIGRATION_SOURCE_ARTIFACT_SIZE,
         )
 
+    @staticmethod
+    def _write_source_required_go_semantic_world_manifest(path: pathlib.Path) -> None:
+        ManifestTests._write_exact_go_semantic_compiler_world_manifest(path)
+        transport.migrate_manifest(
+            path,
+            transport.FRAME_RUN_ID,
+            transport.SEMANTIC_PROGRESS_OBSERVABILITY_MIGRATION_FROM_COLLECTOR_SHA,
+            transport.SOURCE_REQUIRED_GO_SEMANTIC_WORLD_MIGRATION_NAME,
+            transport.SOURCE_REQUIRED_GO_SEMANTIC_WORLD_MIGRATION_SOURCE_RUN_ID,
+            transport.SOURCE_REQUIRED_GO_SEMANTIC_WORLD_MIGRATION_SOURCE_HEAD_SHA,
+            transport.SOURCE_REQUIRED_GO_SEMANTIC_WORLD_MIGRATION_SOURCE_ARTIFACT_ID,
+            transport.SOURCE_REQUIRED_GO_SEMANTIC_WORLD_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+            transport.SOURCE_REQUIRED_GO_SEMANTIC_WORLD_MIGRATION_SOURCE_ARTIFACT_SIZE,
+        )
+
     def test_manifest_round_trips_and_is_create_new(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             path = pathlib.Path(temporary, "manifest.json")
@@ -2443,7 +2458,7 @@ class ManifestTests(unittest.TestCase):
                     transport.EXACT_GO_SEMANTIC_COMPILER_WORLD_MIGRATION_SOURCE_ARTIFACT_SIZE,
                 )
 
-    def test_source_required_go_semantic_world_migration_is_exact_and_closes_chain(
+    def test_source_required_go_semantic_world_migration_is_exact_and_rejects_repeat(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -2524,6 +2539,93 @@ class ManifestTests(unittest.TestCase):
                     transport.SOURCE_REQUIRED_GO_SEMANTIC_WORLD_MIGRATION_SOURCE_ARTIFACT_ID,
                     transport.SOURCE_REQUIRED_GO_SEMANTIC_WORLD_MIGRATION_SOURCE_ARTIFACT_DIGEST,
                     transport.SOURCE_REQUIRED_GO_SEMANTIC_WORLD_MIGRATION_SOURCE_ARTIFACT_SIZE,
+                )
+
+    def test_semantic_progress_observability_migration_is_exact_and_closes_chain(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            path = root.joinpath("manifest.json")
+            sentinel = root.joinpath("semantic-state.bin")
+            sentinel.write_bytes(b"semantic-state-must-not-change")
+            self._write_source_required_go_semantic_world_manifest(path)
+            prior_manifest = json.loads(path.read_text(encoding="utf-8"))
+            prior_records = prior_manifest["collector_migrations"]
+            source = (
+                transport.SEMANTIC_PROGRESS_OBSERVABILITY_MIGRATION_FROM_COLLECTOR_SHA
+            )
+            target = "a" * 40
+
+            self.assertEqual(
+                transport.migrate_manifest(
+                    path,
+                    transport.FRAME_RUN_ID,
+                    target,
+                    transport.SEMANTIC_PROGRESS_OBSERVABILITY_MIGRATION_NAME,
+                    transport.SEMANTIC_PROGRESS_OBSERVABILITY_MIGRATION_SOURCE_RUN_ID,
+                    transport.SEMANTIC_PROGRESS_OBSERVABILITY_MIGRATION_SOURCE_HEAD_SHA,
+                    transport.SEMANTIC_PROGRESS_OBSERVABILITY_MIGRATION_SOURCE_ARTIFACT_ID,
+                    transport.SEMANTIC_PROGRESS_OBSERVABILITY_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+                    transport.SEMANTIC_PROGRESS_OBSERVABILITY_MIGRATION_SOURCE_ARTIFACT_SIZE,
+                ),
+                target,
+            )
+            value = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(value["schema_version"], 22)
+            self.assertEqual(value["collector_migrations"][:20], prior_records)
+            self.assertEqual(
+                value["collector_migrations"][20],
+                {
+                    "from_collector_sha": source,
+                    "migration_contract": (
+                        transport.SEMANTIC_PROGRESS_OBSERVABILITY_MIGRATION_CONTRACT
+                    ),
+                    "migration_name": (
+                        transport.SEMANTIC_PROGRESS_OBSERVABILITY_MIGRATION_NAME
+                    ),
+                    "source_artifact_digest": (
+                        transport.SEMANTIC_PROGRESS_OBSERVABILITY_MIGRATION_SOURCE_ARTIFACT_DIGEST
+                    ),
+                    "source_artifact_id": (
+                        transport.SEMANTIC_PROGRESS_OBSERVABILITY_MIGRATION_SOURCE_ARTIFACT_ID
+                    ),
+                    "source_artifact_size": (
+                        transport.SEMANTIC_PROGRESS_OBSERVABILITY_MIGRATION_SOURCE_ARTIFACT_SIZE
+                    ),
+                    "source_head_sha": (
+                        transport.SEMANTIC_PROGRESS_OBSERVABILITY_MIGRATION_SOURCE_HEAD_SHA
+                    ),
+                    "source_run_id": (
+                        transport.SEMANTIC_PROGRESS_OBSERVABILITY_MIGRATION_SOURCE_RUN_ID
+                    ),
+                    "to_collector_sha": target,
+                },
+            )
+            self.assertEqual(sentinel.read_bytes(), b"semantic-state-must-not-change")
+            self.assertEqual(
+                transport.validate_manifest(path, transport.FRAME_RUN_ID), target
+            )
+
+            for field in value["collector_migrations"][20]:
+                tampered = json.loads(json.dumps(value))
+                tampered["collector_migrations"][20][field] = True
+                path.write_text(json.dumps(tampered), encoding="utf-8")
+                with self.subTest(field=field), self.assertRaises(ValueError):
+                    transport.validate_manifest(path, transport.FRAME_RUN_ID)
+
+            path.write_text(json.dumps(value), encoding="utf-8")
+            with self.assertRaises(ValueError):
+                transport.migrate_manifest(
+                    path,
+                    transport.FRAME_RUN_ID,
+                    "b" * 40,
+                    transport.SEMANTIC_PROGRESS_OBSERVABILITY_MIGRATION_NAME,
+                    transport.SEMANTIC_PROGRESS_OBSERVABILITY_MIGRATION_SOURCE_RUN_ID,
+                    transport.SEMANTIC_PROGRESS_OBSERVABILITY_MIGRATION_SOURCE_HEAD_SHA,
+                    transport.SEMANTIC_PROGRESS_OBSERVABILITY_MIGRATION_SOURCE_ARTIFACT_ID,
+                    transport.SEMANTIC_PROGRESS_OBSERVABILITY_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+                    transport.SEMANTIC_PROGRESS_OBSERVABILITY_MIGRATION_SOURCE_ARTIFACT_SIZE,
                 )
 
     def test_source_required_progress_migration_preserves_source_evidence(self) -> None:
@@ -3093,6 +3195,7 @@ class WorkflowContractTests(unittest.TestCase):
             "bounded-source-census-artifact-v1",
             "exact-go-semantic-compiler-world-v1",
             "source-required-go-semantic-worlds-v1",
+            "semantic-progress-observability-v1",
             'migrate-source-required-go-semantic-progress',
             '"$manifest" "$STATE_ROOT" "$WORK_ROOT" "$FRAME_RUN_ID"',
             '"$transport" migrate-manifest',
