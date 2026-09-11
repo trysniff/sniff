@@ -632,6 +632,21 @@ class ManifestTests(unittest.TestCase):
             transport.GO_PROJECT_MODEL_DEPENDENCY_MIGRATION_SOURCE_ARTIFACT_SIZE,
         )
 
+    @staticmethod
+    def _write_source_census_progress_manifest(path: pathlib.Path) -> None:
+        ManifestTests._write_go_project_model_dependency_manifest(path)
+        transport.migrate_manifest(
+            path,
+            transport.FRAME_RUN_ID,
+            transport.BOUNDED_SOURCE_CENSUS_ARTIFACT_MIGRATION_FROM_COLLECTOR_SHA,
+            transport.SOURCE_CENSUS_PROGRESS_MIGRATION_NAME,
+            transport.SOURCE_CENSUS_PROGRESS_MIGRATION_SOURCE_RUN_ID,
+            transport.SOURCE_CENSUS_PROGRESS_MIGRATION_SOURCE_HEAD_SHA,
+            transport.SOURCE_CENSUS_PROGRESS_MIGRATION_SOURCE_ARTIFACT_ID,
+            transport.SOURCE_CENSUS_PROGRESS_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+            transport.SOURCE_CENSUS_PROGRESS_MIGRATION_SOURCE_ARTIFACT_SIZE,
+        )
+
     def test_manifest_round_trips_and_is_create_new(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             path = pathlib.Path(temporary, "manifest.json")
@@ -2113,7 +2128,7 @@ class ManifestTests(unittest.TestCase):
                     transport.GO_PROJECT_MODEL_DEPENDENCY_MIGRATION_SOURCE_ARTIFACT_SIZE,
                 )
 
-    def test_source_census_progress_migration_is_exact_and_closes_the_chain(
+    def test_source_census_progress_migration_is_exact_and_only_opens_the_next_migration(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -2198,6 +2213,97 @@ class ManifestTests(unittest.TestCase):
                     transport.SOURCE_CENSUS_PROGRESS_MIGRATION_SOURCE_ARTIFACT_ID,
                     transport.SOURCE_CENSUS_PROGRESS_MIGRATION_SOURCE_ARTIFACT_DIGEST,
                     transport.SOURCE_CENSUS_PROGRESS_MIGRATION_SOURCE_ARTIFACT_SIZE,
+                )
+
+    def test_bounded_source_census_artifact_migration_is_exact_and_closes_the_chain(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = pathlib.Path(temporary, "manifest.json")
+            self._write_source_census_progress_manifest(path)
+            prior_manifest = json.loads(path.read_text(encoding="utf-8"))
+            prior_records = prior_manifest["collector_migrations"]
+            source = (
+                transport.BOUNDED_SOURCE_CENSUS_ARTIFACT_MIGRATION_FROM_COLLECTOR_SHA
+            )
+            target = "8" * 40
+
+            self.assertEqual(
+                transport.migrate_manifest(
+                    path,
+                    transport.FRAME_RUN_ID,
+                    target,
+                    transport.BOUNDED_SOURCE_CENSUS_ARTIFACT_MIGRATION_NAME,
+                    transport.BOUNDED_SOURCE_CENSUS_ARTIFACT_MIGRATION_SOURCE_RUN_ID,
+                    transport.BOUNDED_SOURCE_CENSUS_ARTIFACT_MIGRATION_SOURCE_HEAD_SHA,
+                    transport.BOUNDED_SOURCE_CENSUS_ARTIFACT_MIGRATION_SOURCE_ARTIFACT_ID,
+                    transport.BOUNDED_SOURCE_CENSUS_ARTIFACT_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+                    transport.BOUNDED_SOURCE_CENSUS_ARTIFACT_MIGRATION_SOURCE_ARTIFACT_SIZE,
+                ),
+                target,
+            )
+            value = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(value["schema_version"], 19)
+            self.assertEqual(value["collector_migrations"][:17], prior_records)
+            self.assertEqual(
+                value["collector_migrations"][17],
+                {
+                    "from_collector_sha": source,
+                    "migration_contract": (
+                        transport.BOUNDED_SOURCE_CENSUS_ARTIFACT_MIGRATION_CONTRACT
+                    ),
+                    "migration_name": (
+                        transport.BOUNDED_SOURCE_CENSUS_ARTIFACT_MIGRATION_NAME
+                    ),
+                    "source_artifact_digest": (
+                        transport.BOUNDED_SOURCE_CENSUS_ARTIFACT_MIGRATION_SOURCE_ARTIFACT_DIGEST
+                    ),
+                    "source_artifact_id": (
+                        transport.BOUNDED_SOURCE_CENSUS_ARTIFACT_MIGRATION_SOURCE_ARTIFACT_ID
+                    ),
+                    "source_artifact_size": (
+                        transport.BOUNDED_SOURCE_CENSUS_ARTIFACT_MIGRATION_SOURCE_ARTIFACT_SIZE
+                    ),
+                    "source_head_sha": (
+                        transport.BOUNDED_SOURCE_CENSUS_ARTIFACT_MIGRATION_SOURCE_HEAD_SHA
+                    ),
+                    "source_run_id": (
+                        transport.BOUNDED_SOURCE_CENSUS_ARTIFACT_MIGRATION_SOURCE_RUN_ID
+                    ),
+                    "to_collector_sha": target,
+                },
+            )
+            self.assertEqual(
+                transport.validate_manifest(path, transport.FRAME_RUN_ID), target
+            )
+
+            for field in value["collector_migrations"][17]:
+                tampered = json.loads(json.dumps(value))
+                tampered["collector_migrations"][17][field] = True
+                path.write_text(json.dumps(tampered), encoding="utf-8")
+                with self.subTest(field=field), self.assertRaises(ValueError):
+                    transport.validate_manifest(path, transport.FRAME_RUN_ID)
+
+            reordered = json.loads(json.dumps(value))
+            reordered["collector_migrations"][16:] = reversed(
+                reordered["collector_migrations"][16:]
+            )
+            path.write_text(json.dumps(reordered), encoding="utf-8")
+            with self.assertRaises(ValueError):
+                transport.validate_manifest(path, transport.FRAME_RUN_ID)
+
+            path.write_text(json.dumps(value), encoding="utf-8")
+            with self.assertRaises(ValueError):
+                transport.migrate_manifest(
+                    path,
+                    transport.FRAME_RUN_ID,
+                    "9" * 40,
+                    transport.BOUNDED_SOURCE_CENSUS_ARTIFACT_MIGRATION_NAME,
+                    transport.BOUNDED_SOURCE_CENSUS_ARTIFACT_MIGRATION_SOURCE_RUN_ID,
+                    transport.BOUNDED_SOURCE_CENSUS_ARTIFACT_MIGRATION_SOURCE_HEAD_SHA,
+                    transport.BOUNDED_SOURCE_CENSUS_ARTIFACT_MIGRATION_SOURCE_ARTIFACT_ID,
+                    transport.BOUNDED_SOURCE_CENSUS_ARTIFACT_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+                    transport.BOUNDED_SOURCE_CENSUS_ARTIFACT_MIGRATION_SOURCE_ARTIFACT_SIZE,
                 )
 
     def test_storage_migration_rejects_unapproved_source_or_name(self) -> None:
@@ -2607,6 +2713,7 @@ class WorkflowContractTests(unittest.TestCase):
             "executable-git-blob-project-model-v1",
             "go-project-model-dependency-preparation-v1",
             "resumable-source-census-progress-v1",
+            "bounded-source-census-artifact-v1",
             '"$transport" migrate-manifest',
             '"$PRIOR_HEAD_SHA" "$PRIOR_ARTIFACT_ID"',
             '"$PRIOR_ARTIFACT_DIGEST" "$PRIOR_ARTIFACT_SIZE"',

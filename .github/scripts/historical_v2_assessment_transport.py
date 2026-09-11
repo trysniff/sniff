@@ -306,6 +306,25 @@ SOURCE_CENSUS_PROGRESS_MIGRATION_SOURCE_ARTIFACT_DIGEST = (
 )
 SOURCE_CENSUS_PROGRESS_MIGRATION_SOURCE_ARTIFACT_SIZE = 325_147_098
 
+BOUNDED_SOURCE_CENSUS_ARTIFACT_MIGRATION_NAME = (
+    "bounded-source-census-artifact-v1"
+)
+BOUNDED_SOURCE_CENSUS_ARTIFACT_MIGRATION_CONTRACT = (
+    "sniffbench-historical-v2-bounded-source-census-artifact-migration-v1"
+)
+BOUNDED_SOURCE_CENSUS_ARTIFACT_MIGRATION_FROM_COLLECTOR_SHA = (
+    "ae708e7c44b42bbdcc08065d46e362e95d510e9b"
+)
+BOUNDED_SOURCE_CENSUS_ARTIFACT_MIGRATION_SOURCE_RUN_ID = 34_524_704_772
+BOUNDED_SOURCE_CENSUS_ARTIFACT_MIGRATION_SOURCE_HEAD_SHA = (
+    "ae708e7c44b42bbdcc08065d46e362e95d510e9b"
+)
+BOUNDED_SOURCE_CENSUS_ARTIFACT_MIGRATION_SOURCE_ARTIFACT_ID = 10_171_478_461
+BOUNDED_SOURCE_CENSUS_ARTIFACT_MIGRATION_SOURCE_ARTIFACT_DIGEST = (
+    "sha256:cd59d6e58d19d446be67da8e5022c77791463ee4fdd81c2c998456ab3d96fcdd"
+)
+BOUNDED_SOURCE_CENSUS_ARTIFACT_MIGRATION_SOURCE_ARTIFACT_SIZE = 354_792_493
+
 FRAME_FILE_SHA256 = {
     "environment.txt": "2e87f3c3e1b2005f6b6d09b1bf1b82d30a9433636c3c67f0806cc68e80ab6800",
     "exclusions.json": "74bccb100eb48ab87952bd7eec137b2285edbc68d2547715bc0e06a80e029f76",
@@ -734,7 +753,7 @@ def validate_manifest(path: pathlib.Path, frame_run_id: int) -> str:
     schema_version = value.get("schema_version")
     if schema_version == 1:
         expected = _manifest(frame_run_id, collector_sha)
-    elif schema_version in (2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18):
+    elif schema_version in (2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19):
         migrations = value.get("collector_migrations")
         expected_count = schema_version - 1
         if not isinstance(migrations, list) or len(migrations) != expected_count:
@@ -823,6 +842,11 @@ def _migration_record(
     elif migration_name == SOURCE_CENSUS_PROGRESS_MIGRATION_NAME:
         contract = SOURCE_CENSUS_PROGRESS_MIGRATION_CONTRACT
         source_collector_sha = SOURCE_CENSUS_PROGRESS_MIGRATION_FROM_COLLECTOR_SHA
+    elif migration_name == BOUNDED_SOURCE_CENSUS_ARTIFACT_MIGRATION_NAME:
+        contract = BOUNDED_SOURCE_CENSUS_ARTIFACT_MIGRATION_CONTRACT
+        source_collector_sha = (
+            BOUNDED_SOURCE_CENSUS_ARTIFACT_MIGRATION_FROM_COLLECTOR_SHA
+        )
     else:
         raise ValueError("transport manifest collector migration is not allowlisted")
     return {
@@ -1158,15 +1182,35 @@ def _expected_source_census_progress_migration(
     )
 
 
+def _expected_bounded_source_census_artifact_migration(
+    target_collector_sha: str,
+) -> dict[str, Any]:
+    if (
+        target_collector_sha
+        == BOUNDED_SOURCE_CENSUS_ARTIFACT_MIGRATION_FROM_COLLECTOR_SHA
+        or re.fullmatch(r"[0-9a-f]{40}", target_collector_sha) is None
+    ):
+        raise ValueError("transport manifest collector migration target is invalid")
+    return _migration_record(
+        BOUNDED_SOURCE_CENSUS_ARTIFACT_MIGRATION_NAME,
+        target_collector_sha,
+        BOUNDED_SOURCE_CENSUS_ARTIFACT_MIGRATION_SOURCE_RUN_ID,
+        BOUNDED_SOURCE_CENSUS_ARTIFACT_MIGRATION_SOURCE_HEAD_SHA,
+        BOUNDED_SOURCE_CENSUS_ARTIFACT_MIGRATION_SOURCE_ARTIFACT_ID,
+        BOUNDED_SOURCE_CENSUS_ARTIFACT_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+        BOUNDED_SOURCE_CENSUS_ARTIFACT_MIGRATION_SOURCE_ARTIFACT_SIZE,
+    )
+
+
 def _validate_collector_migrations(
     migrations: Sequence[Mapping[str, Any]], collector_sha: str
 ) -> None:
-    if len(migrations) not in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17):
+    if len(migrations) not in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18):
         raise ValueError("transport manifest collector migration chain is invalid")
     expected = [_expected_storage_migration()]
     if len(migrations) == 2:
         expected.append(_expected_go_preparation_migration(collector_sha))
-    elif len(migrations) in (3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17):
+    elif len(migrations) in (3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18):
         expected.append(
             _expected_go_preparation_migration(
                 GO_MODULE_DOWNLOAD_MIGRATION_FROM_COLLECTOR_SHA
@@ -1287,14 +1331,25 @@ def _validate_collector_migrations(
         if len(migrations) >= 16:
             dependency_target = (
                 SOURCE_CENSUS_PROGRESS_MIGRATION_FROM_COLLECTOR_SHA
-                if len(migrations) == 17
+                if len(migrations) >= 17
                 else collector_sha
             )
             expected.append(
                 _expected_go_project_model_dependency_migration(dependency_target)
             )
-        if len(migrations) == 17:
-            expected.append(_expected_source_census_progress_migration(collector_sha))
+        if len(migrations) >= 17:
+            source_progress_target = (
+                BOUNDED_SOURCE_CENSUS_ARTIFACT_MIGRATION_FROM_COLLECTOR_SHA
+                if len(migrations) == 18
+                else collector_sha
+            )
+            expected.append(
+                _expected_source_census_progress_migration(source_progress_target)
+            )
+        if len(migrations) == 18:
+            expected.append(
+                _expected_bounded_source_census_artifact_migration(collector_sha)
+            )
     elif collector_sha != STORAGE_MIGRATION_TO_COLLECTOR_SHA:
         raise ValueError("transport manifest collector migration target drifted")
     if [dict(migration) for migration in migrations] != expected:
@@ -1417,6 +1472,12 @@ def migrate_manifest(
         ]
     elif schema_version == 17:
         expected_name = SOURCE_CENSUS_PROGRESS_MIGRATION_NAME
+        migrations = [
+            _require_mapping(item, "transport manifest collector migration")
+            for item in value.get("collector_migrations", [])
+        ]
+    elif schema_version == 18:
+        expected_name = BOUNDED_SOURCE_CENSUS_ARTIFACT_MIGRATION_NAME
         migrations = [
             _require_mapping(item, "transport manifest collector migration")
             for item in value.get("collector_migrations", [])
