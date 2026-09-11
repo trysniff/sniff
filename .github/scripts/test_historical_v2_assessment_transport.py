@@ -662,6 +662,21 @@ class ManifestTests(unittest.TestCase):
             transport.BOUNDED_SOURCE_CENSUS_ARTIFACT_MIGRATION_SOURCE_ARTIFACT_SIZE,
         )
 
+    @staticmethod
+    def _write_exact_go_semantic_compiler_world_manifest(path: pathlib.Path) -> None:
+        ManifestTests._write_bounded_source_census_artifact_manifest(path)
+        transport.migrate_manifest(
+            path,
+            transport.FRAME_RUN_ID,
+            transport.SOURCE_REQUIRED_GO_SEMANTIC_WORLD_MIGRATION_FROM_COLLECTOR_SHA,
+            transport.EXACT_GO_SEMANTIC_COMPILER_WORLD_MIGRATION_NAME,
+            transport.EXACT_GO_SEMANTIC_COMPILER_WORLD_MIGRATION_SOURCE_RUN_ID,
+            transport.EXACT_GO_SEMANTIC_COMPILER_WORLD_MIGRATION_SOURCE_HEAD_SHA,
+            transport.EXACT_GO_SEMANTIC_COMPILER_WORLD_MIGRATION_SOURCE_ARTIFACT_ID,
+            transport.EXACT_GO_SEMANTIC_COMPILER_WORLD_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+            transport.EXACT_GO_SEMANTIC_COMPILER_WORLD_MIGRATION_SOURCE_ARTIFACT_SIZE,
+        )
+
     def test_manifest_round_trips_and_is_create_new(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             path = pathlib.Path(temporary, "manifest.json")
@@ -2335,7 +2350,7 @@ class ManifestTests(unittest.TestCase):
                     transport.EXACT_GO_SEMANTIC_COMPILER_WORLD_MIGRATION_SOURCE_ARTIFACT_SIZE,
                 )
 
-    def test_exact_go_semantic_compiler_world_migration_is_exact_and_closes_chain(
+    def test_exact_go_semantic_compiler_world_migration_is_exact_and_advances_chain(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -2346,7 +2361,9 @@ class ManifestTests(unittest.TestCase):
             source = (
                 transport.EXACT_GO_SEMANTIC_COMPILER_WORLD_MIGRATION_FROM_COLLECTOR_SHA
             )
-            target = "9" * 40
+            target = (
+                transport.SOURCE_REQUIRED_GO_SEMANTIC_WORLD_MIGRATION_FROM_COLLECTOR_SHA
+            )
 
             self.assertEqual(
                 transport.migrate_manifest(
@@ -2425,6 +2442,246 @@ class ManifestTests(unittest.TestCase):
                     transport.EXACT_GO_SEMANTIC_COMPILER_WORLD_MIGRATION_SOURCE_ARTIFACT_DIGEST,
                     transport.EXACT_GO_SEMANTIC_COMPILER_WORLD_MIGRATION_SOURCE_ARTIFACT_SIZE,
                 )
+
+    def test_source_required_go_semantic_world_migration_is_exact_and_closes_chain(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = pathlib.Path(temporary, "manifest.json")
+            self._write_exact_go_semantic_compiler_world_manifest(path)
+            prior_manifest = json.loads(path.read_text(encoding="utf-8"))
+            prior_records = prior_manifest["collector_migrations"]
+            source = (
+                transport.SOURCE_REQUIRED_GO_SEMANTIC_WORLD_MIGRATION_FROM_COLLECTOR_SHA
+            )
+            target = "a" * 40
+
+            self.assertEqual(
+                transport.migrate_manifest(
+                    path,
+                    transport.FRAME_RUN_ID,
+                    target,
+                    transport.SOURCE_REQUIRED_GO_SEMANTIC_WORLD_MIGRATION_NAME,
+                    transport.SOURCE_REQUIRED_GO_SEMANTIC_WORLD_MIGRATION_SOURCE_RUN_ID,
+                    transport.SOURCE_REQUIRED_GO_SEMANTIC_WORLD_MIGRATION_SOURCE_HEAD_SHA,
+                    transport.SOURCE_REQUIRED_GO_SEMANTIC_WORLD_MIGRATION_SOURCE_ARTIFACT_ID,
+                    transport.SOURCE_REQUIRED_GO_SEMANTIC_WORLD_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+                    transport.SOURCE_REQUIRED_GO_SEMANTIC_WORLD_MIGRATION_SOURCE_ARTIFACT_SIZE,
+                ),
+                target,
+            )
+            value = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(value["schema_version"], 21)
+            self.assertEqual(value["collector_migrations"][:19], prior_records)
+            self.assertEqual(
+                value["collector_migrations"][19],
+                {
+                    "from_collector_sha": source,
+                    "migration_contract": (
+                        transport.SOURCE_REQUIRED_GO_SEMANTIC_WORLD_MIGRATION_CONTRACT
+                    ),
+                    "migration_name": (
+                        transport.SOURCE_REQUIRED_GO_SEMANTIC_WORLD_MIGRATION_NAME
+                    ),
+                    "source_artifact_digest": (
+                        transport.SOURCE_REQUIRED_GO_SEMANTIC_WORLD_MIGRATION_SOURCE_ARTIFACT_DIGEST
+                    ),
+                    "source_artifact_id": (
+                        transport.SOURCE_REQUIRED_GO_SEMANTIC_WORLD_MIGRATION_SOURCE_ARTIFACT_ID
+                    ),
+                    "source_artifact_size": (
+                        transport.SOURCE_REQUIRED_GO_SEMANTIC_WORLD_MIGRATION_SOURCE_ARTIFACT_SIZE
+                    ),
+                    "source_head_sha": (
+                        transport.SOURCE_REQUIRED_GO_SEMANTIC_WORLD_MIGRATION_SOURCE_HEAD_SHA
+                    ),
+                    "source_run_id": (
+                        transport.SOURCE_REQUIRED_GO_SEMANTIC_WORLD_MIGRATION_SOURCE_RUN_ID
+                    ),
+                    "to_collector_sha": target,
+                },
+            )
+            self.assertEqual(
+                transport.validate_manifest(path, transport.FRAME_RUN_ID), target
+            )
+
+            for field in value["collector_migrations"][19]:
+                tampered = json.loads(json.dumps(value))
+                tampered["collector_migrations"][19][field] = True
+                path.write_text(json.dumps(tampered), encoding="utf-8")
+                with self.subTest(field=field), self.assertRaises(ValueError):
+                    transport.validate_manifest(path, transport.FRAME_RUN_ID)
+
+            path.write_text(json.dumps(value), encoding="utf-8")
+            with self.assertRaises(ValueError):
+                transport.migrate_manifest(
+                    path,
+                    transport.FRAME_RUN_ID,
+                    "b" * 40,
+                    transport.SOURCE_REQUIRED_GO_SEMANTIC_WORLD_MIGRATION_NAME,
+                    transport.SOURCE_REQUIRED_GO_SEMANTIC_WORLD_MIGRATION_SOURCE_RUN_ID,
+                    transport.SOURCE_REQUIRED_GO_SEMANTIC_WORLD_MIGRATION_SOURCE_HEAD_SHA,
+                    transport.SOURCE_REQUIRED_GO_SEMANTIC_WORLD_MIGRATION_SOURCE_ARTIFACT_ID,
+                    transport.SOURCE_REQUIRED_GO_SEMANTIC_WORLD_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+                    transport.SOURCE_REQUIRED_GO_SEMANTIC_WORLD_MIGRATION_SOURCE_ARTIFACT_SIZE,
+                )
+
+    def test_source_required_progress_migration_preserves_source_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            manifest = root.joinpath("manifest.json")
+            self._write_exact_go_semantic_compiler_world_manifest(manifest)
+            state_root = root.joinpath("historical-v2-assessment-state")
+            work_root = root.joinpath("historical-v2-assessment-work")
+            state_slot = state_root.joinpath("go", "slot-0122")
+            source_stage = state_slot.joinpath("0004-source-census")
+            source_stage.mkdir(parents=True)
+            state_slot.with_name("slot-0122.lock").write_text("locked", encoding="utf-8")
+            prior_state = state_root.joinpath("go", "slot-0121", "complete")
+            prior_state.mkdir(parents=True)
+            prior_state.joinpath("checkpoint.json").write_bytes(b"prior-slot")
+            state_root.joinpath("go", "slot-0121.lock").write_text(
+                "locked", encoding="utf-8"
+            )
+            checkpoint = {
+                "schema_version": 1,
+                "checkpoint_contract": "sniffbench-historical-v2-slot-stage-checkpoint-v1",
+                "selection_sha256": transport.SELECTION_SHA256,
+                "language": "go",
+                "slot_number": 122,
+                "sequence": 4,
+                "stage": "source_census",
+                "outcome": {
+                    "status": "completed",
+                    "artifact_kind": "source_census",
+                },
+            }
+            source_checkpoint = source_stage.joinpath("checkpoint.json")
+            source_checkpoint.write_text(json.dumps(checkpoint), encoding="utf-8")
+
+            work_slot = work_root.joinpath("go", "slot-0122")
+            source_progress = work_slot.joinpath("source-progress")
+            source_progress.joinpath("base").mkdir(parents=True)
+            source_progress.joinpath("patched").mkdir()
+            base_evidence = source_progress.joinpath("base", "snapshot.json")
+            patched_evidence = source_progress.joinpath("patched", "snapshot.json")
+            base_evidence.write_bytes(b"base-source-evidence")
+            patched_evidence.write_bytes(b"patched-source-evidence")
+            semantic_progress = work_slot.joinpath("semantic-progress")
+            semantic_unit = semantic_progress.joinpath("base", "go", "old-world")
+            semantic_unit.mkdir(parents=True)
+            semantic_unit.joinpath("scope.json").write_bytes(b"old-semantic-world")
+            next_slot = work_root.joinpath("go", "slot-0123", "repository")
+            next_slot.mkdir(parents=True)
+            next_slot.joinpath("go.mod").write_bytes(b"next-slot")
+            manifest_before = manifest.read_bytes()
+            checkpoint_before = source_checkpoint.read_bytes()
+
+            transport.migrate_source_required_go_semantic_progress(
+                manifest,
+                state_root,
+                work_root,
+                transport.FRAME_RUN_ID,
+                transport.SOURCE_REQUIRED_GO_SEMANTIC_WORLD_MIGRATION_NAME,
+                transport.SOURCE_REQUIRED_GO_SEMANTIC_WORLD_MIGRATION_SOURCE_RUN_ID,
+                transport.SOURCE_REQUIRED_GO_SEMANTIC_WORLD_MIGRATION_SOURCE_HEAD_SHA,
+                transport.SOURCE_REQUIRED_GO_SEMANTIC_WORLD_MIGRATION_SOURCE_ARTIFACT_ID,
+                transport.SOURCE_REQUIRED_GO_SEMANTIC_WORLD_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+                transport.SOURCE_REQUIRED_GO_SEMANTIC_WORLD_MIGRATION_SOURCE_ARTIFACT_SIZE,
+            )
+
+            self.assertFalse(semantic_progress.exists())
+            self.assertEqual(base_evidence.read_bytes(), b"base-source-evidence")
+            self.assertEqual(patched_evidence.read_bytes(), b"patched-source-evidence")
+            self.assertEqual(source_checkpoint.read_bytes(), checkpoint_before)
+            self.assertEqual(manifest.read_bytes(), manifest_before)
+            self.assertEqual(
+                prior_state.joinpath("checkpoint.json").read_bytes(), b"prior-slot"
+            )
+            self.assertEqual(next_slot.joinpath("go.mod").read_bytes(), b"next-slot")
+
+    def test_source_required_progress_migration_fails_before_deleting_on_drift(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            manifest = root.joinpath("manifest.json")
+            self._write_exact_go_semantic_compiler_world_manifest(manifest)
+            state_root = root.joinpath("historical-v2-assessment-state")
+            work_root = root.joinpath("historical-v2-assessment-work")
+            state_slot = state_root.joinpath("go", "slot-0122")
+            source_stage = state_slot.joinpath("0004-source-census")
+            source_stage.mkdir(parents=True)
+            state_slot.with_name("slot-0122.lock").write_text("locked", encoding="utf-8")
+            source_stage.joinpath("checkpoint.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "checkpoint_contract": (
+                            "sniffbench-historical-v2-slot-stage-checkpoint-v1"
+                        ),
+                        "selection_sha256": transport.SELECTION_SHA256,
+                        "language": "go",
+                        "slot_number": 122,
+                        "sequence": 4,
+                        "stage": "source_census",
+                        "outcome": {
+                            "status": "completed",
+                            "artifact_kind": "source_census",
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            work_slot = work_root.joinpath("go", "slot-0122")
+            source_progress = work_slot.joinpath("source-progress")
+            source_progress.joinpath("base").mkdir(parents=True)
+            source_progress.joinpath("patched").mkdir()
+            semantic_progress = work_slot.joinpath("semantic-progress")
+            semantic_progress.mkdir()
+            semantic_marker = semantic_progress.joinpath("must-survive")
+            semantic_marker.write_bytes(b"evidence")
+            unexpected_progress = work_root.joinpath(
+                "go", "slot-0123", "semantic-progress"
+            )
+            unexpected_progress.mkdir(parents=True)
+            unexpected_marker = unexpected_progress.joinpath("must-survive")
+            unexpected_marker.write_bytes(b"unexpected-evidence")
+
+            with self.assertRaises(ValueError):
+                transport.migrate_source_required_go_semantic_progress(
+                    manifest,
+                    state_root,
+                    work_root,
+                    transport.FRAME_RUN_ID,
+                    transport.SOURCE_REQUIRED_GO_SEMANTIC_WORLD_MIGRATION_NAME,
+                    transport.SOURCE_REQUIRED_GO_SEMANTIC_WORLD_MIGRATION_SOURCE_RUN_ID
+                    + 1,
+                    transport.SOURCE_REQUIRED_GO_SEMANTIC_WORLD_MIGRATION_SOURCE_HEAD_SHA,
+                    transport.SOURCE_REQUIRED_GO_SEMANTIC_WORLD_MIGRATION_SOURCE_ARTIFACT_ID,
+                    transport.SOURCE_REQUIRED_GO_SEMANTIC_WORLD_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+                    transport.SOURCE_REQUIRED_GO_SEMANTIC_WORLD_MIGRATION_SOURCE_ARTIFACT_SIZE,
+                )
+            self.assertEqual(semantic_marker.read_bytes(), b"evidence")
+            self.assertEqual(unexpected_marker.read_bytes(), b"unexpected-evidence")
+
+            with self.assertRaises(ValueError):
+                transport.migrate_source_required_go_semantic_progress(
+                    manifest,
+                    state_root,
+                    work_root,
+                    transport.FRAME_RUN_ID,
+                    transport.SOURCE_REQUIRED_GO_SEMANTIC_WORLD_MIGRATION_NAME,
+                    transport.SOURCE_REQUIRED_GO_SEMANTIC_WORLD_MIGRATION_SOURCE_RUN_ID,
+                    transport.SOURCE_REQUIRED_GO_SEMANTIC_WORLD_MIGRATION_SOURCE_HEAD_SHA,
+                    transport.SOURCE_REQUIRED_GO_SEMANTIC_WORLD_MIGRATION_SOURCE_ARTIFACT_ID,
+                    transport.SOURCE_REQUIRED_GO_SEMANTIC_WORLD_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+                    transport.SOURCE_REQUIRED_GO_SEMANTIC_WORLD_MIGRATION_SOURCE_ARTIFACT_SIZE,
+                )
+            self.assertEqual(semantic_marker.read_bytes(), b"evidence")
+            self.assertEqual(
+                unexpected_marker.read_bytes(), b"unexpected-evidence"
+            )
 
     def test_storage_migration_rejects_unapproved_source_or_name(self) -> None:
         attempts = (
@@ -2835,6 +3092,9 @@ class WorkflowContractTests(unittest.TestCase):
             "resumable-source-census-progress-v1",
             "bounded-source-census-artifact-v1",
             "exact-go-semantic-compiler-world-v1",
+            "source-required-go-semantic-worlds-v1",
+            'migrate-source-required-go-semantic-progress',
+            '"$manifest" "$STATE_ROOT" "$WORK_ROOT" "$FRAME_RUN_ID"',
             '"$transport" migrate-manifest',
             '"$PRIOR_HEAD_SHA" "$PRIOR_ARTIFACT_ID"',
             '"$PRIOR_ARTIFACT_DIGEST" "$PRIOR_ARTIFACT_SIZE"',
@@ -2863,6 +3123,9 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertNotIn('target/release/sniffbench-frame run-slots', workflow)
         self.assertNotIn('--artifact-root "$GITHUB_WORKSPACE"', workflow)
         self.assertNotIn('--artifact-root "$COLLECTOR_ROOT"', workflow)
+        cleanup = workflow.index("migrate-source-required-go-semantic-progress")
+        manifest_migration = workflow.index('"$transport" migrate-manifest')
+        self.assertLess(cleanup, manifest_migration)
         replay = workflow.index("- name: Replay stale compiler public-surface censuses")
         install = workflow.index("- name: Install every pinned semantic indexer")
         assess = workflow.index("- name: Assess a bounded resumable slot slice")
