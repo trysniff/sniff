@@ -430,29 +430,18 @@ def _require_exact_directory_children(
     root: pathlib.Path,
     expected_directories: set[str],
     label: str,
-    expected_files: set[str] | None = None,
 ) -> None:
     _plain_directory(root, label)
-    expected_files = expected_files or set()
     observed_directories: set[str] = set()
-    observed_files: set[str] = set()
     try:
         entries = list(os.scandir(root))
     except OSError as error:
         raise ValueError(f"failed to enumerate {label}: {error}") from error
     for entry in entries:
-        if entry.is_symlink():
+        if entry.is_symlink() or not entry.is_dir(follow_symlinks=False):
             raise ValueError(f"{label} contains an unexpected entry: {entry.name}")
-        if entry.is_dir(follow_symlinks=False):
-            observed_directories.add(entry.name)
-        elif entry.is_file(follow_symlinks=False):
-            observed_files.add(entry.name)
-        else:
-            raise ValueError(f"{label} contains an unexpected entry: {entry.name}")
-    if (
-        observed_directories != expected_directories
-        or observed_files != expected_files
-    ):
+        observed_directories.add(entry.name)
+    if observed_directories != expected_directories:
         raise ValueError(f"{label} directory set drifted")
 
 
