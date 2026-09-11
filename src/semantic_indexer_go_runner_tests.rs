@@ -200,6 +200,51 @@ fn bounded_merge_failure_is_processless_snapshot_assembly() {
     assert!(failure.process.is_none());
 }
 
+#[test]
+fn incomplete_go_variants_run_before_completed_variants_without_reordering_peers() {
+    let plans = vec![
+        variant_plan("complete-a", &["fixture/a.go"], &[]),
+        variant_plan("incomplete-a", &["fixture/b.go"], &[]),
+        variant_plan("complete-b", &["fixture/c.go"], &[]),
+        variant_plan("incomplete-b", &["fixture/d.go"], &[]),
+    ];
+    let completed = BTreeSet::from([
+        SemanticVariantId("complete-a".to_string()),
+        SemanticVariantId("complete-b".to_string()),
+    ]);
+
+    let ordered = prioritize_incomplete_go_variants(&plans, &completed)
+        .into_iter()
+        .map(|plan| plan.identity.0.as_str())
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        ordered,
+        vec!["incomplete-a", "incomplete-b", "complete-a", "complete-b"]
+    );
+}
+
+#[test]
+fn recovered_go_variant_progress_must_match_the_current_plan() {
+    let plan = variant_plan("linux", &["fixture/main.go"], &[]);
+    let exact = crate::semantic_indexer_runner::progress::SemanticProgressRecovery {
+        variant_identity: Some(plan.identity.0.clone()),
+        dimensions: plan.dimensions.clone(),
+        planned_unit_count: 2,
+        completed_unit_count: 1,
+        next_unit_id: Some("document-00000001".to_string()),
+    };
+    validate_go_variant_progress_recovery(&plan, &exact).unwrap();
+
+    let mut mismatched = exact.clone();
+    mismatched.variant_identity = Some("other".to_string());
+    assert!(validate_go_variant_progress_recovery(&plan, &mismatched).is_err());
+
+    let mut contradictory = exact;
+    contradictory.completed_unit_count = contradictory.planned_unit_count;
+    assert!(validate_go_variant_progress_recovery(&plan, &contradictory).is_err());
+}
+
 #[tokio::test]
 async fn completed_progress_unit_skips_the_compiler_invocation() {
     let repository = tempfile::tempdir().unwrap();

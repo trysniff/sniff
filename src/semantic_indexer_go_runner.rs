@@ -8,7 +8,8 @@ use crate::semantic_index_merge::{
     begin_document_shard, merge_document_shard, merge_implementation_pair,
 };
 use crate::semantic_indexer_runner::progress::{
-    SemanticProgressScope, SemanticProgressScopeInputs, SemanticProgressStore, SemanticProgressUnit,
+    SemanticProgressRecovery, SemanticProgressScope, SemanticProgressScopeInputs,
+    SemanticProgressStore, SemanticProgressUnit,
 };
 use serde::Serialize;
 
@@ -113,6 +114,7 @@ async fn run_required_go_indexer_variants_with_limits(
         })?;
     }
     validate_variant_progress_directories(inputs.spec, inputs.progress_root, plans)?;
+    let execution_plans = go_variant_execution_order(inputs.spec, inputs.progress_root, plans)?;
     let execution_root = inputs.recovery.prepare_indexer_run().map_err(|detail| {
         indexer_failure(
             inputs.spec,
@@ -127,7 +129,7 @@ async fn run_required_go_indexer_variants_with_limits(
             .await?;
         let mut variants = BTreeMap::new();
         let mut selected_documents = BTreeSet::new();
-        for plan in plans {
+        for plan in execution_plans {
             let world = run_go_compiler_world(
                 inputs,
                 &execution_root,
@@ -171,6 +173,65 @@ async fn run_required_go_indexer_variants_with_limits(
         )
     });
     combine_typed_run_and_integrity(run_result, cleanup_result)
+}
+
+fn go_variant_execution_order<'a>(
+    spec: PinnedIndexer,
+    progress_root: Option<&Path>,
+    plans: &'a [SemanticIndexerVariantPlan],
+) -> Result<Vec<&'a SemanticIndexerVariantPlan>, SemanticIndexerRunFailure> {
+    let Some(progress_root) = progress_root else {
+        return Ok(plans.iter().collect());
+    };
+    let family_root = progress_root.join("go");
+    let mut completed = BTreeSet::new();
+    for plan in plans {
+        let identity =
+            canonical_sha256(&plan.identity).map_err(|detail| go_progress_failure(spec, detail))?;
+        let Some(recovery) = SemanticProgressStore::recover_existing(&family_root.join(identity))
+            .map_err(|detail| go_progress_failure(spec, detail))?
+        else {
+            continue;
+        };
+        validate_go_variant_progress_recovery(plan, &recovery)
+            .map_err(|detail| go_progress_failure(spec, detail))?;
+        if recovery.completed_unit_count == recovery.planned_unit_count {
+            completed.insert(plan.identity.clone());
+        }
+    }
+    Ok(prioritize_incomplete_go_variants(plans, &completed))
+}
+
+fn validate_go_variant_progress_recovery(
+    plan: &SemanticIndexerVariantPlan,
+    recovery: &SemanticProgressRecovery,
+) -> Result<(), String> {
+    if recovery.variant_identity.as_deref() != Some(plan.identity.0.as_str())
+        || recovery.dimensions != plan.dimensions
+        || (recovery.completed_unit_count == recovery.planned_unit_count)
+            != recovery.next_unit_id.is_none()
+    {
+        return Err(format!(
+            "Go semantic progress disagrees with compiler variant {}",
+            plan.identity.0
+        ));
+    }
+    Ok(())
+}
+
+fn prioritize_incomplete_go_variants<'a>(
+    plans: &'a [SemanticIndexerVariantPlan],
+    completed: &BTreeSet<crate::semantic_index::SemanticVariantId>,
+) -> Vec<&'a SemanticIndexerVariantPlan> {
+    plans
+        .iter()
+        .filter(|plan| !completed.contains(&plan.identity))
+        .chain(
+            plans
+                .iter()
+                .filter(|plan| completed.contains(&plan.identity)),
+        )
+        .collect()
 }
 
 struct PreparedGoRun {
