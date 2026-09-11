@@ -344,6 +344,25 @@ EXACT_GO_SEMANTIC_COMPILER_WORLD_MIGRATION_SOURCE_ARTIFACT_DIGEST = (
 )
 EXACT_GO_SEMANTIC_COMPILER_WORLD_MIGRATION_SOURCE_ARTIFACT_SIZE = 456_087_092
 
+SOURCE_REQUIRED_GO_SEMANTIC_WORLD_MIGRATION_NAME = (
+    "source-required-go-semantic-worlds-v1"
+)
+SOURCE_REQUIRED_GO_SEMANTIC_WORLD_MIGRATION_CONTRACT = (
+    "sniffbench-historical-v2-source-required-go-semantic-worlds-migration-v1"
+)
+SOURCE_REQUIRED_GO_SEMANTIC_WORLD_MIGRATION_FROM_COLLECTOR_SHA = (
+    "082aa95d20f98d380f2907aac09154ecda7b6293"
+)
+SOURCE_REQUIRED_GO_SEMANTIC_WORLD_MIGRATION_SOURCE_RUN_ID = 34_576_173_950
+SOURCE_REQUIRED_GO_SEMANTIC_WORLD_MIGRATION_SOURCE_HEAD_SHA = (
+    "082aa95d20f98d380f2907aac09154ecda7b6293"
+)
+SOURCE_REQUIRED_GO_SEMANTIC_WORLD_MIGRATION_SOURCE_ARTIFACT_ID = 10_190_009_834
+SOURCE_REQUIRED_GO_SEMANTIC_WORLD_MIGRATION_SOURCE_ARTIFACT_DIGEST = (
+    "sha256:95de029d8163cf4e595c5e9dfca9315059b169b7e546249bc2a5802f78beac45"
+)
+SOURCE_REQUIRED_GO_SEMANTIC_WORLD_MIGRATION_SOURCE_ARTIFACT_SIZE = 475_036_861
+
 FRAME_FILE_SHA256 = {
     "environment.txt": "2e87f3c3e1b2005f6b6d09b1bf1b82d30a9433636c3c67f0806cc68e80ab6800",
     "exclusions.json": "74bccb100eb48ab87952bd7eec137b2285edbc68d2547715bc0e06a80e029f76",
@@ -392,6 +411,210 @@ def _require_exact_fields(
     for key, expected_value in expected.items():
         if value.get(key) != expected_value:
             raise ValueError(f"{label} field drifted: {key}")
+
+
+def _exact_plain_child(
+    parent: pathlib.Path, name: str, label: str
+) -> pathlib.Path:
+    _plain_directory(parent, f"{label} parent")
+    parent_resolved = parent.resolve(strict=True)
+    child = parent.joinpath(name)
+    _plain_directory(child, label)
+    child_resolved = child.resolve(strict=True)
+    if child_resolved.parent != parent_resolved or child_resolved.name != name:
+        raise ValueError(f"{label} escaped its parent")
+    return child_resolved
+
+
+def _require_exact_directory_children(
+    root: pathlib.Path,
+    expected_directories: set[str],
+    label: str,
+    expected_files: set[str] | None = None,
+) -> None:
+    _plain_directory(root, label)
+    expected_files = expected_files or set()
+    observed_directories: set[str] = set()
+    observed_files: set[str] = set()
+    try:
+        entries = list(os.scandir(root))
+    except OSError as error:
+        raise ValueError(f"failed to enumerate {label}: {error}") from error
+    for entry in entries:
+        if entry.is_symlink():
+            raise ValueError(f"{label} contains an unexpected entry: {entry.name}")
+        if entry.is_dir(follow_symlinks=False):
+            observed_directories.add(entry.name)
+        elif entry.is_file(follow_symlinks=False):
+            observed_files.add(entry.name)
+        else:
+            raise ValueError(f"{label} contains an unexpected entry: {entry.name}")
+    if (
+        observed_directories != expected_directories
+        or observed_files != expected_files
+    ):
+        raise ValueError(f"{label} directory set drifted")
+
+
+def _validate_plain_tree(root: pathlib.Path, label: str) -> None:
+    _plain_directory(root, label)
+    try:
+        entries = list(os.scandir(root))
+    except OSError as error:
+        raise ValueError(f"failed to enumerate {label}: {error}") from error
+    for entry in entries:
+        if entry.is_symlink():
+            raise ValueError(f"{label} contains a symlink: {entry.name}")
+        if entry.is_dir(follow_symlinks=False):
+            _validate_plain_tree(pathlib.Path(entry.path), label)
+        elif not entry.is_file(follow_symlinks=False):
+            raise ValueError(f"{label} contains a non-regular entry: {entry.name}")
+
+
+def _named_work_progress_roots(
+    language_root: pathlib.Path, name: str
+) -> list[pathlib.Path]:
+    roots: list[pathlib.Path] = []
+    try:
+        entries = list(os.scandir(language_root))
+    except OSError as error:
+        raise ValueError(f"failed to enumerate Go work root: {error}") from error
+    for entry in entries:
+        if entry.is_symlink() or not entry.is_dir(follow_symlinks=False):
+            raise ValueError(f"Go work root contains an unexpected entry: {entry.name}")
+        slot_root = _exact_plain_child(language_root, entry.name, "Go work slot")
+        progress_root = slot_root.joinpath(name)
+        try:
+            progress_root.lstat()
+        except FileNotFoundError:
+            continue
+        except OSError as error:
+            raise ValueError(f"failed to inspect {name}: {error}") from error
+        roots.append(_exact_plain_child(slot_root, name, f"{name} root"))
+    roots.sort()
+    return roots
+
+
+def _remove_validated_plain_tree(root: pathlib.Path, label: str) -> None:
+    try:
+        entries = list(os.scandir(root))
+    except OSError as error:
+        raise ValueError(f"failed to enumerate {label}: {error}") from error
+    for entry in entries:
+        path = pathlib.Path(entry.path)
+        if entry.is_symlink():
+            raise ValueError(f"{label} changed to a symlink during migration")
+        try:
+            if entry.is_dir(follow_symlinks=False):
+                _remove_validated_plain_tree(path, label)
+                path.rmdir()
+            elif entry.is_file(follow_symlinks=False):
+                path.unlink()
+            else:
+                raise ValueError(f"{label} changed during migration")
+        except OSError as error:
+            raise ValueError(f"failed to remove {label}: {error}") from error
+
+
+def migrate_source_required_go_semantic_progress(
+    manifest_path: pathlib.Path,
+    state_root: pathlib.Path,
+    work_root: pathlib.Path,
+    frame_run_id: int,
+    migration_name: str,
+    source_run_id: int,
+    source_head_sha: str,
+    source_artifact_id: int,
+    source_artifact_digest: str,
+    source_artifact_size: int,
+) -> None:
+    if migration_name != SOURCE_REQUIRED_GO_SEMANTIC_WORLD_MIGRATION_NAME:
+        raise ValueError("semantic progress migration is not allowlisted")
+    if (
+        source_run_id != SOURCE_REQUIRED_GO_SEMANTIC_WORLD_MIGRATION_SOURCE_RUN_ID
+        or source_head_sha
+        != SOURCE_REQUIRED_GO_SEMANTIC_WORLD_MIGRATION_SOURCE_HEAD_SHA
+        or source_artifact_id
+        != SOURCE_REQUIRED_GO_SEMANTIC_WORLD_MIGRATION_SOURCE_ARTIFACT_ID
+        or source_artifact_digest
+        != SOURCE_REQUIRED_GO_SEMANTIC_WORLD_MIGRATION_SOURCE_ARTIFACT_DIGEST
+        or source_artifact_size
+        != SOURCE_REQUIRED_GO_SEMANTIC_WORLD_MIGRATION_SOURCE_ARTIFACT_SIZE
+    ):
+        raise ValueError("semantic progress migration source artifact drifted")
+    manifest = _require_mapping(
+        _read_json(manifest_path, "transport manifest"), "transport manifest"
+    )
+    if manifest.get("schema_version") != 20:
+        raise ValueError("semantic progress migration requires manifest schema 20")
+    if (
+        validate_manifest(manifest_path, frame_run_id)
+        != SOURCE_REQUIRED_GO_SEMANTIC_WORLD_MIGRATION_FROM_COLLECTOR_SHA
+    ):
+        raise ValueError("semantic progress migration source collector drifted")
+
+    if state_root.name != "historical-v2-assessment-state":
+        raise ValueError("semantic progress migration state root name drifted")
+    if work_root.name != "historical-v2-assessment-work":
+        raise ValueError("semantic progress migration work root name drifted")
+    _require_exact_directory_children(state_root, {"go"}, "assessment state root")
+    _require_exact_directory_children(work_root, {"go"}, "assessment work root")
+    state_language = _exact_plain_child(state_root, "go", "Go state root")
+    work_language = _exact_plain_child(work_root, "go", "Go work root")
+    _plain_file(state_language.joinpath("slot-0122.lock"), "Go state slot lock")
+    state_slot = _exact_plain_child(state_language, "slot-0122", "Go state slot")
+    work_slot = _exact_plain_child(work_language, "slot-0122", "Go work slot")
+
+    source_stage = _exact_plain_child(
+        state_slot, "0004-source-census", "committed source census stage"
+    )
+    checkpoint = _require_mapping(
+        _read_json(source_stage.joinpath("checkpoint.json"), "source census checkpoint"),
+        "source census checkpoint",
+    )
+    _require_exact_fields(
+        checkpoint,
+        {
+            "schema_version": 1,
+            "checkpoint_contract": "sniffbench-historical-v2-slot-stage-checkpoint-v1",
+            "selection_sha256": SELECTION_SHA256,
+            "language": "go",
+            "slot_number": 122,
+            "sequence": 4,
+            "stage": "source_census",
+        },
+        "source census checkpoint",
+    )
+    outcome = _require_mapping(checkpoint.get("outcome"), "source census outcome")
+    _require_exact_fields(
+        outcome,
+        {"status": "completed", "artifact_kind": "source_census"},
+        "source census outcome",
+    )
+    if any(entry.name.startswith("0005-") for entry in state_slot.iterdir()):
+        raise ValueError("semantic progress migration found a committed semantic stage")
+
+    source_progress = _exact_plain_child(
+        work_slot, "source-progress", "source progress root"
+    )
+    _require_exact_directory_children(
+        source_progress, {"base", "patched"}, "source progress root"
+    )
+    semantic_progress = _exact_plain_child(
+        work_slot, "semantic-progress", "semantic progress root"
+    )
+    if _named_work_progress_roots(work_language, "semantic-progress") != [
+        semantic_progress
+    ]:
+        raise ValueError("semantic progress migration scope drifted")
+    _validate_plain_tree(semantic_progress, "semantic progress root")
+    _remove_validated_plain_tree(semantic_progress, "semantic progress root")
+    try:
+        semantic_progress.rmdir()
+    except OSError as error:
+        raise ValueError(f"failed to remove semantic progress root: {error}") from error
+    if semantic_progress.exists():
+        raise ValueError("semantic progress root survived migration")
 
 
 def _positive_json_integer(value: Any, label: str) -> int:
@@ -772,7 +995,7 @@ def validate_manifest(path: pathlib.Path, frame_run_id: int) -> str:
     schema_version = value.get("schema_version")
     if schema_version == 1:
         expected = _manifest(frame_run_id, collector_sha)
-    elif schema_version in (2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20):
+    elif schema_version in (2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21):
         migrations = value.get("collector_migrations")
         expected_count = schema_version - 1
         if not isinstance(migrations, list) or len(migrations) != expected_count:
@@ -870,6 +1093,11 @@ def _migration_record(
         contract = EXACT_GO_SEMANTIC_COMPILER_WORLD_MIGRATION_CONTRACT
         source_collector_sha = (
             EXACT_GO_SEMANTIC_COMPILER_WORLD_MIGRATION_FROM_COLLECTOR_SHA
+        )
+    elif migration_name == SOURCE_REQUIRED_GO_SEMANTIC_WORLD_MIGRATION_NAME:
+        contract = SOURCE_REQUIRED_GO_SEMANTIC_WORLD_MIGRATION_CONTRACT
+        source_collector_sha = (
+            SOURCE_REQUIRED_GO_SEMANTIC_WORLD_MIGRATION_FROM_COLLECTOR_SHA
         )
     else:
         raise ValueError("transport manifest collector migration is not allowlisted")
@@ -1246,15 +1474,35 @@ def _expected_exact_go_semantic_compiler_world_migration(
     )
 
 
+def _expected_source_required_go_semantic_world_migration(
+    target_collector_sha: str,
+) -> dict[str, Any]:
+    if (
+        target_collector_sha
+        == SOURCE_REQUIRED_GO_SEMANTIC_WORLD_MIGRATION_FROM_COLLECTOR_SHA
+        or re.fullmatch(r"[0-9a-f]{40}", target_collector_sha) is None
+    ):
+        raise ValueError("transport manifest collector migration target is invalid")
+    return _migration_record(
+        SOURCE_REQUIRED_GO_SEMANTIC_WORLD_MIGRATION_NAME,
+        target_collector_sha,
+        SOURCE_REQUIRED_GO_SEMANTIC_WORLD_MIGRATION_SOURCE_RUN_ID,
+        SOURCE_REQUIRED_GO_SEMANTIC_WORLD_MIGRATION_SOURCE_HEAD_SHA,
+        SOURCE_REQUIRED_GO_SEMANTIC_WORLD_MIGRATION_SOURCE_ARTIFACT_ID,
+        SOURCE_REQUIRED_GO_SEMANTIC_WORLD_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+        SOURCE_REQUIRED_GO_SEMANTIC_WORLD_MIGRATION_SOURCE_ARTIFACT_SIZE,
+    )
+
+
 def _validate_collector_migrations(
     migrations: Sequence[Mapping[str, Any]], collector_sha: str
 ) -> None:
-    if len(migrations) not in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19):
+    if len(migrations) not in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20):
         raise ValueError("transport manifest collector migration chain is invalid")
     expected = [_expected_storage_migration()]
     if len(migrations) == 2:
         expected.append(_expected_go_preparation_migration(collector_sha))
-    elif len(migrations) in (3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19):
+    elif len(migrations) in (3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20):
         expected.append(
             _expected_go_preparation_migration(
                 GO_MODULE_DOWNLOAD_MIGRATION_FROM_COLLECTOR_SHA
@@ -1403,7 +1651,15 @@ def _validate_collector_migrations(
             )
         if len(migrations) >= 19:
             expected.append(
-                _expected_exact_go_semantic_compiler_world_migration(collector_sha)
+                _expected_exact_go_semantic_compiler_world_migration(
+                    SOURCE_REQUIRED_GO_SEMANTIC_WORLD_MIGRATION_FROM_COLLECTOR_SHA
+                    if len(migrations) >= 20
+                    else collector_sha
+                )
+            )
+        if len(migrations) >= 20:
+            expected.append(
+                _expected_source_required_go_semantic_world_migration(collector_sha)
             )
     elif collector_sha != STORAGE_MIGRATION_TO_COLLECTOR_SHA:
         raise ValueError("transport manifest collector migration target drifted")
@@ -1543,6 +1799,12 @@ def migrate_manifest(
             _require_mapping(item, "transport manifest collector migration")
             for item in value.get("collector_migrations", [])
         ]
+    elif schema_version == 20:
+        expected_name = SOURCE_REQUIRED_GO_SEMANTIC_WORLD_MIGRATION_NAME
+        migrations = [
+            _require_mapping(item, "transport manifest collector migration")
+            for item in value.get("collector_migrations", [])
+        ]
     else:
         raise ValueError("transport manifest collector migration chain is closed")
     if migration_name != expected_name:
@@ -1622,6 +1884,20 @@ def _parser() -> argparse.ArgumentParser:
     migrate.add_argument("source_artifact_digest")
     migrate.add_argument("source_artifact_size", type=_positive_integer)
 
+    semantic_progress = commands.add_parser(
+        "migrate-source-required-go-semantic-progress"
+    )
+    semantic_progress.add_argument("manifest", type=pathlib.Path)
+    semantic_progress.add_argument("state_root", type=pathlib.Path)
+    semantic_progress.add_argument("work_root", type=pathlib.Path)
+    semantic_progress.add_argument("frame_run_id", type=_positive_integer)
+    semantic_progress.add_argument("migration_name")
+    semantic_progress.add_argument("source_run_id", type=_positive_integer)
+    semantic_progress.add_argument("source_head_sha")
+    semantic_progress.add_argument("source_artifact_id", type=_positive_integer)
+    semantic_progress.add_argument("source_artifact_digest")
+    semantic_progress.add_argument("source_artifact_size", type=_positive_integer)
+
     tools = commands.add_parser("validate-tools-provenance")
     tools.add_argument("run", type=pathlib.Path)
     tools.add_argument("artifacts", type=pathlib.Path)
@@ -1660,6 +1936,19 @@ def main(arguments: Sequence[str] | None = None) -> int:
                     args.source_artifact_digest,
                     args.source_artifact_size,
                 )
+            )
+        elif args.command == "migrate-source-required-go-semantic-progress":
+            migrate_source_required_go_semantic_progress(
+                args.manifest,
+                args.state_root,
+                args.work_root,
+                args.frame_run_id,
+                args.migration_name,
+                args.source_run_id,
+                args.source_head_sha,
+                args.source_artifact_id,
+                args.source_artifact_digest,
+                args.source_artifact_size,
             )
         elif args.command == "validate-tools-provenance":
             provenance = validate_tools_provenance(
