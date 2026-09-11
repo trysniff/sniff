@@ -325,6 +325,25 @@ BOUNDED_SOURCE_CENSUS_ARTIFACT_MIGRATION_SOURCE_ARTIFACT_DIGEST = (
 )
 BOUNDED_SOURCE_CENSUS_ARTIFACT_MIGRATION_SOURCE_ARTIFACT_SIZE = 354_792_493
 
+EXACT_GO_SEMANTIC_COMPILER_WORLD_MIGRATION_NAME = (
+    "exact-go-semantic-compiler-world-v1"
+)
+EXACT_GO_SEMANTIC_COMPILER_WORLD_MIGRATION_CONTRACT = (
+    "sniffbench-historical-v2-exact-go-semantic-compiler-world-migration-v1"
+)
+EXACT_GO_SEMANTIC_COMPILER_WORLD_MIGRATION_FROM_COLLECTOR_SHA = (
+    "93d57f6377a7bb185da7115bf8c19f8f4ac7f7e4"
+)
+EXACT_GO_SEMANTIC_COMPILER_WORLD_MIGRATION_SOURCE_RUN_ID = 34_559_823_453
+EXACT_GO_SEMANTIC_COMPILER_WORLD_MIGRATION_SOURCE_HEAD_SHA = (
+    "93d57f6377a7bb185da7115bf8c19f8f4ac7f7e4"
+)
+EXACT_GO_SEMANTIC_COMPILER_WORLD_MIGRATION_SOURCE_ARTIFACT_ID = 10_183_984_866
+EXACT_GO_SEMANTIC_COMPILER_WORLD_MIGRATION_SOURCE_ARTIFACT_DIGEST = (
+    "sha256:1812dd2cea156dcb74a9c3752bf7ab218ff34ece10446a88afdd2cce13bd39be"
+)
+EXACT_GO_SEMANTIC_COMPILER_WORLD_MIGRATION_SOURCE_ARTIFACT_SIZE = 456_087_092
+
 FRAME_FILE_SHA256 = {
     "environment.txt": "2e87f3c3e1b2005f6b6d09b1bf1b82d30a9433636c3c67f0806cc68e80ab6800",
     "exclusions.json": "74bccb100eb48ab87952bd7eec137b2285edbc68d2547715bc0e06a80e029f76",
@@ -753,7 +772,7 @@ def validate_manifest(path: pathlib.Path, frame_run_id: int) -> str:
     schema_version = value.get("schema_version")
     if schema_version == 1:
         expected = _manifest(frame_run_id, collector_sha)
-    elif schema_version in (2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19):
+    elif schema_version in (2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20):
         migrations = value.get("collector_migrations")
         expected_count = schema_version - 1
         if not isinstance(migrations, list) or len(migrations) != expected_count:
@@ -846,6 +865,11 @@ def _migration_record(
         contract = BOUNDED_SOURCE_CENSUS_ARTIFACT_MIGRATION_CONTRACT
         source_collector_sha = (
             BOUNDED_SOURCE_CENSUS_ARTIFACT_MIGRATION_FROM_COLLECTOR_SHA
+        )
+    elif migration_name == EXACT_GO_SEMANTIC_COMPILER_WORLD_MIGRATION_NAME:
+        contract = EXACT_GO_SEMANTIC_COMPILER_WORLD_MIGRATION_CONTRACT
+        source_collector_sha = (
+            EXACT_GO_SEMANTIC_COMPILER_WORLD_MIGRATION_FROM_COLLECTOR_SHA
         )
     else:
         raise ValueError("transport manifest collector migration is not allowlisted")
@@ -1202,15 +1226,35 @@ def _expected_bounded_source_census_artifact_migration(
     )
 
 
+def _expected_exact_go_semantic_compiler_world_migration(
+    target_collector_sha: str,
+) -> dict[str, Any]:
+    if (
+        target_collector_sha
+        == EXACT_GO_SEMANTIC_COMPILER_WORLD_MIGRATION_FROM_COLLECTOR_SHA
+        or re.fullmatch(r"[0-9a-f]{40}", target_collector_sha) is None
+    ):
+        raise ValueError("transport manifest collector migration target is invalid")
+    return _migration_record(
+        EXACT_GO_SEMANTIC_COMPILER_WORLD_MIGRATION_NAME,
+        target_collector_sha,
+        EXACT_GO_SEMANTIC_COMPILER_WORLD_MIGRATION_SOURCE_RUN_ID,
+        EXACT_GO_SEMANTIC_COMPILER_WORLD_MIGRATION_SOURCE_HEAD_SHA,
+        EXACT_GO_SEMANTIC_COMPILER_WORLD_MIGRATION_SOURCE_ARTIFACT_ID,
+        EXACT_GO_SEMANTIC_COMPILER_WORLD_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+        EXACT_GO_SEMANTIC_COMPILER_WORLD_MIGRATION_SOURCE_ARTIFACT_SIZE,
+    )
+
+
 def _validate_collector_migrations(
     migrations: Sequence[Mapping[str, Any]], collector_sha: str
 ) -> None:
-    if len(migrations) not in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18):
+    if len(migrations) not in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19):
         raise ValueError("transport manifest collector migration chain is invalid")
     expected = [_expected_storage_migration()]
     if len(migrations) == 2:
         expected.append(_expected_go_preparation_migration(collector_sha))
-    elif len(migrations) in (3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18):
+    elif len(migrations) in (3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19):
         expected.append(
             _expected_go_preparation_migration(
                 GO_MODULE_DOWNLOAD_MIGRATION_FROM_COLLECTOR_SHA
@@ -1340,15 +1384,26 @@ def _validate_collector_migrations(
         if len(migrations) >= 17:
             source_progress_target = (
                 BOUNDED_SOURCE_CENSUS_ARTIFACT_MIGRATION_FROM_COLLECTOR_SHA
-                if len(migrations) == 18
+                if len(migrations) >= 18
                 else collector_sha
             )
             expected.append(
                 _expected_source_census_progress_migration(source_progress_target)
             )
-        if len(migrations) == 18:
+        if len(migrations) >= 18:
+            bounded_source_target = (
+                EXACT_GO_SEMANTIC_COMPILER_WORLD_MIGRATION_FROM_COLLECTOR_SHA
+                if len(migrations) >= 19
+                else collector_sha
+            )
             expected.append(
-                _expected_bounded_source_census_artifact_migration(collector_sha)
+                _expected_bounded_source_census_artifact_migration(
+                    bounded_source_target
+                )
+            )
+        if len(migrations) >= 19:
+            expected.append(
+                _expected_exact_go_semantic_compiler_world_migration(collector_sha)
             )
     elif collector_sha != STORAGE_MIGRATION_TO_COLLECTOR_SHA:
         raise ValueError("transport manifest collector migration target drifted")
@@ -1478,6 +1533,12 @@ def migrate_manifest(
         ]
     elif schema_version == 18:
         expected_name = BOUNDED_SOURCE_CENSUS_ARTIFACT_MIGRATION_NAME
+        migrations = [
+            _require_mapping(item, "transport manifest collector migration")
+            for item in value.get("collector_migrations", [])
+        ]
+    elif schema_version == 19:
+        expected_name = EXACT_GO_SEMANTIC_COMPILER_WORLD_MIGRATION_NAME
         migrations = [
             _require_mapping(item, "transport manifest collector migration")
             for item in value.get("collector_migrations", [])

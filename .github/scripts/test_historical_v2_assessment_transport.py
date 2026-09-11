@@ -647,6 +647,21 @@ class ManifestTests(unittest.TestCase):
             transport.SOURCE_CENSUS_PROGRESS_MIGRATION_SOURCE_ARTIFACT_SIZE,
         )
 
+    @staticmethod
+    def _write_bounded_source_census_artifact_manifest(path: pathlib.Path) -> None:
+        ManifestTests._write_source_census_progress_manifest(path)
+        transport.migrate_manifest(
+            path,
+            transport.FRAME_RUN_ID,
+            transport.EXACT_GO_SEMANTIC_COMPILER_WORLD_MIGRATION_FROM_COLLECTOR_SHA,
+            transport.BOUNDED_SOURCE_CENSUS_ARTIFACT_MIGRATION_NAME,
+            transport.BOUNDED_SOURCE_CENSUS_ARTIFACT_MIGRATION_SOURCE_RUN_ID,
+            transport.BOUNDED_SOURCE_CENSUS_ARTIFACT_MIGRATION_SOURCE_HEAD_SHA,
+            transport.BOUNDED_SOURCE_CENSUS_ARTIFACT_MIGRATION_SOURCE_ARTIFACT_ID,
+            transport.BOUNDED_SOURCE_CENSUS_ARTIFACT_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+            transport.BOUNDED_SOURCE_CENSUS_ARTIFACT_MIGRATION_SOURCE_ARTIFACT_SIZE,
+        )
+
     def test_manifest_round_trips_and_is_create_new(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             path = pathlib.Path(temporary, "manifest.json")
@@ -2215,7 +2230,7 @@ class ManifestTests(unittest.TestCase):
                     transport.SOURCE_CENSUS_PROGRESS_MIGRATION_SOURCE_ARTIFACT_SIZE,
                 )
 
-    def test_bounded_source_census_artifact_migration_is_exact_and_closes_the_chain(
+    def test_bounded_source_census_artifact_migration_is_exact_and_one_way(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -2304,6 +2319,97 @@ class ManifestTests(unittest.TestCase):
                     transport.BOUNDED_SOURCE_CENSUS_ARTIFACT_MIGRATION_SOURCE_ARTIFACT_ID,
                     transport.BOUNDED_SOURCE_CENSUS_ARTIFACT_MIGRATION_SOURCE_ARTIFACT_DIGEST,
                     transport.BOUNDED_SOURCE_CENSUS_ARTIFACT_MIGRATION_SOURCE_ARTIFACT_SIZE,
+                )
+
+    def test_exact_go_semantic_compiler_world_migration_is_exact_and_closes_chain(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = pathlib.Path(temporary, "manifest.json")
+            self._write_bounded_source_census_artifact_manifest(path)
+            prior_manifest = json.loads(path.read_text(encoding="utf-8"))
+            prior_records = prior_manifest["collector_migrations"]
+            source = (
+                transport.EXACT_GO_SEMANTIC_COMPILER_WORLD_MIGRATION_FROM_COLLECTOR_SHA
+            )
+            target = "9" * 40
+
+            self.assertEqual(
+                transport.migrate_manifest(
+                    path,
+                    transport.FRAME_RUN_ID,
+                    target,
+                    transport.EXACT_GO_SEMANTIC_COMPILER_WORLD_MIGRATION_NAME,
+                    transport.EXACT_GO_SEMANTIC_COMPILER_WORLD_MIGRATION_SOURCE_RUN_ID,
+                    transport.EXACT_GO_SEMANTIC_COMPILER_WORLD_MIGRATION_SOURCE_HEAD_SHA,
+                    transport.EXACT_GO_SEMANTIC_COMPILER_WORLD_MIGRATION_SOURCE_ARTIFACT_ID,
+                    transport.EXACT_GO_SEMANTIC_COMPILER_WORLD_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+                    transport.EXACT_GO_SEMANTIC_COMPILER_WORLD_MIGRATION_SOURCE_ARTIFACT_SIZE,
+                ),
+                target,
+            )
+            value = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(value["schema_version"], 20)
+            self.assertEqual(value["collector_migrations"][:18], prior_records)
+            self.assertEqual(
+                value["collector_migrations"][18],
+                {
+                    "from_collector_sha": source,
+                    "migration_contract": (
+                        transport.EXACT_GO_SEMANTIC_COMPILER_WORLD_MIGRATION_CONTRACT
+                    ),
+                    "migration_name": (
+                        transport.EXACT_GO_SEMANTIC_COMPILER_WORLD_MIGRATION_NAME
+                    ),
+                    "source_artifact_digest": (
+                        transport.EXACT_GO_SEMANTIC_COMPILER_WORLD_MIGRATION_SOURCE_ARTIFACT_DIGEST
+                    ),
+                    "source_artifact_id": (
+                        transport.EXACT_GO_SEMANTIC_COMPILER_WORLD_MIGRATION_SOURCE_ARTIFACT_ID
+                    ),
+                    "source_artifact_size": (
+                        transport.EXACT_GO_SEMANTIC_COMPILER_WORLD_MIGRATION_SOURCE_ARTIFACT_SIZE
+                    ),
+                    "source_head_sha": (
+                        transport.EXACT_GO_SEMANTIC_COMPILER_WORLD_MIGRATION_SOURCE_HEAD_SHA
+                    ),
+                    "source_run_id": (
+                        transport.EXACT_GO_SEMANTIC_COMPILER_WORLD_MIGRATION_SOURCE_RUN_ID
+                    ),
+                    "to_collector_sha": target,
+                },
+            )
+            self.assertEqual(
+                transport.validate_manifest(path, transport.FRAME_RUN_ID), target
+            )
+
+            for field in value["collector_migrations"][18]:
+                tampered = json.loads(json.dumps(value))
+                tampered["collector_migrations"][18][field] = True
+                path.write_text(json.dumps(tampered), encoding="utf-8")
+                with self.subTest(field=field), self.assertRaises(ValueError):
+                    transport.validate_manifest(path, transport.FRAME_RUN_ID)
+
+            reordered = json.loads(json.dumps(value))
+            reordered["collector_migrations"][17:] = reversed(
+                reordered["collector_migrations"][17:]
+            )
+            path.write_text(json.dumps(reordered), encoding="utf-8")
+            with self.assertRaises(ValueError):
+                transport.validate_manifest(path, transport.FRAME_RUN_ID)
+
+            path.write_text(json.dumps(value), encoding="utf-8")
+            with self.assertRaises(ValueError):
+                transport.migrate_manifest(
+                    path,
+                    transport.FRAME_RUN_ID,
+                    "a" * 40,
+                    transport.EXACT_GO_SEMANTIC_COMPILER_WORLD_MIGRATION_NAME,
+                    transport.EXACT_GO_SEMANTIC_COMPILER_WORLD_MIGRATION_SOURCE_RUN_ID,
+                    transport.EXACT_GO_SEMANTIC_COMPILER_WORLD_MIGRATION_SOURCE_HEAD_SHA,
+                    transport.EXACT_GO_SEMANTIC_COMPILER_WORLD_MIGRATION_SOURCE_ARTIFACT_ID,
+                    transport.EXACT_GO_SEMANTIC_COMPILER_WORLD_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+                    transport.EXACT_GO_SEMANTIC_COMPILER_WORLD_MIGRATION_SOURCE_ARTIFACT_SIZE,
                 )
 
     def test_storage_migration_rejects_unapproved_source_or_name(self) -> None:
@@ -2714,6 +2820,7 @@ class WorkflowContractTests(unittest.TestCase):
             "go-project-model-dependency-preparation-v1",
             "resumable-source-census-progress-v1",
             "bounded-source-census-artifact-v1",
+            "exact-go-semantic-compiler-world-v1",
             '"$transport" migrate-manifest',
             '"$PRIOR_HEAD_SHA" "$PRIOR_ARTIFACT_ID"',
             '"$PRIOR_ARTIFACT_DIGEST" "$PRIOR_ARTIFACT_SIZE"',
