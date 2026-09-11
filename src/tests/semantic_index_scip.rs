@@ -117,6 +117,51 @@ fn nested_module_prefix_is_applied_before_expected_document_filtering() {
 }
 
 #[test]
+fn nested_module_prefix_discards_escaping_provider_extras_without_weakening_inventory() {
+    let root = root("nested-go-cache");
+    fs::create_dir_all(root.join("tools/pkg")).unwrap();
+    fs::write(root.join("tools/pkg/api.go"), "package pkg\n").unwrap();
+    let mut source = base_index();
+    source
+        .metadata
+        .as_mut()
+        .unwrap()
+        .tool_info
+        .as_mut()
+        .unwrap()
+        .name = "scip-go".to_string();
+    source.documents.push(document("pkg/api.go"));
+    source
+        .documents
+        .push(document("../.sniff-indexer-tmp/go-build/aa/cache-object-d"));
+    for document in &mut source.documents {
+        document.language = "go".to_string();
+    }
+    let expected = BTreeMap::from([(
+        RepositoryPath("tools/pkg/api.go".to_string()),
+        "go".to_string(),
+    )]);
+
+    let index = ingest_scip_bytes_with_expected_languages(
+        &root,
+        &source.write_to_bytes().unwrap(),
+        Some(&expected),
+        None,
+        Some(&RepositoryPath("tools".to_string())),
+    )
+    .unwrap();
+
+    assert_eq!(
+        index.documents.into_keys().collect::<Vec<_>>(),
+        [RepositoryPath("tools/pkg/api.go".to_string())]
+    );
+    assert!(index.provenance.diagnostics.iter().any(|diagnostic| {
+        diagnostic.contains("invalid document path outside Sniff's prefixed semantic inventory")
+            && diagnostic.contains(".sniff-indexer-tmp/go-build")
+    }));
+}
+
+#[test]
 fn imports_global_identities_definitions_references_and_relationships() {
     let root = root("global");
     let mut index = base_index();

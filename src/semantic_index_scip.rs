@@ -353,13 +353,27 @@ fn ingest_document(
     provider_with_local_symbols: bool,
     typescript_provider: bool,
 ) -> Result<(), String> {
-    let raw_path = normalize_document_path(
+    let provider_name = index.provenance.tool_name.clone();
+    let raw_path = match normalize_document_path(
         index,
         &document.relative_path,
         expected_languages,
         document_prefix,
         typescript_provider,
-    )?;
+    ) {
+        Ok(path) => path,
+        Err(error) if expected_languages.is_some() && document_prefix.is_some() => {
+            record_provider_diagnostic(
+                index,
+                format!(
+                    "{} emitted an invalid document path outside Sniff's prefixed semantic inventory; skipped {:?}: {error}",
+                    provider_name, document.relative_path
+                ),
+            );
+            return Ok(());
+        }
+        Err(error) => return Err(error),
+    };
     let path = normalize_typescript_document_path(
         index,
         raw_path,
@@ -396,7 +410,6 @@ fn ingest_document(
         Err(error) => return Err(error),
     };
 
-    let provider_name = index.provenance.tool_name.clone();
     for information in &document.symbols {
         if contains_malformed_local_identity(information, provider_with_local_symbols) {
             record_provider_diagnostic(
