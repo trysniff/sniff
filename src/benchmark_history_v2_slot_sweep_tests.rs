@@ -476,6 +476,7 @@ fn selected_slot_work_recovery_removes_only_proven_semantic_and_source_state() {
     assert_eq!(summary.selected_slot_count, 1);
     assert_eq!(summary.materialized_semantic_root_count, 2);
     assert_eq!(summary.recovered_semantic_root_count, 2);
+    assert!(summary.semantic_worlds.is_empty());
     for root in [&repository, &patched] {
         assert!(!root.join(".sniff-indexer-recovery.json").exists());
         assert!(!root.join(".sniff-indexer-tmp").exists());

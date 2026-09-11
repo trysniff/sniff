@@ -1,9 +1,10 @@
 use super::{
     HistoricalV2ExclusionManifest, HistoricalV2Frame, HistoricalV2RecoverableTestExecutor,
-    HistoricalV2SelectedPayloads, HistoricalV2SlotRunSummary, HistoricalV2SlotSelection,
-    HistoricalV2SlotStage, HistoricalV2SlotStageOutcome,
+    HistoricalV2SelectedPayloads, HistoricalV2SemanticSnapshotSide, HistoricalV2SlotRunSummary,
+    HistoricalV2SlotSelection, HistoricalV2SlotStage, HistoricalV2SlotStageOutcome,
 };
 use reqwest::Client;
+use std::collections::BTreeMap;
 use std::path::Path;
 
 pub struct HistoricalV2SelectedSlotSweepInputs<'a, E: HistoricalV2RecoverableTestExecutor> {
@@ -65,6 +66,21 @@ pub struct HistoricalV2SelectedSlotWorkRecoverySummary {
     pub selected_slot_count: usize,
     pub materialized_semantic_root_count: usize,
     pub recovered_semantic_root_count: usize,
+    pub semantic_worlds: Vec<HistoricalV2SemanticWorldProgress>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HistoricalV2SemanticWorldProgress {
+    pub language: String,
+    pub slot_number: usize,
+    pub side: HistoricalV2SemanticSnapshotSide,
+    pub family: String,
+    pub world: String,
+    pub variant_identity: Option<String>,
+    pub dimensions: BTreeMap<String, String>,
+    pub planned_unit_count: usize,
+    pub completed_unit_count: usize,
+    pub next_unit_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

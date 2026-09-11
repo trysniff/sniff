@@ -51,10 +51,14 @@ impl HistoricalV2SemanticProgress {
         Ok(progress)
     }
 
-    pub(super) fn recover_existing(root: &Path) -> Result<(), String> {
+    pub(super) fn recover_existing(
+        root: &Path,
+    ) -> Result<Vec<HistoricalV2SemanticProgressRecovery>, String> {
         match std::fs::symlink_metadata(root) {
             Ok(_) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(Vec::new());
+            }
             Err(error) => {
                 return Err(format!(
                     "failed to inspect historical-v2 semantic progress root: {error}"
@@ -62,17 +66,22 @@ impl HistoricalV2SemanticProgress {
             }
         }
         let progress = Self::open(root)?;
+        let mut recovered = Vec::new();
         for side in [
             HistoricalV2SemanticSnapshotSide::Base,
             HistoricalV2SemanticSnapshotSide::Patched,
         ] {
             remove_incomplete_file(&progress.side_root(side).join(SNAPSHOT_TEMP_FILE))?;
-            crate::semantic_indexer_runner::recover_semantic_indexer_progress(
-                &progress.side_root(side),
-            )?;
+            recovered.extend(
+                crate::semantic_indexer_runner::recover_semantic_indexer_progress(
+                    &progress.side_root(side),
+                )?
+                .into_iter()
+                .map(|progress| HistoricalV2SemanticProgressRecovery { side, progress }),
+            );
             progress.validate_side_entries(side)?;
         }
-        Ok(())
+        Ok(recovered)
     }
 
     pub(super) fn indexer_root(&self, side: HistoricalV2SemanticSnapshotSide) -> PathBuf {

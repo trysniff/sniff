@@ -6,12 +6,12 @@ use sniff::benchmark::{
     HistoricalV2PublicSurfaceReplayInputs, HistoricalV2SelectedPayloads,
     HistoricalV2SelectedSlotStateInspection, HistoricalV2SelectedSlotStateInspectionInputs,
     HistoricalV2SelectedSlotSweepInputs, HistoricalV2SelectedSlotWorkRecoveryInputs,
-    HistoricalV2SlotOutcome, HistoricalV2SlotRunDisposition, HistoricalV2SlotSelection,
-    HistoricalV2SlotStage, HistoricalV2SlotStageError, HistoricalV2SlotStageErrorKind,
-    HistoricalV2SlotStageOutcome, inspect_historical_v2_selected_slot_state,
-    recover_historical_v2_selected_slot_work, replay_historical_v2_public_surface_census,
-    run_historical_v2_selected_slots_bounded, validate_historical_v2_protocol,
-    validate_historical_v2_selected_payloads_commitment,
+    HistoricalV2SemanticSnapshotSide, HistoricalV2SlotOutcome, HistoricalV2SlotRunDisposition,
+    HistoricalV2SlotSelection, HistoricalV2SlotStage, HistoricalV2SlotStageError,
+    HistoricalV2SlotStageErrorKind, HistoricalV2SlotStageOutcome,
+    inspect_historical_v2_selected_slot_state, recover_historical_v2_selected_slot_work,
+    replay_historical_v2_public_surface_census, run_historical_v2_selected_slots_bounded,
+    validate_historical_v2_protocol, validate_historical_v2_selected_payloads_commitment,
 };
 use std::fs;
 use std::io::{Error as IoError, ErrorKind};
@@ -207,11 +207,39 @@ pub(super) fn recover_slot_work(
         })
         .map_err(stage_error)?;
     eprintln!(
-        "Historical-v2 selected-slot work recovered\nSelected: {}\nMaterialized semantic roots: {}\nRecovered semantic roots: {}",
+        "Historical-v2 selected-slot work recovered\nSelected slots: {}\nMaterialized worktrees: {}\nInterrupted indexers recovered: {}\nStarted semantic compiler worlds: {}",
         summary.selected_slot_count,
         summary.materialized_semantic_root_count,
-        summary.recovered_semantic_root_count
+        summary.recovered_semantic_root_count,
+        summary.semantic_worlds.len()
     );
+    for world in &summary.semantic_worlds {
+        let side = match world.side {
+            HistoricalV2SemanticSnapshotSide::Base => "base",
+            HistoricalV2SemanticSnapshotSide::Patched => "patched",
+        };
+        let identity = world.variant_identity.as_deref().unwrap_or("unqualified");
+        let dimensions = world
+            .dimensions
+            .iter()
+            .map(|(name, value)| format!("{name}={value}"))
+            .collect::<Vec<_>>()
+            .join(",");
+        let next = world.next_unit_id.as_deref().unwrap_or("complete");
+        eprintln!(
+            "  {}/slot-{:04} side={} family={} world={} variant={} dimensions=[{}] units={}/{} next={}",
+            world.language,
+            world.slot_number,
+            side,
+            world.family,
+            world.world,
+            identity,
+            dimensions,
+            world.completed_unit_count,
+            world.planned_unit_count,
+            next
+        );
+    }
     Ok(())
 }
 

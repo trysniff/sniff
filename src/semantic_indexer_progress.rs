@@ -187,6 +187,15 @@ pub(super) struct SemanticProgressStore {
     scope: SemanticProgressScope,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct SemanticProgressRecovery {
+    pub(super) variant_identity: Option<String>,
+    pub(super) dimensions: BTreeMap<String, String>,
+    pub(super) planned_unit_count: usize,
+    pub(super) completed_unit_count: usize,
+    pub(super) next_unit_id: Option<String>,
+}
+
 impl SemanticProgressStore {
     pub(super) fn open(root: &Path, scope: SemanticProgressScope) -> Result<Self, String> {
         scope.validate()?;
@@ -227,10 +236,12 @@ impl SemanticProgressStore {
         Ok(store)
     }
 
-    pub(super) fn recover_existing(root: &Path) -> Result<(), String> {
+    pub(super) fn recover_existing(
+        root: &Path,
+    ) -> Result<Option<SemanticProgressRecovery>, String> {
         match fs::symlink_metadata(root) {
             Ok(_) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(error) => {
                 return Err(format!(
                     "failed to inspect semantic progress root {}: {error}",
@@ -269,7 +280,7 @@ impl SemanticProgressStore {
                     "semantic progress assemblies exist without a committed scope".to_string(),
                 );
             }
-            return Ok(());
+            return Ok(None);
         }
         let scope: SemanticProgressScope = read_json(&scope_path, "semantic progress scope")?;
         scope.validate()?;
@@ -283,10 +294,32 @@ impl SemanticProgressStore {
         }
         store.remove_assembly_temps()?;
         store.validate_directory_entries()?;
-        if let Some(latest) = store.load_assembly_normalized()? {
+        let latest = store.load_assembly_normalized()?;
+        if let Some(latest) = &latest {
             store.prune_assemblies(latest.completed_unit_count)?;
         }
-        store.validate_directory_entries()
+        store.validate_directory_entries()?;
+        let completed_unit_count = latest
+            .as_ref()
+            .map_or(0, |assembly| assembly.completed_unit_count);
+        let (variant_identity, dimensions) = match &store.scope.variant {
+            SemanticIndexVariant::Unqualified => (None, BTreeMap::new()),
+            SemanticIndexVariant::Qualified {
+                identity,
+                dimensions,
+            } => (Some(identity.0.clone()), dimensions.clone()),
+        };
+        Ok(Some(SemanticProgressRecovery {
+            variant_identity,
+            dimensions,
+            planned_unit_count: store.scope.units.len(),
+            completed_unit_count,
+            next_unit_id: store
+                .scope
+                .units
+                .get(completed_unit_count)
+                .map(|unit| unit.unit_id.clone()),
+        }))
     }
 
     pub(super) fn load(
