@@ -484,7 +484,7 @@ async fn run_go_compiler_world(
         .iter()
         .all(|package| package.source_documents.is_empty())
     {
-        plan.ok_or_else(|| {
+        let plan = plan.ok_or_else(|| {
             go_snapshot_assembly_failure(
                 spec,
                 "unqualified Go semantic indexing selected no repository package",
@@ -513,7 +513,7 @@ async fn run_go_compiler_world(
         };
         return Ok(GoCompilerWorld {
             index,
-            ignored_documents,
+            ignored_documents: plan.ignored_documents.clone(),
         });
     }
     let selected_packages = inventory
