@@ -935,7 +935,7 @@ async fn run_one_in_recovery_scope(
         }
     }
     if spec.kind == SemanticIndexerKind::Go {
-        prepare_go_dependency_cache(spec, execution_root, installed).await?;
+        prepare_go_dependency_cache(spec, execution_root, installed, ".").await?;
     }
     if spec.kind == SemanticIndexerKind::Kotlin {
         prepare_kotlin_dependency_cache(spec, execution_root, installed)
@@ -1269,9 +1269,10 @@ async fn prepare_go_dependency_cache(
     spec: PinnedIndexer,
     root: &Path,
     installed: &InstalledIndexer,
+    module_root: &str,
 ) -> Result<(), SemanticIndexerRunFailure> {
     for attempt in 1..=GO_DEPENDENCY_PREPARATION_ATTEMPTS {
-        let output = run_go_dependency_preparation(spec, root, installed).await?;
+        let output = run_go_dependency_preparation(spec, root, installed, module_root).await?;
         if output.status_code == Some(0) && !output.timed_out {
             return Ok(());
         }
@@ -1292,6 +1293,7 @@ async fn run_go_dependency_preparation(
     spec: PinnedIndexer,
     root: &Path,
     installed: &InstalledIndexer,
+    module_root: &str,
 ) -> Result<crate::sandbox::SandboxOutput, SemanticIndexerRunFailure> {
     let mut prepared = build_indexer_sandbox_command(spec, root, installed, Vec::new(), None)
         .map_err(|detail| {
@@ -1313,7 +1315,7 @@ async fn run_go_dependency_preparation(
         })?
         .to_string_lossy()
         .into_owned();
-    prepared.command.args = go_dependency_arguments();
+    prepared.command.args = go_dependency_arguments(module_root);
     prepared.command.allow_network = true;
     let output = run_with_runtime_identity(prepared, "Go dependency preparation")
         .await
@@ -1328,10 +1330,15 @@ async fn run_go_dependency_preparation(
     Ok(output)
 }
 
-fn go_dependency_arguments() -> Vec<String> {
+fn go_dependency_arguments(module_root: &str) -> Vec<String> {
     // Prepare the declared module graph without validating unrelated packages.
     // The pinned compiler indexer remains the authority for package semantics.
-    vec!["mod".to_string(), "download".to_string()]
+    vec![
+        "-C".to_string(),
+        module_root.to_string(),
+        "mod".to_string(),
+        "download".to_string(),
+    ]
 }
 
 fn go_dependency_program(installed: &InstalledIndexer) -> Result<PathBuf, String> {

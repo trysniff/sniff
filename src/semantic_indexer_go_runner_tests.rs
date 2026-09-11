@@ -80,7 +80,7 @@ fn variant_plan(
             ("GOFLAGS".to_string(), String::new()),
             ("GOOS".to_string(), "linux".to_string()),
         ]),
-        compiler_project: None,
+        compiler_project: Some(RepositoryPath("go.mod".to_string())),
         selected_documents: selected_documents
             .iter()
             .map(|path| RepositoryPath((*path).to_string()))
@@ -109,6 +109,7 @@ fn package_inventory(
                 source_bytes: 1,
             }]
         },
+        test_documents: BTreeSet::new(),
         ignored_documents: ignored_documents
             .iter()
             .map(|path| RepositoryPath((*path).to_string()))
@@ -129,6 +130,48 @@ fn go_variant_inventory_requires_exact_nonempty_document_sets() {
     assert!(error.contains("invented_selected=[\"fixture/invented.go\"]"));
     assert!(error.contains("missing_ignored=[\"fixture/windows.go\"]"));
     assert!(error.contains("invented_ignored=[\"fixture/other.go\"]"));
+}
+
+#[test]
+fn go_variant_inventory_accepts_only_compiler_classified_test_additions() {
+    let plan = variant_plan("linux", &["fixture/main.go"], &[]);
+    let mut inventory = package_inventory(&["fixture/main.go", "fixture/main_test.go"], &[]);
+    inventory.test_documents = BTreeSet::from([RepositoryPath("fixture/main_test.go".to_string())]);
+
+    validate_go_variant_inventory(&plan, &inventory).unwrap();
+
+    inventory.test_documents.clear();
+    let error = validate_go_variant_inventory(&plan, &inventory).unwrap_err();
+    assert!(
+        error.contains("invented_selected=[\"fixture/main_test.go\"]"),
+        "{error}"
+    );
+}
+
+#[test]
+fn qualified_go_variant_is_bound_to_its_exact_module_manifest() {
+    let repository = tempfile::tempdir().unwrap();
+    fs::create_dir_all(repository.path().join("tools")).unwrap();
+    fs::write(
+        repository.path().join("tools/go.mod"),
+        "module example.test/tools\n",
+    )
+    .unwrap();
+    let mut plan = variant_plan("tools", &[], &[]);
+    plan.compiler_project = Some(RepositoryPath("tools/go.mod".to_string()));
+    let spec = pinned_indexer(SemanticIndexerKind::Go).unwrap();
+
+    assert_eq!(
+        go_module_root(spec, repository.path(), Some(&plan)).unwrap(),
+        "tools"
+    );
+
+    plan.compiler_project = None;
+    let error = go_module_root(spec, repository.path(), Some(&plan)).unwrap_err();
+    assert!(
+        error.detail.contains("no exact go.mod project"),
+        "{error:?}"
+    );
 }
 
 #[test]
@@ -378,5 +421,103 @@ async fn live_empty_go_variant_is_recorded_without_a_scip_invocation() {
             SemanticIndexerContribution::BuildContextDiscovery,
             SemanticIndexerContribution::PackageInventory,
         ]
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires Go and the installed pinned Go semantic indexer"]
+async fn live_nested_go_modules_and_tests_preserve_repository_paths() {
+    let repository = tempfile::tempdir().unwrap();
+    fs::write(
+        repository.path().join("go.mod"),
+        "module example.test/root\n\ngo 1.22\n",
+    )
+    .unwrap();
+    fs::create_dir_all(repository.path().join("tools/pkg")).unwrap();
+    fs::write(
+        repository.path().join("tools/go.mod"),
+        "module example.test/tools\n\ngo 1.22\n",
+    )
+    .unwrap();
+    let files = vec![
+        write_go_file(
+            repository.path(),
+            "root.go",
+            "package root\n\nfunc Root() string { return \"root\" }\n",
+        ),
+        write_go_file(
+            repository.path(),
+            "root_test.go",
+            "package root\n\nfunc TestRoot() { Root() }\n",
+        ),
+        write_go_file(
+            repository.path(),
+            "tools/pkg/library.go",
+            "package pkg\n\nfunc Library() string { return \"library\" }\n",
+        ),
+        write_go_file(
+            repository.path(),
+            "tools/pkg/library_test.go",
+            "package pkg\n\nfunc TestLibrary() { Library() }\n",
+        ),
+    ];
+    let root_plan = variant_plan("root-linux", &["root.go"], &[]);
+    let mut nested_plan = variant_plan("tools-linux", &["tools/pkg/library.go"], &[]);
+    nested_plan.compiler_project = Some(RepositoryPath("tools/go.mod".to_string()));
+    let plans = [root_plan, nested_plan];
+    let spec = pinned_indexer(SemanticIndexerKind::Go).unwrap();
+    let store = SemanticIndexerStore::for_user().unwrap();
+    let installed = store.verify(spec).unwrap();
+    let recovery = SemanticIndexerRecoveryGuard::begin(repository.path()).unwrap();
+    let repository_content_sha256 =
+        repository_snapshot::repository_content_digest(repository.path()).unwrap();
+    let inputs = GoIndexerRunInputs {
+        spec,
+        root: repository.path(),
+        installed: &installed,
+        files: &files,
+        required_documents: &files,
+        recovery: &recovery,
+        repository_content_sha256: &repository_content_sha256,
+        progress_root: None,
+    };
+
+    let result = run_required_go_indexer_variants_with_limits(
+        &inputs,
+        &plans,
+        GoShardLimits {
+            target_source_bytes: u64::MAX,
+            max_packages: 8,
+        },
+    )
+    .await;
+    recovery.finish().unwrap();
+    let SemanticIndexSet::Qualified { variants } = result.unwrap() else {
+        panic!("expected qualified Go semantic indexes");
+    };
+
+    assert_eq!(
+        variants[&plans[0].identity]
+            .index
+            .documents
+            .keys()
+            .cloned()
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([
+            RepositoryPath("root.go".to_string()),
+            RepositoryPath("root_test.go".to_string()),
+        ])
+    );
+    assert_eq!(
+        variants[&plans[1].identity]
+            .index
+            .documents
+            .keys()
+            .cloned()
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([
+            RepositoryPath("tools/pkg/library.go".to_string()),
+            RepositoryPath("tools/pkg/library_test.go".to_string()),
+        ])
     );
 }

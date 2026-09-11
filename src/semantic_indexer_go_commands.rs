@@ -17,6 +17,7 @@ pub(super) struct GoScipExecution<'a> {
     pub(super) spec: PinnedIndexer,
     pub(super) repository_root: &'a Path,
     pub(super) execution_root: &'a Path,
+    pub(super) module_root: &'a str,
     pub(super) installed: &'a InstalledIndexer,
     pub(super) expected_languages: &'a BTreeMap<RepositoryPath, String>,
     pub(super) context: &'a BTreeMap<String, String>,
@@ -81,6 +82,7 @@ pub(super) async fn resolve_go_variant_context(
     root: &Path,
     installed: &InstalledIndexer,
     plan: &SemanticIndexerVariantPlan,
+    module_root: &str,
 ) -> Result<(BTreeMap<String, String>, SemanticIndexerInvocation), SemanticIndexerRunFailure> {
     plan.validate().map_err(|detail| {
         indexer_failure(
@@ -92,10 +94,15 @@ pub(super) async fn resolve_go_variant_context(
     })?;
     let mut names = plan.environment.keys().cloned().collect::<Vec<_>>();
     names.sort();
-    let arguments = ["env".to_string(), "-json".to_string()]
-        .into_iter()
-        .chain(names)
-        .collect::<Vec<_>>();
+    let arguments = [
+        "-C".to_string(),
+        module_root.to_string(),
+        "env".to_string(),
+        "-json".to_string(),
+    ]
+    .into_iter()
+    .chain(names)
+    .collect::<Vec<_>>();
     let output = run_go_tool_with_environment(
         spec,
         root,
@@ -186,7 +193,10 @@ pub(super) async fn run_go_scip(
             ),
         ));
     }
-    let mut arguments = vec!["--module-root".to_string(), ".".to_string()];
+    let mut arguments = vec![
+        "--module-root".to_string(),
+        execution.module_root.to_string(),
+    ];
     arguments.extend(patterns);
     let invocation_arguments = arguments.clone();
     let prepared = build_indexer_sandbox_command(
@@ -234,11 +244,14 @@ pub(super) async fn run_go_scip(
             &output,
         ));
     }
-    let result = crate::semantic_index_scip::ingest_scip_file_with_expected_languages(
+    let document_prefix =
+        (execution.module_root != ".").then(|| RepositoryPath(execution.module_root.to_string()));
+    let result = crate::semantic_index_scip::ingest_scip_file_with_expected_languages_and_prefix(
         execution.repository_root,
         &index_path,
         Some(execution.expected_languages),
         missing_position_encoding(spec.kind),
+        document_prefix.as_ref(),
     )
     .and_then(|mut index| {
         validate_go_documents(&index, expected_documents)?;

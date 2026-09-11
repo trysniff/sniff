@@ -224,6 +224,9 @@ jobs:
             semantic_indexer_runner::go_runner::tests::live_empty_go_variant_is_recorded_without_a_scip_invocation \
             -- --exact --ignored --test-threads=1 --nocapture
           cargo test --lib --locked \
+            semantic_indexer_runner::go_runner::tests::live_nested_go_modules_and_tests_preserve_repository_paths \
+            -- --exact --ignored --test-threads=1 --nocapture
+          cargo test --lib --locked \
             benchmark::release::intentional_boundary_project_model_gradle::tests::real_gradle_tooling_model_commits_kotlin_publication_and_compilation_facts \
             -- --exact --ignored --test-threads=1 --nocapture
 

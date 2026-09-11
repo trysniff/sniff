@@ -397,7 +397,10 @@ fn generic_indexer_path_cannot_fall_back_to_go_module_wide_indexing() {
 
 #[test]
 fn go_dependency_preparation_downloads_the_declared_module_graph() {
-    assert_eq!(go_dependency_arguments(), ["mod", "download"]);
+    assert_eq!(
+        go_dependency_arguments("tools"),
+        ["-C", "tools", "mod", "download"]
+    );
 }
 
 #[test]
