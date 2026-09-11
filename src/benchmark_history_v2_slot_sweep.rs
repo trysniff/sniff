@@ -6,9 +6,9 @@ use super::{
     HistoricalV2SelectedSlotStateInspectionInputs, HistoricalV2SelectedSlotStateInspectionSummary,
     HistoricalV2SelectedSlotSweepInputs, HistoricalV2SelectedSlotSweepSummary,
     HistoricalV2SelectedSlotWorkRecoveryInputs, HistoricalV2SelectedSlotWorkRecoverySummary,
-    HistoricalV2SlotOperations, HistoricalV2SlotOutcome, HistoricalV2SlotRunDisposition,
-    HistoricalV2SlotRunIdentity, HistoricalV2SlotStage, HistoricalV2SlotStageError,
-    HistoricalV2SlotStageJournal, HistoricalV2SlotStageOutcome,
+    HistoricalV2SemanticWorldProgress, HistoricalV2SlotOperations, HistoricalV2SlotOutcome,
+    HistoricalV2SlotRunDisposition, HistoricalV2SlotRunIdentity, HistoricalV2SlotStage,
+    HistoricalV2SlotStageError, HistoricalV2SlotStageJournal, HistoricalV2SlotStageOutcome,
     run_historical_v2_slot_slice_through, validate_historical_v2_protocol,
     validate_historical_v2_selected_payloads_commitment, validate_historical_v2_slot_selection,
 };
@@ -203,9 +203,25 @@ pub fn recover_historical_v2_selected_slot_work(
             recovered_semantic_root_count += 1;
         }
     }
+    let mut semantic_worlds = Vec::new();
     for root in &layout.semantic_progress_roots {
-        super::history_v2_semantic::recover_historical_v2_semantic_progress(root)
-            .map_err(recovery_infrastructure)?;
+        let recovered =
+            super::history_v2_semantic::recover_historical_v2_semantic_progress(&root.root)
+                .map_err(recovery_infrastructure)?;
+        semantic_worlds.extend(recovered.into_iter().map(|recovery| {
+            HistoricalV2SemanticWorldProgress {
+                language: root.language.clone(),
+                slot_number: root.slot_number,
+                side: recovery.side,
+                family: recovery.progress.family,
+                world: recovery.progress.world,
+                variant_identity: recovery.progress.variant_identity,
+                dimensions: recovery.progress.dimensions,
+                planned_unit_count: recovery.progress.planned_unit_count,
+                completed_unit_count: recovery.progress.completed_unit_count,
+                next_unit_id: recovery.progress.next_unit_id,
+            }
+        }));
     }
     for root in &layout.source_progress_roots {
         super::history_v2_source_census::recover_historical_v2_source_progress(root)
@@ -216,6 +232,7 @@ pub fn recover_historical_v2_selected_slot_work(
         selected_slot_count: inputs.payloads.records.len(),
         materialized_semantic_root_count: layout.semantic_roots.len(),
         recovered_semantic_root_count,
+        semantic_worlds,
     })
 }
 
@@ -474,6 +491,10 @@ fn validate_selected_slot_work_layout(
                     "historical-v2 work root contains an unselected slot: {language}/{slot_name}"
                 )));
             }
+            let slot_number = slot_name
+                .strip_prefix("slot-")
+                .and_then(|number| number.parse::<usize>().ok())
+                .ok_or_else(|| recovery_invalid("historical-v2 work slot name is invalid"))?;
             let slot_root = exact_plain_child(
                 &language_root,
                 &slot_entry.path(),
@@ -497,11 +518,15 @@ fn validate_selected_slot_work_layout(
             }
             let progress_root = slot_root.join("semantic-progress");
             match fs::symlink_metadata(&progress_root) {
-                Ok(_) => semantic_progress_roots.push(exact_plain_child(
-                    &slot_root,
-                    &progress_root,
-                    "historical-v2 semantic progress root",
-                )?),
+                Ok(_) => semantic_progress_roots.push(SelectedSemanticProgressRoot {
+                    language: language.clone(),
+                    slot_number,
+                    root: exact_plain_child(
+                        &slot_root,
+                        &progress_root,
+                        "historical-v2 semantic progress root",
+                    )?,
+                }),
                 Err(error) if error.kind() == ErrorKind::NotFound => {}
                 Err(error) => {
                     return Err(recovery_infrastructure(format!(
@@ -526,7 +551,9 @@ fn validate_selected_slot_work_layout(
         }
     }
     semantic_roots.sort();
-    semantic_progress_roots.sort();
+    semantic_progress_roots.sort_by(|left, right| {
+        (&left.language, left.slot_number).cmp(&(&right.language, right.slot_number))
+    });
     source_progress_roots.sort();
     Ok(SelectedSlotWorkLayout {
         semantic_roots,
@@ -537,8 +564,14 @@ fn validate_selected_slot_work_layout(
 
 struct SelectedSlotWorkLayout {
     semantic_roots: Vec<PathBuf>,
-    semantic_progress_roots: Vec<PathBuf>,
+    semantic_progress_roots: Vec<SelectedSemanticProgressRoot>,
     source_progress_roots: Vec<PathBuf>,
+}
+
+struct SelectedSemanticProgressRoot {
+    language: String,
+    slot_number: usize,
+    root: PathBuf,
 }
 
 fn read_plain_directory(

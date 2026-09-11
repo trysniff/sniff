@@ -43,18 +43,35 @@ use typescript_runner::{
     run_typescript_variants, variant_arguments as typescript_variant_arguments,
 };
 
-pub(crate) fn recover_semantic_indexer_progress(progress_root: &Path) -> Result<(), String> {
-    for family in ["go", "typescript"] {
-        recover_semantic_progress_family(progress_root, family)?;
-    }
-    Ok(())
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SemanticIndexerProgressRecovery {
+    pub(crate) family: String,
+    pub(crate) world: String,
+    pub(crate) variant_identity: Option<String>,
+    pub(crate) dimensions: BTreeMap<String, String>,
+    pub(crate) planned_unit_count: usize,
+    pub(crate) completed_unit_count: usize,
+    pub(crate) next_unit_id: Option<String>,
 }
 
-fn recover_semantic_progress_family(progress_root: &Path, family: &str) -> Result<(), String> {
+pub(crate) fn recover_semantic_indexer_progress(
+    progress_root: &Path,
+) -> Result<Vec<SemanticIndexerProgressRecovery>, String> {
+    let mut recovered = Vec::new();
+    for family in ["go", "typescript"] {
+        recovered.extend(recover_semantic_progress_family(progress_root, family)?);
+    }
+    Ok(recovered)
+}
+
+fn recover_semantic_progress_family(
+    progress_root: &Path,
+    family: &str,
+) -> Result<Vec<SemanticIndexerProgressRecovery>, String> {
     let family_root = progress_root.join(family);
     let metadata = match fs::symlink_metadata(&family_root) {
         Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(error) => {
             return Err(format!(
                 "failed to inspect {family} semantic progress root {}: {error}",
@@ -69,8 +86,14 @@ fn recover_semantic_progress_family(progress_root: &Path, family: &str) -> Resul
         ));
     }
     if family_root.join("scope.json").exists() {
-        return progress::SemanticProgressStore::recover_existing(&family_root);
+        return progress::SemanticProgressStore::recover_existing(&family_root).map(|recovery| {
+            recovery
+                .map(|recovery| semantic_progress_recovery(family, "unqualified", recovery))
+                .into_iter()
+                .collect()
+        });
     }
+    let mut world_roots = BTreeMap::new();
     for entry in fs::read_dir(&family_root).map_err(|error| {
         format!(
             "failed to enumerate {family} semantic progress root {}: {error}",
@@ -99,9 +122,31 @@ fn recover_semantic_progress_family(progress_root: &Path, family: &str) -> Resul
                 entry.path().display()
             ));
         }
-        progress::SemanticProgressStore::recover_existing(&entry.path())?;
+        world_roots.insert(name, entry.path());
     }
-    Ok(())
+    let mut recovered = Vec::new();
+    for (world, root) in world_roots {
+        if let Some(progress) = progress::SemanticProgressStore::recover_existing(&root)? {
+            recovered.push(semantic_progress_recovery(family, &world, progress));
+        }
+    }
+    Ok(recovered)
+}
+
+fn semantic_progress_recovery(
+    family: &str,
+    world: &str,
+    recovery: progress::SemanticProgressRecovery,
+) -> SemanticIndexerProgressRecovery {
+    SemanticIndexerProgressRecovery {
+        family: family.to_string(),
+        world: world.to_string(),
+        variant_identity: recovery.variant_identity,
+        dimensions: recovery.dimensions,
+        planned_unit_count: recovery.planned_unit_count,
+        completed_unit_count: recovery.completed_unit_count,
+        next_unit_id: recovery.next_unit_id,
+    }
 }
 
 fn ensure_semantic_progress_family(progress_root: &Path, family: &str) -> Result<PathBuf, String> {

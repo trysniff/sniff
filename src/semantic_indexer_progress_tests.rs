@@ -49,6 +49,16 @@ fn scope(unit: SemanticProgressUnit) -> SemanticProgressScope {
 }
 
 fn scope_with_units(units: Vec<SemanticProgressUnit>) -> SemanticProgressScope {
+    scope_with_variant(
+        units,
+        crate::semantic_index::SemanticIndexVariant::Unqualified,
+    )
+}
+
+fn scope_with_variant(
+    units: Vec<SemanticProgressUnit>,
+    variant: crate::semantic_index::SemanticIndexVariant,
+) -> SemanticProgressScope {
     SemanticProgressScope::new(SemanticProgressScopeInputs {
         indexer: SemanticIndexerKind::Go,
         indexer_version: "v1".to_string(),
@@ -56,7 +66,7 @@ fn scope_with_units(units: Vec<SemanticProgressUnit>) -> SemanticProgressScope {
         runtime_sha256: digest('2'),
         repository_content_sha256: digest('3'),
         file_scope_sha256: digest('4'),
-        variant: crate::semantic_index::SemanticIndexVariant::Unqualified,
+        variant,
         compiler_context: BTreeMap::from([("GOOS".to_string(), "linux".to_string())]),
         compiler_context_sha256: digest('5'),
         document_partition_sha256: digest('6'),
@@ -64,6 +74,47 @@ fn scope_with_units(units: Vec<SemanticProgressUnit>) -> SemanticProgressScope {
         units,
     })
     .unwrap()
+}
+
+#[test]
+fn qualified_world_recovery_reports_exact_progress_identity() {
+    let state = tempfile::tempdir().unwrap();
+    let family_root = state.path().join("go");
+    fs::create_dir(&family_root).unwrap();
+    let world = digest('a');
+    let world_root = family_root.join(&world);
+    let variant_identity = "ibpme-v7:fixture".to_string();
+    let dimensions = BTreeMap::from([
+        ("cgo_enabled".to_string(), "false".to_string()),
+        ("goarch".to_string(), "amd64".to_string()),
+        ("goos".to_string(), "linux".to_string()),
+    ]);
+    SemanticProgressStore::open(
+        &world_root,
+        scope_with_variant(
+            vec![unit(), second_unit()],
+            crate::semantic_index::SemanticIndexVariant::Qualified {
+                identity: crate::semantic_index::SemanticVariantId(variant_identity.clone()),
+                dimensions: dimensions.clone(),
+            },
+        ),
+    )
+    .unwrap();
+
+    let recovered = super::super::recover_semantic_indexer_progress(state.path()).unwrap();
+
+    assert_eq!(recovered.len(), 1);
+    let recovered = &recovered[0];
+    assert_eq!(recovered.family, "go");
+    assert_eq!(recovered.world, world);
+    assert_eq!(
+        recovered.variant_identity.as_deref(),
+        Some(&*variant_identity)
+    );
+    assert_eq!(recovered.dimensions, dimensions);
+    assert_eq!(recovered.planned_unit_count, 2);
+    assert_eq!(recovered.completed_unit_count, 0);
+    assert_eq!(recovered.next_unit_id.as_deref(), Some("document-0000"));
 }
 
 fn index(root: &Path) -> SemanticIndex {
@@ -183,11 +234,18 @@ fn recovery_preserves_completed_units_and_removes_only_incomplete_transactions()
         .unwrap();
     fs::write(store.unit_temp_path(&unit), b"partial").unwrap();
 
-    SemanticProgressStore::recover_existing(state.path()).unwrap();
+    let recovery = SemanticProgressStore::recover_existing(state.path())
+        .unwrap()
+        .unwrap();
 
     assert!(store.unit_path(&unit).is_file());
     assert!(!store.unit_temp_path(&unit).exists());
     assert!(store.load(&unit, repository.path()).unwrap().is_some());
+    assert_eq!(recovery.variant_identity, None);
+    assert!(recovery.dimensions.is_empty());
+    assert_eq!(recovery.planned_unit_count, 1);
+    assert_eq!(recovery.completed_unit_count, 0);
+    assert_eq!(recovery.next_unit_id.as_deref(), Some("document-0000"));
 }
 
 #[test]
@@ -227,10 +285,15 @@ fn assembled_prefix_survives_relocation_and_supersedes_older_prefix() {
     for unit in &units {
         assert!(!store.unit_path(unit).exists());
     }
-    SemanticProgressStore::recover_existing(state.path()).unwrap();
+    let recovery = SemanticProgressStore::recover_existing(state.path())
+        .unwrap()
+        .unwrap();
     let completed = store.load_assembly(second.path()).unwrap().unwrap();
     assert_eq!(completed.completed_unit_count, 2);
     assert_eq!(completed.payload.provenance.invocations.len(), 2);
+    assert_eq!(recovery.planned_unit_count, 2);
+    assert_eq!(recovery.completed_unit_count, 2);
+    assert_eq!(recovery.next_unit_id, None);
 }
 
 #[test]

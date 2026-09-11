@@ -26,8 +26,8 @@ use crate::semantic_indexer_manifest::SemanticIndexerKind;
 #[cfg(test)]
 use crate::semantic_indexer_runner::SemanticIndexerBatchOutcome;
 use crate::semantic_indexer_runner::{
-    SemanticIndexerProcessEvidence, SemanticIndexerRunFailure, SemanticIndexerRunFailureKind,
-    SemanticIndexerRunPhase, SemanticVariantIndexerBatchOutcome,
+    SemanticIndexerProcessEvidence, SemanticIndexerProgressRecovery, SemanticIndexerRunFailure,
+    SemanticIndexerRunFailureKind, SemanticIndexerRunPhase, SemanticVariantIndexerBatchOutcome,
 };
 use crate::semantic_method_join::{SemanticMethodBinding, SemanticMethodCoverage, join_methods};
 use crate::types::FileRecord;
@@ -69,6 +69,12 @@ mod stage_support;
 #[path = "benchmark_history_v2_semantic_progress.rs"]
 mod progress;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct HistoricalV2SemanticProgressRecovery {
+    pub(crate) side: HistoricalV2SemanticSnapshotSide,
+    pub(crate) progress: SemanticIndexerProgressRecovery,
+}
+
 #[path = "benchmark_history_v2_semantic_variants.rs"]
 mod variants;
 
@@ -76,7 +82,9 @@ use stage_support::*;
 
 pub use validation::validate_historical_v2_semantic_census_commitment;
 
-pub fn recover_historical_v2_semantic_progress(root: &Path) -> Result<(), String> {
+pub(crate) fn recover_historical_v2_semantic_progress(
+    root: &Path,
+) -> Result<Vec<HistoricalV2SemanticProgressRecovery>, String> {
     progress::HistoricalV2SemanticProgress::recover_existing(root)
 }
 
