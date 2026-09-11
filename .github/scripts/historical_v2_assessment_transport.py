@@ -382,6 +382,25 @@ SEMANTIC_PROGRESS_OBSERVABILITY_MIGRATION_SOURCE_ARTIFACT_DIGEST = (
 )
 SEMANTIC_PROGRESS_OBSERVABILITY_MIGRATION_SOURCE_ARTIFACT_SIZE = 510_295_640
 
+SEMANTIC_INCOMPLETE_WORLD_FIRST_MIGRATION_NAME = (
+    "semantic-incomplete-world-first-v1"
+)
+SEMANTIC_INCOMPLETE_WORLD_FIRST_MIGRATION_CONTRACT = (
+    "sniffbench-historical-v2-semantic-incomplete-world-first-migration-v1"
+)
+SEMANTIC_INCOMPLETE_WORLD_FIRST_MIGRATION_FROM_COLLECTOR_SHA = (
+    "65391487441767274efe4d4610643063afe6ebfe"
+)
+SEMANTIC_INCOMPLETE_WORLD_FIRST_MIGRATION_SOURCE_RUN_ID = 34_649_320_871
+SEMANTIC_INCOMPLETE_WORLD_FIRST_MIGRATION_SOURCE_HEAD_SHA = (
+    "65391487441767274efe4d4610643063afe6ebfe"
+)
+SEMANTIC_INCOMPLETE_WORLD_FIRST_MIGRATION_SOURCE_ARTIFACT_ID = 10_283_960_367
+SEMANTIC_INCOMPLETE_WORLD_FIRST_MIGRATION_SOURCE_ARTIFACT_DIGEST = (
+    "sha256:8973a60ea8e4a115a0ab4dc9e8a7ff8391f5de5e9c3ff48b7b3e488d5727fbe0"
+)
+SEMANTIC_INCOMPLETE_WORLD_FIRST_MIGRATION_SOURCE_ARTIFACT_SIZE = 484_506_905
+
 FRAME_FILE_SHA256 = {
     "environment.txt": "2e87f3c3e1b2005f6b6d09b1bf1b82d30a9433636c3c67f0806cc68e80ab6800",
     "exclusions.json": "74bccb100eb48ab87952bd7eec137b2285edbc68d2547715bc0e06a80e029f76",
@@ -1003,7 +1022,7 @@ def validate_manifest(path: pathlib.Path, frame_run_id: int) -> str:
     schema_version = value.get("schema_version")
     if schema_version == 1:
         expected = _manifest(frame_run_id, collector_sha)
-    elif schema_version in range(2, 23):
+    elif schema_version in range(2, 24):
         migrations = value.get("collector_migrations")
         expected_count = schema_version - 1
         if not isinstance(migrations, list) or len(migrations) != expected_count:
@@ -1111,6 +1130,11 @@ def _migration_record(
         contract = SEMANTIC_PROGRESS_OBSERVABILITY_MIGRATION_CONTRACT
         source_collector_sha = (
             SEMANTIC_PROGRESS_OBSERVABILITY_MIGRATION_FROM_COLLECTOR_SHA
+        )
+    elif migration_name == SEMANTIC_INCOMPLETE_WORLD_FIRST_MIGRATION_NAME:
+        contract = SEMANTIC_INCOMPLETE_WORLD_FIRST_MIGRATION_CONTRACT
+        source_collector_sha = (
+            SEMANTIC_INCOMPLETE_WORLD_FIRST_MIGRATION_FROM_COLLECTOR_SHA
         )
     else:
         raise ValueError("transport manifest collector migration is not allowlisted")
@@ -1527,15 +1551,35 @@ def _expected_semantic_progress_observability_migration(
     )
 
 
+def _expected_semantic_incomplete_world_first_migration(
+    target_collector_sha: str,
+) -> dict[str, Any]:
+    if (
+        target_collector_sha
+        == SEMANTIC_INCOMPLETE_WORLD_FIRST_MIGRATION_FROM_COLLECTOR_SHA
+        or re.fullmatch(r"[0-9a-f]{40}", target_collector_sha) is None
+    ):
+        raise ValueError("transport manifest collector migration target is invalid")
+    return _migration_record(
+        SEMANTIC_INCOMPLETE_WORLD_FIRST_MIGRATION_NAME,
+        target_collector_sha,
+        SEMANTIC_INCOMPLETE_WORLD_FIRST_MIGRATION_SOURCE_RUN_ID,
+        SEMANTIC_INCOMPLETE_WORLD_FIRST_MIGRATION_SOURCE_HEAD_SHA,
+        SEMANTIC_INCOMPLETE_WORLD_FIRST_MIGRATION_SOURCE_ARTIFACT_ID,
+        SEMANTIC_INCOMPLETE_WORLD_FIRST_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+        SEMANTIC_INCOMPLETE_WORLD_FIRST_MIGRATION_SOURCE_ARTIFACT_SIZE,
+    )
+
+
 def _validate_collector_migrations(
     migrations: Sequence[Mapping[str, Any]], collector_sha: str
 ) -> None:
-    if len(migrations) not in range(1, 22):
+    if len(migrations) not in range(1, 23):
         raise ValueError("transport manifest collector migration chain is invalid")
     expected = [_expected_storage_migration()]
     if len(migrations) == 2:
         expected.append(_expected_go_preparation_migration(collector_sha))
-    elif len(migrations) in range(3, 22):
+    elif len(migrations) in range(3, 23):
         expected.append(
             _expected_go_preparation_migration(
                 GO_MODULE_DOWNLOAD_MIGRATION_FROM_COLLECTOR_SHA
@@ -1700,7 +1744,15 @@ def _validate_collector_migrations(
             )
         if len(migrations) >= 21:
             expected.append(
-                _expected_semantic_progress_observability_migration(collector_sha)
+                _expected_semantic_progress_observability_migration(
+                    SEMANTIC_INCOMPLETE_WORLD_FIRST_MIGRATION_FROM_COLLECTOR_SHA
+                    if len(migrations) >= 22
+                    else collector_sha
+                )
+            )
+        if len(migrations) >= 22:
+            expected.append(
+                _expected_semantic_incomplete_world_first_migration(collector_sha)
             )
     elif collector_sha != STORAGE_MIGRATION_TO_COLLECTOR_SHA:
         raise ValueError("transport manifest collector migration target drifted")
@@ -1848,6 +1900,12 @@ def migrate_manifest(
         ]
     elif schema_version == 21:
         expected_name = SEMANTIC_PROGRESS_OBSERVABILITY_MIGRATION_NAME
+        migrations = [
+            _require_mapping(item, "transport manifest collector migration")
+            for item in value.get("collector_migrations", [])
+        ]
+    elif schema_version == 22:
+        expected_name = SEMANTIC_INCOMPLETE_WORLD_FIRST_MIGRATION_NAME
         migrations = [
             _require_mapping(item, "transport manifest collector migration")
             for item in value.get("collector_migrations", [])

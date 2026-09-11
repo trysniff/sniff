@@ -127,7 +127,7 @@ jobs:
               exit 1
             fi
             case "$COLLECTOR_MIGRATION" in
-              compact-stage-artifact-json-v1|package-scoped-go-dependency-preparation-v1|declared-go-module-dependency-preparation-v1|strict-go-project-root-validation-v1|valid-go-eof-parser-v1|validated-resume-symlink-extraction-v1|committed-git-blob-source-census-v1|bounded-go-semantic-indexing-v1|hosted-semantic-seal-margin-v1|resumable-go-semantic-assembly-v1|finalized-go-semantic-compaction-v1|indexed-semantic-snapshot-projection-v1|batched-source-normalized-semantic-snapshot-v1|compiler-public-surface-replay-v1|executable-git-blob-project-model-v1|go-project-model-dependency-preparation-v1|resumable-source-census-progress-v1|bounded-source-census-artifact-v1|exact-go-semantic-compiler-world-v1|source-required-go-semantic-worlds-v1|semantic-progress-observability-v1) ;;
+              compact-stage-artifact-json-v1|package-scoped-go-dependency-preparation-v1|declared-go-module-dependency-preparation-v1|strict-go-project-root-validation-v1|valid-go-eof-parser-v1|validated-resume-symlink-extraction-v1|committed-git-blob-source-census-v1|bounded-go-semantic-indexing-v1|hosted-semantic-seal-margin-v1|resumable-go-semantic-assembly-v1|finalized-go-semantic-compaction-v1|indexed-semantic-snapshot-projection-v1|batched-source-normalized-semantic-snapshot-v1|compiler-public-surface-replay-v1|executable-git-blob-project-model-v1|go-project-model-dependency-preparation-v1|resumable-source-census-progress-v1|bounded-source-census-artifact-v1|exact-go-semantic-compiler-world-v1|source-required-go-semantic-worlds-v1|semantic-progress-observability-v1|semantic-incomplete-world-first-v1) ;;
               *)
                 echo 'collector_migration is not an allowlisted exact migration' >&2
                 exit 1
@@ -619,6 +619,30 @@ jobs:
             fi
           done
 
+      - name: Capture durable progress before bounded assessment
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            "$STATE_OBSERVER" state-status \
+              --protocol "$COLLECTOR_ROOT/sniffbench/historical-v2-protocol.json" \
+              --artifact-root "$FRAME_ARTIFACT_ROOT" \
+              --frame "$FRAME_ROOT/frame.json" \
+              --exclusions "$FRAME_ROOT/exclusions.json" \
+              --selection "$FRAME_ROOT/selection.json" \
+              --payloads "$FRAME_ROOT/selected-payloads.json" \
+              --state-root "$STATE_ROOT"
+            "$STATE_OBSERVER" recover-slot-work \
+              --protocol "$COLLECTOR_ROOT/sniffbench/historical-v2-protocol.json" \
+              --artifact-root "$FRAME_ARTIFACT_ROOT" \
+              --frame "$FRAME_ROOT/frame.json" \
+              --exclusions "$FRAME_ROOT/exclusions.json" \
+              --selection "$FRAME_ROOT/selection.json" \
+              --payloads "$FRAME_ROOT/selected-payloads.json" \
+              --work-root "$WORK_ROOT" \
+              | grep -E '^(Started semantic compiler worlds:|  [a-z]+/slot-)'
+          } > "$RUNNER_TEMP/historical-v2-durable-progress-before.txt"
+
       - name: Assess a bounded resumable slot slice
         id: assess
         shell: bash
@@ -713,6 +737,39 @@ jobs:
           printf "Assessment state SHA-256: \`%s\`\n" \
             "$(sha256sum "$SNAPSHOT_ARCHIVE" | cut -d' ' -f1)" >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Capture durable progress after bounded assessment
+        id: durable_progress
+        if: ${{ always() && steps.seal.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            "$STATE_OBSERVER" state-status \
+              --protocol "$COLLECTOR_ROOT/sniffbench/historical-v2-protocol.json" \
+              --artifact-root "$FRAME_ARTIFACT_ROOT" \
+              --frame "$FRAME_ROOT/frame.json" \
+              --exclusions "$FRAME_ROOT/exclusions.json" \
+              --selection "$FRAME_ROOT/selection.json" \
+              --payloads "$FRAME_ROOT/selected-payloads.json" \
+              --state-root "$STATE_ROOT"
+            "$STATE_OBSERVER" recover-slot-work \
+              --protocol "$COLLECTOR_ROOT/sniffbench/historical-v2-protocol.json" \
+              --artifact-root "$FRAME_ARTIFACT_ROOT" \
+              --frame "$FRAME_ROOT/frame.json" \
+              --exclusions "$FRAME_ROOT/exclusions.json" \
+              --selection "$FRAME_ROOT/selection.json" \
+              --payloads "$FRAME_ROOT/selected-payloads.json" \
+              --work-root "$WORK_ROOT" \
+              | grep -E '^(Started semantic compiler worlds:|  [a-z]+/slot-)'
+          } > "$RUNNER_TEMP/historical-v2-durable-progress-after.txt"
+          if cmp --silent \
+            "$RUNNER_TEMP/historical-v2-durable-progress-before.txt" \
+            "$RUNNER_TEMP/historical-v2-durable-progress-after.txt"; then
+            printf 'changed=false\n' >> "$GITHUB_OUTPUT"
+          else
+            printf 'changed=true\n' >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Upload immutable resumable assessment state
         if: ${{ always() && steps.seal.outcome == 'success' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -728,8 +785,13 @@ jobs:
         shell: bash
         env:
           ASSESSMENT_STATUS: ${{ steps.assess.outputs.status }}
+          DURABLE_PROGRESS_CHANGED: ${{ steps.durable_progress.outputs.changed }}
         run: |
           set -euo pipefail
+          if [[ "$DURABLE_PROGRESS_CHANGED" != 'true' ]]; then
+            echo 'historical-v2 bounded assessment made no durable progress' >&2
+            exit 1
+          fi
           case "$ASSESSMENT_STATUS" in
             0|124|130) ;;
             *)

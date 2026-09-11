@@ -692,6 +692,21 @@ class ManifestTests(unittest.TestCase):
             transport.SOURCE_REQUIRED_GO_SEMANTIC_WORLD_MIGRATION_SOURCE_ARTIFACT_SIZE,
         )
 
+    @staticmethod
+    def _write_semantic_progress_observability_manifest(path: pathlib.Path) -> None:
+        ManifestTests._write_source_required_go_semantic_world_manifest(path)
+        transport.migrate_manifest(
+            path,
+            transport.FRAME_RUN_ID,
+            transport.SEMANTIC_INCOMPLETE_WORLD_FIRST_MIGRATION_FROM_COLLECTOR_SHA,
+            transport.SEMANTIC_PROGRESS_OBSERVABILITY_MIGRATION_NAME,
+            transport.SEMANTIC_PROGRESS_OBSERVABILITY_MIGRATION_SOURCE_RUN_ID,
+            transport.SEMANTIC_PROGRESS_OBSERVABILITY_MIGRATION_SOURCE_HEAD_SHA,
+            transport.SEMANTIC_PROGRESS_OBSERVABILITY_MIGRATION_SOURCE_ARTIFACT_ID,
+            transport.SEMANTIC_PROGRESS_OBSERVABILITY_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+            transport.SEMANTIC_PROGRESS_OBSERVABILITY_MIGRATION_SOURCE_ARTIFACT_SIZE,
+        )
+
     def test_manifest_round_trips_and_is_create_new(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             path = pathlib.Path(temporary, "manifest.json")
@@ -2628,6 +2643,93 @@ class ManifestTests(unittest.TestCase):
                     transport.SEMANTIC_PROGRESS_OBSERVABILITY_MIGRATION_SOURCE_ARTIFACT_SIZE,
                 )
 
+    def test_semantic_incomplete_world_first_migration_is_exact_and_closes_chain(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            path = root.joinpath("manifest.json")
+            sentinel = root.joinpath("semantic-state.bin")
+            sentinel.write_bytes(b"semantic-state-must-not-change")
+            self._write_semantic_progress_observability_manifest(path)
+            prior_manifest = json.loads(path.read_text(encoding="utf-8"))
+            prior_records = prior_manifest["collector_migrations"]
+            source = (
+                transport.SEMANTIC_INCOMPLETE_WORLD_FIRST_MIGRATION_FROM_COLLECTOR_SHA
+            )
+            target = "a" * 40
+
+            self.assertEqual(
+                transport.migrate_manifest(
+                    path,
+                    transport.FRAME_RUN_ID,
+                    target,
+                    transport.SEMANTIC_INCOMPLETE_WORLD_FIRST_MIGRATION_NAME,
+                    transport.SEMANTIC_INCOMPLETE_WORLD_FIRST_MIGRATION_SOURCE_RUN_ID,
+                    transport.SEMANTIC_INCOMPLETE_WORLD_FIRST_MIGRATION_SOURCE_HEAD_SHA,
+                    transport.SEMANTIC_INCOMPLETE_WORLD_FIRST_MIGRATION_SOURCE_ARTIFACT_ID,
+                    transport.SEMANTIC_INCOMPLETE_WORLD_FIRST_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+                    transport.SEMANTIC_INCOMPLETE_WORLD_FIRST_MIGRATION_SOURCE_ARTIFACT_SIZE,
+                ),
+                target,
+            )
+            value = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(value["schema_version"], 23)
+            self.assertEqual(value["collector_migrations"][:21], prior_records)
+            self.assertEqual(
+                value["collector_migrations"][21],
+                {
+                    "from_collector_sha": source,
+                    "migration_contract": (
+                        transport.SEMANTIC_INCOMPLETE_WORLD_FIRST_MIGRATION_CONTRACT
+                    ),
+                    "migration_name": (
+                        transport.SEMANTIC_INCOMPLETE_WORLD_FIRST_MIGRATION_NAME
+                    ),
+                    "source_artifact_digest": (
+                        transport.SEMANTIC_INCOMPLETE_WORLD_FIRST_MIGRATION_SOURCE_ARTIFACT_DIGEST
+                    ),
+                    "source_artifact_id": (
+                        transport.SEMANTIC_INCOMPLETE_WORLD_FIRST_MIGRATION_SOURCE_ARTIFACT_ID
+                    ),
+                    "source_artifact_size": (
+                        transport.SEMANTIC_INCOMPLETE_WORLD_FIRST_MIGRATION_SOURCE_ARTIFACT_SIZE
+                    ),
+                    "source_head_sha": (
+                        transport.SEMANTIC_INCOMPLETE_WORLD_FIRST_MIGRATION_SOURCE_HEAD_SHA
+                    ),
+                    "source_run_id": (
+                        transport.SEMANTIC_INCOMPLETE_WORLD_FIRST_MIGRATION_SOURCE_RUN_ID
+                    ),
+                    "to_collector_sha": target,
+                },
+            )
+            self.assertEqual(sentinel.read_bytes(), b"semantic-state-must-not-change")
+            self.assertEqual(
+                transport.validate_manifest(path, transport.FRAME_RUN_ID), target
+            )
+
+            for field in value["collector_migrations"][21]:
+                tampered = json.loads(json.dumps(value))
+                tampered["collector_migrations"][21][field] = True
+                path.write_text(json.dumps(tampered), encoding="utf-8")
+                with self.subTest(field=field), self.assertRaises(ValueError):
+                    transport.validate_manifest(path, transport.FRAME_RUN_ID)
+
+            path.write_text(json.dumps(value), encoding="utf-8")
+            with self.assertRaises(ValueError):
+                transport.migrate_manifest(
+                    path,
+                    transport.FRAME_RUN_ID,
+                    "b" * 40,
+                    transport.SEMANTIC_INCOMPLETE_WORLD_FIRST_MIGRATION_NAME,
+                    transport.SEMANTIC_INCOMPLETE_WORLD_FIRST_MIGRATION_SOURCE_RUN_ID,
+                    transport.SEMANTIC_INCOMPLETE_WORLD_FIRST_MIGRATION_SOURCE_HEAD_SHA,
+                    transport.SEMANTIC_INCOMPLETE_WORLD_FIRST_MIGRATION_SOURCE_ARTIFACT_ID,
+                    transport.SEMANTIC_INCOMPLETE_WORLD_FIRST_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+                    transport.SEMANTIC_INCOMPLETE_WORLD_FIRST_MIGRATION_SOURCE_ARTIFACT_SIZE,
+                )
+
     def test_source_required_progress_migration_preserves_source_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary)
@@ -2995,6 +3097,29 @@ class WorkflowContractTests(unittest.TestCase):
         )
         self.assertIn("--label historical-v2-assessment", workflow)
         self.assertIn("--linux-proc-stats", workflow)
+        self.assertIn(
+            "      - name: Capture durable progress before bounded assessment",
+            workflow,
+        )
+        self.assertIn(
+            "      - name: Capture durable progress after bounded assessment",
+            workflow,
+        )
+        self.assertEqual(
+            workflow.count(
+                "| grep -E '^(Started semantic compiler worlds:|  [a-z]+/slot-)'"
+            ),
+            2,
+        )
+        self.assertIn(
+            "          DURABLE_PROGRESS_CHANGED: "
+            "${{ steps.durable_progress.outputs.changed }}",
+            workflow,
+        )
+        self.assertIn(
+            "historical-v2 bounded assessment made no durable progress",
+            workflow,
+        )
         self.assertNotIn("--kill-after=60s 300m", workflow)
 
     def test_exact_collector_tools_are_built_in_a_prior_workflow_run(self) -> None:
@@ -3196,6 +3321,7 @@ class WorkflowContractTests(unittest.TestCase):
             "exact-go-semantic-compiler-world-v1",
             "source-required-go-semantic-worlds-v1",
             "semantic-progress-observability-v1",
+            "semantic-incomplete-world-first-v1",
             'migrate-source-required-go-semantic-progress',
             '"$manifest" "$STATE_ROOT" "$WORK_ROOT" "$FRAME_RUN_ID"',
             '"$transport" migrate-manifest',
