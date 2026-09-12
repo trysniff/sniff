@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "transaction_contract": "sniffbench-historical-v2-slot-stage-transaction-v1",
+  "sequence": 5,
+  "checkpoint_sha256": "f1b0900150a9432dd492a6953e74ceb08bf8d3e466c350382f7795c1440f8ce2",
+  "files": [
+    {
+      "name": "artifact.json",
+      "sha256": "8e3236e31324ecf20fabfde4453f9ea4b6acd7617aa307347f87b80cca1b63ae",
+      "byte_count": 1220
+    },
+    {
+      "name": "checkpoint.json",
+      "sha256": "77e3a3aea395607b40cb1f0b019e53b598449ab06b0a0819fc8e4be494d1c2cc",
+      "byte_count": 824
+    }
+  ]
+}
