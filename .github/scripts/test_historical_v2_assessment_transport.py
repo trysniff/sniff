@@ -3047,10 +3047,18 @@ class WorkflowContractTests(unittest.TestCase):
             .strip()
         )
         assessment_minutes = int(
+            re.search(
+                r"assessment_timeout_minutes:\n"
+                r"(?:        .*\n)*?"
+                r'        default: "(\d+)"',
+                workflow,
+            ).group(1)
+        )
+        max_assessment_minutes = int(
             next(
                 line
                 for line in lines
-                if line.startswith("      ASSESSMENT_TIMEOUT_MINUTES:")
+                if line.startswith("      MAX_ASSESSMENT_TIMEOUT_MINUTES:")
             )
             .split('"', 2)[1]
         )
@@ -3079,10 +3087,20 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIsNotNone(go_timeout)
 
         self.assertEqual(assessment_minutes, 6)
-        self.assertEqual(reserve_minutes, 24)
+        self.assertEqual(max_assessment_minutes, 18)
+        self.assertEqual(reserve_minutes, 12)
         self.assertEqual(heartbeat_seconds, 60)
-        self.assertEqual(assessment_minutes + reserve_minutes, job_minutes)
+        self.assertEqual(max_assessment_minutes + reserve_minutes, job_minutes)
         self.assertLess(int(go_timeout.group(1)), assessment_minutes)
+        self.assertIn(
+            "      ASSESSMENT_TIMEOUT_MINUTES: ${{ inputs.assessment_timeout_minutes }}",
+            workflow,
+        )
+        self.assertIn(
+            "assessment_timeout_minutes must be an integer from 1 through "
+            "${MAX_ASSESSMENT_TIMEOUT_MINUTES}",
+            workflow,
+        )
         self.assertIn(
             '"${ASSESSMENT_TIMEOUT_MINUTES}m" \\',
             workflow,
