@@ -3111,6 +3111,35 @@ class WorkflowContractTests(unittest.TestCase):
             ),
             2,
         )
+        before_start = workflow.index(
+            "      - name: Capture durable progress before bounded assessment"
+        )
+        assess_start = workflow.index(
+            "      - name: Assess a bounded resumable slot slice",
+            before_start,
+        )
+        after_start = workflow.index(
+            "      - name: Capture durable progress after bounded assessment"
+        )
+        upload_start = workflow.index(
+            "      - name: Upload immutable resumable assessment state",
+            after_start,
+        )
+        for body in (
+            workflow[before_start:assess_start],
+            workflow[after_start:upload_start],
+        ):
+            self.assertIn(
+                '--state-root "$STATE_ROOT" \\\n'
+                "              2>&1",
+                body,
+            )
+            self.assertIn(
+                '--work-root "$WORK_ROOT" \\\n'
+                "              2>&1 \\\n"
+                "              | grep -E",
+                body,
+            )
         self.assertIn(
             "          DURABLE_PROGRESS_CHANGED: "
             "${{ steps.durable_progress.outputs.changed }}",

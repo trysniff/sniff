@@ -631,7 +631,8 @@ jobs:
               --exclusions "$FRAME_ROOT/exclusions.json" \
               --selection "$FRAME_ROOT/selection.json" \
               --payloads "$FRAME_ROOT/selected-payloads.json" \
-              --state-root "$STATE_ROOT"
+              --state-root "$STATE_ROOT" \
+              2>&1
             "$STATE_OBSERVER" recover-slot-work \
               --protocol "$COLLECTOR_ROOT/sniffbench/historical-v2-protocol.json" \
               --artifact-root "$FRAME_ARTIFACT_ROOT" \
@@ -640,6 +641,7 @@ jobs:
               --selection "$FRAME_ROOT/selection.json" \
               --payloads "$FRAME_ROOT/selected-payloads.json" \
               --work-root "$WORK_ROOT" \
+              2>&1 \
               | grep -E '^(Started semantic compiler worlds:|  [a-z]+/slot-)'
           } > "$RUNNER_TEMP/historical-v2-durable-progress-before.txt"
 
@@ -751,7 +753,8 @@ jobs:
               --exclusions "$FRAME_ROOT/exclusions.json" \
               --selection "$FRAME_ROOT/selection.json" \
               --payloads "$FRAME_ROOT/selected-payloads.json" \
-              --state-root "$STATE_ROOT"
+              --state-root "$STATE_ROOT" \
+              2>&1
             "$STATE_OBSERVER" recover-slot-work \
               --protocol "$COLLECTOR_ROOT/sniffbench/historical-v2-protocol.json" \
               --artifact-root "$FRAME_ARTIFACT_ROOT" \
@@ -760,6 +763,7 @@ jobs:
               --selection "$FRAME_ROOT/selection.json" \
               --payloads "$FRAME_ROOT/selected-payloads.json" \
               --work-root "$WORK_ROOT" \
+              2>&1 \
               | grep -E '^(Started semantic compiler worlds:|  [a-z]+/slot-)'
           } > "$RUNNER_TEMP/historical-v2-durable-progress-after.txt"
           if cmp --silent \
