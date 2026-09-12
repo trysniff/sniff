@@ -2954,12 +2954,16 @@ class ManifestTests(unittest.TestCase):
             "0004-source-census", "checkpoint.json"
         )
         source_checkpoint.write_bytes(
-            SCIP_REPLAY_FIXTURE_ROOT.joinpath("source-checkpoint.json").read_bytes()
+            SCIP_REPLAY_FIXTURE_ROOT.joinpath("source-checkpoint.json")
+            .read_text(encoding="utf-8")
+            .encode("utf-8")
         )
         semantic_stage = state_slot.joinpath("0005-semantic-census")
         for name in ("_transaction.json", "artifact.json", "checkpoint.json"):
             semantic_stage.joinpath(name).write_bytes(
-                SCIP_REPLAY_FIXTURE_ROOT.joinpath(name).read_bytes()
+                SCIP_REPLAY_FIXTURE_ROOT.joinpath(name)
+                .read_text(encoding="utf-8")
+                .encode("utf-8")
             )
 
         prior_state = state_language.joinpath("slot-0121", "complete")
