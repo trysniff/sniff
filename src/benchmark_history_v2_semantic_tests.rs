@@ -4863,6 +4863,150 @@ fn go_package_root_validation_rejects_omitted_compiler_exposure() {
 }
 
 #[test]
+fn qualified_go_package_roots_ignore_uncommitted_redundant_worlds() {
+    let mut fixture = compiler_surface_fixture(
+        "go",
+        SemanticIndexerKind::Go,
+        SemanticPositionEncoding::Utf8,
+        &[("api.go", "package api\n")],
+        &[],
+    );
+    let model = &mut fixture.source.go_project_model;
+    model.executions[0].execution_id = "linux-amd64".to_string();
+    model.targets[0].execution_id = "linux-amd64".to_string();
+    model.targets[0].target_id = "linux-target".to_string();
+    let mut redundant_execution = model.executions[0].clone();
+    redundant_execution.execution_id = "freebsd-amd64".to_string();
+    redundant_execution.variant = super::super::IntentionalBoundaryProjectModelVariant::Go {
+        goos: "freebsd".to_string(),
+        goarch: "amd64".to_string(),
+        cgo_enabled: false,
+        build_tags: Vec::new(),
+        architecture: IntentionalBoundaryProjectModelGoArchitecture::Default,
+    };
+    let mut redundant_target = model.targets[0].clone();
+    redundant_target.execution_id = redundant_execution.execution_id.clone();
+    redundant_target.target_id = "freebsd-target".to_string();
+    model.executions.push(redundant_execution);
+    model.targets.push(redundant_target);
+
+    let identity = SemanticVariantId("linux-amd64".to_string());
+    let mut index = fixture.indexes.remove(&SemanticIndexerKind::Go).unwrap();
+    index.variant = SemanticIndexVariant::Qualified {
+        identity: identity.clone(),
+        dimensions: BTreeMap::from([("target".to_string(), "linux-amd64".to_string())]),
+    };
+    let sets = BTreeMap::from([(
+        SemanticIndexerKind::Go,
+        SemanticIndexSet::Qualified {
+            variants: BTreeMap::from([(
+                identity,
+                QualifiedSemanticIndex {
+                    index,
+                    ignored_documents: BTreeSet::new(),
+                },
+            )]),
+        },
+    )]);
+    let changed_indexers = BTreeSet::from([SemanticIndexerKind::Go]);
+    let required_paths = fixture_required_paths(&fixture.source);
+    let semantic = build_semantic_snapshot_from_sets(
+        fixture.root.path(),
+        &fixture.source,
+        &fixture.files,
+        &changed_indexers,
+        &required_paths,
+        &sets,
+    )
+    .unwrap();
+
+    assert_eq!(semantic.go_package_roots.len(), 1);
+    assert_eq!(
+        semantic.go_package_roots[0].variant_target_ids,
+        ["linux-target"]
+    );
+    validation::validate_snapshot(
+        &fixture.source,
+        &semantic,
+        &changed_indexers,
+        &required_paths,
+    )
+    .unwrap();
+
+    let mut reordered_source = fixture.source.clone();
+    reordered_source.go_project_model.executions.reverse();
+    reordered_source.go_project_model.targets.reverse();
+    let reordered = build_semantic_snapshot_from_sets(
+        fixture.root.path(),
+        &reordered_source,
+        &fixture.files,
+        &changed_indexers,
+        &required_paths,
+        &sets,
+    )
+    .unwrap();
+    assert_eq!(semantic.go_package_roots, reordered.go_package_roots);
+}
+
+#[test]
+fn qualified_go_package_root_validation_rejects_rehashed_target_tampering() {
+    let mut fixture = compiler_surface_fixture(
+        "go",
+        SemanticIndexerKind::Go,
+        SemanticPositionEncoding::Utf8,
+        &[("api.go", "package api\n")],
+        &[],
+    );
+    fixture.source.go_project_model.executions[0].execution_id = "linux-amd64".to_string();
+    fixture.source.go_project_model.targets[0].execution_id = "linux-amd64".to_string();
+    fixture.source.go_project_model.targets[0].target_id = "linux-target".to_string();
+    let identity = SemanticVariantId("linux-amd64".to_string());
+    let mut index = fixture.indexes.remove(&SemanticIndexerKind::Go).unwrap();
+    index.variant = SemanticIndexVariant::Qualified {
+        identity: identity.clone(),
+        dimensions: BTreeMap::from([("target".to_string(), "linux-amd64".to_string())]),
+    };
+    let sets = BTreeMap::from([(
+        SemanticIndexerKind::Go,
+        SemanticIndexSet::Qualified {
+            variants: BTreeMap::from([(
+                identity,
+                QualifiedSemanticIndex {
+                    index,
+                    ignored_documents: BTreeSet::new(),
+                },
+            )]),
+        },
+    )]);
+    let changed_indexers = BTreeSet::from([SemanticIndexerKind::Go]);
+    let required_paths = fixture_required_paths(&fixture.source);
+    let mut semantic = build_semantic_snapshot_from_sets(
+        fixture.root.path(),
+        &fixture.source,
+        &fixture.files,
+        &changed_indexers,
+        &required_paths,
+        &sets,
+    )
+    .unwrap();
+    semantic.go_package_roots[0].variant_target_ids[0] = "invented-target".to_string();
+    semantic.semantic_snapshot_sha256 = semantic_snapshot_sha256(&semantic).unwrap();
+
+    let error = validation::validate_snapshot(
+        &fixture.source,
+        &semantic,
+        &changed_indexers,
+        &required_paths,
+    )
+    .unwrap_err();
+
+    assert!(
+        error.contains("Go package roots disagree with compiler package exposures"),
+        "{error}"
+    );
+}
+
+#[test]
 fn go_surface_identity_survives_moving_a_declaration_between_package_files() {
     let first = compiler_surface_fixture(
         "go",

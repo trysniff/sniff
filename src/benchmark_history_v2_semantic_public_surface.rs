@@ -66,6 +66,63 @@ pub(super) struct PublicSurfaceBindingOutputs<'a> {
     pub(super) public_surface_document_paths: &'a mut BTreeSet<String>,
 }
 
+pub(super) fn go_package_roots_for_variant(
+    packages: &[HistoricalV2GoPackageExposure],
+    semantic_variant: &SemanticIndexVariant,
+) -> Vec<HistoricalV2SemanticGoPackageRoot> {
+    let mut roots = packages
+        .iter()
+        .filter(|package| package.externally_reachable)
+        .filter_map(|package| {
+            let package_variants = package
+                .variants
+                .iter()
+                .filter(|variant| variant.externally_reachable)
+                .filter(|variant| match semantic_variant {
+                    SemanticIndexVariant::Unqualified => true,
+                    SemanticIndexVariant::Qualified { identity, .. } => {
+                        variant.execution_id == identity.0
+                    }
+                })
+                .collect::<Vec<_>>();
+            if package_variants.is_empty() {
+                return None;
+            }
+            let mut variant_target_ids = package_variants
+                .iter()
+                .map(|variant| variant.target_id.clone())
+                .collect::<Vec<_>>();
+            variant_target_ids.sort();
+            variant_target_ids.dedup();
+            let mut source_repository_paths = package_variants
+                .iter()
+                .flat_map(|variant| variant.source_repository_paths.iter())
+                .cloned()
+                .collect::<Vec<_>>();
+            source_repository_paths.sort();
+            source_repository_paths.dedup();
+            let mut ignored_source_repository_paths = package_variants
+                .iter()
+                .flat_map(|variant| variant.ignored_source_repository_paths.iter())
+                .cloned()
+                .collect::<Vec<_>>();
+            ignored_source_repository_paths.sort();
+            ignored_source_repository_paths.dedup();
+            Some(HistoricalV2SemanticGoPackageRoot {
+                variant: semantic_variant.clone(),
+                variant_target_ids,
+                surface_slot_id: package.surface_slot_id.clone(),
+                module_path: package.module_path.clone(),
+                import_path: package.import_path.clone(),
+                source_repository_paths,
+                ignored_source_repository_paths,
+            })
+        })
+        .collect::<Vec<_>>();
+    roots.sort();
+    roots
+}
+
 pub(super) fn bind_public_surface(
     inputs: PublicSurfaceBindingInputs<'_>,
     outputs: PublicSurfaceBindingOutputs<'_>,
@@ -145,56 +202,21 @@ pub(super) fn bind_public_surface(
     };
     kotlin_compilation_roots.extend(kotlin_roots.iter().cloned());
     if kind == SemanticIndexerKind::Go {
-        for package in go_packages
-            .iter()
-            .filter(|package| package.externally_reachable)
-        {
-            let package_variants = package
-                .variants
-                .iter()
-                .filter(|variant| variant.externally_reachable)
-                .filter(|variant| match &index.variant {
-                    SemanticIndexVariant::Unqualified => true,
-                    SemanticIndexVariant::Qualified { identity, .. } => {
-                        variant.execution_id == identity.0
-                    }
-                })
-                .collect::<Vec<_>>();
-            if package_variants.is_empty() {
-                continue;
-            }
-            let mut variant_target_ids = package_variants
-                .iter()
-                .map(|variant| variant.target_id.clone())
-                .collect::<Vec<_>>();
-            variant_target_ids.sort();
-            let mut source_repository_paths = package_variants
-                .iter()
-                .flat_map(|variant| variant.source_repository_paths.iter())
-                .cloned()
-                .collect::<Vec<_>>();
-            source_repository_paths.sort();
-            source_repository_paths.dedup();
-            let mut ignored_source_repository_paths = package_variants
-                .iter()
-                .flat_map(|variant| variant.ignored_source_repository_paths.iter())
-                .cloned()
-                .collect::<Vec<_>>();
-            ignored_source_repository_paths.sort();
-            ignored_source_repository_paths.dedup();
-            for repository_path in &source_repository_paths {
+        let roots = go_package_roots_for_variant(&go_packages, &index.variant);
+        for root in &roots {
+            for repository_path in &root.source_repository_paths {
                 if !index
                     .documents
                     .contains_key(&RepositoryPath(repository_path.clone()))
                 {
                     return Err(format!(
                         "historical-v2 Go package {} has compiler-invisible source {repository_path}",
-                        package.import_path
+                        root.import_path
                     ));
                 }
             }
             if matches!(index.variant, SemanticIndexVariant::Qualified { .. })
-                && ignored_source_repository_paths.iter().any(|path| {
+                && root.ignored_source_repository_paths.iter().any(|path| {
                     index
                         .documents
                         .contains_key(&RepositoryPath(path.to_string()))
@@ -202,19 +224,11 @@ pub(super) fn bind_public_surface(
             {
                 return Err(format!(
                     "historical-v2 Go package {} indexed a source excluded from its compiler variant",
-                    package.import_path
+                    root.import_path
                 ));
             }
-            go_package_roots.push(HistoricalV2SemanticGoPackageRoot {
-                variant: index.variant.clone(),
-                variant_target_ids,
-                surface_slot_id: package.surface_slot_id.clone(),
-                module_path: package.module_path.clone(),
-                import_path: package.import_path.clone(),
-                source_repository_paths,
-                ignored_source_repository_paths,
-            });
         }
+        go_package_roots.extend(roots);
     }
     for (repository_path, (symbol, definition)) in &rust_roots {
         retain_symbol(
