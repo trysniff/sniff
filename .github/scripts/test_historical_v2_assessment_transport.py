@@ -740,6 +740,21 @@ class ManifestTests(unittest.TestCase):
             transport.BOUNDED_SEMANTIC_DURATION_MIGRATION_SOURCE_ARTIFACT_SIZE,
         )
 
+    @staticmethod
+    def _write_inferred_scip_kind_replay_manifest(path: pathlib.Path) -> None:
+        ManifestTests._write_bounded_semantic_duration_manifest(path)
+        transport.migrate_manifest(
+            path,
+            transport.FRAME_RUN_ID,
+            transport.GO_PACKAGE_ROOT_WORLD_MIGRATION_FROM_COLLECTOR_SHA,
+            transport.INFERRED_SCIP_KIND_REPLAY_MIGRATION_NAME,
+            transport.INFERRED_SCIP_KIND_REPLAY_MIGRATION_SOURCE_RUN_ID,
+            transport.INFERRED_SCIP_KIND_REPLAY_MIGRATION_SOURCE_HEAD_SHA,
+            transport.INFERRED_SCIP_KIND_REPLAY_MIGRATION_SOURCE_ARTIFACT_ID,
+            transport.INFERRED_SCIP_KIND_REPLAY_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+            transport.INFERRED_SCIP_KIND_REPLAY_MIGRATION_SOURCE_ARTIFACT_SIZE,
+        )
+
     def test_manifest_round_trips_and_is_create_new(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             path = pathlib.Path(temporary, "manifest.json")
@@ -2846,7 +2861,7 @@ class ManifestTests(unittest.TestCase):
                     transport.BOUNDED_SEMANTIC_DURATION_MIGRATION_SOURCE_ARTIFACT_SIZE,
                 )
 
-    def test_inferred_scip_kind_replay_migration_is_exact_and_closes_chain(
+    def test_inferred_scip_kind_replay_migration_is_exact(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -2926,6 +2941,84 @@ class ManifestTests(unittest.TestCase):
                     transport.INFERRED_SCIP_KIND_REPLAY_MIGRATION_SOURCE_ARTIFACT_ID,
                     transport.INFERRED_SCIP_KIND_REPLAY_MIGRATION_SOURCE_ARTIFACT_DIGEST,
                     transport.INFERRED_SCIP_KIND_REPLAY_MIGRATION_SOURCE_ARTIFACT_SIZE,
+                )
+
+    def test_go_package_root_world_migration_is_exact_and_closes_chain(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = pathlib.Path(temporary, "manifest.json")
+            self._write_inferred_scip_kind_replay_manifest(path)
+            prior_manifest = json.loads(path.read_text(encoding="utf-8"))
+            prior_records = prior_manifest["collector_migrations"]
+            target = "a" * 40
+
+            self.assertEqual(
+                transport.migrate_manifest(
+                    path,
+                    transport.FRAME_RUN_ID,
+                    target,
+                    transport.GO_PACKAGE_ROOT_WORLD_MIGRATION_NAME,
+                    transport.GO_PACKAGE_ROOT_WORLD_MIGRATION_SOURCE_RUN_ID,
+                    transport.GO_PACKAGE_ROOT_WORLD_MIGRATION_SOURCE_HEAD_SHA,
+                    transport.GO_PACKAGE_ROOT_WORLD_MIGRATION_SOURCE_ARTIFACT_ID,
+                    transport.GO_PACKAGE_ROOT_WORLD_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+                    transport.GO_PACKAGE_ROOT_WORLD_MIGRATION_SOURCE_ARTIFACT_SIZE,
+                ),
+                target,
+            )
+            value = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(value["schema_version"], 26)
+            self.assertEqual(value["collector_migrations"][:24], prior_records)
+            self.assertEqual(
+                value["collector_migrations"][24],
+                {
+                    "from_collector_sha": (
+                        transport.GO_PACKAGE_ROOT_WORLD_MIGRATION_FROM_COLLECTOR_SHA
+                    ),
+                    "migration_contract": (
+                        transport.GO_PACKAGE_ROOT_WORLD_MIGRATION_CONTRACT
+                    ),
+                    "migration_name": transport.GO_PACKAGE_ROOT_WORLD_MIGRATION_NAME,
+                    "source_artifact_digest": (
+                        transport.GO_PACKAGE_ROOT_WORLD_MIGRATION_SOURCE_ARTIFACT_DIGEST
+                    ),
+                    "source_artifact_id": (
+                        transport.GO_PACKAGE_ROOT_WORLD_MIGRATION_SOURCE_ARTIFACT_ID
+                    ),
+                    "source_artifact_size": (
+                        transport.GO_PACKAGE_ROOT_WORLD_MIGRATION_SOURCE_ARTIFACT_SIZE
+                    ),
+                    "source_head_sha": (
+                        transport.GO_PACKAGE_ROOT_WORLD_MIGRATION_SOURCE_HEAD_SHA
+                    ),
+                    "source_run_id": (
+                        transport.GO_PACKAGE_ROOT_WORLD_MIGRATION_SOURCE_RUN_ID
+                    ),
+                    "to_collector_sha": target,
+                },
+            )
+            self.assertEqual(
+                transport.validate_manifest(path, transport.FRAME_RUN_ID), target
+            )
+
+            for field in value["collector_migrations"][24]:
+                tampered = json.loads(json.dumps(value))
+                tampered["collector_migrations"][24][field] = True
+                path.write_text(json.dumps(tampered), encoding="utf-8")
+                with self.subTest(field=field), self.assertRaises(ValueError):
+                    transport.validate_manifest(path, transport.FRAME_RUN_ID)
+
+            path.write_text(json.dumps(value), encoding="utf-8")
+            with self.assertRaises(ValueError):
+                transport.migrate_manifest(
+                    path,
+                    transport.FRAME_RUN_ID,
+                    "b" * 40,
+                    transport.GO_PACKAGE_ROOT_WORLD_MIGRATION_NAME,
+                    transport.GO_PACKAGE_ROOT_WORLD_MIGRATION_SOURCE_RUN_ID,
+                    transport.GO_PACKAGE_ROOT_WORLD_MIGRATION_SOURCE_HEAD_SHA,
+                    transport.GO_PACKAGE_ROOT_WORLD_MIGRATION_SOURCE_ARTIFACT_ID,
+                    transport.GO_PACKAGE_ROOT_WORLD_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+                    transport.GO_PACKAGE_ROOT_WORLD_MIGRATION_SOURCE_ARTIFACT_SIZE,
                 )
 
     @staticmethod
@@ -3811,6 +3904,7 @@ class WorkflowContractTests(unittest.TestCase):
             "semantic-incomplete-world-first-v1",
             "bounded-semantic-duration-v1",
             "inferred-scip-kind-replay-v1",
+            "committed-go-package-root-worlds-v1",
             'migrate-source-required-go-semantic-progress',
             'migrate-inferred-scip-kind-replay',
             '"$manifest" "$STATE_ROOT" "$WORK_ROOT" "$FRAME_RUN_ID"',
