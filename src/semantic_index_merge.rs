@@ -6,6 +6,7 @@ use crate::semantic_index::{
 };
 
 const CONFLICTING_KINDS: &str = "ConflictingKinds";
+const UNSPECIFIED_KIND: &str = "UnspecifiedKind";
 
 #[cfg(test)]
 pub(crate) fn merge_document_shards(
@@ -311,7 +312,9 @@ pub(crate) fn merge_symbol(
     )?;
     if existing.kind.category == SemanticSymbolCategory::Unknown {
         if existing.kind.provider_name == CONFLICTING_KINDS {
-            if incoming.kind.category != SemanticSymbolCategory::Unknown {
+            if incoming.kind.category != SemanticSymbolCategory::Unknown
+                && incoming.kind.provider_name != UNSPECIFIED_KIND
+            {
                 let detail = format!(
                     "additional conflicting SCIP symbol kind for {}: {}",
                     incoming.id.0, incoming.kind.provider_name
@@ -326,20 +329,15 @@ pub(crate) fn merge_symbol(
     } else if incoming.kind.category != SemanticSymbolCategory::Unknown
         && existing.kind != incoming.kind
     {
-        let mut provider_names = [
-            existing.kind.provider_name.as_str(),
-            incoming.kind.provider_name.as_str(),
-        ];
-        provider_names.sort_unstable();
-        let detail = format!(
-            "conflicting SCIP symbol kinds for {}: {} and {}",
-            incoming.id.0, provider_names[0], provider_names[1]
-        );
-        existing.kind = SemanticSymbolKind {
-            category: SemanticSymbolCategory::Unknown,
-            provider_name: CONFLICTING_KINDS.to_string(),
-        };
-        existing.ambiguity_notes.push(detail);
+        match (
+            existing.kind.category == incoming.kind.category,
+            existing.kind.provider_name == UNSPECIFIED_KIND,
+            incoming.kind.provider_name == UNSPECIFIED_KIND,
+        ) {
+            (true, true, false) => existing.kind = incoming.kind,
+            (true, false, true) => {}
+            _ => record_kind_conflict(existing, &incoming.kind),
+        }
     }
     existing.signatures.extend(incoming.signatures);
     merge_optional(&mut existing.owner, incoming.owner, &incoming.id, "owner")?;
@@ -375,6 +373,23 @@ pub(crate) fn merge_symbol(
         }
     }
     Ok(())
+}
+
+fn record_kind_conflict(existing: &mut SemanticSymbol, incoming: &SemanticSymbolKind) {
+    let mut provider_names = [
+        existing.kind.provider_name.as_str(),
+        incoming.provider_name.as_str(),
+    ];
+    provider_names.sort_unstable();
+    let detail = format!(
+        "conflicting SCIP symbol kinds for {}: {} and {}",
+        existing.id.0, provider_names[0], provider_names[1]
+    );
+    existing.kind = SemanticSymbolKind {
+        category: SemanticSymbolCategory::Unknown,
+        provider_name: CONFLICTING_KINDS.to_string(),
+    };
+    existing.ambiguity_notes.push(detail);
 }
 
 fn merge_optional<T: PartialEq + std::fmt::Debug>(
@@ -491,6 +506,16 @@ mod tests {
         }
     }
 
+    fn symbol_with_provider_kind(
+        id: &str,
+        category: SemanticSymbolCategory,
+        provider_name: &str,
+    ) -> SemanticSymbol {
+        let mut symbol = symbol(id, category, SemanticSymbolOrigin::Repository);
+        symbol.kind.provider_name = provider_name.to_string();
+        symbol
+    }
+
     fn index(path: &str, argument: &str, digest: char) -> SemanticIndex {
         let document = document(path);
         SemanticIndex {
@@ -592,6 +617,70 @@ mod tests {
             &merged.calls.iter().next().unwrap().callee,
             &SemanticResolution::Resolved { value: shared }
         );
+    }
+
+    #[test]
+    fn inferred_unspecified_kind_refines_to_concrete_kind_in_any_merge_order() {
+        for inferred_first in [true, false] {
+            let id = SemanticSymbolId(format!("scip-global:client-{inferred_first}"));
+            let inferred =
+                symbol_with_provider_kind(&id.0, SemanticSymbolCategory::Type, UNSPECIFIED_KIND);
+            let concrete = symbol_with_provider_kind(&id.0, SemanticSymbolCategory::Type, "Struct");
+            let (first, second) = if inferred_first {
+                (inferred, concrete)
+            } else {
+                (concrete, inferred)
+            };
+            let mut merged = index("client.go", "./client", 'a');
+            merged.symbols.insert(id.clone(), first);
+
+            merge_symbol(&mut merged, second).unwrap();
+
+            assert_eq!(
+                merged.symbols[&id].kind.category,
+                SemanticSymbolCategory::Type
+            );
+            assert_eq!(merged.symbols[&id].kind.provider_name, "Struct");
+            assert!(merged.symbols[&id].ambiguity_notes.is_empty());
+        }
+    }
+
+    #[test]
+    fn inferred_kind_category_disagreement_remains_ambiguous() {
+        let id = SemanticSymbolId("scip-global:category-conflict".to_string());
+        let mut merged = index("client.go", "./client", 'a');
+        merged.symbols.insert(
+            id.clone(),
+            symbol_with_provider_kind(&id.0, SemanticSymbolCategory::Type, UNSPECIFIED_KIND),
+        );
+
+        merge_symbol(
+            &mut merged,
+            symbol_with_provider_kind(&id.0, SemanticSymbolCategory::Callable, "Function"),
+        )
+        .unwrap();
+
+        assert_eq!(merged.symbols[&id].kind.provider_name, CONFLICTING_KINDS);
+        assert_eq!(merged.symbols[&id].ambiguity_notes.len(), 1);
+    }
+
+    #[test]
+    fn different_concrete_provider_kinds_remain_ambiguous() {
+        let id = SemanticSymbolId("scip-global:concrete-conflict".to_string());
+        let mut merged = index("client.go", "./client", 'a');
+        merged.symbols.insert(
+            id.clone(),
+            symbol_with_provider_kind(&id.0, SemanticSymbolCategory::Type, "Struct"),
+        );
+
+        merge_symbol(
+            &mut merged,
+            symbol_with_provider_kind(&id.0, SemanticSymbolCategory::Type, "Class"),
+        )
+        .unwrap();
+
+        assert_eq!(merged.symbols[&id].kind.provider_name, CONFLICTING_KINDS);
+        assert_eq!(merged.symbols[&id].ambiguity_notes.len(), 1);
     }
 
     #[test]
