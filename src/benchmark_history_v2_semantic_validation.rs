@@ -3,19 +3,20 @@ use super::super::{
     HISTORICAL_V2_SEMANTIC_CENSUS_SCHEMA_VERSION, HistoricalV2Materialization,
     HistoricalV2MaterializedRoots, HistoricalV2NodeConsumerResolution,
     HistoricalV2PublicSurfaceCoverage, HistoricalV2PythonDistributionModule,
-    HistoricalV2PythonModuleKind, HistoricalV2SemanticCensus, HistoricalV2SemanticGoPackageRoot,
-    HistoricalV2SemanticMethodStatus, HistoricalV2SemanticPublicBinding,
-    HistoricalV2SemanticPublicBindingKind, HistoricalV2SemanticPublicReexportHop,
-    HistoricalV2SemanticPublicRootOrigin, HistoricalV2SemanticSnapshotCensus,
-    HistoricalV2SemanticSymbol, HistoricalV2SemanticVariantCondition, HistoricalV2SourceCensus,
-    HistoricalV2SourceFile, HistoricalV2SourcePublicBindingKind,
-    HistoricalV2SourcePublicDeclaration, HistoricalV2SourcePublicNamespace,
-    HistoricalV2SourcePublicReexport, HistoricalV2SourcePublicReexportKind,
-    HistoricalV2SourcePublicSymbolKind, HistoricalV2SourceSemanticCoverage,
-    HistoricalV2SourceSnapshotCensus, IntentionalBoundaryIndexerKind,
-    IntentionalBoundarySemanticOrigin, IntentionalBoundarySemanticRange,
-    IntentionalBoundarySemanticSymbolCategory, validate_historical_v2_source_census,
+    HistoricalV2PythonModuleKind, HistoricalV2SemanticCensus, HistoricalV2SemanticMethodStatus,
+    HistoricalV2SemanticPublicBinding, HistoricalV2SemanticPublicBindingKind,
+    HistoricalV2SemanticPublicReexportHop, HistoricalV2SemanticPublicRootOrigin,
+    HistoricalV2SemanticSnapshotCensus, HistoricalV2SemanticSymbol,
+    HistoricalV2SemanticVariantCondition, HistoricalV2SourceCensus, HistoricalV2SourceFile,
+    HistoricalV2SourcePublicBindingKind, HistoricalV2SourcePublicDeclaration,
+    HistoricalV2SourcePublicNamespace, HistoricalV2SourcePublicReexport,
+    HistoricalV2SourcePublicReexportKind, HistoricalV2SourcePublicSymbolKind,
+    HistoricalV2SourceSemanticCoverage, HistoricalV2SourceSnapshotCensus,
+    IntentionalBoundaryIndexerKind, IntentionalBoundarySemanticOrigin,
+    IntentionalBoundarySemanticRange, IntentionalBoundarySemanticSymbolCategory,
+    validate_historical_v2_source_census,
 };
+use super::public_surface::go_package_roots_for_variant;
 use super::{
     SEMANTIC_CENSUS_CONTRACT, indexer_for_language, indexer_kind, semantic_census_sha256,
     semantic_scope, semantic_snapshot_sha256,
@@ -713,81 +714,8 @@ fn validate_go_package_roots(
     let mut expected = if indexers.contains(&IntentionalBoundaryIndexerKind::Go) {
         let packages = go_package_exposures(&source.go_project_model)?;
         let mut roots = Vec::new();
-        for package in packages
-            .into_iter()
-            .filter(|package| package.externally_reachable)
-        {
-            if go_variants.len() == 1 && matches!(go_variants[0], SemanticIndexVariant::Unqualified)
-            {
-                let mut variant_target_ids = package
-                    .variants
-                    .iter()
-                    .filter(|variant| variant.externally_reachable)
-                    .map(|variant| variant.target_id.clone())
-                    .collect::<Vec<_>>();
-                variant_target_ids.sort();
-                let mut source_repository_paths = package
-                    .variants
-                    .iter()
-                    .filter(|variant| variant.externally_reachable)
-                    .flat_map(|variant| variant.source_repository_paths.iter())
-                    .cloned()
-                    .collect::<Vec<_>>();
-                source_repository_paths.sort();
-                source_repository_paths.dedup();
-                let mut ignored_source_repository_paths = package
-                    .variants
-                    .iter()
-                    .filter(|variant| variant.externally_reachable)
-                    .flat_map(|variant| variant.ignored_source_repository_paths.iter())
-                    .cloned()
-                    .collect::<Vec<_>>();
-                ignored_source_repository_paths.sort();
-                ignored_source_repository_paths.dedup();
-                roots.push(HistoricalV2SemanticGoPackageRoot {
-                    variant: SemanticIndexVariant::Unqualified,
-                    variant_target_ids,
-                    surface_slot_id: package.surface_slot_id,
-                    module_path: package.module_path,
-                    import_path: package.import_path,
-                    source_repository_paths,
-                    ignored_source_repository_paths,
-                });
-                continue;
-            }
-            for package_variant in package
-                .variants
-                .iter()
-                .filter(|variant| variant.externally_reachable)
-            {
-                let semantic_variant = go_variants
-                    .iter()
-                    .copied()
-                    .find(|variant| {
-                        matches!(
-                            variant,
-                            SemanticIndexVariant::Qualified { identity, .. }
-                                if identity.0 == package_variant.execution_id
-                        )
-                    })
-                    .ok_or_else(|| {
-                        format!(
-                            "historical-v2 Go package {} has no committed compiler variant {}",
-                            package.import_path, package_variant.execution_id
-                        )
-                    })?;
-                roots.push(HistoricalV2SemanticGoPackageRoot {
-                    variant: semantic_variant.clone(),
-                    variant_target_ids: vec![package_variant.target_id.clone()],
-                    surface_slot_id: package.surface_slot_id.clone(),
-                    module_path: package.module_path.clone(),
-                    import_path: package.import_path.clone(),
-                    source_repository_paths: package_variant.source_repository_paths.clone(),
-                    ignored_source_repository_paths: package_variant
-                        .ignored_source_repository_paths
-                        .clone(),
-                });
-            }
+        for semantic_variant in go_variants {
+            roots.extend(go_package_roots_for_variant(&packages, semantic_variant));
         }
         if !roots
             .iter()
