@@ -2948,7 +2948,12 @@ class ManifestTests(unittest.TestCase):
             "0004-source-census",
             "0005-semantic-census",
         ):
-            state_slot.joinpath(name).mkdir()
+            stage = state_slot.joinpath(name)
+            stage.mkdir()
+            for file_name in ("_transaction.json", "artifact.json", "checkpoint.json"):
+                stage.joinpath(file_name).write_bytes(
+                    f"{name}/{file_name}\n".encode()
+                )
 
         source_checkpoint = state_slot.joinpath(
             "0004-source-census", "checkpoint.json"
@@ -2966,6 +2971,14 @@ class ManifestTests(unittest.TestCase):
                 .encode("utf-8")
             )
 
+        expected_hashes = {
+            stage.name: {
+                path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+                for path in stage.iterdir()
+            }
+            for stage in state_slot.iterdir()
+        }
+
         prior_state = state_language.joinpath("slot-0121", "complete")
         prior_state.mkdir(parents=True)
         prior_state.joinpath("checkpoint.json").write_bytes(b"prior-slot")
@@ -2978,6 +2991,12 @@ class ManifestTests(unittest.TestCase):
             "state_root": state_root,
             "work_root": work_root,
             "state_slot": state_slot,
+            "payload_stage": state_slot.joinpath("0001-payload"),
+            "materialization_stage": state_slot.joinpath("0002-materialization"),
+            "test_materialization_stage": state_slot.joinpath(
+                "0003-test-materialization"
+            ),
+            "source_stage": state_slot.joinpath("0004-source-census"),
             "source_checkpoint": source_checkpoint,
             "semantic_stage": semantic_stage,
             "artifact": semantic_stage.joinpath("artifact.json"),
@@ -2985,6 +3004,7 @@ class ManifestTests(unittest.TestCase):
             "transaction": semantic_stage.joinpath("_transaction.json"),
             "prior_state": prior_state.joinpath("checkpoint.json"),
             "unrelated_work": unrelated_work.joinpath("go.mod"),
+            "expected_hashes": expected_hashes,
         }
 
     @staticmethod
@@ -2993,24 +3013,29 @@ class ManifestTests(unittest.TestCase):
         *,
         source_artifact_id: int | None = None,
     ) -> None:
-        transport.migrate_inferred_scip_kind_replay(
-            paths["manifest"],
-            paths["state_root"],
-            paths["work_root"],
-            transport.FRAME_RUN_ID,
-            transport.INFERRED_SCIP_KIND_REPLAY_MIGRATION_NAME,
-            transport.INFERRED_SCIP_KIND_REPLAY_MIGRATION_SOURCE_RUN_ID,
-            transport.INFERRED_SCIP_KIND_REPLAY_MIGRATION_SOURCE_HEAD_SHA,
-            (
-                transport.INFERRED_SCIP_KIND_REPLAY_MIGRATION_SOURCE_ARTIFACT_ID
-                if source_artifact_id is None
-                else source_artifact_id
-            ),
-            transport.INFERRED_SCIP_KIND_REPLAY_MIGRATION_SOURCE_ARTIFACT_DIGEST,
-            transport.INFERRED_SCIP_KIND_REPLAY_MIGRATION_SOURCE_ARTIFACT_SIZE,
-        )
+        with mock.patch.object(
+            transport,
+            "INFERRED_SCIP_KIND_REPLAY_STAGE_SHA256",
+            paths["expected_hashes"],
+        ):
+            transport.migrate_inferred_scip_kind_replay(
+                paths["manifest"],
+                paths["state_root"],
+                paths["work_root"],
+                transport.FRAME_RUN_ID,
+                transport.INFERRED_SCIP_KIND_REPLAY_MIGRATION_NAME,
+                transport.INFERRED_SCIP_KIND_REPLAY_MIGRATION_SOURCE_RUN_ID,
+                transport.INFERRED_SCIP_KIND_REPLAY_MIGRATION_SOURCE_HEAD_SHA,
+                (
+                    transport.INFERRED_SCIP_KIND_REPLAY_MIGRATION_SOURCE_ARTIFACT_ID
+                    if source_artifact_id is None
+                    else source_artifact_id
+                ),
+                transport.INFERRED_SCIP_KIND_REPLAY_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+                transport.INFERRED_SCIP_KIND_REPLAY_MIGRATION_SOURCE_ARTIFACT_SIZE,
+            )
 
-    def test_inferred_scip_kind_replay_rewinds_only_exact_false_exclusion(
+    def test_inferred_scip_kind_replay_rewinds_to_executable_payload_boundary(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -3018,45 +3043,73 @@ class ManifestTests(unittest.TestCase):
                 pathlib.Path(temporary)
             )
             manifest_before = paths["manifest"].read_bytes()
-            source_before = paths["source_checkpoint"].read_bytes()
-
-            self.assertEqual(
-                transport.main(
-                    [
-                        "migrate-inferred-scip-kind-replay",
-                        str(paths["manifest"]),
-                        str(paths["state_root"]),
-                        str(paths["work_root"]),
-                        str(transport.FRAME_RUN_ID),
-                        transport.INFERRED_SCIP_KIND_REPLAY_MIGRATION_NAME,
-                        str(transport.INFERRED_SCIP_KIND_REPLAY_MIGRATION_SOURCE_RUN_ID),
-                        transport.INFERRED_SCIP_KIND_REPLAY_MIGRATION_SOURCE_HEAD_SHA,
-                        str(
-                            transport.INFERRED_SCIP_KIND_REPLAY_MIGRATION_SOURCE_ARTIFACT_ID
-                        ),
-                        transport.INFERRED_SCIP_KIND_REPLAY_MIGRATION_SOURCE_ARTIFACT_DIGEST,
-                        str(
-                            transport.INFERRED_SCIP_KIND_REPLAY_MIGRATION_SOURCE_ARTIFACT_SIZE
-                        ),
-                    ]
-                ),
-                0,
-            )
+            with mock.patch.object(
+                transport,
+                "INFERRED_SCIP_KIND_REPLAY_STAGE_SHA256",
+                paths["expected_hashes"],
+            ):
+                self.assertEqual(
+                    transport.main(
+                        [
+                            "migrate-inferred-scip-kind-replay",
+                            str(paths["manifest"]),
+                            str(paths["state_root"]),
+                            str(paths["work_root"]),
+                            str(transport.FRAME_RUN_ID),
+                            transport.INFERRED_SCIP_KIND_REPLAY_MIGRATION_NAME,
+                            str(
+                                transport.INFERRED_SCIP_KIND_REPLAY_MIGRATION_SOURCE_RUN_ID
+                            ),
+                            transport.INFERRED_SCIP_KIND_REPLAY_MIGRATION_SOURCE_HEAD_SHA,
+                            str(
+                                transport.INFERRED_SCIP_KIND_REPLAY_MIGRATION_SOURCE_ARTIFACT_ID
+                            ),
+                            transport.INFERRED_SCIP_KIND_REPLAY_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+                            str(
+                                transport.INFERRED_SCIP_KIND_REPLAY_MIGRATION_SOURCE_ARTIFACT_SIZE
+                            ),
+                        ]
+                    ),
+                    0,
+                )
 
             self.assertFalse(paths["semantic_stage"].exists())
             self.assertEqual(paths["manifest"].read_bytes(), manifest_before)
-            self.assertEqual(paths["source_checkpoint"].read_bytes(), source_before)
             self.assertEqual(paths["prior_state"].read_bytes(), b"prior-slot")
             self.assertEqual(paths["unrelated_work"].read_bytes(), b"next-slot")
             self.assertEqual(
                 {path.name for path in paths["state_slot"].iterdir()},
-                {
-                    "0001-payload",
-                    "0002-materialization",
-                    "0003-test-materialization",
-                    "0004-source-census",
-                },
+                {"0001-payload"},
             )
+            self.assertTrue(paths["payload_stage"].is_dir())
+            self.assertFalse(paths["materialization_stage"].exists())
+            self.assertFalse(paths["test_materialization_stage"].exists())
+            self.assertFalse(paths["source_stage"].exists())
+
+    def test_inferred_scip_kind_replay_hashes_match_exact_evidence_fixtures(
+        self,
+    ) -> None:
+        self.assertEqual(
+            set(transport.INFERRED_SCIP_KIND_REPLAY_STAGE_ORDER),
+            set(transport.INFERRED_SCIP_KIND_REPLAY_STAGE_SHA256),
+        )
+        fixture_paths = {
+            ("0004-source-census", "checkpoint.json"): "source-checkpoint.json",
+            ("0005-semantic-census", "_transaction.json"): "_transaction.json",
+            ("0005-semantic-census", "artifact.json"): "artifact.json",
+            ("0005-semantic-census", "checkpoint.json"): "checkpoint.json",
+        }
+        for (stage, name), fixture_name in fixture_paths.items():
+            with self.subTest(stage=stage, name=name):
+                fixture = (
+                    SCIP_REPLAY_FIXTURE_ROOT.joinpath(fixture_name)
+                    .read_text(encoding="utf-8")
+                    .encode("utf-8")
+                )
+                self.assertEqual(
+                    hashlib.sha256(fixture).hexdigest(),
+                    transport.INFERRED_SCIP_KIND_REPLAY_STAGE_SHA256[stage][name],
+                )
 
     def test_inferred_scip_kind_replay_fails_before_deleting_on_drift(
         self,
@@ -3071,6 +3124,9 @@ class ManifestTests(unittest.TestCase):
         def add_stage_file(paths: dict[str, pathlib.Path]) -> None:
             paths["semantic_stage"].joinpath("unexpected").write_bytes(b"drift")
 
+        def add_materialization_file(paths: dict[str, pathlib.Path]) -> None:
+            paths["materialization_stage"].joinpath("unexpected").write_bytes(b"drift")
+
         def add_stale_work(paths: dict[str, pathlib.Path]) -> None:
             paths["work_root"].joinpath("go", "slot-0122").mkdir()
 
@@ -3084,6 +3140,7 @@ class ManifestTests(unittest.TestCase):
             "transaction": add_byte("transaction"),
             "source": add_byte("source_checkpoint"),
             "stage-file": add_stage_file,
+            "materialization-stage-file": add_materialization_file,
             "stale-work": add_stale_work,
             "source-directory": replace_source_with_directory,
         }
@@ -3097,6 +3154,7 @@ class ManifestTests(unittest.TestCase):
                     self._migrate_inferred_scip_kind_replay(paths)
                 self.assertTrue(paths["semantic_stage"].is_dir())
                 self.assertTrue(paths["artifact"].is_file())
+                self.assertTrue(paths["materialization_stage"].is_dir())
 
         with tempfile.TemporaryDirectory() as temporary:
             paths = self._write_inferred_scip_kind_replay_fixture(

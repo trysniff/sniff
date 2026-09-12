@@ -434,18 +434,40 @@ INFERRED_SCIP_KIND_REPLAY_MIGRATION_SOURCE_ARTIFACT_DIGEST = (
     "sha256:65c8e588a7201234c3f24e6191237b296653b021df4b3ca1f6b3b1abff365e9f"
 )
 INFERRED_SCIP_KIND_REPLAY_MIGRATION_SOURCE_ARTIFACT_SIZE = 711_391_178
-INFERRED_SCIP_KIND_REPLAY_SOURCE_CHECKPOINT_SHA256 = (
-    "69bfea58a577430dba13fb0176b572426f498c8d62591aa28b28d68398264c5b"
+INFERRED_SCIP_KIND_REPLAY_STAGE_ORDER = (
+    "0001-payload",
+    "0002-materialization",
+    "0003-test-materialization",
+    "0004-source-census",
+    "0005-semantic-census",
 )
-INFERRED_SCIP_KIND_REPLAY_TRANSACTION_SHA256 = (
-    "2dc808c4b06df8aa2e64df19e07af75464415d4c4d392509e1a6c114b328b6a1"
-)
-INFERRED_SCIP_KIND_REPLAY_ARTIFACT_SHA256 = (
-    "8e3236e31324ecf20fabfde4453f9ea4b6acd7617aa307347f87b80cca1b63ae"
-)
-INFERRED_SCIP_KIND_REPLAY_CHECKPOINT_SHA256 = (
-    "77e3a3aea395607b40cb1f0b019e53b598449ab06b0a0819fc8e4be494d1c2cc"
-)
+INFERRED_SCIP_KIND_REPLAY_STAGE_SHA256 = {
+    "0001-payload": {
+        "_transaction.json": "d8bed734ce57e912011acb9a774d5d71849afbe9fab4ff782f717c9026527b78",
+        "artifact.json": "9498bd10600d3bf8b43ca53db8c9001551bb024946d83959c5a04d2dc216f402",
+        "checkpoint.json": "c62d552f59fcc23579e111c3962f7be8b4b387d7b727706ef24a6129df5d65f4",
+    },
+    "0002-materialization": {
+        "_transaction.json": "e8d98285cd818854cce925b2e5ee9d828c76a71d41e08e77c98e99f65eae09fd",
+        "artifact.json": "62acf21942e28ff5fb39728621597f54ceb435e1a280816d31fbd4606c528b30",
+        "checkpoint.json": "763d899aceedef410ccb183b0e5bdb7affa99040a528715d9503591d4df6e56f",
+    },
+    "0003-test-materialization": {
+        "_transaction.json": "d3a4293b039505bfa23e134a56ab876abb9d18ba332bd949709ffffbe5c1ab40",
+        "artifact.json": "356a49e6977c2e9120362f7c891ffff5f43114060b21c34dada2d7debc6abf01",
+        "checkpoint.json": "4eedc4ee23321831509df50025d8550b0dbeafee939ed71cb420814dffa22b4e",
+    },
+    "0004-source-census": {
+        "_transaction.json": "ca0b1d1e6cfd6eb7fc909a4616ba04507810ea4dfef541fdb214c8ef2838e7cb",
+        "artifact.json": "f6e4cedb65bd3ab9ead8c7b18f01891166c70f22e8df9384249cf0d6fcd5c5a6",
+        "checkpoint.json": "69bfea58a577430dba13fb0176b572426f498c8d62591aa28b28d68398264c5b",
+    },
+    "0005-semantic-census": {
+        "_transaction.json": "2dc808c4b06df8aa2e64df19e07af75464415d4c4d392509e1a6c114b328b6a1",
+        "artifact.json": "8e3236e31324ecf20fabfde4453f9ea4b6acd7617aa307347f87b80cca1b63ae",
+        "checkpoint.json": "77e3a3aea395607b40cb1f0b019e53b598449ab06b0a0819fc8e4be494d1c2cc",
+    },
+}
 
 FRAME_FILE_SHA256 = {
     "environment.txt": "2e87f3c3e1b2005f6b6d09b1bf1b82d30a9433636c3c67f0806cc68e80ab6800",
@@ -767,32 +789,21 @@ def migrate_inferred_scip_kind_replay(
         "Go state slot 122",
     )
 
-    source_checkpoint = state_slot.joinpath(
-        "0004-source-census", "checkpoint.json"
-    )
-    _plain_file(source_checkpoint, "source census checkpoint")
-    if (
-        _sha256(source_checkpoint)
-        != INFERRED_SCIP_KIND_REPLAY_SOURCE_CHECKPOINT_SHA256
+    stages: dict[str, pathlib.Path] = {}
+    expected_files = {"_transaction.json", "artifact.json", "checkpoint.json"}
+    if set(INFERRED_SCIP_KIND_REPLAY_STAGE_SHA256) != set(
+        INFERRED_SCIP_KIND_REPLAY_STAGE_ORDER
     ):
-        raise ValueError("SCIP kind replay source checkpoint drifted")
-
-    semantic_stage = _exact_plain_child(
-        state_slot, "0005-semantic-census", "committed semantic census stage"
-    )
-    _require_exact_file_children(
-        semantic_stage,
-        {"_transaction.json", "artifact.json", "checkpoint.json"},
-        "committed semantic census stage",
-    )
-    expected_hashes = {
-        "_transaction.json": INFERRED_SCIP_KIND_REPLAY_TRANSACTION_SHA256,
-        "artifact.json": INFERRED_SCIP_KIND_REPLAY_ARTIFACT_SHA256,
-        "checkpoint.json": INFERRED_SCIP_KIND_REPLAY_CHECKPOINT_SHA256,
-    }
-    for name, expected in expected_hashes.items():
-        if _sha256(semantic_stage.joinpath(name)) != expected:
-            raise ValueError(f"SCIP kind replay semantic stage drifted: {name}")
+        raise ValueError("SCIP kind replay stage hash table drifted")
+    for stage_name in INFERRED_SCIP_KIND_REPLAY_STAGE_ORDER:
+        expected_hashes = INFERRED_SCIP_KIND_REPLAY_STAGE_SHA256[stage_name]
+        label = f"committed {stage_name} stage"
+        stage = _exact_plain_child(state_slot, stage_name, label)
+        _require_exact_file_children(stage, expected_files, label)
+        for name, expected in expected_hashes.items():
+            if _sha256(stage.joinpath(name)) != expected:
+                raise ValueError(f"SCIP kind replay stage drifted: {stage_name}/{name}")
+        stages[stage_name] = stage
 
     work_slot = work_language.joinpath("slot-0122")
     try:
@@ -806,23 +817,19 @@ def migrate_inferred_scip_kind_replay(
     else:
         raise ValueError("SCIP kind replay found stale slot work")
 
-    _remove_validated_plain_tree(semantic_stage, "committed semantic census stage")
-    try:
-        semantic_stage.rmdir()
-    except OSError as error:
-        raise ValueError(
-            f"failed to remove committed semantic census stage: {error}"
-        ) from error
-    if semantic_stage.exists():
-        raise ValueError("SCIP kind replay semantic stage survived migration")
+    for stage_name in reversed(INFERRED_SCIP_KIND_REPLAY_STAGE_ORDER[1:]):
+        stage = stages[stage_name]
+        label = f"committed {stage_name} stage"
+        _remove_validated_plain_tree(stage, label)
+        try:
+            stage.rmdir()
+        except OSError as error:
+            raise ValueError(f"failed to remove {label}: {error}") from error
+        if stage.exists():
+            raise ValueError(f"SCIP kind replay stage survived migration: {stage_name}")
     _require_exact_directory_children(
         state_slot,
-        {
-            "0001-payload",
-            "0002-materialization",
-            "0003-test-materialization",
-            "0004-source-census",
-        },
+        {"0001-payload"},
         "rewound Go state slot 122",
     )
 
