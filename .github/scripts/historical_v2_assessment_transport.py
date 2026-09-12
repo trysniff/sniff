@@ -469,6 +469,23 @@ INFERRED_SCIP_KIND_REPLAY_STAGE_SHA256 = {
     },
 }
 
+GO_PACKAGE_ROOT_WORLD_MIGRATION_NAME = "committed-go-package-root-worlds-v1"
+GO_PACKAGE_ROOT_WORLD_MIGRATION_CONTRACT = (
+    "sniffbench-historical-v2-committed-go-package-root-worlds-migration-v1"
+)
+GO_PACKAGE_ROOT_WORLD_MIGRATION_FROM_COLLECTOR_SHA = (
+    "44806e08e8e5d13a007f3f206814059b5338ac63"
+)
+GO_PACKAGE_ROOT_WORLD_MIGRATION_SOURCE_RUN_ID = 34_707_516_664
+GO_PACKAGE_ROOT_WORLD_MIGRATION_SOURCE_HEAD_SHA = (
+    "44806e08e8e5d13a007f3f206814059b5338ac63"
+)
+GO_PACKAGE_ROOT_WORLD_MIGRATION_SOURCE_ARTIFACT_ID = 10_302_940_888
+GO_PACKAGE_ROOT_WORLD_MIGRATION_SOURCE_ARTIFACT_DIGEST = (
+    "sha256:0100cabc412f7f1f959153203ccf31982761d8603f5beb61aff99d696739c33b"
+)
+GO_PACKAGE_ROOT_WORLD_MIGRATION_SOURCE_ARTIFACT_SIZE = 854_088_786
+
 FRAME_FILE_SHA256 = {
     "environment.txt": "2e87f3c3e1b2005f6b6d09b1bf1b82d30a9433636c3c67f0806cc68e80ab6800",
     "exclusions.json": "74bccb100eb48ab87952bd7eec137b2285edbc68d2547715bc0e06a80e029f76",
@@ -1212,7 +1229,7 @@ def validate_manifest(path: pathlib.Path, frame_run_id: int) -> str:
     schema_version = value.get("schema_version")
     if schema_version == 1:
         expected = _manifest(frame_run_id, collector_sha)
-    elif schema_version in range(2, 26):
+    elif schema_version in range(2, 27):
         migrations = value.get("collector_migrations")
         expected_count = schema_version - 1
         if not isinstance(migrations, list) or len(migrations) != expected_count:
@@ -1332,6 +1349,9 @@ def _migration_record(
     elif migration_name == INFERRED_SCIP_KIND_REPLAY_MIGRATION_NAME:
         contract = INFERRED_SCIP_KIND_REPLAY_MIGRATION_CONTRACT
         source_collector_sha = INFERRED_SCIP_KIND_REPLAY_MIGRATION_FROM_COLLECTOR_SHA
+    elif migration_name == GO_PACKAGE_ROOT_WORLD_MIGRATION_NAME:
+        contract = GO_PACKAGE_ROOT_WORLD_MIGRATION_CONTRACT
+        source_collector_sha = GO_PACKAGE_ROOT_WORLD_MIGRATION_FROM_COLLECTOR_SHA
     else:
         raise ValueError("transport manifest collector migration is not allowlisted")
     return {
@@ -1805,15 +1825,34 @@ def _expected_inferred_scip_kind_replay_migration(
     )
 
 
+def _expected_go_package_root_world_migration(
+    target_collector_sha: str,
+) -> dict[str, Any]:
+    if (
+        target_collector_sha == GO_PACKAGE_ROOT_WORLD_MIGRATION_FROM_COLLECTOR_SHA
+        or re.fullmatch(r"[0-9a-f]{40}", target_collector_sha) is None
+    ):
+        raise ValueError("transport manifest collector migration target is invalid")
+    return _migration_record(
+        GO_PACKAGE_ROOT_WORLD_MIGRATION_NAME,
+        target_collector_sha,
+        GO_PACKAGE_ROOT_WORLD_MIGRATION_SOURCE_RUN_ID,
+        GO_PACKAGE_ROOT_WORLD_MIGRATION_SOURCE_HEAD_SHA,
+        GO_PACKAGE_ROOT_WORLD_MIGRATION_SOURCE_ARTIFACT_ID,
+        GO_PACKAGE_ROOT_WORLD_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+        GO_PACKAGE_ROOT_WORLD_MIGRATION_SOURCE_ARTIFACT_SIZE,
+    )
+
+
 def _validate_collector_migrations(
     migrations: Sequence[Mapping[str, Any]], collector_sha: str
 ) -> None:
-    if len(migrations) not in range(1, 25):
+    if len(migrations) not in range(1, 26):
         raise ValueError("transport manifest collector migration chain is invalid")
     expected = [_expected_storage_migration()]
     if len(migrations) == 2:
         expected.append(_expected_go_preparation_migration(collector_sha))
-    elif len(migrations) in range(3, 25):
+    elif len(migrations) in range(3, 26):
         expected.append(
             _expected_go_preparation_migration(
                 GO_MODULE_DOWNLOAD_MIGRATION_FROM_COLLECTOR_SHA
@@ -2001,7 +2040,15 @@ def _validate_collector_migrations(
                 )
             )
         if len(migrations) >= 24:
-            expected.append(_expected_inferred_scip_kind_replay_migration(collector_sha))
+            expected.append(
+                _expected_inferred_scip_kind_replay_migration(
+                    GO_PACKAGE_ROOT_WORLD_MIGRATION_FROM_COLLECTOR_SHA
+                    if len(migrations) >= 25
+                    else collector_sha
+                )
+            )
+        if len(migrations) >= 25:
+            expected.append(_expected_go_package_root_world_migration(collector_sha))
     elif collector_sha != STORAGE_MIGRATION_TO_COLLECTOR_SHA:
         raise ValueError("transport manifest collector migration target drifted")
     if [dict(migration) for migration in migrations] != expected:
@@ -2166,6 +2213,12 @@ def migrate_manifest(
         ]
     elif schema_version == 24:
         expected_name = INFERRED_SCIP_KIND_REPLAY_MIGRATION_NAME
+        migrations = [
+            _require_mapping(item, "transport manifest collector migration")
+            for item in value.get("collector_migrations", [])
+        ]
+    elif schema_version == 25:
+        expected_name = GO_PACKAGE_ROOT_WORLD_MIGRATION_NAME
         migrations = [
             _require_mapping(item, "transport manifest collector migration")
             for item in value.get("collector_migrations", [])
