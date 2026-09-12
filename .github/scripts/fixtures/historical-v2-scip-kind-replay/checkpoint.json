@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "checkpoint_contract": "sniffbench-historical-v2-slot-stage-checkpoint-v1",
+  "selection_sha256": "d37f4bef7616e5da5dd08b161e497432aa42c5eba32d633da9a9b431d65e98e3",
+  "language": "go",
+  "slot_number": 122,
+  "canonical_repository": "vmware/govmomi",
+  "sequence": 5,
+  "previous_checkpoint_sha256": "8ec6d50d883e3679a51fdfab62122cd7a1dcf8e0c838ae55486d65bada5a4345",
+  "stage": "semantic_census",
+  "outcome": {
+    "status": "excluded",
+    "reason": {
+      "stage": "semantic_census",
+      "reason": [
+        "compiler_census_incomplete"
+      ]
+    },
+    "artifact_kind": "semantic_census_exclusion",
+    "artifact_sha256": "c171a201ba97d20b20f72d8ce2837eea8c66d6efb6be1eea855925d0aa852030"
+  },
+  "checkpoint_sha256": "f1b0900150a9432dd492a6953e74ceb08bf8d3e466c350382f7795c1440f8ce2"
+}
