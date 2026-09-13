@@ -770,6 +770,21 @@ class ManifestTests(unittest.TestCase):
             transport.GO_PACKAGE_ROOT_WORLD_MIGRATION_SOURCE_ARTIFACT_SIZE,
         )
 
+    @staticmethod
+    def _write_semantic_variant_assembly_manifest(path: pathlib.Path) -> None:
+        ManifestTests._write_go_package_root_world_manifest(path)
+        transport.migrate_manifest(
+            path,
+            transport.FRAME_RUN_ID,
+            transport.QUALIFICATION_ARTIFACT_MIGRATION_FROM_COLLECTOR_SHA,
+            transport.SEMANTIC_VARIANT_ASSEMBLY_MIGRATION_NAME,
+            transport.SEMANTIC_VARIANT_ASSEMBLY_MIGRATION_SOURCE_RUN_ID,
+            transport.SEMANTIC_VARIANT_ASSEMBLY_MIGRATION_SOURCE_HEAD_SHA,
+            transport.SEMANTIC_VARIANT_ASSEMBLY_MIGRATION_SOURCE_ARTIFACT_ID,
+            transport.SEMANTIC_VARIANT_ASSEMBLY_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+            transport.SEMANTIC_VARIANT_ASSEMBLY_MIGRATION_SOURCE_ARTIFACT_SIZE,
+        )
+
     def test_manifest_round_trips_and_is_create_new(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             path = pathlib.Path(temporary, "manifest.json")
@@ -3036,7 +3051,7 @@ class ManifestTests(unittest.TestCase):
                     transport.GO_PACKAGE_ROOT_WORLD_MIGRATION_SOURCE_ARTIFACT_SIZE,
                 )
 
-    def test_semantic_variant_assembly_migration_is_exact_and_closes_chain(
+    def test_semantic_variant_assembly_migration_is_exact(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -3044,7 +3059,7 @@ class ManifestTests(unittest.TestCase):
             self._write_go_package_root_world_manifest(path)
             prior_manifest = json.loads(path.read_text(encoding="utf-8"))
             prior_records = prior_manifest["collector_migrations"]
-            target = "a" * 40
+            target = transport.QUALIFICATION_ARTIFACT_MIGRATION_FROM_COLLECTOR_SHA
 
             self.assertEqual(
                 transport.migrate_manifest(
@@ -3116,6 +3131,86 @@ class ManifestTests(unittest.TestCase):
                     transport.SEMANTIC_VARIANT_ASSEMBLY_MIGRATION_SOURCE_ARTIFACT_ID,
                     transport.SEMANTIC_VARIANT_ASSEMBLY_MIGRATION_SOURCE_ARTIFACT_DIGEST,
                     transport.SEMANTIC_VARIANT_ASSEMBLY_MIGRATION_SOURCE_ARTIFACT_SIZE,
+                )
+
+    def test_qualification_artifact_migration_is_exact_and_closes_chain(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = pathlib.Path(temporary, "manifest.json")
+            self._write_semantic_variant_assembly_manifest(path)
+            prior_manifest = json.loads(path.read_text(encoding="utf-8"))
+            prior_records = prior_manifest["collector_migrations"]
+            target = "a" * 40
+
+            self.assertEqual(
+                transport.migrate_manifest(
+                    path,
+                    transport.FRAME_RUN_ID,
+                    target,
+                    transport.QUALIFICATION_ARTIFACT_MIGRATION_NAME,
+                    transport.QUALIFICATION_ARTIFACT_MIGRATION_SOURCE_RUN_ID,
+                    transport.QUALIFICATION_ARTIFACT_MIGRATION_SOURCE_HEAD_SHA,
+                    transport.QUALIFICATION_ARTIFACT_MIGRATION_SOURCE_ARTIFACT_ID,
+                    transport.QUALIFICATION_ARTIFACT_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+                    transport.QUALIFICATION_ARTIFACT_MIGRATION_SOURCE_ARTIFACT_SIZE,
+                ),
+                target,
+            )
+            value = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(value["schema_version"], 28)
+            self.assertEqual(value["collector_migrations"][:26], prior_records)
+            self.assertEqual(
+                value["collector_migrations"][26],
+                {
+                    "from_collector_sha": (
+                        transport.QUALIFICATION_ARTIFACT_MIGRATION_FROM_COLLECTOR_SHA
+                    ),
+                    "migration_contract": (
+                        transport.QUALIFICATION_ARTIFACT_MIGRATION_CONTRACT
+                    ),
+                    "migration_name": transport.QUALIFICATION_ARTIFACT_MIGRATION_NAME,
+                    "source_artifact_digest": (
+                        transport.QUALIFICATION_ARTIFACT_MIGRATION_SOURCE_ARTIFACT_DIGEST
+                    ),
+                    "source_artifact_id": (
+                        transport.QUALIFICATION_ARTIFACT_MIGRATION_SOURCE_ARTIFACT_ID
+                    ),
+                    "source_artifact_size": (
+                        transport.QUALIFICATION_ARTIFACT_MIGRATION_SOURCE_ARTIFACT_SIZE
+                    ),
+                    "source_head_sha": (
+                        transport.QUALIFICATION_ARTIFACT_MIGRATION_SOURCE_HEAD_SHA
+                    ),
+                    "source_run_id": (
+                        transport.QUALIFICATION_ARTIFACT_MIGRATION_SOURCE_RUN_ID
+                    ),
+                    "to_collector_sha": target,
+                },
+            )
+            self.assertEqual(
+                transport.validate_manifest(path, transport.FRAME_RUN_ID), target
+            )
+
+            for field in value["collector_migrations"][26]:
+                tampered = json.loads(json.dumps(value))
+                tampered["collector_migrations"][26][field] = True
+                path.write_text(json.dumps(tampered), encoding="utf-8")
+                with self.subTest(field=field), self.assertRaises(ValueError):
+                    transport.validate_manifest(path, transport.FRAME_RUN_ID)
+
+            path.write_text(json.dumps(value), encoding="utf-8")
+            with self.assertRaises(ValueError):
+                transport.migrate_manifest(
+                    path,
+                    transport.FRAME_RUN_ID,
+                    "b" * 40,
+                    transport.QUALIFICATION_ARTIFACT_MIGRATION_NAME,
+                    transport.QUALIFICATION_ARTIFACT_MIGRATION_SOURCE_RUN_ID,
+                    transport.QUALIFICATION_ARTIFACT_MIGRATION_SOURCE_HEAD_SHA,
+                    transport.QUALIFICATION_ARTIFACT_MIGRATION_SOURCE_ARTIFACT_ID,
+                    transport.QUALIFICATION_ARTIFACT_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+                    transport.QUALIFICATION_ARTIFACT_MIGRATION_SOURCE_ARTIFACT_SIZE,
                 )
 
     @staticmethod
@@ -4003,6 +4098,7 @@ class WorkflowContractTests(unittest.TestCase):
             "inferred-scip-kind-replay-v1",
             "committed-go-package-root-worlds-v1",
             "checkpointed-semantic-variant-assembly-v1",
+            "bounded-qualification-artifact-v1",
             'migrate-source-required-go-semantic-progress',
             'migrate-inferred-scip-kind-replay',
             '"$manifest" "$STATE_ROOT" "$WORK_ROOT" "$FRAME_RUN_ID"',

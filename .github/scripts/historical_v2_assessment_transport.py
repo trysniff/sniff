@@ -505,6 +505,23 @@ SEMANTIC_VARIANT_ASSEMBLY_MIGRATION_SOURCE_ARTIFACT_DIGEST = (
 )
 SEMANTIC_VARIANT_ASSEMBLY_MIGRATION_SOURCE_ARTIFACT_SIZE = 858_760_429
 
+QUALIFICATION_ARTIFACT_MIGRATION_NAME = "bounded-qualification-artifact-v1"
+QUALIFICATION_ARTIFACT_MIGRATION_CONTRACT = (
+    "sniffbench-historical-v2-bounded-qualification-artifact-migration-v1"
+)
+QUALIFICATION_ARTIFACT_MIGRATION_FROM_COLLECTOR_SHA = (
+    "79c2aa27c4ce13eab850f547785a88434d6ed766"
+)
+QUALIFICATION_ARTIFACT_MIGRATION_SOURCE_RUN_ID = 34_759_391_724
+QUALIFICATION_ARTIFACT_MIGRATION_SOURCE_HEAD_SHA = (
+    "79c2aa27c4ce13eab850f547785a88434d6ed766"
+)
+QUALIFICATION_ARTIFACT_MIGRATION_SOURCE_ARTIFACT_ID = 10_318_806_056
+QUALIFICATION_ARTIFACT_MIGRATION_SOURCE_ARTIFACT_DIGEST = (
+    "sha256:8d5e9fef77aa04f6fd779393115367c7fe801c819b0a6ce72b199591168783cd"
+)
+QUALIFICATION_ARTIFACT_MIGRATION_SOURCE_ARTIFACT_SIZE = 1_283_912_373
+
 FRAME_FILE_SHA256 = {
     "environment.txt": "2e87f3c3e1b2005f6b6d09b1bf1b82d30a9433636c3c67f0806cc68e80ab6800",
     "exclusions.json": "74bccb100eb48ab87952bd7eec137b2285edbc68d2547715bc0e06a80e029f76",
@@ -1248,7 +1265,7 @@ def validate_manifest(path: pathlib.Path, frame_run_id: int) -> str:
     schema_version = value.get("schema_version")
     if schema_version == 1:
         expected = _manifest(frame_run_id, collector_sha)
-    elif schema_version in range(2, 28):
+    elif schema_version in range(2, 29):
         migrations = value.get("collector_migrations")
         expected_count = schema_version - 1
         if not isinstance(migrations, list) or len(migrations) != expected_count:
@@ -1374,6 +1391,9 @@ def _migration_record(
     elif migration_name == SEMANTIC_VARIANT_ASSEMBLY_MIGRATION_NAME:
         contract = SEMANTIC_VARIANT_ASSEMBLY_MIGRATION_CONTRACT
         source_collector_sha = SEMANTIC_VARIANT_ASSEMBLY_MIGRATION_FROM_COLLECTOR_SHA
+    elif migration_name == QUALIFICATION_ARTIFACT_MIGRATION_NAME:
+        contract = QUALIFICATION_ARTIFACT_MIGRATION_CONTRACT
+        source_collector_sha = QUALIFICATION_ARTIFACT_MIGRATION_FROM_COLLECTOR_SHA
     else:
         raise ValueError("transport manifest collector migration is not allowlisted")
     return {
@@ -1885,15 +1905,34 @@ def _expected_semantic_variant_assembly_migration(
     )
 
 
+def _expected_qualification_artifact_migration(
+    target_collector_sha: str,
+) -> dict[str, Any]:
+    if (
+        target_collector_sha == QUALIFICATION_ARTIFACT_MIGRATION_FROM_COLLECTOR_SHA
+        or re.fullmatch(r"[0-9a-f]{40}", target_collector_sha) is None
+    ):
+        raise ValueError("transport manifest collector migration target is invalid")
+    return _migration_record(
+        QUALIFICATION_ARTIFACT_MIGRATION_NAME,
+        target_collector_sha,
+        QUALIFICATION_ARTIFACT_MIGRATION_SOURCE_RUN_ID,
+        QUALIFICATION_ARTIFACT_MIGRATION_SOURCE_HEAD_SHA,
+        QUALIFICATION_ARTIFACT_MIGRATION_SOURCE_ARTIFACT_ID,
+        QUALIFICATION_ARTIFACT_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+        QUALIFICATION_ARTIFACT_MIGRATION_SOURCE_ARTIFACT_SIZE,
+    )
+
+
 def _validate_collector_migrations(
     migrations: Sequence[Mapping[str, Any]], collector_sha: str
 ) -> None:
-    if len(migrations) not in range(1, 27):
+    if len(migrations) not in range(1, 28):
         raise ValueError("transport manifest collector migration chain is invalid")
     expected = [_expected_storage_migration()]
     if len(migrations) == 2:
         expected.append(_expected_go_preparation_migration(collector_sha))
-    elif len(migrations) in range(3, 27):
+    elif len(migrations) in range(3, 28):
         expected.append(
             _expected_go_preparation_migration(
                 GO_MODULE_DOWNLOAD_MIGRATION_FROM_COLLECTOR_SHA
@@ -2098,8 +2137,14 @@ def _validate_collector_migrations(
             )
         if len(migrations) >= 26:
             expected.append(
-                _expected_semantic_variant_assembly_migration(collector_sha)
+                _expected_semantic_variant_assembly_migration(
+                    QUALIFICATION_ARTIFACT_MIGRATION_FROM_COLLECTOR_SHA
+                    if len(migrations) >= 27
+                    else collector_sha
+                )
             )
+        if len(migrations) >= 27:
+            expected.append(_expected_qualification_artifact_migration(collector_sha))
     elif collector_sha != STORAGE_MIGRATION_TO_COLLECTOR_SHA:
         raise ValueError("transport manifest collector migration target drifted")
     if [dict(migration) for migration in migrations] != expected:
@@ -2276,6 +2321,12 @@ def migrate_manifest(
         ]
     elif schema_version == 26:
         expected_name = SEMANTIC_VARIANT_ASSEMBLY_MIGRATION_NAME
+        migrations = [
+            _require_mapping(item, "transport manifest collector migration")
+            for item in value.get("collector_migrations", [])
+        ]
+    elif schema_version == 27:
+        expected_name = QUALIFICATION_ARTIFACT_MIGRATION_NAME
         migrations = [
             _require_mapping(item, "transport manifest collector migration")
             for item in value.get("collector_migrations", [])
