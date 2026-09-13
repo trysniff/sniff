@@ -320,22 +320,18 @@ pub(super) fn stored_artifact<T: DeserializeOwned>(
     index: usize,
     stage: HistoricalV2SlotStage,
 ) -> Result<T, HistoricalV2SlotStageError> {
-    let value = journal
-        .history()
-        .get(index)
-        .and_then(|stored| stored.artifact.clone())
+    let stored = journal.history().get(index).ok_or_else(|| {
+        HistoricalV2SlotStageError::invalid(stage, "historical-v2 prerequisite stage is missing")
+    })?;
+    stored
+        .read_artifact()
+        .map_err(|error| HistoricalV2SlotStageError::invalid(stage, error))?
         .ok_or_else(|| {
             HistoricalV2SlotStageError::invalid(
                 stage,
                 "historical-v2 prerequisite stage artifact is missing",
             )
-        })?;
-    serde_json::from_value(value).map_err(|error| {
-        HistoricalV2SlotStageError::invalid(
-            stage,
-            format!("invalid historical-v2 prerequisite stage artifact: {error}"),
-        )
-    })
+        })
 }
 
 pub(super) fn hash_json(value: &impl Serialize) -> Result<String, String> {

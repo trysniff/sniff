@@ -213,6 +213,43 @@ fn durable_journal_round_trips_each_completed_artifact() {
 }
 
 #[test]
+fn semantic_census_artifact_is_disk_backed_and_typed_on_demand() {
+    let temp = tempfile::tempdir().unwrap();
+    let state = temp.path().join("state");
+    let expected = json!({"stage": "SemanticCensus", "evidence": [1, 2, 3]});
+    {
+        let mut journal = HistoricalV2SlotStageJournal::open(&state, "rust", 1).unwrap();
+        append_completed_stages(&mut journal, 4);
+        journal
+            .append(
+                checkpoint_input(
+                    HistoricalV2SlotStage::SemanticCensus,
+                    completed(HistoricalV2StageArtifactKind::SemanticCensus),
+                ),
+                Some(&expected),
+            )
+            .unwrap();
+
+        assert!(journal.history()[4].artifact.is_none());
+        assert_eq!(
+            journal.history()[4]
+                .read_artifact::<serde_json::Value>()
+                .unwrap(),
+            Some(expected.clone())
+        );
+    }
+
+    let resumed = HistoricalV2SlotStageJournal::open_existing(&state, "rust", 1).unwrap();
+    assert!(resumed.history()[4].artifact.is_none());
+    assert_eq!(
+        resumed.history()[4]
+            .read_artifact::<serde_json::Value>()
+            .unwrap(),
+        Some(expected)
+    );
+}
+
+#[test]
 fn journal_inspection_reports_incomplete_publish_without_removing_it() {
     let temp = tempfile::tempdir().unwrap();
     let state = temp.path().join("state");

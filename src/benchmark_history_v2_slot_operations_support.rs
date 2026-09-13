@@ -205,22 +205,19 @@ pub(super) fn artifact<T: DeserializeOwned>(
     context: HistoricalV2SlotStageContext<'_>,
     index: usize,
 ) -> Result<T, HistoricalV2SlotStageError> {
-    let value = context
+    let stored = context
         .history
         .get(index)
-        .and_then(|stored| stored.artifact.clone())
+        .ok_or_else(|| invalid(context.stage, "historical-v2 prerequisite stage is missing"))?;
+    stored
+        .read_artifact()
+        .map_err(|error| invalid(context.stage, error))?
         .ok_or_else(|| {
             invalid(
                 context.stage,
                 "historical-v2 prerequisite artifact is missing",
             )
-        })?;
-    serde_json::from_value(value).map_err(|error| {
-        invalid(
-            context.stage,
-            format!("invalid historical-v2 prerequisite artifact: {error}"),
-        )
-    })
+        })
 }
 
 pub(super) fn completed<T: Serialize>(
