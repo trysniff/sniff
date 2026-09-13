@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 
 pub async fn run_historical_v2_selected_slots_bounded<E>(
     inputs: HistoricalV2SelectedSlotSweepInputs<'_, E>,
-    maximum_new_slots: NonZeroUsize,
+    maximum_new_slots: usize,
     maximum_new_stages_per_slot: Option<NonZeroUsize>,
 ) -> Result<HistoricalV2SelectedSlotSweepSummary, HistoricalV2SlotStageError>
 where
@@ -616,7 +616,7 @@ fn exact_plain_child(
 
 async fn run_selected_slots<E>(
     inputs: HistoricalV2SelectedSlotSweepInputs<'_, E>,
-    maximum_new_slots: NonZeroUsize,
+    maximum_new_slots: usize,
     maximum_new_stages_per_slot: Option<NonZeroUsize>,
 ) -> Result<HistoricalV2SelectedSlotSweepSummary, HistoricalV2SlotStageError>
 where
@@ -667,7 +667,7 @@ where
             canonical_repository,
         };
         let started = slot_has_persisted_stage(&roots.state, identity)?;
-        if !started && newly_admitted_slot_count >= maximum_new_slots.get() {
+        if !started && newly_admitted_slot_count >= maximum_new_slots {
             slots.push(HistoricalV2SelectedSlotRunSummary {
                 language: payload.language.clone(),
                 slot_number: payload.slot_number,

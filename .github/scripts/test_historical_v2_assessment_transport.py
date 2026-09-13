@@ -3754,6 +3754,11 @@ class WorkflowContractTests(unittest.TestCase):
             "max_new_stages_per_slot must be an integer from 1 through 10",
             workflow,
         )
+        self.assertIn(
+            "max_new_slots must be an integer from 0 through 768",
+            workflow,
+        )
+        self.assertIn("max_new_slots=0 requires resume_run_id", workflow)
         self.assertIn("through_stage is not a historical-v2 slot stage", workflow)
 
     def test_assessment_budget_reserves_time_for_setup_sealing_and_upload(self) -> None:

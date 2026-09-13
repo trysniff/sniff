@@ -54,7 +54,7 @@ async fn one_stage_sweep_persists_every_selected_payload_without_external_execut
             test_executor: &executor,
             through_stage: Some(HistoricalV2SlotStage::Payload),
         },
-        NonZeroUsize::new(1).unwrap(),
+        1,
         None,
     )
     .await
@@ -95,7 +95,7 @@ async fn one_stage_sweep_persists_every_selected_payload_without_external_execut
             test_executor: &executor,
             through_stage: Some(HistoricalV2SlotStage::Payload),
         },
-        NonZeroUsize::new(1).unwrap(),
+        0,
         None,
     )
     .await
@@ -131,10 +131,9 @@ async fn bounded_sweep_admits_only_the_declared_number_of_new_slots() {
         through_stage: Some(HistoricalV2SlotStage::Payload),
     };
 
-    let first =
-        run_historical_v2_selected_slots_bounded(run(), NonZeroUsize::new(1).unwrap(), None)
-            .await
-            .unwrap();
+    let first = run_historical_v2_selected_slots_bounded(run(), 1, None)
+        .await
+        .unwrap();
     assert_eq!(first.selected_slot_count, 2);
     assert_eq!(first.newly_admitted_slot_count, 1);
     assert_eq!(first.paused_count, 2);
@@ -148,10 +147,23 @@ async fn bounded_sweep_admits_only_the_declared_number_of_new_slots() {
     );
     assert_eq!(persisted_slot_count(&state_root), 1);
 
-    let second =
-        run_historical_v2_selected_slots_bounded(run(), NonZeroUsize::new(1).unwrap(), None)
-            .await
-            .unwrap();
+    let resume_only = run_historical_v2_selected_slots_bounded(run(), 0, None)
+        .await
+        .unwrap();
+    assert_eq!(resume_only.newly_admitted_slot_count, 0);
+    assert_eq!(
+        resume_only
+            .slots
+            .iter()
+            .map(|slot| slot.run.executed_stages.len())
+            .sum::<usize>(),
+        0
+    );
+    assert_eq!(persisted_slot_count(&state_root), 1);
+
+    let second = run_historical_v2_selected_slots_bounded(run(), 1, None)
+        .await
+        .unwrap();
     assert_eq!(second.newly_admitted_slot_count, 1);
     assert_eq!(
         second
@@ -191,7 +203,7 @@ async fn bounded_sweep_rejects_malformed_language_state_before_admitting_a_slot(
             test_executor: &executor,
             through_stage: Some(HistoricalV2SlotStage::Payload),
         },
-        NonZeroUsize::new(1).unwrap(),
+        1,
         None,
     )
     .await
@@ -233,7 +245,7 @@ async fn bounded_sweep_rejects_a_malformed_unadmitted_slot_marker() {
             test_executor: &executor,
             through_stage: Some(HistoricalV2SlotStage::Payload),
         },
-        NonZeroUsize::new(1).unwrap(),
+        1,
         None,
     )
     .await
@@ -282,7 +294,7 @@ async fn state_inspection_reports_exact_committed_and_incomplete_progress() {
             test_executor: &executor,
             through_stage: Some(HistoricalV2SlotStage::Payload),
         },
-        NonZeroUsize::new(1).unwrap(),
+        1,
         None,
     )
     .await

@@ -37,7 +37,7 @@ fn run_slots_has_no_unbounded_slot_admission_mode() {
 }
 
 #[test]
-fn run_slots_rejects_a_zero_slot_admission_limit() {
+fn run_slots_accepts_a_zero_slot_admission_limit_for_resume_only_sweeps() {
     let mut arguments = run_slots_arguments();
     let index = arguments
         .iter()
@@ -45,7 +45,10 @@ fn run_slots_rejects_a_zero_slot_admission_limit() {
         .unwrap();
     arguments[index + 1] = "0";
 
-    assert!(Args::try_parse_from(arguments).is_err());
+    let parsed = Args::try_parse_from(arguments).unwrap();
+    let Command::RunSlots { .. } = parsed.command else {
+        panic!("run-slots command was not parsed");
+    };
 }
 
 #[test]
