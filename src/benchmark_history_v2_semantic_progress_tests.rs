@@ -6,7 +6,7 @@ use crate::benchmark::{
     HistoricalV2NodeConsumerProfileCensus, HistoricalV2NodePackageSurfaceCensus,
     HistoricalV2PythonDistributionSurfaceCensus,
     INTENTIONAL_BOUNDARY_PROJECT_MODEL_CENSUS_SCHEMA_VERSION,
-    IntentionalBoundaryProjectModelCensus,
+    IntentionalBoundaryProjectModelCensus, IntentionalBoundarySemanticIndexerCensus,
 };
 use std::fs;
 
@@ -158,6 +158,43 @@ fn semantic_snapshot(
     }
 }
 
+fn semantic_indexer() -> HistoricalV2SemanticIndexerVariantCensus {
+    HistoricalV2SemanticIndexerVariantCensus {
+        variant: crate::semantic_index::SemanticIndexVariant::Unqualified,
+        indexed_document_paths: Vec::new(),
+        ignored_document_paths: Vec::new(),
+        census: IntentionalBoundarySemanticIndexerCensus {
+            indexer: IntentionalBoundaryIndexerKind::Go,
+            tool_name: "fixture-indexer".to_string(),
+            tool_version: Some("1.0.0".to_string()),
+            semantic_facts_sha256: digest('a'),
+            diagnostic_count: 0,
+            diagnostics_sha256: digest('b'),
+            document_count: 0,
+            symbol_count: 0,
+            relationship_count: 0,
+            import_count: 0,
+            call_count: 0,
+            test_relationship_count: 0,
+            unresolved_edge_count: 0,
+        },
+    }
+}
+
+fn semantic_contribution() -> assembly::HistoricalV2SemanticVariantContribution {
+    assembly::HistoricalV2SemanticVariantContribution {
+        indexer: semantic_indexer(),
+        methods: Vec::new(),
+        symbols: Vec::new(),
+        public_bindings: Vec::new(),
+        public_roots: Vec::new(),
+        go_package_roots: Vec::new(),
+        kotlin_compilation_roots: Vec::new(),
+        public_reexport_hops: Vec::new(),
+        public_surface_document_paths: Vec::new(),
+    }
+}
+
 #[test]
 fn completed_snapshot_resumes_only_under_the_exact_identity() {
     let state = tempfile::tempdir().unwrap();
@@ -207,6 +244,128 @@ fn completed_snapshot_resumes_only_under_the_exact_identity() {
             )
             .is_err()
     );
+}
+
+#[test]
+fn completed_variant_contribution_resumes_only_under_exact_index_evidence() {
+    let state = tempfile::tempdir().unwrap();
+    let root = state.path().join("progress");
+    let progress = HistoricalV2SemanticProgress::open(&root).unwrap();
+    let materialization = materialization();
+    let source_census = source_census();
+    let changed = BTreeSet::from([SemanticIndexerKind::Go]);
+    let required = BTreeSet::new();
+    let indexer = semantic_indexer();
+    let contribution = semantic_contribution();
+    let published = progress
+        .publish_contribution(
+            &materialization,
+            &source_census,
+            HistoricalV2SemanticSnapshotSide::Base,
+            &source_census.base,
+            &changed,
+            &required,
+            &indexer,
+            contribution.clone(),
+        )
+        .unwrap();
+    assert_eq!(published, contribution);
+    assert_eq!(
+        progress
+            .load_contribution(
+                &materialization,
+                &source_census,
+                HistoricalV2SemanticSnapshotSide::Base,
+                &source_census.base,
+                &changed,
+                &required,
+                &indexer,
+            )
+            .unwrap(),
+        Some(contribution)
+    );
+
+    let mut changed_indexer = indexer;
+    changed_indexer.census.semantic_facts_sha256 = digest('c');
+    assert!(
+        progress
+            .load_contribution(
+                &materialization,
+                &source_census,
+                HistoricalV2SemanticSnapshotSide::Base,
+                &source_census.base,
+                &changed,
+                &required,
+                &changed_indexer,
+            )
+            .unwrap_err()
+            .contains("changed immutable evidence")
+    );
+}
+
+#[test]
+fn rehashed_variant_contribution_tampering_is_rejected() {
+    let state = tempfile::tempdir().unwrap();
+    let progress = HistoricalV2SemanticProgress::open(&state.path().join("progress")).unwrap();
+    let materialization = materialization();
+    let source_census = source_census();
+    let changed = BTreeSet::from([SemanticIndexerKind::Go]);
+    let required = BTreeSet::new();
+    let indexer = semantic_indexer();
+    progress
+        .publish_contribution(
+            &materialization,
+            &source_census,
+            HistoricalV2SemanticSnapshotSide::Base,
+            &source_census.base,
+            &changed,
+            &required,
+            &indexer,
+            semantic_contribution(),
+        )
+        .unwrap();
+    let path = progress
+        .contribution_path(HistoricalV2SemanticSnapshotSide::Base, &indexer)
+        .unwrap();
+    let mut checkpoint: ContributionCheckpoint =
+        serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    checkpoint.payload.indexer.census.document_count = 1;
+    checkpoint.payload_sha256 = canonical_sha256(&checkpoint.payload).unwrap();
+    checkpoint.checkpoint_sha256.clear();
+    checkpoint.checkpoint_sha256 = canonical_sha256(&checkpoint).unwrap();
+    fs::write(&path, serde_json::to_vec(&checkpoint).unwrap()).unwrap();
+
+    assert!(
+        progress
+            .load_contribution(
+                &materialization,
+                &source_census,
+                HistoricalV2SemanticSnapshotSide::Base,
+                &source_census.base,
+                &changed,
+                &required,
+                &indexer,
+            )
+            .unwrap_err()
+            .contains("changed compiler identity")
+    );
+}
+
+#[test]
+fn interrupted_variant_contribution_is_removed_during_recovery() {
+    let state = tempfile::tempdir().unwrap();
+    let root = state.path().join("progress");
+    let progress = HistoricalV2SemanticProgress::open(&root).unwrap();
+    let path = progress
+        .contribution_path(HistoricalV2SemanticSnapshotSide::Base, &semantic_indexer())
+        .unwrap();
+    let temporary = temporary_path(&path);
+    fs::write(&temporary, b"partial").unwrap();
+
+    HistoricalV2SemanticProgress::recover_existing(&root).unwrap();
+
+    assert!(!temporary.exists());
+    assert!(!path.exists());
 }
 
 #[test]

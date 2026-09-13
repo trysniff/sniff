@@ -621,6 +621,99 @@ fn qualified_compiler_worlds_remain_distinct_through_validation() {
 }
 
 #[test]
+fn committed_variant_contributions_rebuild_the_exact_direct_snapshot() {
+    let fixture = fixture();
+    let unqualified = fixture.indexes[&SemanticIndexerKind::Rust].clone();
+    let variants = [("fixture-linux", "linux"), ("fixture-windows", "windows")]
+        .into_iter()
+        .map(|(identity, target)| {
+            let identity = SemanticVariantId(identity.to_string());
+            let mut index = unqualified.clone();
+            index.variant = SemanticIndexVariant::Qualified {
+                identity: identity.clone(),
+                dimensions: BTreeMap::from([("target".to_string(), target.to_string())]),
+            };
+            (
+                identity,
+                QualifiedSemanticIndex {
+                    index,
+                    ignored_documents: BTreeSet::new(),
+                },
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let sets = BTreeMap::from([(
+        SemanticIndexerKind::Rust,
+        SemanticIndexSet::Qualified { variants },
+    )]);
+    let changed_indexers = fixture_changed_indexers();
+    let required_paths = fixture_required_paths(&fixture.source);
+    let direct = build_semantic_snapshot_from_sets(
+        fixture.root.path(),
+        &fixture.source,
+        &fixture.files,
+        &changed_indexers,
+        &required_paths,
+        &sets,
+    )
+    .unwrap();
+    let materialization = HistoricalV2Materialization {
+        schema_version: 1,
+        materialization_contract: "fixture".to_string(),
+        canonical_repository: "example/repo".to_string(),
+        base_revision: fixture.source.revision.clone(),
+        object_format: "sha1".to_string(),
+        base_tree_oid: "1".repeat(40),
+        historical_patch_sha256: "2".repeat(64),
+        patched_tree_oid: "3".repeat(40),
+        patched_commit_oid: "4".repeat(40),
+        materialization_sha256: "5".repeat(64),
+    };
+    let source_census = HistoricalV2SourceCensus {
+        schema_version: 2,
+        source_census_contract: "fixture".to_string(),
+        canonical_repository: "example/repo".to_string(),
+        materialization_sha256: materialization.materialization_sha256.clone(),
+        base: fixture.source.clone(),
+        patched: fixture.source.clone(),
+        source_census_sha256: "6".repeat(64),
+    };
+    let state = tempfile::tempdir().unwrap();
+    let progress =
+        progress::HistoricalV2SemanticProgress::open(&state.path().join("progress")).unwrap();
+    let build = || {
+        assembly::build_semantic_snapshot_from_sets(
+            fixture.root.path(),
+            &fixture.source,
+            &fixture.files,
+            &changed_indexers,
+            &required_paths,
+            &sets,
+            Some(assembly::SemanticContributionProgress {
+                store: &progress,
+                materialization: &materialization,
+                source_census: &source_census,
+                side: HistoricalV2SemanticSnapshotSide::Base,
+            }),
+        )
+        .unwrap()
+    };
+
+    assert_eq!(build(), direct);
+    assert_eq!(build(), direct);
+    let contribution_count = std::fs::read_dir(
+        state
+            .path()
+            .join("progress")
+            .join("base")
+            .join("contributions"),
+    )
+    .unwrap()
+    .count();
+    assert_eq!(contribution_count, 2);
+}
+
+#[test]
 fn high_degree_graph_is_hash_committed_without_per_method_edge_copies() {
     let mut fixture = fixture();
     let index = fixture.indexes.get_mut(&SemanticIndexerKind::Rust).unwrap();
