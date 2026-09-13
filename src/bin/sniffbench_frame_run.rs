@@ -44,7 +44,7 @@ pub(super) struct RunSlotsArgs {
     #[arg(long)]
     docker_executable: PathBuf,
     #[arg(long)]
-    max_new_slots: NonZeroUsize,
+    max_new_slots: usize,
     #[arg(long)]
     max_new_stages_per_slot: Option<NonZeroUsize>,
     #[arg(long)]

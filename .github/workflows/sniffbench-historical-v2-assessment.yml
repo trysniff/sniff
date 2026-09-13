@@ -94,8 +94,12 @@ jobs:
             echo 'frame_run_id must identify the accepted frozen frame run 32804623556' >&2
             exit 1
           fi
-          if [[ ! "$MAX_NEW_SLOTS" =~ ^[1-9][0-9]*$ ]] || (( MAX_NEW_SLOTS > 768 )); then
-            echo 'max_new_slots must be an integer from 1 through 768' >&2
+          if [[ ! "$MAX_NEW_SLOTS" =~ ^(0|[1-9][0-9]*)$ ]] || (( MAX_NEW_SLOTS > 768 )); then
+            echo 'max_new_slots must be an integer from 0 through 768' >&2
+            exit 1
+          fi
+          if [[ "$MAX_NEW_SLOTS" == '0' && -z "$RESUME_RUN_ID" ]]; then
+            echo 'max_new_slots=0 requires resume_run_id' >&2
             exit 1
           fi
           if [[ ! "$MAX_NEW_STAGES_PER_SLOT" =~ ^[1-9][0-9]*$ ]] \
