@@ -175,19 +175,29 @@ pub(super) async fn census_semantic_snapshot(
     ) else {
         return Ok(None);
     };
-    let snapshot = resolve_snapshot_build(
-        inputs.side,
-        &inputs.source.revision,
-        build_semantic_snapshot_from_index_sets(
-            inputs.root,
-            inputs.source,
-            &all_files,
-            changed_indexers,
-            inputs.required_paths,
-            indexes,
-        ),
-        failures,
+    let build = build_semantic_snapshot_from_index_sets(
+        inputs.root,
+        inputs.source,
+        &all_files,
+        changed_indexers,
+        inputs.required_paths,
+        indexes,
+        progress.map(|store| assembly::SemanticContributionProgress {
+            store,
+            materialization,
+            source_census,
+            side: inputs.side,
+        }),
     );
+    let snapshot = match build {
+        Ok(snapshot) => Some(snapshot),
+        Err(assembly::SemanticSnapshotAssemblyError::Evidence(detail)) => {
+            resolve_snapshot_build(inputs.side, &inputs.source.revision, Err(detail), failures)
+        }
+        Err(assembly::SemanticSnapshotAssemblyError::Progress(detail)) => {
+            return Err(infrastructure(detail));
+        }
+    };
     if let (Some(progress), Some(snapshot)) = (progress, &snapshot) {
         progress
             .publish_snapshot(

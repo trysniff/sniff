@@ -1,4 +1,4 @@
-use super::{SNAPSHOT_TEMP_FILE, SnapshotCheckpoint};
+use serde::de::DeserializeOwned;
 use std::collections::BTreeSet;
 #[cfg(unix)]
 use std::fs::File;
@@ -6,7 +6,7 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::Path;
 
-const MAX_SNAPSHOT_BYTES: u64 = 512 * 1024 * 1024;
+const MAX_CHECKPOINT_BYTES: u64 = 512 * 1024 * 1024;
 
 pub(super) fn ensure_plain_directory(path: &Path) -> Result<(), String> {
     match fs::symlink_metadata(path) {
@@ -51,26 +51,24 @@ pub(super) fn remove_incomplete_file(path: &Path) -> Result<(), String> {
     }
 }
 
-pub(super) fn read_checkpoint(path: &Path) -> Result<SnapshotCheckpoint, String> {
-    let metadata = fs::symlink_metadata(path).map_err(|error| {
-        format!("failed to inspect historical-v2 semantic snapshot checkpoint: {error}")
-    })?;
+pub(super) fn read_checkpoint<T: DeserializeOwned>(path: &Path, label: &str) -> Result<T, String> {
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|error| format!("failed to inspect historical-v2 {label}: {error}"))?;
     if metadata.file_type().is_symlink()
         || !metadata.is_file()
-        || metadata.len() > MAX_SNAPSHOT_BYTES
+        || metadata.len() > MAX_CHECKPOINT_BYTES
     {
-        return Err(
-            "historical-v2 semantic snapshot checkpoint is not a bounded plain file".to_string(),
-        );
+        return Err(format!("historical-v2 {label} is not a bounded plain file"));
     }
-    serde_json::from_slice(&fs::read(path).map_err(|error| {
-        format!("failed to read historical-v2 semantic snapshot checkpoint: {error}")
-    })?)
-    .map_err(|error| format!("invalid historical-v2 semantic snapshot checkpoint: {error}"))
+    serde_json::from_slice(
+        &fs::read(path)
+            .map_err(|error| format!("failed to read historical-v2 {label}: {error}"))?,
+    )
+    .map_err(|error| format!("invalid historical-v2 {label}: {error}"))
 }
 
 pub(super) fn write_atomic_new(path: &Path, bytes: &[u8]) -> Result<(), String> {
-    let temp = path.with_file_name(SNAPSHOT_TEMP_FILE);
+    let temp = std::path::PathBuf::from(format!("{}.tmp", path.to_string_lossy()));
     remove_incomplete_file(&temp)?;
     let mut file = OpenOptions::new()
         .create_new(true)
