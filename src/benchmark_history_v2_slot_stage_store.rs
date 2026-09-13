@@ -27,6 +27,8 @@ const MAX_ARTIFACT_BYTES: u64 = 128 * 1024 * 1024;
 const MAX_SOURCE_CENSUS_ARTIFACT_BYTES: u64 = 512 * 1024 * 1024;
 // The exhaustive hosted Go census is about 699 MiB compact; retain bounded headroom.
 const MAX_SEMANTIC_CENSUS_ARTIFACT_BYTES: u64 = 1024 * 1024 * 1024;
+// Qualification retains exact public-surface evidence; the hosted Go artifact is about 159 MiB.
+const MAX_QUALIFICATION_ARTIFACT_BYTES: u64 = 256 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -49,7 +51,7 @@ struct StageTransaction {
 #[derive(Debug, Clone, PartialEq)]
 pub struct HistoricalV2StoredSlotStage {
     pub checkpoint: HistoricalV2SlotStageCheckpoint,
-    /// Inline for bounded stages; use `read_artifact` because SemanticCensus is disk-backed.
+    /// Inline for small stages; use `read_artifact` for disk-backed evidence stages.
     pub artifact: Option<Value>,
     artifact_path: Option<PathBuf>,
     artifact_commitment: Option<CommittedFile>,
@@ -655,7 +657,7 @@ fn load_stage(root: &Path, sequence: usize) -> Result<HistoricalV2StoredSlotStag
         })
         .transpose()?;
     let (artifact, artifact_path, artifact_commitment) =
-        if checkpoint.stage == HistoricalV2SlotStage::SemanticCensus {
+        if artifact_is_disk_backed(checkpoint.stage) {
             if let (Some(path), Some(commitment)) = (artifact_path, artifact_commitment) {
                 read_committed_json_limited::<serde::de::IgnoredAny>(
                     path.as_path(),
@@ -752,15 +754,22 @@ fn artifact_limit(stage: HistoricalV2SlotStage) -> u64 {
     match stage {
         HistoricalV2SlotStage::SourceCensus => MAX_SOURCE_CENSUS_ARTIFACT_BYTES,
         HistoricalV2SlotStage::SemanticCensus => MAX_SEMANTIC_CENSUS_ARTIFACT_BYTES,
+        HistoricalV2SlotStage::Qualification => MAX_QUALIFICATION_ARTIFACT_BYTES,
         HistoricalV2SlotStage::Payload
         | HistoricalV2SlotStage::Materialization
         | HistoricalV2SlotStage::TestMaterialization
         | HistoricalV2SlotStage::AssessmentIdentity
-        | HistoricalV2SlotStage::Qualification
         | HistoricalV2SlotStage::TestRecipe
         | HistoricalV2SlotStage::IdenticalTests
         | HistoricalV2SlotStage::ReadyForReview => MAX_ARTIFACT_BYTES,
     }
+}
+
+fn artifact_is_disk_backed(stage: HistoricalV2SlotStage) -> bool {
+    matches!(
+        stage,
+        HistoricalV2SlotStage::SemanticCensus | HistoricalV2SlotStage::Qualification
+    )
 }
 
 fn transaction_file_names(root: &Path) -> Result<Vec<&'static str>, String> {
@@ -849,9 +858,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn evidence_censuses_have_the_only_expanded_artifact_bounds() {
+    fn exhaustive_evidence_stages_have_explicit_artifact_bounds() {
         assert_eq!(MAX_SOURCE_CENSUS_ARTIFACT_BYTES, 512 * 1024 * 1024);
         assert_eq!(MAX_SEMANTIC_CENSUS_ARTIFACT_BYTES, 1024 * 1024 * 1024);
+        assert_eq!(MAX_QUALIFICATION_ARTIFACT_BYTES, 256 * 1024 * 1024);
         assert_eq!(
             artifact_limit(HistoricalV2SlotStage::SourceCensus),
             MAX_SOURCE_CENSUS_ARTIFACT_BYTES
@@ -860,17 +870,27 @@ mod tests {
             artifact_limit(HistoricalV2SlotStage::SemanticCensus),
             MAX_SEMANTIC_CENSUS_ARTIFACT_BYTES
         );
+        assert_eq!(
+            artifact_limit(HistoricalV2SlotStage::Qualification),
+            MAX_QUALIFICATION_ARTIFACT_BYTES
+        );
+        assert!(artifact_is_disk_backed(
+            HistoricalV2SlotStage::SemanticCensus
+        ));
+        assert!(artifact_is_disk_backed(
+            HistoricalV2SlotStage::Qualification
+        ));
         for stage in [
             HistoricalV2SlotStage::Payload,
             HistoricalV2SlotStage::Materialization,
             HistoricalV2SlotStage::TestMaterialization,
             HistoricalV2SlotStage::AssessmentIdentity,
-            HistoricalV2SlotStage::Qualification,
             HistoricalV2SlotStage::TestRecipe,
             HistoricalV2SlotStage::IdenticalTests,
             HistoricalV2SlotStage::ReadyForReview,
         ] {
             assert_eq!(artifact_limit(stage), MAX_ARTIFACT_BYTES, "{stage:?}");
+            assert!(!artifact_is_disk_backed(stage), "{stage:?}");
         }
     }
 }
