@@ -1,6 +1,7 @@
 use super::super::history_v2_slot_store_support::{
-    SlotFileLock, canonical_directory, read_limited, require_plain_directory, sha256,
-    sync_directory, validate_slot_path, write_compact_json_new, write_json_new,
+    SlotFileLock, canonical_directory, read_committed_json_limited, read_limited,
+    require_plain_directory, sync_directory, validate_slot_path, write_compact_json_new,
+    write_json_new,
 };
 use super::{
     HistoricalV2SlotStage, HistoricalV2SlotStageCheckpoint, HistoricalV2SlotStageCheckpointInput,
@@ -8,7 +9,7 @@ use super::{
     append_historical_v2_slot_stage_checkpoint, expected_historical_v2_slot_stage,
     validate_historical_v2_slot_stage_history,
 };
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::fs::{self, File};
@@ -24,7 +25,8 @@ const MAX_TRANSACTION_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_CHECKPOINT_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_ARTIFACT_BYTES: u64 = 128 * 1024 * 1024;
 const MAX_SOURCE_CENSUS_ARTIFACT_BYTES: u64 = 512 * 1024 * 1024;
-const MAX_SEMANTIC_CENSUS_ARTIFACT_BYTES: u64 = 512 * 1024 * 1024;
+// The exhaustive hosted Go census is about 699 MiB compact; retain bounded headroom.
+const MAX_SEMANTIC_CENSUS_ARTIFACT_BYTES: u64 = 1024 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -47,7 +49,45 @@ struct StageTransaction {
 #[derive(Debug, Clone, PartialEq)]
 pub struct HistoricalV2StoredSlotStage {
     pub checkpoint: HistoricalV2SlotStageCheckpoint,
+    /// Inline for bounded stages; use `read_artifact` because SemanticCensus is disk-backed.
     pub artifact: Option<Value>,
+    artifact_path: Option<PathBuf>,
+    artifact_commitment: Option<CommittedFile>,
+}
+
+impl HistoricalV2StoredSlotStage {
+    #[cfg(test)]
+    pub(crate) fn in_memory(
+        checkpoint: HistoricalV2SlotStageCheckpoint,
+        artifact: Option<Value>,
+    ) -> Self {
+        Self {
+            checkpoint,
+            artifact,
+            artifact_path: None,
+            artifact_commitment: None,
+        }
+    }
+
+    pub fn read_artifact<T: DeserializeOwned>(&self) -> Result<Option<T>, String> {
+        if let Some(value) = &self.artifact {
+            return T::deserialize(value)
+                .map(Some)
+                .map_err(|error| format!("invalid historical-v2 stage artifact: {error}"));
+        }
+        match (&self.artifact_path, &self.artifact_commitment) {
+            (Some(path), Some(commitment)) => read_committed_json_limited(
+                path,
+                artifact_limit(self.checkpoint.stage),
+                "stage artifact",
+                commitment.byte_count,
+                &commitment.sha256,
+            )
+            .map(Some),
+            (None, None) => Ok(None),
+            _ => Err("historical-v2 stage artifact storage is inconsistent".to_string()),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -452,7 +492,7 @@ fn publish_stage<T: Serialize>(
             artifact_limit(checkpoint.stage),
         )?;
     }
-    let files = committed_files(staging_root, artifact.is_some(), checkpoint.stage)?;
+    let files = committed_files_streaming(staging_root, artifact.is_some(), checkpoint.stage)?;
     let transaction = StageTransaction {
         schema_version: TRANSACTION_SCHEMA_VERSION,
         transaction_contract: TRANSACTION_CONTRACT.to_string(),
@@ -599,47 +639,57 @@ fn load_stage(root: &Path, sequence: usize) -> Result<HistoricalV2StoredSlotStag
         || transaction.transaction_contract != TRANSACTION_CONTRACT
         || transaction.sequence != sequence
         || transaction.checkpoint_sha256 != checkpoint.checkpoint_sha256
-        || transaction.files != committed_files(root, has_artifact, checkpoint.stage)?
+        || transaction.files != committed_files_streaming(root, has_artifact, checkpoint.stage)?
     {
         return Err("historical-v2 stage transaction commitment changed".to_string());
     }
-    let artifact = has_artifact
+    let artifact_path = has_artifact.then(|| root.join(ARTIFACT_FILE));
+    let artifact_commitment = has_artifact
         .then(|| {
-            serde_json::from_slice::<Value>(&read_limited(
-                &root.join(ARTIFACT_FILE),
-                artifact_limit(checkpoint.stage),
-                "stage artifact",
-            )?)
-            .map_err(|error| format!("invalid historical-v2 stage artifact: {error}"))
+            transaction
+                .files
+                .iter()
+                .find(|file| file.name == ARTIFACT_FILE)
+                .cloned()
+                .ok_or_else(|| "historical-v2 stage artifact commitment is missing".to_string())
         })
         .transpose()?;
+    let (artifact, artifact_path, artifact_commitment) =
+        if checkpoint.stage == HistoricalV2SlotStage::SemanticCensus {
+            if let (Some(path), Some(commitment)) = (artifact_path, artifact_commitment) {
+                read_committed_json_limited::<serde::de::IgnoredAny>(
+                    path.as_path(),
+                    artifact_limit(checkpoint.stage),
+                    "stage artifact",
+                    commitment.byte_count,
+                    &commitment.sha256,
+                )?;
+                (None, Some(path), Some(commitment))
+            } else {
+                (None, None, None)
+            }
+        } else {
+            let artifact = artifact_path
+                .as_ref()
+                .zip(artifact_commitment.as_ref())
+                .map(|(path, commitment)| {
+                    read_committed_json_limited::<Value>(
+                        path,
+                        artifact_limit(checkpoint.stage),
+                        "stage artifact",
+                        commitment.byte_count,
+                        &commitment.sha256,
+                    )
+                })
+                .transpose()?;
+            (artifact, None, None)
+        };
     Ok(HistoricalV2StoredSlotStage {
         checkpoint,
         artifact,
+        artifact_path,
+        artifact_commitment,
     })
-}
-
-fn committed_files(
-    root: &Path,
-    has_artifact: bool,
-    stage: HistoricalV2SlotStage,
-) -> Result<Vec<CommittedFile>, String> {
-    let mut inputs = vec![(CHECKPOINT_FILE, MAX_CHECKPOINT_BYTES)];
-    if has_artifact {
-        inputs.insert(0, (ARTIFACT_FILE, artifact_limit(stage)));
-    }
-    inputs
-        .into_iter()
-        .map(|(name, limit)| {
-            let bytes = read_limited(&root.join(name), limit, name)?;
-            Ok(CommittedFile {
-                name: name.to_string(),
-                sha256: sha256(&bytes),
-                byte_count: u64::try_from(bytes.len())
-                    .map_err(|_| "historical-v2 stage artifact size overflowed".to_string())?,
-            })
-        })
-        .collect()
 }
 
 fn committed_files_streaming(
@@ -800,6 +850,8 @@ mod tests {
 
     #[test]
     fn evidence_censuses_have_the_only_expanded_artifact_bounds() {
+        assert_eq!(MAX_SOURCE_CENSUS_ARTIFACT_BYTES, 512 * 1024 * 1024);
+        assert_eq!(MAX_SEMANTIC_CENSUS_ARTIFACT_BYTES, 1024 * 1024 * 1024);
         assert_eq!(
             artifact_limit(HistoricalV2SlotStage::SourceCensus),
             MAX_SOURCE_CENSUS_ARTIFACT_BYTES

@@ -372,13 +372,9 @@ fn stage_artifact<T: DeserializeOwned>(
 }
 
 fn artifact_value<T: DeserializeOwned>(stored: &HistoricalV2StoredSlotStage) -> Result<T, String> {
-    serde_json::from_value(
-        stored
-            .artifact
-            .clone()
-            .ok_or_else(|| "historical-v2 review prerequisite artifact is missing".to_string())?,
-    )
-    .map_err(|error| format!("invalid historical-v2 review prerequisite artifact: {error}"))
+    stored
+        .read_artifact()?
+        .ok_or_else(|| "historical-v2 review prerequisite artifact is missing".to_string())
 }
 
 fn completed_sha256(history: &[HistoricalV2StoredSlotStage], index: usize) -> Result<&str, String> {

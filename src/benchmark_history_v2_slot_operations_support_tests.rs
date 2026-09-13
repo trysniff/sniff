@@ -208,8 +208,8 @@ fn prepared_outcomes_keep_the_typed_reason_and_exact_artifact() {
 }
 
 fn stored(artifact: serde_json::Value) -> HistoricalV2StoredSlotStage {
-    HistoricalV2StoredSlotStage {
-        checkpoint: HistoricalV2SlotStageCheckpoint {
+    HistoricalV2StoredSlotStage::in_memory(
+        HistoricalV2SlotStageCheckpoint {
             schema_version: HISTORICAL_V2_SLOT_STAGE_CHECKPOINT_SCHEMA_VERSION,
             checkpoint_contract: "fixture".to_string(),
             selection_sha256: "a".repeat(64),
@@ -225,6 +225,6 @@ fn stored(artifact: serde_json::Value) -> HistoricalV2StoredSlotStage {
             },
             checkpoint_sha256: "c".repeat(64),
         },
-        artifact: Some(artifact),
-    }
+        Some(artifact),
+    )
 }
