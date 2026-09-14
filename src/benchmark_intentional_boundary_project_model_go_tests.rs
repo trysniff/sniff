@@ -32,6 +32,7 @@ fn go_variant_for(
         cgo_enabled,
         build_tags: build_tags.iter().map(|tag| (*tag).to_string()).collect(),
         architecture: IntentionalBoundaryProjectModelGoArchitecture::Default,
+        query: IntentionalBoundaryProjectModelGoQuery::ModulePackages,
     }
 }
 
@@ -499,6 +500,7 @@ fn go_project_model_identity_includes_the_exact_build_variant() {
                 environment_variable: "GOAMD64".to_string(),
                 value: "v3".to_string(),
             },
+            query: IntentionalBoundaryProjectModelGoQuery::ModulePackages,
         },
         &output,
     )
@@ -560,6 +562,7 @@ fn go_project_model_rejects_invalid_architecture_configuration() {
                 cgo_enabled: false,
                 build_tags: Vec::new(),
                 architecture,
+                query: IntentionalBoundaryProjectModelGoQuery::ModulePackages,
             },
             &go_list_output(root.path(), "go.mod"),
         );
@@ -577,6 +580,7 @@ fn plans_every_toolchain_platform_and_only_supported_cgo_worlds() {
         &GoConstraintTagDomain {
             custom_build_tags: Vec::new(),
             architecture_feature_tags: Vec::new(),
+            standalone_source_repository_paths: Vec::new(),
         },
     )
     .unwrap();
@@ -606,6 +610,7 @@ fn rejects_broken_repeated_or_unbounded_toolchain_platforms() {
                 &GoConstraintTagDomain {
                     custom_build_tags: Vec::new(),
                     architecture_feature_tags: Vec::new(),
+                    standalone_source_repository_paths: Vec::new(),
                 },
             )
             .is_err()
@@ -622,6 +627,7 @@ fn rejects_broken_repeated_or_unbounded_toolchain_platforms() {
             &GoConstraintTagDomain {
                 custom_build_tags: unbounded_tags,
                 architecture_feature_tags: Vec::new(),
+                standalone_source_repository_paths: Vec::new(),
             },
         )
         .is_err()
@@ -637,6 +643,7 @@ fn rejects_broken_repeated_or_unbounded_toolchain_platforms() {
             &GoConstraintTagDomain {
                 custom_build_tags: Vec::new(),
                 architecture_feature_tags: unbounded_architecture_features,
+                standalone_source_repository_paths: Vec::new(),
             },
         )
         .is_err()
@@ -655,6 +662,7 @@ fn accepts_a_finite_variant_domain_above_the_old_context_ceiling() {
         &GoConstraintTagDomain {
             custom_build_tags: tags,
             architecture_feature_tags: Vec::new(),
+            standalone_source_repository_paths: Vec::new(),
         },
     )
     .unwrap();
@@ -668,6 +676,7 @@ fn accepts_a_finite_variant_domain_above_the_old_context_ceiling() {
                 toolchain_identity_sha256: "a".repeat(64),
                 variant,
                 equivalent_variants: Vec::new(),
+                module_identity: None,
                 stdout: r#"{"Dir":"/repo/api","ImportPath":"example/api","Name":"api","GoFiles":["api.go"],"Module":null}"#
                     .to_string(),
             })
@@ -692,18 +701,21 @@ fn identical_consumed_compiler_facts_form_one_lossless_variant_class() {
             toolchain_identity_sha256: "a".repeat(64),
             variant: equivalent.clone(),
             equivalent_variants: Vec::new(),
+            module_identity: None,
             stdout: same_projection_right.to_string(),
         },
         GoListExecutionOutput {
             toolchain_identity_sha256: "a".repeat(64),
             variant: distinct.clone(),
             equivalent_variants: Vec::new(),
+            module_identity: None,
             stdout: different_projection.to_string(),
         },
         GoListExecutionOutput {
             toolchain_identity_sha256: "a".repeat(64),
             variant: representative.clone(),
             equivalent_variants: Vec::new(),
+            module_identity: None,
             stdout: same_projection_left.to_string(),
         },
     ])
@@ -731,12 +743,14 @@ fn compiler_rejected_nonbaseline_context_is_not_a_compiler_world() {
             toolchain_identity_sha256: "a".repeat(64),
             variant: baseline.clone(),
             equivalent_variants: Vec::new(),
+            module_identity: None,
             stdout: r#"{"Dir":"/repo/plugins","ImportPath":"example/plugins","Name":"plugins","GoFiles":["minimum.go"],"Module":null}"#.to_string(),
         },
         GoListExecutionOutput {
             toolchain_identity_sha256: "a".repeat(64),
             variant: rejected,
             equivalent_variants: Vec::new(),
+            module_identity: None,
             stdout: r#"{"Dir":"/repo/plugins","ImportPath":"example/plugins","Name":"plugins","GoFiles":["minimum.go"],"Module":null,"Incomplete":true,"Error":{"Err":"found packages main and plugins"}}"#.to_string(),
         },
     ])
@@ -752,11 +766,36 @@ fn compiler_rejected_canonical_context_fails_closed() {
         toolchain_identity_sha256: "a".repeat(64),
         variant: go_variant(),
         equivalent_variants: Vec::new(),
+        module_identity: None,
         stdout: r#"{"Dir":"/repo/api","ImportPath":"example/api","Name":"api","Incomplete":true,"Error":{"Err":"invalid package"},"Module":null}"#.to_string(),
     }])
     .unwrap_err();
 
-    assert!(error.contains("canonical portable Go context"), "{error}");
+    assert!(error.contains("required Go compiler context"), "{error}");
+}
+
+#[test]
+fn compiler_rejected_standalone_source_fails_closed() {
+    let variant = IntentionalBoundaryProjectModelVariant::Go {
+        goos: "linux".to_string(),
+        goarch: "amd64".to_string(),
+        cgo_enabled: false,
+        build_tags: Vec::new(),
+        architecture: IntentionalBoundaryProjectModelGoArchitecture::Default,
+        query: IntentionalBoundaryProjectModelGoQuery::StandaloneSource {
+            source_repository_path: "plugins/generate.go".to_string(),
+        },
+    };
+    let error = collapse_go_list_outputs(vec![GoListExecutionOutput {
+        toolchain_identity_sha256: "a".repeat(64),
+        variant,
+        equivalent_variants: Vec::new(),
+        module_identity: None,
+        stdout: r#"{"Dir":"/repo/plugins","ImportPath":"command-line-arguments","Name":"main","Incomplete":true,"Error":{"Err":"invalid source"}}"#.to_string(),
+    }])
+    .unwrap_err();
+
+    assert!(error.contains("required Go compiler context"), "{error}");
 }
 
 #[test]
@@ -781,12 +820,13 @@ fn equivalent_variant_ledger_is_identity_committed_and_structurally_validated() 
         &"a".repeat(64),
         go_variant(),
         vec![equivalent.clone()],
+        None,
         &go_list_output(root.path(), "go.mod"),
     )
     .unwrap();
 
     assert_eq!(census.executions[0].equivalent_variants, [equivalent]);
-    assert!(census.executions[0].execution_id.starts_with("ibpme-v8:"));
+    assert!(census.executions[0].execution_id.starts_with("ibpme-v9:"));
     validate_intentional_boundary_project_model_census_commitment(&inventory, &census).unwrap();
 
     let mut repeated = census;
@@ -814,12 +854,14 @@ fn equivalent_variant_cannot_reappear_in_another_execution() {
                     toolchain_identity_sha256: "a".repeat(64),
                     variant: go_variant(),
                     equivalent_variants: vec![equivalent.clone()],
+                    module_identity: None,
                     stdout: stdout.clone(),
                 },
                 GoListExecutionOutput {
                     toolchain_identity_sha256: "a".repeat(64),
                     variant: equivalent.clone(),
                     equivalent_variants: Vec::new(),
+                    module_identity: None,
                     stdout,
                 },
             ])
@@ -839,15 +881,19 @@ fn discovers_only_ordinary_custom_tags_from_exact_constraint_output() {
         {"GOOS":"windows","GOARCH":"arm64","CgoSupported":false,"FirstClass":true}
     ]"#;
     let output = serde_json::json!({
-        "schema_version": 1,
+        "schema_version": 2,
         "files": [
             {
                 "repository_path": "api/api.go",
-                "tags": ["amd64", "cgo", "enterprise", "go1.25", "ignore", "linux", "unix"]
+                "tags": ["amd64", "cgo", "enterprise", "go1.25", "ignore", "linux", "unix"],
+                "package_name": "api",
+                "go_generate_directives": []
             },
             {
                 "repository_path": "api/more.go",
-                "tags": ["enterprise", "purego"]
+                "tags": ["enterprise", "purego"],
+                "package_name": "api",
+                "go_generate_directives": []
             }
         ]
     });
@@ -862,8 +908,144 @@ fn discovers_only_ordinary_custom_tags_from_exact_constraint_output() {
         GoConstraintTagDomain {
             custom_build_tags: vec!["enterprise".to_string(), "purego".to_string()],
             architecture_feature_tags: Vec::new(),
+            standalone_source_repository_paths: Vec::new(),
         }
     );
+}
+
+#[test]
+fn source_facts_identify_only_direct_self_run_main_files_as_standalone() {
+    let platforms = r#"[
+        {"GOOS":"linux","GOARCH":"amd64","CgoSupported":true,"FirstClass":true}
+    ]"#;
+    let output = serde_json::json!({
+        "schema_version": 2,
+        "files": [
+            {
+                "repository_path": "plugins/generate.go",
+                "tags": ["plugins"],
+                "package_name": "main",
+                "go_generate_directives": ["//go:generate go run generate.go"]
+            },
+            {
+                "repository_path": "plugins/minimum.go",
+                "tags": [],
+                "package_name": "plugins",
+                "go_generate_directives": []
+            },
+            {
+                "repository_path": "tools/not-self.go",
+                "tags": [],
+                "package_name": "main",
+                "go_generate_directives": ["//go:generate go run other.go"]
+            }
+        ]
+    });
+
+    let facts = parse_go_constraint_tags(
+        &serde_json::to_string(&output).unwrap(),
+        &[
+            "plugins/generate.go".to_string(),
+            "plugins/minimum.go".to_string(),
+            "tools/not-self.go".to_string(),
+        ],
+        platforms,
+    )
+    .unwrap();
+
+    assert_eq!(facts.custom_build_tags, ["plugins"]);
+    assert_eq!(
+        facts.standalone_source_repository_paths,
+        ["plugins/generate.go"]
+    );
+}
+
+#[test]
+fn standalone_go_list_target_is_bound_to_exact_source_and_module_identity() {
+    let root = tempfile::tempdir().unwrap();
+    git(root.path(), &["init", "--quiet"]);
+    git(root.path(), &["config", "user.name", "SniffBench"]);
+    git(
+        root.path(),
+        &["config", "user.email", "bench@example.invalid"],
+    );
+    git(
+        root.path(),
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/example/standalone-go.git",
+        ],
+    );
+    fs::create_dir(root.path().join("plugins")).unwrap();
+    fs::write(
+        root.path().join("go.mod"),
+        "module example.com/standalone\n\ngo 1.22\n",
+    )
+    .unwrap();
+    fs::write(
+        root.path().join("plugins/generate.go"),
+        "//go:build plugins\n\npackage main\n\n//go:generate go run generate.go\nfunc main() {}\n",
+    )
+    .unwrap();
+    git(root.path(), &["add", "."]);
+    git(root.path(), &["commit", "--quiet", "-m", "fixture"]);
+    let revision = git(root.path(), &["rev-parse", "HEAD"]);
+    let inventory = super::super::inventory_intentional_boundary_repository(
+        "github.com/example/standalone-go",
+        &revision,
+        root.path(),
+    )
+    .unwrap();
+    let module_identity = GoListModule {
+        path: "example.com/standalone".to_string(),
+        version: String::new(),
+        dir: emitted_path(root.path(), ""),
+        go_mod: emitted_path(root.path(), "go.mod"),
+        main: true,
+    };
+    let stdout = serde_json::to_vec(&serde_json::json!({
+        "Dir": emitted_path(root.path(), "plugins"),
+        "ImportPath": "command-line-arguments",
+        "Name": "main",
+        "GoFiles": ["generate.go"]
+    }))
+    .unwrap();
+    let variant = IntentionalBoundaryProjectModelVariant::Go {
+        goos: "linux".to_string(),
+        goarch: "amd64".to_string(),
+        cgo_enabled: false,
+        build_tags: Vec::new(),
+        architecture: IntentionalBoundaryProjectModelGoArchitecture::Default,
+        query: IntentionalBoundaryProjectModelGoQuery::StandaloneSource {
+            source_repository_path: "plugins/generate.go".to_string(),
+        },
+    };
+
+    let census = parse_intentional_boundary_go_list_with_equivalents(
+        root.path(),
+        &inventory,
+        "go.mod",
+        &"a".repeat(64),
+        variant,
+        Vec::new(),
+        Some(&module_identity),
+        &stdout,
+    )
+    .unwrap();
+
+    assert_eq!(census.executions.len(), 1);
+    assert_eq!(census.targets.len(), 1);
+    assert_eq!(
+        census.targets[0].source_repository_paths,
+        ["plugins/generate.go"]
+    );
+    assert_eq!(
+        census.targets[0].target_name,
+        "standalone:plugins/generate.go"
+    );
+    validate_intentional_boundary_project_model_census_commitment(&inventory, &census).unwrap();
 }
 
 #[test]
@@ -880,8 +1062,13 @@ fn rejects_constraint_output_that_needs_unmodeled_compiler_modes() {
         "fuzz",
     ] {
         let output = serde_json::json!({
-            "schema_version": 1,
-            "files": [{"repository_path": "api/api.go", "tags": [tag]}]
+            "schema_version": 2,
+            "files": [{
+                "repository_path": "api/api.go",
+                "tags": [tag],
+                "package_name": "api",
+                "go_generate_directives": []
+            }]
         });
         let error = parse_go_constraint_tags(
             &serde_json::to_string(&output).unwrap(),
@@ -903,15 +1090,19 @@ fn separates_architecture_features_from_custom_build_tags() {
         {"GOOS":"wasip1","GOARCH":"wasm","CgoSupported":false,"FirstClass":false}
     ]"#;
     let output = serde_json::json!({
-        "schema_version": 1,
+        "schema_version": 2,
         "files": [
             {
                 "repository_path": "api/api.go",
-                "tags": ["amd64.v2", "amd64.v3", "enterprise"]
+                "tags": ["amd64.v2", "amd64.v3", "enterprise"],
+                "package_name": "api",
+                "go_generate_directives": []
             },
             {
                 "repository_path": "api/wasm.go",
-                "tags": ["wasm.satconv", "wasm.signext"]
+                "tags": ["wasm.satconv", "wasm.signext"],
+                "package_name": "api",
+                "go_generate_directives": []
             }
         ]
     });
@@ -931,6 +1122,7 @@ fn separates_architecture_features_from_custom_build_tags() {
                 "wasm.satconv".to_string(),
                 "wasm.signext".to_string(),
             ],
+            standalone_source_repository_paths: Vec::new(),
         }
     );
 }
@@ -950,6 +1142,7 @@ fn architecture_features_expand_to_distinct_compiler_contexts() {
                 "wasm.satconv".to_string(),
                 "wasm.signext".to_string(),
             ],
+            standalone_source_repository_paths: Vec::new(),
         },
     )
     .unwrap();
@@ -1008,8 +1201,13 @@ fn architecture_features_expand_to_distinct_compiler_contexts() {
 fn rejects_unknown_architecture_feature_shapes() {
     let platforms = r#"[{"GOOS":"linux","GOARCH":"amd64","CgoSupported":false,"FirstClass":true}]"#;
     let output = serde_json::json!({
-        "schema_version": 1,
-        "files": [{"repository_path": "api/api.go", "tags": ["amd64.fast"]}]
+        "schema_version": 2,
+        "files": [{
+            "repository_path": "api/api.go",
+            "tags": ["amd64.fast"],
+            "package_name": "api",
+            "go_generate_directives": []
+        }]
     });
 
     let error = parse_go_constraint_tags(
@@ -1031,6 +1229,7 @@ fn custom_tags_expand_to_every_boolean_assignment() {
         &GoConstraintTagDomain {
             custom_build_tags: vec!["enterprise".to_string(), "purego".to_string()],
             architecture_feature_tags: Vec::new(),
+            standalone_source_repository_paths: Vec::new(),
         },
     )
     .unwrap();
@@ -1057,16 +1256,16 @@ fn rejects_reordered_or_malformed_constraint_censuses() {
     let platforms = r#"[{"GOOS":"linux","GOARCH":"amd64","CgoSupported":false,"FirstClass":true}]"#;
     for output in [
         serde_json::json!({
+            "schema_version": 3,
+            "files": [{"repository_path": "api/api.go", "tags": [], "package_name": "api", "go_generate_directives": []}]
+        }),
+        serde_json::json!({
             "schema_version": 2,
-            "files": [{"repository_path": "api/api.go", "tags": []}]
+            "files": [{"repository_path": "wrong.go", "tags": [], "package_name": "api", "go_generate_directives": []}]
         }),
         serde_json::json!({
-            "schema_version": 1,
-            "files": [{"repository_path": "wrong.go", "tags": []}]
-        }),
-        serde_json::json!({
-            "schema_version": 1,
-            "files": [{"repository_path": "api/api.go", "tags": ["same", "same"]}]
+            "schema_version": 2,
+            "files": [{"repository_path": "api/api.go", "tags": ["same", "same"], "package_name": "api", "go_generate_directives": []}]
         }),
     ] {
         assert!(
@@ -1227,6 +1426,7 @@ fn collector_executes_every_tracked_go_module_exactly_once() {
                 toolchain_identity_sha256: "e".repeat(64),
                 variant: go_variant(),
                 equivalent_variants: Vec::new(),
+                module_identity: None,
                 stdout: String::from_utf8(go_list_output(execution_root, manifest)).unwrap(),
             }])
         },
@@ -1254,6 +1454,7 @@ fn collector_rejects_repository_mutation_by_go_list_boundary() {
                 toolchain_identity_sha256: "f".repeat(64),
                 variant: go_variant(),
                 equivalent_variants: Vec::new(),
+                module_identity: None,
                 stdout: String::from_utf8(go_list_output(root.path(), manifest)).unwrap(),
             }])
         },

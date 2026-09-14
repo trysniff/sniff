@@ -15,7 +15,8 @@ use super::intentional_boundary_project_model_typescript::{
 use super::{
     INTENTIONAL_BOUNDARY_PROJECT_MODEL_CENSUS_SCHEMA_VERSION,
     IntentionalBoundaryProjectModelCensus, IntentionalBoundaryProjectModelExecution,
-    IntentionalBoundaryProjectModelGoArchitecture, IntentionalBoundaryProjectModelProducerTask,
+    IntentionalBoundaryProjectModelGoArchitecture, IntentionalBoundaryProjectModelGoQuery,
+    IntentionalBoundaryProjectModelProducerTask,
     IntentionalBoundaryProjectModelProvider as Provider, IntentionalBoundaryProjectModelTarget,
     IntentionalBoundaryProjectModelTargetStatus as TargetStatus,
     IntentionalBoundaryProjectModelVariant, IntentionalBoundaryRepositoryInventory,
@@ -26,7 +27,7 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::{Component, Path};
 
-pub(super) const PROJECT_MODEL_CONTRACT: &str = "sniffbench-intentional-boundary-project-model-v8";
+pub(super) const PROJECT_MODEL_CONTRACT: &str = "sniffbench-intentional-boundary-project-model-v9";
 
 #[derive(Serialize)]
 struct NormalizedTarget<'a> {
@@ -62,7 +63,7 @@ pub(super) fn compute_normalized_model_sha256(
         .collect::<Result<Vec<_>, String>>()?;
     normalized_targets.sort();
     hash_json(&(
-        "sniffbench-intentional-boundary-normalized-project-model-v8",
+        "sniffbench-intentional-boundary-normalized-project-model-v9",
         provider,
         covered_manifest_repository_paths,
         normalized_targets,
@@ -73,7 +74,7 @@ pub(super) fn compute_execution_id(
     execution: &IntentionalBoundaryProjectModelExecution,
 ) -> Result<String, String> {
     Ok(format!(
-        "ibpme-v8:{}",
+        "ibpme-v9:{}",
         hash_json(&(
             "sniffbench-intentional-boundary-project-model-execution-v8",
             execution.provider,
@@ -358,6 +359,7 @@ pub(super) fn valid_execution_variant(
                 goarch,
                 build_tags,
                 architecture,
+                query,
                 ..
             },
         ) => {
@@ -371,6 +373,15 @@ pub(super) fn valid_execution_variant(
                             .all(|value| value.is_alphanumeric() || matches!(value, '_' | '.'))
                 })
                 && valid_go_architecture(goarch, architecture)
+                && match query {
+                    IntentionalBoundaryProjectModelGoQuery::ModulePackages => true,
+                    IntentionalBoundaryProjectModelGoQuery::StandaloneSource {
+                        source_repository_path,
+                    } => {
+                        is_safe_repository_path(source_repository_path)
+                            && source_repository_path.ends_with(".go")
+                    }
+                }
         }
         (Provider::CargoMetadata, IntentionalBoundaryProjectModelVariant::Default) => true,
         (
