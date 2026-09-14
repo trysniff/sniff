@@ -1,8 +1,11 @@
 use super::super::{
     IntentionalBoundaryProjectModelCensus, IntentionalBoundaryProjectModelGoArchitecture,
-    IntentionalBoundaryProjectModelProvider, IntentionalBoundaryProjectModelVariant,
+    IntentionalBoundaryProjectModelGoQuery, IntentionalBoundaryProjectModelProvider,
+    IntentionalBoundaryProjectModelVariant,
 };
-use crate::semantic_index::{RepositoryPath, SemanticIndexerVariantPlan, SemanticVariantId};
+use crate::semantic_index::{
+    RepositoryPath, SemanticIndexerCompilerQuery, SemanticIndexerVariantPlan, SemanticVariantId,
+};
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -28,6 +31,7 @@ pub(super) fn go_semantic_variant_plans(
             cgo_enabled,
             build_tags,
             architecture,
+            query,
         } = &execution.variant
         else {
             return Err("historical-v2 Go variant ledger contains an untyped variant".to_string());
@@ -67,16 +71,33 @@ pub(super) fn go_semantic_variant_plans(
             })
             .map(|path| RepositoryPath(path.clone()))
             .collect::<BTreeSet<_>>();
-        let ignored_documents = module_documents
-            .difference(&selected_documents)
-            .cloned()
-            .chain(targets.iter().flat_map(|target| {
+        let target_ignored_documents = targets
+            .iter()
+            .flat_map(|target| {
                 target
                     .ignored_source_repository_paths
                     .iter()
                     .map(|path| RepositoryPath(path.clone()))
-            }))
+            })
             .collect::<BTreeSet<_>>();
+        let (compiler_query, ignored_documents) = match query {
+            IntentionalBoundaryProjectModelGoQuery::ModulePackages => (
+                SemanticIndexerCompilerQuery::ProjectPackages,
+                module_documents
+                    .difference(&selected_documents)
+                    .cloned()
+                    .chain(target_ignored_documents)
+                    .collect::<BTreeSet<_>>(),
+            ),
+            IntentionalBoundaryProjectModelGoQuery::StandaloneSource {
+                source_repository_path,
+            } => (
+                SemanticIndexerCompilerQuery::ExactSource {
+                    source_document: RepositoryPath(source_repository_path.clone()),
+                },
+                target_ignored_documents,
+            ),
+        };
         let tags = serde_json::to_string(build_tags)
             .map_err(|error| format!("failed to serialize Go build tags: {error}"))?;
         let architecture_dimension = match architecture {
@@ -92,6 +113,17 @@ pub(super) fn go_semantic_variant_plans(
             ("cgo_enabled".to_string(), cgo_enabled.to_string()),
             ("goarch".to_string(), goarch.clone()),
             ("goos".to_string(), goos.clone()),
+            (
+                "query".to_string(),
+                match query {
+                    IntentionalBoundaryProjectModelGoQuery::ModulePackages => {
+                        "module_packages".to_string()
+                    }
+                    IntentionalBoundaryProjectModelGoQuery::StandaloneSource {
+                        source_repository_path,
+                    } => format!("standalone_source:{source_repository_path}"),
+                },
+            ),
         ]);
         let mut environment = BTreeMap::from([
             (
@@ -126,6 +158,7 @@ pub(super) fn go_semantic_variant_plans(
             identity: SemanticVariantId(execution.execution_id.clone()),
             dimensions,
             environment,
+            compiler_query,
             compiler_project: Some(RepositoryPath(
                 execution.invocation_anchor_repository_path.clone(),
             )),
@@ -267,6 +300,7 @@ fn go_variant_preference(
     bool,
     bool,
     bool,
+    bool,
     &str,
     &str,
     &[String],
@@ -278,6 +312,7 @@ fn go_variant_preference(
         cgo_enabled,
         build_tags,
         architecture,
+        query,
     } = variant
     else {
         unreachable!("Go semantic plans only retain Go variants");
@@ -292,6 +327,10 @@ fn go_variant_preference(
         );
     (
         !portable_baseline,
+        !matches!(
+            query,
+            IntentionalBoundaryProjectModelGoQuery::ModulePackages
+        ),
         !build_tags.is_empty(),
         *cgo_enabled,
         !matches!(
@@ -402,6 +441,7 @@ pub(super) fn typescript_semantic_variant_plans(
             identity: SemanticVariantId(execution.execution_id.clone()),
             dimensions,
             environment: BTreeMap::new(),
+            compiler_query: SemanticIndexerCompilerQuery::ProjectPackages,
             compiler_project: root_config_repository_path.clone().map(RepositoryPath),
             selected_documents: selected_source_repository_paths
                 .iter()
@@ -476,6 +516,7 @@ mod tests {
             cgo_enabled: false,
             build_tags: Vec::new(),
             architecture: IntentionalBoundaryProjectModelGoArchitecture::Default,
+            query: IntentionalBoundaryProjectModelGoQuery::ModulePackages,
         };
         empty_execution.target_count = 0;
         model.executions.push(empty_execution);
@@ -507,6 +548,7 @@ mod tests {
             cgo_enabled: false,
             build_tags: Vec::new(),
             architecture: IntentionalBoundaryProjectModelGoArchitecture::Default,
+            query: IntentionalBoundaryProjectModelGoQuery::ModulePackages,
         };
         model.targets[0].execution_id = "linux-amd64".to_string();
         model.targets[0].source_repository_paths = vec!["api/common.go".to_string()];
@@ -519,6 +561,7 @@ mod tests {
             cgo_enabled: false,
             build_tags: Vec::new(),
             architecture: IntentionalBoundaryProjectModelGoArchitecture::Default,
+            query: IntentionalBoundaryProjectModelGoQuery::ModulePackages,
         };
         let mut freebsd_target = model.targets[0].clone();
         freebsd_target.execution_id = freebsd.execution_id.clone();
@@ -542,6 +585,7 @@ mod tests {
             cgo_enabled: false,
             build_tags: Vec::new(),
             architecture: IntentionalBoundaryProjectModelGoArchitecture::Default,
+            query: IntentionalBoundaryProjectModelGoQuery::ModulePackages,
         };
         model.targets[0].execution_id = "linux-amd64".to_string();
         model.targets[0].source_repository_paths =
@@ -557,6 +601,7 @@ mod tests {
             cgo_enabled: false,
             build_tags: Vec::new(),
             architecture: IntentionalBoundaryProjectModelGoArchitecture::Default,
+            query: IntentionalBoundaryProjectModelGoQuery::ModulePackages,
         };
         let mut windows_target = model.targets[0].clone();
         windows_target.execution_id = windows.execution_id.clone();
@@ -573,6 +618,7 @@ mod tests {
             cgo_enabled: true,
             build_tags: Vec::new(),
             architecture: IntentionalBoundaryProjectModelGoArchitecture::Default,
+            query: IntentionalBoundaryProjectModelGoQuery::ModulePackages,
         };
         let mut cgo_target = model.targets[0].clone();
         cgo_target.execution_id = cgo.execution_id.clone();
@@ -591,6 +637,7 @@ mod tests {
             cgo_enabled: false,
             build_tags: Vec::new(),
             architecture: IntentionalBoundaryProjectModelGoArchitecture::Default,
+            query: IntentionalBoundaryProjectModelGoQuery::ModulePackages,
         };
         let mut redundant_target = model.targets[0].clone();
         redundant_target.execution_id = redundant.execution_id.clone();
@@ -621,6 +668,57 @@ mod tests {
         model.targets.reverse();
         let reordered = go_semantic_variant_plans(&model, &semantic_documents).unwrap();
         assert_eq!(plans, reordered);
+    }
+
+    #[test]
+    fn standalone_go_source_gets_a_named_file_compiler_world() {
+        let mut model = go_model();
+        model.executions[0].execution_id = "module-packages".to_string();
+        model.targets[0].execution_id = "module-packages".to_string();
+        model.targets[0].source_repository_paths = vec!["api/common.go".to_string()];
+        model.targets[0].ignored_source_repository_paths = vec!["plugins/generate.go".to_string()];
+        let mut standalone = model.executions[0].clone();
+        standalone.execution_id = "standalone-generator".to_string();
+        standalone.variant = IntentionalBoundaryProjectModelVariant::Go {
+            goos: "linux".to_string(),
+            goarch: "amd64".to_string(),
+            cgo_enabled: false,
+            build_tags: Vec::new(),
+            architecture: IntentionalBoundaryProjectModelGoArchitecture::Default,
+            query: IntentionalBoundaryProjectModelGoQuery::StandaloneSource {
+                source_repository_path: "plugins/generate.go".to_string(),
+            },
+        };
+        let mut target = model.targets[0].clone();
+        target.execution_id = standalone.execution_id.clone();
+        target.target_name = "standalone:plugins/generate.go".to_string();
+        target.source_repository_paths = vec!["plugins/generate.go".to_string()];
+        target.ignored_source_repository_paths.clear();
+        model.executions.push(standalone);
+        model.targets.push(target);
+        let semantic_documents = BTreeSet::from([
+            RepositoryPath("api/common.go".to_string()),
+            RepositoryPath("plugins/generate.go".to_string()),
+        ]);
+
+        let plans = go_semantic_variant_plans(&model, &semantic_documents).unwrap();
+        let standalone = plans
+            .iter()
+            .find(|plan| plan.identity.0 == "standalone-generator")
+            .unwrap();
+
+        assert_eq!(plans.len(), 2);
+        assert_eq!(
+            standalone.compiler_query,
+            SemanticIndexerCompilerQuery::ExactSource {
+                source_document: RepositoryPath("plugins/generate.go".to_string())
+            }
+        );
+        assert_eq!(
+            standalone.selected_documents,
+            BTreeSet::from([RepositoryPath("plugins/generate.go".to_string())])
+        );
+        assert!(standalone.ignored_documents.is_empty());
     }
 
     #[test]
@@ -788,9 +886,11 @@ mod tests {
                 environment_variable: "GOAMD64".to_string(),
                 value: "v3".to_string(),
             },
+            query: IntentionalBoundaryProjectModelGoQuery::ModulePackages,
         };
         IntentionalBoundaryProjectModelCensus {
-            schema_version: 8,
+            schema_version:
+                crate::benchmark::release::INTENTIONAL_BOUNDARY_PROJECT_MODEL_CENSUS_SCHEMA_VERSION,
             project_model_contract: "fixture".to_string(),
             repository: "example/repo".to_string(),
             revision: "a".repeat(40),

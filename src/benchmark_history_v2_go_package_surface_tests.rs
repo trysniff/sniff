@@ -2,8 +2,8 @@ use super::*;
 use crate::benchmark::release::{
     INTENTIONAL_BOUNDARY_PROJECT_MODEL_CENSUS_SCHEMA_VERSION,
     IntentionalBoundaryProjectModelExecution, IntentionalBoundaryProjectModelGoArchitecture,
-    IntentionalBoundaryProjectModelTarget, IntentionalBoundaryProjectModelUnresolvedReason,
-    IntentionalBoundaryProjectModelVariant,
+    IntentionalBoundaryProjectModelGoQuery, IntentionalBoundaryProjectModelTarget,
+    IntentionalBoundaryProjectModelUnresolvedReason, IntentionalBoundaryProjectModelVariant,
 };
 
 fn model(
@@ -26,6 +26,7 @@ fn model(
                     cgo_enabled: false,
                     build_tags: Vec::new(),
                     architecture: IntentionalBoundaryProjectModelGoArchitecture::Default,
+                    query: IntentionalBoundaryProjectModelGoQuery::ModulePackages,
                 },
                 equivalent_variants: Vec::new(),
                 invocation_anchor_repository_path: "go.mod".to_string(),
