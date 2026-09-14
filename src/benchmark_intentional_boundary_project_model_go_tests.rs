@@ -1303,24 +1303,28 @@ fn real_go_list_is_sandboxed_or_fails_as_typed_unavailable() {
                 .executions
                 .iter()
                 .find(|execution| {
-                    matches!(
-                        &execution.variant,
-                        IntentionalBoundaryProjectModelVariant::Go {
-                            goos,
-                            goarch,
-                            cgo_enabled: false,
-                            architecture: IntentionalBoundaryProjectModelGoArchitecture::Explicit {
-                                environment_variable,
-                                value,
-                            },
-                            ..
-                        } if goos == "linux"
-                            && goarch == "amd64"
-                            && environment_variable == "GOAMD64"
-                            && value == level
-                    )
+                    std::iter::once(&execution.variant)
+                        .chain(&execution.equivalent_variants)
+                        .any(|variant| {
+                            matches!(
+                                variant,
+                                IntentionalBoundaryProjectModelVariant::Go {
+                                    goos,
+                                    goarch,
+                                    cgo_enabled: false,
+                                    architecture: IntentionalBoundaryProjectModelGoArchitecture::Explicit {
+                                        environment_variable,
+                                        value,
+                                    },
+                                    ..
+                                } if goos == "linux"
+                                    && goarch == "amd64"
+                                    && environment_variable == "GOAMD64"
+                                    && value == level
+                            )
+                        })
                 })
-                .unwrap_or_else(|| panic!("missing Linux/amd64/{level} execution"));
+                .unwrap_or_else(|| panic!("missing Linux/amd64/{level} execution coverage"));
             let package = census
                 .targets
                 .iter()
