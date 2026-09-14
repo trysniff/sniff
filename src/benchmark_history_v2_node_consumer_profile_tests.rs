@@ -89,7 +89,7 @@ fn fixture() -> (
         .object_id
         .clone();
     let project_model = IntentionalBoundaryProjectModelCensus {
-        schema_version: 7,
+        schema_version: 8,
         project_model_contract: "fixture".to_string(),
         repository: repository.to_string(),
         revision,
@@ -115,6 +115,7 @@ fn fixture() -> (
                 ],
                 ignored_source_repository_paths: Vec::new(),
             },
+            equivalent_variants: Vec::new(),
             invocation_anchor_repository_path: "packages/pkg/package.json".to_string(),
             invocation_anchor_object_id: config_object_id,
             toolchain_identity_sha256: "a".repeat(64),
@@ -192,7 +193,7 @@ fn custom_fixture(
         .object_id
         .clone();
     let project_model = IntentionalBoundaryProjectModelCensus {
-        schema_version: 7,
+        schema_version: 8,
         project_model_contract: "fixture".to_string(),
         repository: repository.to_string(),
         revision,
@@ -220,6 +221,7 @@ fn custom_fixture(
                     .collect(),
                 ignored_source_repository_paths: Vec::new(),
             },
+            equivalent_variants: Vec::new(),
             invocation_anchor_repository_path: "packages/pkg/package.json".to_string(),
             invocation_anchor_object_id: manifest_object_id,
             toolchain_identity_sha256: "a".repeat(64),

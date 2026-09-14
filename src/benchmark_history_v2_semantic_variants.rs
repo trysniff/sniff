@@ -790,7 +790,7 @@ mod tests {
             },
         };
         IntentionalBoundaryProjectModelCensus {
-            schema_version: 7,
+            schema_version: 8,
             project_model_contract: "fixture".to_string(),
             repository: "example/repo".to_string(),
             revision: "a".repeat(40),
@@ -799,6 +799,7 @@ mod tests {
                 execution_id: "go-linux-amd64".to_string(),
                 provider: IntentionalBoundaryProjectModelProvider::GoList,
                 variant,
+                equivalent_variants: Vec::new(),
                 invocation_anchor_repository_path: "go.mod".to_string(),
                 invocation_anchor_object_id: "c".repeat(40),
                 toolchain_identity_sha256: "d".repeat(64),

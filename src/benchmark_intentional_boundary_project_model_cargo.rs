@@ -162,27 +162,11 @@ pub fn parse_intentional_boundary_cargo_metadata(
         &covered_manifests.iter().cloned().collect::<Vec<_>>(),
         &targets,
     )?;
-    let execution_id = compute_execution_id(
-        Provider::CargoMetadata,
-        invocation_manifest_repository_path,
-        &invocation_entry.object_id,
-        toolchain_identity_sha256,
-        CARGO_COMMAND_CONTRACT,
-        &super::IntentionalBoundaryProjectModelVariant::Default,
-        &normalized_model_sha256,
-    )?;
-    for target in &mut targets {
-        target.execution_id = execution_id.clone();
-        target.target_id = compute_target_id(target)?;
-    }
-    targets.sort();
-    if targets.windows(2).any(|pair| pair[0] >= pair[1]) {
-        return Err("Cargo metadata produced duplicate normalized targets".to_string());
-    }
-    let execution = IntentionalBoundaryProjectModelExecution {
-        execution_id,
+    let mut execution = IntentionalBoundaryProjectModelExecution {
+        execution_id: String::new(),
         provider: Provider::CargoMetadata,
         variant: super::IntentionalBoundaryProjectModelVariant::Default,
+        equivalent_variants: Vec::new(),
         invocation_anchor_repository_path: invocation_manifest_repository_path.to_string(),
         invocation_anchor_object_id: invocation_entry.object_id.clone(),
         toolchain_identity_sha256: toolchain_identity_sha256.to_string(),
@@ -191,6 +175,16 @@ pub fn parse_intentional_boundary_cargo_metadata(
         covered_manifest_repository_paths: covered_manifests.into_iter().collect(),
         target_count: targets.len(),
     };
+    execution.execution_id = compute_execution_id(&execution)?;
+    let execution_id = execution.execution_id.clone();
+    for target in &mut targets {
+        target.execution_id = execution_id.clone();
+        target.target_id = compute_target_id(target)?;
+    }
+    targets.sort();
+    if targets.windows(2).any(|pair| pair[0] >= pair[1]) {
+        return Err("Cargo metadata produced duplicate normalized targets".to_string());
+    }
     finish_project_model_census(inventory, vec![execution], targets)
 }
 

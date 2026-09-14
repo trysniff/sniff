@@ -26,7 +26,7 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::{Component, Path};
 
-pub(super) const PROJECT_MODEL_CONTRACT: &str = "sniffbench-intentional-boundary-project-model-v7";
+pub(super) const PROJECT_MODEL_CONTRACT: &str = "sniffbench-intentional-boundary-project-model-v8";
 
 #[derive(Serialize)]
 struct NormalizedTarget<'a> {
@@ -62,7 +62,7 @@ pub(super) fn compute_normalized_model_sha256(
         .collect::<Result<Vec<_>, String>>()?;
     normalized_targets.sort();
     hash_json(&(
-        "sniffbench-intentional-boundary-normalized-project-model-v7",
+        "sniffbench-intentional-boundary-normalized-project-model-v8",
         provider,
         covered_manifest_repository_paths,
         normalized_targets,
@@ -70,25 +70,20 @@ pub(super) fn compute_normalized_model_sha256(
 }
 
 pub(super) fn compute_execution_id(
-    provider: Provider,
-    invocation_anchor_repository_path: &str,
-    invocation_anchor_object_id: &str,
-    toolchain_identity_sha256: &str,
-    command_contract: &str,
-    variant: &IntentionalBoundaryProjectModelVariant,
-    normalized_model_sha256: &str,
+    execution: &IntentionalBoundaryProjectModelExecution,
 ) -> Result<String, String> {
     Ok(format!(
-        "ibpme-v7:{}",
+        "ibpme-v8:{}",
         hash_json(&(
-            "sniffbench-intentional-boundary-project-model-execution-v7",
-            provider,
-            invocation_anchor_repository_path,
-            invocation_anchor_object_id,
-            toolchain_identity_sha256,
-            command_contract,
-            variant,
-            normalized_model_sha256,
+            "sniffbench-intentional-boundary-project-model-execution-v8",
+            execution.provider,
+            &execution.invocation_anchor_repository_path,
+            &execution.invocation_anchor_object_id,
+            &execution.toolchain_identity_sha256,
+            &execution.command_contract,
+            &execution.variant,
+            &execution.equivalent_variants,
+            &execution.normalized_model_sha256,
         ))?
     ))
 }
@@ -97,9 +92,9 @@ pub(super) fn compute_target_id(
     target: &IntentionalBoundaryProjectModelTarget,
 ) -> Result<String, String> {
     Ok(format!(
-        "ibpmt-v7:{}",
+        "ibpmt-v8:{}",
         hash_json(&(
-            "sniffbench-intentional-boundary-project-model-target-v7",
+            "sniffbench-intentional-boundary-project-model-target-v8",
             &target.execution_id,
             normalized_target(target),
         ))?
@@ -170,6 +165,7 @@ pub fn validate_intentional_boundary_project_model_census_commitment(
         || census.inventory_sha256 != inventory.inventory_sha256
         || census.executions.windows(2).any(|pair| pair[0] >= pair[1])
         || census.targets.windows(2).any(|pair| pair[0] >= pair[1])
+        || !unique_go_variant_coverage(&census.executions)
     {
         return Err("intentional-boundary project-model identity changed".to_string());
     }
@@ -184,6 +180,7 @@ pub fn validate_intentional_boundary_project_model_census_commitment(
             || !is_sha256(&execution.toolchain_identity_sha256)
             || !is_sha256(&execution.normalized_model_sha256)
             || !valid_execution_variant(execution.provider, &execution.variant)
+            || !valid_equivalent_variants(execution)
             || (execution.provider == Provider::TypeScriptCompilerApi
                 && !validate_typescript_variant_inventory(inventory, &execution.variant))
         {
@@ -224,15 +221,7 @@ pub fn validate_intentional_boundary_project_model_census_commitment(
                 &execution.covered_manifest_repository_paths,
                 &targets,
             )? != execution.normalized_model_sha256
-            || compute_execution_id(
-                execution.provider,
-                &execution.invocation_anchor_repository_path,
-                &execution.invocation_anchor_object_id,
-                &execution.toolchain_identity_sha256,
-                &execution.command_contract,
-                &execution.variant,
-                &execution.normalized_model_sha256,
-            )? != execution.execution_id
+            || compute_execution_id(execution)? != execution.execution_id
             || (execution.provider == Provider::GradleToolingApi
                 && !validate_gradle_variant_inventory(inventory, execution, &targets))
         {
@@ -304,6 +293,42 @@ pub fn validate_intentional_boundary_project_model_census_commitment(
         return Err("intentional-boundary project-model census commitment changed".to_string());
     }
     Ok(())
+}
+
+fn valid_equivalent_variants(execution: &IntentionalBoundaryProjectModelExecution) -> bool {
+    if execution.equivalent_variants.is_empty() {
+        return true;
+    }
+    execution.provider == Provider::GoList
+        && execution
+            .equivalent_variants
+            .windows(2)
+            .all(|pair| pair[0] < pair[1])
+        && execution
+            .equivalent_variants
+            .first()
+            .is_some_and(|variant| execution.variant < *variant)
+        && execution
+            .equivalent_variants
+            .iter()
+            .all(|variant| valid_execution_variant(Provider::GoList, variant))
+}
+
+fn unique_go_variant_coverage(executions: &[IntentionalBoundaryProjectModelExecution]) -> bool {
+    let mut covered = BTreeSet::new();
+    executions.iter().all(|execution| {
+        if execution.provider != Provider::GoList {
+            return true;
+        }
+        std::iter::once(&execution.variant)
+            .chain(&execution.equivalent_variants)
+            .all(|variant| {
+                covered.insert((
+                    execution.invocation_anchor_repository_path.as_str(),
+                    variant,
+                ))
+            })
+    })
 }
 
 fn validate_target_classification(

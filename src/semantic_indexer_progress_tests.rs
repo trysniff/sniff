@@ -83,7 +83,7 @@ fn qualified_world_recovery_reports_exact_progress_identity() {
     fs::create_dir(&family_root).unwrap();
     let world = digest('a');
     let world_root = family_root.join(&world);
-    let variant_identity = "ibpme-v7:fixture".to_string();
+    let variant_identity = "ibpme-v8:fixture".to_string();
     let dimensions = BTreeMap::from([
         ("cgo_enabled".to_string(), "false".to_string()),
         ("goarch".to_string(), "amd64".to_string()),

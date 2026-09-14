@@ -431,35 +431,27 @@ fn normalize_world(
         &covered_manifest_repository_paths,
         &provisional_targets,
     )?;
-    let execution_id = compute_execution_id(
-        Provider::TypeScriptCompilerApi,
-        &anchor_path,
-        &anchor.object_id,
-        toolchain_identity_sha256,
-        TYPESCRIPT_PROJECT_MODEL_COMMAND_CONTRACT,
-        &variant,
-        &normalized_model_sha256,
-    )?;
+    let mut execution = IntentionalBoundaryProjectModelExecution {
+        execution_id: String::new(),
+        provider: Provider::TypeScriptCompilerApi,
+        variant,
+        equivalent_variants: Vec::new(),
+        invocation_anchor_repository_path: anchor_path,
+        invocation_anchor_object_id: anchor.object_id.clone(),
+        toolchain_identity_sha256: toolchain_identity_sha256.to_string(),
+        command_contract: TYPESCRIPT_PROJECT_MODEL_COMMAND_CONTRACT.to_string(),
+        normalized_model_sha256,
+        covered_manifest_repository_paths,
+        target_count: provisional_targets.len(),
+    };
+    execution.execution_id = compute_execution_id(&execution)?;
+    let execution_id = execution.execution_id.clone();
     for target in &mut provisional_targets {
         target.execution_id = execution_id.clone();
         target.target_id = compute_target_id(target)?;
     }
     provisional_targets.sort();
-    Ok((
-        IntentionalBoundaryProjectModelExecution {
-            execution_id,
-            provider: Provider::TypeScriptCompilerApi,
-            variant,
-            invocation_anchor_repository_path: anchor_path,
-            invocation_anchor_object_id: anchor.object_id.clone(),
-            toolchain_identity_sha256: toolchain_identity_sha256.to_string(),
-            command_contract: TYPESCRIPT_PROJECT_MODEL_COMMAND_CONTRACT.to_string(),
-            normalized_model_sha256,
-            covered_manifest_repository_paths,
-            target_count: provisional_targets.len(),
-        },
-        provisional_targets,
-    ))
+    Ok((execution, provisional_targets))
 }
 
 fn normalize_project(

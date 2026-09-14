@@ -14,8 +14,18 @@ use super::variants::{
     parse_go_dist_variants, stage_go_constraint_invocation,
 };
 use super::*;
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::thread;
+
+const GO_LIST_PARALLELISM: usize = 4;
+type GoListClasses = BTreeMap<(String, Vec<Vec<u8>>), GoListClass>;
+
+struct GoListClass {
+    stdout: String,
+    variants: Vec<IntentionalBoundaryProjectModelVariant>,
+}
 
 struct GoListCallRuntime(PathBuf);
 
@@ -38,6 +48,7 @@ impl Drop for GoListCallRuntime {
 pub(super) struct GoListExecutionOutput {
     pub(super) toolchain_identity_sha256: String,
     pub(super) variant: IntentionalBoundaryProjectModelVariant,
+    pub(super) equivalent_variants: Vec<IntentionalBoundaryProjectModelVariant>,
     pub(super) stdout: String,
 }
 
@@ -210,12 +221,13 @@ where
             ));
         }
         for output in outputs {
-            let contribution = parse_intentional_boundary_go_list(
+            let contribution = parse_intentional_boundary_go_list_with_equivalents(
                 execution_root,
                 inventory,
                 manifest_path,
                 &output.toolchain_identity_sha256,
                 output.variant,
+                output.equivalent_variants,
                 output.stdout.as_bytes(),
             )
             .map_err(|detail| {
@@ -425,73 +437,211 @@ fn run_go_lists(
             )
         },
     )?;
-    let mut outputs = Vec::with_capacity(variants.len());
-    for variant in variants {
-        let IntentionalBoundaryProjectModelVariant::Go {
-            goos,
-            goarch,
-            cgo_enabled,
-            build_tags,
-            architecture,
-        } = &variant
-        else {
-            unreachable!("Go platform planning only emits Go variants");
-        };
-        let mut logical_command = vec![
-            "go".to_string(),
-            "-C".to_string(),
-            module_directory.to_string(),
-            "list".to_string(),
-            "-json".to_string(),
-            "-find".to_string(),
-            "-mod=readonly".to_string(),
-            "-buildvcs=false".to_string(),
-        ];
-        if !build_tags.is_empty() {
-            logical_command.push(format!("-tags={}", build_tags.join(",")));
-        }
-        logical_command.push("./...".to_string());
-        let mut explicit_context = vec![
-            (
-                "CGO_ENABLED".to_string(),
-                if *cgo_enabled { "1" } else { "0" }.to_string(),
-            ),
-            ("GOARCH".to_string(), goarch.clone()),
-            ("GOOS".to_string(), goos.clone()),
-        ];
-        if let IntentionalBoundaryProjectModelGoArchitecture::Explicit {
-            environment_variable,
-            value,
-        } = architecture
-        {
-            explicit_context.push((environment_variable.clone(), value.clone()));
-        }
-        let list_execution = run_go_project_model_command(GoProjectModelCommand {
-            root,
-            cache: &cache,
-            manifest_repository_path,
-            logical_command,
-            explicit_context: &explicit_context,
-            dependency_preparation_identity: &dependency_preparation_identity,
-            nonzero_kind: ProjectModelDerivationErrorKind::ProviderRejectedRepository,
-            label: "sandboxed go list",
+    run_go_variant_classes(
+        root,
+        &cache,
+        manifest_repository_path,
+        module_directory,
+        &dependency_preparation_identity,
+        &platform_execution.toolchain_identity_sha256,
+        variants,
+    )
+}
+
+fn run_go_variant_classes(
+    root: &Path,
+    cache: &Path,
+    manifest_repository_path: &str,
+    module_directory: &str,
+    dependency_preparation_identity: &str,
+    expected_toolchain_identity_sha256: &str,
+    variants: Vec<IntentionalBoundaryProjectModelVariant>,
+) -> Result<Vec<GoListExecutionOutput>, ProjectModelDerivationError> {
+    let mut classes = GoListClasses::new();
+    for chunk in variants.chunks(GO_LIST_PARALLELISM) {
+        let outputs = thread::scope(|scope| {
+            let handles = chunk
+                .iter()
+                .cloned()
+                .map(|variant| {
+                    scope.spawn(move || {
+                        run_go_variant(
+                            root,
+                            cache,
+                            manifest_repository_path,
+                            module_directory,
+                            dependency_preparation_identity,
+                            expected_toolchain_identity_sha256,
+                            variant,
+                        )
+                    })
+                })
+                .collect::<Vec<_>>();
+            let mut outputs = Vec::with_capacity(handles.len());
+            for handle in handles {
+                outputs.push(handle.join().map_err(|_| {
+                    go_error(
+                        ProjectModelDerivationErrorKind::InfrastructureFailed,
+                        IntentionalBoundaryProjectModelFailurePhase::Execution,
+                        Some(manifest_repository_path),
+                        "parallel go list worker panicked",
+                    )
+                })??);
+            }
+            Ok::<_, ProjectModelDerivationError>(outputs)
         })?;
-        if platform_execution.toolchain_identity_sha256 != list_execution.toolchain_identity_sha256
-        {
-            return Err(go_error(
-                ProjectModelDerivationErrorKind::InfrastructureFailed,
-                IntentionalBoundaryProjectModelFailurePhase::IntegrityVerification,
-                Some(manifest_repository_path),
-                "Go toolchain identity changed between platform discovery and package selection",
-            ));
+        for output in outputs {
+            insert_go_list_output(&mut classes, output).map_err(|detail| {
+                go_error(
+                    ProjectModelDerivationErrorKind::ProviderOutputIncomplete,
+                    IntentionalBoundaryProjectModelFailurePhase::OutputValidation,
+                    Some(manifest_repository_path),
+                    detail,
+                )
+            })?;
         }
-        outputs.push(GoListExecutionOutput {
-            toolchain_identity_sha256: list_execution.toolchain_identity_sha256,
-            variant,
-            stdout: list_execution.output.stdout,
-        });
     }
+    finish_go_list_classes(classes, manifest_repository_path)
+}
+
+fn insert_go_list_output(
+    classes: &mut GoListClasses,
+    output: GoListExecutionOutput,
+) -> Result<(), String> {
+    let GoListExecutionOutput {
+        toolchain_identity_sha256,
+        variant,
+        equivalent_variants,
+        stdout,
+    } = output;
+    let projection = canonical_go_list_projection(&stdout)?;
+    let class = classes
+        .entry((toolchain_identity_sha256, projection))
+        .or_insert_with(|| GoListClass {
+            stdout,
+            variants: Vec::new(),
+        });
+    class.variants.push(variant);
+    class.variants.extend(equivalent_variants);
+    Ok(())
+}
+
+fn finish_go_list_classes(
+    classes: GoListClasses,
+    manifest_repository_path: &str,
+) -> Result<Vec<GoListExecutionOutput>, ProjectModelDerivationError> {
+    let mut outputs = classes
+        .into_iter()
+        .map(|((toolchain_identity_sha256, _), class)| {
+            let GoListClass {
+                stdout,
+                mut variants,
+            } = class;
+            variants.sort();
+            if variants.windows(2).any(|pair| pair[0] >= pair[1]) {
+                return Err(go_error(
+                    ProjectModelDerivationErrorKind::ProviderOutputIncomplete,
+                    IntentionalBoundaryProjectModelFailurePhase::CensusAssembly,
+                    Some(manifest_repository_path),
+                    "Go equivalent-variant class repeated a compiler context",
+                ));
+            }
+            let variant = variants.remove(0);
+            Ok(GoListExecutionOutput {
+                toolchain_identity_sha256,
+                variant,
+                equivalent_variants: variants,
+                stdout,
+            })
+        })
+        .collect::<Result<Vec<_>, ProjectModelDerivationError>>()?;
+    outputs.sort_by(|left, right| left.variant.cmp(&right.variant));
     Ok(outputs)
+}
+
+#[cfg(test)]
+pub(super) fn collapse_go_list_outputs(
+    outputs: Vec<GoListExecutionOutput>,
+) -> Result<Vec<GoListExecutionOutput>, String> {
+    let mut classes = GoListClasses::new();
+    for output in outputs {
+        insert_go_list_output(&mut classes, output)?;
+    }
+    finish_go_list_classes(classes, "go.mod").map_err(legacy_project_model_error)
+}
+
+fn run_go_variant(
+    root: &Path,
+    cache: &Path,
+    manifest_repository_path: &str,
+    module_directory: &str,
+    dependency_preparation_identity: &str,
+    expected_toolchain_identity_sha256: &str,
+    variant: IntentionalBoundaryProjectModelVariant,
+) -> Result<GoListExecutionOutput, ProjectModelDerivationError> {
+    let IntentionalBoundaryProjectModelVariant::Go {
+        goos,
+        goarch,
+        cgo_enabled,
+        build_tags,
+        architecture,
+    } = &variant
+    else {
+        unreachable!("Go platform planning only emits Go variants");
+    };
+    let mut logical_command = vec![
+        "go".to_string(),
+        "-C".to_string(),
+        module_directory.to_string(),
+        "list".to_string(),
+        "-json".to_string(),
+        "-find".to_string(),
+        "-mod=readonly".to_string(),
+        "-buildvcs=false".to_string(),
+    ];
+    if !build_tags.is_empty() {
+        logical_command.push(format!("-tags={}", build_tags.join(",")));
+    }
+    logical_command.push("./...".to_string());
+    let mut explicit_context = vec![
+        (
+            "CGO_ENABLED".to_string(),
+            if *cgo_enabled { "1" } else { "0" }.to_string(),
+        ),
+        ("GOARCH".to_string(), goarch.clone()),
+        ("GOOS".to_string(), goos.clone()),
+    ];
+    if let IntentionalBoundaryProjectModelGoArchitecture::Explicit {
+        environment_variable,
+        value,
+    } = architecture
+    {
+        explicit_context.push((environment_variable.clone(), value.clone()));
+    }
+    let list_execution = run_go_project_model_command(GoProjectModelCommand {
+        root,
+        cache,
+        manifest_repository_path,
+        logical_command,
+        explicit_context: &explicit_context,
+        dependency_preparation_identity,
+        nonzero_kind: ProjectModelDerivationErrorKind::ProviderRejectedRepository,
+        label: "sandboxed go list",
+    })?;
+    if expected_toolchain_identity_sha256 != list_execution.toolchain_identity_sha256 {
+        return Err(go_error(
+            ProjectModelDerivationErrorKind::InfrastructureFailed,
+            IntentionalBoundaryProjectModelFailurePhase::IntegrityVerification,
+            Some(manifest_repository_path),
+            "Go toolchain identity changed between platform discovery and package selection",
+        ));
+    }
+    Ok(GoListExecutionOutput {
+        toolchain_identity_sha256: list_execution.toolchain_identity_sha256,
+        variant,
+        equivalent_variants: Vec::new(),
+        stdout: list_execution.output.stdout,
+    })
 }
 
 fn run_go_project_model_command(

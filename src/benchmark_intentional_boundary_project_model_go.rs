@@ -14,12 +14,12 @@ use super::{
     IntentionalBoundaryProjectModelVariant, IntentionalBoundaryRepositoryInventory,
     validate_intentional_boundary_repository_inventory,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
-pub(super) const GO_LIST_COMMAND_CONTRACT: &str = "go-mod-download-then-offline-list-json-find-mod-readonly-buildvcs-off-exact-constraint-variants-v5";
+pub(super) const GO_LIST_COMMAND_CONTRACT: &str = "go-mod-download-then-offline-list-json-find-mod-readonly-buildvcs-off-exact-equivalent-constraint-variants-v6";
 
 #[path = "benchmark_intentional_boundary_project_model_go_variants.rs"]
 mod variants;
@@ -32,7 +32,9 @@ mod runtime;
 pub use runtime::census_intentional_boundary_go_project_models;
 pub(super) use runtime::census_intentional_boundary_go_project_models_typed;
 #[cfg(test)]
-use runtime::{GoListExecutionOutput, census_go_project_models_with_executor};
+use runtime::{
+    GoListExecutionOutput, census_go_project_models_with_executor, collapse_go_list_outputs,
+};
 
 #[path = "benchmark_intentional_boundary_project_model_go_dependency.rs"]
 mod dependency;
@@ -48,7 +50,7 @@ use variants::{
 mod validation;
 pub use validation::validate_intentional_boundary_go_list;
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 struct GoListPackage {
     #[serde(rename = "Dir")]
     dir: String,
@@ -70,7 +72,7 @@ struct GoListPackage {
     error: Option<GoListError>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 struct GoListModule {
     #[serde(rename = "Path")]
     path: String,
@@ -84,7 +86,7 @@ struct GoListModule {
     main: bool,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 struct GoListError {
     #[serde(rename = "Err")]
     message: String,
@@ -98,12 +100,46 @@ struct GoPackageContext<'a> {
     revision: &'a str,
 }
 
+fn canonical_go_list_projection(stdout: &str) -> Result<Vec<Vec<u8>>, String> {
+    let mut packages = serde_json::Deserializer::from_str(stdout)
+        .into_iter::<GoListPackage>()
+        .map(|package| {
+            let package = package
+                .map_err(|error| format!("failed to parse concatenated go list JSON: {error}"))?;
+            serde_json::to_vec(&package)
+                .map_err(|error| format!("failed to normalize go list JSON: {error}"))
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    packages.sort();
+    Ok(packages)
+}
+
 pub fn parse_intentional_boundary_go_list(
     root: &Path,
     inventory: &IntentionalBoundaryRepositoryInventory,
     invocation_manifest_repository_path: &str,
     toolchain_identity_sha256: &str,
     variant: IntentionalBoundaryProjectModelVariant,
+    stdout: &[u8],
+) -> Result<IntentionalBoundaryProjectModelCensus, String> {
+    parse_intentional_boundary_go_list_with_equivalents(
+        root,
+        inventory,
+        invocation_manifest_repository_path,
+        toolchain_identity_sha256,
+        variant,
+        Vec::new(),
+        stdout,
+    )
+}
+
+fn parse_intentional_boundary_go_list_with_equivalents(
+    root: &Path,
+    inventory: &IntentionalBoundaryRepositoryInventory,
+    invocation_manifest_repository_path: &str,
+    toolchain_identity_sha256: &str,
+    variant: IntentionalBoundaryProjectModelVariant,
+    equivalent_variants: Vec<IntentionalBoundaryProjectModelVariant>,
     stdout: &[u8],
 ) -> Result<IntentionalBoundaryProjectModelCensus, String> {
     if !is_sha256(toolchain_identity_sha256) {
@@ -114,6 +150,20 @@ pub fn parse_intentional_boundary_go_list(
     }
     if !valid_execution_variant(Provider::GoList, &variant) {
         return Err("Go project-model execution has an invalid build variant".to_string());
+    }
+    if equivalent_variants
+        .windows(2)
+        .any(|pair| pair[0] >= pair[1])
+        || equivalent_variants
+            .first()
+            .is_some_and(|equivalent| variant >= *equivalent)
+        || equivalent_variants
+            .iter()
+            .any(|equivalent| !valid_execution_variant(Provider::GoList, equivalent))
+    {
+        return Err(
+            "Go project-model execution has an invalid equivalent-variant ledger".to_string(),
+        );
     }
     let canonical_root = canonical_path(root, "Go project-model repository root")?;
     let invocation_entry = regular_inventory_entry(
@@ -156,27 +206,11 @@ pub fn parse_intentional_boundary_go_list(
     let covered_manifests = vec![invocation_manifest_repository_path.to_string()];
     let normalized_model_sha256 =
         compute_normalized_model_sha256(Provider::GoList, &covered_manifests, &targets)?;
-    let execution_id = compute_execution_id(
-        Provider::GoList,
-        invocation_manifest_repository_path,
-        &invocation_entry.object_id,
-        toolchain_identity_sha256,
-        GO_LIST_COMMAND_CONTRACT,
-        &variant,
-        &normalized_model_sha256,
-    )?;
-    for target in &mut targets {
-        target.execution_id = execution_id.clone();
-        target.target_id = compute_target_id(target)?;
-    }
-    targets.sort();
-    if targets.windows(2).any(|pair| pair[0] >= pair[1]) {
-        return Err("go list produced duplicate normalized packages".to_string());
-    }
-    let execution = IntentionalBoundaryProjectModelExecution {
-        execution_id,
+    let mut execution = IntentionalBoundaryProjectModelExecution {
+        execution_id: String::new(),
         provider: Provider::GoList,
         variant,
+        equivalent_variants,
         invocation_anchor_repository_path: invocation_manifest_repository_path.to_string(),
         invocation_anchor_object_id: invocation_entry.object_id.clone(),
         toolchain_identity_sha256: toolchain_identity_sha256.to_string(),
@@ -185,6 +219,16 @@ pub fn parse_intentional_boundary_go_list(
         covered_manifest_repository_paths: covered_manifests,
         target_count: targets.len(),
     };
+    execution.execution_id = compute_execution_id(&execution)?;
+    let execution_id = execution.execution_id.clone();
+    for target in &mut targets {
+        target.execution_id = execution_id.clone();
+        target.target_id = compute_target_id(target)?;
+    }
+    targets.sort();
+    if targets.windows(2).any(|pair| pair[0] >= pair[1]) {
+        return Err("go list produced duplicate normalized packages".to_string());
+    }
     finish_project_model_census(inventory, vec![execution], targets)
 }
 
