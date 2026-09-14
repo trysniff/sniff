@@ -11,6 +11,28 @@ use std::path::Path;
 use std::process::Command;
 
 #[test]
+fn project_model_stage_errors_retain_the_typed_provider() {
+    let error = super::super::intentional_boundary_project_model_outcome::project_model_error(
+        super::super::intentional_boundary_project_model_outcome::ProjectModelDerivationErrorKind::ProviderOutputIncomplete,
+        super::super::IntentionalBoundaryProjectModelProvider::TypeScriptCompilerApi,
+        super::super::IntentionalBoundaryProjectModelFailurePhase::OutputValidation,
+        Some("tsconfig.json"),
+        "missing exact source world",
+    );
+
+    let stage_error = project_model_stage_error(error);
+
+    assert_eq!(
+        stage_error.kind,
+        HistoricalV2SlotStageErrorKind::InfrastructureFailed
+    );
+    assert_eq!(
+        stage_error.detail,
+        "historical-v2 TypeScript project model failed: missing exact source world"
+    );
+}
+
+#[test]
 fn typescript_named_reexport_commits_exposure_and_compiler_anchor() {
     let source = b"export { internal as publicName } from \"./dep\";\n";
 
