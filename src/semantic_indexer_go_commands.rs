@@ -319,6 +319,9 @@ fn validate_go_compiler_patterns(
             }
             Ok(patterns)
         }
+        crate::semantic_index::SemanticIndexerCompilerQuery::ExactSources { .. } => {
+            Err("Go compiler shard received a TypeScript exact-sources query".to_string())
+        }
     }
 }
 

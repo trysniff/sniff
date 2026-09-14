@@ -392,6 +392,7 @@ pub(super) fn valid_execution_variant(
             Provider::TypeScriptCompilerApi,
             IntentionalBoundaryProjectModelVariant::TypeScript {
                 root_config_repository_path,
+                root_source_repository_paths,
                 compiler_version,
                 projects,
                 selected_source_repository_paths,
@@ -400,6 +401,10 @@ pub(super) fn valid_execution_variant(
         ) => {
             !compiler_version.trim().is_empty()
                 && !projects.is_empty()
+                && !root_source_repository_paths.is_empty()
+                && root_source_repository_paths
+                    .windows(2)
+                    .all(|pair| pair[0] < pair[1])
                 && projects.windows(2).all(|pair| pair[0] < pair[1])
                 && selected_source_repository_paths
                     .windows(2)
@@ -410,6 +415,9 @@ pub(super) fn valid_execution_variant(
                 && selected_source_repository_paths
                     .iter()
                     .all(|path| ignored_source_repository_paths.binary_search(path).is_err())
+                && root_source_repository_paths
+                    .iter()
+                    .all(|path| selected_source_repository_paths.binary_search(path).is_ok())
                 && match root_config_repository_path {
                     Some(root) => projects
                         .iter()

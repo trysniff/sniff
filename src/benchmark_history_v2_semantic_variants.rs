@@ -402,6 +402,7 @@ pub(super) fn typescript_semantic_variant_plans(
         }
         let IntentionalBoundaryProjectModelVariant::TypeScript {
             root_config_repository_path,
+            root_source_repository_paths,
             compiler_version,
             projects,
             selected_source_repository_paths,
@@ -441,7 +442,16 @@ pub(super) fn typescript_semantic_variant_plans(
             identity: SemanticVariantId(execution.execution_id.clone()),
             dimensions,
             environment: BTreeMap::new(),
-            compiler_query: SemanticIndexerCompilerQuery::ProjectPackages,
+            compiler_query: match root_config_repository_path {
+                Some(_) => SemanticIndexerCompilerQuery::ProjectPackages,
+                None => SemanticIndexerCompilerQuery::ExactSources {
+                    source_documents: root_source_repository_paths
+                        .iter()
+                        .cloned()
+                        .map(RepositoryPath)
+                        .collect(),
+                },
+            },
             compiler_project: root_config_repository_path.clone().map(RepositoryPath),
             selected_documents: selected_source_repository_paths
                 .iter()
@@ -842,6 +852,7 @@ mod tests {
         execution.provider = IntentionalBoundaryProjectModelProvider::TypeScriptCompilerApi;
         execution.variant = IntentionalBoundaryProjectModelVariant::TypeScript {
             root_config_repository_path: Some("tsconfig.json".to_string()),
+            root_source_repository_paths: vec!["src/index.ts".to_string()],
             compiler_version: "5.6.2".to_string(),
             projects: vec![
                 crate::benchmark::release::IntentionalBoundaryProjectModelTypeScriptProject {
@@ -873,6 +884,45 @@ mod tests {
         assert_eq!(
             plans[0].compiler_project,
             Some(RepositoryPath("tsconfig.json".to_string()))
+        );
+    }
+
+    #[test]
+    fn typescript_loose_plan_retains_its_exact_root_sources() {
+        let mut model = go_model();
+        let execution = &mut model.executions[0];
+        execution.execution_id = "typescript-loose-world".to_string();
+        execution.provider = IntentionalBoundaryProjectModelProvider::TypeScriptCompilerApi;
+        execution.variant = IntentionalBoundaryProjectModelVariant::TypeScript {
+            root_config_repository_path: None,
+            root_source_repository_paths: vec!["src/index.test.ts".to_string()],
+            compiler_version: "5.6.2".to_string(),
+            projects: vec![
+                crate::benchmark::release::IntentionalBoundaryProjectModelTypeScriptProject {
+                    config_repository_path: None,
+                    config_object_id: None,
+                    config_reads: Vec::new(),
+                    project_references: Vec::new(),
+                    effective_compiler_options_json: r#"{"noEmit":true}"#.to_string(),
+                    source_repository_paths: vec!["src/index.test.ts".to_string()],
+                },
+            ],
+            selected_source_repository_paths: vec!["src/index.test.ts".to_string()],
+            ignored_source_repository_paths: vec!["src/index.ts".to_string()],
+        };
+        let target = &mut model.targets[0];
+        target.execution_id = execution.execution_id.clone();
+        target.provider = IntentionalBoundaryProjectModelProvider::TypeScriptCompilerApi;
+
+        let plans = typescript_semantic_variant_plans(&model).unwrap();
+
+        assert_eq!(plans.len(), 1);
+        assert_eq!(plans[0].compiler_project, None);
+        assert_eq!(
+            plans[0].compiler_query,
+            SemanticIndexerCompilerQuery::ExactSources {
+                source_documents: BTreeSet::from([RepositoryPath("src/index.test.ts".to_string())])
+            }
         );
     }
 

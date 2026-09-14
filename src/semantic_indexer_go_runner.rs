@@ -514,6 +514,14 @@ async fn run_go_compiler_world(
                 )
             })?
         }
+        SemanticIndexerCompilerQuery::ExactSources { .. } => {
+            return Err(indexer_failure(
+                spec,
+                SemanticIndexerRunFailureKind::InvalidInput,
+                SemanticIndexerRunPhase::RepositoryValidation,
+                "Go compiler variant received a TypeScript exact-sources query",
+            ));
+        }
     };
     let inventory_arguments = vec![
         "-C".to_string(),

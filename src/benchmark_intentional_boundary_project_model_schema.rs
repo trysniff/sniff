@@ -2,7 +2,7 @@ use super::{IntentionalBoundaryManifestDeclarationKind, IntentionalBoundaryManif
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-pub const INTENTIONAL_BOUNDARY_PROJECT_MODEL_CENSUS_SCHEMA_VERSION: u32 = 9;
+pub const INTENTIONAL_BOUNDARY_PROJECT_MODEL_CENSUS_SCHEMA_VERSION: u32 = 10;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -94,6 +94,7 @@ pub enum IntentionalBoundaryProjectModelVariant {
     },
     TypeScript {
         root_config_repository_path: Option<String>,
+        root_source_repository_paths: Vec<String>,
         compiler_version: String,
         projects: Vec<IntentionalBoundaryProjectModelTypeScriptProject>,
         selected_source_repository_paths: Vec<String>,
