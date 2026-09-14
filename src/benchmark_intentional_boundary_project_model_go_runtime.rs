@@ -45,6 +45,7 @@ impl Drop for GoListCallRuntime {
     }
 }
 
+#[derive(Debug)]
 pub(super) struct GoListExecutionOutput {
     pub(super) toolchain_identity_sha256: String,
     pub(super) variant: IntentionalBoundaryProjectModelVariant,
@@ -491,6 +492,25 @@ fn run_go_variant_classes(
             Ok::<_, ProjectModelDerivationError>(outputs)
         })?;
         for output in outputs {
+            let valid = go_list_context_is_valid(&output.stdout).map_err(|detail| {
+                go_error(
+                    ProjectModelDerivationErrorKind::ProviderOutputIncomplete,
+                    IntentionalBoundaryProjectModelFailurePhase::OutputValidation,
+                    Some(manifest_repository_path),
+                    detail,
+                )
+            })?;
+            if !valid {
+                if is_canonical_portable_go_variant(&output.variant) {
+                    return Err(go_error(
+                        ProjectModelDerivationErrorKind::ProviderRejectedRepository,
+                        IntentionalBoundaryProjectModelFailurePhase::Execution,
+                        Some(manifest_repository_path),
+                        "canonical portable Go context was rejected by go list",
+                    ));
+                }
+                continue;
+            }
             insert_go_list_output(&mut classes, output).map_err(|detail| {
                 go_error(
                     ProjectModelDerivationErrorKind::ProviderOutputIncomplete,
@@ -565,9 +585,40 @@ pub(super) fn collapse_go_list_outputs(
 ) -> Result<Vec<GoListExecutionOutput>, String> {
     let mut classes = GoListClasses::new();
     for output in outputs {
+        if !go_list_context_is_valid(&output.stdout)? {
+            if is_canonical_portable_go_variant(&output.variant) {
+                return Err("canonical portable Go context was rejected by go list".to_string());
+            }
+            continue;
+        }
         insert_go_list_output(&mut classes, output)?;
     }
     finish_go_list_classes(classes, "go.mod").map_err(legacy_project_model_error)
+}
+
+pub(super) fn go_list_context_is_valid(stdout: &str) -> Result<bool, String> {
+    let packages = serde_json::Deserializer::from_str(stdout).into_iter::<GoListPackage>();
+    for package in packages {
+        let package = package
+            .map_err(|error| format!("failed to parse concatenated go list JSON: {error}"))?;
+        if package.incomplete || package.error.is_some() {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn is_canonical_portable_go_variant(variant: &IntentionalBoundaryProjectModelVariant) -> bool {
+    matches!(
+        variant,
+        IntentionalBoundaryProjectModelVariant::Go {
+            goos,
+            goarch,
+            cgo_enabled: false,
+            build_tags,
+            architecture: IntentionalBoundaryProjectModelGoArchitecture::Default,
+        } if goos == "linux" && goarch == "amd64" && build_tags.is_empty()
+    )
 }
 
 fn run_go_variant(
@@ -594,6 +645,7 @@ fn run_go_variant(
         "-C".to_string(),
         module_directory.to_string(),
         "list".to_string(),
+        "-e".to_string(),
         "-json".to_string(),
         "-find".to_string(),
         "-mod=readonly".to_string(),

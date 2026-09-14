@@ -1,6 +1,7 @@
 use super::super::intentional_boundary_project_model::hash_json;
 use super::{
-    IntentionalBoundaryProjectModelGoArchitecture, IntentionalBoundaryProjectModelVariant,
+    GO_LIST_COMMAND_CONTRACT, IntentionalBoundaryProjectModelGoArchitecture,
+    IntentionalBoundaryProjectModelVariant,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -92,9 +93,10 @@ pub(super) fn go_project_model_pipeline_identity(
     dependency_preparation_identity: &str,
 ) -> Result<String, String> {
     hash_json(&(
-        "sniff-go-project-model-pipeline-v3",
+        "sniff-go-project-model-pipeline-v4",
         toolchain_identity_sha256,
         dependency_preparation_identity,
+        GO_LIST_COMMAND_CONTRACT,
         GO_CONSTRAINT_HELPER_SOURCE,
     ))
 }
