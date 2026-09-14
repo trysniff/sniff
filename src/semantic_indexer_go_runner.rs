@@ -1,9 +1,12 @@
 use super::go_shards::{
-    GO_SHARD_LIMITS, GoShardLimits, parse_go_package_inventory, plan_go_package_shards_with_limits,
-    shard_pairs,
+    GO_SHARD_LIMITS, GoShardLimits, module_relative_source, parse_go_package_inventory,
+    plan_go_package_shards_with_limits, shard_pairs,
 };
 use super::*;
-use crate::semantic_index::{QualifiedSemanticIndex, SemanticIndexSet, SemanticIndexerVariantPlan};
+use crate::semantic_index::{
+    QualifiedSemanticIndex, SemanticIndexSet, SemanticIndexerCompilerQuery,
+    SemanticIndexerVariantPlan,
+};
 use crate::semantic_index_merge::{
     begin_document_shard, merge_document_shard, merge_implementation_pair,
 };
@@ -495,6 +498,23 @@ async fn run_go_compiler_world(
             )
         }
     };
+    let default_query = SemanticIndexerCompilerQuery::ProjectPackages;
+    let compiler_query = plan
+        .map(|plan| &plan.compiler_query)
+        .unwrap_or(&default_query);
+    let inventory_pattern = match compiler_query {
+        SemanticIndexerCompilerQuery::ProjectPackages => "./...".to_string(),
+        SemanticIndexerCompilerQuery::ExactSource { source_document } => {
+            module_relative_source(&module_root, &source_document.0).map_err(|detail| {
+                indexer_failure(
+                    spec,
+                    SemanticIndexerRunFailureKind::InvalidInput,
+                    SemanticIndexerRunPhase::RepositoryValidation,
+                    detail,
+                )
+            })?
+        }
+    };
     let inventory_arguments = vec![
         "-C".to_string(),
         module_root.clone(),
@@ -503,7 +523,7 @@ async fn run_go_compiler_world(
         "-find".to_string(),
         "-mod=readonly".to_string(),
         "-buildvcs=false".to_string(),
-        "./...".to_string(),
+        inventory_pattern,
     ];
     let inventory_output = if plan.is_some() {
         run_go_tool_with_environment(
@@ -530,8 +550,13 @@ async fn run_go_compiler_world(
         context.clone(),
         inventory_output.stdout_sha256.clone(),
     );
-    let mut inventory = parse_go_package_inventory(execution_root, &inventory_output.stdout)
-        .map_err(|detail| go_output_validation_failure(spec, detail, &inventory_output))?;
+    let mut inventory = parse_go_package_inventory(
+        execution_root,
+        &module_root,
+        compiler_query,
+        &inventory_output.stdout,
+    )
+    .map_err(|detail| go_output_validation_failure(spec, detail, &inventory_output))?;
     if let Some(plan) = plan {
         validate_go_variant_inventory(plan, &inventory)
             .map_err(|detail| go_output_validation_failure(spec, detail, &inventory_output))?;
@@ -668,6 +693,7 @@ async fn run_go_compiler_world(
         expected_languages,
         context: &context,
         variant: &variant,
+        compiler_query,
     };
     let mut completed_unit_count = 0;
     let mut merged = None;

@@ -1,6 +1,7 @@
 use super::super::HistoricalV2SemanticPublicBindingKind;
 use super::super::HistoricalV2TypeScriptModuleResolution;
 use super::super::IntentionalBoundaryProjectModelGoArchitecture;
+use super::super::IntentionalBoundaryProjectModelGoQuery;
 use super::*;
 use crate::semantic_index::{
     QualifiedSemanticIndex, RepositoryPath, SemanticCallEdge, SemanticDispatch, SemanticDocument,
@@ -117,6 +118,7 @@ fn fixture_go_project_model(
                     cgo_enabled: false,
                     build_tags: Vec::new(),
                     architecture: IntentionalBoundaryProjectModelGoArchitecture::Default,
+                    query: IntentionalBoundaryProjectModelGoQuery::ModulePackages,
                 },
                 equivalent_variants: Vec::new(),
                 invocation_anchor_repository_path: "go.mod".to_string(),
@@ -4978,6 +4980,7 @@ fn qualified_go_package_roots_ignore_uncommitted_redundant_worlds() {
         cgo_enabled: false,
         build_tags: Vec::new(),
         architecture: IntentionalBoundaryProjectModelGoArchitecture::Default,
+        query: IntentionalBoundaryProjectModelGoQuery::ModulePackages,
     };
     let mut redundant_target = model.targets[0].clone();
     redundant_target.execution_id = redundant_execution.execution_id.clone();

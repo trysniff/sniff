@@ -12,6 +12,7 @@ fn plan(project: Option<&str>) -> SemanticIndexerVariantPlan {
             ),
         ]),
         environment: BTreeMap::new(),
+        compiler_query: crate::semantic_index::SemanticIndexerCompilerQuery::ProjectPackages,
         compiler_project: project.map(|path| RepositoryPath(path.to_string())),
         selected_documents: BTreeSet::from([RepositoryPath("src/index.ts".to_string())]),
         ignored_documents: BTreeSet::new(),
@@ -98,6 +99,7 @@ async fn live_project_reference_world_is_indexed_as_one_qualified_variant() {
             ("root_config".to_string(), "tsconfig.json".to_string()),
         ]),
         environment: BTreeMap::new(),
+        compiler_query: crate::semantic_index::SemanticIndexerCompilerQuery::ProjectPackages,
         compiler_project: Some(RepositoryPath("tsconfig.json".to_string())),
         selected_documents: BTreeSet::from([
             RepositoryPath("packages/core/src/core.ts".to_string()),

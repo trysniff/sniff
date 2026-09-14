@@ -31,9 +31,17 @@ pub struct SemanticIndexerVariantPlan {
     pub identity: SemanticVariantId,
     pub dimensions: BTreeMap<String, String>,
     pub environment: BTreeMap<String, String>,
+    pub compiler_query: SemanticIndexerCompilerQuery,
     pub compiler_project: Option<RepositoryPath>,
     pub selected_documents: BTreeSet<RepositoryPath>,
     pub ignored_documents: BTreeSet<RepositoryPath>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SemanticIndexerCompilerQuery {
+    ProjectPackages,
+    ExactSource { source_document: RepositoryPath },
 }
 
 impl SemanticIndexerVariantPlan {
@@ -58,6 +66,13 @@ impl SemanticIndexerVariantPlan {
                 .chain(&self.ignored_documents)
                 .any(|path| !is_canonical_repository_path(&path.0))
             || !self.selected_documents.is_disjoint(&self.ignored_documents)
+            || matches!(
+                &self.compiler_query,
+                SemanticIndexerCompilerQuery::ExactSource { source_document }
+                    if !is_canonical_repository_path(&source_document.0)
+                        || self.selected_documents != BTreeSet::from([source_document.clone()])
+                        || self.ignored_documents.contains(source_document)
+            )
         {
             return Err(format!(
                 "semantic compiler variant plan {} is incomplete",
@@ -484,6 +499,7 @@ mod variant_tests {
                 ("GOARCH".to_string(), "amd64".to_string()),
                 ("GOOS".to_string(), "linux".to_string()),
             ]),
+            compiler_query: SemanticIndexerCompilerQuery::ProjectPackages,
             compiler_project: None,
             selected_documents: BTreeSet::from([RepositoryPath("api_linux.go".to_string())]),
             ignored_documents: BTreeSet::from([RepositoryPath("api_windows.go".to_string())]),

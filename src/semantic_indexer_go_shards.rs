@@ -1,4 +1,4 @@
-use crate::semantic_index::RepositoryPath;
+use crate::semantic_index::{RepositoryPath, SemanticIndexerCompilerQuery};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -17,7 +17,8 @@ pub(super) const GO_SHARD_LIMITS: GoShardLimits = GoShardLimits {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(super) struct GoPackage {
-    pub(super) import_path: String,
+    pub(super) package_identity: String,
+    pub(super) compiler_pattern: String,
     pub(super) source_documents: BTreeSet<RepositoryPath>,
     pub(super) source_bytes: u64,
 }
@@ -56,7 +57,7 @@ impl GoPackageShard {
     pub(super) fn patterns(&self) -> Vec<String> {
         self.packages
             .iter()
-            .map(|package| package.import_path.clone())
+            .map(|package| package.compiler_pattern.clone())
             .collect()
     }
 
@@ -87,6 +88,8 @@ struct GoListPackage {
 
 pub(super) fn parse_go_package_inventory(
     repository_root: &Path,
+    module_root: &str,
+    compiler_query: &SemanticIndexerCompilerQuery,
     output: &str,
 ) -> Result<GoPackageInventory, String> {
     let root = fs::canonicalize(repository_root).map_err(|error| {
@@ -103,9 +106,26 @@ pub(super) fn parse_go_package_inventory(
     for item in stream {
         let item =
             item.map_err(|error| format!("Go package inventory is invalid JSON: {error}"))?;
-        if item.import_path.trim().is_empty() || item.import_path == "command-line-arguments" {
-            return Err("Go package inventory contains an invalid import path".to_string());
-        }
+        let (package_identity, compiler_pattern) = match compiler_query {
+            SemanticIndexerCompilerQuery::ProjectPackages => {
+                if item.import_path.trim().is_empty()
+                    || item.import_path == "command-line-arguments"
+                {
+                    return Err("Go package inventory contains an invalid import path".to_string());
+                }
+                (item.import_path.clone(), item.import_path.clone())
+            }
+            SemanticIndexerCompilerQuery::ExactSource { source_document } => {
+                if item.import_path != "command-line-arguments" {
+                    return Err(
+                        "Go exact-source inventory changed its compiler package identity"
+                            .to_string(),
+                    );
+                }
+                let relative = module_relative_source(module_root, &source_document.0)?;
+                (format!("standalone:{}", source_document.0), relative)
+            }
+        };
         let relative_directory = go_package_relative_directory(&root, &item.dir)?;
         let mut source_documents = BTreeSet::new();
         let mut source_bytes = 0u64;
@@ -216,22 +236,53 @@ pub(super) fn parse_go_package_inventory(
             }
         }
         let package = GoPackage {
-            import_path: item.import_path.clone(),
+            package_identity: package_identity.clone(),
+            compiler_pattern,
             source_documents,
             source_bytes,
         };
-        if packages.insert(item.import_path.clone(), package).is_some() {
+        if packages.insert(package_identity.clone(), package).is_some() {
             return Err(format!(
-                "Go package inventory repeats import path {}",
-                item.import_path
+                "Go package inventory repeats package identity {package_identity}"
             ));
         }
     }
-    Ok(GoPackageInventory {
+    let inventory = GoPackageInventory {
         packages: packages.into_values().collect(),
         test_documents,
         ignored_documents: ignored_document_owners.into_keys().collect(),
-    })
+    };
+    if let SemanticIndexerCompilerQuery::ExactSource { source_document } = compiler_query {
+        let selected = inventory
+            .packages
+            .iter()
+            .flat_map(|package| package.source_documents.iter())
+            .collect::<BTreeSet<_>>();
+        if inventory.packages.len() != 1
+            || selected != BTreeSet::from([source_document])
+            || !inventory.test_documents.is_empty()
+            || !inventory.ignored_documents.is_empty()
+        {
+            return Err(
+                "Go exact-source inventory did not select exactly its committed source".to_string(),
+            );
+        }
+    }
+    Ok(inventory)
+}
+
+pub(super) fn module_relative_source(
+    module_root: &str,
+    source_repository_path: &str,
+) -> Result<String, String> {
+    if module_root == "." {
+        return Ok(source_repository_path.to_string());
+    }
+    source_repository_path
+        .strip_prefix(module_root)
+        .and_then(|suffix| suffix.strip_prefix('/'))
+        .map(str::to_string)
+        .ok_or_else(|| "Go exact source is outside its compiler module".to_string())
 }
 
 pub(super) fn plan_go_package_shards_with_limits(
@@ -264,7 +315,7 @@ pub(super) fn plan_go_package_shards_with_limits(
         right
             .source_bytes
             .cmp(&left.source_bytes)
-            .then_with(|| left.import_path.cmp(&right.import_path))
+            .then_with(|| left.package_identity.cmp(&right.package_identity))
     });
     let mut shards = (0..shard_count)
         .map(|_| GoPackageShard {
@@ -288,12 +339,12 @@ pub(super) fn plan_go_package_shards_with_limits(
     for shard in &mut shards {
         shard
             .packages
-            .sort_by(|left, right| left.import_path.cmp(&right.import_path));
+            .sort_by(|left, right| left.package_identity.cmp(&right.package_identity));
     }
     shards.sort_by(|left, right| {
         left.packages[0]
-            .import_path
-            .cmp(&right.packages[0].import_path)
+            .package_identity
+            .cmp(&right.packages[0].package_identity)
     });
     validate_shard_coverage(&shards)?;
     Ok(shards)
@@ -313,10 +364,10 @@ fn validate_shard_coverage(shards: &[GoPackageShard]) -> Result<(), String> {
             return Err("Go package sharding produced an empty shard".to_string());
         }
         for package in &shard.packages {
-            if !packages.insert(&package.import_path) {
+            if !packages.insert(&package.package_identity) {
                 return Err(format!(
                     "Go package {} appeared in more than one shard",
-                    package.import_path
+                    package.package_identity
                 ));
             }
             for document in &package.source_documents {
@@ -385,10 +436,20 @@ mod tests {
 
     fn package(name: &str, bytes: u64) -> GoPackage {
         GoPackage {
-            import_path: format!("example.test/{name}"),
+            package_identity: format!("example.test/{name}"),
+            compiler_pattern: format!("example.test/{name}"),
             source_documents: BTreeSet::from([RepositoryPath(format!("{name}/{name}.go"))]),
             source_bytes: bytes,
         }
+    }
+
+    fn parse_project_inventory(root: &Path, output: &str) -> Result<GoPackageInventory, String> {
+        parse_go_package_inventory(
+            root,
+            ".",
+            &SemanticIndexerCompilerQuery::ProjectPackages,
+            output,
+        )
     }
 
     #[test]
@@ -405,10 +466,10 @@ mod tests {
             r#"{"ImportPath":"example.test/b","Dir":"/workspace/b","GoFiles":["b.go"]}"#,
         );
 
-        let packages = parse_go_package_inventory(root.path(), output).unwrap();
+        let packages = parse_project_inventory(root.path(), output).unwrap();
 
         assert_eq!(packages.packages.len(), 2);
-        assert_eq!(packages.packages[0].import_path, "example.test/a");
+        assert_eq!(packages.packages[0].package_identity, "example.test/a");
         assert_eq!(packages.packages[0].source_documents.len(), 2);
         assert_eq!(packages.packages[0].source_bytes, 20);
         assert_eq!(packages.packages[1].source_bytes, 10);
@@ -429,7 +490,7 @@ mod tests {
         fs::write(root.path().join("empty/only_windows.go"), "package empty\n").unwrap();
         let output = r#"{"ImportPath":"example.test/empty","Dir":"/workspace/empty","IgnoredGoFiles":["only_windows.go"]}"#;
 
-        let inventory = parse_go_package_inventory(root.path(), output).unwrap();
+        let inventory = parse_project_inventory(root.path(), output).unwrap();
 
         assert_eq!(inventory.packages.len(), 1);
         assert!(inventory.packages[0].source_documents.is_empty());
@@ -444,11 +505,63 @@ mod tests {
     fn preserves_a_compiler_world_with_no_packages() {
         let root = tempfile::tempdir().unwrap();
 
-        let inventory = parse_go_package_inventory(root.path(), "").unwrap();
+        let inventory = parse_project_inventory(root.path(), "").unwrap();
 
         assert!(inventory.packages.is_empty());
         assert!(inventory.test_documents.is_empty());
         assert!(inventory.ignored_documents.is_empty());
+    }
+
+    #[test]
+    fn exact_source_inventory_uses_one_named_file_compiler_pattern() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir(root.path().join("plugins")).unwrap();
+        fs::write(
+            root.path().join("plugins/generate.go"),
+            "package main\nfunc main() {}\n",
+        )
+        .unwrap();
+        let output = r#"{"ImportPath":"command-line-arguments","Dir":"/workspace/plugins","GoFiles":["generate.go"]}"#;
+        let query = SemanticIndexerCompilerQuery::ExactSource {
+            source_document: RepositoryPath("plugins/generate.go".to_string()),
+        };
+
+        let inventory = parse_go_package_inventory(root.path(), ".", &query, output).unwrap();
+
+        assert_eq!(inventory.packages.len(), 1);
+        assert_eq!(
+            inventory.packages[0].package_identity,
+            "standalone:plugins/generate.go"
+        );
+        assert_eq!(
+            inventory.packages[0].compiler_pattern,
+            "plugins/generate.go"
+        );
+        assert_eq!(
+            inventory.packages[0].source_documents,
+            BTreeSet::from([RepositoryPath("plugins/generate.go".to_string())])
+        );
+    }
+
+    #[test]
+    fn exact_source_inventory_rejects_an_extra_compiler_document() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir(root.path().join("plugins")).unwrap();
+        for file in ["generate.go", "extra.go"] {
+            fs::write(
+                root.path().join("plugins").join(file),
+                "package main\nfunc main() {}\n",
+            )
+            .unwrap();
+        }
+        let output = r#"{"ImportPath":"command-line-arguments","Dir":"/workspace/plugins","GoFiles":["extra.go","generate.go"]}"#;
+        let query = SemanticIndexerCompilerQuery::ExactSource {
+            source_document: RepositoryPath("plugins/generate.go".to_string()),
+        };
+
+        let error = parse_go_package_inventory(root.path(), ".", &query, output).unwrap_err();
+
+        assert!(error.contains("did not select exactly"), "{error}");
     }
 
     #[test]
@@ -460,7 +573,7 @@ mod tests {
             fs::write(path, "package pkg\n").unwrap();
         }
         let output = r#"{"ImportPath":"example.test/pkg","Dir":"/workspace/pkg","GoFiles":["api.go","generated.go"],"TestGoFiles":["api_test.go"]}"#;
-        let mut inventory = parse_go_package_inventory(root.path(), output).unwrap();
+        let mut inventory = parse_project_inventory(root.path(), output).unwrap();
         let expected = BTreeMap::from([
             (RepositoryPath("pkg/api.go".to_string()), "go".to_string()),
             (
@@ -490,7 +603,7 @@ mod tests {
             serde_json::to_string(&root.path().to_string_lossy()).unwrap()
         );
 
-        let error = parse_go_package_inventory(root.path(), &output).unwrap_err();
+        let error = parse_project_inventory(root.path(), &output).unwrap_err();
 
         assert!(
             error.contains("non-test file in its test source set"),
@@ -536,7 +649,7 @@ mod tests {
             serde_json::to_string(&outside.path().to_string_lossy()).unwrap()
         );
 
-        let error = parse_go_package_inventory(root.path(), &output).unwrap_err();
+        let error = parse_project_inventory(root.path(), &output).unwrap_err();
 
         assert!(error.contains("outside the staged repository"));
     }

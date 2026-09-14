@@ -12,21 +12,25 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"go/ast"
 	"go/build/constraint"
+	"go/parser"
+	"go/token"
 	"io"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 )
 
-const schemaVersion = 1
+const schemaVersion = 2
 
 var (
-	slashSlash            = []byte("//")
-	slashStar             = []byte("/*")
-	starSlash             = []byte("*/")
-	goBuildComment        = []byte("//go:build")
-	errMultipleGoBuild    = errors.New("multiple //go:build comments")
+	slashSlash         = []byte("//")
+	slashStar          = []byte("/*")
+	starSlash          = []byte("*/")
+	goBuildComment     = []byte("//go:build")
+	errMultipleGoBuild = errors.New("multiple //go:build comments")
 )
 
 type request struct {
@@ -35,8 +39,10 @@ type request struct {
 }
 
 type fileTags struct {
-	RepositoryPath string   `json:"repository_path"`
-	Tags           []string `json:"tags"`
+	RepositoryPath       string   `json:"repository_path"`
+	Tags                 []string `json:"tags"`
+	PackageName          string   `json:"package_name"`
+	GoGenerateDirectives []string `json:"go_generate_directives"`
 }
 
 type response struct {
@@ -81,11 +87,16 @@ func run() error {
 			return fmt.Errorf("unsafe or unordered source path %q", path)
 		}
 		previous = path
-		tags, err := tagsForFile(filepath.FromSlash(path))
+		tags, packageName, directives, err := factsForFile(filepath.FromSlash(path))
 		if err != nil {
 			return fmt.Errorf("inspect %s: %w", path, err)
 		}
-		result.Files = append(result.Files, fileTags{RepositoryPath: path, Tags: tags})
+		result.Files = append(result.Files, fileTags{
+			RepositoryPath:       path,
+			Tags:                 tags,
+			PackageName:          packageName,
+			GoGenerateDirectives: directives,
+		})
 	}
 
 	encoder := json.NewEncoder(os.Stdout)
@@ -107,20 +118,20 @@ func requireJSONEOF(decoder *json.Decoder) error {
 	return nil
 }
 
-func tagsForFile(path string) ([]string, error) {
+func factsForFile(path string) ([]string, string, []string, error) {
 	content, err := os.ReadFile(path)
 	if err != nil {
-		return nil, err
+		return nil, "", nil, err
 	}
 	header, goBuild, err := parseFileHeader(content)
 	if err != nil {
-		return nil, err
+		return nil, "", nil, err
 	}
 	tags := make(map[string]struct{})
 	if goBuild != nil {
 		expr, err := constraint.Parse(string(goBuild))
 		if err != nil {
-			return nil, fmt.Errorf("parse //go:build line: %w", err)
+			return nil, "", nil, fmt.Errorf("parse //go:build line: %w", err)
 		}
 		collectTags(expr, tags)
 	} else {
@@ -147,7 +158,23 @@ func tagsForFile(path string) ([]string, error) {
 		result = append(result, tag)
 	}
 	sort.Strings(result)
-	return result, nil
+	file, err := parser.ParseFile(token.NewFileSet(), path, content, parser.ParseComments)
+	if err != nil {
+		return nil, "", nil, fmt.Errorf("parse Go source: %w", err)
+	}
+	directives := make([]string, 0)
+	for _, group := range file.Comments {
+		for _, comment := range group.List {
+			if isGoGenerateDirective(comment) {
+				directives = append(directives, comment.Text)
+			}
+		}
+	}
+	return result, file.Name.Name, directives, nil
+}
+
+func isGoGenerateDirective(comment *ast.Comment) bool {
+	return strings.HasPrefix(comment.Text, "//go:generate ") || strings.HasPrefix(comment.Text, "//go:generate\t")
 }
 
 func collectTags(expr constraint.Expr, tags map[string]struct{}) {

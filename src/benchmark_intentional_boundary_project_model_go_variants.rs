@@ -1,7 +1,7 @@
 use super::super::intentional_boundary_project_model::hash_json;
 use super::{
     GO_LIST_COMMAND_CONTRACT, IntentionalBoundaryProjectModelGoArchitecture,
-    IntentionalBoundaryProjectModelVariant,
+    IntentionalBoundaryProjectModelGoQuery, IntentionalBoundaryProjectModelVariant,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -10,11 +10,11 @@ use std::io::ErrorKind;
 use std::path::{Component, Path};
 
 pub(super) const GO_VARIANT_LIMIT: usize = 16_384;
-const GO_CONSTRAINT_SCHEMA_VERSION: u32 = 1;
-const GO_CONSTRAINT_HELPER_NAME: &str = "sniff-build-constraints.go";
-const GO_CONSTRAINT_REQUEST_NAME: &str = "sniff-build-constraints-request.json";
+const GO_CONSTRAINT_SCHEMA_VERSION: u32 = 2;
+const GO_CONSTRAINT_HELPER_NAME: &str = "sniff-source-facts.go";
+const GO_CONSTRAINT_REQUEST_NAME: &str = "sniff-source-facts-request.json";
 const GO_CONSTRAINT_HELPER_SOURCE: &str =
-    include_str!("../assets/go-tooling/sniff-build-constraints.go");
+    include_str!("../assets/go-tooling/sniff-source-facts.go");
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -49,6 +49,8 @@ struct GoConstraintResponse {
 struct GoConstraintFile {
     repository_path: String,
     tags: Vec<String>,
+    package_name: String,
+    go_generate_directives: Vec<String>,
 }
 
 pub(super) struct GoConstraintInvocation {
@@ -60,6 +62,7 @@ pub(super) struct GoConstraintInvocation {
 pub(super) struct GoConstraintTagDomain {
     pub(super) custom_build_tags: Vec<String>,
     pub(super) architecture_feature_tags: Vec<String>,
+    pub(super) standalone_source_repository_paths: Vec<String>,
 }
 
 pub(super) fn stage_go_constraint_invocation(
@@ -124,6 +127,7 @@ pub(super) fn parse_go_constraint_tags(
         .collect::<BTreeSet<_>>();
     let mut custom = BTreeSet::new();
     let mut architecture_features = BTreeSet::new();
+    let mut standalone_sources = Vec::new();
     for (file, expected_path) in response.files.iter().zip(source_repository_paths) {
         if file.repository_path != *expected_path
             || file.tags.windows(2).any(|pair| pair[0] >= pair[1])
@@ -131,6 +135,24 @@ pub(super) fn parse_go_constraint_tags(
             return Err(
                 "Go constraint discovery returned reordered paths or repeated tags".to_string(),
             );
+        }
+        if file.package_name.trim() != file.package_name
+            || file.package_name.is_empty()
+            || file.package_name.chars().any(char::is_whitespace)
+            || file.go_generate_directives.iter().any(|directive| {
+                directive.contains(['\0', '\r', '\n'])
+                    || !(directive.starts_with("//go:generate ")
+                        || directive.starts_with("//go:generate\t"))
+            })
+        {
+            return Err("Go source-fact discovery returned invalid parser facts".to_string());
+        }
+        if is_direct_standalone_go_run(
+            &file.repository_path,
+            &file.package_name,
+            &file.go_generate_directives,
+        ) {
+            standalone_sources.push(file.repository_path.clone());
         }
         for tag in &file.tags {
             if tag.is_empty() || tag.contains(',') || tag.chars().any(char::is_whitespace) {
@@ -172,6 +194,32 @@ pub(super) fn parse_go_constraint_tags(
     Ok(GoConstraintTagDomain {
         custom_build_tags: custom.into_iter().collect(),
         architecture_feature_tags: architecture_features.into_iter().collect(),
+        standalone_source_repository_paths: standalone_sources,
+    })
+}
+
+fn is_direct_standalone_go_run(
+    repository_path: &str,
+    package_name: &str,
+    directives: &[String],
+) -> bool {
+    if package_name != "main" {
+        return false;
+    }
+    let Some(file_name) = Path::new(repository_path)
+        .file_name()
+        .and_then(|name| name.to_str())
+    else {
+        return false;
+    };
+    directives.iter().any(|directive| {
+        let Some(body) = directive
+            .strip_prefix("//go:generate ")
+            .or_else(|| directive.strip_prefix("//go:generate\t"))
+        else {
+            return false;
+        };
+        body.split_ascii_whitespace().collect::<Vec<_>>() == ["go", "run", file_name]
     })
 }
 
@@ -289,6 +337,7 @@ pub(super) fn parse_go_dist_variants(
                         cgo_enabled,
                         build_tags: selected_tags,
                         architecture: architecture.clone(),
+                        query: IntentionalBoundaryProjectModelGoQuery::ModulePackages,
                     });
                 }
             }

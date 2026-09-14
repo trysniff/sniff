@@ -1,8 +1,9 @@
 use super::*;
 use crate::semantic_index::{
     QualifiedSemanticIndex, RepositoryPath, SEMANTIC_INDEX_FORMAT_VERSION, SemanticIndexProvenance,
-    SemanticIndexSet, SemanticIndexerContribution, SemanticIndexerVariantPlan,
-    SemanticRelationshipKind, SemanticResolution, SemanticSymbolId, SemanticVariantId,
+    SemanticIndexSet, SemanticIndexerCompilerQuery, SemanticIndexerContribution,
+    SemanticIndexerVariantPlan, SemanticRelationshipKind, SemanticResolution, SemanticSymbolId,
+    SemanticVariantId,
 };
 use crate::semantic_indexer_installation::SemanticIndexerStore;
 
@@ -80,6 +81,7 @@ fn variant_plan(
             ("GOFLAGS".to_string(), String::new()),
             ("GOOS".to_string(), "linux".to_string()),
         ]),
+        compiler_query: SemanticIndexerCompilerQuery::ProjectPackages,
         compiler_project: Some(RepositoryPath("go.mod".to_string())),
         selected_documents: selected_documents
             .iter()
@@ -101,7 +103,8 @@ fn package_inventory(
             Vec::new()
         } else {
             vec![super::go_shards::GoPackage {
-                import_path: "example.test/fixture".to_string(),
+                package_identity: "example.test/fixture".to_string(),
+                compiler_pattern: "example.test/fixture".to_string(),
                 source_documents: selected_documents
                     .iter()
                     .map(|path| RepositoryPath((*path).to_string()))
@@ -395,6 +398,75 @@ async fn live_multi_shard_go_index_preserves_calls_and_structural_implementation
         relationship.kind == SemanticRelationshipKind::Implementation
             && relationship.source == dog
             && relationship.target == speaker
+    }));
+}
+
+#[tokio::test]
+#[ignore = "requires Go and the installed pinned Go semantic indexer"]
+async fn live_standalone_go_source_uses_named_file_query_in_mixed_package_directory() {
+    let repository = tempfile::tempdir().unwrap();
+    fs::write(
+        repository.path().join("go.mod"),
+        "module example.test/standalone\n\ngo 1.22\n",
+    )
+    .unwrap();
+    let files = vec![
+        write_go_file(
+            repository.path(),
+            "plugins/minimum.go",
+            "package plugins\n\nfunc Minimum() {}\n",
+        ),
+        write_go_file(
+            repository.path(),
+            "plugins/generate.go",
+            "//go:build plugins\n\npackage main\n\n//go:generate go run generate.go\nfunc main() {}\n",
+        ),
+    ];
+    let mut plan = variant_plan("standalone-generator", &["plugins/generate.go"], &[]);
+    plan.compiler_query = SemanticIndexerCompilerQuery::ExactSource {
+        source_document: RepositoryPath("plugins/generate.go".to_string()),
+    };
+    let spec = pinned_indexer(SemanticIndexerKind::Go).unwrap();
+    let store = SemanticIndexerStore::for_user().unwrap();
+    let installed = store.verify(spec).unwrap();
+    let recovery = SemanticIndexerRecoveryGuard::begin(repository.path()).unwrap();
+    let repository_content_sha256 =
+        repository_snapshot::repository_content_digest(repository.path()).unwrap();
+    let inputs = GoIndexerRunInputs {
+        spec,
+        root: repository.path(),
+        installed: &installed,
+        files: &files,
+        required_documents: &files[1..],
+        recovery: &recovery,
+        repository_content_sha256: &repository_content_sha256,
+        progress_root: None,
+    };
+
+    let result = run_required_go_indexer_variants_with_limits(
+        &inputs,
+        std::slice::from_ref(&plan),
+        GoShardLimits {
+            target_source_bytes: u64::MAX,
+            max_packages: 1,
+        },
+    )
+    .await;
+    recovery.finish().unwrap();
+    let SemanticIndexSet::Qualified { variants } = result.unwrap() else {
+        panic!("expected a qualified Go semantic index set");
+    };
+    let index = &variants[&plan.identity].index;
+
+    assert_eq!(
+        index.documents.keys().cloned().collect::<BTreeSet<_>>(),
+        BTreeSet::from([RepositoryPath("plugins/generate.go".to_string())])
+    );
+    assert!(index.provenance.invocations.iter().any(|invocation| {
+        invocation
+            .arguments
+            .iter()
+            .any(|argument| argument == "plugins/generate.go")
     }));
 }
 

@@ -22,6 +22,7 @@ pub(super) struct GoScipExecution<'a> {
     pub(super) expected_languages: &'a BTreeMap<RepositoryPath, String>,
     pub(super) context: &'a BTreeMap<String, String>,
     pub(super) variant: &'a crate::semantic_index::SemanticIndexVariant,
+    pub(super) compiler_query: &'a crate::semantic_index::SemanticIndexerCompilerQuery,
 }
 
 pub(super) async fn discover_go_build_context(
@@ -193,12 +194,24 @@ pub(super) async fn run_go_scip(
             ),
         ));
     }
+    let mut invocation_arguments = vec![
+        "--module-root".to_string(),
+        execution.module_root.to_string(),
+    ];
+    invocation_arguments.extend(patterns.clone());
+    let patterns = validate_go_compiler_patterns(execution, patterns).map_err(|detail| {
+        indexer_failure(
+            spec,
+            SemanticIndexerRunFailureKind::InvalidInput,
+            SemanticIndexerRunPhase::Preparation,
+            detail,
+        )
+    })?;
     let mut arguments = vec![
         "--module-root".to_string(),
         execution.module_root.to_string(),
     ];
     arguments.extend(patterns);
-    let invocation_arguments = arguments.clone();
     let prepared = build_indexer_sandbox_command(
         spec,
         execution.execution_root,
@@ -284,6 +297,29 @@ pub(super) async fn run_go_scip(
         )
     });
     combine_typed_run_and_integrity(result, cleanup)
+}
+
+fn validate_go_compiler_patterns(
+    execution: &GoScipExecution<'_>,
+    patterns: Vec<String>,
+) -> Result<Vec<String>, String> {
+    match execution.compiler_query {
+        crate::semantic_index::SemanticIndexerCompilerQuery::ProjectPackages => Ok(patterns),
+        crate::semantic_index::SemanticIndexerCompilerQuery::ExactSource { source_document } => {
+            let relative = super::go_shards::module_relative_source(
+                execution.module_root,
+                &source_document.0,
+            )?;
+            let expected = vec![relative];
+            if patterns != expected {
+                return Err(
+                    "Go exact-source compiler shard disagrees with its committed source query"
+                        .to_string(),
+                );
+            }
+            Ok(patterns)
+        }
+    }
 }
 
 pub(super) fn go_output_validation_failure(

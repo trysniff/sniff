@@ -7,7 +7,7 @@ use super::intentional_boundary_project_model::{
 use super::{
     IntentionalBoundaryManifestDeclarationKind, IntentionalBoundaryManifestTarget,
     IntentionalBoundaryProjectModelCensus, IntentionalBoundaryProjectModelExecution,
-    IntentionalBoundaryProjectModelGoArchitecture,
+    IntentionalBoundaryProjectModelGoArchitecture, IntentionalBoundaryProjectModelGoQuery,
     IntentionalBoundaryProjectModelProvider as Provider, IntentionalBoundaryProjectModelTarget,
     IntentionalBoundaryProjectModelTargetStatus as TargetStatus,
     IntentionalBoundaryProjectModelUnresolvedReason as UnresolvedReason,
@@ -19,7 +19,7 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
-pub(super) const GO_LIST_COMMAND_CONTRACT: &str = "go-mod-download-then-offline-list-e-json-find-mod-readonly-buildvcs-off-valid-exact-equivalent-constraint-variants-v7";
+pub(super) const GO_LIST_COMMAND_CONTRACT: &str = "go-mod-download-then-offline-list-module-identity-e-json-find-mod-readonly-buildvcs-off-valid-exact-equivalent-source-fact-variants-v8";
 
 #[path = "benchmark_intentional_boundary_project_model_go_variants.rs"]
 mod variants;
@@ -73,7 +73,7 @@ struct GoListPackage {
     error: Option<GoListError>,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 struct GoListModule {
     #[serde(rename = "Path")]
     path: String,
@@ -99,6 +99,12 @@ struct GoPackageContext<'a> {
     manifest_repository_path: &'a str,
     manifest_object_id: &'a str,
     revision: &'a str,
+}
+
+struct GoListVariantLedger<'a> {
+    variant: IntentionalBoundaryProjectModelVariant,
+    equivalent_variants: Vec<IntentionalBoundaryProjectModelVariant>,
+    module_identity: Option<&'a GoListModule>,
 }
 
 fn canonical_go_list_projection(stdout: &str) -> Result<Vec<Vec<u8>>, String> {
@@ -128,8 +134,11 @@ pub fn parse_intentional_boundary_go_list(
         inventory,
         invocation_manifest_repository_path,
         toolchain_identity_sha256,
-        variant,
-        Vec::new(),
+        GoListVariantLedger {
+            variant,
+            equivalent_variants: Vec::new(),
+            module_identity: None,
+        },
         stdout,
     )
 }
@@ -139,16 +148,21 @@ fn parse_intentional_boundary_go_list_with_equivalents(
     inventory: &IntentionalBoundaryRepositoryInventory,
     invocation_manifest_repository_path: &str,
     toolchain_identity_sha256: &str,
-    variant: IntentionalBoundaryProjectModelVariant,
-    equivalent_variants: Vec<IntentionalBoundaryProjectModelVariant>,
+    ledger: GoListVariantLedger<'_>,
     stdout: &[u8],
 ) -> Result<IntentionalBoundaryProjectModelCensus, String> {
+    let GoListVariantLedger {
+        variant,
+        equivalent_variants,
+        module_identity,
+    } = ledger;
     if !is_sha256(toolchain_identity_sha256) {
         return Err("Go toolchain identity is not SHA-256".to_string());
     }
-    if !matches!(variant, IntentionalBoundaryProjectModelVariant::Go { .. }) {
-        return Err("Go project-model execution omitted its build variant".to_string());
-    }
+    let query = match &variant {
+        IntentionalBoundaryProjectModelVariant::Go { query, .. } => query,
+        _ => return Err("Go project-model execution omitted its build variant".to_string()),
+    };
     if !valid_execution_variant(Provider::GoList, &variant) {
         return Err("Go project-model execution has an invalid build variant".to_string());
     }
@@ -201,7 +215,22 @@ fn parse_intentional_boundary_go_list_with_equivalents(
                 package.import_path
             ));
         }
-        targets.push(normalize_package(&context, package)?);
+        targets.push(normalize_package(
+            &context,
+            package,
+            query,
+            module_identity,
+        )?);
+    }
+    if matches!(
+        query,
+        IntentionalBoundaryProjectModelGoQuery::StandaloneSource { .. }
+    ) && targets.len() != 1
+    {
+        return Err(
+            "go list standalone-source query did not return exactly one compiler target"
+                .to_string(),
+        );
     }
     targets.sort();
     let covered_manifests = vec![invocation_manifest_repository_path.to_string()];
@@ -236,10 +265,40 @@ fn parse_intentional_boundary_go_list_with_equivalents(
 fn normalize_package(
     context: &GoPackageContext<'_>,
     package: GoListPackage,
+    query: &IntentionalBoundaryProjectModelGoQuery,
+    module_identity: Option<&GoListModule>,
 ) -> Result<IntentionalBoundaryProjectModelTarget, String> {
-    let module = package
-        .module
-        .ok_or_else(|| "go list package omitted module ownership".to_string())?;
+    let (module, target_name, standalone_source) = match query {
+        IntentionalBoundaryProjectModelGoQuery::ModulePackages => (
+            package
+                .module
+                .ok_or_else(|| "go list package omitted module ownership".to_string())?,
+            package.import_path.clone(),
+            None,
+        ),
+        IntentionalBoundaryProjectModelGoQuery::StandaloneSource {
+            source_repository_path,
+        } => {
+            if package.module.is_some()
+                || package.import_path != "command-line-arguments"
+                || package.name != "main"
+                || !package.cgo_files.is_empty()
+                || !package.ignored_go_files.is_empty()
+            {
+                return Err(
+                    "go list standalone-source output changed its exact compiler shape".to_string(),
+                );
+            }
+            let module = module_identity.cloned().ok_or_else(|| {
+                "go list standalone-source output omitted module identity".to_string()
+            })?;
+            (
+                module,
+                format!("standalone:{source_repository_path}"),
+                Some(source_repository_path.as_str()),
+            )
+        }
+    };
     if !module.main {
         return Err(format!(
             "go list package is not owned by the invoked main module: {}",
@@ -249,7 +308,8 @@ fn normalize_package(
     if module.path.trim().is_empty()
         || package.import_path.trim().is_empty()
         || package.name.trim().is_empty()
-        || (package.import_path != module.path
+        || (standalone_source.is_none()
+            && package.import_path != module.path
             && !package
                 .import_path
                 .strip_prefix(&module.path)
@@ -328,6 +388,14 @@ fn normalize_package(
             "Go compiler-ignored production source",
         )?;
     }
+    if let Some(expected_source) = standalone_source
+        && source_repository_paths != [expected_source.to_string()]
+    {
+        return Err(
+            "go list standalone-source output did not select exactly its committed source"
+                .to_string(),
+        );
+    }
     let provider_kind = if package.name == "main" {
         "main"
     } else {
@@ -354,7 +422,7 @@ fn normalize_package(
         manifest_object_id: context.manifest_object_id.to_string(),
         package_name: module.path,
         package_version,
-        target_name: package.import_path,
+        target_name,
         provider_kinds,
         provider_output_types,
         source_repository_paths,

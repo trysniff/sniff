@@ -2,7 +2,7 @@ use super::{IntentionalBoundaryManifestDeclarationKind, IntentionalBoundaryManif
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-pub const INTENTIONAL_BOUNDARY_PROJECT_MODEL_CENSUS_SCHEMA_VERSION: u32 = 8;
+pub const INTENTIONAL_BOUNDARY_PROJECT_MODEL_CENSUS_SCHEMA_VERSION: u32 = 9;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -90,6 +90,7 @@ pub enum IntentionalBoundaryProjectModelVariant {
         cgo_enabled: bool,
         build_tags: Vec<String>,
         architecture: IntentionalBoundaryProjectModelGoArchitecture,
+        query: IntentionalBoundaryProjectModelGoQuery,
     },
     TypeScript {
         root_config_repository_path: Option<String>,
@@ -98,6 +99,13 @@ pub enum IntentionalBoundaryProjectModelVariant {
         selected_source_repository_paths: Vec<String>,
         ignored_source_repository_paths: Vec<String>,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum IntentionalBoundaryProjectModelGoQuery {
+    ModulePackages,
+    StandaloneSource { source_repository_path: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
