@@ -505,22 +505,40 @@ SEMANTIC_VARIANT_ASSEMBLY_MIGRATION_SOURCE_ARTIFACT_DIGEST = (
 )
 SEMANTIC_VARIANT_ASSEMBLY_MIGRATION_SOURCE_ARTIFACT_SIZE = 858_760_429
 
-QUALIFICATION_ARTIFACT_MIGRATION_NAME = "bounded-qualification-artifact-v1"
-QUALIFICATION_ARTIFACT_MIGRATION_CONTRACT = (
-    "sniffbench-historical-v2-bounded-qualification-artifact-migration-v1"
+QUALIFICATION_PROJECT_MODEL_REPLAY_MIGRATION_NAME = (
+    "bounded-qualification-project-model-v8-replay-v1"
 )
-QUALIFICATION_ARTIFACT_MIGRATION_FROM_COLLECTOR_SHA = (
+QUALIFICATION_PROJECT_MODEL_REPLAY_MIGRATION_CONTRACT = (
+    "sniffbench-historical-v2-bounded-qualification-project-model-v8-replay-migration-v1"
+)
+QUALIFICATION_PROJECT_MODEL_REPLAY_MIGRATION_FROM_COLLECTOR_SHA = (
     "79c2aa27c4ce13eab850f547785a88434d6ed766"
 )
-QUALIFICATION_ARTIFACT_MIGRATION_SOURCE_RUN_ID = 34_759_391_724
-QUALIFICATION_ARTIFACT_MIGRATION_SOURCE_HEAD_SHA = (
+QUALIFICATION_PROJECT_MODEL_REPLAY_MIGRATION_SOURCE_RUN_ID = 34_759_391_724
+QUALIFICATION_PROJECT_MODEL_REPLAY_MIGRATION_SOURCE_HEAD_SHA = (
     "79c2aa27c4ce13eab850f547785a88434d6ed766"
 )
-QUALIFICATION_ARTIFACT_MIGRATION_SOURCE_ARTIFACT_ID = 10_318_806_056
-QUALIFICATION_ARTIFACT_MIGRATION_SOURCE_ARTIFACT_DIGEST = (
+QUALIFICATION_PROJECT_MODEL_REPLAY_MIGRATION_SOURCE_ARTIFACT_ID = 10_318_806_056
+QUALIFICATION_PROJECT_MODEL_REPLAY_MIGRATION_SOURCE_ARTIFACT_DIGEST = (
     "sha256:8d5e9fef77aa04f6fd779393115367c7fe801c819b0a6ce72b199591168783cd"
 )
-QUALIFICATION_ARTIFACT_MIGRATION_SOURCE_ARTIFACT_SIZE = 1_283_912_373
+QUALIFICATION_PROJECT_MODEL_REPLAY_MIGRATION_SOURCE_ARTIFACT_SIZE = 1_283_912_373
+QUALIFICATION_PROJECT_MODEL_REPLAY_SLOTS = {
+    122: {
+        "canonical_repository": "vmware/govmomi",
+        "committed_stage_count": 6,
+        "retained_checkpoint_sha256": (
+            "9da2d231fd20f3db6e04ea0a05dbdd0cfff28e0386d5c64ebec79e8b1d1b7ba7"
+        ),
+    },
+    123: {
+        "canonical_repository": "kyverno/chainsaw",
+        "committed_stage_count": 4,
+        "retained_checkpoint_sha256": (
+            "80a169533ecd56c5a6909ada364034f266c9d5681662e58705621350a5bd7cc3"
+        ),
+    },
+}
 
 FRAME_FILE_SHA256 = {
     "environment.txt": "2e87f3c3e1b2005f6b6d09b1bf1b82d30a9433636c3c67f0806cc68e80ab6800",
@@ -886,6 +904,351 @@ def migrate_inferred_scip_kind_replay(
         "rewound Go state slot 122",
     )
 
+
+def _validate_replay_file_commitments(
+    stage: pathlib.Path, label: str, committed_files: Any
+) -> None:
+    if not isinstance(committed_files, list) or len(committed_files) != 2:
+        raise ValueError(f"{label} transaction file commitments drifted")
+    for item, expected_name in zip(
+        committed_files, ("artifact.json", "checkpoint.json")
+    ):
+        commitment = _require_mapping(item, f"{label} file commitment")
+        if set(commitment) != {"name", "sha256", "byte_count"}:
+            raise ValueError(f"{label} file commitment field set drifted")
+        if commitment.get("name") != expected_name:
+            raise ValueError(f"{label} committed filename drifted")
+        expected_sha256 = commitment.get("sha256")
+        if (
+            not isinstance(expected_sha256, str)
+            or re.fullmatch(r"[0-9a-f]{64}", expected_sha256) is None
+        ):
+            raise ValueError(f"{label} committed file hash is invalid")
+        expected_size = _positive_json_integer(
+            commitment.get("byte_count"), f"{label} committed file byte count"
+        )
+        committed_path = stage.joinpath(expected_name)
+        _plain_file(committed_path, f"{label} committed file")
+        try:
+            observed_size = committed_path.stat().st_size
+        except OSError as error:
+            raise ValueError(
+                f"failed to inspect {label} committed file: {error}"
+            ) from error
+        if observed_size != expected_size or _sha256(committed_path) != expected_sha256:
+            raise ValueError(f"{label} committed file changed")
+
+
+def _validate_replay_stage_transaction(
+    stage: pathlib.Path,
+    slot_number: int,
+    canonical_repository: str,
+    sequence: int,
+    stage_name: str,
+    previous_checkpoint_sha256: str | None,
+) -> str:
+    label = f"Go slot {slot_number} {stage_name} stage"
+    _require_exact_file_children(
+        stage, {"_transaction.json", "artifact.json", "checkpoint.json"}, label
+    )
+    checkpoint_path = stage.joinpath("checkpoint.json")
+    checkpoint = _require_mapping(
+        _read_json(checkpoint_path, f"{label} checkpoint"), f"{label} checkpoint"
+    )
+    if set(checkpoint) != {
+        "schema_version",
+        "checkpoint_contract",
+        "selection_sha256",
+        "language",
+        "slot_number",
+        "canonical_repository",
+        "sequence",
+        "previous_checkpoint_sha256",
+        "stage",
+        "outcome",
+        "checkpoint_sha256",
+    }:
+        raise ValueError(f"{label} checkpoint field set drifted")
+    _require_exact_fields(
+        checkpoint,
+        {
+            "schema_version": 1,
+            "checkpoint_contract": (
+                "sniffbench-historical-v2-slot-stage-checkpoint-v1"
+            ),
+            "selection_sha256": SELECTION_SHA256,
+            "language": "go",
+            "slot_number": slot_number,
+            "canonical_repository": canonical_repository,
+            "sequence": sequence,
+            "previous_checkpoint_sha256": previous_checkpoint_sha256,
+            "stage": stage_name,
+        },
+        f"{label} checkpoint",
+    )
+    checkpoint_sha256 = checkpoint.get("checkpoint_sha256")
+    if (
+        not isinstance(checkpoint_sha256, str)
+        or re.fullmatch(r"[0-9a-f]{64}", checkpoint_sha256) is None
+    ):
+        raise ValueError(f"{label} checkpoint commitment is invalid")
+    outcome = _require_mapping(checkpoint.get("outcome"), f"{label} outcome")
+    if set(outcome) != {"status", "artifact_kind", "artifact_sha256"}:
+        raise ValueError(f"{label} outcome field set drifted")
+    if outcome.get("status") != "completed":
+        raise ValueError(f"{label} is not completed")
+    if not isinstance(outcome.get("artifact_kind"), str) or not outcome.get(
+        "artifact_kind"
+    ):
+        raise ValueError(f"{label} artifact kind is invalid")
+    artifact_sha256 = outcome.get("artifact_sha256")
+    if (
+        not isinstance(artifact_sha256, str)
+        or re.fullmatch(r"[0-9a-f]{64}", artifact_sha256) is None
+    ):
+        raise ValueError(f"{label} artifact commitment is invalid")
+
+    transaction = _require_mapping(
+        _read_json(stage.joinpath("_transaction.json"), f"{label} transaction"),
+        f"{label} transaction",
+    )
+    if set(transaction) != {
+        "schema_version",
+        "transaction_contract",
+        "sequence",
+        "checkpoint_sha256",
+        "files",
+    }:
+        raise ValueError(f"{label} transaction field set drifted")
+    _require_exact_fields(
+        transaction,
+        {
+            "schema_version": 1,
+            "transaction_contract": (
+                "sniffbench-historical-v2-slot-stage-transaction-v1"
+            ),
+            "sequence": sequence,
+            "checkpoint_sha256": checkpoint_sha256,
+        },
+        f"{label} transaction",
+    )
+    _validate_replay_file_commitments(stage, label, transaction.get("files"))
+    return checkpoint_sha256
+
+
+def _validate_qualification_project_model_replay_slot(
+    state_language: pathlib.Path,
+    work_language: pathlib.Path,
+    slot_number: int,
+    expected: Mapping[str, Any],
+    stage_names: Sequence[str],
+) -> tuple[pathlib.Path, pathlib.Path, pathlib.Path, pathlib.Path | None]:
+    _plain_file(
+        state_language.joinpath(f"slot-{slot_number:04}.lock"),
+        f"Go state slot {slot_number} lock",
+    )
+    state_slot = _exact_plain_child(
+        state_language, f"slot-{slot_number:04}", f"Go state slot {slot_number}"
+    )
+    committed_stage_count = int(expected["committed_stage_count"])
+    expected_directories = {
+        f"{sequence:04}-{stage_names[sequence - 1].replace('_', '-')}"
+        for sequence in range(1, committed_stage_count + 1)
+    }
+    _require_exact_directory_children(
+        state_slot, expected_directories, f"Go state slot {slot_number}"
+    )
+    previous_checkpoint_sha256: str | None = None
+    for sequence in range(1, committed_stage_count + 1):
+        stage_name = stage_names[sequence - 1]
+        stage = _exact_plain_child(
+            state_slot,
+            f"{sequence:04}-{stage_name.replace('_', '-')}",
+            f"Go slot {slot_number} committed stage",
+        )
+        previous_checkpoint_sha256 = _validate_replay_stage_transaction(
+            stage,
+            slot_number,
+            str(expected["canonical_repository"]),
+            sequence,
+            stage_name,
+            previous_checkpoint_sha256,
+        )
+        if sequence == 3 and (
+            previous_checkpoint_sha256 != expected["retained_checkpoint_sha256"]
+        ):
+            raise ValueError(
+                f"Go slot {slot_number} retained checkpoint commitment drifted"
+            )
+
+    work_slot = _exact_plain_child(
+        work_language, f"slot-{slot_number:04}", f"Go work slot {slot_number}"
+    )
+    source_progress = _exact_plain_child(
+        work_slot, "source-progress", f"Go slot {slot_number} source progress"
+    )
+    _require_exact_directory_children(
+        source_progress,
+        {"base", "patched"},
+        f"Go slot {slot_number} source progress",
+    )
+    _validate_plain_tree(source_progress, f"Go slot {slot_number} source progress")
+    semantic_progress = None
+    if slot_number == 122:
+        semantic_progress = _exact_plain_child(
+            work_slot,
+            "semantic-progress",
+            "Go slot 122 semantic progress",
+        )
+        _validate_plain_tree(semantic_progress, "Go slot 122 semantic progress")
+    return state_slot, work_slot, source_progress, semantic_progress
+
+
+def _remove_qualification_project_model_replay_root(
+    root: pathlib.Path, label: str
+) -> None:
+    _remove_validated_plain_tree(root, label)
+    try:
+        root.rmdir()
+    except OSError as error:
+        raise ValueError(f"failed to remove {label}: {error}") from error
+
+
+def _apply_qualification_project_model_replay(
+    state_slots: Mapping[int, pathlib.Path],
+    work_slots: Mapping[int, pathlib.Path],
+    source_progress_roots: Sequence[pathlib.Path],
+    semantic_progress_roots: Sequence[pathlib.Path],
+    stage_names: Sequence[str],
+) -> None:
+    for progress in (*semantic_progress_roots, *source_progress_roots):
+        _remove_qualification_project_model_replay_root(
+            progress, "qualification project-model progress"
+        )
+    for slot_number, state_slot in state_slots.items():
+        committed_stage_count = int(
+            QUALIFICATION_PROJECT_MODEL_REPLAY_SLOTS[slot_number][
+                "committed_stage_count"
+            ]
+        )
+        for sequence in range(committed_stage_count, 3, -1):
+            stage_name = stage_names[sequence - 1]
+            stage = _exact_plain_child(
+                state_slot,
+                f"{sequence:04}-{stage_name.replace('_', '-')}",
+                f"Go slot {slot_number} stale stage",
+            )
+            _remove_qualification_project_model_replay_root(
+                stage, f"Go slot {slot_number} stale stage"
+            )
+        _require_exact_directory_children(
+            state_slot,
+            {
+                "0001-payload",
+                "0002-materialization",
+                "0003-test-materialization",
+            },
+            f"rewound Go state slot {slot_number}",
+        )
+        for progress_name in ("source-progress", "semantic-progress"):
+            if work_slots[slot_number].joinpath(progress_name).exists():
+                raise ValueError(
+                    f"Go slot {slot_number} {progress_name} survived migration"
+                )
+
+
+def migrate_qualification_project_model_replay(
+    manifest_path: pathlib.Path,
+    state_root: pathlib.Path,
+    work_root: pathlib.Path,
+    frame_run_id: int,
+    migration_name: str,
+    source_run_id: int,
+    source_head_sha: str,
+    source_artifact_id: int,
+    source_artifact_digest: str,
+    source_artifact_size: int,
+) -> None:
+    if migration_name != QUALIFICATION_PROJECT_MODEL_REPLAY_MIGRATION_NAME:
+        raise ValueError(
+            "qualification project-model replay migration is not allowlisted"
+        )
+    if (
+        source_run_id != QUALIFICATION_PROJECT_MODEL_REPLAY_MIGRATION_SOURCE_RUN_ID
+        or source_head_sha
+        != QUALIFICATION_PROJECT_MODEL_REPLAY_MIGRATION_SOURCE_HEAD_SHA
+        or source_artifact_id
+        != QUALIFICATION_PROJECT_MODEL_REPLAY_MIGRATION_SOURCE_ARTIFACT_ID
+        or source_artifact_digest
+        != QUALIFICATION_PROJECT_MODEL_REPLAY_MIGRATION_SOURCE_ARTIFACT_DIGEST
+        or source_artifact_size
+        != QUALIFICATION_PROJECT_MODEL_REPLAY_MIGRATION_SOURCE_ARTIFACT_SIZE
+    ):
+        raise ValueError("qualification project-model replay source artifact drifted")
+    manifest = _require_mapping(
+        _read_json(manifest_path, "transport manifest"), "transport manifest"
+    )
+    if manifest.get("schema_version") != 27:
+        raise ValueError(
+            "qualification project-model replay requires manifest schema 27"
+        )
+    if (
+        validate_manifest(manifest_path, frame_run_id)
+        != QUALIFICATION_PROJECT_MODEL_REPLAY_MIGRATION_FROM_COLLECTOR_SHA
+    ):
+        raise ValueError("qualification project-model replay source collector drifted")
+    if state_root.name != "historical-v2-assessment-state":
+        raise ValueError("qualification project-model replay state root name drifted")
+    if work_root.name != "historical-v2-assessment-work":
+        raise ValueError("qualification project-model replay work root name drifted")
+    _require_exact_directory_children(state_root, {"go"}, "assessment state root")
+    _require_exact_directory_children(work_root, {"go"}, "assessment work root")
+    state_language = _exact_plain_child(state_root, "go", "Go state root")
+    work_language = _exact_plain_child(work_root, "go", "Go work root")
+
+    stage_names = (
+        "payload",
+        "materialization",
+        "test_materialization",
+        "source_census",
+        "semantic_census",
+        "assessment_identity",
+    )
+    state_slots: dict[int, pathlib.Path] = {}
+    work_slots: dict[int, pathlib.Path] = {}
+    source_progress_roots: list[pathlib.Path] = []
+    semantic_progress_roots: list[pathlib.Path] = []
+    for slot_number, expected in QUALIFICATION_PROJECT_MODEL_REPLAY_SLOTS.items():
+        state_slot, work_slot, source_progress, semantic_progress = (
+            _validate_qualification_project_model_replay_slot(
+                state_language,
+                work_language,
+                slot_number,
+                expected,
+                stage_names,
+            )
+        )
+        state_slots[slot_number] = state_slot
+        work_slots[slot_number] = work_slot
+        source_progress_roots.append(source_progress)
+        if semantic_progress is not None:
+            semantic_progress_roots.append(semantic_progress)
+
+    if _named_work_progress_roots(work_language, "source-progress") != sorted(
+        source_progress_roots
+    ):
+        raise ValueError("qualification project-model source progress scope drifted")
+    if _named_work_progress_roots(work_language, "semantic-progress") != sorted(
+        semantic_progress_roots
+    ):
+        raise ValueError("qualification project-model semantic progress scope drifted")
+    _apply_qualification_project_model_replay(
+        state_slots,
+        work_slots,
+        source_progress_roots,
+        semantic_progress_roots,
+        stage_names,
+    )
 
 def _positive_json_integer(value: Any, label: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
@@ -1391,9 +1754,11 @@ def _migration_record(
     elif migration_name == SEMANTIC_VARIANT_ASSEMBLY_MIGRATION_NAME:
         contract = SEMANTIC_VARIANT_ASSEMBLY_MIGRATION_CONTRACT
         source_collector_sha = SEMANTIC_VARIANT_ASSEMBLY_MIGRATION_FROM_COLLECTOR_SHA
-    elif migration_name == QUALIFICATION_ARTIFACT_MIGRATION_NAME:
-        contract = QUALIFICATION_ARTIFACT_MIGRATION_CONTRACT
-        source_collector_sha = QUALIFICATION_ARTIFACT_MIGRATION_FROM_COLLECTOR_SHA
+    elif migration_name == QUALIFICATION_PROJECT_MODEL_REPLAY_MIGRATION_NAME:
+        contract = QUALIFICATION_PROJECT_MODEL_REPLAY_MIGRATION_CONTRACT
+        source_collector_sha = (
+            QUALIFICATION_PROJECT_MODEL_REPLAY_MIGRATION_FROM_COLLECTOR_SHA
+        )
     else:
         raise ValueError("transport manifest collector migration is not allowlisted")
     return {
@@ -1905,22 +2270,23 @@ def _expected_semantic_variant_assembly_migration(
     )
 
 
-def _expected_qualification_artifact_migration(
+def _expected_qualification_project_model_replay_migration(
     target_collector_sha: str,
 ) -> dict[str, Any]:
     if (
-        target_collector_sha == QUALIFICATION_ARTIFACT_MIGRATION_FROM_COLLECTOR_SHA
+        target_collector_sha
+        == QUALIFICATION_PROJECT_MODEL_REPLAY_MIGRATION_FROM_COLLECTOR_SHA
         or re.fullmatch(r"[0-9a-f]{40}", target_collector_sha) is None
     ):
         raise ValueError("transport manifest collector migration target is invalid")
     return _migration_record(
-        QUALIFICATION_ARTIFACT_MIGRATION_NAME,
+        QUALIFICATION_PROJECT_MODEL_REPLAY_MIGRATION_NAME,
         target_collector_sha,
-        QUALIFICATION_ARTIFACT_MIGRATION_SOURCE_RUN_ID,
-        QUALIFICATION_ARTIFACT_MIGRATION_SOURCE_HEAD_SHA,
-        QUALIFICATION_ARTIFACT_MIGRATION_SOURCE_ARTIFACT_ID,
-        QUALIFICATION_ARTIFACT_MIGRATION_SOURCE_ARTIFACT_DIGEST,
-        QUALIFICATION_ARTIFACT_MIGRATION_SOURCE_ARTIFACT_SIZE,
+        QUALIFICATION_PROJECT_MODEL_REPLAY_MIGRATION_SOURCE_RUN_ID,
+        QUALIFICATION_PROJECT_MODEL_REPLAY_MIGRATION_SOURCE_HEAD_SHA,
+        QUALIFICATION_PROJECT_MODEL_REPLAY_MIGRATION_SOURCE_ARTIFACT_ID,
+        QUALIFICATION_PROJECT_MODEL_REPLAY_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+        QUALIFICATION_PROJECT_MODEL_REPLAY_MIGRATION_SOURCE_ARTIFACT_SIZE,
     )
 
 
@@ -2138,13 +2504,15 @@ def _validate_collector_migrations(
         if len(migrations) >= 26:
             expected.append(
                 _expected_semantic_variant_assembly_migration(
-                    QUALIFICATION_ARTIFACT_MIGRATION_FROM_COLLECTOR_SHA
+                    QUALIFICATION_PROJECT_MODEL_REPLAY_MIGRATION_FROM_COLLECTOR_SHA
                     if len(migrations) >= 27
                     else collector_sha
                 )
             )
         if len(migrations) >= 27:
-            expected.append(_expected_qualification_artifact_migration(collector_sha))
+            expected.append(
+                _expected_qualification_project_model_replay_migration(collector_sha)
+            )
     elif collector_sha != STORAGE_MIGRATION_TO_COLLECTOR_SHA:
         raise ValueError("transport manifest collector migration target drifted")
     if [dict(migration) for migration in migrations] != expected:
@@ -2326,7 +2694,7 @@ def migrate_manifest(
             for item in value.get("collector_migrations", [])
         ]
     elif schema_version == 27:
-        expected_name = QUALIFICATION_ARTIFACT_MIGRATION_NAME
+        expected_name = QUALIFICATION_PROJECT_MODEL_REPLAY_MIGRATION_NAME
         migrations = [
             _require_mapping(item, "transport manifest collector migration")
             for item in value.get("collector_migrations", [])
@@ -2436,6 +2804,22 @@ def _parser() -> argparse.ArgumentParser:
     scip_kind_replay.add_argument("source_artifact_digest")
     scip_kind_replay.add_argument("source_artifact_size", type=_positive_integer)
 
+    project_model_replay = commands.add_parser(
+        "migrate-bounded-qualification-project-model-v8-replay"
+    )
+    project_model_replay.add_argument("manifest", type=pathlib.Path)
+    project_model_replay.add_argument("state_root", type=pathlib.Path)
+    project_model_replay.add_argument("work_root", type=pathlib.Path)
+    project_model_replay.add_argument("frame_run_id", type=_positive_integer)
+    project_model_replay.add_argument("migration_name")
+    project_model_replay.add_argument("source_run_id", type=_positive_integer)
+    project_model_replay.add_argument("source_head_sha")
+    project_model_replay.add_argument("source_artifact_id", type=_positive_integer)
+    project_model_replay.add_argument("source_artifact_digest")
+    project_model_replay.add_argument(
+        "source_artifact_size", type=_positive_integer
+    )
+
     tools = commands.add_parser("validate-tools-provenance")
     tools.add_argument("run", type=pathlib.Path)
     tools.add_argument("artifacts", type=pathlib.Path)
@@ -2490,6 +2874,22 @@ def main(arguments: Sequence[str] | None = None) -> int:
             )
         elif args.command == "migrate-inferred-scip-kind-replay":
             migrate_inferred_scip_kind_replay(
+                args.manifest,
+                args.state_root,
+                args.work_root,
+                args.frame_run_id,
+                args.migration_name,
+                args.source_run_id,
+                args.source_head_sha,
+                args.source_artifact_id,
+                args.source_artifact_digest,
+                args.source_artifact_size,
+            )
+        elif (
+            args.command
+            == "migrate-bounded-qualification-project-model-v8-replay"
+        ):
+            migrate_qualification_project_model_replay(
                 args.manifest,
                 args.state_root,
                 args.work_root,
