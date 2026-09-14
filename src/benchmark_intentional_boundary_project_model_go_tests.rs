@@ -762,6 +762,12 @@ fn compiler_rejected_canonical_context_fails_closed() {
 #[test]
 fn malformed_go_list_error_output_is_not_treated_as_a_rejected_context() {
     assert!(go_list_context_is_valid("{not-json").is_err());
+    assert!(
+        go_list_context_is_valid(
+            r#"{"Dir":"/repo/api","ImportPath":"example/api","Name":"api","Incomplete":true,"Error":{"Err":"invalid package"},"Module":null}{not-json"#,
+        )
+        .is_err()
+    );
 }
 
 #[test]
