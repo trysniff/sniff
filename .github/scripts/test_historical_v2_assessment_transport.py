@@ -776,7 +776,7 @@ class ManifestTests(unittest.TestCase):
         transport.migrate_manifest(
             path,
             transport.FRAME_RUN_ID,
-            transport.QUALIFICATION_ARTIFACT_MIGRATION_FROM_COLLECTOR_SHA,
+            transport.QUALIFICATION_PROJECT_MODEL_REPLAY_MIGRATION_FROM_COLLECTOR_SHA,
             transport.SEMANTIC_VARIANT_ASSEMBLY_MIGRATION_NAME,
             transport.SEMANTIC_VARIANT_ASSEMBLY_MIGRATION_SOURCE_RUN_ID,
             transport.SEMANTIC_VARIANT_ASSEMBLY_MIGRATION_SOURCE_HEAD_SHA,
@@ -3059,7 +3059,9 @@ class ManifestTests(unittest.TestCase):
             self._write_go_package_root_world_manifest(path)
             prior_manifest = json.loads(path.read_text(encoding="utf-8"))
             prior_records = prior_manifest["collector_migrations"]
-            target = transport.QUALIFICATION_ARTIFACT_MIGRATION_FROM_COLLECTOR_SHA
+            target = (
+                transport.QUALIFICATION_PROJECT_MODEL_REPLAY_MIGRATION_FROM_COLLECTOR_SHA
+            )
 
             self.assertEqual(
                 transport.migrate_manifest(
@@ -3133,7 +3135,7 @@ class ManifestTests(unittest.TestCase):
                     transport.SEMANTIC_VARIANT_ASSEMBLY_MIGRATION_SOURCE_ARTIFACT_SIZE,
                 )
 
-    def test_qualification_artifact_migration_is_exact_and_closes_chain(
+    def test_qualification_project_model_replay_migration_is_exact_and_closes_chain(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -3148,12 +3150,12 @@ class ManifestTests(unittest.TestCase):
                     path,
                     transport.FRAME_RUN_ID,
                     target,
-                    transport.QUALIFICATION_ARTIFACT_MIGRATION_NAME,
-                    transport.QUALIFICATION_ARTIFACT_MIGRATION_SOURCE_RUN_ID,
-                    transport.QUALIFICATION_ARTIFACT_MIGRATION_SOURCE_HEAD_SHA,
-                    transport.QUALIFICATION_ARTIFACT_MIGRATION_SOURCE_ARTIFACT_ID,
-                    transport.QUALIFICATION_ARTIFACT_MIGRATION_SOURCE_ARTIFACT_DIGEST,
-                    transport.QUALIFICATION_ARTIFACT_MIGRATION_SOURCE_ARTIFACT_SIZE,
+                    transport.QUALIFICATION_PROJECT_MODEL_REPLAY_MIGRATION_NAME,
+                    transport.QUALIFICATION_PROJECT_MODEL_REPLAY_MIGRATION_SOURCE_RUN_ID,
+                    transport.QUALIFICATION_PROJECT_MODEL_REPLAY_MIGRATION_SOURCE_HEAD_SHA,
+                    transport.QUALIFICATION_PROJECT_MODEL_REPLAY_MIGRATION_SOURCE_ARTIFACT_ID,
+                    transport.QUALIFICATION_PROJECT_MODEL_REPLAY_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+                    transport.QUALIFICATION_PROJECT_MODEL_REPLAY_MIGRATION_SOURCE_ARTIFACT_SIZE,
                 ),
                 target,
             )
@@ -3164,26 +3166,28 @@ class ManifestTests(unittest.TestCase):
                 value["collector_migrations"][26],
                 {
                     "from_collector_sha": (
-                        transport.QUALIFICATION_ARTIFACT_MIGRATION_FROM_COLLECTOR_SHA
+                        transport.QUALIFICATION_PROJECT_MODEL_REPLAY_MIGRATION_FROM_COLLECTOR_SHA
                     ),
                     "migration_contract": (
-                        transport.QUALIFICATION_ARTIFACT_MIGRATION_CONTRACT
+                        transport.QUALIFICATION_PROJECT_MODEL_REPLAY_MIGRATION_CONTRACT
                     ),
-                    "migration_name": transport.QUALIFICATION_ARTIFACT_MIGRATION_NAME,
+                    "migration_name": (
+                        transport.QUALIFICATION_PROJECT_MODEL_REPLAY_MIGRATION_NAME
+                    ),
                     "source_artifact_digest": (
-                        transport.QUALIFICATION_ARTIFACT_MIGRATION_SOURCE_ARTIFACT_DIGEST
+                        transport.QUALIFICATION_PROJECT_MODEL_REPLAY_MIGRATION_SOURCE_ARTIFACT_DIGEST
                     ),
                     "source_artifact_id": (
-                        transport.QUALIFICATION_ARTIFACT_MIGRATION_SOURCE_ARTIFACT_ID
+                        transport.QUALIFICATION_PROJECT_MODEL_REPLAY_MIGRATION_SOURCE_ARTIFACT_ID
                     ),
                     "source_artifact_size": (
-                        transport.QUALIFICATION_ARTIFACT_MIGRATION_SOURCE_ARTIFACT_SIZE
+                        transport.QUALIFICATION_PROJECT_MODEL_REPLAY_MIGRATION_SOURCE_ARTIFACT_SIZE
                     ),
                     "source_head_sha": (
-                        transport.QUALIFICATION_ARTIFACT_MIGRATION_SOURCE_HEAD_SHA
+                        transport.QUALIFICATION_PROJECT_MODEL_REPLAY_MIGRATION_SOURCE_HEAD_SHA
                     ),
                     "source_run_id": (
-                        transport.QUALIFICATION_ARTIFACT_MIGRATION_SOURCE_RUN_ID
+                        transport.QUALIFICATION_PROJECT_MODEL_REPLAY_MIGRATION_SOURCE_RUN_ID
                     ),
                     "to_collector_sha": target,
                 },
@@ -3205,12 +3209,12 @@ class ManifestTests(unittest.TestCase):
                     path,
                     transport.FRAME_RUN_ID,
                     "b" * 40,
-                    transport.QUALIFICATION_ARTIFACT_MIGRATION_NAME,
-                    transport.QUALIFICATION_ARTIFACT_MIGRATION_SOURCE_RUN_ID,
-                    transport.QUALIFICATION_ARTIFACT_MIGRATION_SOURCE_HEAD_SHA,
-                    transport.QUALIFICATION_ARTIFACT_MIGRATION_SOURCE_ARTIFACT_ID,
-                    transport.QUALIFICATION_ARTIFACT_MIGRATION_SOURCE_ARTIFACT_DIGEST,
-                    transport.QUALIFICATION_ARTIFACT_MIGRATION_SOURCE_ARTIFACT_SIZE,
+                    transport.QUALIFICATION_PROJECT_MODEL_REPLAY_MIGRATION_NAME,
+                    transport.QUALIFICATION_PROJECT_MODEL_REPLAY_MIGRATION_SOURCE_RUN_ID,
+                    transport.QUALIFICATION_PROJECT_MODEL_REPLAY_MIGRATION_SOURCE_HEAD_SHA,
+                    transport.QUALIFICATION_PROJECT_MODEL_REPLAY_MIGRATION_SOURCE_ARTIFACT_ID,
+                    transport.QUALIFICATION_PROJECT_MODEL_REPLAY_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+                    transport.QUALIFICATION_PROJECT_MODEL_REPLAY_MIGRATION_SOURCE_ARTIFACT_SIZE,
                 )
 
     @staticmethod
@@ -3454,6 +3458,284 @@ class ManifestTests(unittest.TestCase):
                     ),
                 )
             self.assertTrue(paths["semantic_stage"].is_dir())
+
+    @staticmethod
+    def _write_qualification_project_model_replay_fixture(
+        root: pathlib.Path,
+    ) -> dict[str, object]:
+        manifest = root.joinpath("manifest.json")
+        ManifestTests._write_semantic_variant_assembly_manifest(manifest)
+        state_root = root.joinpath("historical-v2-assessment-state")
+        work_root = root.joinpath("historical-v2-assessment-work")
+        state_language = state_root.joinpath("go")
+        work_language = work_root.joinpath("go")
+        stage_names = (
+            "payload",
+            "materialization",
+            "test_materialization",
+            "source_census",
+            "semantic_census",
+            "assessment_identity",
+        )
+        state_slots: dict[int, pathlib.Path] = {}
+        work_slots: dict[int, pathlib.Path] = {}
+        retained_hashes: dict[int, dict[str, dict[str, str]]] = {}
+        for slot_number, expected in (
+            (122, transport.QUALIFICATION_PROJECT_MODEL_REPLAY_SLOTS[122]),
+            (123, transport.QUALIFICATION_PROJECT_MODEL_REPLAY_SLOTS[123]),
+        ):
+            state_slot = state_language.joinpath(f"slot-{slot_number:04}")
+            state_slot.mkdir(parents=True)
+            state_language.joinpath(f"slot-{slot_number:04}.lock").write_bytes(
+                b"locked"
+            )
+            previous_checkpoint_sha256 = None
+            committed_stage_count = int(expected["committed_stage_count"])
+            for sequence in range(1, committed_stage_count + 1):
+                stage_name = stage_names[sequence - 1]
+                stage = state_slot.joinpath(
+                    f"{sequence:04}-{stage_name.replace('_', '-')}"
+                )
+                stage.mkdir()
+                checkpoint_sha256 = hashlib.sha256(
+                    f"checkpoint/{slot_number}/{sequence}".encode()
+                ).hexdigest()
+                if sequence == 3:
+                    checkpoint_sha256 = str(expected["retained_checkpoint_sha256"])
+                artifact_sha256 = hashlib.sha256(
+                    f"artifact-commitment/{slot_number}/{sequence}".encode()
+                ).hexdigest()
+                artifact = json.dumps(
+                    {"slot_number": slot_number, "stage": stage_name},
+                    separators=(",", ":"),
+                ).encode()
+                stage.joinpath("artifact.json").write_bytes(artifact)
+                checkpoint = {
+                    "schema_version": 1,
+                    "checkpoint_contract": (
+                        "sniffbench-historical-v2-slot-stage-checkpoint-v1"
+                    ),
+                    "selection_sha256": transport.SELECTION_SHA256,
+                    "language": "go",
+                    "slot_number": slot_number,
+                    "canonical_repository": expected["canonical_repository"],
+                    "sequence": sequence,
+                    "previous_checkpoint_sha256": previous_checkpoint_sha256,
+                    "stage": stage_name,
+                    "outcome": {
+                        "status": "completed",
+                        "artifact_kind": stage_name,
+                        "artifact_sha256": artifact_sha256,
+                    },
+                    "checkpoint_sha256": checkpoint_sha256,
+                }
+                checkpoint_bytes = (json.dumps(checkpoint, indent=2) + "\n").encode()
+                stage.joinpath("checkpoint.json").write_bytes(checkpoint_bytes)
+                transaction = {
+                    "schema_version": 1,
+                    "transaction_contract": (
+                        "sniffbench-historical-v2-slot-stage-transaction-v1"
+                    ),
+                    "sequence": sequence,
+                    "checkpoint_sha256": checkpoint_sha256,
+                    "files": [
+                        {
+                            "name": "artifact.json",
+                            "sha256": hashlib.sha256(artifact).hexdigest(),
+                            "byte_count": len(artifact),
+                        },
+                        {
+                            "name": "checkpoint.json",
+                            "sha256": hashlib.sha256(checkpoint_bytes).hexdigest(),
+                            "byte_count": len(checkpoint_bytes),
+                        },
+                    ],
+                }
+                stage.joinpath("_transaction.json").write_text(
+                    json.dumps(transaction, indent=2) + "\n", encoding="utf-8"
+                )
+                previous_checkpoint_sha256 = checkpoint_sha256
+            state_slots[slot_number] = state_slot
+            retained_hashes[slot_number] = {
+                stage.name: {
+                    path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+                    for path in stage.iterdir()
+                }
+                for stage in state_slot.iterdir()
+                if stage.name.startswith(("0001-", "0002-", "0003-"))
+            }
+
+            work_slot = work_language.joinpath(f"slot-{slot_number:04}")
+            for side in ("base", "patched"):
+                progress = work_slot.joinpath("source-progress", side)
+                progress.mkdir(parents=True)
+                progress.joinpath("progress.json").write_text(
+                    f"source/{slot_number}/{side}\n", encoding="utf-8"
+                )
+            repository = work_slot.joinpath("repository")
+            repository.mkdir()
+            repository.joinpath("go.mod").write_text(
+                f"module fixture/{slot_number}\n", encoding="utf-8"
+            )
+            if slot_number == 122:
+                semantic_progress = work_slot.joinpath(
+                    "semantic-progress", "base", "world"
+                )
+                semantic_progress.mkdir(parents=True)
+                semantic_progress.joinpath("progress.json").write_text(
+                    "semantic\n", encoding="utf-8"
+                )
+            work_slots[slot_number] = work_slot
+
+        unrelated_work = work_language.joinpath("slot-0124", "repository")
+        unrelated_work.mkdir(parents=True)
+        unrelated_work.joinpath("go.mod").write_text(
+            "module fixture/124\n", encoding="utf-8"
+        )
+        return {
+            "manifest": manifest,
+            "state_root": state_root,
+            "work_root": work_root,
+            "state_slots": state_slots,
+            "work_slots": work_slots,
+            "retained_hashes": retained_hashes,
+            "unrelated_work": unrelated_work.joinpath("go.mod"),
+        }
+
+    @staticmethod
+    def _migrate_qualification_project_model_replay(
+        paths: dict[str, object], *, source_artifact_id: int | None = None
+    ) -> None:
+        transport.migrate_qualification_project_model_replay(
+            paths["manifest"],
+            paths["state_root"],
+            paths["work_root"],
+            transport.FRAME_RUN_ID,
+            transport.QUALIFICATION_PROJECT_MODEL_REPLAY_MIGRATION_NAME,
+            transport.QUALIFICATION_PROJECT_MODEL_REPLAY_MIGRATION_SOURCE_RUN_ID,
+            transport.QUALIFICATION_PROJECT_MODEL_REPLAY_MIGRATION_SOURCE_HEAD_SHA,
+            (
+                transport.QUALIFICATION_PROJECT_MODEL_REPLAY_MIGRATION_SOURCE_ARTIFACT_ID
+                if source_artifact_id is None
+                else source_artifact_id
+            ),
+            transport.QUALIFICATION_PROJECT_MODEL_REPLAY_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+            transport.QUALIFICATION_PROJECT_MODEL_REPLAY_MIGRATION_SOURCE_ARTIFACT_SIZE,
+        )
+
+    def test_qualification_project_model_replay_rewinds_exact_stale_slots(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            paths = self._write_qualification_project_model_replay_fixture(
+                pathlib.Path(temporary)
+            )
+            manifest_before = paths["manifest"].read_bytes()
+            self.assertEqual(
+                transport.main(
+                    [
+                        "migrate-bounded-qualification-project-model-v8-replay",
+                        str(paths["manifest"]),
+                        str(paths["state_root"]),
+                        str(paths["work_root"]),
+                        str(transport.FRAME_RUN_ID),
+                        transport.QUALIFICATION_PROJECT_MODEL_REPLAY_MIGRATION_NAME,
+                        str(
+                            transport.QUALIFICATION_PROJECT_MODEL_REPLAY_MIGRATION_SOURCE_RUN_ID
+                        ),
+                        transport.QUALIFICATION_PROJECT_MODEL_REPLAY_MIGRATION_SOURCE_HEAD_SHA,
+                        str(
+                            transport.QUALIFICATION_PROJECT_MODEL_REPLAY_MIGRATION_SOURCE_ARTIFACT_ID
+                        ),
+                        transport.QUALIFICATION_PROJECT_MODEL_REPLAY_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+                        str(
+                            transport.QUALIFICATION_PROJECT_MODEL_REPLAY_MIGRATION_SOURCE_ARTIFACT_SIZE
+                        ),
+                    ]
+                ),
+                0,
+            )
+            self.assertEqual(paths["manifest"].read_bytes(), manifest_before)
+            for slot_number in (122, 123):
+                state_slot = paths["state_slots"][slot_number]
+                self.assertEqual(
+                    {stage.name for stage in state_slot.iterdir()},
+                    {
+                        "0001-payload",
+                        "0002-materialization",
+                        "0003-test-materialization",
+                    },
+                )
+                observed_hashes = {
+                    stage.name: {
+                        path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+                        for path in stage.iterdir()
+                    }
+                    for stage in state_slot.iterdir()
+                }
+                self.assertEqual(observed_hashes, paths["retained_hashes"][slot_number])
+                work_slot = paths["work_slots"][slot_number]
+                self.assertFalse(work_slot.joinpath("source-progress").exists())
+                self.assertFalse(work_slot.joinpath("semantic-progress").exists())
+                self.assertTrue(work_slot.joinpath("repository", "go.mod").is_file())
+            self.assertEqual(
+                paths["unrelated_work"].read_text(encoding="utf-8"),
+                "module fixture/124\n",
+            )
+
+    def test_qualification_project_model_replay_fails_before_deleting_on_drift(
+        self,
+    ) -> None:
+        def mutate_artifact(paths: dict[str, object]) -> None:
+            artifact = paths["state_slots"][123].joinpath(
+                "0004-source-census", "artifact.json"
+            )
+            artifact.write_bytes(artifact.read_bytes() + b" ")
+
+        def add_unexpected_progress(paths: dict[str, object]) -> None:
+            progress = paths["work_root"].joinpath(
+                "go", "slot-0124", "source-progress", "base"
+            )
+            progress.mkdir(parents=True)
+
+        for name, mutate in {
+            "committed-artifact": mutate_artifact,
+            "unexpected-progress": add_unexpected_progress,
+        }.items():
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as temporary:
+                paths = self._write_qualification_project_model_replay_fixture(
+                    pathlib.Path(temporary)
+                )
+                mutate(paths)
+                with self.assertRaises(ValueError):
+                    self._migrate_qualification_project_model_replay(paths)
+                self.assertTrue(
+                    paths["state_slots"][122]
+                    .joinpath("0006-assessment-identity")
+                    .is_dir()
+                )
+                self.assertTrue(
+                    paths["state_slots"][123].joinpath("0004-source-census").is_dir()
+                )
+                self.assertTrue(
+                    paths["work_slots"][122].joinpath("semantic-progress").is_dir()
+                )
+
+        with tempfile.TemporaryDirectory() as temporary:
+            paths = self._write_qualification_project_model_replay_fixture(
+                pathlib.Path(temporary)
+            )
+            with self.assertRaises(ValueError):
+                self._migrate_qualification_project_model_replay(
+                    paths,
+                    source_artifact_id=(
+                        transport.QUALIFICATION_PROJECT_MODEL_REPLAY_MIGRATION_SOURCE_ARTIFACT_ID
+                        + 1
+                    ),
+                )
+            self.assertTrue(
+                paths["state_slots"][122].joinpath("0006-assessment-identity").is_dir()
+            )
 
     def test_source_required_progress_migration_preserves_source_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -4103,9 +4385,10 @@ class WorkflowContractTests(unittest.TestCase):
             "inferred-scip-kind-replay-v1",
             "committed-go-package-root-worlds-v1",
             "checkpointed-semantic-variant-assembly-v1",
-            "bounded-qualification-artifact-v1",
+            "bounded-qualification-project-model-v8-replay-v1",
             'migrate-source-required-go-semantic-progress',
             'migrate-inferred-scip-kind-replay',
+            'migrate-bounded-qualification-project-model-v8-replay',
             '"$manifest" "$STATE_ROOT" "$WORK_ROOT" "$FRAME_RUN_ID"',
             '"$transport" migrate-manifest',
             '"$PRIOR_HEAD_SHA" "$PRIOR_ARTIFACT_ID"',
@@ -4137,9 +4420,13 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertNotIn('--artifact-root "$COLLECTOR_ROOT"', workflow)
         cleanup = workflow.index("migrate-source-required-go-semantic-progress")
         semantic_replay = workflow.index("migrate-inferred-scip-kind-replay")
+        project_model_replay = workflow.index(
+            "migrate-bounded-qualification-project-model-v8-replay"
+        )
         manifest_migration = workflow.index('"$transport" migrate-manifest')
         self.assertLess(cleanup, manifest_migration)
         self.assertLess(semantic_replay, manifest_migration)
+        self.assertLess(project_model_replay, manifest_migration)
         replay = workflow.index("- name: Replay stale compiler public-surface censuses")
         install = workflow.index("- name: Install every pinned semantic indexer")
         assess = workflow.index("- name: Assess a bounded resumable slot slice")
