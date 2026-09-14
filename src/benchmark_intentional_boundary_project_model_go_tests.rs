@@ -723,6 +723,54 @@ fn identical_consumed_compiler_facts_form_one_lossless_variant_class() {
 }
 
 #[test]
+fn compiler_rejected_nonbaseline_context_is_not_a_compiler_world() {
+    let baseline = go_variant();
+    let rejected = go_variant_for("linux", "amd64", false, &["plugins"]);
+    let outputs = collapse_go_list_outputs(vec![
+        GoListExecutionOutput {
+            toolchain_identity_sha256: "a".repeat(64),
+            variant: baseline.clone(),
+            equivalent_variants: Vec::new(),
+            stdout: r#"{"Dir":"/repo/plugins","ImportPath":"example/plugins","Name":"plugins","GoFiles":["minimum.go"],"Module":null}"#.to_string(),
+        },
+        GoListExecutionOutput {
+            toolchain_identity_sha256: "a".repeat(64),
+            variant: rejected,
+            equivalent_variants: Vec::new(),
+            stdout: r#"{"Dir":"/repo/plugins","ImportPath":"example/plugins","Name":"plugins","GoFiles":["minimum.go"],"Module":null,"Incomplete":true,"Error":{"Err":"found packages main and plugins"}}"#.to_string(),
+        },
+    ])
+    .unwrap();
+
+    assert_eq!(outputs.len(), 1);
+    assert_eq!(outputs[0].variant, baseline);
+}
+
+#[test]
+fn compiler_rejected_canonical_context_fails_closed() {
+    let error = collapse_go_list_outputs(vec![GoListExecutionOutput {
+        toolchain_identity_sha256: "a".repeat(64),
+        variant: go_variant(),
+        equivalent_variants: Vec::new(),
+        stdout: r#"{"Dir":"/repo/api","ImportPath":"example/api","Name":"api","Incomplete":true,"Error":{"Err":"invalid package"},"Module":null}"#.to_string(),
+    }])
+    .unwrap_err();
+
+    assert!(error.contains("canonical portable Go context"), "{error}");
+}
+
+#[test]
+fn malformed_go_list_error_output_is_not_treated_as_a_rejected_context() {
+    assert!(go_list_context_is_valid("{not-json").is_err());
+    assert!(
+        go_list_context_is_valid(
+            r#"{"Dir":"/repo/api","ImportPath":"example/api","Name":"api","Incomplete":true,"Error":{"Err":"invalid package"},"Module":null}{not-json"#,
+        )
+        .is_err()
+    );
+}
+
+#[test]
 fn equivalent_variant_ledger_is_identity_committed_and_structurally_validated() {
     let (root, inventory) = repository();
     let equivalent = go_variant_for("linux", "amd64", false, &["enterprise"]);
@@ -1354,6 +1402,57 @@ fn real_go_list_is_sandboxed_or_fails_as_typed_unavailable() {
             "unexpected missing-Go error: {error}"
         );
     }
+}
+
+#[test]
+fn real_go_list_structurally_marks_a_mixed_package_tag_context_invalid() {
+    if !Command::new("go")
+        .arg("version")
+        .output()
+        .is_ok_and(|output| output.status.success())
+    {
+        return;
+    }
+    let root = tempfile::tempdir().unwrap();
+    fs::create_dir(root.path().join("plugins")).unwrap();
+    fs::write(
+        root.path().join("go.mod"),
+        "module example.com/mixed\n\ngo 1.22\n",
+    )
+    .unwrap();
+    fs::write(
+        root.path().join("plugins/minimum.go"),
+        "package plugins\nfunc Minimum() {}\n",
+    )
+    .unwrap();
+    fs::write(
+        root.path().join("plugins/generate.go"),
+        "//go:build plugins\n\npackage main\nfunc main() {}\n",
+    )
+    .unwrap();
+
+    let output = Command::new("go")
+        .arg("-C")
+        .arg(root.path())
+        .args([
+            "list",
+            "-e",
+            "-json",
+            "-find",
+            "-mod=readonly",
+            "-buildvcs=false",
+            "-tags=plugins",
+            "./...",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "go list -e failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(!go_list_context_is_valid(&stdout).unwrap(), "{stdout}");
 }
 
 #[test]
