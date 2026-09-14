@@ -2,7 +2,7 @@ use super::{IntentionalBoundaryManifestDeclarationKind, IntentionalBoundaryManif
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-pub const INTENTIONAL_BOUNDARY_PROJECT_MODEL_CENSUS_SCHEMA_VERSION: u32 = 7;
+pub const INTENTIONAL_BOUNDARY_PROJECT_MODEL_CENSUS_SCHEMA_VERSION: u32 = 8;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -181,6 +181,8 @@ pub struct IntentionalBoundaryProjectModelExecution {
     pub execution_id: String,
     pub provider: IntentionalBoundaryProjectModelProvider,
     pub variant: IntentionalBoundaryProjectModelVariant,
+    /// Exact Go contexts with the same canonical project-model projection as `variant`.
+    pub equivalent_variants: Vec<IntentionalBoundaryProjectModelVariant>,
     pub invocation_anchor_repository_path: String,
     pub invocation_anchor_object_id: String,
     pub toolchain_identity_sha256: String,

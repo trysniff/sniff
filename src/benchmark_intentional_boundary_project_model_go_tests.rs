@@ -612,9 +612,10 @@ fn rejects_broken_repeated_or_unbounded_toolchain_platforms() {
         );
     }
 
-    let unbounded_tags = (0..12)
+    let mut unbounded_tags = (0..15)
         .map(|index| format!("tag{index}"))
         .collect::<Vec<_>>();
+    unbounded_tags.sort();
     assert!(
         parse_go_dist_variants(
             r#"[{"GOOS":"linux","GOARCH":"amd64","CgoSupported":false,"FirstClass":true}]"#,
@@ -626,9 +627,10 @@ fn rejects_broken_repeated_or_unbounded_toolchain_platforms() {
         .is_err()
     );
 
-    let unbounded_architecture_features = (0..12)
+    let mut unbounded_architecture_features = (0..15)
         .map(|index| format!("wasm.feature{index}"))
         .collect::<Vec<_>>();
+    unbounded_architecture_features.sort();
     assert!(
         parse_go_dist_variants(
             r#"[{"GOOS":"wasip1","GOARCH":"wasm","CgoSupported":false,"FirstClass":false}]"#,
@@ -639,7 +641,147 @@ fn rejects_broken_repeated_or_unbounded_toolchain_platforms() {
         )
         .is_err()
     );
-    assert_eq!(GO_VARIANT_LIMIT, 2_048);
+    assert_eq!(GO_VARIANT_LIMIT, 16_384);
+}
+
+#[test]
+fn accepts_a_finite_variant_domain_above_the_old_context_ceiling() {
+    let mut tags = (0..11)
+        .map(|index| format!("tag{index}"))
+        .collect::<Vec<_>>();
+    tags.sort();
+    let variants = parse_go_dist_variants(
+        r#"[{"GOOS":"linux","GOARCH":"amd64","CgoSupported":true,"FirstClass":true}]"#,
+        &GoConstraintTagDomain {
+            custom_build_tags: tags,
+            architecture_feature_tags: Vec::new(),
+        },
+    )
+    .unwrap();
+
+    assert_eq!(variants.len(), 4_096);
+    let representative = variants[0].clone();
+    let outputs = collapse_go_list_outputs(
+        variants
+            .into_iter()
+            .map(|variant| GoListExecutionOutput {
+                toolchain_identity_sha256: "a".repeat(64),
+                variant,
+                equivalent_variants: Vec::new(),
+                stdout: r#"{"Dir":"/repo/api","ImportPath":"example/api","Name":"api","GoFiles":["api.go"],"Module":null}"#
+                    .to_string(),
+            })
+            .collect(),
+    )
+    .unwrap();
+    assert_eq!(outputs.len(), 1);
+    assert_eq!(outputs[0].variant, representative);
+    assert_eq!(outputs[0].equivalent_variants.len(), 4_095);
+}
+
+#[test]
+fn identical_consumed_compiler_facts_form_one_lossless_variant_class() {
+    let representative = go_variant_for("linux", "amd64", false, &[]);
+    let equivalent = go_variant_for("linux", "amd64", false, &["enterprise"]);
+    let distinct = go_variant_for("windows", "amd64", false, &[]);
+    let same_projection_left = r#"{"Dir":"/repo/api","ImportPath":"example/api","Name":"api","GoFiles":["api.go"],"Module":null,"Stale":true}"#;
+    let same_projection_right = r#"{"Dir":"/repo/api","ImportPath":"example/api","Name":"api","GoFiles":["api.go"],"Module":null,"Stale":false}"#;
+    let different_projection = r#"{"Dir":"/repo/other","ImportPath":"example/other","Name":"other","GoFiles":["other.go"],"Module":null}"#;
+    let outputs = collapse_go_list_outputs(vec![
+        GoListExecutionOutput {
+            toolchain_identity_sha256: "a".repeat(64),
+            variant: equivalent.clone(),
+            equivalent_variants: Vec::new(),
+            stdout: same_projection_right.to_string(),
+        },
+        GoListExecutionOutput {
+            toolchain_identity_sha256: "a".repeat(64),
+            variant: distinct.clone(),
+            equivalent_variants: Vec::new(),
+            stdout: different_projection.to_string(),
+        },
+        GoListExecutionOutput {
+            toolchain_identity_sha256: "a".repeat(64),
+            variant: representative.clone(),
+            equivalent_variants: Vec::new(),
+            stdout: same_projection_left.to_string(),
+        },
+    ])
+    .unwrap();
+
+    assert_eq!(outputs.len(), 2);
+    let class = outputs
+        .iter()
+        .find(|output| output.variant == representative)
+        .unwrap();
+    assert_eq!(class.equivalent_variants, [equivalent]);
+    assert!(
+        outputs
+            .iter()
+            .any(|output| { output.variant == distinct && output.equivalent_variants.is_empty() })
+    );
+}
+
+#[test]
+fn equivalent_variant_ledger_is_identity_committed_and_structurally_validated() {
+    let (root, inventory) = repository();
+    let equivalent = go_variant_for("linux", "amd64", false, &["enterprise"]);
+    let census = parse_intentional_boundary_go_list_with_equivalents(
+        root.path(),
+        &inventory,
+        "go.mod",
+        &"a".repeat(64),
+        go_variant(),
+        vec![equivalent.clone()],
+        &go_list_output(root.path(), "go.mod"),
+    )
+    .unwrap();
+
+    assert_eq!(census.executions[0].equivalent_variants, [equivalent]);
+    assert!(census.executions[0].execution_id.starts_with("ibpme-v8:"));
+    validate_intentional_boundary_project_model_census_commitment(&inventory, &census).unwrap();
+
+    let mut repeated = census;
+    let duplicate = repeated.executions[0].equivalent_variants[0].clone();
+    repeated.executions[0].equivalent_variants.push(duplicate);
+    assert!(
+        validate_intentional_boundary_project_model_census_commitment(&inventory, &repeated)
+            .is_err()
+    );
+}
+
+#[test]
+fn equivalent_variant_cannot_reappear_in_another_execution() {
+    let (root, inventory) = repository();
+    let equivalent = go_variant_for("linux", "amd64", false, &["enterprise"]);
+    let census = census_go_project_models_with_executor(
+        &inventory.repository,
+        &inventory.revision,
+        root.path(),
+        &inventory,
+        |execution_root, manifest, _| {
+            let stdout = String::from_utf8(go_list_output(execution_root, manifest)).unwrap();
+            Ok(vec![
+                GoListExecutionOutput {
+                    toolchain_identity_sha256: "a".repeat(64),
+                    variant: go_variant(),
+                    equivalent_variants: vec![equivalent.clone()],
+                    stdout: stdout.clone(),
+                },
+                GoListExecutionOutput {
+                    toolchain_identity_sha256: "a".repeat(64),
+                    variant: equivalent.clone(),
+                    equivalent_variants: Vec::new(),
+                    stdout,
+                },
+            ])
+        },
+    )
+    .unwrap();
+
+    let error = validate_intentional_boundary_project_model_census_commitment(&inventory, &census)
+        .unwrap_err();
+    assert!(error.contains("identity changed"), "{error}");
 }
 
 #[test]
@@ -1036,6 +1178,7 @@ fn collector_executes_every_tracked_go_module_exactly_once() {
             Ok(vec![GoListExecutionOutput {
                 toolchain_identity_sha256: "e".repeat(64),
                 variant: go_variant(),
+                equivalent_variants: Vec::new(),
                 stdout: String::from_utf8(go_list_output(execution_root, manifest)).unwrap(),
             }])
         },
@@ -1062,6 +1205,7 @@ fn collector_rejects_repository_mutation_by_go_list_boundary() {
             Ok(vec![GoListExecutionOutput {
                 toolchain_identity_sha256: "f".repeat(64),
                 variant: go_variant(),
+                equivalent_variants: Vec::new(),
                 stdout: String::from_utf8(go_list_output(root.path(), manifest)).unwrap(),
             }])
         },
@@ -1159,24 +1303,28 @@ fn real_go_list_is_sandboxed_or_fails_as_typed_unavailable() {
                 .executions
                 .iter()
                 .find(|execution| {
-                    matches!(
-                        &execution.variant,
-                        IntentionalBoundaryProjectModelVariant::Go {
-                            goos,
-                            goarch,
-                            cgo_enabled: false,
-                            architecture: IntentionalBoundaryProjectModelGoArchitecture::Explicit {
-                                environment_variable,
-                                value,
-                            },
-                            ..
-                        } if goos == "linux"
-                            && goarch == "amd64"
-                            && environment_variable == "GOAMD64"
-                            && value == level
-                    )
+                    std::iter::once(&execution.variant)
+                        .chain(&execution.equivalent_variants)
+                        .any(|variant| {
+                            matches!(
+                                variant,
+                                IntentionalBoundaryProjectModelVariant::Go {
+                                    goos,
+                                    goarch,
+                                    cgo_enabled: false,
+                                    architecture: IntentionalBoundaryProjectModelGoArchitecture::Explicit {
+                                        environment_variable,
+                                        value,
+                                    },
+                                    ..
+                                } if goos == "linux"
+                                    && goarch == "amd64"
+                                    && environment_variable == "GOAMD64"
+                                    && value == level
+                            )
+                        })
                 })
-                .unwrap_or_else(|| panic!("missing Linux/amd64/{level} execution"));
+                .unwrap_or_else(|| panic!("missing Linux/amd64/{level} execution coverage"));
             let package = census
                 .targets
                 .iter()

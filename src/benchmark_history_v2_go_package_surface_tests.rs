@@ -27,6 +27,7 @@ fn model(
                     build_tags: Vec::new(),
                     architecture: IntentionalBoundaryProjectModelGoArchitecture::Default,
                 },
+                equivalent_variants: Vec::new(),
                 invocation_anchor_repository_path: "go.mod".to_string(),
                 invocation_anchor_object_id: "d".repeat(40),
                 toolchain_identity_sha256: "e".repeat(64),

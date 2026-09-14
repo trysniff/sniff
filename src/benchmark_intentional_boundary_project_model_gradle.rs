@@ -202,27 +202,11 @@ pub fn parse_intentional_boundary_gradle_tooling_model(
     let variant = super::IntentionalBoundaryProjectModelVariant::Gradle { kotlin_projects };
     let normalized_model_sha256 =
         compute_normalized_model_sha256(Provider::GradleToolingApi, &covered_manifests, &targets)?;
-    let execution_id = compute_execution_id(
-        Provider::GradleToolingApi,
-        invocation_settings_repository_path,
-        &invocation_entry.object_id,
-        toolchain_identity_sha256,
-        GRADLE_TOOLING_COMMAND_CONTRACT,
-        &variant,
-        &normalized_model_sha256,
-    )?;
-    for target in &mut targets {
-        target.execution_id = execution_id.clone();
-        target.target_id = compute_target_id(target)?;
-    }
-    targets.sort();
-    if targets.windows(2).any(|pair| pair[0] >= pair[1]) {
-        return Err("Gradle Tooling API produced duplicate normalized projects".to_string());
-    }
-    let execution = IntentionalBoundaryProjectModelExecution {
-        execution_id,
+    let mut execution = IntentionalBoundaryProjectModelExecution {
+        execution_id: String::new(),
         provider: Provider::GradleToolingApi,
         variant,
+        equivalent_variants: Vec::new(),
         invocation_anchor_repository_path: invocation_settings_repository_path.to_string(),
         invocation_anchor_object_id: invocation_entry.object_id.clone(),
         toolchain_identity_sha256: toolchain_identity_sha256.to_string(),
@@ -231,6 +215,16 @@ pub fn parse_intentional_boundary_gradle_tooling_model(
         covered_manifest_repository_paths: covered_manifests,
         target_count: targets.len(),
     };
+    execution.execution_id = compute_execution_id(&execution)?;
+    let execution_id = execution.execution_id.clone();
+    for target in &mut targets {
+        target.execution_id = execution_id.clone();
+        target.target_id = compute_target_id(target)?;
+    }
+    targets.sort();
+    if targets.windows(2).any(|pair| pair[0] >= pair[1]) {
+        return Err("Gradle Tooling API produced duplicate normalized projects".to_string());
+    }
     finish_project_model_census(inventory, vec![execution], targets)
 }
 

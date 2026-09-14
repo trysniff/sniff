@@ -8,7 +8,7 @@ use std::fs;
 use std::io::ErrorKind;
 use std::path::{Component, Path};
 
-pub(super) const GO_VARIANT_LIMIT: usize = 2_048;
+pub(super) const GO_VARIANT_LIMIT: usize = 16_384;
 const GO_CONSTRAINT_SCHEMA_VERSION: u32 = 1;
 const GO_CONSTRAINT_HELPER_NAME: &str = "sniff-build-constraints.go";
 const GO_CONSTRAINT_REQUEST_NAME: &str = "sniff-build-constraints-request.json";
@@ -92,7 +92,7 @@ pub(super) fn go_project_model_pipeline_identity(
     dependency_preparation_identity: &str,
 ) -> Result<String, String> {
     hash_json(&(
-        "sniff-go-project-model-pipeline-v2",
+        "sniff-go-project-model-pipeline-v3",
         toolchain_identity_sha256,
         dependency_preparation_identity,
         GO_CONSTRAINT_HELPER_SOURCE,

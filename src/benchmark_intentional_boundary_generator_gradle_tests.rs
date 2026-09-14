@@ -119,6 +119,7 @@ fn fixture() -> (
             execution_id,
             provider: IntentionalBoundaryProjectModelProvider::GradleToolingApi,
             variant: IntentionalBoundaryProjectModelVariant::Default,
+            equivalent_variants: Vec::new(),
             invocation_anchor_repository_path: "settings.gradle.kts".to_string(),
             invocation_anchor_object_id: "b".repeat(40),
             toolchain_identity_sha256: "c".repeat(64),

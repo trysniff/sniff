@@ -331,16 +331,7 @@ fn recommit_project_model_variant(
     mut census: IntentionalBoundaryProjectModelCensus,
 ) -> IntentionalBoundaryProjectModelCensus {
     let execution = &mut census.executions[0];
-    execution.execution_id = compute_execution_id(
-        execution.provider,
-        &execution.invocation_anchor_repository_path,
-        &execution.invocation_anchor_object_id,
-        &execution.toolchain_identity_sha256,
-        &execution.command_contract,
-        &execution.variant,
-        &execution.normalized_model_sha256,
-    )
-    .unwrap();
+    execution.execution_id = compute_execution_id(execution).unwrap();
     for target in &mut census.targets {
         target.execution_id = execution.execution_id.clone();
         target.target_id = compute_target_id(target).unwrap();

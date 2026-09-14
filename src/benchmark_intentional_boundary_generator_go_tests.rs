@@ -72,6 +72,7 @@ fn project_models(module: &str, sources: &[&str]) -> IntentionalBoundaryProjectM
                 build_tags: Vec::new(),
                 architecture: IntentionalBoundaryProjectModelGoArchitecture::Default,
             },
+            equivalent_variants: Vec::new(),
             invocation_anchor_repository_path: module.to_string(),
             invocation_anchor_object_id: "3".repeat(40),
             toolchain_identity_sha256: "4".repeat(64),
