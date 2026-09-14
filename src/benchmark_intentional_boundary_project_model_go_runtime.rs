@@ -230,9 +230,11 @@ where
                 inventory,
                 manifest_path,
                 &output.toolchain_identity_sha256,
-                output.variant,
-                output.equivalent_variants,
-                output.module_identity.as_ref(),
+                GoListVariantLedger {
+                    variant: output.variant,
+                    equivalent_variants: output.equivalent_variants,
+                    module_identity: output.module_identity.as_ref(),
+                },
                 output.stdout.as_bytes(),
             )
             .map_err(|detail| {
@@ -505,26 +507,31 @@ fn run_go_lists(
             })?,
         )
     };
-    run_go_variant_classes(
+    let runtime = GoVariantRuntime {
         root,
-        &cache,
+        cache: &cache,
         manifest_repository_path,
         module_directory,
-        &dependency_preparation_identity,
-        &platform_execution.toolchain_identity_sha256,
-        module_identity.as_ref(),
-        variants,
-    )
+        dependency_preparation_identity: &dependency_preparation_identity,
+        expected_toolchain_identity_sha256: &platform_execution.toolchain_identity_sha256,
+        module_identity: module_identity.as_ref(),
+    };
+    run_go_variant_classes(&runtime, variants)
+}
+
+#[derive(Clone, Copy)]
+struct GoVariantRuntime<'a> {
+    root: &'a Path,
+    cache: &'a Path,
+    manifest_repository_path: &'a str,
+    module_directory: &'a str,
+    dependency_preparation_identity: &'a str,
+    expected_toolchain_identity_sha256: &'a str,
+    module_identity: Option<&'a GoListModule>,
 }
 
 fn run_go_variant_classes(
-    root: &Path,
-    cache: &Path,
-    manifest_repository_path: &str,
-    module_directory: &str,
-    dependency_preparation_identity: &str,
-    expected_toolchain_identity_sha256: &str,
-    module_identity: Option<&GoListModule>,
+    runtime: &GoVariantRuntime<'_>,
     variants: Vec<IntentionalBoundaryProjectModelVariant>,
 ) -> Result<Vec<GoListExecutionOutput>, ProjectModelDerivationError> {
     let mut classes = GoListClasses::new();
@@ -533,20 +540,7 @@ fn run_go_variant_classes(
             let handles = chunk
                 .iter()
                 .cloned()
-                .map(|variant| {
-                    scope.spawn(move || {
-                        run_go_variant(
-                            root,
-                            cache,
-                            manifest_repository_path,
-                            module_directory,
-                            dependency_preparation_identity,
-                            expected_toolchain_identity_sha256,
-                            module_identity,
-                            variant,
-                        )
-                    })
-                })
+                .map(|variant| scope.spawn(move || run_go_variant(runtime, variant)))
                 .collect::<Vec<_>>();
             let mut outputs = Vec::with_capacity(handles.len());
             for handle in handles {
@@ -554,7 +548,7 @@ fn run_go_variant_classes(
                     go_error(
                         ProjectModelDerivationErrorKind::InfrastructureFailed,
                         IntentionalBoundaryProjectModelFailurePhase::Execution,
-                        Some(manifest_repository_path),
+                        Some(runtime.manifest_repository_path),
                         "parallel go list worker panicked",
                     )
                 })??);
@@ -566,7 +560,7 @@ fn run_go_variant_classes(
                 go_error(
                     ProjectModelDerivationErrorKind::ProviderOutputIncomplete,
                     IntentionalBoundaryProjectModelFailurePhase::OutputValidation,
-                    Some(manifest_repository_path),
+                    Some(runtime.manifest_repository_path),
                     detail,
                 )
             })?;
@@ -575,7 +569,7 @@ fn run_go_variant_classes(
                     return Err(go_error(
                         ProjectModelDerivationErrorKind::ProviderRejectedRepository,
                         IntentionalBoundaryProjectModelFailurePhase::Execution,
-                        Some(manifest_repository_path),
+                        Some(runtime.manifest_repository_path),
                         "required Go compiler context was rejected by go list",
                     ));
                 }
@@ -585,13 +579,13 @@ fn run_go_variant_classes(
                 go_error(
                     ProjectModelDerivationErrorKind::ProviderOutputIncomplete,
                     IntentionalBoundaryProjectModelFailurePhase::OutputValidation,
-                    Some(manifest_repository_path),
+                    Some(runtime.manifest_repository_path),
                     detail,
                 )
             })?;
         }
     }
-    finish_go_list_classes(classes, manifest_repository_path)
+    finish_go_list_classes(classes, runtime.manifest_repository_path)
 }
 
 fn insert_go_list_output(
@@ -651,7 +645,7 @@ fn finish_go_list_classes(
             if matches!(
                 query,
                 IntentionalBoundaryProjectModelGoQuery::StandaloneSource { .. }
-            ) && variants.len() > 0
+            ) && !variants.is_empty()
             {
                 return Err(go_error(
                     ProjectModelDerivationErrorKind::ProviderOutputIncomplete,
@@ -718,15 +712,18 @@ fn is_canonical_portable_go_variant(variant: &IntentionalBoundaryProjectModelVar
 }
 
 fn run_go_variant(
-    root: &Path,
-    cache: &Path,
-    manifest_repository_path: &str,
-    module_directory: &str,
-    dependency_preparation_identity: &str,
-    expected_toolchain_identity_sha256: &str,
-    module_identity: Option<&GoListModule>,
+    runtime: &GoVariantRuntime<'_>,
     variant: IntentionalBoundaryProjectModelVariant,
 ) -> Result<GoListExecutionOutput, ProjectModelDerivationError> {
+    let GoVariantRuntime {
+        root,
+        cache,
+        manifest_repository_path,
+        module_directory,
+        dependency_preparation_identity,
+        expected_toolchain_identity_sha256,
+        module_identity,
+    } = *runtime;
     let IntentionalBoundaryProjectModelVariant::Go {
         goos,
         goarch,

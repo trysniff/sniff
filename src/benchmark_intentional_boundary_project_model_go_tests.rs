@@ -818,9 +818,11 @@ fn equivalent_variant_ledger_is_identity_committed_and_structurally_validated() 
         &inventory,
         "go.mod",
         &"a".repeat(64),
-        go_variant(),
-        vec![equivalent.clone()],
-        None,
+        GoListVariantLedger {
+            variant: go_variant(),
+            equivalent_variants: vec![equivalent.clone()],
+            module_identity: None,
+        },
         &go_list_output(root.path(), "go.mod"),
     )
     .unwrap();
@@ -1028,9 +1030,11 @@ fn standalone_go_list_target_is_bound_to_exact_source_and_module_identity() {
         &inventory,
         "go.mod",
         &"a".repeat(64),
-        variant,
-        Vec::new(),
-        Some(&module_identity),
+        GoListVariantLedger {
+            variant,
+            equivalent_variants: Vec::new(),
+            module_identity: Some(&module_identity),
+        },
         &stdout,
     )
     .unwrap();

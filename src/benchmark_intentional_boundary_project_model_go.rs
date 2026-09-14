@@ -101,6 +101,12 @@ struct GoPackageContext<'a> {
     revision: &'a str,
 }
 
+struct GoListVariantLedger<'a> {
+    variant: IntentionalBoundaryProjectModelVariant,
+    equivalent_variants: Vec<IntentionalBoundaryProjectModelVariant>,
+    module_identity: Option<&'a GoListModule>,
+}
+
 fn canonical_go_list_projection(stdout: &str) -> Result<Vec<Vec<u8>>, String> {
     let mut packages = serde_json::Deserializer::from_str(stdout)
         .into_iter::<GoListPackage>()
@@ -128,9 +134,11 @@ pub fn parse_intentional_boundary_go_list(
         inventory,
         invocation_manifest_repository_path,
         toolchain_identity_sha256,
-        variant,
-        Vec::new(),
-        None,
+        GoListVariantLedger {
+            variant,
+            equivalent_variants: Vec::new(),
+            module_identity: None,
+        },
         stdout,
     )
 }
@@ -140,11 +148,14 @@ fn parse_intentional_boundary_go_list_with_equivalents(
     inventory: &IntentionalBoundaryRepositoryInventory,
     invocation_manifest_repository_path: &str,
     toolchain_identity_sha256: &str,
-    variant: IntentionalBoundaryProjectModelVariant,
-    equivalent_variants: Vec<IntentionalBoundaryProjectModelVariant>,
-    module_identity: Option<&GoListModule>,
+    ledger: GoListVariantLedger<'_>,
     stdout: &[u8],
 ) -> Result<IntentionalBoundaryProjectModelCensus, String> {
+    let GoListVariantLedger {
+        variant,
+        equivalent_variants,
+        module_identity,
+    } = ledger;
     if !is_sha256(toolchain_identity_sha256) {
         return Err("Go toolchain identity is not SHA-256".to_string());
     }
