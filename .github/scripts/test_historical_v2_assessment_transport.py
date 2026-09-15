@@ -3966,6 +3966,8 @@ class ManifestTests(unittest.TestCase):
                 + "\n",
                 encoding="utf-8",
             )
+            source_stages[slot_number] = stage
+        for slot_number in transport.QUALIFICATION_PROJECT_MODEL_V10_REPLAY_SLOTS:
             for side in ("base", "patched"):
                 progress = paths["work_slots"][slot_number].joinpath(
                     "source-progress", side
@@ -3974,7 +3976,6 @@ class ManifestTests(unittest.TestCase):
                 progress.joinpath("progress.json").write_text(
                     f"source-v10/{slot_number}/{side}\n", encoding="utf-8"
                 )
-            source_stages[slot_number] = stage
         paths["v10_source_stages"] = source_stages
 
     @staticmethod
@@ -4232,7 +4233,8 @@ class ManifestTests(unittest.TestCase):
             self._prepare_qualification_project_model_v10_replay(paths)
             manifest_before = paths["manifest"].read_bytes()
             slot_124_state_before = snapshot(paths["state_slots"][124])
-            slot_124_work_before = snapshot(paths["work_slots"][124])
+            slot_124_repository = paths["work_slots"][124].joinpath("repository")
+            slot_124_repository_before = snapshot(slot_124_repository)
 
             self.assertEqual(
                 transport.main(
@@ -4287,7 +4289,10 @@ class ManifestTests(unittest.TestCase):
                     .exists()
                 )
             self.assertEqual(snapshot(paths["state_slots"][124]), slot_124_state_before)
-            self.assertEqual(snapshot(paths["work_slots"][124]), slot_124_work_before)
+            self.assertEqual(snapshot(slot_124_repository), slot_124_repository_before)
+            self.assertFalse(
+                paths["work_slots"][124].joinpath("source-progress").exists()
+            )
 
     def test_qualification_project_model_v10_replay_fails_before_mutation_on_drift(
         self,
@@ -4316,8 +4321,18 @@ class ManifestTests(unittest.TestCase):
             side.joinpath("progress.json").unlink()
             side.rmdir()
 
+        def remove_slot_124_source_progress(paths: dict[str, object]) -> None:
+            progress = paths["work_slots"][124].joinpath("source-progress")
+            for side_name in ("base", "patched"):
+                side = progress.joinpath(side_name)
+                side.joinpath("progress.json").unlink()
+                side.rmdir()
+            progress.rmdir()
+
         def add_unexpected_source_progress(paths: dict[str, object]) -> None:
-            progress = paths["work_slots"][124].joinpath("source-progress", "base")
+            progress = paths["work_root"].joinpath(
+                "go", "slot-0125", "source-progress", "base"
+            )
             progress.mkdir(parents=True)
 
         def add_semantic_progress(paths: dict[str, object]) -> None:
@@ -4330,6 +4345,7 @@ class ManifestTests(unittest.TestCase):
         for name, mutate in {
             "tampered-source-stage": tamper_source_stage,
             "missing-source-progress-side": remove_source_progress_side,
+            "missing-slot-124-source-progress": remove_slot_124_source_progress,
             "unexpected-source-progress": add_unexpected_source_progress,
             "semantic-progress": add_semantic_progress,
             "unexpected-slot-124-source-stage": add_slot_124_source_stage,
