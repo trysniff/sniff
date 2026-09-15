@@ -52,6 +52,7 @@ pub enum HistoricalV2SourcePublicSymbolKind {
 pub enum HistoricalV2SourcePublicBindingKind {
     Definition,
     Reference,
+    ModuleAnchor,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]

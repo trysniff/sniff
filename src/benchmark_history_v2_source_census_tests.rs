@@ -114,6 +114,34 @@ fn typescript_anonymous_default_export_fails_closed() {
 }
 
 #[test]
+fn typescript_default_object_commits_the_compiler_module_anchor() {
+    let source = b"export default {};\n";
+    let (_, declarations, _) =
+        source_public_declarations("rollup.config.js", "javascript", source).unwrap();
+    let [declaration] = declarations.as_slice() else {
+        panic!("expected one default declaration");
+    };
+
+    assert_eq!(declaration.name, "default");
+    assert_eq!(declaration.kind, HistoricalV2SourcePublicSymbolKind::CompilerDefined);
+    assert_eq!(
+        declaration.binding,
+        HistoricalV2SourcePublicBindingKind::ModuleAnchor
+    );
+    assert_eq!(declaration.identifier.start, 0);
+    assert_eq!(declaration.identifier.end, 0);
+    assert_eq!(declaration.identifier_positions.utf16.start.line_zero_based, 0);
+    assert_eq!(
+        declaration.identifier_positions.utf16.start.character_zero_based,
+        0
+    );
+    assert_eq!(
+        declaration.identifier_positions.utf16,
+        declaration.identifier_positions.utf8
+    );
+}
+
+#[test]
 fn typescript_static_and_instance_members_have_distinct_surface_ids() {
     let source = br#"export class Service {
   static run(): string { return "static"; }

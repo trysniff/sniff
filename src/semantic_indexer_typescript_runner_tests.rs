@@ -294,6 +294,29 @@ async fn live_configured_and_loose_worlds_cover_every_exact_source() {
             .documents
             .contains_key(&RepositoryPath("rollup.config.js".to_string()))
     );
+    let module_anchor = crate::semantic_index::SemanticLocation {
+        document: RepositoryPath("rollup.config.js".to_string()),
+        range: crate::semantic_index::SemanticSourceRange {
+            start: crate::semantic_index::SemanticPosition {
+                line: 0,
+                character: 0,
+            },
+            end: crate::semantic_index::SemanticPosition {
+                line: 0,
+                character: 0,
+            },
+        },
+    };
+    let module_symbols = loose
+        .symbols
+        .values()
+        .filter(|symbol| {
+            symbol.origin == crate::semantic_index::SemanticSymbolOrigin::Repository
+                && symbol.kind.category == crate::semantic_index::SemanticSymbolCategory::Module
+                && symbol.definitions.contains(&module_anchor)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(module_symbols.len(), 1);
     assert!(
         loose
             .documents

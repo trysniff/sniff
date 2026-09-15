@@ -231,6 +231,12 @@ fn collect_default(
             SourcePublicSymbolKind::Type,
             SourcePublicBindingKind::Definition,
         ),
+        ExportDefaultDeclarationKind::ObjectExpression(_) => (
+            "default",
+            SourceByteRange { start: 0, end: 0 },
+            SourcePublicSymbolKind::CompilerDefined,
+            SourcePublicBindingKind::ModuleAnchor,
+        ),
         _ => (
             "default",
             exposed,

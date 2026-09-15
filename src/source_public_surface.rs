@@ -33,6 +33,7 @@ pub(crate) enum SourcePublicSymbolKind {
 pub(crate) enum SourcePublicBindingKind {
     Definition,
     Reference,
+    ModuleAnchor,
     Unsupported,
 }
 
