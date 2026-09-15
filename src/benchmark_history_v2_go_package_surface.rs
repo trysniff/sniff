@@ -1,7 +1,8 @@
 use super::{
     IntentionalBoundaryManifestDeclarationKind, IntentionalBoundaryManifestTarget,
     IntentionalBoundaryProjectModelCensus, IntentionalBoundaryProjectModelProvider,
-    IntentionalBoundaryProjectModelTargetStatus, IntentionalBoundaryProjectModelVariant,
+    IntentionalBoundaryProjectModelTarget, IntentionalBoundaryProjectModelTargetStatus,
+    IntentionalBoundaryProjectModelVariant,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -92,13 +93,7 @@ pub(super) fn go_package_exposures(
             "executable"
         };
         if target.provider_output_types.as_slice() != [expected_output]
-            || target.package_name.trim().is_empty()
-            || target.target_name.trim().is_empty()
-            || (target.target_name != target.package_name
-                && !target
-                    .target_name
-                    .strip_prefix(&target.package_name)
-                    .is_some_and(|suffix| suffix.starts_with('/')))
+            || !go_compiler_package_identity_is_consistent(target, &execution.variant)
         {
             return Err(format!(
                 "historical-v2 Go target {} changed compiler package identity",
@@ -187,6 +182,40 @@ pub(super) fn go_package_exposures(
             .then_with(|| left.module_path.cmp(&right.module_path))
     });
     Ok(exposures)
+}
+
+fn go_compiler_package_identity_is_consistent(
+    target: &IntentionalBoundaryProjectModelTarget,
+    variant: &IntentionalBoundaryProjectModelVariant,
+) -> bool {
+    if target.package_name.trim().is_empty() || target.target_name.trim().is_empty() {
+        return false;
+    }
+    let IntentionalBoundaryProjectModelVariant::Go { query, .. } = variant else {
+        return false;
+    };
+    match query {
+        super::IntentionalBoundaryProjectModelGoQuery::ModulePackages => {
+            target.target_name == target.package_name
+                || target
+                    .target_name
+                    .strip_prefix(&target.package_name)
+                    .is_some_and(|suffix| suffix.starts_with('/'))
+        }
+        super::IntentionalBoundaryProjectModelGoQuery::StandaloneSource {
+            source_repository_path,
+        } => {
+            target.provider_kinds.as_slice() == ["main"]
+                && target.provider_output_types.as_slice() == ["executable"]
+                && target.target_name == format!("standalone:{source_repository_path}")
+                && target.source_repository_paths.len() == 1
+                && target
+                    .source_repository_paths
+                    .first()
+                    .is_some_and(|source| source == source_repository_path)
+                && target.ignored_source_repository_paths.is_empty()
+        }
+    }
 }
 
 pub(super) fn go_package_source_map(

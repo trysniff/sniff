@@ -179,6 +179,76 @@ fn groups_repeated_package_ownership_without_flattening_variants() {
 }
 
 #[test]
+fn exposes_exact_standalone_source_package_identity() {
+    let mut model = model(vec![target(
+        "standalone",
+        "standalone:plugins/generate.go",
+        "main",
+        "plugins/generate.go",
+    )]);
+    model.executions[0].variant = IntentionalBoundaryProjectModelVariant::Go {
+        goos: "linux".to_string(),
+        goarch: "amd64".to_string(),
+        cgo_enabled: false,
+        build_tags: Vec::new(),
+        architecture: IntentionalBoundaryProjectModelGoArchitecture::Default,
+        query: IntentionalBoundaryProjectModelGoQuery::StandaloneSource {
+            source_repository_path: "plugins/generate.go".to_string(),
+        },
+    };
+
+    let exposures = go_package_exposures(&model).unwrap();
+
+    assert_eq!(exposures.len(), 1);
+    assert_eq!(exposures[0].module_path, "example.test/project");
+    assert_eq!(exposures[0].import_path, "standalone:plugins/generate.go");
+    assert!(!exposures[0].externally_reachable);
+}
+
+#[test]
+fn rejects_standalone_source_package_identity_drift() {
+    let standalone_variant = IntentionalBoundaryProjectModelVariant::Go {
+        goos: "linux".to_string(),
+        goarch: "amd64".to_string(),
+        cgo_enabled: false,
+        build_tags: Vec::new(),
+        architecture: IntentionalBoundaryProjectModelGoArchitecture::Default,
+        query: IntentionalBoundaryProjectModelGoQuery::StandaloneSource {
+            source_repository_path: "plugins/generate.go".to_string(),
+        },
+    };
+    let mut wrong_name = model(vec![target(
+        "standalone",
+        "standalone:plugins/other.go",
+        "main",
+        "plugins/generate.go",
+    )]);
+    wrong_name.executions[0].variant = standalone_variant.clone();
+    let mut wrong_source = model(vec![target(
+        "standalone",
+        "standalone:plugins/generate.go",
+        "main",
+        "plugins/other.go",
+    )]);
+    wrong_source.executions[0].variant = standalone_variant.clone();
+    let mut wrong_kind = model(vec![target(
+        "standalone",
+        "standalone:plugins/generate.go",
+        "package",
+        "plugins/generate.go",
+    )]);
+    wrong_kind.executions[0].variant = standalone_variant;
+
+    for drifted in [wrong_name, wrong_source, wrong_kind] {
+        let error = go_package_exposures(&drifted).unwrap_err();
+        assert!(
+            error.contains("changed compiler package identity"),
+            "{error}"
+        );
+    }
+}
+
+#[test]
 fn package_slots_use_module_and_import_identity_not_source_paths() {
     let first =
         go_package_surface_slot_id("example.test/project", "example.test/project/public").unwrap();
