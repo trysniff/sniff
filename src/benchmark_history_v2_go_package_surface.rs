@@ -119,10 +119,7 @@ pub(super) fn go_package_exposures(
                 target.target_name
             ));
         }
-        for source in repository_paths
-            .iter()
-            .chain(&target.ignored_source_repository_paths)
-        {
+        for source in repository_paths {
             let package_key = (target.package_name.as_str(), target.target_name.as_str());
             if source_owners
                 .insert(source.as_str(), package_key)
@@ -223,10 +220,17 @@ pub(super) fn go_package_source_map(
 ) -> Result<BTreeMap<&str, &HistoricalV2GoPackageExposure>, String> {
     let mut sources = BTreeMap::new();
     for exposure in exposures {
-        for source in &exposure.source_repository_paths {
-            if sources.insert(source.as_str(), exposure).is_some() {
+        for source in exposure
+            .variants
+            .iter()
+            .flat_map(|variant| &variant.source_repository_paths)
+        {
+            if let Some(owner) = sources.insert(source.as_str(), exposure)
+                && (owner.module_path != exposure.module_path
+                    || owner.import_path != exposure.import_path)
+            {
                 return Err(format!(
-                    "historical-v2 Go source {source} belongs to more than one package exposure"
+                    "historical-v2 Go source {source} belongs to more than one active package exposure"
                 ));
             }
         }
