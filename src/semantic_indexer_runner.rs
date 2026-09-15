@@ -40,7 +40,8 @@ mod typescript_runner;
 pub(crate) use recovery::recover_interrupted_semantic_indexing;
 use recovery::{INDEXER_CACHE_DIR, INDEXER_TEMP_DIR, SemanticIndexerRecoveryGuard};
 use typescript_runner::{
-    run_typescript_variants, variant_arguments as typescript_variant_arguments,
+    prepare_loose_project as prepare_typescript_loose_project, run_typescript_variants,
+    variant_arguments as typescript_variant_arguments,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -995,37 +996,38 @@ async fn run_one_in_recovery_scope(
             detail,
         )
     })?;
-    let temporary_project =
-        if spec.kind == SemanticIndexerKind::TypeScriptJavaScript && typescript_plan.is_none() {
-            prepare_mixed_typescript_javascript_project(spec, root, execution_root, files).map_err(
-                |detail| {
-                    indexer_failure(
-                        spec,
-                        SemanticIndexerRunFailureKind::InfrastructureFailed,
-                        SemanticIndexerRunPhase::Preparation,
-                        detail,
-                    )
-                },
-            )?
+    let temporary_project = if spec.kind == SemanticIndexerKind::TypeScriptJavaScript {
+        match typescript_plan {
+            Some(plan) => prepare_typescript_loose_project(spec, execution_root, plan),
+            None => prepare_mixed_typescript_javascript_project(spec, root, execution_root, files),
+        }
+        .map_err(|detail| {
+            indexer_failure(
+                spec,
+                SemanticIndexerRunFailureKind::InfrastructureFailed,
+                SemanticIndexerRunPhase::Preparation,
+                detail,
+            )
+        })?
+    } else {
+        #[cfg(windows)]
+        if spec.kind == SemanticIndexerKind::Python {
+            prepare_windows_python_project(root, execution_root, files).map_err(|detail| {
+                indexer_failure(
+                    spec,
+                    SemanticIndexerRunFailureKind::InfrastructureFailed,
+                    SemanticIndexerRunPhase::Preparation,
+                    detail,
+                )
+            })?
         } else {
-            #[cfg(windows)]
-            if spec.kind == SemanticIndexerKind::Python {
-                prepare_windows_python_project(root, execution_root, files).map_err(|detail| {
-                    indexer_failure(
-                        spec,
-                        SemanticIndexerRunFailureKind::InfrastructureFailed,
-                        SemanticIndexerRunPhase::Preparation,
-                        detail,
-                    )
-                })?
-            } else {
-                None
-            }
-            #[cfg(not(windows))]
-            {
-                None
-            }
-        };
+            None
+        }
+        #[cfg(not(windows))]
+        {
+            None
+        }
+    };
     #[cfg(windows)]
     let python_environment = if spec.kind == SemanticIndexerKind::Python {
         Some(

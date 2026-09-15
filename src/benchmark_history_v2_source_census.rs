@@ -1001,10 +1001,19 @@ fn project_model_stage_error(error: ProjectModelDerivationError) -> HistoricalV2
             HistoricalV2SlotStageErrorKind::InfrastructureFailed
         }
     };
+    let provider = match error.provider {
+        super::IntentionalBoundaryProjectModelProvider::CargoMetadata => "Cargo",
+        super::IntentionalBoundaryProjectModelProvider::GoList => "Go",
+        super::IntentionalBoundaryProjectModelProvider::GradleToolingApi => "Gradle",
+        super::IntentionalBoundaryProjectModelProvider::TypeScriptCompilerApi => "TypeScript",
+    };
     HistoricalV2SlotStageError {
         stage: HistoricalV2SlotStage::SourceCensus,
         kind,
-        detail: format!("historical-v2 Cargo project model failed: {}", error.detail),
+        detail: format!(
+            "historical-v2 {provider} project model failed: {}",
+            error.detail
+        ),
     }
 }
 

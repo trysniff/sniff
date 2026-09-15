@@ -79,6 +79,7 @@ pub(in crate::benchmark::release) fn validate_typescript_variant_inventory(
 ) -> bool {
     let IntentionalBoundaryProjectModelVariant::TypeScript {
         root_config_repository_path,
+        root_source_repository_paths,
         compiler_version,
         projects,
         selected_source_repository_paths,
@@ -99,6 +100,13 @@ pub(in crate::benchmark::release) fn validate_typescript_variant_inventory(
         .filter_map(|project| project.config_repository_path.clone())
         .collect::<BTreeSet<_>>();
     if compiler_version != expected_compiler_version
+        || root_source_repository_paths.is_empty()
+        || root_source_repository_paths
+            .windows(2)
+            .any(|pair| pair[0] >= pair[1])
+        || root_source_repository_paths
+            .iter()
+            .any(|path| !selected.contains(path))
         || selected_source_repository_paths
             .iter()
             .chain(ignored_source_repository_paths)

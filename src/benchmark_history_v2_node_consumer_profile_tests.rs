@@ -89,7 +89,7 @@ fn fixture() -> (
         .object_id
         .clone();
     let project_model = IntentionalBoundaryProjectModelCensus {
-        schema_version: 8,
+        schema_version: super::super::INTENTIONAL_BOUNDARY_PROJECT_MODEL_CENSUS_SCHEMA_VERSION,
         project_model_contract: "fixture".to_string(),
         repository: repository.to_string(),
         revision,
@@ -99,6 +99,7 @@ fn fixture() -> (
             provider: IntentionalBoundaryProjectModelProvider::TypeScriptCompilerApi,
             variant: IntentionalBoundaryProjectModelVariant::TypeScript {
                 root_config_repository_path: None,
+                root_source_repository_paths: vec!["packages/pkg/src/index.ts".to_string()],
                 compiler_version: "5.6.2".to_string(),
                 projects: vec![IntentionalBoundaryProjectModelTypeScriptProject {
                     config_repository_path: None,
@@ -193,7 +194,7 @@ fn custom_fixture(
         .object_id
         .clone();
     let project_model = IntentionalBoundaryProjectModelCensus {
-        schema_version: 8,
+        schema_version: super::super::INTENTIONAL_BOUNDARY_PROJECT_MODEL_CENSUS_SCHEMA_VERSION,
         project_model_contract: "fixture".to_string(),
         repository: repository.to_string(),
         revision,
@@ -203,6 +204,10 @@ fn custom_fixture(
             provider: IntentionalBoundaryProjectModelProvider::TypeScriptCompilerApi,
             variant: IntentionalBoundaryProjectModelVariant::TypeScript {
                 root_config_repository_path: None,
+                root_source_repository_paths: project_sources
+                    .iter()
+                    .map(|value| (*value).to_string())
+                    .collect(),
                 compiler_version: "5.6.2".to_string(),
                 projects: vec![IntentionalBoundaryProjectModelTypeScriptProject {
                     config_repository_path: None,

@@ -200,6 +200,9 @@ jobs:
             benchmark::release::intentional_boundary_project_model_typescript::tests::real_pinned_compiler_api_emits_the_reference_world \
             -- --exact --ignored --test-threads=1 --nocapture
           cargo test --lib --locked \
+            benchmark::release::intentional_boundary_project_model_typescript::tests::real_pinned_compiler_api_emits_an_exact_loose_source_world \
+            -- --exact --ignored --test-threads=1 --nocapture
+          cargo test --lib --locked \
             benchmark::release::history_v2_node_consumer_profile::tests::real_typescript_and_node_resolvers_select_the_active_conditions \
             -- --exact --ignored --test-threads=1 --nocapture
           cargo test --lib --locked \
@@ -213,6 +216,9 @@ jobs:
             -- --exact --ignored --test-threads=1 --nocapture
           cargo test --lib --locked \
             semantic_indexer_runner::typescript_runner::tests::live_project_reference_world_is_indexed_as_one_qualified_variant \
+            -- --exact --ignored --test-threads=1 --nocapture
+          cargo test --lib --locked \
+            semantic_indexer_runner::typescript_runner::tests::live_configured_and_loose_worlds_cover_every_exact_source \
             -- --exact --ignored --test-threads=1 --nocapture
           cargo test --lib --locked \
             benchmark::release::history_v2_semantic::tests::pinned_python_provider_drives_signatures_and_recursive_public_surfaces \

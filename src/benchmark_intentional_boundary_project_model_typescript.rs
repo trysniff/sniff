@@ -32,8 +32,8 @@ pub(super) use validation::{
 };
 
 pub(super) const TYPESCRIPT_PROJECT_MODEL_COMMAND_CONTRACT: &str =
-    "sniff-typescript-compiler-project-model-v1";
-const TYPESCRIPT_PROJECT_MODEL_OUTPUT_SCHEMA_VERSION: u32 = 1;
+    "sniff-typescript-compiler-project-model-v2";
+pub(super) const TYPESCRIPT_PROJECT_MODEL_OUTPUT_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Clone)]
 pub(super) struct TypeScriptCompilerExecutionOutput {
@@ -53,6 +53,7 @@ struct CompilerOutput {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct CompilerWorld {
     root_config: Option<String>,
+    root_source_files: Vec<String>,
     inferred: bool,
     config_closure: Vec<String>,
     diagnostics: Vec<Value>,
@@ -243,7 +244,7 @@ fn parse_typescript_project_model(
         if !world_keys.insert(world_key.clone()) {
             return Err("TypeScript compiler emitted duplicate project worlds".to_string());
         }
-        if config_candidates.is_empty() != world.inferred
+        if world.inferred != world.root_config.is_none()
             || world
                 .root_config
                 .as_ref()
@@ -318,6 +319,7 @@ fn normalize_world(
         ));
     }
     require_sorted_unique(&world.config_closure, "TypeScript config closure")?;
+    require_sorted_unique(&world.root_source_files, "TypeScript root sources")?;
     require_sorted_unique(&world.selected_source_files, "TypeScript selected sources")?;
     require_sorted_unique(&world.ignored_source_files, "TypeScript ignored sources")?;
     let selected = world
@@ -334,6 +336,14 @@ fn normalize_world(
         || selected.union(&ignored).cloned().collect::<BTreeSet<_>>() != *required_sources
     {
         return Err("TypeScript compiler world changed its required-source partition".to_string());
+    }
+    if world.root_source_files.is_empty()
+        || world
+            .root_source_files
+            .iter()
+            .any(|source| !selected.contains(source))
+    {
+        return Err("TypeScript compiler world changed its exact root-source set".to_string());
     }
     let inferred = world.inferred;
     if inferred != world.root_config.is_none()
@@ -419,6 +429,7 @@ fn normalize_world(
     covered_configs.insert(anchor_path.clone());
     let variant = IntentionalBoundaryProjectModelVariant::TypeScript {
         root_config_repository_path: world.root_config,
+        root_source_repository_paths: world.root_source_files,
         compiler_version: compiler_version.to_string(),
         projects: normalized_projects,
         selected_source_repository_paths: world.selected_source_files,

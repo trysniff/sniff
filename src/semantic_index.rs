@@ -41,7 +41,12 @@ pub struct SemanticIndexerVariantPlan {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SemanticIndexerCompilerQuery {
     ProjectPackages,
-    ExactSource { source_document: RepositoryPath },
+    ExactSource {
+        source_document: RepositoryPath,
+    },
+    ExactSources {
+        source_documents: BTreeSet<RepositoryPath>,
+    },
 }
 
 impl SemanticIndexerVariantPlan {
@@ -72,6 +77,17 @@ impl SemanticIndexerVariantPlan {
                     if !is_canonical_repository_path(&source_document.0)
                         || self.selected_documents != BTreeSet::from([source_document.clone()])
                         || self.ignored_documents.contains(source_document)
+            )
+            || matches!(
+                &self.compiler_query,
+                SemanticIndexerCompilerQuery::ExactSources { source_documents }
+                    if source_documents.is_empty()
+                        || self.compiler_project.is_some()
+                        || source_documents.iter().any(|source_document| {
+                            !is_canonical_repository_path(&source_document.0)
+                                || !self.selected_documents.contains(source_document)
+                                || self.ignored_documents.contains(source_document)
+                        })
             )
         {
             return Err(format!(

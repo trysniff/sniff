@@ -3,7 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 const SOURCE_EXTENSIONS = [
   '.cjs',
   '.cts',
@@ -207,32 +207,53 @@ function closureFor(rootConfig) {
   return sortedUnique(closure);
 }
 
+function looseSourceWorld(looseSources) {
+  const hasJavaScript = looseSources.some((value) => {
+    const lower = value.toLowerCase();
+    return lower.endsWith('.js') || lower.endsWith('.jsx') || lower.endsWith('.mjs') || lower.endsWith('.cjs');
+  });
+  const hasJsx = looseSources.some((value) => {
+    const lower = value.toLowerCase();
+    return lower.endsWith('.jsx') || lower.endsWith('.tsx');
+  });
+  const compilerOptions = {
+    noEmit: true,
+    ...(hasJavaScript ? { allowJs: true, checkJs: false } : {}),
+    ...(hasJsx ? { jsx: 'preserve' } : {}),
+  };
+  const synthetic = {
+    compilerOptions,
+    files: looseSources,
+  };
+  const virtualConfig = path.join(root, '.sniff-typescript-loose-project.json');
+  const parsed = ts.parseJsonConfigFileContent(synthetic, ts.sys, root, undefined, virtualConfig);
+  const selected = sortedUnique(parsed.fileNames
+    .map((fileName) => repositoryPath(fileName, 'loose compiler-selected source'))
+    .filter((value) => isSourceFile(value) && sourceFileSet.has(value)));
+  return {
+    configClosure: [],
+    diagnostics: parsed.errors.map(diagnosticRecord).sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right))),
+    inferred: true,
+    projects: [{
+      configPath: null,
+      configReads: [],
+      diagnostics: [],
+      effectiveOptions: normalizeCompilerValue(parsed.options, 'loose compiler options'),
+      references: [],
+      selectedSourceFiles: selected,
+    }],
+    rootConfig: null,
+    rootSourceFiles: looseSources,
+    selectedSourceFiles: selected,
+  };
+}
+
 let worlds;
 if (projects.size === 0) {
   if (sourceFiles.length === 0) {
     worlds = [];
   } else {
-    const hasTypeScript = sourceFiles.some((value) => value.endsWith('.ts') || value.endsWith('.tsx'));
-    const synthetic = hasTypeScript ? {} : { compilerOptions: { allowJs: true } };
-    const parsed = ts.parseJsonConfigFileContent(synthetic, ts.sys, root, undefined, path.join(root, 'tsconfig.json'));
-    const selected = sortedUnique(parsed.fileNames
-      .map((fileName) => repositoryPath(fileName, 'inferred compiler-selected source'))
-      .filter((value) => isSourceFile(value) && sourceFileSet.has(value)));
-    worlds = [{
-      configClosure: [],
-      diagnostics: parsed.errors.map(diagnosticRecord).sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right))),
-      inferred: true,
-      projects: [{
-        configPath: null,
-        configReads: [],
-        diagnostics: [],
-        effectiveOptions: normalizeCompilerValue(parsed.options, 'inferred compiler options'),
-        references: [],
-        selectedSourceFiles: selected,
-      }],
-      rootConfig: null,
-      selectedSourceFiles: selected,
-    }];
+    worlds = [looseSourceWorld(sourceFiles)];
   }
 } else {
   const referenced = new Set([...projects.values()].flatMap((project) => project.references));
@@ -254,9 +275,15 @@ if (projects.size === 0) {
       inferred: false,
       projects: worldProjects,
       rootConfig,
+      rootSourceFiles: sortedUnique(worldProjects.flatMap((project) => project.selectedSourceFiles)),
       selectedSourceFiles: sortedUnique(worldProjects.flatMap((project) => project.selectedSourceFiles)),
     };
   });
+  const configuredSources = new Set(worlds.flatMap((world) => world.selectedSourceFiles));
+  const looseSources = sourceFiles.filter((source) => !configuredSources.has(source));
+  if (looseSources.length > 0) {
+    worlds.push(looseSourceWorld(looseSources));
+  }
 }
 
 for (const world of worlds) {

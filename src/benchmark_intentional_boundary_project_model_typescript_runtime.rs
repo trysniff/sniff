@@ -8,7 +8,9 @@ use super::super::intentional_boundary_runtime_snapshot::{
 };
 use super::super::non_blind_history_runtime::prepare_historical_runtime;
 use super::super::non_blind_history_runtime_support::{resolve_on_path, sandbox_repository_path};
-use super::{Provider, TypeScriptCompilerExecutionOutput};
+use super::{
+    Provider, TYPESCRIPT_PROJECT_MODEL_OUTPUT_SCHEMA_VERSION, TypeScriptCompilerExecutionOutput,
+};
 use crate::semantic_indexer_installation::SemanticIndexerStore;
 use crate::semantic_indexer_manifest::{SemanticIndexerKind, pinned_indexer};
 use serde::Serialize;
@@ -92,7 +94,7 @@ pub(super) fn run_typescript_project_model(
     })?;
     let input_path = runtime.path().join("input.json");
     let input = serde_json::to_vec(&SidecarInput {
-        schema_version: 1,
+        schema_version: TYPESCRIPT_PROJECT_MODEL_OUTPUT_SCHEMA_VERSION,
         configs,
         source_files: required_sources,
     })

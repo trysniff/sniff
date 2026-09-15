@@ -125,6 +125,11 @@ pub(super) fn parse_go_package_inventory(
                 let relative = module_relative_source(module_root, &source_document.0)?;
                 (format!("standalone:{}", source_document.0), relative)
             }
+            SemanticIndexerCompilerQuery::ExactSources { .. } => {
+                return Err(
+                    "Go package inventory received a TypeScript exact-sources query".to_string(),
+                );
+            }
         };
         let relative_directory = go_package_relative_directory(&root, &item.dir)?;
         let mut source_documents = BTreeSet::new();

@@ -75,7 +75,7 @@ fn repository() -> (TempDir, String, IntentionalBoundaryRepositoryInventory) {
 
 fn compiler_output() -> serde_json::Value {
     serde_json::json!({
-        "schemaVersion": 1,
+        "schemaVersion": 2,
         "typescriptVersion": "5.6.2",
         "worlds": [{
             "rootConfig": "tsconfig.json",
@@ -100,6 +100,7 @@ fn compiler_output() -> serde_json::Value {
                     "selectedSourceFiles": ["src/index.ts"]
                 }
             ],
+            "rootSourceFiles": ["packages/core/src/core.ts", "src/index.ts"],
             "selectedSourceFiles": ["packages/core/src/core.ts", "src/index.ts"],
             "ignoredSourceFiles": []
         }]
@@ -229,6 +230,7 @@ fn omitted_required_source_fails_closed() {
     let (root, revision, inventory) = repository();
     let mut output = compiler_output();
     output["worlds"][0]["selectedSourceFiles"] = serde_json::json!(["src/index.ts"]);
+    output["worlds"][0]["rootSourceFiles"] = serde_json::json!(["src/index.ts"]);
     output["worlds"][0]["ignoredSourceFiles"] = serde_json::json!(["packages/core/src/core.ts"]);
     output["worlds"][0]["projects"][0]["selectedSourceFiles"] = serde_json::json!([]);
     let error = census_typescript_project_models_with_executor(
@@ -253,6 +255,95 @@ fn omitted_required_source_fails_closed() {
 }
 
 #[test]
+fn explicit_loose_world_covers_sources_omitted_by_repository_configs() {
+    let (root, _, _) = repository();
+    fs::write(
+        root.path().join("src/index.test.ts"),
+        "export function testMain(): void {}\n",
+    )
+    .unwrap();
+    git(root.path(), &["add", "."]);
+    git(
+        root.path(),
+        &["commit", "--quiet", "-m", "add loose source"],
+    );
+    let revision = git(root.path(), &["rev-parse", "HEAD"]);
+    let inventory = super::super::inventory_intentional_boundary_repository(
+        "github.com/example/typescript-model",
+        &revision,
+        root.path(),
+    )
+    .unwrap();
+    let mut output = compiler_output();
+    output["worlds"][0]["ignoredSourceFiles"] = serde_json::json!(["src/index.test.ts"]);
+    output["worlds"].as_array_mut().unwrap().push(serde_json::json!({
+        "rootConfig": null,
+        "inferred": true,
+        "configClosure": [],
+        "diagnostics": [],
+        "projects": [{
+            "configPath": null,
+            "configReads": [],
+            "diagnostics": [],
+            "effectiveOptions": {"configFilePath": "<repo>/.sniff-typescript-loose-project.json", "noEmit": true},
+            "references": [],
+            "selectedSourceFiles": ["src/index.test.ts"]
+        }],
+        "rootSourceFiles": ["src/index.test.ts"],
+        "selectedSourceFiles": ["src/index.test.ts"],
+        "ignoredSourceFiles": ["packages/core/src/core.ts", "src/index.ts"]
+    }));
+    let required = vec![
+        "packages/core/src/core.ts".to_string(),
+        "src/index.test.ts".to_string(),
+        "src/index.ts".to_string(),
+    ];
+
+    let census = census_typescript_project_models_with_executor(
+        "github.com/example/typescript-model",
+        &revision,
+        root.path(),
+        &inventory,
+        &required,
+        |_, _, _| {
+            Ok(TypeScriptCompilerExecutionOutput {
+                toolchain_identity_sha256: "c".repeat(64),
+                stdout: output.to_string(),
+            })
+        },
+    )
+    .unwrap();
+
+    assert_eq!(census.executions.len(), 2);
+    let loose = census
+        .executions
+        .iter()
+        .find(|execution| {
+            matches!(
+                &execution.variant,
+                IntentionalBoundaryProjectModelVariant::TypeScript {
+                    root_config_repository_path: None,
+                    ..
+                }
+            )
+        })
+        .unwrap();
+    let IntentionalBoundaryProjectModelVariant::TypeScript {
+        selected_source_repository_paths,
+        ignored_source_repository_paths,
+        ..
+    } = &loose.variant
+    else {
+        unreachable!();
+    };
+    assert_eq!(selected_source_repository_paths, &["src/index.test.ts"]);
+    assert_eq!(
+        ignored_source_repository_paths,
+        &["packages/core/src/core.ts", "src/index.ts"]
+    );
+}
+
+#[test]
 fn inferred_world_is_explicit_and_bound_to_a_real_source_anchor() {
     let (root, _, _) = repository();
     git(
@@ -273,7 +364,7 @@ fn inferred_world_is_explicit_and_bound_to_a_real_source_anchor() {
     )
     .unwrap();
     let output = serde_json::json!({
-        "schemaVersion": 1,
+        "schemaVersion": 2,
         "typescriptVersion": "5.6.2",
         "worlds": [{
             "rootConfig": null,
@@ -288,6 +379,7 @@ fn inferred_world_is_explicit_and_bound_to_a_real_source_anchor() {
                 "references": [],
                 "selectedSourceFiles": ["src/index.ts"]
             }],
+            "rootSourceFiles": ["src/index.ts"],
             "selectedSourceFiles": ["src/index.ts"],
             "ignoredSourceFiles": []
         }]
@@ -333,4 +425,75 @@ fn real_pinned_compiler_api_emits_the_reference_world() {
 
     assert_eq!(census.executions.len(), 1);
     assert_eq!(census.targets.len(), 2);
+}
+
+#[test]
+#[ignore = "requires installed pinned TypeScript indexer and native sandbox"]
+fn real_pinned_compiler_api_emits_an_exact_loose_source_world() {
+    let (root, _, _) = repository();
+    for (path, source) in [
+        ("src/index.test.ts", "export function testMain(): void {}\n"),
+        ("rollup.config.js", "export default {};\n"),
+    ] {
+        fs::write(root.path().join(path), source).unwrap();
+    }
+    git(root.path(), &["add", "."]);
+    git(
+        root.path(),
+        &["commit", "--quiet", "-m", "add loose compiler sources"],
+    );
+    let revision = git(root.path(), &["rev-parse", "HEAD"]);
+    let inventory = super::super::inventory_intentional_boundary_repository(
+        "github.com/example/typescript-model",
+        &revision,
+        root.path(),
+    )
+    .unwrap();
+    let required = vec![
+        "packages/core/src/core.ts".to_string(),
+        "rollup.config.js".to_string(),
+        "src/index.test.ts".to_string(),
+        "src/index.ts".to_string(),
+    ];
+
+    let census = census_intentional_boundary_typescript_project_models_typed(
+        "github.com/example/typescript-model",
+        &revision,
+        root.path(),
+        &inventory,
+        &required,
+    )
+    .unwrap_or_else(|error| panic!("{error:#?}"));
+
+    assert_eq!(census.executions.len(), 2);
+    assert_eq!(census.targets.len(), 3);
+    let loose = census
+        .executions
+        .iter()
+        .find(|execution| {
+            matches!(
+                execution.variant,
+                IntentionalBoundaryProjectModelVariant::TypeScript {
+                    root_config_repository_path: None,
+                    ..
+                }
+            )
+        })
+        .unwrap();
+    let IntentionalBoundaryProjectModelVariant::TypeScript {
+        root_source_repository_paths,
+        selected_source_repository_paths,
+        ..
+    } = &loose.variant
+    else {
+        unreachable!();
+    };
+    assert_eq!(
+        root_source_repository_paths,
+        &["rollup.config.js", "src/index.test.ts"]
+    );
+    assert_eq!(
+        selected_source_repository_paths,
+        root_source_repository_paths
+    );
 }

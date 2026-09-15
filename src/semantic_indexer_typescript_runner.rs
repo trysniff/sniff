@@ -4,6 +4,8 @@ use super::progress::{
 use super::*;
 use serde::Serialize;
 
+const LOOSE_PROJECT_CONFIG: &str = ".sniff-typescript-loose-project.json";
+
 struct TypeScriptProgressIdentity {
     runtime_sha256: String,
     repository_content_sha256: String,
@@ -566,6 +568,83 @@ fn files_for_plan(
         .collect()
 }
 
+pub(super) fn prepare_loose_project(
+    spec: PinnedIndexer,
+    root: &Path,
+    plan: &SemanticIndexerVariantPlan,
+) -> Result<Option<PathBuf>, String> {
+    if spec.kind != SemanticIndexerKind::TypeScriptJavaScript {
+        return Ok(None);
+    }
+    if plan.compiler_project.is_some() {
+        return Ok(None);
+    }
+    let crate::semantic_index::SemanticIndexerCompilerQuery::ExactSources { source_documents } =
+        &plan.compiler_query
+    else {
+        return Err("loose TypeScript compiler project has no exact source query".to_string());
+    };
+    let has_javascript = source_documents.iter().any(|document| {
+        matches!(
+            Path::new(&document.0)
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .map(str::to_ascii_lowercase)
+                .as_deref(),
+            Some("js" | "jsx" | "mjs" | "cjs")
+        )
+    });
+    let has_jsx = source_documents.iter().any(|document| {
+        matches!(
+            Path::new(&document.0)
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .map(str::to_ascii_lowercase)
+                .as_deref(),
+            Some("jsx" | "tsx")
+        )
+    });
+    let mut compiler_options =
+        serde_json::Map::from_iter([("noEmit".to_string(), serde_json::Value::Bool(true))]);
+    if has_javascript {
+        compiler_options.insert("allowJs".to_string(), serde_json::Value::Bool(true));
+        compiler_options.insert("checkJs".to_string(), serde_json::Value::Bool(false));
+    }
+    if has_jsx {
+        compiler_options.insert(
+            "jsx".to_string(),
+            serde_json::Value::String("preserve".to_string()),
+        );
+    }
+    let path = root.join(LOOSE_PROJECT_CONFIG);
+    let config = serde_json::json!({
+        "compilerOptions": compiler_options,
+        "files": source_documents
+            .iter()
+            .map(|document| document.0.as_str())
+            .collect::<Vec<_>>()
+    });
+    let bytes = serde_json::to_vec_pretty(&config)
+        .map_err(|error| format!("failed to serialize loose TypeScript project: {error}"))?;
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .map_err(|error| {
+            format!(
+                "failed to create loose TypeScript project {}: {error}",
+                path.display()
+            )
+        })?;
+    file.write_all(&bytes).map_err(|error| {
+        format!(
+            "failed to write loose TypeScript project {}: {error}",
+            path.display()
+        )
+    })?;
+    Ok(Some(path))
+}
+
 pub(super) fn variant_arguments(
     spec: PinnedIndexer,
     plan: &SemanticIndexerVariantPlan,
@@ -574,11 +653,17 @@ pub(super) fn variant_arguments(
         return Err("compiler-project arguments require scip-typescript".to_string());
     }
     let mut arguments = vec!["index".to_string()];
-    match &plan.compiler_project {
-        Some(project) => arguments.push(project.0.clone()),
-        None => {
-            arguments.push(".".to_string());
-            arguments.push("--infer-tsconfig".to_string());
+    match (&plan.compiler_project, &plan.compiler_query) {
+        (Some(project), crate::semantic_index::SemanticIndexerCompilerQuery::ProjectPackages) => {
+            arguments.push(project.0.clone());
+        }
+        (None, crate::semantic_index::SemanticIndexerCompilerQuery::ExactSources { .. }) => {
+            arguments.push(LOOSE_PROJECT_CONFIG.to_string());
+        }
+        _ => {
+            return Err(
+                "TypeScript compiler project query does not match its project identity".to_string(),
+            );
         }
     }
     Ok(arguments)
