@@ -249,6 +249,52 @@ fn rejects_standalone_source_package_identity_drift() {
 }
 
 #[test]
+fn maps_ignored_generator_to_its_active_standalone_package() {
+    let mut package = target(
+        "package",
+        "example.test/project/plugins",
+        "package",
+        "plugins/plugins.go",
+    );
+    package.ignored_source_repository_paths = vec!["plugins/generate.go".to_string()];
+    let mut standalone = target(
+        "standalone",
+        "standalone:plugins/generate.go",
+        "main",
+        "plugins/generate.go",
+    );
+    standalone.execution_id = "standalone-execution".to_string();
+    let mut model = model(vec![package, standalone]);
+    model
+        .executions
+        .iter_mut()
+        .find(|execution| execution.execution_id == "standalone-execution")
+        .unwrap()
+        .variant = IntentionalBoundaryProjectModelVariant::Go {
+        goos: "linux".to_string(),
+        goarch: "amd64".to_string(),
+        cgo_enabled: false,
+        build_tags: Vec::new(),
+        architecture: IntentionalBoundaryProjectModelGoArchitecture::Default,
+        query: IntentionalBoundaryProjectModelGoQuery::StandaloneSource {
+            source_repository_path: "plugins/generate.go".to_string(),
+        },
+    };
+
+    let exposures = go_package_exposures(&model).unwrap();
+    let sources = go_package_source_map(&exposures).unwrap();
+
+    assert_eq!(
+        sources["plugins/plugins.go"].import_path,
+        "example.test/project/plugins"
+    );
+    assert_eq!(
+        sources["plugins/generate.go"].import_path,
+        "standalone:plugins/generate.go"
+    );
+}
+
+#[test]
 fn package_slots_use_module_and_import_identity_not_source_paths() {
     let first =
         go_package_surface_slot_id("example.test/project", "example.test/project/public").unwrap();
