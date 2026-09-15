@@ -819,6 +819,23 @@ class ManifestTests(unittest.TestCase):
             transport.QUALIFICATION_PROJECT_MODEL_V9_REPLAY_MIGRATION_SOURCE_ARTIFACT_SIZE,
         )
 
+    @staticmethod
+    def _write_qualification_project_model_v10_replay_manifest(
+        path: pathlib.Path,
+    ) -> None:
+        ManifestTests._write_qualification_project_model_v9_replay_manifest(path)
+        transport.migrate_manifest(
+            path,
+            transport.FRAME_RUN_ID,
+            transport.GO_STANDALONE_SOURCE_OWNERSHIP_MIGRATION_FROM_COLLECTOR_SHA,
+            transport.QUALIFICATION_PROJECT_MODEL_V10_REPLAY_MIGRATION_NAME,
+            transport.QUALIFICATION_PROJECT_MODEL_V10_REPLAY_MIGRATION_SOURCE_RUN_ID,
+            transport.QUALIFICATION_PROJECT_MODEL_V10_REPLAY_MIGRATION_SOURCE_HEAD_SHA,
+            transport.QUALIFICATION_PROJECT_MODEL_V10_REPLAY_MIGRATION_SOURCE_ARTIFACT_ID,
+            transport.QUALIFICATION_PROJECT_MODEL_V10_REPLAY_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+            transport.QUALIFICATION_PROJECT_MODEL_V10_REPLAY_MIGRATION_SOURCE_ARTIFACT_SIZE,
+        )
+
     def test_manifest_round_trips_and_is_create_new(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             path = pathlib.Path(temporary, "manifest.json")
@@ -3319,7 +3336,7 @@ class ManifestTests(unittest.TestCase):
                 with self.subTest(field=field), self.assertRaises(ValueError):
                     transport.validate_manifest(path, transport.FRAME_RUN_ID)
 
-    def test_qualification_project_model_v10_replay_migration_is_exact_and_closes_chain(
+    def test_qualification_project_model_v10_replay_migration_is_exact(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -3361,6 +3378,67 @@ class ManifestTests(unittest.TestCase):
             for field in value["collector_migrations"][28]:
                 tampered = json.loads(json.dumps(value))
                 tampered["collector_migrations"][28][field] = True
+                path.write_text(json.dumps(tampered), encoding="utf-8")
+                with self.subTest(field=field), self.assertRaises(ValueError):
+                    transport.validate_manifest(path, transport.FRAME_RUN_ID)
+
+    def test_go_standalone_source_ownership_migration_is_exact_and_closes_chain(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = pathlib.Path(temporary, "manifest.json")
+            self._write_qualification_project_model_v10_replay_manifest(path)
+            prior_manifest = json.loads(path.read_text(encoding="utf-8"))
+            state_sentinel = pathlib.Path(temporary, "state-sentinel.bin")
+            state_sentinel.write_bytes(b"assessment-state-must-not-change\x00\xff")
+            target = "b" * 40
+
+            self.assertEqual(
+                transport.migrate_manifest(
+                    path,
+                    transport.FRAME_RUN_ID,
+                    target,
+                    transport.GO_STANDALONE_SOURCE_OWNERSHIP_MIGRATION_NAME,
+                    transport.GO_STANDALONE_SOURCE_OWNERSHIP_MIGRATION_SOURCE_RUN_ID,
+                    transport.GO_STANDALONE_SOURCE_OWNERSHIP_MIGRATION_SOURCE_HEAD_SHA,
+                    transport.GO_STANDALONE_SOURCE_OWNERSHIP_MIGRATION_SOURCE_ARTIFACT_ID,
+                    transport.GO_STANDALONE_SOURCE_OWNERSHIP_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+                    transport.GO_STANDALONE_SOURCE_OWNERSHIP_MIGRATION_SOURCE_ARTIFACT_SIZE,
+                ),
+                target,
+            )
+            value = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(value["schema_version"], 31)
+            self.assertEqual(
+                value["collector_migrations"][:29],
+                prior_manifest["collector_migrations"],
+            )
+            self.assertEqual(
+                value["collector_migrations"][29],
+                transport._expected_go_standalone_source_ownership_migration(target),
+            )
+            self.assertEqual(
+                transport.validate_manifest(path, transport.FRAME_RUN_ID), target
+            )
+            self.assertEqual(
+                state_sentinel.read_bytes(), b"assessment-state-must-not-change\x00\xff"
+            )
+            with self.assertRaisesRegex(ValueError, "migration chain is closed"):
+                transport.migrate_manifest(
+                    path,
+                    transport.FRAME_RUN_ID,
+                    "c" * 40,
+                    transport.GO_STANDALONE_SOURCE_OWNERSHIP_MIGRATION_NAME,
+                    transport.GO_STANDALONE_SOURCE_OWNERSHIP_MIGRATION_SOURCE_RUN_ID,
+                    transport.GO_STANDALONE_SOURCE_OWNERSHIP_MIGRATION_SOURCE_HEAD_SHA,
+                    transport.GO_STANDALONE_SOURCE_OWNERSHIP_MIGRATION_SOURCE_ARTIFACT_ID,
+                    transport.GO_STANDALONE_SOURCE_OWNERSHIP_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+                    transport.GO_STANDALONE_SOURCE_OWNERSHIP_MIGRATION_SOURCE_ARTIFACT_SIZE,
+                )
+
+            for field in value["collector_migrations"][29]:
+                tampered = json.loads(json.dumps(value))
+                tampered["collector_migrations"][29][field] = True
                 path.write_text(json.dumps(tampered), encoding="utf-8")
                 with self.subTest(field=field), self.assertRaises(ValueError):
                     transport.validate_manifest(path, transport.FRAME_RUN_ID)
@@ -5038,6 +5116,7 @@ class WorkflowContractTests(unittest.TestCase):
             "bounded-qualification-project-model-v8-replay-v1",
             "bounded-qualification-project-model-v9-replay-v1",
             "bounded-qualification-project-model-v10-replay-v1",
+            "go-standalone-source-ownership-v1",
             'migrate-source-required-go-semantic-progress',
             'migrate-inferred-scip-kind-replay',
             'migrate-bounded-qualification-project-model-v8-replay',
@@ -5073,6 +5152,7 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertNotIn('target/release/sniffbench-frame run-slots', workflow)
         self.assertNotIn('--artifact-root "$GITHUB_WORKSPACE"', workflow)
         self.assertNotIn('--artifact-root "$COLLECTOR_ROOT"', workflow)
+        self.assertNotIn('migrate-go-standalone-source-ownership', workflow)
         cleanup = workflow.index("migrate-source-required-go-semantic-progress")
         semantic_replay = workflow.index("migrate-inferred-scip-kind-replay")
         project_model_replay = workflow.index(
