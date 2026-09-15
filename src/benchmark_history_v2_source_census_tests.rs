@@ -123,16 +123,26 @@ fn typescript_default_object_commits_the_compiler_module_anchor() {
     };
 
     assert_eq!(declaration.name, "default");
-    assert_eq!(declaration.kind, HistoricalV2SourcePublicSymbolKind::CompilerDefined);
+    assert_eq!(
+        declaration.kind,
+        HistoricalV2SourcePublicSymbolKind::CompilerDefined
+    );
     assert_eq!(
         declaration.binding,
         HistoricalV2SourcePublicBindingKind::ModuleAnchor
     );
     assert_eq!(declaration.identifier.start, 0);
     assert_eq!(declaration.identifier.end, 0);
-    assert_eq!(declaration.identifier_positions.utf16.start.line_zero_based, 0);
     assert_eq!(
-        declaration.identifier_positions.utf16.start.character_zero_based,
+        declaration.identifier_positions.utf16.start.line_zero_based,
+        0
+    );
+    assert_eq!(
+        declaration
+            .identifier_positions
+            .utf16
+            .start
+            .character_zero_based,
         0
     );
     assert_eq!(

@@ -1135,10 +1135,7 @@ fn typescript_source_export_outside_the_package_graph_remains_latent() {
 
 #[test]
 fn typescript_default_object_binds_the_exact_compiler_module_definition() {
-    let fixture = typescript_surface_fixture(
-        &[("rollup.config.js", "export default {};\n")],
-        &[],
-    );
+    let fixture = typescript_surface_fixture(&[("rollup.config.js", "export default {};\n")], &[]);
     let changed_indexers = BTreeSet::from([SemanticIndexerKind::TypeScriptJavaScript]);
     let required_paths = fixture_required_paths(&fixture.source);
     let snapshot = build_semantic_snapshot(

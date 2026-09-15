@@ -1835,8 +1835,7 @@ fn declaration_location(
     encoding: SemanticPositionEncoding,
 ) -> Result<SemanticLocation, String> {
     let range = declaration.identifier;
-    let module_anchor = declaration.binding
-        == HistoricalV2SourcePublicBindingKind::ModuleAnchor;
+    let module_anchor = declaration.binding == HistoricalV2SourcePublicBindingKind::ModuleAnchor;
     if (!module_anchor && range.start >= range.end)
         || range.end > source.len()
         || declaration.exposed_identifier.start >= declaration.exposed_identifier.end
