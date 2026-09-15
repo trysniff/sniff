@@ -210,6 +210,26 @@ export * as publicNamespace from "./namespace";
 }
 
 #[test]
+fn js_ts_default_object_uses_the_compiler_module_anchor() {
+    let source = b"export default {};\n";
+    let surface =
+        census_source_public_surface("rollup.config.js", source).expect("JavaScript surface");
+    let [declaration] = surface.declarations.as_slice() else {
+        panic!("expected one default declaration");
+    };
+
+    assert_eq!(declaration.name, "default");
+    assert_eq!(declaration.target_name, "default");
+    assert_eq!(declaration.kind, SourcePublicSymbolKind::CompilerDefined);
+    assert_eq!(declaration.binding, SourcePublicBindingKind::ModuleAnchor);
+    assert_eq!(slice(source, declaration.exposed_identifier), "default");
+    assert_eq!(
+        declaration.compiler_anchor,
+        super::SourceByteRange { start: 0, end: 0 }
+    );
+}
+
+#[test]
 fn js_ts_surface_rejects_unnamed_exported_type_members() {
     let error = census_source_public_surface(
         "surface.ts",

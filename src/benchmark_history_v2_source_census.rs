@@ -591,6 +591,9 @@ pub(super) fn source_public_declarations_with_module_identity(
                 crate::source_public_surface::SourcePublicBindingKind::Reference => {
                     HistoricalV2SourcePublicBindingKind::Reference
                 }
+                crate::source_public_surface::SourcePublicBindingKind::ModuleAnchor => {
+                    HistoricalV2SourcePublicBindingKind::ModuleAnchor
+                }
                 crate::source_public_surface::SourcePublicBindingKind::Unsupported => {
                     return Err(format!(
                         "historical-v2 public surface has an unsupported exposure in {repository_path}: {}",
@@ -634,7 +637,11 @@ pub(super) fn source_public_declarations_with_module_identity(
                 start: declaration.compiler_anchor.start,
                 end: declaration.compiler_anchor.end,
             };
-            let identifier_coordinate_positions = identifier_positions(source_text, identifier)?;
+            let identifier_coordinate_positions = compiler_anchor_positions(
+                source_text,
+                identifier,
+                binding,
+            )?;
             let owner_identifier = declaration.owner_compiler_anchor.map(|range| {
                 HistoricalV2SourceByteRange {
                     start: range.start,
@@ -825,6 +832,24 @@ fn identifier_positions(
         || !source.is_char_boundary(range.end)
     {
         return Err("historical-v2 public declaration has an invalid byte range".to_string());
+    }
+    Ok(HistoricalV2SourceIdentifierPositions {
+        utf8: position_range(source, range, |text| text.len())?,
+        utf16: position_range(source, range, |text| text.encode_utf16().count())?,
+        utf32: position_range(source, range, |text| text.chars().count())?,
+    })
+}
+
+fn compiler_anchor_positions(
+    source: &str,
+    range: HistoricalV2SourceByteRange,
+    binding: HistoricalV2SourcePublicBindingKind,
+) -> Result<HistoricalV2SourceIdentifierPositions, String> {
+    if binding != HistoricalV2SourcePublicBindingKind::ModuleAnchor {
+        return identifier_positions(source, range);
+    }
+    if range.start != 0 || range.end != 0 {
+        return Err("historical-v2 module anchor is not the compiler module origin".to_string());
     }
     Ok(HistoricalV2SourceIdentifierPositions {
         utf8: position_range(source, range, |text| text.len())?,

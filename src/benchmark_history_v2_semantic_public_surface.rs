@@ -337,6 +337,10 @@ pub(super) fn bind_public_surface(
                     HistoricalV2SemanticPublicBindingKind::Reference,
                     symbol_at_exact_reference(index, document, declaration, &location)?,
                 ),
+                HistoricalV2SourcePublicBindingKind::ModuleAnchor => (
+                    HistoricalV2SemanticPublicBindingKind::Definition,
+                    symbol_at_exact_definition(index, declaration, &location)?,
+                ),
             };
             let owner_location = declaration_owner_location(
                 file,
@@ -1831,7 +1835,8 @@ fn declaration_location(
     encoding: SemanticPositionEncoding,
 ) -> Result<SemanticLocation, String> {
     let range = declaration.identifier;
-    if range.start >= range.end
+    let module_anchor = declaration.binding == HistoricalV2SourcePublicBindingKind::ModuleAnchor;
+    if (!module_anchor && range.start >= range.end)
         || range.end > source.len()
         || declaration.exposed_identifier.start >= declaration.exposed_identifier.end
         || declaration.exposed_identifier.end > source.len()
@@ -1854,6 +1859,14 @@ fn declaration_location(
             }
             HistoricalV2SourcePublicBindingKind::Reference => {
                 &source[range.start..range.end] == declaration.name.as_str()
+            }
+            HistoricalV2SourcePublicBindingKind::ModuleAnchor => {
+                matches!(file.language.as_str(), "typescript" | "javascript")
+                    && declaration.name == "default"
+                    && declaration.target_name == "default"
+                    && declaration.kind == HistoricalV2SourcePublicSymbolKind::CompilerDefined
+                    && range.start == 0
+                    && range.end == 0
             }
         }
     {

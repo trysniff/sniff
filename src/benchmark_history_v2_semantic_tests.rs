@@ -1134,6 +1134,49 @@ fn typescript_source_export_outside_the_package_graph_remains_latent() {
 }
 
 #[test]
+fn typescript_default_object_binds_the_exact_compiler_module_definition() {
+    let fixture = typescript_surface_fixture(&[("rollup.config.js", "export default {};\n")], &[]);
+    let changed_indexers = BTreeSet::from([SemanticIndexerKind::TypeScriptJavaScript]);
+    let required_paths = fixture_required_paths(&fixture.source);
+    let snapshot = build_semantic_snapshot(
+        fixture.root.path(),
+        &fixture.source,
+        &fixture.files,
+        &changed_indexers,
+        &required_paths,
+        &fixture.indexes,
+    )
+    .unwrap();
+    let declaration = &fixture.source.source_files[0].public_declarations[0];
+    let binding = snapshot
+        .public_bindings
+        .iter()
+        .find(|binding| binding.declaration_unit_id == declaration.declaration_unit_id)
+        .expect("default object compiler binding");
+
+    assert_eq!(
+        declaration.binding,
+        super::super::HistoricalV2SourcePublicBindingKind::ModuleAnchor
+    );
+    assert_eq!(
+        binding.binding,
+        HistoricalV2SemanticPublicBindingKind::Definition
+    );
+    assert_eq!(binding.repository_path, "rollup.config.js");
+    assert_eq!(binding.compiler_anchor.start_line_zero_based, 0);
+    assert_eq!(binding.compiler_anchor.start_character_zero_based, 0);
+    assert_eq!(binding.compiler_anchor.end_line_zero_based, 0);
+    assert_eq!(binding.compiler_anchor.end_character_zero_based, 0);
+    validation::validate_snapshot(
+        &fixture.source,
+        &snapshot,
+        &changed_indexers,
+        &required_paths,
+    )
+    .unwrap();
+}
+
+#[test]
 fn two_node_package_slots_for_one_module_remain_distinct() {
     let mut fixture =
         typescript_surface_fixture(&[("src/index.ts", "export const value = 1;\n")], &[]);
@@ -5300,7 +5343,13 @@ fn compiler_surface_fixture(
                     provider_identity: symbol_id.0.clone(),
                     display_name: Some(declaration.name.clone()),
                     kind: SemanticSymbolKind {
-                        category: semantic_category(declaration.kind),
+                        category: if declaration.binding
+                            == super::super::HistoricalV2SourcePublicBindingKind::ModuleAnchor
+                        {
+                            SemanticSymbolCategory::Module
+                        } else {
+                            semantic_category(declaration.kind)
+                        },
                         provider_name: "fixture-declaration".to_string(),
                     },
                     documentation: Vec::new(),
@@ -5322,6 +5371,9 @@ fn compiler_surface_fixture(
                     }
                     super::super::HistoricalV2SourcePublicBindingKind::Reference => {
                         SemanticOccurrenceRole::Read
+                    }
+                    super::super::HistoricalV2SourcePublicBindingKind::ModuleAnchor => {
+                        SemanticOccurrenceRole::Definition
                     }
                 }]),
                 override_documentation: Vec::new(),

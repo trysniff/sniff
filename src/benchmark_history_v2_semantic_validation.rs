@@ -1000,10 +1000,22 @@ fn validate_public_bindings<'a>(
             ));
         }
         for declaration in &file.public_declarations {
+            let valid_identifier =
+                if declaration.binding == HistoricalV2SourcePublicBindingKind::ModuleAnchor {
+                    matches!(file.language.as_str(), "typescript" | "javascript")
+                        && declaration.name == "default"
+                        && declaration.target_name == "default"
+                        && declaration.kind
+                            == super::super::HistoricalV2SourcePublicSymbolKind::CompilerDefined
+                        && declaration.identifier.start == 0
+                        && declaration.identifier.end == 0
+                } else {
+                    declaration.identifier.start < declaration.identifier.end
+                };
             if declaration.surface_unit_id.trim().is_empty()
                 || declaration.declaration_unit_id.trim().is_empty()
                 || declaration.exposed_identifier.start >= declaration.exposed_identifier.end
-                || declaration.identifier.start >= declaration.identifier.end
+                || !valid_identifier
                 || declaration.name.trim().is_empty()
                 || expected
                     .insert(
@@ -1126,6 +1138,9 @@ fn validate_public_bindings<'a>(
                     }
                     HistoricalV2SourcePublicBindingKind::Reference => {
                         HistoricalV2SemanticPublicBindingKind::Reference
+                    }
+                    HistoricalV2SourcePublicBindingKind::ModuleAnchor => {
+                        HistoricalV2SemanticPublicBindingKind::Definition
                     }
                 };
                 let expected_owner_anchor = declaration_owner_semantic_range(
