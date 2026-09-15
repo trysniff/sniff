@@ -595,6 +595,7 @@ QUALIFICATION_PROJECT_MODEL_V10_REPLAY_SLOTS = {
     122: {
         "canonical_repository": "vmware/govmomi",
         "committed_stage_count": 4,
+        "source_progress": True,
         "retained_checkpoint_sha256": (
             QUALIFICATION_PROJECT_MODEL_REPLAY_SLOTS[122][
                 "retained_checkpoint_sha256"
@@ -604,6 +605,7 @@ QUALIFICATION_PROJECT_MODEL_V10_REPLAY_SLOTS = {
     123: {
         "canonical_repository": "kyverno/chainsaw",
         "committed_stage_count": 4,
+        "source_progress": True,
         "retained_checkpoint_sha256": (
             QUALIFICATION_PROJECT_MODEL_REPLAY_SLOTS[123][
                 "retained_checkpoint_sha256"
@@ -613,6 +615,7 @@ QUALIFICATION_PROJECT_MODEL_V10_REPLAY_SLOTS = {
     124: {
         "canonical_repository": "prometheus/prometheus",
         "committed_stage_count": 3,
+        "source_progress": True,
     },
 }
 
@@ -1494,7 +1497,7 @@ def _validate_qualification_project_model_v10_replay_slot(
         work_language, f"slot-{slot_number:04}", f"Go work slot {slot_number}"
     )
     source_progress = None
-    if committed_stage_count == 4:
+    if expected.get("source_progress") is True:
         source_progress = _exact_plain_child(
             work_slot,
             "source-progress",
