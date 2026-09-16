@@ -64,7 +64,7 @@ jobs:
   assess:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 45
     env:
       ASSESSMENT_HEARTBEAT_SECONDS: "60"
       ASSESSMENT_TIMEOUT_MINUTES: ${{ inputs.assessment_timeout_minutes }}
@@ -74,7 +74,7 @@ jobs:
       MAX_NEW_SLOTS: ${{ inputs.max_new_slots }}
       MAX_NEW_STAGES_PER_SLOT: ${{ inputs.max_new_stages_per_slot }}
       MAX_ASSESSMENT_TIMEOUT_MINUTES: "18"
-      NON_ASSESSMENT_RESERVE_MINUTES: "12"
+      NON_ASSESSMENT_RESERVE_MINUTES: "27"
       RESUME_RUN_ID: ${{ inputs.resume_run_id }}
       TOOLS_RUN_ID: ${{ inputs.tools_run_id }}
       THROUGH_STAGE: ${{ inputs.through_stage }}
@@ -700,7 +700,7 @@ jobs:
               --payloads "$FRAME_ROOT/selected-payloads.json" \
               --work-root "$WORK_ROOT" \
               2>&1 \
-              | grep -E '^(Started semantic compiler worlds:|  [a-z]+/slot-)'
+              | grep -E '^(Started semantic compiler worlds:|Durable semantic checkpoints:|  [a-z]+/slot-)'
           } > "$RUNNER_TEMP/historical-v2-durable-progress-before.txt"
 
       - name: Assess a bounded resumable slot slice
@@ -822,7 +822,7 @@ jobs:
               --payloads "$FRAME_ROOT/selected-payloads.json" \
               --work-root "$WORK_ROOT" \
               2>&1 \
-              | grep -E '^(Started semantic compiler worlds:|  [a-z]+/slot-)'
+              | grep -E '^(Started semantic compiler worlds:|Durable semantic checkpoints:|  [a-z]+/slot-)'
           } > "$RUNNER_TEMP/historical-v2-durable-progress-after.txt"
           if cmp --silent \
             "$RUNNER_TEMP/historical-v2-durable-progress-before.txt" \
@@ -830,6 +830,18 @@ jobs:
             printf 'changed=false\n' >> "$GITHUB_OUTPUT"
           else
             printf 'changed=true\n' >> "$GITHUB_OUTPUT"
+            diff_status=0
+            diff --unified=0 \
+              "$RUNNER_TEMP/historical-v2-durable-progress-before.txt" \
+              "$RUNNER_TEMP/historical-v2-durable-progress-after.txt" \
+              > "$RUNNER_TEMP/historical-v2-durable-progress.diff" \
+              || diff_status=$?
+            if (( diff_status != 1 )); then
+              echo "unexpected durable-progress diff status: $diff_status" >&2
+              exit 1
+            fi
+            grep -E '^([+][^+]|[-][^-])' \
+              "$RUNNER_TEMP/historical-v2-durable-progress.diff"
           fi
 
       - name: Upload immutable resumable assessment state

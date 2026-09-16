@@ -4819,7 +4819,7 @@ class WorkflowContractTests(unittest.TestCase):
             .split('"', 2)[1]
         )
 
-        self.assertEqual(job_minutes, 30)
+        self.assertEqual(job_minutes, 45)
         go_timeout = re.search(
             r"GO_COMMAND_TIMEOUT: Duration = Duration::from_secs\((\d+) \* 60\)",
             go_dependency,
@@ -4828,9 +4828,10 @@ class WorkflowContractTests(unittest.TestCase):
 
         self.assertEqual(assessment_minutes, 6)
         self.assertEqual(max_assessment_minutes, 18)
-        self.assertEqual(reserve_minutes, 12)
+        self.assertEqual(reserve_minutes, 27)
         self.assertEqual(heartbeat_seconds, 60)
         self.assertEqual(max_assessment_minutes + reserve_minutes, job_minutes)
+        self.assertIn("historical-v2-durable-progress.diff", workflow)
         self.assertLess(int(go_timeout.group(1)), assessment_minutes)
         self.assertIn(
             "      ASSESSMENT_TIMEOUT_MINUTES: ${{ inputs.assessment_timeout_minutes }}",
@@ -4865,7 +4866,8 @@ class WorkflowContractTests(unittest.TestCase):
         )
         self.assertEqual(
             workflow.count(
-                "| grep -E '^(Started semantic compiler worlds:|  [a-z]+/slot-)'"
+                "| grep -E '^(Started semantic compiler worlds:|"
+                "Durable semantic checkpoints:|  [a-z]+/slot-)'"
             ),
             2,
         )
