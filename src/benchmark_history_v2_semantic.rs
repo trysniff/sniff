@@ -32,6 +32,7 @@ use crate::semantic_indexer_runner::{
 use crate::semantic_method_join::{SemanticMethodBinding, SemanticMethodCoverage, join_methods};
 use crate::types::FileRecord;
 use serde::Serialize;
+use serde::ser::SerializeStruct;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -833,9 +834,58 @@ pub(super) fn indexer_kind(kind: SemanticIndexerKind) -> IntentionalBoundaryInde
 pub(super) fn semantic_snapshot_sha256(
     value: &HistoricalV2SemanticSnapshotCensus,
 ) -> Result<String, String> {
-    let mut committed = value.clone();
-    committed.semantic_snapshot_sha256.clear();
-    hash_json(&committed)
+    hash_json(&SnapshotWithoutCommitment(value))
+}
+
+struct SnapshotWithoutCommitment<'a>(&'a HistoricalV2SemanticSnapshotCensus);
+
+impl Serialize for SnapshotWithoutCommitment<'_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let snapshot = self.0;
+        let mut record = serializer.serialize_struct("HistoricalV2SemanticSnapshotCensus", 23)?;
+        record.serialize_field("revision", &snapshot.revision)?;
+        record.serialize_field(
+            "source_snapshot_census_sha256",
+            &snapshot.source_snapshot_census_sha256,
+        )?;
+        record.serialize_field("required_document_paths", &snapshot.required_document_paths)?;
+        record.serialize_field(
+            "public_surface_document_paths",
+            &snapshot.public_surface_document_paths,
+        )?;
+        record.serialize_field("indexers", &snapshot.indexers)?;
+        record.serialize_field("methods", &snapshot.methods)?;
+        record.serialize_field("public_bindings", &snapshot.public_bindings)?;
+        record.serialize_field("public_roots", &snapshot.public_roots)?;
+        record.serialize_field("go_package_roots", &snapshot.go_package_roots)?;
+        record.serialize_field(
+            "kotlin_compilation_roots",
+            &snapshot.kotlin_compilation_roots,
+        )?;
+        record.serialize_field("public_reexport_hops", &snapshot.public_reexport_hops)?;
+        record.serialize_field("symbols", &snapshot.symbols)?;
+        record.serialize_field("symbol_count", &snapshot.symbol_count)?;
+        record.serialize_field("public_binding_count", &snapshot.public_binding_count)?;
+        record.serialize_field("public_root_count", &snapshot.public_root_count)?;
+        record.serialize_field("go_package_root_count", &snapshot.go_package_root_count)?;
+        record.serialize_field(
+            "kotlin_compilation_root_count",
+            &snapshot.kotlin_compilation_root_count,
+        )?;
+        record.serialize_field(
+            "public_reexport_hop_count",
+            &snapshot.public_reexport_hop_count,
+        )?;
+        record.serialize_field("public_symbol_count", &snapshot.public_symbol_count)?;
+        record.serialize_field("resolved_method_count", &snapshot.resolved_method_count)?;
+        record.serialize_field(
+            "compiler_excluded_method_count",
+            &snapshot.compiler_excluded_method_count,
+        )?;
+        record.serialize_field("unresolved_method_count", &snapshot.unresolved_method_count)?;
+        record.serialize_field("semantic_snapshot_sha256", "")?;
+        record.end()
+    }
 }
 
 fn build_semantic_snapshot_from_index_sets(
@@ -872,8 +922,7 @@ pub(super) fn semantic_census_sha256(value: &HistoricalV2SemanticCensus) -> Resu
 }
 
 fn hash_json(value: &impl Serialize) -> Result<String, String> {
-    serde_json::to_vec(value)
-        .map(|bytes| sha256(&bytes))
+    super::streamed_json_hash::sha256_json(value)
         .map_err(|error| format!("failed to commit historical-v2 semantic census: {error}"))
 }
 

@@ -9,6 +9,7 @@ use crate::semantic_index::{
     SemanticSymbolKind, SemanticTestRelationship, SemanticTextEncoding,
 };
 use crate::types::MethodRecord;
+use sha2::{Digest, Sha256};
 use std::path::Path;
 use std::process::Command;
 
@@ -508,6 +509,57 @@ fn semantic_fact_commitment_ignores_operator_checkout_and_command_paths() {
 
     assert_eq!(left.semantic_facts_sha256, right.semantic_facts_sha256);
     assert_eq!(left.diagnostics_sha256, right.diagnostics_sha256);
+}
+
+#[test]
+fn streamed_semantic_hashes_match_the_original_json_bytes() {
+    fn legacy_hash(value: &impl serde::Serialize) -> String {
+        format!("{:x}", Sha256::digest(serde_json::to_vec(value).unwrap()))
+    }
+
+    let (root, source_census, files, indexes) = fixture();
+    let index = indexes.get(&SemanticIndexerKind::Rust).unwrap();
+    let summary = summarize_index(SemanticIndexerKind::Rust, index).unwrap();
+    assert_eq!(
+        summary.semantic_facts_sha256,
+        legacy_hash(&(
+            index.format_version,
+            &index.variant,
+            &index.provenance.format,
+            &index.provenance.tool_name,
+            &index.provenance.tool_version,
+            index.provenance.source_text_encoding,
+            &index.documents,
+            &index.symbols,
+            &index.relationships,
+            &index.imports,
+            &index.calls,
+            &index.test_relationships,
+            &index.unresolved_edges,
+        ))
+    );
+    assert_eq!(
+        summary.diagnostics_sha256,
+        legacy_hash(&index.provenance.diagnostics)
+    );
+
+    let census = build_semantic_census(root.path(), &source_census, &files, &indexes).unwrap();
+    assert_eq!(
+        compute_semantic_census_sha256(&census).unwrap(),
+        legacy_hash(&(
+            census.schema_version,
+            &census.semantic_contract,
+            &census.repository,
+            &census.revision,
+            &census.source_census_sha256,
+            &census.indexers,
+            &census.source_references,
+            &census.methods,
+            census.resolved_method_count,
+            census.compiler_excluded_method_count,
+            census.unresolved_method_count,
+        ))
+    );
 }
 
 #[test]

@@ -307,7 +307,7 @@ pub(in crate::benchmark::release) fn summarize_index(
     kind: SemanticIndexerKind,
     index: &SemanticIndex,
 ) -> Result<IntentionalBoundarySemanticIndexerCensus, String> {
-    let facts = serde_json::to_vec(&(
+    let semantic_facts_sha256 = super::super::streamed_json_hash::sha256_json(&(
         index.format_version,
         &index.variant,
         &index.provenance.format,
@@ -323,16 +323,17 @@ pub(in crate::benchmark::release) fn summarize_index(
         &index.unresolved_edges,
     ))
     .map_err(|error| format!("failed to commit intentional-boundary semantic facts: {error}"))?;
-    let diagnostics = serde_json::to_vec(&index.provenance.diagnostics).map_err(|error| {
-        format!("failed to commit intentional-boundary semantic diagnostics: {error}")
-    })?;
+    let diagnostics_sha256 =
+        super::super::streamed_json_hash::sha256_json(&index.provenance.diagnostics).map_err(
+            |error| format!("failed to commit intentional-boundary semantic diagnostics: {error}"),
+        )?;
     Ok(IntentionalBoundarySemanticIndexerCensus {
         indexer: indexer_kind(kind),
         tool_name: index.provenance.tool_name.clone(),
         tool_version: index.provenance.tool_version.clone(),
-        semantic_facts_sha256: sha256(&facts),
+        semantic_facts_sha256,
         diagnostic_count: index.provenance.diagnostics.len(),
-        diagnostics_sha256: sha256(&diagnostics),
+        diagnostics_sha256,
         document_count: index.documents.len(),
         symbol_count: index.symbols.len(),
         relationship_count: index.relationships.len(),

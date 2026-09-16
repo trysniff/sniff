@@ -1,7 +1,5 @@
 use super::*;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
-use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 
 const SNAPSHOT_PROGRESS_SCHEMA_VERSION: u32 = 5;
@@ -556,27 +554,9 @@ use io::{
 };
 
 fn canonical_sha256<T: Serialize>(value: &T) -> Result<String, String> {
-    let mut writer = BufWriter::with_capacity(64 * 1024, Sha256Writer(Sha256::new()));
-    serde_json::to_writer(&mut writer, value).map_err(|error| {
+    super::super::streamed_json_hash::sha256_json(value).map_err(|error| {
         format!("failed to serialize historical-v2 semantic progress commitment: {error}")
-    })?;
-    let writer = writer.into_inner().map_err(|error| {
-        format!("failed to hash historical-v2 semantic progress commitment: {error}")
-    })?;
-    Ok(format!("{:x}", writer.0.finalize()))
-}
-
-struct Sha256Writer(Sha256);
-
-impl Write for Sha256Writer {
-    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-        self.0.update(bytes);
-        Ok(bytes.len())
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
+    })
 }
 
 fn is_sha256(value: &str) -> bool {
