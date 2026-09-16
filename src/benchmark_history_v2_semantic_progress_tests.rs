@@ -196,6 +196,89 @@ fn semantic_contribution() -> assembly::HistoricalV2SemanticVariantContribution 
 }
 
 #[test]
+fn streamed_checkpoints_keep_the_exact_json_and_hash_contract() {
+    let state = tempfile::tempdir().unwrap();
+    let progress = HistoricalV2SemanticProgress::open(&state.path().join("progress")).unwrap();
+    let materialization = materialization();
+    let source_census = source_census();
+    let changed = BTreeSet::from([SemanticIndexerKind::Go]);
+    let required = BTreeSet::new();
+    let indexer = semantic_indexer();
+    progress
+        .publish_contribution(
+            &materialization,
+            &source_census,
+            HistoricalV2SemanticSnapshotSide::Base,
+            &source_census.base,
+            &changed,
+            &required,
+            &indexer,
+            semantic_contribution(),
+        )
+        .unwrap();
+    let contribution_path = progress
+        .contribution_path(HistoricalV2SemanticSnapshotSide::Base, &indexer)
+        .unwrap();
+    let contribution_bytes = fs::read(contribution_path).unwrap();
+    let contribution: ContributionCheckpoint = serde_json::from_slice(&contribution_bytes).unwrap();
+    let mut expected_bytes = serde_json::to_vec(&contribution).unwrap();
+    expected_bytes.push(b'\n');
+    assert_eq!(contribution_bytes, expected_bytes);
+    assert_eq!(
+        contribution.payload_sha256,
+        format!(
+            "{:x}",
+            Sha256::digest(serde_json::to_vec(&contribution.payload).unwrap())
+        )
+    );
+    let mut contribution_projection = contribution.clone();
+    contribution_projection.checkpoint_sha256.clear();
+    assert_eq!(
+        contribution.checkpoint_sha256,
+        format!(
+            "{:x}",
+            Sha256::digest(serde_json::to_vec(&contribution_projection).unwrap())
+        )
+    );
+
+    progress
+        .publish_snapshot(
+            &materialization,
+            &source_census,
+            HistoricalV2SemanticSnapshotSide::Base,
+            &source_census.base,
+            &changed,
+            &required,
+            semantic_snapshot(&source_census.base),
+        )
+        .unwrap();
+    let snapshot_path = progress
+        .side_root(HistoricalV2SemanticSnapshotSide::Base)
+        .join(SNAPSHOT_FILE);
+    let snapshot_bytes = fs::read(snapshot_path).unwrap();
+    let snapshot: SnapshotCheckpoint = serde_json::from_slice(&snapshot_bytes).unwrap();
+    let mut expected_bytes = serde_json::to_vec(&snapshot).unwrap();
+    expected_bytes.push(b'\n');
+    assert_eq!(snapshot_bytes, expected_bytes);
+    assert_eq!(
+        snapshot.payload_sha256,
+        format!(
+            "{:x}",
+            Sha256::digest(serde_json::to_vec(&snapshot.payload).unwrap())
+        )
+    );
+    let mut snapshot_projection = snapshot.clone();
+    snapshot_projection.checkpoint_sha256.clear();
+    assert_eq!(
+        snapshot.checkpoint_sha256,
+        format!(
+            "{:x}",
+            Sha256::digest(serde_json::to_vec(&snapshot_projection).unwrap())
+        )
+    );
+}
+
+#[test]
 fn completed_snapshot_resumes_only_under_the_exact_identity() {
     let state = tempfile::tempdir().unwrap();
     let root = state.path().join("progress");
@@ -213,7 +296,7 @@ fn completed_snapshot_resumes_only_under_the_exact_identity() {
             &source_census.base,
             &changed,
             &required,
-            &snapshot,
+            snapshot.clone(),
         )
         .unwrap();
 
@@ -351,7 +434,7 @@ fn recovery_reports_only_valid_committed_semantic_checkpoints() {
             &source_census.base,
             &changed,
             &required,
-            &snapshot,
+            snapshot.clone(),
         )
         .unwrap();
     let complete = HistoricalV2SemanticProgress::recover_existing(&root).unwrap();
@@ -476,7 +559,7 @@ fn previous_snapshot_progress_schema_is_not_reinterpreted() {
             &source_census.base,
             &changed,
             &required,
-            &snapshot,
+            snapshot.clone(),
         )
         .unwrap();
     let path = progress
