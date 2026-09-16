@@ -811,7 +811,7 @@ async fn completed_snapshot_is_loaded_before_source_reconstruction() {
             &source_census.base,
             &changed_indexers,
             &required_paths,
-            &snapshot,
+            snapshot.clone(),
         )
         .unwrap();
     let unavailable_root = state.path().join("source-does-not-exist");

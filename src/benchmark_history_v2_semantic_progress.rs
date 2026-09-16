@@ -1,6 +1,7 @@
 use super::*;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 
 const SNAPSHOT_PROGRESS_SCHEMA_VERSION: u32 = 5;
@@ -133,9 +134,9 @@ impl HistoricalV2SemanticProgress {
             let identity = name.strip_suffix(".json").ok_or_else(|| {
                 format!("historical-v2 semantic contribution has an invalid name {name}")
             })?;
-            let checkpoint: ContributionCheckpoint =
+            let mut checkpoint: ContributionCheckpoint =
                 read_checkpoint(&entry.path(), "semantic contribution checkpoint")?;
-            validate_contribution_checkpoint_self(&checkpoint, side, identity)?;
+            validate_contribution_checkpoint_self(&mut checkpoint, side, identity)?;
             recovered.push(HistoricalV2SemanticCheckpointRecovery {
                 side,
                 kind: HistoricalV2SemanticCheckpointKind::Contribution,
@@ -145,9 +146,9 @@ impl HistoricalV2SemanticProgress {
         }
         let snapshot_path = self.side_root(side).join(SNAPSHOT_FILE);
         if snapshot_path.exists() {
-            let checkpoint: SnapshotCheckpoint =
+            let mut checkpoint: SnapshotCheckpoint =
                 read_checkpoint(&snapshot_path, "semantic snapshot checkpoint")?;
-            validate_snapshot_checkpoint_self(&checkpoint, side)?;
+            validate_snapshot_checkpoint_self(&mut checkpoint, side)?;
             recovered.push(HistoricalV2SemanticCheckpointRecovery {
                 side,
                 kind: HistoricalV2SemanticCheckpointKind::Snapshot,
@@ -182,10 +183,10 @@ impl HistoricalV2SemanticProgress {
         if !path.exists() {
             return Ok(None);
         }
-        let checkpoint: ContributionCheckpoint =
+        let mut checkpoint: ContributionCheckpoint =
             read_checkpoint(&path, "semantic contribution checkpoint")?;
         validate_contribution_checkpoint(
-            &checkpoint,
+            &mut checkpoint,
             materialization,
             source_census,
             side,
@@ -234,10 +235,7 @@ impl HistoricalV2SemanticProgress {
             checkpoint_sha256: String::new(),
         };
         checkpoint.checkpoint_sha256 = canonical_sha256(&checkpoint)?;
-        let bytes = serde_json::to_vec(&checkpoint).map_err(|error| {
-            format!("failed to serialize historical-v2 semantic contribution progress: {error}")
-        })?;
-        write_atomic_new(&path, &bytes)?;
+        write_json_atomic_new(&path, &checkpoint)?;
         Ok(checkpoint.payload)
     }
 
@@ -257,10 +255,10 @@ impl HistoricalV2SemanticProgress {
         if !path.exists() {
             return Ok(None);
         }
-        let checkpoint: SnapshotCheckpoint =
+        let mut checkpoint: SnapshotCheckpoint =
             read_checkpoint(&path, "semantic snapshot checkpoint")?;
         validate_checkpoint(
-            &checkpoint,
+            &mut checkpoint,
             materialization,
             source_census,
             side,
@@ -280,8 +278,8 @@ impl HistoricalV2SemanticProgress {
         source: &HistoricalV2SourceSnapshotCensus,
         changed_indexers: &BTreeSet<SemanticIndexerKind>,
         required_document_paths: &BTreeSet<String>,
-        payload: &HistoricalV2SemanticSnapshotCensus,
-    ) -> Result<(), String> {
+        payload: HistoricalV2SemanticSnapshotCensus,
+    ) -> Result<HistoricalV2SemanticSnapshotCensus, String> {
         self.validate_side_entries(side)?;
         let path = self.side_root(side).join(SNAPSHOT_FILE);
         if path.exists() {
@@ -300,15 +298,13 @@ impl HistoricalV2SemanticProgress {
             source_snapshot_census_sha256: source.snapshot_census_sha256.clone(),
             changed_indexers: changed_indexers.iter().copied().collect(),
             required_document_paths: required_document_paths.iter().cloned().collect(),
-            payload_sha256: canonical_sha256(payload)?,
-            payload: payload.clone(),
+            payload_sha256: canonical_sha256(&payload)?,
+            payload,
             checkpoint_sha256: String::new(),
         };
         checkpoint.checkpoint_sha256 = canonical_sha256(&checkpoint)?;
-        let bytes = serde_json::to_vec(&checkpoint).map_err(|error| {
-            format!("failed to serialize historical-v2 semantic snapshot progress: {error}")
-        })?;
-        write_atomic_new(&path, &bytes)
+        write_json_atomic_new(&path, &checkpoint)?;
+        Ok(checkpoint.payload)
     }
 
     fn side_root(&self, side: HistoricalV2SemanticSnapshotSide) -> PathBuf {
@@ -368,7 +364,7 @@ impl HistoricalV2SemanticProgress {
 
 #[allow(clippy::too_many_arguments)]
 fn validate_contribution_checkpoint(
-    checkpoint: &ContributionCheckpoint,
+    checkpoint: &mut ContributionCheckpoint,
     materialization: &HistoricalV2Materialization,
     source_census: &HistoricalV2SourceCensus,
     side: HistoricalV2SemanticSnapshotSide,
@@ -395,7 +391,7 @@ fn validate_contribution_checkpoint(
 }
 
 fn validate_contribution_checkpoint_self(
-    checkpoint: &ContributionCheckpoint,
+    checkpoint: &mut ContributionCheckpoint,
     side: HistoricalV2SemanticSnapshotSide,
     identity: &str,
 ) -> Result<(), String> {
@@ -424,9 +420,10 @@ fn validate_contribution_checkpoint_self(
         ));
     }
     assembly::validate_variant_contribution(&checkpoint.payload, &checkpoint.indexer)?;
-    let mut projection = checkpoint.clone();
-    projection.checkpoint_sha256.clear();
-    if checkpoint.checkpoint_sha256 != canonical_sha256(&projection)? {
+    let stored_sha256 = std::mem::take(&mut checkpoint.checkpoint_sha256);
+    let calculated_sha256 = canonical_sha256(checkpoint);
+    checkpoint.checkpoint_sha256 = stored_sha256;
+    if checkpoint.checkpoint_sha256 != calculated_sha256? {
         return Err(format!(
             "historical-v2 semantic contribution {} commitment changed",
             contribution_label(&checkpoint.indexer)
@@ -480,7 +477,7 @@ fn validate_contribution_entries(root: &Path) -> Result<(), String> {
 
 #[allow(clippy::too_many_arguments)]
 fn validate_checkpoint(
-    checkpoint: &SnapshotCheckpoint,
+    checkpoint: &mut SnapshotCheckpoint,
     materialization: &HistoricalV2Materialization,
     source_census: &HistoricalV2SourceCensus,
     side: HistoricalV2SemanticSnapshotSide,
@@ -505,7 +502,7 @@ fn validate_checkpoint(
 }
 
 fn validate_snapshot_checkpoint_self(
-    checkpoint: &SnapshotCheckpoint,
+    checkpoint: &mut SnapshotCheckpoint,
     side: HistoricalV2SemanticSnapshotSide,
 ) -> Result<(), String> {
     if checkpoint.schema_version != SNAPSHOT_PROGRESS_SCHEMA_VERSION
@@ -531,9 +528,10 @@ fn validate_snapshot_checkpoint_self(
             side_name(side)
         ));
     }
-    let mut projection = checkpoint.clone();
-    projection.checkpoint_sha256.clear();
-    if checkpoint.checkpoint_sha256 != canonical_sha256(&projection)? {
+    let stored_sha256 = std::mem::take(&mut checkpoint.checkpoint_sha256);
+    let calculated_sha256 = canonical_sha256(checkpoint);
+    checkpoint.checkpoint_sha256 = stored_sha256;
+    if checkpoint.checkpoint_sha256 != calculated_sha256? {
         return Err(format!(
             "historical-v2 {} semantic snapshot checkpoint commitment changed",
             side_name(side)
@@ -554,15 +552,31 @@ mod io;
 
 use io::{
     ensure_plain_directory, read_checkpoint, remove_incomplete_file, require_allowed_entries,
-    require_entries, write_atomic_new,
+    require_entries, write_json_atomic_new,
 };
 
 fn canonical_sha256<T: Serialize>(value: &T) -> Result<String, String> {
-    serde_json::to_vec(value)
-        .map(|bytes| format!("{:x}", Sha256::digest(bytes)))
-        .map_err(|error| {
-            format!("failed to serialize historical-v2 semantic progress commitment: {error}")
-        })
+    let mut writer = BufWriter::with_capacity(64 * 1024, Sha256Writer(Sha256::new()));
+    serde_json::to_writer(&mut writer, value).map_err(|error| {
+        format!("failed to serialize historical-v2 semantic progress commitment: {error}")
+    })?;
+    let writer = writer.into_inner().map_err(|error| {
+        format!("failed to hash historical-v2 semantic progress commitment: {error}")
+    })?;
+    Ok(format!("{:x}", writer.0.finalize()))
+}
+
+struct Sha256Writer(Sha256);
+
+impl Write for Sha256Writer {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.update(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
 fn is_sha256(value: &str) -> bool {

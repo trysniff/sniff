@@ -198,19 +198,22 @@ pub(super) async fn census_semantic_snapshot(
             return Err(infrastructure(detail));
         }
     };
-    if let (Some(progress), Some(snapshot)) = (progress, &snapshot) {
-        progress
-            .publish_snapshot(
-                materialization,
-                source_census,
-                inputs.side,
-                inputs.source,
-                changed_indexers,
-                inputs.required_paths,
-                snapshot,
-            )
-            .map_err(infrastructure)?;
-    }
+    let snapshot = match (progress, snapshot) {
+        (Some(progress), Some(snapshot)) => Some(
+            progress
+                .publish_snapshot(
+                    materialization,
+                    source_census,
+                    inputs.side,
+                    inputs.source,
+                    changed_indexers,
+                    inputs.required_paths,
+                    snapshot,
+                )
+                .map_err(infrastructure)?,
+        ),
+        (_, snapshot) => snapshot,
+    };
     Ok(snapshot)
 }
 
