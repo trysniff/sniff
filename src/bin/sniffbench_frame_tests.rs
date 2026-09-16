@@ -1,8 +1,30 @@
 use super::*;
 use sniff::benchmark::{
-    HistoricalV2SelectedSlotRunSummary, HistoricalV2SlotRunDisposition, HistoricalV2SlotRunSummary,
-    HistoricalV2SlotStage,
+    HistoricalV2SelectedSlotRunSummary, HistoricalV2SemanticCheckpointKind,
+    HistoricalV2SemanticCheckpointProgress, HistoricalV2SemanticSnapshotSide,
+    HistoricalV2SlotRunDisposition, HistoricalV2SlotRunSummary, HistoricalV2SlotStage,
 };
+
+#[test]
+fn committed_semantic_checkpoint_line_enters_the_durable_progress_ledger() {
+    let checkpoint = HistoricalV2SemanticCheckpointProgress {
+        language: "go".to_string(),
+        slot_number: 122,
+        side: HistoricalV2SemanticSnapshotSide::Base,
+        kind: HistoricalV2SemanticCheckpointKind::Contribution,
+        identity: "a".repeat(64),
+        checkpoint_sha256: "b".repeat(64),
+    };
+    let line = sniffbench_frame_run::semantic_checkpoint_progress_line(&checkpoint);
+    assert_eq!(
+        line,
+        format!(
+            "  go/slot-0122 side=base checkpoint=contribution identity={} sha256={}",
+            "a".repeat(64),
+            "b".repeat(64)
+        )
+    );
+}
 
 #[test]
 fn run_slots_requires_every_execution_boundary_explicitly() {

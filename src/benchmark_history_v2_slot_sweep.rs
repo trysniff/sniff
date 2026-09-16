@@ -6,9 +6,10 @@ use super::{
     HistoricalV2SelectedSlotStateInspectionInputs, HistoricalV2SelectedSlotStateInspectionSummary,
     HistoricalV2SelectedSlotSweepInputs, HistoricalV2SelectedSlotSweepSummary,
     HistoricalV2SelectedSlotWorkRecoveryInputs, HistoricalV2SelectedSlotWorkRecoverySummary,
-    HistoricalV2SemanticWorldProgress, HistoricalV2SlotOperations, HistoricalV2SlotOutcome,
-    HistoricalV2SlotRunDisposition, HistoricalV2SlotRunIdentity, HistoricalV2SlotStage,
-    HistoricalV2SlotStageError, HistoricalV2SlotStageJournal, HistoricalV2SlotStageOutcome,
+    HistoricalV2SemanticCheckpointProgress, HistoricalV2SemanticWorldProgress,
+    HistoricalV2SlotOperations, HistoricalV2SlotOutcome, HistoricalV2SlotRunDisposition,
+    HistoricalV2SlotRunIdentity, HistoricalV2SlotStage, HistoricalV2SlotStageError,
+    HistoricalV2SlotStageJournal, HistoricalV2SlotStageOutcome,
     run_historical_v2_slot_slice_through, validate_historical_v2_protocol,
     validate_historical_v2_selected_payloads_commitment, validate_historical_v2_slot_selection,
 };
@@ -204,11 +205,12 @@ pub fn recover_historical_v2_selected_slot_work(
         }
     }
     let mut semantic_worlds = Vec::new();
+    let mut semantic_checkpoints = Vec::new();
     for root in &layout.semantic_progress_roots {
         let recovered =
             super::history_v2_semantic::recover_historical_v2_semantic_progress(&root.root)
                 .map_err(recovery_infrastructure)?;
-        semantic_worlds.extend(recovered.into_iter().map(|recovery| {
+        semantic_worlds.extend(recovered.worlds.into_iter().map(|recovery| {
             HistoricalV2SemanticWorldProgress {
                 language: root.language.clone(),
                 slot_number: root.slot_number,
@@ -222,6 +224,16 @@ pub fn recover_historical_v2_selected_slot_work(
                 next_unit_id: recovery.progress.next_unit_id,
             }
         }));
+        semantic_checkpoints.extend(recovered.checkpoints.into_iter().map(|checkpoint| {
+            HistoricalV2SemanticCheckpointProgress {
+                language: root.language.clone(),
+                slot_number: root.slot_number,
+                side: checkpoint.side,
+                kind: checkpoint.kind,
+                identity: checkpoint.identity,
+                checkpoint_sha256: checkpoint.checkpoint_sha256,
+            }
+        }));
     }
     for root in &layout.source_progress_roots {
         super::history_v2_source_census::recover_historical_v2_source_progress(root)
@@ -233,6 +245,7 @@ pub fn recover_historical_v2_selected_slot_work(
         materialized_semantic_root_count: layout.semantic_roots.len(),
         recovered_semantic_root_count,
         semantic_worlds,
+        semantic_checkpoints,
     })
 }
 

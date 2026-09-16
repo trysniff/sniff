@@ -1,7 +1,8 @@
 use super::{
     HistoricalV2ExclusionManifest, HistoricalV2Frame, HistoricalV2RecoverableTestExecutor,
-    HistoricalV2SelectedPayloads, HistoricalV2SemanticSnapshotSide, HistoricalV2SlotRunSummary,
-    HistoricalV2SlotSelection, HistoricalV2SlotStage, HistoricalV2SlotStageOutcome,
+    HistoricalV2SelectedPayloads, HistoricalV2SemanticCheckpointKind,
+    HistoricalV2SemanticSnapshotSide, HistoricalV2SlotRunSummary, HistoricalV2SlotSelection,
+    HistoricalV2SlotStage, HistoricalV2SlotStageOutcome,
 };
 use reqwest::Client;
 use std::collections::BTreeMap;
@@ -67,6 +68,17 @@ pub struct HistoricalV2SelectedSlotWorkRecoverySummary {
     pub materialized_semantic_root_count: usize,
     pub recovered_semantic_root_count: usize,
     pub semantic_worlds: Vec<HistoricalV2SemanticWorldProgress>,
+    pub semantic_checkpoints: Vec<HistoricalV2SemanticCheckpointProgress>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HistoricalV2SemanticCheckpointProgress {
+    pub language: String,
+    pub slot_number: usize,
+    pub side: HistoricalV2SemanticSnapshotSide,
+    pub kind: HistoricalV2SemanticCheckpointKind,
+    pub identity: String,
+    pub checkpoint_sha256: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

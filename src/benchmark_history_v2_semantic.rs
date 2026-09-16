@@ -78,6 +78,24 @@ pub(crate) struct HistoricalV2SemanticProgressRecovery {
     pub(crate) progress: SemanticIndexerProgressRecovery,
 }
 
+pub(crate) struct HistoricalV2SemanticProgressRecoverySummary {
+    pub(crate) worlds: Vec<HistoricalV2SemanticProgressRecovery>,
+    pub(crate) checkpoints: Vec<HistoricalV2SemanticCheckpointRecovery>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum HistoricalV2SemanticCheckpointKind {
+    Contribution,
+    Snapshot,
+}
+
+pub(crate) struct HistoricalV2SemanticCheckpointRecovery {
+    pub(crate) side: HistoricalV2SemanticSnapshotSide,
+    pub(crate) kind: HistoricalV2SemanticCheckpointKind,
+    pub(crate) identity: String,
+    pub(crate) checkpoint_sha256: String,
+}
+
 #[path = "benchmark_history_v2_semantic_variants.rs"]
 mod variants;
 
@@ -87,7 +105,7 @@ pub use validation::validate_historical_v2_semantic_census_commitment;
 
 pub(crate) fn recover_historical_v2_semantic_progress(
     root: &Path,
-) -> Result<Vec<HistoricalV2SemanticProgressRecovery>, String> {
+) -> Result<HistoricalV2SemanticProgressRecoverySummary, String> {
     progress::HistoricalV2SemanticProgress::recover_existing(root)
 }
 
