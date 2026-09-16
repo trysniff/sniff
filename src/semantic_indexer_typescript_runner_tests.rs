@@ -229,6 +229,11 @@ async fn live_configured_and_loose_worlds_cover_every_exact_source() {
             "src/App.tsx",
             "const App = () => \"ready\";\nexport default App;\n",
         ),
+        write_file(
+            root.path(),
+            "src/Checkbox.tsx",
+            "function memo<T>(value: T): T { return value; }\nconst Checkbox = () => true;\nexport default memo(Checkbox);\n",
+        ),
     ];
     write_text(
         root.path(),
@@ -250,12 +255,14 @@ async fn live_configured_and_loose_worlds_cover_every_exact_source() {
         ignored_documents: BTreeSet::from([
             RepositoryPath("rollup.config.js".to_string()),
             RepositoryPath("src/App.tsx".to_string()),
+            RepositoryPath("src/Checkbox.tsx".to_string()),
             RepositoryPath("src/index.test.ts".to_string()),
         ]),
     };
     let loose_roots = BTreeSet::from([
         RepositoryPath("rollup.config.js".to_string()),
         RepositoryPath("src/App.tsx".to_string()),
+        RepositoryPath("src/Checkbox.tsx".to_string()),
         RepositoryPath("src/index.test.ts".to_string()),
     ]);
     let loose = SemanticIndexerVariantPlan {
@@ -363,6 +370,29 @@ async fn live_configured_and_loose_worlds_cover_every_exact_source() {
         })
         .expect("App default-export compiler reference");
     assert_eq!(app_reference.symbol, app_definition.symbol);
+    let checkbox_anchor = crate::semantic_index::SemanticLocation {
+        document: RepositoryPath("src/Checkbox.tsx".to_string()),
+        range: crate::semantic_index::SemanticSourceRange {
+            start: crate::semantic_index::SemanticPosition {
+                line: 0,
+                character: 0,
+            },
+            end: crate::semantic_index::SemanticPosition {
+                line: 0,
+                character: 0,
+            },
+        },
+    };
+    let checkbox_module_symbols = loose
+        .symbols
+        .values()
+        .filter(|symbol| {
+            symbol.origin == crate::semantic_index::SemanticSymbolOrigin::Repository
+                && symbol.kind.category == crate::semantic_index::SemanticSymbolCategory::Module
+                && symbol.definitions.contains(&checkbox_anchor)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(checkbox_module_symbols.len(), 1);
     assert!(
         loose
             .documents
