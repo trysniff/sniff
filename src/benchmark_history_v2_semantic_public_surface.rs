@@ -1857,6 +1857,12 @@ fn declaration_location(
                     &declaration.name,
                 )
             }
+            HistoricalV2SourcePublicBindingKind::Reference
+                if matches!(file.language.as_str(), "typescript" | "javascript")
+                    && declaration.name == "default" =>
+            {
+                &source[range.start..range.end] == declaration.target_name.as_str()
+            }
             HistoricalV2SourcePublicBindingKind::Reference => {
                 &source[range.start..range.end] == declaration.name.as_str()
             }

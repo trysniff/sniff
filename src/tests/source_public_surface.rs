@@ -230,6 +230,22 @@ fn js_ts_default_object_uses_the_compiler_module_anchor() {
 }
 
 #[test]
+fn js_ts_default_identifier_uses_the_exact_compiler_reference() {
+    let source = b"const App = () => \"ready\";\nexport default App;\n";
+    let surface = census_source_public_surface("App.tsx", source).expect("TypeScript surface");
+    let [declaration] = surface.declarations.as_slice() else {
+        panic!("expected one default declaration");
+    };
+
+    assert_eq!(declaration.name, "default");
+    assert_eq!(declaration.target_name, "App");
+    assert_eq!(declaration.kind, SourcePublicSymbolKind::CompilerDefined);
+    assert_eq!(declaration.binding, SourcePublicBindingKind::Reference);
+    assert_eq!(slice(source, declaration.exposed_identifier), "default");
+    assert_eq!(slice(source, declaration.compiler_anchor), "App");
+}
+
+#[test]
 fn js_ts_surface_rejects_unnamed_exported_type_members() {
     let error = census_source_public_surface(
         "surface.ts",

@@ -152,6 +152,42 @@ fn typescript_default_object_commits_the_compiler_module_anchor() {
 }
 
 #[test]
+fn typescript_default_identifier_commits_the_exact_compiler_reference() {
+    let source = b"const App = () => \"ready\";\nexport default App;\n";
+    let (_, declarations, _) = source_public_declarations("App.tsx", "typescript", source).unwrap();
+    let [declaration] = declarations.as_slice() else {
+        panic!("expected one default declaration");
+    };
+
+    assert_eq!(declaration.name, "default");
+    assert_eq!(declaration.target_name, "App");
+    assert_eq!(
+        declaration.binding,
+        HistoricalV2SourcePublicBindingKind::Reference
+    );
+    assert_eq!(
+        &source[declaration.exposed_identifier.start..declaration.exposed_identifier.end],
+        b"default"
+    );
+    assert_eq!(
+        &source[declaration.identifier.start..declaration.identifier.end],
+        b"App"
+    );
+    assert_eq!(
+        declaration.identifier_positions.utf16.start.line_zero_based,
+        1
+    );
+    assert_eq!(
+        declaration
+            .identifier_positions
+            .utf16
+            .start
+            .character_zero_based,
+        15
+    );
+}
+
+#[test]
 fn typescript_static_and_instance_members_have_distinct_surface_ids() {
     let source = br#"export class Service {
   static run(): string { return "static"; }
