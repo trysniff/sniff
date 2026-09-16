@@ -265,14 +265,36 @@ fn js_ts_default_identifier_uses_the_exact_compiler_reference() {
 }
 
 #[test]
-fn js_ts_surface_rejects_unnamed_exported_type_members() {
-    let error = census_source_public_surface(
-        "surface.ts",
-        b"export interface Callable { (value: string): string; }\n",
-    )
-    .expect_err("unnamed interface call signature must fail closed");
-
-    assert!(error.contains("unnamed callable or index"), "{error}");
+fn js_ts_unnamed_type_members_are_owned_by_the_compiler_type_symbol() {
+    let source = br#"export interface Expanded {
+  [scrapePool: string]: boolean;
+  (value: string): string;
+  new (value: string): Expanded;
+}
+export class Indexed {
+  [key: string]: boolean;
+}
+"#;
+    let surface = census_source_public_surface("surface.ts", source).expect("TypeScript surface");
+    assert_eq!(surface.declarations.len(), 2);
+    let expanded = surface
+        .declarations
+        .iter()
+        .find(|declaration| declaration.name == "Expanded")
+        .expect("interface owner");
+    assert_eq!(expanded.owner, None);
+    assert_eq!(expanded.kind, SourcePublicSymbolKind::Type);
+    assert_eq!(expanded.binding, SourcePublicBindingKind::Definition);
+    assert_eq!(slice(source, expanded.compiler_anchor), "Expanded");
+    let indexed = surface
+        .declarations
+        .iter()
+        .find(|declaration| declaration.name == "Indexed")
+        .expect("class owner");
+    assert_eq!(indexed.owner, None);
+    assert_eq!(indexed.kind, SourcePublicSymbolKind::Type);
+    assert_eq!(indexed.binding, SourcePublicBindingKind::Definition);
+    assert_eq!(slice(source, indexed.compiler_anchor), "Indexed");
 }
 
 #[test]

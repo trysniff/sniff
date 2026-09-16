@@ -383,6 +383,21 @@ mod tests {
     }
 
     #[test]
+    fn changing_a_typescript_index_signature_changes_the_compiler_surface_fingerprint() {
+        let base = symbol_with_signatures(&[
+            "interface Expanded\n{\"schema\":\"typescript-unnamed-api-v1\",\"calls\":[],\"constructs\":[],\"indexes\":[{\"key\":\"string\",\"value\":\"boolean\",\"readonly\":false}]}",
+        ]);
+        let patched = symbol_with_signatures(&[
+            "interface Expanded\n{\"schema\":\"typescript-unnamed-api-v1\",\"calls\":[],\"constructs\":[],\"indexes\":[{\"key\":\"string\",\"value\":\"number\",\"readonly\":false}]}",
+        ]);
+
+        assert_ne!(
+            semantic_fingerprint(&base).expect("base fingerprint"),
+            semantic_fingerprint(&patched).expect("patched fingerprint")
+        );
+    }
+
+    #[test]
     fn public_surface_without_a_compiler_signature_fails_closed() {
         let mut symbol = symbol_with_signatures(&[]);
         symbol.symbol_id = "unsigned".to_string();

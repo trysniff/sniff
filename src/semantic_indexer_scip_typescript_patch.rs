@@ -6,7 +6,7 @@ use std::path::Path;
 const SCIP_TYPESCRIPT_VERSION: &str = "0.4.0";
 const FILE_INDEXER: &str = "node_modules/@sourcegraph/scip-typescript/dist/src/FileIndexer.js";
 const UPSTREAM_SHA256: &str = "95c37b41a5c4725a70f66b39ff60bd2d47459a28bf735b93659077f2f99c967f";
-const PATCHED_SHA256: &str = "1841c9dbbb9da0fd21b524f567ad74dd1e0a0cde14ba0ace074865b3aa80c526";
+const PATCHED_SHA256: &str = "a22f4bee6ea5f7bd504d7110ca82a82e54f9f8096cf7fc2e278b9fdc96314bbd";
 
 const ADD_INFORMATION_BEFORE: &str = r#"    addSymbolInformation(node, sym, declaration, symbol) {
         const documentation = [
@@ -61,7 +61,34 @@ const SIGNATURE_HEADER_AFTER: &str = r#"    compilerSignatureForDocumentation(no
                 !candidate.body)) {
             return undefined;
         }
-        return this.signatureForDocumentation(node, sym, declaration);
+        const signature = this.signatureForDocumentation(node, sym, declaration);
+        if (!ts.isInterfaceDeclaration(declaration) && !ts.isClassDeclaration(declaration)) {
+            return signature;
+        }
+        const formatFlags = ts.TypeFormatFlags.NoTruncation |
+            ts.TypeFormatFlags.UseFullyQualifiedType |
+            ts.TypeFormatFlags.WriteArrowStyleSignature |
+            ts.TypeFormatFlags.UseAliasDefinedOutsideCurrentScope;
+        const type = this.checker.getDeclaredTypeOfSymbol(sym);
+        const signatures = kind => this.checker
+            .getSignaturesOfType(type, kind)
+            .map(candidate => this.checker.signatureToString(candidate, candidate.getDeclaration() || declaration, formatFlags));
+        const unnamedApi = {
+            schema: 'typescript-unnamed-api-v1',
+            calls: signatures(ts.SignatureKind.Call),
+            constructs: signatures(ts.SignatureKind.Construct),
+            indexes: this.checker.getIndexInfosOfType(type).map(index => ({
+                key: this.checker.typeToString(index.keyType, declaration, formatFlags),
+                value: this.checker.typeToString(index.type, declaration, formatFlags),
+                readonly: index.isReadonly,
+            })),
+        };
+        if (unnamedApi.calls.length === 0 &&
+            unnamedApi.constructs.length === 0 &&
+            unnamedApi.indexes.length === 0) {
+            return signature;
+        }
+        return signature + '\n' + JSON.stringify(unnamedApi);
     }
     signatureForDocumentation(node, sym, declaration) {
         var _a;
@@ -228,6 +255,10 @@ mod tests {
         assert!(patched.contains("this.sourceFile.scriptKind === ts.ScriptKind.JS"));
         assert!(patched.contains("ts.isFunctionLike(candidate)"));
         assert!(patched.contains("ts.TypeFormatFlags.InTypeAlias"));
+        assert!(patched.contains("schema: 'typescript-unnamed-api-v1'"));
+        assert!(patched.contains("this.checker.getIndexInfosOfType(type)"));
+        assert!(patched.contains("signatures(ts.SignatureKind.Call)"));
+        assert!(patched.contains("signatures(ts.SignatureKind.Construct)"));
         assert!(patch_source(&patched).is_err());
         assert!(patch_source("").is_err());
     }
@@ -287,6 +318,9 @@ mod tests {
             r#"export function parse(value: string): string;
 export function parse(value: number): number;
 export function parse(value: string | number): string | number { return value; }
+export interface Expanded {
+  [scrapePool: string]: boolean;
+}
 "#,
         )
         .unwrap();
@@ -330,6 +364,22 @@ export function parse(value: string | number): string | number { return value; }
                 ("typescript", "function parse(value: number) => number"),
                 ("typescript", "function parse(value: string) => string"),
             ]
+        );
+        let expanded = index
+            .symbols
+            .values()
+            .find(|symbol| symbol.provider_identity.ends_with("/Expanded#"))
+            .unwrap();
+        assert_eq!(
+            expanded
+                .signatures
+                .iter()
+                .map(|signature| (signature.language.as_str(), signature.text.as_str()))
+                .collect::<Vec<_>>(),
+            [(
+                "typescript",
+                "interface Expanded\n{\"schema\":\"typescript-unnamed-api-v1\",\"calls\":[],\"constructs\":[],\"indexes\":[{\"key\":\"string\",\"value\":\"boolean\",\"readonly\":false}]}"
+            )]
         );
     }
 }

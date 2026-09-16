@@ -347,11 +347,9 @@ fn collect_class_members(
                     },
                 )?;
             }
-            ClassElement::TSIndexSignature(_) => {
-                return Err(format!(
-                    "exported class {owner} has an unnamed index-signature API surface"
-                ));
-            }
+            // The pinned TypeScript compiler represents index signatures in the
+            // owning class API fingerprint, not as independent SCIP symbols.
+            ClassElement::TSIndexSignature(_) => {}
         }
     }
     Ok(())
@@ -368,13 +366,11 @@ fn collect_interface_members(
                 (&property.key, SourcePublicSymbolKind::Field)
             }
             TSSignature::TSMethodSignature(method) => (&method.key, SourcePublicSymbolKind::Method),
+            // These compiler-visible signatures have no independent SCIP symbol.
+            // Their exact API shape is retained on the owning interface symbol.
             TSSignature::TSIndexSignature(_)
             | TSSignature::TSCallSignatureDeclaration(_)
-            | TSSignature::TSConstructSignatureDeclaration(_) => {
-                return Err(format!(
-                    "exported interface {owner} has an unnamed callable or index API surface"
-                ));
-            }
+            | TSSignature::TSConstructSignatureDeclaration(_) => continue,
         };
         push_key_member(
             declarations,
