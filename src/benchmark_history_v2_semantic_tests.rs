@@ -1177,6 +1177,56 @@ fn typescript_default_object_binds_the_exact_compiler_module_definition() {
 }
 
 #[test]
+fn typescript_default_identifier_binds_the_exact_compiler_reference() {
+    let fixture = typescript_surface_fixture(
+        &[(
+            "App.tsx",
+            "const App = () => \"ready\";\nexport default App;\n",
+        )],
+        &[],
+    );
+    let changed_indexers = BTreeSet::from([SemanticIndexerKind::TypeScriptJavaScript]);
+    let required_paths = fixture_required_paths(&fixture.source);
+    let snapshot = build_semantic_snapshot(
+        fixture.root.path(),
+        &fixture.source,
+        &fixture.files,
+        &changed_indexers,
+        &required_paths,
+        &fixture.indexes,
+    )
+    .unwrap();
+    let declaration = &fixture.source.source_files[0].public_declarations[0];
+    let binding = snapshot
+        .public_bindings
+        .iter()
+        .find(|binding| binding.declaration_unit_id == declaration.declaration_unit_id)
+        .expect("default identifier compiler binding");
+
+    assert_eq!(declaration.name, "default");
+    assert_eq!(declaration.target_name, "App");
+    assert_eq!(
+        declaration.binding,
+        super::super::HistoricalV2SourcePublicBindingKind::Reference
+    );
+    assert_eq!(
+        binding.binding,
+        HistoricalV2SemanticPublicBindingKind::Reference
+    );
+    assert_eq!(binding.compiler_anchor.start_line_zero_based, 1);
+    assert_eq!(binding.compiler_anchor.start_character_zero_based, 15);
+    assert_eq!(binding.compiler_anchor.end_line_zero_based, 1);
+    assert_eq!(binding.compiler_anchor.end_character_zero_based, 18);
+    validation::validate_snapshot(
+        &fixture.source,
+        &snapshot,
+        &changed_indexers,
+        &required_paths,
+    )
+    .unwrap();
+}
+
+#[test]
 fn two_node_package_slots_for_one_module_remain_distinct() {
     let mut fixture =
         typescript_surface_fixture(&[("src/index.ts", "export const value = 1;\n")], &[]);

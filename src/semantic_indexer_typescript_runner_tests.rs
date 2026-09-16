@@ -224,6 +224,11 @@ async fn live_configured_and_loose_worlds_cover_every_exact_source() {
             "export default {};\n",
             "javascript",
         ),
+        write_file(
+            root.path(),
+            "src/App.tsx",
+            "const App = () => \"ready\";\nexport default App;\n",
+        ),
     ];
     write_text(
         root.path(),
@@ -244,11 +249,13 @@ async fn live_configured_and_loose_worlds_cover_every_exact_source() {
         selected_documents: BTreeSet::from([RepositoryPath("src/index.ts".to_string())]),
         ignored_documents: BTreeSet::from([
             RepositoryPath("rollup.config.js".to_string()),
+            RepositoryPath("src/App.tsx".to_string()),
             RepositoryPath("src/index.test.ts".to_string()),
         ]),
     };
     let loose_roots = BTreeSet::from([
         RepositoryPath("rollup.config.js".to_string()),
+        RepositoryPath("src/App.tsx".to_string()),
         RepositoryPath("src/index.test.ts".to_string()),
     ]);
     let loose = SemanticIndexerVariantPlan {
@@ -317,6 +324,45 @@ async fn live_configured_and_loose_worlds_cover_every_exact_source() {
         })
         .collect::<Vec<_>>();
     assert_eq!(module_symbols.len(), 1);
+    let app_document = &loose.documents[&RepositoryPath("src/App.tsx".to_string())];
+    let app_definition = app_document
+        .occurrences
+        .iter()
+        .find(|occurrence| {
+            occurrence.range
+                == crate::semantic_index::SemanticSourceRange {
+                    start: crate::semantic_index::SemanticPosition {
+                        line: 0,
+                        character: 6,
+                    },
+                    end: crate::semantic_index::SemanticPosition {
+                        line: 0,
+                        character: 9,
+                    },
+                }
+                && occurrence
+                    .roles
+                    .contains(&crate::semantic_index::SemanticOccurrenceRole::Definition)
+        })
+        .expect("App compiler definition");
+    let app_reference = app_document
+        .occurrences
+        .iter()
+        .find(|occurrence| {
+            occurrence.range
+                == crate::semantic_index::SemanticSourceRange {
+                    start: crate::semantic_index::SemanticPosition {
+                        line: 1,
+                        character: 15,
+                    },
+                    end: crate::semantic_index::SemanticPosition {
+                        line: 1,
+                        character: 18,
+                    },
+                }
+        })
+        .expect("App default-export compiler reference");
+    assert_eq!(app_reference.symbol, app_definition.symbol);
     assert!(
         loose
             .documents
