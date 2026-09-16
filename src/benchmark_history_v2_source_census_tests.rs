@@ -152,6 +152,45 @@ fn typescript_default_object_commits_the_compiler_module_anchor() {
 }
 
 #[test]
+fn typescript_default_call_commits_the_compiler_module_anchor() {
+    let source = b"const Checkbox = () => true;\nexport default memo(Checkbox);\n";
+    let (_, declarations, _) =
+        source_public_declarations("Checkbox.tsx", "typescript", source).unwrap();
+    let [declaration] = declarations.as_slice() else {
+        panic!("expected one default declaration");
+    };
+
+    assert_eq!(declaration.name, "default");
+    assert_eq!(declaration.target_name, "default");
+    assert_eq!(
+        declaration.kind,
+        HistoricalV2SourcePublicSymbolKind::CompilerDefined
+    );
+    assert_eq!(
+        declaration.binding,
+        HistoricalV2SourcePublicBindingKind::ModuleAnchor
+    );
+    assert_eq!(declaration.identifier.start, 0);
+    assert_eq!(declaration.identifier.end, 0);
+    assert_eq!(
+        declaration.identifier_positions.utf16.start.line_zero_based,
+        0
+    );
+    assert_eq!(
+        declaration
+            .identifier_positions
+            .utf16
+            .start
+            .character_zero_based,
+        0
+    );
+    assert_eq!(
+        declaration.identifier_positions.utf16,
+        declaration.identifier_positions.utf8
+    );
+}
+
+#[test]
 fn typescript_default_identifier_commits_the_exact_compiler_reference() {
     let source = b"const App = () => \"ready\";\nexport default App;\n";
     let (_, declarations, _) = source_public_declarations("App.tsx", "typescript", source).unwrap();
