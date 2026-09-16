@@ -13,6 +13,10 @@ use sha2::{Digest, Sha256};
 use std::path::Path;
 use std::process::Command;
 
+fn sha256(bytes: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(bytes))
+}
+
 fn range(line: u32, start: u32, end: u32) -> SemanticSourceRange {
     SemanticSourceRange {
         start: SemanticPosition {
