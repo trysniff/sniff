@@ -76,11 +76,14 @@ impl HistoricalV2SemanticProgress {
 
     pub(super) fn recover_existing(
         root: &Path,
-    ) -> Result<Vec<HistoricalV2SemanticProgressRecovery>, String> {
+    ) -> Result<HistoricalV2SemanticProgressRecoverySummary, String> {
         match std::fs::symlink_metadata(root) {
             Ok(_) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(Vec::new());
+                return Ok(HistoricalV2SemanticProgressRecoverySummary {
+                    worlds: Vec::new(),
+                    checkpoints: Vec::new(),
+                });
             }
             Err(error) => {
                 return Err(format!(
@@ -89,14 +92,15 @@ impl HistoricalV2SemanticProgress {
             }
         }
         let progress = Self::open(root)?;
-        let mut recovered = Vec::new();
+        let mut worlds = Vec::new();
+        let mut checkpoints = Vec::new();
         for side in [
             HistoricalV2SemanticSnapshotSide::Base,
             HistoricalV2SemanticSnapshotSide::Patched,
         ] {
             remove_incomplete_file(&progress.side_root(side).join(SNAPSHOT_TEMP_FILE))?;
             progress.remove_contribution_temps(side)?;
-            recovered.extend(
+            worlds.extend(
                 crate::semantic_indexer_runner::recover_semantic_indexer_progress(
                     &progress.side_root(side),
                 )?
@@ -104,7 +108,56 @@ impl HistoricalV2SemanticProgress {
                 .map(|progress| HistoricalV2SemanticProgressRecovery { side, progress }),
             );
             progress.validate_side_entries(side)?;
+            checkpoints.extend(progress.recover_checkpoints(side)?);
         }
+        Ok(HistoricalV2SemanticProgressRecoverySummary {
+            worlds,
+            checkpoints,
+        })
+    }
+
+    fn recover_checkpoints(
+        &self,
+        side: HistoricalV2SemanticSnapshotSide,
+    ) -> Result<Vec<HistoricalV2SemanticCheckpointRecovery>, String> {
+        let mut recovered = Vec::new();
+        for entry in std::fs::read_dir(self.contribution_root(side)).map_err(|error| {
+            format!("failed to inspect historical-v2 semantic contributions: {error}")
+        })? {
+            let entry = entry.map_err(|error| {
+                format!("failed to inspect historical-v2 semantic contribution: {error}")
+            })?;
+            let name = entry.file_name().into_string().map_err(|_| {
+                "historical-v2 semantic contribution has a non-UTF-8 name".to_string()
+            })?;
+            let identity = name.strip_suffix(".json").ok_or_else(|| {
+                format!("historical-v2 semantic contribution has an invalid name {name}")
+            })?;
+            let checkpoint: ContributionCheckpoint =
+                read_checkpoint(&entry.path(), "semantic contribution checkpoint")?;
+            validate_contribution_checkpoint_self(&checkpoint, side, identity)?;
+            recovered.push(HistoricalV2SemanticCheckpointRecovery {
+                side,
+                kind: HistoricalV2SemanticCheckpointKind::Contribution,
+                identity: identity.to_string(),
+                checkpoint_sha256: checkpoint.checkpoint_sha256,
+            });
+        }
+        let snapshot_path = self.side_root(side).join(SNAPSHOT_FILE);
+        if snapshot_path.exists() {
+            let checkpoint: SnapshotCheckpoint =
+                read_checkpoint(&snapshot_path, "semantic snapshot checkpoint")?;
+            validate_snapshot_checkpoint_self(&checkpoint, side)?;
+            recovered.push(HistoricalV2SemanticCheckpointRecovery {
+                side,
+                kind: HistoricalV2SemanticCheckpointKind::Snapshot,
+                identity: "snapshot".to_string(),
+                checkpoint_sha256: checkpoint.checkpoint_sha256,
+            });
+        }
+        recovered.sort_by(|left, right| {
+            (left.kind, left.identity.as_str()).cmp(&(right.kind, right.identity.as_str()))
+        });
         Ok(recovered)
     }
 
@@ -324,33 +377,59 @@ fn validate_contribution_checkpoint(
     required_document_paths: &BTreeSet<String>,
     indexer: &HistoricalV2SemanticIndexerVariantCensus,
 ) -> Result<(), String> {
-    if checkpoint.schema_version != CONTRIBUTION_PROGRESS_SCHEMA_VERSION
-        || checkpoint.progress_contract != CONTRIBUTION_PROGRESS_CONTRACT
-        || checkpoint.materialization_sha256 != materialization.materialization_sha256
+    if checkpoint.materialization_sha256 != materialization.materialization_sha256
         || checkpoint.source_census_sha256 != source_census.source_census_sha256
-        || checkpoint.side != side
         || checkpoint.revision != source.revision
         || checkpoint.source_snapshot_census_sha256 != source.snapshot_census_sha256
         || checkpoint.changed_indexers != changed_indexers.iter().copied().collect::<Vec<_>>()
         || checkpoint.required_document_paths
             != required_document_paths.iter().cloned().collect::<Vec<_>>()
         || &checkpoint.indexer != indexer
-        || !is_sha256(&checkpoint.payload_sha256)
-        || checkpoint.payload_sha256 != canonical_sha256(&checkpoint.payload)?
-        || !is_sha256(&checkpoint.checkpoint_sha256)
     {
         return Err(format!(
             "historical-v2 semantic contribution {} changed immutable evidence",
             contribution_label(indexer)
         ));
     }
-    assembly::validate_variant_contribution(&checkpoint.payload, indexer)?;
+    validate_contribution_checkpoint_self(checkpoint, side, &contribution_identity(indexer)?)
+}
+
+fn validate_contribution_checkpoint_self(
+    checkpoint: &ContributionCheckpoint,
+    side: HistoricalV2SemanticSnapshotSide,
+    identity: &str,
+) -> Result<(), String> {
+    if checkpoint.schema_version != CONTRIBUTION_PROGRESS_SCHEMA_VERSION
+        || checkpoint.progress_contract != CONTRIBUTION_PROGRESS_CONTRACT
+        || checkpoint.side != side
+        || !is_sha256(&checkpoint.materialization_sha256)
+        || !is_sha256(&checkpoint.source_census_sha256)
+        || !is_sha256(&checkpoint.source_snapshot_census_sha256)
+        || !is_sha256(&checkpoint.payload_sha256)
+        || !is_sha256(&checkpoint.checkpoint_sha256)
+        || checkpoint
+            .changed_indexers
+            .windows(2)
+            .any(|pair| pair[0] >= pair[1])
+        || checkpoint
+            .required_document_paths
+            .windows(2)
+            .any(|pair| pair[0] >= pair[1])
+        || contribution_identity(&checkpoint.indexer)? != identity
+        || checkpoint.payload_sha256 != canonical_sha256(&checkpoint.payload)?
+    {
+        return Err(format!(
+            "historical-v2 semantic contribution {} changed immutable evidence",
+            contribution_label(&checkpoint.indexer)
+        ));
+    }
+    assembly::validate_variant_contribution(&checkpoint.payload, &checkpoint.indexer)?;
     let mut projection = checkpoint.clone();
     projection.checkpoint_sha256.clear();
     if checkpoint.checkpoint_sha256 != canonical_sha256(&projection)? {
         return Err(format!(
             "historical-v2 semantic contribution {} commitment changed",
-            contribution_label(indexer)
+            contribution_label(&checkpoint.indexer)
         ));
     }
     Ok(())
@@ -409,18 +488,43 @@ fn validate_checkpoint(
     changed_indexers: &BTreeSet<SemanticIndexerKind>,
     required_document_paths: &BTreeSet<String>,
 ) -> Result<(), String> {
-    if checkpoint.schema_version != SNAPSHOT_PROGRESS_SCHEMA_VERSION
-        || checkpoint.progress_contract != SNAPSHOT_PROGRESS_CONTRACT
-        || checkpoint.materialization_sha256 != materialization.materialization_sha256
+    if checkpoint.materialization_sha256 != materialization.materialization_sha256
         || checkpoint.source_census_sha256 != source_census.source_census_sha256
-        || checkpoint.side != side
         || checkpoint.revision != source.revision
         || checkpoint.source_snapshot_census_sha256 != source.snapshot_census_sha256
         || checkpoint.changed_indexers != changed_indexers.iter().copied().collect::<Vec<_>>()
         || checkpoint.required_document_paths
             != required_document_paths.iter().cloned().collect::<Vec<_>>()
-        || checkpoint.payload_sha256 != canonical_sha256(&checkpoint.payload)?
+    {
+        return Err(format!(
+            "historical-v2 {} semantic snapshot checkpoint changed immutable evidence",
+            side_name(side)
+        ));
+    }
+    validate_snapshot_checkpoint_self(checkpoint, side)
+}
+
+fn validate_snapshot_checkpoint_self(
+    checkpoint: &SnapshotCheckpoint,
+    side: HistoricalV2SemanticSnapshotSide,
+) -> Result<(), String> {
+    if checkpoint.schema_version != SNAPSHOT_PROGRESS_SCHEMA_VERSION
+        || checkpoint.progress_contract != SNAPSHOT_PROGRESS_CONTRACT
+        || checkpoint.side != side
+        || !is_sha256(&checkpoint.materialization_sha256)
+        || !is_sha256(&checkpoint.source_census_sha256)
+        || !is_sha256(&checkpoint.source_snapshot_census_sha256)
+        || !is_sha256(&checkpoint.payload_sha256)
         || !is_sha256(&checkpoint.checkpoint_sha256)
+        || checkpoint
+            .changed_indexers
+            .windows(2)
+            .any(|pair| pair[0] >= pair[1])
+        || checkpoint
+            .required_document_paths
+            .windows(2)
+            .any(|pair| pair[0] >= pair[1])
+        || checkpoint.payload_sha256 != canonical_sha256(&checkpoint.payload)?
     {
         return Err(format!(
             "historical-v2 {} semantic snapshot checkpoint changed immutable evidence",

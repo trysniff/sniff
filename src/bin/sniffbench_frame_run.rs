@@ -6,6 +6,7 @@ use sniff::benchmark::{
     HistoricalV2PublicSurfaceReplayInputs, HistoricalV2SelectedPayloads,
     HistoricalV2SelectedSlotStateInspection, HistoricalV2SelectedSlotStateInspectionInputs,
     HistoricalV2SelectedSlotSweepInputs, HistoricalV2SelectedSlotWorkRecoveryInputs,
+    HistoricalV2SemanticCheckpointKind, HistoricalV2SemanticCheckpointProgress,
     HistoricalV2SemanticSnapshotSide, HistoricalV2SlotOutcome, HistoricalV2SlotRunDisposition,
     HistoricalV2SlotSelection, HistoricalV2SlotStage, HistoricalV2SlotStageError,
     HistoricalV2SlotStageErrorKind, HistoricalV2SlotStageOutcome,
@@ -240,7 +241,36 @@ pub(super) fn recover_slot_work(
             next
         );
     }
+    eprintln!(
+        "Durable semantic checkpoints: {}",
+        summary.semantic_checkpoints.len()
+    );
+    for checkpoint in &summary.semantic_checkpoints {
+        eprintln!("{}", semantic_checkpoint_progress_line(checkpoint));
+    }
     Ok(())
+}
+
+pub(super) fn semantic_checkpoint_progress_line(
+    checkpoint: &HistoricalV2SemanticCheckpointProgress,
+) -> String {
+    let side = match checkpoint.side {
+        HistoricalV2SemanticSnapshotSide::Base => "base",
+        HistoricalV2SemanticSnapshotSide::Patched => "patched",
+    };
+    let kind = match checkpoint.kind {
+        HistoricalV2SemanticCheckpointKind::Contribution => "contribution",
+        HistoricalV2SemanticCheckpointKind::Snapshot => "snapshot",
+    };
+    format!(
+        "  {}/slot-{:04} side={} checkpoint={} identity={} sha256={}",
+        checkpoint.language,
+        checkpoint.slot_number,
+        side,
+        kind,
+        checkpoint.identity,
+        checkpoint.checkpoint_sha256
+    )
 }
 
 pub(super) fn state_status(args: StateStatusArgs) -> Result<(), Box<dyn std::error::Error>> {

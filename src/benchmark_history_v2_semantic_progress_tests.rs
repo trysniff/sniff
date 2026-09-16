@@ -304,6 +304,96 @@ fn completed_variant_contribution_resumes_only_under_exact_index_evidence() {
 }
 
 #[test]
+fn recovery_reports_only_valid_committed_semantic_checkpoints() {
+    let state = tempfile::tempdir().unwrap();
+    let root = state.path().join("progress");
+    let progress = HistoricalV2SemanticProgress::open(&root).unwrap();
+    let materialization = materialization();
+    let source_census = source_census();
+    let changed = BTreeSet::from([SemanticIndexerKind::Go]);
+    let required = BTreeSet::new();
+    let indexer = semantic_indexer();
+
+    let initial = HistoricalV2SemanticProgress::recover_existing(&root).unwrap();
+    assert!(initial.worlds.is_empty());
+    assert!(initial.checkpoints.is_empty());
+
+    progress
+        .publish_contribution(
+            &materialization,
+            &source_census,
+            HistoricalV2SemanticSnapshotSide::Base,
+            &source_census.base,
+            &changed,
+            &required,
+            &indexer,
+            semantic_contribution(),
+        )
+        .unwrap();
+    let contribution = HistoricalV2SemanticProgress::recover_existing(&root).unwrap();
+    assert_eq!(contribution.checkpoints.len(), 1);
+    assert_eq!(
+        contribution.checkpoints[0].kind,
+        HistoricalV2SemanticCheckpointKind::Contribution
+    );
+    assert_eq!(
+        contribution.checkpoints[0].identity,
+        contribution_identity(&indexer).unwrap()
+    );
+    assert!(is_sha256(&contribution.checkpoints[0].checkpoint_sha256));
+
+    let snapshot = semantic_snapshot(&source_census.base);
+    progress
+        .publish_snapshot(
+            &materialization,
+            &source_census,
+            HistoricalV2SemanticSnapshotSide::Base,
+            &source_census.base,
+            &changed,
+            &required,
+            &snapshot,
+        )
+        .unwrap();
+    let complete = HistoricalV2SemanticProgress::recover_existing(&root).unwrap();
+    assert_eq!(complete.checkpoints.len(), 2);
+    assert_eq!(
+        complete.checkpoints[1].kind,
+        HistoricalV2SemanticCheckpointKind::Snapshot
+    );
+    assert_eq!(complete.checkpoints[1].identity, "snapshot");
+    assert!(is_sha256(&complete.checkpoints[1].checkpoint_sha256));
+}
+
+#[test]
+fn recovery_rejects_a_corrupt_committed_contribution() {
+    let state = tempfile::tempdir().unwrap();
+    let root = state.path().join("progress");
+    let progress = HistoricalV2SemanticProgress::open(&root).unwrap();
+    let materialization = materialization();
+    let source_census = source_census();
+    let changed = BTreeSet::from([SemanticIndexerKind::Go]);
+    let required = BTreeSet::new();
+    let indexer = semantic_indexer();
+    progress
+        .publish_contribution(
+            &materialization,
+            &source_census,
+            HistoricalV2SemanticSnapshotSide::Base,
+            &source_census.base,
+            &changed,
+            &required,
+            &indexer,
+            semantic_contribution(),
+        )
+        .unwrap();
+    let path = progress
+        .contribution_path(HistoricalV2SemanticSnapshotSide::Base, &indexer)
+        .unwrap();
+    fs::write(&path, b"{}\n").unwrap();
+    assert!(HistoricalV2SemanticProgress::recover_existing(&root).is_err());
+}
+
+#[test]
 fn rehashed_variant_contribution_tampering_is_rejected() {
     let state = tempfile::tempdir().unwrap();
     let progress = HistoricalV2SemanticProgress::open(&state.path().join("progress")).unwrap();
