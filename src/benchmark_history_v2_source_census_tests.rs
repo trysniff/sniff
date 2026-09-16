@@ -227,6 +227,30 @@ fn typescript_default_identifier_commits_the_exact_compiler_reference() {
 }
 
 #[test]
+fn typescript_unnamed_interface_api_commits_only_the_compiler_owner() {
+    let source = b"export interface Expanded {\n  [scrapePool: string]: boolean;\n}\n";
+    let (coverage, declarations, reexports) =
+        source_public_declarations("Filter.tsx", "typescript", source).unwrap();
+
+    assert_eq!(coverage, HistoricalV2PublicSurfaceCoverage::Complete);
+    assert!(reexports.is_empty());
+    let [declaration] = declarations.as_slice() else {
+        panic!("expected one compiler-owned interface declaration");
+    };
+    assert_eq!(declaration.name, "Expanded");
+    assert_eq!(declaration.target_name, "Expanded");
+    assert_eq!(declaration.owner, None);
+    assert_eq!(
+        declaration.binding,
+        HistoricalV2SourcePublicBindingKind::Definition
+    );
+    assert_eq!(
+        &source[declaration.identifier.start..declaration.identifier.end],
+        b"Expanded"
+    );
+}
+
+#[test]
 fn typescript_static_and_instance_members_have_distinct_surface_ids() {
     let source = br#"export class Service {
   static run(): string { return "static"; }
