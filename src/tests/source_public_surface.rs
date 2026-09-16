@@ -230,6 +230,25 @@ fn js_ts_default_object_uses_the_compiler_module_anchor() {
 }
 
 #[test]
+fn js_ts_default_call_uses_the_compiler_module_anchor() {
+    let source = b"const Checkbox = () => true;\nexport default memo(Checkbox);\n";
+    let surface = census_source_public_surface("Checkbox.tsx", source).expect("TypeScript surface");
+    let [declaration] = surface.declarations.as_slice() else {
+        panic!("expected one default declaration");
+    };
+
+    assert_eq!(declaration.name, "default");
+    assert_eq!(declaration.target_name, "default");
+    assert_eq!(declaration.kind, SourcePublicSymbolKind::CompilerDefined);
+    assert_eq!(declaration.binding, SourcePublicBindingKind::ModuleAnchor);
+    assert_eq!(slice(source, declaration.exposed_identifier), "default");
+    assert_eq!(
+        declaration.compiler_anchor,
+        super::SourceByteRange { start: 0, end: 0 }
+    );
+}
+
+#[test]
 fn js_ts_default_identifier_uses_the_exact_compiler_reference() {
     let source = b"const App = () => \"ready\";\nexport default App;\n";
     let surface = census_source_public_surface("App.tsx", source).expect("TypeScript surface");
