@@ -7,6 +7,8 @@ import tempfile
 import time
 import unittest
 
+import run_with_heartbeat as heartbeat
+
 
 HELPER = pathlib.Path(__file__).with_name("run_with_heartbeat.py")
 
@@ -38,6 +40,25 @@ def invoke(
 
 
 class HeartbeatRunnerTests(unittest.TestCase):
+    def test_parses_proc_cpu_ticks_with_parentheses_in_process_name(self) -> None:
+        fields = ["S", *("0" for _ in range(10)), "17", "23"]
+        self.assertEqual(
+            heartbeat._parse_proc_cpu_ticks(f"123 (worker (phase)) {' '.join(fields)}"),
+            40,
+        )
+        with self.assertRaisesRegex(RuntimeError, "invalid procfs CPU data"):
+            heartbeat._parse_proc_cpu_ticks("123 (worker) S 0")
+
+    def test_parses_proc_io_counters(self) -> None:
+        self.assertEqual(
+            heartbeat._parse_proc_io_counters(
+                "rchar: 100\nwchar: 200\nread_bytes: 12\nwrite_bytes: 34\n"
+            ),
+            (100, 200, 12, 34),
+        )
+        with self.assertRaisesRegex(RuntimeError, "invalid procfs I/O data"):
+            heartbeat._parse_proc_io_counters("rchar: 1\n")
+
     def test_preserves_success_without_spurious_heartbeat(self) -> None:
         result = invoke(
             sys.executable,
@@ -97,6 +118,16 @@ class HeartbeatRunnerTests(unittest.TestCase):
         self.assertGreaterEqual(values[3], 1)
         self.assertGreater(values[4], values[5])
         self.assertGreater(values[6], values[7])
+        counters = re.search(
+            r"cpu_ms=(\d+) cpu_observed_processes=(\d+) "
+            r"io_rchar_bytes=(\d+) io_wchar_bytes=(\d+) "
+            r"io_read_bytes=(\d+) io_write_bytes=(\d+) "
+            r"io_observed_processes=(\d+)",
+            result.stderr,
+        )
+        self.assertIsNotNone(counters, result.stderr)
+        self.assertGreaterEqual(int(counters.group(2)), 1)
+        self.assertGreaterEqual(int(counters.group(7)), 1)
 
     @unittest.skipUnless(os.name == "posix", "POSIX signal-forwarding regression")
     def test_forwards_termination_and_returns_the_child_status(self) -> None:
