@@ -449,9 +449,11 @@ It writes phase start markers and completed durations for base/patched semantic
 censuses and per-Go-unit load-or-index, merge, and checkpoint work to stderr.
 A final start marker without a matching completion identifies the phase active
 when a bounded run stops. The timing lines contain no repository paths and do
-not change committed evidence. A hosted resume
-uses its frozen collector; setting the variable cannot add timing hooks to
-an older collector and does not authorize a collector migration.
+not change committed evidence. The historical-v2 assessment workflow exposes
+the same opt-in through `semantic_timing`; it is off by default and applies
+only to the bounded slot-assessment step. A hosted resume uses its frozen
+collector; enabling the input cannot add timing hooks to an older collector
+and does not authorize a collector migration.
 
 The manual `SniffBench intentional-boundary collection` workflow provides the
 same bounded Linux execution from `main`. Start without a resume run ID. For
