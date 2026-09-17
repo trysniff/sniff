@@ -99,10 +99,12 @@ async fn census_historical_v2_semantics_typed_internal(
     timing.phase("scope");
     let mut failures = Vec::new();
     let mut stage_errors = Vec::new();
+    timing.phase_start("open_progress");
     let progress = progress_root
         .map(progress::HistoricalV2SemanticProgress::open)
         .transpose()
         .map_err(infrastructure)?;
+    timing.phase("open_progress");
     timing.phase_start("base");
     let base = census_semantic_snapshot(
         HistoricalV2SemanticSnapshotInputs {
@@ -200,6 +202,7 @@ pub(super) async fn census_semantic_snapshot(
         .flatten();
     timing.phase("load_snapshot");
     if let Some(snapshot) = existing_snapshot {
+        timing.phase_start("validate_reused_snapshot");
         validation::validate_snapshot(
             inputs.source,
             &snapshot,
@@ -231,16 +234,18 @@ pub(super) async fn census_semantic_snapshot(
     )
     .await;
     timing.phase("compiler_indexing");
-    let Some(indexes) = resolve_variant_indexer_run(
+    timing.phase_start("resolve_indexer_run");
+    let resolved = resolve_variant_indexer_run(
         inputs.side,
         &inputs.source.revision,
         run,
         failures,
         stage_errors,
-    ) else {
+    );
+    timing.phase("resolve_indexer_run");
+    let Some(indexes) = resolved else {
         return Ok(None);
     };
-    timing.phase("resolve_indexer_run");
     timing.phase_start("assembly");
     let build = build_semantic_snapshot_from_index_sets(
         inputs.root,
