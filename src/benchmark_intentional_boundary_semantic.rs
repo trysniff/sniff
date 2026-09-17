@@ -25,7 +25,6 @@ use crate::semantic_index::{
 use crate::semantic_indexer_manifest::SemanticIndexerKind;
 use crate::semantic_method_join::{SemanticMethodCoverage, join_methods};
 use crate::types::FileRecord;
-use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
@@ -241,7 +240,7 @@ pub(super) use projection::{
 pub(super) fn compute_semantic_census_sha256(
     census: &IntentionalBoundarySemanticCensus,
 ) -> Result<String, String> {
-    let bytes = serde_json::to_vec(&(
+    super::streamed_json_hash::sha256_json(&(
         census.schema_version,
         &census.semantic_contract,
         &census.repository,
@@ -254,8 +253,7 @@ pub(super) fn compute_semantic_census_sha256(
         census.compiler_excluded_method_count,
         census.unresolved_method_count,
     ))
-    .map_err(|error| format!("failed to commit intentional-boundary semantic census: {error}"))?;
-    Ok(sha256(&bytes))
+    .map_err(|error| format!("failed to commit intentional-boundary semantic census: {error}"))
 }
 
 fn flatten_source_references(
@@ -565,10 +563,6 @@ fn test_kind(value: SemanticTestRelationshipKind) -> IntentionalBoundarySemantic
             IntentionalBoundarySemanticTestKind::AssertsContract
         }
     }
-}
-
-fn sha256(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
 }
 
 fn is_sha256(value: &str) -> bool {

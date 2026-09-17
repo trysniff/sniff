@@ -11,6 +11,7 @@ use crate::semantic_index::{
     SemanticSymbolCategory, SemanticSymbolId, SemanticSymbolKind, SemanticSymbolOrigin,
     SemanticTextEncoding, SemanticVariantId, SemanticVisibility,
 };
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 
 fn fixture_cargo_project_model(
@@ -593,6 +594,18 @@ fn qualified_compiler_worlds_remain_distinct_through_validation() {
         &sets,
     )
     .expect("qualified semantic snapshot");
+
+    let mut legacy_projection = snapshot.clone();
+    legacy_projection.semantic_snapshot_sha256.clear();
+    let legacy_bytes = serde_json::to_vec(&legacy_projection).unwrap();
+    assert_eq!(
+        serde_json::to_vec(&SnapshotWithoutCommitment(&snapshot)).unwrap(),
+        legacy_bytes
+    );
+    assert_eq!(
+        snapshot.semantic_snapshot_sha256,
+        format!("{:x}", Sha256::digest(&legacy_bytes))
+    );
 
     assert_eq!(snapshot.indexers.len(), 2);
     assert_eq!(snapshot.methods.len(), 1);

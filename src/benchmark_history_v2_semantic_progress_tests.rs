@@ -8,6 +8,7 @@ use crate::benchmark::{
     INTENTIONAL_BOUNDARY_PROJECT_MODEL_CENSUS_SCHEMA_VERSION,
     IntentionalBoundaryProjectModelCensus, IntentionalBoundarySemanticIndexerCensus,
 };
+use sha2::{Digest, Sha256};
 use std::fs;
 
 fn digest(character: char) -> String {

@@ -7,6 +7,9 @@ use std::fs;
 use std::path::{Component, Path};
 
 pub(crate) const RELEASE_SCHEMA_VERSION: u32 = 7;
+
+#[path = "benchmark_streamed_json_hash.rs"]
+mod streamed_json_hash;
 const REQUIRED_LANGUAGES: [&str; 6] =
     ["go", "javascript", "kotlin", "python", "rust", "typescript"];
 const REQUIRED_BASELINES: [&str; 7] = [
