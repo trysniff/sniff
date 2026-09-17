@@ -1,4 +1,38 @@
 use super::*;
+use std::time::Instant;
+
+struct SemanticTiming {
+    label: &'static str,
+    started: Option<Instant>,
+    last: Option<Instant>,
+}
+
+impl SemanticTiming {
+    fn new(label: &'static str) -> Self {
+        let started =
+            (std::env::var("SNIFF_BENCH_SEMANTIC_TIMING").as_deref() == Ok("1")).then(Instant::now);
+        Self {
+            label,
+            started,
+            last: started,
+        }
+    }
+
+    fn phase(&mut self, phase: &'static str) {
+        let (Some(started), Some(last)) = (self.started, self.last) else {
+            return;
+        };
+        let now = Instant::now();
+        eprintln!(
+            "sniffbench semantic timing label={} phase={} phase_ms={} total_ms={}",
+            self.label,
+            phase,
+            now.duration_since(last).as_millis(),
+            now.duration_since(started).as_millis()
+        );
+        self.last = Some(now);
+    }
+}
 
 pub async fn census_historical_v2_semantics(
     materialization: &HistoricalV2Materialization,
@@ -46,9 +80,11 @@ async fn census_historical_v2_semantics_typed_internal(
     source_census: &HistoricalV2SourceCensus,
     progress_root: Option<&Path>,
 ) -> Result<SemanticCensusStageResult, HistoricalV2SlotStageError> {
+    let mut timing = SemanticTiming::new("census");
     validate_historical_v2_source_census_commitment(materialization, roots, source_census)
         .map_err(invalid)?;
     let scope = semantic_scope(materialization, roots, source_census).map_err(infrastructure)?;
+    timing.phase("scope");
     let mut failures = Vec::new();
     let mut stage_errors = Vec::new();
     let progress = progress_root
@@ -70,6 +106,7 @@ async fn census_historical_v2_semantics_typed_internal(
         &mut stage_errors,
     )
     .await?;
+    timing.phase("base");
     let patched = census_semantic_snapshot(
         HistoricalV2SemanticSnapshotInputs {
             side: HistoricalV2SemanticSnapshotSide::Patched,
@@ -85,6 +122,7 @@ async fn census_historical_v2_semantics_typed_internal(
         &mut stage_errors,
     )
     .await?;
+    timing.phase("patched");
     if !stage_errors.is_empty() {
         return Err(combine_stage_errors(stage_errors));
     }
@@ -112,6 +150,7 @@ async fn census_historical_v2_semantics_typed_internal(
         semantic_census_sha256: String::new(),
     };
     census.semantic_census_sha256 = semantic_census_sha256(&census).map_err(infrastructure)?;
+    timing.phase("commitment");
     Ok(HistoricalV2StageResult::Completed(census))
 }
 
@@ -125,7 +164,11 @@ pub(super) async fn census_semantic_snapshot(
     failures: &mut Vec<HistoricalV2SemanticCensusFailureEvidence>,
     stage_errors: &mut Vec<HistoricalV2SlotStageError>,
 ) -> Result<Option<HistoricalV2SemanticSnapshotCensus>, HistoricalV2SlotStageError> {
-    if let Some(snapshot) = progress
+    let mut timing = SemanticTiming::new(match inputs.side {
+        HistoricalV2SemanticSnapshotSide::Base => "base",
+        HistoricalV2SemanticSnapshotSide::Patched => "patched",
+    });
+    let existing_snapshot = progress
         .map(|progress| {
             progress.load_snapshot(
                 materialization,
@@ -138,8 +181,9 @@ pub(super) async fn census_semantic_snapshot(
         })
         .transpose()
         .map_err(infrastructure)?
-        .flatten()
-    {
+        .flatten();
+    timing.phase("load_snapshot");
+    if let Some(snapshot) = existing_snapshot {
         validation::validate_snapshot(
             inputs.source,
             &snapshot,
@@ -147,6 +191,7 @@ pub(super) async fn census_semantic_snapshot(
             inputs.required_paths,
         )
         .map_err(infrastructure)?;
+        timing.phase("validate_reused_snapshot");
         return Ok(Some(snapshot));
     }
     let all_files = snapshot_file_records(inputs.root, inputs.source).map_err(infrastructure)?;
@@ -157,6 +202,7 @@ pub(super) async fn census_semantic_snapshot(
         inputs.required_paths,
     )
     .map_err(infrastructure)?;
+    timing.phase("prepare_files");
     let indexer_root = progress.map(|progress| progress.indexer_root(inputs.side));
     let run = run_scoped_indexers(
         inputs.root,
@@ -166,6 +212,7 @@ pub(super) async fn census_semantic_snapshot(
         indexer_root.as_deref(),
     )
     .await;
+    timing.phase("compiler_indexing");
     let Some(indexes) = resolve_variant_indexer_run(
         inputs.side,
         &inputs.source.revision,
@@ -175,6 +222,7 @@ pub(super) async fn census_semantic_snapshot(
     ) else {
         return Ok(None);
     };
+    timing.phase("resolve_indexer_run");
     let build = build_semantic_snapshot_from_index_sets(
         inputs.root,
         inputs.source,
@@ -189,6 +237,7 @@ pub(super) async fn census_semantic_snapshot(
             side: inputs.side,
         }),
     );
+    timing.phase("assembly");
     let snapshot = match build {
         Ok(snapshot) => Some(snapshot),
         Err(assembly::SemanticSnapshotAssemblyError::Evidence(detail)) => {
@@ -214,6 +263,7 @@ pub(super) async fn census_semantic_snapshot(
         ),
         (_, snapshot) => snapshot,
     };
+    timing.phase("checkpoint_publication");
     Ok(snapshot)
 }
 

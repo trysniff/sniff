@@ -443,6 +443,14 @@ sniff benchmark collect-intentional-frame \
   --max-new-ranks 10
 ```
 
+For a collector built with semantic timing support, set
+`SNIFF_BENCH_SEMANTIC_TIMING=1` in that collector's process environment.
+It writes phase durations for base/patched semantic censuses and per-Go-unit
+load-or-index, merge, and checkpoint work to stderr. The timing lines contain
+no repository paths and do not change committed evidence. A hosted resume
+uses its frozen collector; setting the variable cannot add timing hooks to
+an older collector and does not authorize a collector migration.
+
 The manual `SniffBench intentional-boundary collection` workflow provides the
 same bounded Linux execution from `main`. Start without a resume run ID. For
 each later slice, provide the immediately preceding run ID; the workflow
