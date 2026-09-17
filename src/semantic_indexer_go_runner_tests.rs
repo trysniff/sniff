@@ -38,6 +38,15 @@ fn digest(character: char) -> String {
     character.to_string().repeat(64)
 }
 
+#[test]
+fn go_assembly_checkpoints_only_at_document_and_world_boundaries() {
+    let checkpoints = (1..=15)
+        .filter(|completed| should_publish_go_assembly(*completed, 5, 15))
+        .collect::<Vec<_>>();
+    assert_eq!(checkpoints, vec![5, 15]);
+    assert!(should_publish_go_assembly(5, 5, 5));
+}
+
 fn empty_index(root: &Path) -> SemanticIndex {
     SemanticIndex {
         format_version: SEMANTIC_INDEX_FORMAT_VERSION,

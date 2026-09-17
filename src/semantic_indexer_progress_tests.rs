@@ -297,6 +297,48 @@ fn assembled_prefix_survives_relocation_and_supersedes_older_prefix() {
 }
 
 #[test]
+fn unit_checkpoints_replay_after_interruption_before_first_assembly() {
+    use crate::semantic_index_merge::{begin_document_shard, merge_document_shard};
+
+    let first = tempfile::tempdir().unwrap();
+    let second = tempfile::tempdir().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let units = vec![unit(), second_unit()];
+    let scope = scope_with_units(units.clone());
+    let store = SemanticProgressStore::open(state.path(), scope.clone()).unwrap();
+    for unit in &units {
+        store
+            .publish(unit, first.path(), &index(first.path()))
+            .unwrap();
+    }
+    assert!(store.load_assembly(first.path()).unwrap().is_none());
+    drop(store);
+
+    let recovered = SemanticProgressStore::recover_existing(state.path())
+        .unwrap()
+        .unwrap();
+    assert_eq!(recovered.completed_unit_count, 0);
+    let store = SemanticProgressStore::open(state.path(), scope).unwrap();
+    let first_unit = store.load(&units[0], second.path()).unwrap().unwrap();
+    let mut assembled = begin_document_shard(first_unit).unwrap();
+    let second_unit = store.load(&units[1], second.path()).unwrap().unwrap();
+    merge_document_shard(&mut assembled, second_unit).unwrap();
+    store
+        .publish_assembly(&units, second.path(), &assembled)
+        .unwrap();
+
+    assert_eq!(
+        store
+            .load_assembly(second.path())
+            .unwrap()
+            .unwrap()
+            .completed_unit_count,
+        2
+    );
+    assert!(units.iter().all(|unit| !store.unit_path(unit).exists()));
+}
+
+#[test]
 fn recovery_finishes_interrupted_final_unit_pruning() {
     let repository = tempfile::tempdir().unwrap();
     let state = tempfile::tempdir().unwrap();
