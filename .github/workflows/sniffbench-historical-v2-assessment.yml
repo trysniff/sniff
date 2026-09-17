@@ -51,6 +51,11 @@ on:
         required: true
         default: "6"
         type: string
+      semantic_timing:
+        description: "Log active semantic phases when the frozen collector supports it"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   actions: read
@@ -706,6 +711,8 @@ jobs:
       - name: Assess a bounded resumable slot slice
         id: assess
         shell: bash
+        env:
+          SNIFF_BENCH_SEMANTIC_TIMING: ${{ inputs.semantic_timing && '1' || '0' }}
         run: |
           set +e
           python3 "$GITHUB_WORKSPACE/.github/scripts/run_with_heartbeat.py" \

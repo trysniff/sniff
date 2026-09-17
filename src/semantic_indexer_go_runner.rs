@@ -15,6 +15,7 @@ use crate::semantic_indexer_runner::progress::{
     SemanticProgressStore, SemanticProgressUnit,
 };
 use serde::Serialize;
+use std::time::{Duration, Instant};
 
 use super::go_commands::{
     GoScipExecution, discover_go_build_context, go_output_validation_failure,
@@ -24,6 +25,47 @@ use super::go_commands::{
 
 const GO_LIST_FIELDS: &str =
     "ImportPath,Dir,GoFiles,CgoFiles,TestGoFiles,XTestGoFiles,IgnoredGoFiles";
+
+struct GoUnitDurations {
+    load_or_index: Duration,
+    merge: Duration,
+    checkpoint: Duration,
+    checkpointed: bool,
+}
+
+fn log_go_unit_phase_start(
+    enabled: bool,
+    world: usize,
+    kind: &'static str,
+    unit: usize,
+    phase: &'static str,
+    world_started: Instant,
+) {
+    if enabled {
+        eprintln!(
+            "sniffbench semantic go timing world={world} kind={kind} unit={unit} phase={phase} event=start world_elapsed_ms={}",
+            world_started.elapsed().as_millis()
+        );
+    }
+}
+
+fn log_go_unit_timing(
+    enabled: bool,
+    world: usize,
+    kind: &'static str,
+    unit: usize,
+    durations: GoUnitDurations,
+) {
+    if enabled {
+        eprintln!(
+            "sniffbench semantic go timing world={world} kind={kind} unit={unit} load_or_index_ms={} merge_ms={} checkpoint_ms={} checkpointed={}",
+            durations.load_or_index.as_millis(),
+            durations.merge.as_millis(),
+            durations.checkpoint.as_millis(),
+            durations.checkpointed
+        );
+    }
+}
 
 pub(super) struct GoIndexerRunInputs<'a> {
     pub(super) spec: PinnedIndexer,
@@ -70,6 +112,7 @@ async fn run_required_go_indexer_with_limits(
             shard_limits,
             &prepared.expected_languages,
             None,
+            0,
         )
         .await?;
         verify_go_recovery_scope(inputs, &execution_root, &prepared.source_digest_before)?;
@@ -132,13 +175,14 @@ async fn run_required_go_indexer_variants_with_limits(
             .await?;
         let mut variants = BTreeMap::new();
         let mut selected_documents = BTreeSet::new();
-        for plan in execution_plans {
+        for (world_ordinal, plan) in execution_plans.into_iter().enumerate() {
             let world = run_go_compiler_world(
                 inputs,
                 &execution_root,
                 shard_limits,
                 &prepared.expected_languages,
                 Some(plan),
+                world_ordinal,
             )
             .await?;
             selected_documents.extend(world.index.documents.keys().cloned());
@@ -469,7 +513,13 @@ async fn run_go_compiler_world(
     shard_limits: GoShardLimits,
     expected_languages: &BTreeMap<RepositoryPath, String>,
     plan: Option<&SemanticIndexerVariantPlan>,
+    world_ordinal: usize,
 ) -> Result<GoCompilerWorld, SemanticIndexerRunFailure> {
+    let timing_enabled = std::env::var("SNIFF_BENCH_SEMANTIC_TIMING").as_deref() == Ok("1");
+    let world_started = Instant::now();
+    if timing_enabled {
+        eprintln!("sniffbench semantic go timing world={world_ordinal} phase=prepare event=start");
+    }
     let GoIndexerRunInputs {
         spec,
         root,
@@ -713,26 +763,74 @@ async fn run_go_compiler_world(
         completed_unit_count = assembly.completed_unit_count;
         merged = Some(assembly.payload);
     }
+    if timing_enabled {
+        eprintln!(
+            "sniffbench semantic go timing world={world_ordinal} phase=prepare elapsed_ms={} completed_units={completed_unit_count} planned_units={}",
+            world_started.elapsed().as_millis(),
+            assembly_units.len()
+        );
+    }
     for (unit_index, (shard, unit)) in shards.iter().zip(&document_units).enumerate() {
         if unit_index < completed_unit_count {
             continue;
         }
         let expected_documents = shard.source_documents();
+        log_go_unit_phase_start(
+            timing_enabled,
+            world_ordinal,
+            "document",
+            unit_index + 1,
+            "load_or_index",
+            world_started,
+        );
+        let started = Instant::now();
         let index = run_or_resume_go_unit(progress.as_ref(), unit, root, spec, || {
             run_go_scip(&scip, shard.patterns(), &expected_documents, true)
         })
         .await?;
+        let load_or_index = started.elapsed();
+        log_go_unit_phase_start(
+            timing_enabled,
+            world_ordinal,
+            "document",
+            unit_index + 1,
+            "merge",
+            world_started,
+        );
+        let started = Instant::now();
         match &mut merged {
             Some(merged) => merge_document_shard(merged, index),
             None => begin_document_shard(index).map(|index| merged = Some(index)),
         }
         .map_err(|detail| go_snapshot_assembly_failure(spec, detail))?;
+        let merge = started.elapsed();
         completed_unit_count += 1;
+        log_go_unit_phase_start(
+            timing_enabled,
+            world_ordinal,
+            "document",
+            unit_index + 1,
+            "checkpoint",
+            world_started,
+        );
+        let started = Instant::now();
         if let (Some(progress), Some(merged)) = (&progress, &merged) {
             progress
                 .publish_assembly(&assembly_units[..completed_unit_count], root, merged)
                 .map_err(|detail| go_progress_failure(spec, detail))?;
         }
+        log_go_unit_timing(
+            timing_enabled,
+            world_ordinal,
+            "document",
+            unit_index + 1,
+            GoUnitDurations {
+                load_or_index,
+                merge,
+                checkpoint: started.elapsed(),
+                checkpointed: progress.is_some(),
+            },
+        );
     }
     let document_unit_count = document_units.len();
     for (pair_index, ((left, right), unit)) in pairs.into_iter().zip(&pair_units).enumerate() {
@@ -745,10 +843,29 @@ async fn run_go_compiler_world(
             .into_iter()
             .chain(shards[right].source_documents())
             .collect();
+        log_go_unit_phase_start(
+            timing_enabled,
+            world_ordinal,
+            "pair",
+            unit_index + 1,
+            "load_or_index",
+            world_started,
+        );
+        let started = Instant::now();
         let pair = run_or_resume_go_unit(progress.as_ref(), unit, root, spec, || {
             run_go_scip(&scip, unit.patterns.clone(), &expected_documents, false)
         })
         .await?;
+        let load_or_index = started.elapsed();
+        log_go_unit_phase_start(
+            timing_enabled,
+            world_ordinal,
+            "pair",
+            unit_index + 1,
+            "merge",
+            world_started,
+        );
+        let started = Instant::now();
         merge_implementation_pair(
             merged.as_mut().ok_or_else(|| {
                 go_snapshot_assembly_failure(
@@ -759,12 +876,34 @@ async fn run_go_compiler_world(
             pair,
         )
         .map_err(|detail| go_snapshot_assembly_failure(spec, detail))?;
+        let merge = started.elapsed();
         completed_unit_count += 1;
+        log_go_unit_phase_start(
+            timing_enabled,
+            world_ordinal,
+            "pair",
+            unit_index + 1,
+            "checkpoint",
+            world_started,
+        );
+        let started = Instant::now();
         if let (Some(progress), Some(merged)) = (&progress, &merged) {
             progress
                 .publish_assembly(&assembly_units[..completed_unit_count], root, merged)
                 .map_err(|detail| go_progress_failure(spec, detail))?;
         }
+        log_go_unit_timing(
+            timing_enabled,
+            world_ordinal,
+            "pair",
+            unit_index + 1,
+            GoUnitDurations {
+                load_or_index,
+                merge,
+                checkpoint: started.elapsed(),
+                checkpointed: progress.is_some(),
+            },
+        );
     }
     let mut merged = merged.ok_or_else(|| {
         go_snapshot_assembly_failure(spec, "Go semantic assembly omitted every document shard")
@@ -773,6 +912,14 @@ async fn run_go_compiler_world(
         .provenance
         .invocations
         .splice(0..0, [context_invocation, inventory_invocation]);
+    if timing_enabled {
+        eprintln!(
+            "sniffbench semantic go timing world={world_ordinal} phase=complete total_ms={} completed_units={} planned_units={}",
+            world_started.elapsed().as_millis(),
+            completed_unit_count,
+            assembly_units.len()
+        );
+    }
     Ok(GoCompilerWorld {
         index: merged,
         ignored_documents,
