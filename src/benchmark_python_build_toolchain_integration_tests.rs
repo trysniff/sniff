@@ -102,19 +102,18 @@ impl LocalPackageIndex {
         let worker = thread::spawn(move || {
             while !thread_stop.load(Ordering::Acquire) {
                 match listener.accept() {
-                    Ok((stream, _)) => {
-                        if let Err(error) = serve(stream, &routes, Duration::from_secs(30)) {
-                            if !matches!(
+                    Ok((stream, _)) => match serve(stream, &routes, Duration::from_secs(30)) {
+                        Ok(()) => {}
+                        Err(error)
+                            if matches!(
                                 error.kind(),
                                 io::ErrorKind::WouldBlock
                                     | io::ErrorKind::TimedOut
                                     | io::ErrorKind::ConnectionReset
                                     | io::ErrorKind::BrokenPipe
-                            ) {
-                                panic!("local Python package index failed: {error}");
-                            }
-                        }
-                    }
+                            ) => {}
+                        Err(error) => panic!("local Python package index failed: {error}"),
+                    },
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                         thread::sleep(Duration::from_millis(10));
                     }
@@ -139,12 +138,13 @@ impl LocalPackageIndex {
 
     fn shutdown(&mut self) {
         self.stop.store(true, Ordering::Release);
-        if let Some(worker) = self.worker.take() {
-            if let Err(error) = worker.join() {
-                if !thread::panicking() {
-                    std::panic::resume_unwind(error);
-                }
-            }
+        let Some(worker) = self.worker.take() else {
+            return;
+        };
+        match worker.join() {
+            Ok(()) => {}
+            Err(error) if !thread::panicking() => std::panic::resume_unwind(error),
+            Err(_) => {}
         }
     }
 }
