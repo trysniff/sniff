@@ -1,7 +1,7 @@
 use super::*;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
-use std::io::{Cursor, Read, Write};
+use std::io::{self, Cursor, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::process::Command;
 use std::sync::Arc;
@@ -102,7 +102,19 @@ impl LocalPackageIndex {
         let worker = thread::spawn(move || {
             while !thread_stop.load(Ordering::Acquire) {
                 match listener.accept() {
-                    Ok((stream, _)) => serve(stream, &routes),
+                    Ok((stream, _)) => {
+                        if let Err(error) = serve(stream, &routes, Duration::from_secs(30)) {
+                            if !matches!(
+                                error.kind(),
+                                io::ErrorKind::WouldBlock
+                                    | io::ErrorKind::TimedOut
+                                    | io::ErrorKind::ConnectionReset
+                                    | io::ErrorKind::BrokenPipe
+                            ) {
+                                panic!("local Python package index failed: {error}");
+                            }
+                        }
+                    }
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                         thread::sleep(Duration::from_millis(10));
                     }
@@ -127,9 +139,12 @@ impl LocalPackageIndex {
 
     fn shutdown(&mut self) {
         self.stop.store(true, Ordering::Release);
-        let _ = TcpStream::connect(self.address);
         if let Some(worker) = self.worker.take() {
-            worker.join().unwrap();
+            if let Err(error) = worker.join() {
+                if !thread::panicking() {
+                    std::panic::resume_unwind(error);
+                }
+            }
         }
     }
 }
@@ -148,12 +163,21 @@ fn html_link(filename: &str, bytes: &[u8]) -> Vec<u8> {
     .into_bytes()
 }
 
-fn serve(mut stream: TcpStream, routes: &BTreeMap<String, Vec<u8>>) {
-    stream
-        .set_read_timeout(Some(Duration::from_secs(5)))
-        .unwrap();
+fn serve(
+    mut stream: TcpStream,
+    routes: &BTreeMap<String, Vec<u8>>,
+    read_timeout: Duration,
+) -> io::Result<()> {
+    stream.set_read_timeout(Some(read_timeout))?;
     let mut request = [0_u8; 8192];
-    let size = stream.read(&mut request).unwrap();
+    let size = loop {
+        match stream.read(&mut request) {
+            Ok(0) => return Ok(()),
+            Ok(size) => break size,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error),
+        }
+    };
     let request = String::from_utf8_lossy(&request[..size]);
     let path = request
         .lines()
@@ -176,9 +200,20 @@ fn serve(mut stream: TcpStream, routes: &BTreeMap<String, Vec<u8>>) {
         stream,
         "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         body.len()
-    )
-    .unwrap();
-    stream.write_all(body).unwrap();
+    )?;
+    stream.write_all(body)
+}
+
+#[test]
+fn idle_package_index_client_times_out_without_panicking() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let _client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (server, _) = listener.accept().unwrap();
+    let error = serve(server, &BTreeMap::new(), Duration::from_millis(20)).unwrap_err();
+    assert!(matches!(
+        error.kind(),
+        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+    ));
 }
 
 fn wheel(distribution: &str, version: &str, modules: &[(&str, &str)]) -> Vec<u8> {
