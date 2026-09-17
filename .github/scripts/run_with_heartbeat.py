@@ -77,6 +77,50 @@ def _proc_status(pid: int) -> tuple[int, int, int] | None:
     return rss_kib, high_water_kib, threads
 
 
+def _parse_proc_cpu_ticks(value: str) -> int:
+    end = value.rfind(") ")
+    fields = value[end + 2 :].split() if end >= 0 else []
+    if len(fields) < 13:
+        raise RuntimeError("invalid procfs CPU data")
+    try:
+        ticks = int(fields[11]) + int(fields[12])
+    except ValueError as error:
+        raise RuntimeError("invalid procfs CPU data") from error
+    if ticks < 0:
+        raise RuntimeError("invalid procfs CPU data")
+    return ticks
+
+
+def _proc_cpu_ticks(pid: int) -> int | None:
+    try:
+        value = pathlib.Path(f"/proc/{pid}/stat").read_text(encoding="ascii")
+    except (FileNotFoundError, PermissionError):
+        return None
+    return _parse_proc_cpu_ticks(value)
+
+
+def _parse_proc_io_counters(value: str) -> tuple[int, int, int, int]:
+    fields = dict(line.split(":", 1) for line in value.splitlines() if ":" in line)
+    try:
+        counters = tuple(
+            int(fields[key].strip())
+            for key in ("rchar", "wchar", "read_bytes", "write_bytes")
+        )
+    except (KeyError, ValueError) as error:
+        raise RuntimeError("invalid procfs I/O data") from error
+    if any(counter < 0 for counter in counters):
+        raise RuntimeError("invalid procfs I/O data")
+    return counters
+
+
+def _proc_io_counters(pid: int) -> tuple[int, int, int, int] | None:
+    try:
+        value = pathlib.Path(f"/proc/{pid}/io").read_text(encoding="ascii")
+    except (FileNotFoundError, PermissionError):
+        return None
+    return _parse_proc_io_counters(value)
+
+
 def _proc_children(pid: int) -> list[int]:
     try:
         tasks = list(pathlib.Path(f"/proc/{pid}/task").iterdir())
@@ -138,6 +182,10 @@ def _linux_proc_stats(root_pid: int) -> str:
     rss_kib = 0
     high_water_kib = 0
     thread_count = 0
+    cpu_ticks = 0
+    cpu_observed_processes = 0
+    io_counters = [0, 0, 0, 0]
+    io_observed_processes = 0
     while pending:
         pid = pending.pop()
         if pid in seen:
@@ -150,15 +198,29 @@ def _linux_proc_stats(root_pid: int) -> str:
         rss_kib += status[0]
         high_water_kib += status[1]
         thread_count += status[2]
+        observed_cpu = _proc_cpu_ticks(pid)
+        if observed_cpu is not None:
+            cpu_ticks += observed_cpu
+            cpu_observed_processes += 1
+        observed_io = _proc_io_counters(pid)
+        if observed_io is not None:
+            for index, counter in enumerate(observed_io):
+                io_counters[index] += counter
+            io_observed_processes += 1
         pending.extend(_proc_children(pid))
     total_kib, available_kib = _meminfo()
     filesystem_total_kib, filesystem_available_kib = _filesystem_info()
+    cpu_ms = cpu_ticks * 1000 // os.sysconf("SC_CLK_TCK")
     return (
         f"processes={process_count} rss_kib={rss_kib} "
         f"high_water_kib={high_water_kib} threads={thread_count} "
         f"host_mem_total_kib={total_kib} host_mem_available_kib={available_kib} "
         f"host_fs_total_kib={filesystem_total_kib} "
-        f"host_fs_available_kib={filesystem_available_kib}"
+        f"host_fs_available_kib={filesystem_available_kib} "
+        f"cpu_ms={cpu_ms} cpu_observed_processes={cpu_observed_processes} "
+        f"io_rchar_bytes={io_counters[0]} io_wchar_bytes={io_counters[1]} "
+        f"io_read_bytes={io_counters[2]} io_write_bytes={io_counters[3]} "
+        f"io_observed_processes={io_observed_processes}"
     )
 
 
