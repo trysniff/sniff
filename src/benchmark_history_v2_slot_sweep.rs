@@ -222,6 +222,8 @@ pub fn recover_historical_v2_selected_slot_work(
                 planned_unit_count: recovery.progress.planned_unit_count,
                 completed_unit_count: recovery.progress.completed_unit_count,
                 next_unit_id: recovery.progress.next_unit_id,
+                durable_unit_count: recovery.progress.durable_unit_count,
+                next_durable_unit_id: recovery.progress.next_durable_unit_id,
             }
         }));
         semantic_checkpoints.extend(recovered.checkpoints.into_iter().map(|checkpoint| {

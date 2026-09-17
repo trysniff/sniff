@@ -115,6 +115,11 @@ fn qualified_world_recovery_reports_exact_progress_identity() {
     assert_eq!(recovered.planned_unit_count, 2);
     assert_eq!(recovered.completed_unit_count, 0);
     assert_eq!(recovered.next_unit_id.as_deref(), Some("document-0000"));
+    assert_eq!(recovered.durable_unit_count, 0);
+    assert_eq!(
+        recovered.next_durable_unit_id.as_deref(),
+        Some("document-0000")
+    );
 }
 
 fn index(root: &Path) -> SemanticIndex {
@@ -246,6 +251,8 @@ fn recovery_preserves_completed_units_and_removes_only_incomplete_transactions()
     assert_eq!(recovery.planned_unit_count, 1);
     assert_eq!(recovery.completed_unit_count, 0);
     assert_eq!(recovery.next_unit_id.as_deref(), Some("document-0000"));
+    assert_eq!(recovery.durable_unit_count, 1);
+    assert_eq!(recovery.next_durable_unit_id, None);
 }
 
 #[test]
@@ -294,6 +301,8 @@ fn assembled_prefix_survives_relocation_and_supersedes_older_prefix() {
     assert_eq!(recovery.planned_unit_count, 2);
     assert_eq!(recovery.completed_unit_count, 2);
     assert_eq!(recovery.next_unit_id, None);
+    assert_eq!(recovery.durable_unit_count, 2);
+    assert_eq!(recovery.next_durable_unit_id, None);
 }
 
 #[test]
@@ -318,6 +327,8 @@ fn unit_checkpoints_replay_after_interruption_before_first_assembly() {
         .unwrap()
         .unwrap();
     assert_eq!(recovered.completed_unit_count, 0);
+    assert_eq!(recovered.durable_unit_count, 2);
+    assert_eq!(recovered.next_durable_unit_id, None);
     let store = SemanticProgressStore::open(state.path(), scope).unwrap();
     let first_unit = store.load(&units[0], second.path()).unwrap().unwrap();
     let mut assembled = begin_document_shard(first_unit).unwrap();
@@ -336,6 +347,31 @@ fn unit_checkpoints_replay_after_interruption_before_first_assembly() {
         2
     );
     assert!(units.iter().all(|unit| !store.unit_path(unit).exists()));
+}
+
+#[test]
+fn recovery_rejects_gapped_or_corrupt_durable_unit_progress() {
+    let repository = tempfile::tempdir().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let units = vec![unit(), second_unit()];
+    let store = SemanticProgressStore::open(state.path(), scope_with_units(units.clone())).unwrap();
+    store
+        .publish(&units[1], repository.path(), &index(repository.path()))
+        .unwrap();
+    assert!(SemanticProgressStore::recover_existing(state.path()).is_err());
+
+    store
+        .publish(&units[0], repository.path(), &index(repository.path()))
+        .unwrap();
+    assert_eq!(
+        SemanticProgressStore::recover_existing(state.path())
+            .unwrap()
+            .unwrap()
+            .durable_unit_count,
+        2
+    );
+    fs::write(store.unit_path(&units[1]), b"{}\n").unwrap();
+    assert!(SemanticProgressStore::recover_existing(state.path()).is_err());
 }
 
 #[test]

@@ -262,6 +262,10 @@ fn validate_go_variant_progress_recovery(
         || recovery.dimensions != plan.dimensions
         || (recovery.completed_unit_count == recovery.planned_unit_count)
             != recovery.next_unit_id.is_none()
+        || recovery.durable_unit_count < recovery.completed_unit_count
+        || recovery.durable_unit_count > recovery.planned_unit_count
+        || (recovery.durable_unit_count == recovery.planned_unit_count)
+            != recovery.next_durable_unit_id.is_none()
     {
         return Err(format!(
             "Go semantic progress disagrees with compiler variant {}",

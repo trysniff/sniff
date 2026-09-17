@@ -53,6 +53,8 @@ pub(crate) struct SemanticIndexerProgressRecovery {
     pub(crate) planned_unit_count: usize,
     pub(crate) completed_unit_count: usize,
     pub(crate) next_unit_id: Option<String>,
+    pub(crate) durable_unit_count: usize,
+    pub(crate) next_durable_unit_id: Option<String>,
 }
 
 pub(crate) fn recover_semantic_indexer_progress(
@@ -147,6 +149,8 @@ fn semantic_progress_recovery(
         planned_unit_count: recovery.planned_unit_count,
         completed_unit_count: recovery.completed_unit_count,
         next_unit_id: recovery.next_unit_id,
+        durable_unit_count: recovery.durable_unit_count,
+        next_durable_unit_id: recovery.next_durable_unit_id,
     }
 }
 
