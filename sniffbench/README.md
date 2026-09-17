@@ -445,9 +445,11 @@ sniff benchmark collect-intentional-frame \
 
 For a collector built with semantic timing support, set
 `SNIFF_BENCH_SEMANTIC_TIMING=1` in that collector's process environment.
-It writes phase durations for base/patched semantic censuses and per-Go-unit
-load-or-index, merge, and checkpoint work to stderr. The timing lines contain
-no repository paths and do not change committed evidence. A hosted resume
+It writes phase start markers and completed durations for base/patched semantic
+censuses and per-Go-unit load-or-index, merge, and checkpoint work to stderr.
+A final start marker without a matching completion identifies the phase active
+when a bounded run stops. The timing lines contain no repository paths and do
+not change committed evidence. A hosted resume
 uses its frozen collector; setting the variable cannot add timing hooks to
 an older collector and does not authorize a collector migration.
 

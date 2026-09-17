@@ -18,6 +18,17 @@ impl SemanticTiming {
         }
     }
 
+    fn phase_start(&self, phase: &'static str) {
+        if let Some(started) = self.started {
+            eprintln!(
+                "sniffbench semantic timing label={} phase={} event=start total_ms={}",
+                self.label,
+                phase,
+                started.elapsed().as_millis()
+            );
+        }
+    }
+
     fn phase(&mut self, phase: &'static str) {
         let (Some(started), Some(last)) = (self.started, self.last) else {
             return;
@@ -81,6 +92,7 @@ async fn census_historical_v2_semantics_typed_internal(
     progress_root: Option<&Path>,
 ) -> Result<SemanticCensusStageResult, HistoricalV2SlotStageError> {
     let mut timing = SemanticTiming::new("census");
+    timing.phase_start("scope");
     validate_historical_v2_source_census_commitment(materialization, roots, source_census)
         .map_err(invalid)?;
     let scope = semantic_scope(materialization, roots, source_census).map_err(infrastructure)?;
@@ -91,6 +103,7 @@ async fn census_historical_v2_semantics_typed_internal(
         .map(progress::HistoricalV2SemanticProgress::open)
         .transpose()
         .map_err(infrastructure)?;
+    timing.phase_start("base");
     let base = census_semantic_snapshot(
         HistoricalV2SemanticSnapshotInputs {
             side: HistoricalV2SemanticSnapshotSide::Base,
@@ -107,6 +120,7 @@ async fn census_historical_v2_semantics_typed_internal(
     )
     .await?;
     timing.phase("base");
+    timing.phase_start("patched");
     let patched = census_semantic_snapshot(
         HistoricalV2SemanticSnapshotInputs {
             side: HistoricalV2SemanticSnapshotSide::Patched,
@@ -149,6 +163,7 @@ async fn census_historical_v2_semantics_typed_internal(
         })?,
         semantic_census_sha256: String::new(),
     };
+    timing.phase_start("commitment");
     census.semantic_census_sha256 = semantic_census_sha256(&census).map_err(infrastructure)?;
     timing.phase("commitment");
     Ok(HistoricalV2StageResult::Completed(census))
@@ -168,6 +183,7 @@ pub(super) async fn census_semantic_snapshot(
         HistoricalV2SemanticSnapshotSide::Base => "base",
         HistoricalV2SemanticSnapshotSide::Patched => "patched",
     });
+    timing.phase_start("load_snapshot");
     let existing_snapshot = progress
         .map(|progress| {
             progress.load_snapshot(
@@ -194,6 +210,7 @@ pub(super) async fn census_semantic_snapshot(
         timing.phase("validate_reused_snapshot");
         return Ok(Some(snapshot));
     }
+    timing.phase_start("prepare_files");
     let all_files = snapshot_file_records(inputs.root, inputs.source).map_err(infrastructure)?;
     let (scoped_files, required_documents) = scoped_file_records(
         inputs.root,
@@ -204,6 +221,7 @@ pub(super) async fn census_semantic_snapshot(
     .map_err(infrastructure)?;
     timing.phase("prepare_files");
     let indexer_root = progress.map(|progress| progress.indexer_root(inputs.side));
+    timing.phase_start("compiler_indexing");
     let run = run_scoped_indexers(
         inputs.root,
         inputs.source,
@@ -223,6 +241,7 @@ pub(super) async fn census_semantic_snapshot(
         return Ok(None);
     };
     timing.phase("resolve_indexer_run");
+    timing.phase_start("assembly");
     let build = build_semantic_snapshot_from_index_sets(
         inputs.root,
         inputs.source,
@@ -247,6 +266,7 @@ pub(super) async fn census_semantic_snapshot(
             return Err(infrastructure(detail));
         }
     };
+    timing.phase_start("checkpoint_publication");
     let snapshot = match (progress, snapshot) {
         (Some(progress), Some(snapshot)) => Some(
             progress

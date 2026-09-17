@@ -33,6 +33,22 @@ struct GoUnitDurations {
     checkpointed: bool,
 }
 
+fn log_go_unit_phase_start(
+    enabled: bool,
+    world: usize,
+    kind: &'static str,
+    unit: usize,
+    phase: &'static str,
+    world_started: Instant,
+) {
+    if enabled {
+        eprintln!(
+            "sniffbench semantic go timing world={world} kind={kind} unit={unit} phase={phase} event=start world_elapsed_ms={}",
+            world_started.elapsed().as_millis()
+        );
+    }
+}
+
 fn log_go_unit_timing(
     enabled: bool,
     world: usize,
@@ -501,6 +517,9 @@ async fn run_go_compiler_world(
 ) -> Result<GoCompilerWorld, SemanticIndexerRunFailure> {
     let timing_enabled = std::env::var("SNIFF_BENCH_SEMANTIC_TIMING").as_deref() == Ok("1");
     let world_started = Instant::now();
+    if timing_enabled {
+        eprintln!("sniffbench semantic go timing world={world_ordinal} phase=prepare event=start");
+    }
     let GoIndexerRunInputs {
         spec,
         root,
@@ -756,12 +775,28 @@ async fn run_go_compiler_world(
             continue;
         }
         let expected_documents = shard.source_documents();
+        log_go_unit_phase_start(
+            timing_enabled,
+            world_ordinal,
+            "document",
+            unit_index + 1,
+            "load_or_index",
+            world_started,
+        );
         let started = Instant::now();
         let index = run_or_resume_go_unit(progress.as_ref(), unit, root, spec, || {
             run_go_scip(&scip, shard.patterns(), &expected_documents, true)
         })
         .await?;
         let load_or_index = started.elapsed();
+        log_go_unit_phase_start(
+            timing_enabled,
+            world_ordinal,
+            "document",
+            unit_index + 1,
+            "merge",
+            world_started,
+        );
         let started = Instant::now();
         match &mut merged {
             Some(merged) => merge_document_shard(merged, index),
@@ -770,6 +805,14 @@ async fn run_go_compiler_world(
         .map_err(|detail| go_snapshot_assembly_failure(spec, detail))?;
         let merge = started.elapsed();
         completed_unit_count += 1;
+        log_go_unit_phase_start(
+            timing_enabled,
+            world_ordinal,
+            "document",
+            unit_index + 1,
+            "checkpoint",
+            world_started,
+        );
         let started = Instant::now();
         if let (Some(progress), Some(merged)) = (&progress, &merged) {
             progress
@@ -800,12 +843,28 @@ async fn run_go_compiler_world(
             .into_iter()
             .chain(shards[right].source_documents())
             .collect();
+        log_go_unit_phase_start(
+            timing_enabled,
+            world_ordinal,
+            "pair",
+            unit_index + 1,
+            "load_or_index",
+            world_started,
+        );
         let started = Instant::now();
         let pair = run_or_resume_go_unit(progress.as_ref(), unit, root, spec, || {
             run_go_scip(&scip, unit.patterns.clone(), &expected_documents, false)
         })
         .await?;
         let load_or_index = started.elapsed();
+        log_go_unit_phase_start(
+            timing_enabled,
+            world_ordinal,
+            "pair",
+            unit_index + 1,
+            "merge",
+            world_started,
+        );
         let started = Instant::now();
         merge_implementation_pair(
             merged.as_mut().ok_or_else(|| {
@@ -819,6 +878,14 @@ async fn run_go_compiler_world(
         .map_err(|detail| go_snapshot_assembly_failure(spec, detail))?;
         let merge = started.elapsed();
         completed_unit_count += 1;
+        log_go_unit_phase_start(
+            timing_enabled,
+            world_ordinal,
+            "pair",
+            unit_index + 1,
+            "checkpoint",
+            world_started,
+        );
         let started = Instant::now();
         if let (Some(progress), Some(merged)) = (&progress, &merged) {
             progress
