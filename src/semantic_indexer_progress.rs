@@ -194,6 +194,8 @@ pub(super) struct SemanticProgressRecovery {
     pub(super) planned_unit_count: usize,
     pub(super) completed_unit_count: usize,
     pub(super) next_unit_id: Option<String>,
+    pub(super) durable_unit_count: usize,
+    pub(super) next_durable_unit_id: Option<String>,
 }
 
 impl SemanticProgressStore {
@@ -302,6 +304,34 @@ impl SemanticProgressStore {
         let completed_unit_count = latest
             .as_ref()
             .map_or(0, |assembly| assembly.completed_unit_count);
+        let mut durable_unit_count = completed_unit_count;
+        let mut missing_unit = false;
+        for unit in store.scope.units.iter().skip(completed_unit_count) {
+            let path = store.unit_path(unit);
+            match fs::symlink_metadata(&path) {
+                Ok(_) if missing_unit => {
+                    return Err(format!(
+                        "semantic progress unit {} appears after an uncommitted gap",
+                        unit.unit_id
+                    ));
+                }
+                Ok(_) => {
+                    let checkpoint: SemanticProgressCheckpoint =
+                        read_json(&path, "semantic progress checkpoint")?;
+                    validate_checkpoint(&store.scope, unit, &checkpoint)?;
+                    durable_unit_count += 1;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    missing_unit = true;
+                }
+                Err(error) => {
+                    return Err(format!(
+                        "failed to inspect semantic progress unit {}: {error}",
+                        unit.unit_id
+                    ));
+                }
+            }
+        }
         let (variant_identity, dimensions) = match &store.scope.variant {
             SemanticIndexVariant::Unqualified => (None, BTreeMap::new()),
             SemanticIndexVariant::Qualified {
@@ -318,6 +348,12 @@ impl SemanticProgressStore {
                 .scope
                 .units
                 .get(completed_unit_count)
+                .map(|unit| unit.unit_id.clone()),
+            durable_unit_count,
+            next_durable_unit_id: store
+                .scope
+                .units
+                .get(durable_unit_count)
                 .map(|unit| unit.unit_id.clone()),
         }))
     }

@@ -2,8 +2,36 @@ use super::*;
 use sniff::benchmark::{
     HistoricalV2SelectedSlotRunSummary, HistoricalV2SemanticCheckpointKind,
     HistoricalV2SemanticCheckpointProgress, HistoricalV2SemanticSnapshotSide,
-    HistoricalV2SlotRunDisposition, HistoricalV2SlotRunSummary, HistoricalV2SlotStage,
+    HistoricalV2SemanticWorldProgress, HistoricalV2SlotRunDisposition, HistoricalV2SlotRunSummary,
+    HistoricalV2SlotStage,
 };
+
+#[test]
+fn durable_unit_progress_changes_the_hosted_progress_line_without_an_assembly() {
+    let mut world = HistoricalV2SemanticWorldProgress {
+        language: "go".to_string(),
+        slot_number: 122,
+        side: HistoricalV2SemanticSnapshotSide::Patched,
+        family: "go".to_string(),
+        world: "world-id".to_string(),
+        variant_identity: None,
+        dimensions: Default::default(),
+        planned_unit_count: 15,
+        completed_unit_count: 0,
+        next_unit_id: Some("document-00000000".to_string()),
+        durable_unit_count: 0,
+        next_durable_unit_id: Some("document-00000000".to_string()),
+    };
+    let before = sniffbench_frame_run::semantic_world_progress_line(&world);
+    world.durable_unit_count = 1;
+    world.next_durable_unit_id = Some("document-00000001".to_string());
+    let after = sniffbench_frame_run::semantic_world_progress_line(&world);
+
+    assert_ne!(before, after);
+    assert!(before.contains("units=0/15 next=document-00000000 durable_units=0/15"));
+    assert!(after.contains("units=0/15 next=document-00000000 durable_units=1/15"));
+    assert!(after.starts_with("  go/slot-0122 "));
+}
 
 #[test]
 fn committed_semantic_checkpoint_line_enters_the_durable_progress_ledger() {

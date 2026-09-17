@@ -33,6 +33,11 @@ struct GoUnitDurations {
     checkpointed: bool,
 }
 
+// Each unit is already durable; only merged assemblies need phase-boundary snapshots.
+fn should_publish_go_assembly(completed: usize, document_units: usize, total_units: usize) -> bool {
+    completed == document_units || completed == total_units
+}
+
 fn log_go_unit_phase_start(
     enabled: bool,
     world: usize,
@@ -257,6 +262,10 @@ fn validate_go_variant_progress_recovery(
         || recovery.dimensions != plan.dimensions
         || (recovery.completed_unit_count == recovery.planned_unit_count)
             != recovery.next_unit_id.is_none()
+        || recovery.durable_unit_count < recovery.completed_unit_count
+        || recovery.durable_unit_count > recovery.planned_unit_count
+        || (recovery.durable_unit_count == recovery.planned_unit_count)
+            != recovery.next_durable_unit_id.is_none()
     {
         return Err(format!(
             "Go semantic progress disagrees with compiler variant {}",
@@ -805,16 +814,25 @@ async fn run_go_compiler_world(
         .map_err(|detail| go_snapshot_assembly_failure(spec, detail))?;
         let merge = started.elapsed();
         completed_unit_count += 1;
-        log_go_unit_phase_start(
-            timing_enabled,
-            world_ordinal,
-            "document",
-            unit_index + 1,
-            "checkpoint",
-            world_started,
+        let publish_assembly = should_publish_go_assembly(
+            completed_unit_count,
+            document_units.len(),
+            assembly_units.len(),
         );
+        if publish_assembly && progress.is_some() {
+            log_go_unit_phase_start(
+                timing_enabled,
+                world_ordinal,
+                "document",
+                unit_index + 1,
+                "checkpoint",
+                world_started,
+            );
+        }
         let started = Instant::now();
-        if let (Some(progress), Some(merged)) = (&progress, &merged) {
+        if let (Some(progress), Some(merged)) = (&progress, &merged)
+            && publish_assembly
+        {
             progress
                 .publish_assembly(&assembly_units[..completed_unit_count], root, merged)
                 .map_err(|detail| go_progress_failure(spec, detail))?;
@@ -828,7 +846,7 @@ async fn run_go_compiler_world(
                 load_or_index,
                 merge,
                 checkpoint: started.elapsed(),
-                checkpointed: progress.is_some(),
+                checkpointed: progress.is_some() && publish_assembly,
             },
         );
     }
@@ -878,16 +896,25 @@ async fn run_go_compiler_world(
         .map_err(|detail| go_snapshot_assembly_failure(spec, detail))?;
         let merge = started.elapsed();
         completed_unit_count += 1;
-        log_go_unit_phase_start(
-            timing_enabled,
-            world_ordinal,
-            "pair",
-            unit_index + 1,
-            "checkpoint",
-            world_started,
+        let publish_assembly = should_publish_go_assembly(
+            completed_unit_count,
+            document_unit_count,
+            assembly_units.len(),
         );
+        if publish_assembly && progress.is_some() {
+            log_go_unit_phase_start(
+                timing_enabled,
+                world_ordinal,
+                "pair",
+                unit_index + 1,
+                "checkpoint",
+                world_started,
+            );
+        }
         let started = Instant::now();
-        if let (Some(progress), Some(merged)) = (&progress, &merged) {
+        if let (Some(progress), Some(merged)) = (&progress, &merged)
+            && publish_assembly
+        {
             progress
                 .publish_assembly(&assembly_units[..completed_unit_count], root, merged)
                 .map_err(|detail| go_progress_failure(spec, detail))?;
@@ -901,7 +928,7 @@ async fn run_go_compiler_world(
                 load_or_index,
                 merge,
                 checkpoint: started.elapsed(),
-                checkpointed: progress.is_some(),
+                checkpointed: progress.is_some() && publish_assembly,
             },
         );
     }

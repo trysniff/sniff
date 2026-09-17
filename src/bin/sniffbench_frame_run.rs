@@ -7,9 +7,9 @@ use sniff::benchmark::{
     HistoricalV2SelectedSlotStateInspection, HistoricalV2SelectedSlotStateInspectionInputs,
     HistoricalV2SelectedSlotSweepInputs, HistoricalV2SelectedSlotWorkRecoveryInputs,
     HistoricalV2SemanticCheckpointKind, HistoricalV2SemanticCheckpointProgress,
-    HistoricalV2SemanticSnapshotSide, HistoricalV2SlotOutcome, HistoricalV2SlotRunDisposition,
-    HistoricalV2SlotSelection, HistoricalV2SlotStage, HistoricalV2SlotStageError,
-    HistoricalV2SlotStageErrorKind, HistoricalV2SlotStageOutcome,
+    HistoricalV2SemanticSnapshotSide, HistoricalV2SemanticWorldProgress, HistoricalV2SlotOutcome,
+    HistoricalV2SlotRunDisposition, HistoricalV2SlotSelection, HistoricalV2SlotStage,
+    HistoricalV2SlotStageError, HistoricalV2SlotStageErrorKind, HistoricalV2SlotStageOutcome,
     inspect_historical_v2_selected_slot_state, recover_historical_v2_selected_slot_work,
     replay_historical_v2_public_surface_census, run_historical_v2_selected_slots_bounded,
     validate_historical_v2_protocol, validate_historical_v2_selected_payloads_commitment,
@@ -215,31 +215,7 @@ pub(super) fn recover_slot_work(
         summary.semantic_worlds.len()
     );
     for world in &summary.semantic_worlds {
-        let side = match world.side {
-            HistoricalV2SemanticSnapshotSide::Base => "base",
-            HistoricalV2SemanticSnapshotSide::Patched => "patched",
-        };
-        let identity = world.variant_identity.as_deref().unwrap_or("unqualified");
-        let dimensions = world
-            .dimensions
-            .iter()
-            .map(|(name, value)| format!("{name}={value}"))
-            .collect::<Vec<_>>()
-            .join(",");
-        let next = world.next_unit_id.as_deref().unwrap_or("complete");
-        eprintln!(
-            "  {}/slot-{:04} side={} family={} world={} variant={} dimensions=[{}] units={}/{} next={}",
-            world.language,
-            world.slot_number,
-            side,
-            world.family,
-            world.world,
-            identity,
-            dimensions,
-            world.completed_unit_count,
-            world.planned_unit_count,
-            next
-        );
+        eprintln!("{}", semantic_world_progress_line(world));
     }
     eprintln!(
         "Durable semantic checkpoints: {}",
@@ -249,6 +225,38 @@ pub(super) fn recover_slot_work(
         eprintln!("{}", semantic_checkpoint_progress_line(checkpoint));
     }
     Ok(())
+}
+
+pub(super) fn semantic_world_progress_line(world: &HistoricalV2SemanticWorldProgress) -> String {
+    let side = match world.side {
+        HistoricalV2SemanticSnapshotSide::Base => "base",
+        HistoricalV2SemanticSnapshotSide::Patched => "patched",
+    };
+    let identity = world.variant_identity.as_deref().unwrap_or("unqualified");
+    let dimensions = world
+        .dimensions
+        .iter()
+        .map(|(name, value)| format!("{name}={value}"))
+        .collect::<Vec<_>>()
+        .join(",");
+    let next = world.next_unit_id.as_deref().unwrap_or("complete");
+    let next_durable = world.next_durable_unit_id.as_deref().unwrap_or("complete");
+    format!(
+        "  {}/slot-{:04} side={} family={} world={} variant={} dimensions=[{}] units={}/{} next={} durable_units={}/{} next_durable={}",
+        world.language,
+        world.slot_number,
+        side,
+        world.family,
+        world.world,
+        identity,
+        dimensions,
+        world.completed_unit_count,
+        world.planned_unit_count,
+        next,
+        world.durable_unit_count,
+        world.planned_unit_count,
+        next_durable
+    )
 }
 
 pub(super) fn semantic_checkpoint_progress_line(

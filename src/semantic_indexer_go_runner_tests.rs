@@ -38,6 +38,15 @@ fn digest(character: char) -> String {
     character.to_string().repeat(64)
 }
 
+#[test]
+fn go_assembly_checkpoints_only_at_document_and_world_boundaries() {
+    let checkpoints = (1..=15)
+        .filter(|completed| should_publish_go_assembly(*completed, 5, 15))
+        .collect::<Vec<_>>();
+    assert_eq!(checkpoints, vec![5, 15]);
+    assert!(should_publish_go_assembly(5, 5, 5));
+}
+
 fn empty_index(root: &Path) -> SemanticIndex {
     SemanticIndex {
         format_version: SEMANTIC_INDEX_FORMAT_VERSION,
@@ -236,6 +245,8 @@ fn recovered_go_variant_progress_must_match_the_current_plan() {
         planned_unit_count: 2,
         completed_unit_count: 1,
         next_unit_id: Some("document-00000001".to_string()),
+        durable_unit_count: 1,
+        next_durable_unit_id: Some("document-00000001".to_string()),
     };
     validate_go_variant_progress_recovery(&plan, &exact).unwrap();
 
@@ -246,6 +257,19 @@ fn recovered_go_variant_progress_must_match_the_current_plan() {
     let mut contradictory = exact;
     contradictory.completed_unit_count = contradictory.planned_unit_count;
     assert!(validate_go_variant_progress_recovery(&plan, &contradictory).is_err());
+
+    let mut contradictory = crate::semantic_indexer_runner::progress::SemanticProgressRecovery {
+        variant_identity: Some(plan.identity.0.clone()),
+        dimensions: plan.dimensions.clone(),
+        planned_unit_count: 2,
+        completed_unit_count: 1,
+        next_unit_id: Some("document-00000001".to_string()),
+        durable_unit_count: 2,
+        next_durable_unit_id: Some("document-00000001".to_string()),
+    };
+    assert!(validate_go_variant_progress_recovery(&plan, &contradictory).is_err());
+    contradictory.next_durable_unit_id = None;
+    validate_go_variant_progress_recovery(&plan, &contradictory).unwrap();
 }
 
 #[tokio::test]

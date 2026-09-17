@@ -93,6 +93,8 @@ pub struct HistoricalV2SemanticWorldProgress {
     pub planned_unit_count: usize,
     pub completed_unit_count: usize,
     pub next_unit_id: Option<String>,
+    pub durable_unit_count: usize,
+    pub next_durable_unit_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
