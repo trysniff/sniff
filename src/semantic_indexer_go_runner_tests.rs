@@ -302,17 +302,37 @@ async fn completed_progress_unit_skips_the_compiler_invocation() {
     let progress = SemanticProgressStore::open(state.path(), scope).unwrap();
     let spec = pinned_indexer(SemanticIndexerKind::Go).unwrap();
     let calls = std::cell::Cell::new(0_usize);
+    let timing = GoUnitTiming {
+        enabled: false,
+        world: 0,
+        kind: "document",
+        unit: 1,
+    };
 
-    run_or_resume_go_unit(Some(&progress), &unit, repository.path(), spec, || async {
-        calls.set(calls.get() + 1);
-        Ok(empty_index(repository.path()))
-    })
+    run_or_resume_go_unit(
+        Some(&progress),
+        &unit,
+        repository.path(),
+        spec,
+        timing,
+        || async {
+            calls.set(calls.get() + 1);
+            Ok(empty_index(repository.path()))
+        },
+    )
     .await
     .unwrap();
-    run_or_resume_go_unit(Some(&progress), &unit, repository.path(), spec, || async {
-        calls.set(calls.get() + 1);
-        Ok(empty_index(repository.path()))
-    })
+    run_or_resume_go_unit(
+        Some(&progress),
+        &unit,
+        repository.path(),
+        spec,
+        timing,
+        || async {
+            calls.set(calls.get() + 1);
+            Ok(empty_index(repository.path()))
+        },
+    )
     .await
     .unwrap();
 
