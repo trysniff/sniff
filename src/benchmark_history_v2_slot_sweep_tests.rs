@@ -9,11 +9,12 @@ use crate::benchmark::{
     HistoricalV2ExclusionManifest, HistoricalV2ExecutionError, HistoricalV2Frame,
     HistoricalV2IdenticalTestExecutionRequest, HistoricalV2IdenticalTestExecutor,
     HistoricalV2PartitionExclusions, HistoricalV2ProjectedRow,
-    HistoricalV2RawIdenticalTestExecution, HistoricalV2RecoverableTestExecutor,
-    HistoricalV2SelectedPayload, HistoricalV2SelectedPayloads,
+    HistoricalV2QualificationExclusionReason, HistoricalV2RawIdenticalTestExecution,
+    HistoricalV2RecoverableTestExecutor, HistoricalV2SelectedPayload, HistoricalV2SelectedPayloads,
     HistoricalV2SlotStageCheckpointInput, HistoricalV2SlotStageErrorKind,
     HistoricalV2SlotStageJournal, HistoricalV2SlotStageOutcome, HistoricalV2StageArtifactKind,
-    derive_historical_v2_frame_record, historical_v2_frame_sha256, select_historical_v2_slots,
+    HistoricalV2TerminalExclusionReason, derive_historical_v2_frame_record,
+    historical_v2_frame_sha256, select_historical_v2_slots,
 };
 use sha2::{Digest, Sha256};
 
@@ -28,6 +29,123 @@ const PARTITIONS: [&str; 6] = [
 ];
 const PATCH: &str = "diff --git a/src/app.py b/src/app.py\n--- a/src/app.py\n+++ b/src/app.py\n@@ -1,2 +1 @@\n-old_one = prepare()\n-old_two = finish(old_one)\n+result = finish(prepare())\n";
 const RUST_PATCH: &str = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 +1 @@\n-let old_one = prepare();\n-let old_two = finish(old_one);\n+let result = finish(prepare());\n";
+
+#[test]
+fn quota_headroom_distinguishes_possible_from_impossible_without_replay() {
+    let protocol = validate_historical_v2_protocol(PROTOCOL).unwrap();
+    let slots = |excluded_count: usize| {
+        (1..=128)
+            .map(|slot_number| {
+                let excluded = slot_number <= excluded_count;
+                HistoricalV2SelectedSlotStateInspection {
+                    language: "go".to_string(),
+                    slot_number,
+                    canonical_repository: format!("example/slot-{slot_number}"),
+                    committed_stage_count: usize::from(excluded),
+                    latest_committed_stage: excluded.then_some(HistoricalV2SlotStage::Qualification),
+                    latest_committed_outcome: excluded.then(|| HistoricalV2SlotStageOutcome::Excluded {
+                        reason: HistoricalV2TerminalExclusionReason::Qualification(vec![
+                            HistoricalV2QualificationExclusionReason::RepositoryMethodCountAboveMaximum,
+                        ]),
+                        artifact_kind: HistoricalV2StageArtifactKind::Qualification,
+                        artifact_sha256: "a".repeat(64),
+                    }),
+                    next_stage: (!excluded).then_some(HistoricalV2SlotStage::Payload),
+                    incomplete_initialization: false,
+                    incomplete_stage_transaction: false,
+                    incomplete_rewind_transaction: false,
+                }
+            })
+            .collect::<Vec<_>>()
+    };
+
+    let still_possible = quota_headroom(&protocol, &slots(88));
+    let go = still_possible
+        .iter()
+        .find(|quota| quota.language == "go")
+        .unwrap();
+    assert_eq!(go.maximum_accepted_without_replay, 40);
+    assert!(go.reachable_without_replay);
+
+    let impossible = quota_headroom(&protocol, &slots(89));
+    let go = impossible
+        .iter()
+        .find(|quota| quota.language == "go")
+        .unwrap();
+    assert_eq!(go.maximum_accepted_without_replay, 39);
+    assert!(!go.reachable_without_replay);
+}
+
+#[test]
+fn quota_headroom_counts_unfilled_slots_as_unavailable() {
+    let protocol = validate_historical_v2_protocol(PROTOCOL).unwrap();
+    let slots = (1..=126)
+        .map(|slot_number| HistoricalV2SelectedSlotStateInspection {
+            language: "go".to_string(),
+            slot_number,
+            canonical_repository: format!("example/slot-{slot_number}"),
+            committed_stage_count: 1,
+            latest_committed_stage: Some(HistoricalV2SlotStage::Qualification),
+            latest_committed_outcome: (slot_number <= 125).then(|| {
+                HistoricalV2SlotStageOutcome::Excluded {
+                    reason: HistoricalV2TerminalExclusionReason::Qualification(vec![
+                        HistoricalV2QualificationExclusionReason::RepositoryMethodCountAboveMaximum,
+                    ]),
+                    artifact_kind: HistoricalV2StageArtifactKind::Qualification,
+                    artifact_sha256: "a".repeat(64),
+                }
+            }),
+            next_stage: (slot_number == 126).then_some(HistoricalV2SlotStage::Payload),
+            incomplete_initialization: false,
+            incomplete_stage_transaction: false,
+            incomplete_rewind_transaction: false,
+        })
+        .collect::<Vec<_>>();
+    let headroom = quota_headroom(&protocol, &slots);
+    let go = headroom
+        .iter()
+        .find(|quota| quota.language == "go")
+        .unwrap();
+    assert_eq!(go.fixed_slot_count, 128);
+    assert_eq!(go.selected_slot_count, 126);
+    assert_eq!(go.terminal_excluded_count, 125);
+    assert_eq!(go.maximum_accepted_without_replay, 1);
+    assert!(!go.reachable_without_replay);
+}
+
+#[test]
+fn quota_headroom_does_not_settle_an_interrupted_rewind() {
+    let protocol = validate_historical_v2_protocol(PROTOCOL).unwrap();
+    let mut slots = (1..=128)
+        .map(|slot_number| HistoricalV2SelectedSlotStateInspection {
+            language: "go".to_string(),
+            slot_number,
+            canonical_repository: format!("example/slot-{slot_number}"),
+            committed_stage_count: 1,
+            latest_committed_stage: Some(HistoricalV2SlotStage::Qualification),
+            latest_committed_outcome: Some(HistoricalV2SlotStageOutcome::Excluded {
+                reason: HistoricalV2TerminalExclusionReason::Qualification(vec![
+                    HistoricalV2QualificationExclusionReason::RepositoryMethodCountAboveMaximum,
+                ]),
+                artifact_kind: HistoricalV2StageArtifactKind::Qualification,
+                artifact_sha256: "a".repeat(64),
+            }),
+            next_stage: None,
+            incomplete_initialization: false,
+            incomplete_stage_transaction: false,
+            incomplete_rewind_transaction: false,
+        })
+        .collect::<Vec<_>>();
+    slots[0].incomplete_rewind_transaction = true;
+
+    let headroom = quota_headroom(&protocol, &slots);
+    let go = headroom
+        .iter()
+        .find(|quota| quota.language == "go")
+        .unwrap();
+    assert_eq!(go.terminal_excluded_count, 127);
+    assert_eq!(go.maximum_accepted_without_replay, 1);
+}
 
 #[tokio::test]
 async fn one_stage_sweep_persists_every_selected_payload_without_external_execution() {

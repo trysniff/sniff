@@ -334,6 +334,22 @@ pub(super) fn state_status(args: StateStatusArgs) -> Result<(), Box<dyn std::err
         summary.terminal_slot_count,
         summary.incomplete_slot_count,
     );
+    for quota in &summary.quota_headroom {
+        eprintln!(
+            "{} release headroom without replay: at most {} accepted / {} required ({} selected, {} terminally excluded, {} fixed){}",
+            quota.language,
+            quota.maximum_accepted_without_replay,
+            quota.minimum_accepted,
+            quota.selected_slot_count,
+            quota.terminal_excluded_count,
+            quota.fixed_slot_count,
+            if quota.reachable_without_replay {
+                ""
+            } else {
+                " - unreachable under current sealed state"
+            }
+        );
+    }
     Ok(())
 }
 

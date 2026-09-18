@@ -117,7 +117,19 @@ pub struct HistoricalV2SelectedSlotStateInspectionSummary {
     pub started_slot_count: usize,
     pub terminal_slot_count: usize,
     pub incomplete_slot_count: usize,
+    pub quota_headroom: Vec<HistoricalV2LanguageQuotaHeadroom>,
     pub slots: Vec<HistoricalV2SelectedSlotStateInspection>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HistoricalV2LanguageQuotaHeadroom {
+    pub language: String,
+    pub fixed_slot_count: usize,
+    pub selected_slot_count: usize,
+    pub terminal_excluded_count: usize,
+    pub maximum_accepted_without_replay: usize,
+    pub minimum_accepted: usize,
+    pub reachable_without_replay: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
