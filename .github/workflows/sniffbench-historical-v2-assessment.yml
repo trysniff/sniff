@@ -56,6 +56,11 @@ on:
         required: false
         default: false
         type: boolean
+      show_semantic_failures:
+        description: "Include committed semantic failure text in workflow logs and summary"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   actions: read
@@ -744,9 +749,15 @@ jobs:
       - name: Verify resumable assessment state
         if: ${{ always() && steps.assess.outcome == 'success' }}
         shell: bash
+        env:
+          SHOW_SEMANTIC_FAILURES: ${{ inputs.show_semantic_failures }}
         run: |
           set -uo pipefail
           set +e
+          diagnostic_args=()
+          if [[ "$SHOW_SEMANTIC_FAILURES" == 'true' ]]; then
+            diagnostic_args+=(--show-semantic-failures)
+          fi
           status_output="$(
             "$STATE_OBSERVER" state-status \
               --protocol "$COLLECTOR_ROOT/sniffbench/historical-v2-protocol.json" \
@@ -756,6 +767,7 @@ jobs:
               --selection "$FRAME_ROOT/selection.json" \
               --payloads "$FRAME_ROOT/selected-payloads.json" \
               --state-root "$STATE_ROOT" \
+              "${diagnostic_args[@]}" \
               2>&1
           )"
           status=$?

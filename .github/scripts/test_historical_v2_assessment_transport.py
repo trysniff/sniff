@@ -5534,6 +5534,24 @@ class WorkflowContractTests(unittest.TestCase):
         ):
             self.assertNotIn(provider_variable, status_body)
 
+    def test_semantic_failure_details_are_opt_in_and_not_durable_progress(self) -> None:
+        workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+        status = workflow.index("- name: Verify resumable assessment state")
+        seal = workflow.index("- name: Seal resumable assessment state", status)
+        status_body = workflow[status:seal]
+        before = workflow.index("- name: Capture durable progress before bounded assessment")
+        assess = workflow.index("- name: Assess a bounded resumable slot slice", before)
+        after = workflow.index("- name: Capture durable progress after bounded assessment")
+        upload = workflow.index("- name: Upload immutable resumable assessment state", after)
+
+        self.assertIn("show_semantic_failures:", workflow)
+        self.assertIn("SHOW_SEMANTIC_FAILURES: ${{ inputs.show_semantic_failures }}", status_body)
+        self.assertIn("diagnostic_args=()", status_body)
+        self.assertIn("diagnostic_args+=(--show-semantic-failures)", status_body)
+        self.assertIn('"${diagnostic_args[@]}"', status_body)
+        self.assertNotIn("show-semantic-failures", workflow[before:assess])
+        self.assertNotIn("show-semantic-failures", workflow[after:upload])
+
     def test_resume_freezes_collector_and_migration_is_explicit(self) -> None:
         workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
         for required in (
