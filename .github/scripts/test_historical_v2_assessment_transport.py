@@ -5552,6 +5552,60 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertNotIn("show-semantic-failures", workflow[before:assess])
         self.assertNotIn("show-semantic-failures", workflow[after:upload])
 
+    def test_inspection_only_verifies_prior_state_without_assessing_or_uploading(self) -> None:
+        workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+
+        def step(name: str) -> str:
+            start = workflow.index(f"      - name: {name}")
+            end = workflow.find("\n      - ", start + 1)
+            return workflow[start:] if end == -1 else workflow[start:end]
+
+        self.assertIn("inspect_only:\n", workflow)
+        self.assertIn("INSPECT_ONLY: ${{ inputs.inspect_only }}", workflow)
+        self.assertIn("if [[ \"$INSPECT_ONLY\" == 'true' ]]; then", workflow)
+        self.assertIn(
+            "inspect_only requires resume_run_id, max_new_slots=0, and no collector_migration",
+            workflow,
+        )
+        self.assertIn(
+            "if: ${{ success() && (inputs.inspect_only || steps.assess.outcome == 'success') }}",
+            step("Verify resumable assessment state"),
+        )
+        self.assertIn('"$STATE_OBSERVER" state-status', step("Verify resumable assessment state"))
+        self.assertNotIn("run-slots", step("Verify resumable assessment state"))
+        for name in (
+            "Configure the Rust toolchain for sandboxed Rust indexing",
+            "Install the hardened Linux sandbox",
+            "Enable Linux user namespaces for the assessment sandbox",
+            "Enable project-selected Node package managers",
+            "Materialize the exact execution harness",
+            "Require and freeze the production runtime",
+            "Materialize the frozen assessment tools",
+            "Install every pinned semantic indexer",
+            "Capture durable progress before bounded assessment",
+            "Assess a bounded resumable slot slice",
+        ):
+            self.assertIn("if: ${{ !inputs.inspect_only }}", step(name), name)
+        self.assertIn(
+            "if: ${{ !inputs.inspect_only && always() && steps.assess.outcome == 'success' }}",
+            step("Seal resumable assessment state"),
+        )
+        self.assertIn(
+            "if: ${{ always() && steps.seal.outcome == 'success' }}",
+            step("Upload immutable resumable assessment state"),
+        )
+        for action in (
+            "dtolnay/rust-toolchain",
+            "actions/setup-node",
+            "actions/setup-java",
+            "actions/setup-go",
+            "astral-sh/setup-uv",
+            "gradle/actions/setup-gradle",
+            "oven-sh/setup-bun",
+        ):
+            start = workflow.index(f"      - uses: {action}")
+            self.assertIn("if: ${{ !inputs.inspect_only }}", workflow[start:start + 250], action)
+
     def test_resume_freezes_collector_and_migration_is_explicit(self) -> None:
         workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
         for required in (
