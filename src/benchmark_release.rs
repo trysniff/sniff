@@ -217,6 +217,9 @@ mod history_v2_source_census;
 
 pub use history_v2_source_census::*;
 
+#[path = "benchmark_history_v2_diagnostic_timing.rs"]
+mod history_v2_diagnostic_timing;
+
 #[path = "benchmark_history_v2_semantic_schema.rs"]
 mod history_v2_semantic_schema;
 
