@@ -6,13 +6,16 @@ use sniff::benchmark::{
     HistoricalV2PublicSurfaceReplayInputs, HistoricalV2SelectedPayloads,
     HistoricalV2SelectedSlotStateInspection, HistoricalV2SelectedSlotStateInspectionInputs,
     HistoricalV2SelectedSlotSweepInputs, HistoricalV2SelectedSlotWorkRecoveryInputs,
-    HistoricalV2SemanticCheckpointKind, HistoricalV2SemanticCheckpointProgress,
-    HistoricalV2SemanticSnapshotSide, HistoricalV2SemanticWorldProgress, HistoricalV2SlotOutcome,
-    HistoricalV2SlotRunDisposition, HistoricalV2SlotSelection, HistoricalV2SlotStage,
-    HistoricalV2SlotStageError, HistoricalV2SlotStageErrorKind, HistoricalV2SlotStageOutcome,
-    inspect_historical_v2_selected_slot_state, recover_historical_v2_selected_slot_work,
-    replay_historical_v2_public_surface_census, run_historical_v2_selected_slots_bounded,
-    validate_historical_v2_protocol, validate_historical_v2_selected_payloads_commitment,
+    HistoricalV2SemanticCensusExclusion, HistoricalV2SemanticCheckpointKind,
+    HistoricalV2SemanticCheckpointProgress, HistoricalV2SemanticSnapshotSide,
+    HistoricalV2SemanticWorldProgress, HistoricalV2SlotOutcome, HistoricalV2SlotRunDisposition,
+    HistoricalV2SlotSelection, HistoricalV2SlotStage, HistoricalV2SlotStageError,
+    HistoricalV2SlotStageErrorKind, HistoricalV2SlotStageOutcome, HistoricalV2StageArtifactKind,
+    HistoricalV2TerminalExclusionReason, inspect_historical_v2_selected_slot_state,
+    recover_historical_v2_selected_slot_work, replay_historical_v2_public_surface_census,
+    run_historical_v2_selected_slots_bounded, validate_historical_v2_protocol,
+    validate_historical_v2_selected_payloads_commitment,
+    validate_historical_v2_semantic_census_exclusion,
 };
 use std::fs;
 use std::io::{Error as IoError, ErrorKind};
@@ -21,6 +24,7 @@ use std::path::{Path, PathBuf};
 
 const MAX_PROTOCOL_BYTES: u64 = 1024 * 1024;
 const MAX_JSON_ARTIFACT_BYTES: u64 = 512 * 1024 * 1024;
+const MAX_SEMANTIC_EXCLUSION_BYTES: u64 = 128 * 1024 * 1024;
 
 #[derive(Debug, Args)]
 pub(super) struct RunSlotsArgs {
@@ -86,6 +90,9 @@ pub(super) struct StateStatusArgs {
     payloads: PathBuf,
     #[arg(long)]
     state_root: PathBuf,
+    /// Include bounded committed semantic failure details in terminal output.
+    #[arg(long)]
+    show_semantic_failures: bool,
 }
 
 #[derive(Debug, Args)]
@@ -350,7 +357,76 @@ pub(super) fn state_status(args: StateStatusArgs) -> Result<(), Box<dyn std::err
             }
         );
     }
+    if args.show_semantic_failures {
+        for slot in &summary.slots {
+            for line in semantic_failure_lines(&args.state_root, slot)? {
+                eprintln!("{line}");
+            }
+        }
+    }
     Ok(())
+}
+
+fn semantic_failure_lines(
+    state_root: &Path,
+    slot: &HistoricalV2SelectedSlotStateInspection,
+) -> Result<Vec<String>, IoError> {
+    let Some(HistoricalV2SlotStageOutcome::Excluded {
+        reason: HistoricalV2TerminalExclusionReason::SemanticCensus(reasons),
+        artifact_kind,
+        artifact_sha256,
+    }) = &slot.latest_committed_outcome
+    else {
+        return Ok(Vec::new());
+    };
+    if slot.incomplete_rewind_transaction {
+        return Ok(Vec::new());
+    }
+    if slot.latest_committed_stage != Some(HistoricalV2SlotStage::SemanticCensus)
+        || *artifact_kind != HistoricalV2StageArtifactKind::SemanticCensusExclusion
+    {
+        return Err(invalid_data(
+            "historical-v2 semantic exclusion stage identity changed".to_string(),
+        ));
+    }
+    let path = state_root
+        .join(&slot.language)
+        .join(format!("slot-{:04}", slot.slot_number))
+        .join("0005-semantic-census")
+        .join("artifact.json");
+    let bytes = read_plain_file(
+        &path,
+        "historical-v2 semantic exclusion",
+        MAX_SEMANTIC_EXCLUSION_BYTES,
+    )?;
+    let exclusion: HistoricalV2SemanticCensusExclusion =
+        serde_json::from_slice(&bytes).map_err(|error| {
+            invalid_data(format!("invalid historical-v2 semantic exclusion: {error}"))
+        })?;
+    validate_historical_v2_semantic_census_exclusion(&exclusion).map_err(invalid_data)?;
+    if exclusion.reasons != *reasons || exclusion.exclusion_sha256 != *artifact_sha256 {
+        return Err(invalid_data(
+            "historical-v2 semantic exclusion changed from its committed checkpoint".to_string(),
+        ));
+    }
+    Ok(exclusion
+        .failures
+        .iter()
+        .map(|failure| {
+            format!(
+                "{} slot {} | semantic failure side={:?} revision={} reason={:?} phase={:?} indexer={:?} detail_sha256={} detail={:?}",
+                slot.language,
+                slot.slot_number,
+                failure.side,
+                failure.revision,
+                failure.reason,
+                failure.phase,
+                failure.indexer,
+                failure.detail_sha256,
+                failure.retained_detail,
+            )
+        })
+        .collect())
 }
 
 pub(super) fn replay_public_surface_census(
@@ -557,4 +633,91 @@ fn stage_error(error: HistoricalV2SlotStageError) -> IoError {
             error.stage, error.kind, error.detail
         ),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sha2::{Digest, Sha256};
+    use sniff::benchmark::{
+        HISTORICAL_V2_SEMANTIC_CENSUS_EXCLUSION_SCHEMA_VERSION,
+        HistoricalV2SemanticCensusExclusionReason, HistoricalV2SemanticCensusFailureEvidence,
+        HistoricalV2SemanticCensusFailurePhase, HistoricalV2SemanticSnapshotSide,
+    };
+
+    fn sha256(bytes: &[u8]) -> String {
+        format!("{:x}", Sha256::digest(bytes))
+    }
+
+    #[test]
+    fn semantic_failure_details_are_escaped_and_commitment_bound() {
+        let temp = tempfile::tempdir().unwrap();
+        let detail = "compiler output\n\u{1b}[31m";
+        let mut exclusion = HistoricalV2SemanticCensusExclusion {
+            schema_version: HISTORICAL_V2_SEMANTIC_CENSUS_EXCLUSION_SCHEMA_VERSION,
+            exclusion_contract: "sniffbench-historical-v2-semantic-census-exclusion-v1".to_string(),
+            materialization_sha256: "b".repeat(64),
+            source_census_sha256: "c".repeat(64),
+            reasons: vec![HistoricalV2SemanticCensusExclusionReason::CompilerCensusIncomplete],
+            failures: vec![HistoricalV2SemanticCensusFailureEvidence {
+                side: HistoricalV2SemanticSnapshotSide::Base,
+                revision: "a".repeat(40),
+                reason: HistoricalV2SemanticCensusExclusionReason::CompilerCensusIncomplete,
+                indexer: None,
+                phase: HistoricalV2SemanticCensusFailurePhase::SnapshotAssembly,
+                detail_sha256: sha256(detail.as_bytes()),
+                retained_detail: detail.to_string(),
+                detail_truncated: false,
+                process: None,
+            }],
+            exclusion_sha256: String::new(),
+        };
+        exclusion.exclusion_sha256 = sha256(&serde_json::to_vec(&exclusion).unwrap());
+        let artifact_path = temp
+            .path()
+            .join("go/slot-0001/0005-semantic-census/artifact.json");
+        fs::create_dir_all(artifact_path.parent().unwrap()).unwrap();
+        fs::write(&artifact_path, serde_json::to_vec(&exclusion).unwrap()).unwrap();
+        let mut slot = HistoricalV2SelectedSlotStateInspection {
+            language: "go".to_string(),
+            slot_number: 1,
+            canonical_repository: "example/repository".to_string(),
+            committed_stage_count: 5,
+            latest_committed_stage: Some(HistoricalV2SlotStage::SemanticCensus),
+            latest_committed_outcome: Some(HistoricalV2SlotStageOutcome::Excluded {
+                reason: HistoricalV2TerminalExclusionReason::SemanticCensus(
+                    exclusion.reasons.clone(),
+                ),
+                artifact_kind: HistoricalV2StageArtifactKind::SemanticCensusExclusion,
+                artifact_sha256: exclusion.exclusion_sha256.clone(),
+            }),
+            next_stage: None,
+            incomplete_initialization: false,
+            incomplete_stage_transaction: false,
+            incomplete_rewind_transaction: false,
+        };
+
+        let lines = semantic_failure_lines(temp.path(), &slot).unwrap();
+        assert_eq!(lines.len(), 1);
+        assert!(lines[0].contains("phase=SnapshotAssembly"));
+        assert!(lines[0].contains(&sha256(detail.as_bytes())));
+        assert!(!lines[0].contains('\n'));
+        assert!(!lines[0].contains('\u{1b}'));
+
+        slot.latest_committed_outcome = Some(HistoricalV2SlotStageOutcome::Excluded {
+            reason: HistoricalV2TerminalExclusionReason::SemanticCensus(exclusion.reasons.clone()),
+            artifact_kind: HistoricalV2StageArtifactKind::SemanticCensusExclusion,
+            artifact_sha256: "0".repeat(64),
+        });
+        assert!(semantic_failure_lines(temp.path(), &slot).is_err());
+
+        slot.latest_committed_outcome = Some(HistoricalV2SlotStageOutcome::Excluded {
+            reason: HistoricalV2TerminalExclusionReason::SemanticCensus(exclusion.reasons.clone()),
+            artifact_kind: HistoricalV2StageArtifactKind::SemanticCensusExclusion,
+            artifact_sha256: exclusion.exclusion_sha256.clone(),
+        });
+        exclusion.failures[0].retained_detail = "tampered".to_string();
+        fs::write(&artifact_path, serde_json::to_vec(&exclusion).unwrap()).unwrap();
+        assert!(semantic_failure_lines(temp.path(), &slot).is_err());
+    }
 }
