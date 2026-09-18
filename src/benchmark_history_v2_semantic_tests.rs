@@ -1071,6 +1071,32 @@ fn public_reference_binds_the_exact_compiler_occurrence() {
 }
 
 #[test]
+fn duplicate_exact_public_reference_occurrences_fail_closed() {
+    let mut fixture = reference_fixture();
+    let index = fixture
+        .indexes
+        .get_mut(&SemanticIndexerKind::TypeScriptJavaScript)
+        .unwrap();
+    let document = index
+        .documents
+        .get_mut(&RepositoryPath("src/index.ts".to_string()))
+        .unwrap();
+    document.occurrences.push(document.occurrences[0].clone());
+
+    let error = build_semantic_snapshot(
+        fixture.root.path(),
+        &fixture.source,
+        &fixture.files,
+        &BTreeSet::from([SemanticIndexerKind::TypeScriptJavaScript]),
+        &fixture_required_paths(&fixture.source),
+        &fixture.indexes,
+    )
+    .unwrap_err();
+
+    assert!(error.contains("emitted 2 occurrence(s)"), "{error}");
+}
+
+#[test]
 fn public_reference_does_not_fall_back_to_a_matching_symbol_name() {
     let mut fixture = reference_fixture();
     fixture
