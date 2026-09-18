@@ -1,3 +1,4 @@
+use super::super::history_v2_diagnostic_timing::DiagnosticTiming;
 use super::super::{
     HistoricalV2SemanticGoPackageRoot, HistoricalV2SemanticKotlinCompilationRoot,
     HistoricalV2SemanticPublicBinding, HistoricalV2SemanticPublicReexportHop,
@@ -69,6 +70,7 @@ pub(super) fn build_semantic_snapshot_from_sets(
     index_sets: &BTreeMap<SemanticIndexerKind, SemanticIndexSet>,
     progress: Option<SemanticContributionProgress<'_>>,
 ) -> Result<HistoricalV2SemanticSnapshotCensus, SemanticSnapshotAssemblyError> {
+    let timing = DiagnosticTiming::new("semantic_assembly", "expected_methods");
     let expected_indexers = files
         .iter()
         .map(|file| indexer_for_language(&file.language))
@@ -85,10 +87,16 @@ pub(super) fn build_semantic_snapshot_from_sets(
     }
     let expected_methods =
         expected_method_map(source).map_err(SemanticSnapshotAssemblyError::Evidence)?;
+    drop(timing);
     let mut accumulator = SemanticSnapshotAccumulator::default();
     for (kind, set) in index_sets {
+        let timing =
+            DiagnosticTiming::with_context("semantic_assembly", "validate_index_set", || {
+                format!("kind={kind:?}")
+            });
         set.validate()
             .map_err(SemanticSnapshotAssemblyError::Evidence)?;
+        drop(timing);
         match set {
             SemanticIndexSet::Unqualified { index } => {
                 process_variant(
@@ -128,6 +136,7 @@ pub(super) fn build_semantic_snapshot_from_sets(
             }
         }
     }
+    let timing = DiagnosticTiming::new("semantic_assembly", "untouched_methods");
     add_untouched_language_methods(
         root,
         files,
@@ -136,13 +145,17 @@ pub(super) fn build_semantic_snapshot_from_sets(
         &mut accumulator.methods,
     )
     .map_err(SemanticSnapshotAssemblyError::Evidence)?;
-    finish_snapshot(
+    drop(timing);
+    let timing = DiagnosticTiming::new("semantic_assembly", "finish_snapshot");
+    let snapshot = finish_snapshot(
         source,
         required_document_paths,
         expected_methods.len(),
         accumulator,
     )
-    .map_err(SemanticSnapshotAssemblyError::Evidence)
+    .map_err(SemanticSnapshotAssemblyError::Evidence)?;
+    drop(timing);
+    Ok(snapshot)
 }
 
 struct VariantAssemblyInputs<'a> {
@@ -162,46 +175,87 @@ fn process_variant(
     progress: Option<&SemanticContributionProgress<'_>>,
     accumulator: &mut SemanticSnapshotAccumulator,
 ) -> Result<(), SemanticSnapshotAssemblyError> {
+    let timing =
+        DiagnosticTiming::with_context("semantic_assembly_variant", "indexer_census", || {
+            format!("kind={:?} variant={:?}", inputs.kind, inputs.index.variant)
+        });
     let indexer = indexer_variant_census(inputs.kind, inputs.index, inputs.ignored_documents)
         .map_err(SemanticSnapshotAssemblyError::Evidence)?;
+    drop(timing);
     let contribution = match progress {
-        Some(progress) => match progress
-            .store
-            .load_contribution(
-                progress.materialization,
-                progress.source_census,
-                progress.side,
-                inputs.source,
-                inputs.changed_indexers,
-                inputs.required_document_paths,
-                &indexer,
-            )
-            .map_err(SemanticSnapshotAssemblyError::Progress)?
-        {
-            Some(contribution) => contribution,
-            None => {
-                let contribution = build_variant_contribution(&inputs, &indexer)
-                    .map_err(SemanticSnapshotAssemblyError::Evidence)?;
-                progress
-                    .store
-                    .publish_contribution(
-                        progress.materialization,
-                        progress.source_census,
-                        progress.side,
-                        inputs.source,
-                        inputs.changed_indexers,
-                        inputs.required_document_paths,
-                        &indexer,
-                        contribution,
-                    )
-                    .map_err(SemanticSnapshotAssemblyError::Progress)?
+        Some(progress) => {
+            let timing = DiagnosticTiming::with_context(
+                "semantic_assembly_variant",
+                "load_contribution",
+                || format!("kind={:?} variant={:?}", inputs.kind, inputs.index.variant),
+            );
+            let loaded = progress
+                .store
+                .load_contribution(
+                    progress.materialization,
+                    progress.source_census,
+                    progress.side,
+                    inputs.source,
+                    inputs.changed_indexers,
+                    inputs.required_document_paths,
+                    &indexer,
+                )
+                .map_err(SemanticSnapshotAssemblyError::Progress)?;
+            drop(timing);
+            match loaded {
+                Some(contribution) => contribution,
+                None => {
+                    let timing = DiagnosticTiming::with_context(
+                        "semantic_assembly_variant",
+                        "build_contribution",
+                        || format!("kind={:?} variant={:?}", inputs.kind, inputs.index.variant),
+                    );
+                    let contribution = build_variant_contribution(&inputs, &indexer)
+                        .map_err(SemanticSnapshotAssemblyError::Evidence)?;
+                    drop(timing);
+                    let timing = DiagnosticTiming::with_context(
+                        "semantic_assembly_variant",
+                        "publish_contribution",
+                        || format!("kind={:?} variant={:?}", inputs.kind, inputs.index.variant),
+                    );
+                    let published = progress
+                        .store
+                        .publish_contribution(
+                            progress.materialization,
+                            progress.source_census,
+                            progress.side,
+                            inputs.source,
+                            inputs.changed_indexers,
+                            inputs.required_document_paths,
+                            &indexer,
+                            contribution,
+                        )
+                        .map_err(SemanticSnapshotAssemblyError::Progress)?;
+                    drop(timing);
+                    published
+                }
             }
-        },
-        None => build_variant_contribution(&inputs, &indexer)
-            .map_err(SemanticSnapshotAssemblyError::Evidence)?,
+        }
+        None => {
+            let timing = DiagnosticTiming::with_context(
+                "semantic_assembly_variant",
+                "build_contribution",
+                || format!("kind={:?} variant={:?}", inputs.kind, inputs.index.variant),
+            );
+            let contribution = build_variant_contribution(&inputs, &indexer)
+                .map_err(SemanticSnapshotAssemblyError::Evidence)?;
+            drop(timing);
+            contribution
+        }
     };
+    let timing =
+        DiagnosticTiming::with_context("semantic_assembly_variant", "merge_contribution", || {
+            format!("kind={:?} variant={:?}", inputs.kind, inputs.index.variant)
+        });
     merge_variant_contribution(accumulator, contribution)
-        .map_err(SemanticSnapshotAssemblyError::Evidence)
+        .map_err(SemanticSnapshotAssemblyError::Evidence)?;
+    drop(timing);
+    Ok(())
 }
 
 fn indexer_variant_census(

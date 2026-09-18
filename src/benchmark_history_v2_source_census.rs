@@ -1,3 +1,4 @@
+use super::history_v2_diagnostic_timing::DiagnosticTiming;
 use super::history_v2_go_package_surface::{go_package_exposures, go_package_source_map};
 use super::history_v2_node_consumer_profile::{
     census_historical_v2_node_consumer_profiles,
@@ -120,7 +121,10 @@ pub fn validate_historical_v2_source_census_commitment(
     roots: &HistoricalV2MaterializedRoots,
     census: &HistoricalV2SourceCensus,
 ) -> Result<(), String> {
+    let timing = DiagnosticTiming::new("source_census_validation", "materialization");
     validate_historical_v2_materialization(materialization, roots)?;
+    drop(timing);
+    let timing = DiagnosticTiming::new("source_census_validation", "census_commitment");
     if census.schema_version != HISTORICAL_V2_SOURCE_CENSUS_SCHEMA_VERSION
         || census.source_census_contract != SOURCE_CENSUS_CONTRACT
         || census.canonical_repository != materialization.canonical_repository
@@ -129,6 +133,8 @@ pub fn validate_historical_v2_source_census_commitment(
     {
         return Err("historical-v2 source census commitment changed".to_string());
     }
+    drop(timing);
+    let timing = DiagnosticTiming::new("source_census_validation", "repository_inventories");
     let inventory_repository = format!("github.com/{}", materialization.canonical_repository);
     let base_inventory = inventory_intentional_boundary_repository(
         &inventory_repository,
@@ -140,6 +146,11 @@ pub fn validate_historical_v2_source_census_commitment(
         &materialization.patched_commit_oid,
         &roots.patched_root,
     )?;
+    drop(timing);
+    let timing = DiagnosticTiming::new(
+        "source_census_validation",
+        "project_and_surface_commitments",
+    );
     validate_intentional_boundary_project_model_census_commitment(
         &base_inventory,
         &census.base.cargo_project_model,
@@ -204,6 +215,8 @@ pub fn validate_historical_v2_source_census_commitment(
         &patched_inventory,
         &census.patched.typescript_project_model,
     )?;
+    drop(timing);
+    let timing = DiagnosticTiming::new("source_census_validation", "parser_censuses");
     let base_parser_census = census_intentional_boundary_repository(
         &inventory_repository,
         &materialization.base_revision,
@@ -216,6 +229,8 @@ pub fn validate_historical_v2_source_census_commitment(
         &roots.patched_root,
         &patched_inventory,
     )?;
+    drop(timing);
+    let timing = DiagnosticTiming::new("source_census_validation", "snapshot_projections");
     let expected_base = project_snapshot(
         &roots.base_root,
         &base_inventory,
@@ -247,6 +262,7 @@ pub fn validate_historical_v2_source_census_commitment(
     if census.base != expected_base || census.patched != expected_patched {
         return Err("historical-v2 source census commitment changed".to_string());
     }
+    drop(timing);
     Ok(())
 }
 
