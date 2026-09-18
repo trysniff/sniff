@@ -655,6 +655,23 @@ GO_SEMANTIC_BOUNDARY_ASSEMBLY_MIGRATION_SOURCE_ARTIFACT_DIGEST = (
 )
 GO_SEMANTIC_BOUNDARY_ASSEMBLY_MIGRATION_SOURCE_ARTIFACT_SIZE = 1_262_678_372
 
+GO_SEMANTIC_UNIT_PHASE_TIMING_MIGRATION_NAME = "go-semantic-unit-phase-timing-v1"
+GO_SEMANTIC_UNIT_PHASE_TIMING_MIGRATION_CONTRACT = (
+    "sniffbench-historical-v2-go-semantic-unit-phase-timing-migration-v1"
+)
+GO_SEMANTIC_UNIT_PHASE_TIMING_MIGRATION_FROM_COLLECTOR_SHA = (
+    "f2e4e6f1bf7aae6df4c193ebd25211f231ff75cf"
+)
+GO_SEMANTIC_UNIT_PHASE_TIMING_MIGRATION_SOURCE_RUN_ID = 35_290_374_088
+GO_SEMANTIC_UNIT_PHASE_TIMING_MIGRATION_SOURCE_HEAD_SHA = (
+    "f2e4e6f1bf7aae6df4c193ebd25211f231ff75cf"
+)
+GO_SEMANTIC_UNIT_PHASE_TIMING_MIGRATION_SOURCE_ARTIFACT_ID = 10_526_926_678
+GO_SEMANTIC_UNIT_PHASE_TIMING_MIGRATION_SOURCE_ARTIFACT_DIGEST = (
+    "sha256:45fed6b648fd6377c0a5b014758bbf26a963a38f14688b4dd00444202f2a3381"
+)
+GO_SEMANTIC_UNIT_PHASE_TIMING_MIGRATION_SOURCE_ARTIFACT_SIZE = 1_286_257_888
+
 FRAME_FILE_SHA256 = {
     "environment.txt": "2e87f3c3e1b2005f6b6d09b1bf1b82d30a9433636c3c67f0806cc68e80ab6800",
     "exclusions.json": "74bccb100eb48ab87952bd7eec137b2285edbc68d2547715bc0e06a80e029f76",
@@ -2032,7 +2049,7 @@ def validate_manifest(path: pathlib.Path, frame_run_id: int) -> str:
     schema_version = value.get("schema_version")
     if schema_version == 1:
         expected = _manifest(frame_run_id, collector_sha)
-    elif schema_version in range(2, 33):
+    elif schema_version in range(2, 34):
         migrations = value.get("collector_migrations")
         expected_count = schema_version - 1
         if not isinstance(migrations, list) or len(migrations) != expected_count:
@@ -2181,6 +2198,9 @@ def _migration_record(
     elif migration_name == GO_SEMANTIC_BOUNDARY_ASSEMBLY_MIGRATION_NAME:
         contract = GO_SEMANTIC_BOUNDARY_ASSEMBLY_MIGRATION_CONTRACT
         source_collector_sha = GO_SEMANTIC_BOUNDARY_ASSEMBLY_MIGRATION_FROM_COLLECTOR_SHA
+    elif migration_name == GO_SEMANTIC_UNIT_PHASE_TIMING_MIGRATION_NAME:
+        contract = GO_SEMANTIC_UNIT_PHASE_TIMING_MIGRATION_CONTRACT
+        source_collector_sha = GO_SEMANTIC_UNIT_PHASE_TIMING_MIGRATION_FROM_COLLECTOR_SHA
     else:
         raise ValueError("transport manifest collector migration is not allowlisted")
     return {
@@ -2791,15 +2811,34 @@ def _expected_go_semantic_boundary_assembly_migration(
     )
 
 
+def _expected_go_semantic_unit_phase_timing_migration(
+    target_collector_sha: str,
+) -> dict[str, Any]:
+    if (
+        target_collector_sha == GO_SEMANTIC_UNIT_PHASE_TIMING_MIGRATION_FROM_COLLECTOR_SHA
+        or re.fullmatch(r"[0-9a-f]{40}", target_collector_sha) is None
+    ):
+        raise ValueError("transport manifest collector migration target is invalid")
+    return _migration_record(
+        GO_SEMANTIC_UNIT_PHASE_TIMING_MIGRATION_NAME,
+        target_collector_sha,
+        GO_SEMANTIC_UNIT_PHASE_TIMING_MIGRATION_SOURCE_RUN_ID,
+        GO_SEMANTIC_UNIT_PHASE_TIMING_MIGRATION_SOURCE_HEAD_SHA,
+        GO_SEMANTIC_UNIT_PHASE_TIMING_MIGRATION_SOURCE_ARTIFACT_ID,
+        GO_SEMANTIC_UNIT_PHASE_TIMING_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+        GO_SEMANTIC_UNIT_PHASE_TIMING_MIGRATION_SOURCE_ARTIFACT_SIZE,
+    )
+
+
 def _validate_collector_migrations(
     migrations: Sequence[Mapping[str, Any]], collector_sha: str
 ) -> None:
-    if len(migrations) not in range(1, 32):
+    if len(migrations) not in range(1, 33):
         raise ValueError("transport manifest collector migration chain is invalid")
     expected = [_expected_storage_migration()]
     if len(migrations) == 2:
         expected.append(_expected_go_preparation_migration(collector_sha))
-    elif len(migrations) in range(3, 32):
+    elif len(migrations) in range(3, 33):
         expected.append(
             _expected_go_preparation_migration(
                 GO_MODULE_DOWNLOAD_MIGRATION_FROM_COLLECTOR_SHA
@@ -3044,7 +3083,15 @@ def _validate_collector_migrations(
             )
         if len(migrations) >= 31:
             expected.append(
-                _expected_go_semantic_boundary_assembly_migration(collector_sha)
+                _expected_go_semantic_boundary_assembly_migration(
+                    GO_SEMANTIC_UNIT_PHASE_TIMING_MIGRATION_FROM_COLLECTOR_SHA
+                    if len(migrations) >= 32
+                    else collector_sha
+                )
+            )
+        if len(migrations) >= 32:
+            expected.append(
+                _expected_go_semantic_unit_phase_timing_migration(collector_sha)
             )
     elif collector_sha != STORAGE_MIGRATION_TO_COLLECTOR_SHA:
         raise ValueError("transport manifest collector migration target drifted")
@@ -3252,6 +3299,12 @@ def migrate_manifest(
         ]
     elif schema_version == 31:
         expected_name = GO_SEMANTIC_BOUNDARY_ASSEMBLY_MIGRATION_NAME
+        migrations = [
+            _require_mapping(item, "transport manifest collector migration")
+            for item in value.get("collector_migrations", [])
+        ]
+    elif schema_version == 32:
+        expected_name = GO_SEMANTIC_UNIT_PHASE_TIMING_MIGRATION_NAME
         migrations = [
             _require_mapping(item, "transport manifest collector migration")
             for item in value.get("collector_migrations", [])
