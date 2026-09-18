@@ -412,8 +412,16 @@ fn project_snapshot(
     {
         return Err("historical-v2 source snapshot inputs disagree".to_string());
     }
+    let timing = DiagnosticTiming::new("source_projection", "go_package_map");
     let go_packages = go_package_exposures(&go_project_model)?;
     let go_sources = go_package_source_map(&go_packages)?;
+    drop(timing);
+    let mut tracked_entries = BTreeMap::new();
+    for entry in &inventory.tracked_entries {
+        tracked_entries
+            .entry(entry.repository_path.as_str())
+            .or_insert(entry);
+    }
     let mut source_files = Vec::with_capacity(parser_census.source_files.len());
     let mut method_counts_by_language = BTreeMap::<String, usize>::new();
     let mut public_declaration_count = 0_usize;
@@ -423,12 +431,13 @@ fn project_snapshot(
         .iter()
         .map(|source| (source.object_id.as_str(), source.byte_length))
         .collect::<Vec<_>>();
+    let timing = DiagnosticTiming::new("source_projection", "read_git_blobs");
     let blobs = read_intentional_boundary_git_blobs(root, &requests)?;
+    drop(timing);
+    let timing = DiagnosticTiming::new("source_projection", "project_source_files");
     for (source, bytes) in parser_census.source_files.iter().zip(blobs) {
-        let entry = inventory
-            .tracked_entries
-            .iter()
-            .find(|entry| entry.repository_path == source.repository_path)
+        let entry = tracked_entries
+            .get(source.repository_path.as_str())
             .ok_or_else(|| {
                 format!(
                     "historical-v2 source disappeared from Git inventory: {}",
@@ -517,6 +526,7 @@ fn project_snapshot(
             public_reexports,
         });
     }
+    drop(timing);
     let method_count = method_counts_by_language
         .values()
         .try_fold(0_usize, |total, count| {
@@ -549,7 +559,9 @@ fn project_snapshot(
         public_reexport_count,
         snapshot_census_sha256: String::new(),
     };
+    let timing = DiagnosticTiming::new("source_projection", "snapshot_hash");
     snapshot.snapshot_census_sha256 = snapshot_census_sha256(&snapshot)?;
+    drop(timing);
     Ok(snapshot)
 }
 
@@ -596,6 +608,7 @@ pub(super) fn source_public_declarations_with_module_identity(
         crate::source_public_surface::census_source_public_surface(repository_path, source)?;
     let source_text = std::str::from_utf8(source)
         .map_err(|_| "historical-v2 public-surface source is not UTF-8".to_string())?;
+    let positions = SourcePositionIndex::new(source_text);
     let declarations = surface
         .declarations
         .into_iter()
@@ -648,16 +661,13 @@ pub(super) fn source_public_declarations_with_module_identity(
                 end: declaration.exposed_identifier.end,
             };
             let exposed_identifier_positions =
-                identifier_positions(source_text, exposed_identifier)?;
+                identifier_positions(&positions, exposed_identifier)?;
             let identifier = HistoricalV2SourceByteRange {
                 start: declaration.compiler_anchor.start,
                 end: declaration.compiler_anchor.end,
             };
-            let identifier_coordinate_positions = compiler_anchor_positions(
-                source_text,
-                identifier,
-                binding,
-            )?;
+            let identifier_coordinate_positions =
+                compiler_anchor_positions(&positions, identifier, binding)?;
             let owner_identifier = declaration.owner_compiler_anchor.map(|range| {
                 HistoricalV2SourceByteRange {
                     start: range.start,
@@ -665,7 +675,7 @@ pub(super) fn source_public_declarations_with_module_identity(
                 }
             });
             let owner_identifier_positions = owner_identifier
-                .map(|range| identifier_positions(source_text, range))
+                .map(|range| identifier_positions(&positions, range))
                 .transpose()?;
             let namespace = match declaration.namespace {
                 crate::source_public_surface::SourcePublicNamespace::Module => {
@@ -746,7 +756,7 @@ pub(super) fn source_public_declarations_with_module_identity(
                 start: reexport.compiler_anchor.start,
                 end: reexport.compiler_anchor.end,
             };
-            let identifier_positions = identifier_positions(source_text, identifier)?;
+            let identifier_positions = identifier_positions(&positions, identifier)?;
             let reexport_unit_id = hash_json(&(
                 "sniffbench-historical-v2-public-reexport-v1",
                 language,
@@ -838,10 +848,30 @@ pub(super) fn public_module_identity(repository_path: &str, language: &str) -> S
         .unwrap_or_default()
 }
 
+struct SourcePositionIndex<'a> {
+    source: &'a str,
+    newline_offsets: Vec<usize>,
+}
+
+impl<'a> SourcePositionIndex<'a> {
+    fn new(source: &'a str) -> Self {
+        let newline_offsets = source
+            .bytes()
+            .enumerate()
+            .filter_map(|(offset, byte)| (byte == b'\n').then_some(offset))
+            .collect();
+        Self {
+            source,
+            newline_offsets,
+        }
+    }
+}
+
 fn identifier_positions(
-    source: &str,
+    positions: &SourcePositionIndex<'_>,
     range: HistoricalV2SourceByteRange,
 ) -> Result<HistoricalV2SourceIdentifierPositions, String> {
+    let source = positions.source;
     if range.start >= range.end
         || range.end > source.len()
         || !source.is_char_boundary(range.start)
@@ -850,50 +880,53 @@ fn identifier_positions(
         return Err("historical-v2 public declaration has an invalid byte range".to_string());
     }
     Ok(HistoricalV2SourceIdentifierPositions {
-        utf8: position_range(source, range, |text| text.len())?,
-        utf16: position_range(source, range, |text| text.encode_utf16().count())?,
-        utf32: position_range(source, range, |text| text.chars().count())?,
+        utf8: position_range(positions, range, |text| text.len())?,
+        utf16: position_range(positions, range, |text| text.encode_utf16().count())?,
+        utf32: position_range(positions, range, |text| text.chars().count())?,
     })
 }
 
 fn compiler_anchor_positions(
-    source: &str,
+    positions: &SourcePositionIndex<'_>,
     range: HistoricalV2SourceByteRange,
     binding: HistoricalV2SourcePublicBindingKind,
 ) -> Result<HistoricalV2SourceIdentifierPositions, String> {
     if binding != HistoricalV2SourcePublicBindingKind::ModuleAnchor {
-        return identifier_positions(source, range);
+        return identifier_positions(positions, range);
     }
     if range.start != 0 || range.end != 0 {
         return Err("historical-v2 module anchor is not the compiler module origin".to_string());
     }
     Ok(HistoricalV2SourceIdentifierPositions {
-        utf8: position_range(source, range, |text| text.len())?,
-        utf16: position_range(source, range, |text| text.encode_utf16().count())?,
-        utf32: position_range(source, range, |text| text.chars().count())?,
+        utf8: position_range(positions, range, |text| text.len())?,
+        utf16: position_range(positions, range, |text| text.encode_utf16().count())?,
+        utf32: position_range(positions, range, |text| text.chars().count())?,
     })
 }
 
 fn position_range(
-    source: &str,
+    positions: &SourcePositionIndex<'_>,
     range: HistoricalV2SourceByteRange,
     character_count: impl Fn(&str) -> usize,
 ) -> Result<HistoricalV2SourcePositionRange, String> {
     Ok(HistoricalV2SourcePositionRange {
-        start: source_position(source, range.start, &character_count)?,
-        end: source_position(source, range.end, &character_count)?,
+        start: source_position(positions, range.start, &character_count)?,
+        end: source_position(positions, range.end, &character_count)?,
     })
 }
 
 fn source_position(
-    source: &str,
+    positions: &SourcePositionIndex<'_>,
     offset: usize,
     character_count: &impl Fn(&str) -> usize,
 ) -> Result<HistoricalV2SourcePosition, String> {
-    let prefix = &source[..offset];
-    let line = prefix.bytes().filter(|byte| *byte == b'\n').count();
-    let line_start = prefix.rfind('\n').map_or(0, |index| index + 1);
-    let character = character_count(&source[line_start..offset]);
+    let line = positions
+        .newline_offsets
+        .partition_point(|newline| *newline < offset);
+    let line_start = line
+        .checked_sub(1)
+        .map_or(0, |previous| positions.newline_offsets[previous] + 1);
+    let character = character_count(&positions.source[line_start..offset]);
     Ok(HistoricalV2SourcePosition {
         line_zero_based: u32::try_from(line)
             .map_err(|_| "historical-v2 public declaration line exceeds u32".to_string())?,

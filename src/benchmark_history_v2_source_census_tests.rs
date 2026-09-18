@@ -371,8 +371,9 @@ fn rust_inherent_method_commits_the_exact_compiler_owner_coordinates() {
 
 #[test]
 fn public_identifier_positions_commit_all_compiler_coordinate_systems() {
+    let index = SourcePositionIndex::new("éPublic");
     let positions =
-        identifier_positions("éPublic", HistoricalV2SourceByteRange { start: 2, end: 8 }).unwrap();
+        identifier_positions(&index, HistoricalV2SourceByteRange { start: 2, end: 8 }).unwrap();
 
     assert_eq!(positions.utf8.start.character_zero_based, 2);
     assert_eq!(positions.utf8.end.character_zero_based, 8);
@@ -380,6 +381,39 @@ fn public_identifier_positions_commit_all_compiler_coordinate_systems() {
     assert_eq!(positions.utf16.end.character_zero_based, 7);
     assert_eq!(positions.utf32.start.character_zero_based, 1);
     assert_eq!(positions.utf32.end.character_zero_based, 7);
+}
+
+#[test]
+fn indexed_positions_match_prefix_scanning_at_every_unicode_boundary() {
+    let source = "éPublic\n😀x\r\nlast\n";
+    let index = SourcePositionIndex::new(source);
+    for offset in 0..=source.len() {
+        if !source.is_char_boundary(offset) {
+            continue;
+        }
+        let prefix = &source[..offset];
+        let line = prefix.bytes().filter(|byte| *byte == b'\n').count() as u32;
+        let line_start = prefix.rfind('\n').map_or(0, |newline| newline + 1);
+        let utf8 = source_position(&index, offset, &|text: &str| text.len()).unwrap();
+        let utf16 =
+            source_position(&index, offset, &|text: &str| text.encode_utf16().count()).unwrap();
+        let utf32 = source_position(&index, offset, &|text: &str| text.chars().count()).unwrap();
+        assert_eq!(utf8.line_zero_based, line);
+        assert_eq!(utf16.line_zero_based, line);
+        assert_eq!(utf32.line_zero_based, line);
+        assert_eq!(
+            utf8.character_zero_based,
+            source[line_start..offset].len() as u32
+        );
+        assert_eq!(
+            utf16.character_zero_based,
+            source[line_start..offset].encode_utf16().count() as u32
+        );
+        assert_eq!(
+            utf32.character_zero_based,
+            source[line_start..offset].chars().count() as u32
+        );
+    }
 }
 
 #[test]
