@@ -1,15 +1,15 @@
 use super::history_v2_slot_store_support::sync_directory;
 use super::{
-    HistoricalV2PayloadStageInputs, HistoricalV2PublicSurfaceReplayInputs,
-    HistoricalV2PublicSurfaceReplaySummary, HistoricalV2SelectedPayload,
-    HistoricalV2SelectedSlotRunSummary, HistoricalV2SelectedSlotStateInspection,
-    HistoricalV2SelectedSlotStateInspectionInputs, HistoricalV2SelectedSlotStateInspectionSummary,
-    HistoricalV2SelectedSlotSweepInputs, HistoricalV2SelectedSlotSweepSummary,
-    HistoricalV2SelectedSlotWorkRecoveryInputs, HistoricalV2SelectedSlotWorkRecoverySummary,
-    HistoricalV2SemanticCheckpointProgress, HistoricalV2SemanticWorldProgress,
-    HistoricalV2SlotOperations, HistoricalV2SlotOutcome, HistoricalV2SlotRunDisposition,
-    HistoricalV2SlotRunIdentity, HistoricalV2SlotStage, HistoricalV2SlotStageError,
-    HistoricalV2SlotStageJournal, HistoricalV2SlotStageOutcome,
+    HistoricalV2LanguageQuotaHeadroom, HistoricalV2PayloadStageInputs,
+    HistoricalV2PublicSurfaceReplayInputs, HistoricalV2PublicSurfaceReplaySummary,
+    HistoricalV2SelectedPayload, HistoricalV2SelectedSlotRunSummary,
+    HistoricalV2SelectedSlotStateInspection, HistoricalV2SelectedSlotStateInspectionInputs,
+    HistoricalV2SelectedSlotStateInspectionSummary, HistoricalV2SelectedSlotSweepInputs,
+    HistoricalV2SelectedSlotSweepSummary, HistoricalV2SelectedSlotWorkRecoveryInputs,
+    HistoricalV2SelectedSlotWorkRecoverySummary, HistoricalV2SemanticCheckpointProgress,
+    HistoricalV2SemanticWorldProgress, HistoricalV2SlotOperations, HistoricalV2SlotOutcome,
+    HistoricalV2SlotRunDisposition, HistoricalV2SlotRunIdentity, HistoricalV2SlotStage,
+    HistoricalV2SlotStageError, HistoricalV2SlotStageJournal, HistoricalV2SlotStageOutcome,
     run_historical_v2_slot_slice_through, validate_historical_v2_protocol,
     validate_historical_v2_selected_payloads_commitment, validate_historical_v2_slot_selection,
 };
@@ -159,8 +159,49 @@ pub fn inspect_historical_v2_selected_slot_state(
         started_slot_count,
         terminal_slot_count,
         incomplete_slot_count,
+        quota_headroom: quota_headroom(&protocol, &slots),
         slots,
     })
+}
+
+fn quota_headroom(
+    protocol: &super::ValidatedHistoricalV2Protocol,
+    slots: &[HistoricalV2SelectedSlotStateInspection],
+) -> Vec<HistoricalV2LanguageQuotaHeadroom> {
+    protocol
+        .protocol
+        .selection
+        .supported_languages
+        .iter()
+        .map(|language| {
+            let selected_slot_count = slots
+                .iter()
+                .filter(|slot| &slot.language == language)
+                .count();
+            let terminal_excluded_count = slots
+                .iter()
+                .filter(|slot| {
+                    &slot.language == language
+                        && !slot.incomplete_rewind_transaction
+                        && matches!(
+                            slot.latest_committed_outcome,
+                            Some(HistoricalV2SlotStageOutcome::Excluded { .. })
+                        )
+                })
+                .count();
+            let maximum_accepted_without_replay = selected_slot_count - terminal_excluded_count;
+            let minimum_accepted = protocol.protocol.review.minimum_accepted_per_language;
+            HistoricalV2LanguageQuotaHeadroom {
+                language: language.clone(),
+                fixed_slot_count: protocol.protocol.selection.slots_per_language,
+                selected_slot_count,
+                terminal_excluded_count,
+                maximum_accepted_without_replay,
+                minimum_accepted,
+                reachable_without_replay: maximum_accepted_without_replay >= minimum_accepted,
+            }
+        })
+        .collect()
 }
 
 pub fn recover_historical_v2_selected_slot_work(
