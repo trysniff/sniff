@@ -22,9 +22,9 @@ use super::{
     retain_symbol,
 };
 use crate::semantic_index::{
-    RepositoryPath, SemanticIndex, SemanticIndexVariant, SemanticLocation, SemanticPosition,
-    SemanticPositionEncoding, SemanticSourceRange, SemanticSymbol, SemanticSymbolCategory,
-    SemanticSymbolOrigin,
+    RepositoryPath, SemanticIndex, SemanticIndexVariant, SemanticLocation, SemanticOccurrence,
+    SemanticPosition, SemanticPositionEncoding, SemanticSourceRange, SemanticSymbol,
+    SemanticSymbolCategory, SemanticSymbolOrigin,
 };
 use crate::semantic_indexer_manifest::SemanticIndexerKind;
 use crate::types::FileRecord;
@@ -44,6 +44,35 @@ pub(super) use kotlin::{
     kotlin_compilation_expansion_declaration_unit_id,
 };
 use node::*;
+
+type DefinitionsByLocation<'a> = BTreeMap<(&'a str, SemanticSourceRange), Vec<&'a SemanticSymbol>>;
+type OccurrencesByRange<'a> = BTreeMap<SemanticSourceRange, Vec<&'a SemanticOccurrence>>;
+
+fn definitions_by_location(index: &SemanticIndex) -> DefinitionsByLocation<'_> {
+    let mut locations = DefinitionsByLocation::new();
+    for symbol in index.symbols.values().filter(|symbol| {
+        symbol.origin == SemanticSymbolOrigin::Repository && symbol.ambiguity_notes.is_empty()
+    }) {
+        for definition in &symbol.definitions {
+            locations
+                .entry((definition.document.0.as_str(), definition.range))
+                .or_default()
+                .push(symbol);
+        }
+    }
+    locations
+}
+
+fn occurrences_by_range(
+    document: &crate::semantic_index::SemanticDocument,
+) -> OccurrencesByRange<'_> {
+    let mut ranges = OccurrencesByRange::new();
+    for occurrence in &document.occurrences {
+        ranges.entry(occurrence.range).or_default().push(occurrence);
+    }
+    ranges
+}
+
 pub(super) struct PublicSurfaceBindingInputs<'a> {
     pub(super) root: &'a Path,
     pub(super) source: &'a HistoricalV2SourceSnapshotCensus,
@@ -157,6 +186,7 @@ pub(super) fn bind_public_surface(
         .map(|file| (file.repository_path.as_str(), file))
         .collect::<BTreeMap<_, _>>();
     let mut direct_bindings = BTreeMap::new();
+    let definitions = definitions_by_location(index);
     let rust_library_roots = rust_public_library_target_roots(source)?;
     let indexed_source_paths = indexed_files
         .iter()
@@ -312,6 +342,8 @@ pub(super) fn bind_public_surface(
                 file.repository_path
             )
         })?;
+        let positions = SourcePositionIndex::new(&record.source);
+        let occurrences = occurrences_by_range(document);
         let file_externally_reachable = match kind {
             SemanticIndexerKind::Rust => rust_roots.contains_key(&file.repository_path),
             SemanticIndexerKind::TypeScriptJavaScript
@@ -322,36 +354,32 @@ pub(super) fn bind_public_surface(
             }
         };
         for declaration in &file.public_declarations {
-            let location = declaration_location(
-                file,
-                declaration,
-                &record.source,
-                document.position_encoding,
-            )?;
+            let location =
+                declaration_location(file, declaration, &positions, document.position_encoding)?;
             let (binding, symbol) = match declaration.binding {
                 HistoricalV2SourcePublicBindingKind::Definition => (
                     HistoricalV2SemanticPublicBindingKind::Definition,
-                    symbol_at_exact_definition(index, declaration, &location)?,
+                    symbol_at_exact_definition(&definitions, declaration, &location)?,
                 ),
                 HistoricalV2SourcePublicBindingKind::Reference => (
                     HistoricalV2SemanticPublicBindingKind::Reference,
-                    symbol_at_exact_reference(index, document, declaration, &location)?,
+                    symbol_at_exact_reference(index, &occurrences, declaration, &location)?,
                 ),
                 HistoricalV2SourcePublicBindingKind::ModuleAnchor => (
                     HistoricalV2SemanticPublicBindingKind::Definition,
-                    symbol_at_exact_definition(index, declaration, &location)?,
+                    symbol_at_exact_definition(&definitions, declaration, &location)?,
                 ),
             };
             let owner_location = declaration_owner_location(
                 file,
                 declaration,
-                &record.source,
+                &positions,
                 document.position_encoding,
             )?;
             let owner_symbol = owner_location
                 .as_ref()
                 .map(|location| {
-                    symbol_at_exact_owner_reference(index, document, declaration, location)
+                    symbol_at_exact_owner_reference(index, &occurrences, declaration, location)
                 })
                 .transpose()?;
             let externally_reachable = file_externally_reachable
@@ -1281,6 +1309,8 @@ fn resolve_file_public_slots(
             file.repository_path
         )
     })?;
+    let positions = SourcePositionIndex::new(&record.source);
+    let occurrences = occurrences_by_range(document);
     let mut slots = file
         .public_declarations
         .iter()
@@ -1319,8 +1349,15 @@ fn resolve_file_public_slots(
     let mut wildcard_source_surfaces = BTreeMap::<String, String>::new();
 
     for reexport in &file.public_reexports {
-        let (hop, module_symbol) =
-            resolve_public_reexport(file, reexport, &record.source, document, kind, index)?;
+        let (hop, module_symbol) = resolve_public_reexport(
+            file,
+            reexport,
+            &positions,
+            &occurrences,
+            document.position_encoding,
+            kind,
+            index,
+        )?;
         retain_symbol(
             symbols,
             indexer_kind(kind),
@@ -1541,21 +1578,21 @@ pub(super) fn reexport_expansion_declaration_unit_id(
 fn resolve_public_reexport<'a>(
     file: &HistoricalV2SourceFile,
     reexport: &HistoricalV2SourcePublicReexport,
-    source: &str,
-    document: &crate::semantic_index::SemanticDocument,
+    positions: &SourcePositionIndex<'_>,
+    occurrences: &OccurrencesByRange<'_>,
+    encoding: SemanticPositionEncoding,
     kind: SemanticIndexerKind,
     index: &'a SemanticIndex,
 ) -> Result<(HistoricalV2SemanticPublicReexportHop, &'a SemanticSymbol), String> {
-    let location = reexport_location(file, reexport, source, document.position_encoding)?;
-    let occurrences = document
-        .occurrences
-        .iter()
-        .filter(|occurrence| occurrence.range == location.range)
-        .collect::<Vec<_>>();
-    let [occurrence] = occurrences.as_slice() else {
+    let location = reexport_location(file, reexport, positions, encoding)?;
+    let matches = occurrences
+        .get(&location.range)
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    let [occurrence] = matches else {
         return Err(format!(
             "historical-v2 compiler emitted {} occurrence(s) at re-export {}",
-            occurrences.len(),
+            matches.len(),
             reexport.reexport_unit_id
         ));
     };
@@ -1620,7 +1657,7 @@ fn resolve_public_reexport<'a>(
             repository_path: file.repository_path.clone(),
             target_repository_path: target_repository_path.clone(),
             module_symbol_id: symbol.id.0.clone(),
-            position_encoding: document.position_encoding,
+            position_encoding: encoding,
             compiler_anchor: flatten_location(&location),
         },
         symbol,
@@ -1630,9 +1667,10 @@ fn resolve_public_reexport<'a>(
 fn reexport_location(
     file: &HistoricalV2SourceFile,
     reexport: &HistoricalV2SourcePublicReexport,
-    source: &str,
+    positions: &SourcePositionIndex<'_>,
     encoding: SemanticPositionEncoding,
 ) -> Result<SemanticLocation, String> {
+    let source = positions.source;
     let range = reexport.identifier;
     let valid_range = range.start < range.end
         && range.end <= source.len()
@@ -1692,23 +1730,23 @@ fn reexport_location(
     Ok(SemanticLocation {
         document: RepositoryPath(file.repository_path.clone()),
         range: SemanticSourceRange {
-            start: semantic_position_at_byte(source, range.start, encoding)?,
-            end: semantic_position_at_byte(source, range.end, encoding)?,
+            start: positions.position(range.start, encoding)?,
+            end: positions.position(range.end, encoding)?,
         },
     })
 }
 
 fn symbol_at_exact_definition<'a>(
-    index: &'a SemanticIndex,
+    definitions: &DefinitionsByLocation<'a>,
     declaration: &HistoricalV2SourcePublicDeclaration,
     location: &SemanticLocation,
 ) -> Result<&'a SemanticSymbol, String> {
-    let candidates = index
-        .symbols
-        .values()
-        .filter(|symbol| {
-            valid_public_symbol(declaration, symbol) && symbol.definitions.contains(location)
-        })
+    let candidates = definitions
+        .get(&(location.document.0.as_str(), location.range))
+        .into_iter()
+        .flatten()
+        .copied()
+        .filter(|symbol| valid_public_symbol(declaration, symbol))
         .collect::<Vec<_>>();
     let [symbol] = candidates.as_slice() else {
         return Err(format!(
@@ -1723,19 +1761,18 @@ fn symbol_at_exact_definition<'a>(
 
 fn symbol_at_exact_reference<'a>(
     index: &'a SemanticIndex,
-    document: &crate::semantic_index::SemanticDocument,
+    occurrences: &OccurrencesByRange<'_>,
     declaration: &HistoricalV2SourcePublicDeclaration,
     location: &SemanticLocation,
 ) -> Result<&'a SemanticSymbol, String> {
-    let occurrences = document
-        .occurrences
-        .iter()
-        .filter(|occurrence| occurrence.range == location.range)
-        .collect::<Vec<_>>();
-    let [occurrence] = occurrences.as_slice() else {
+    let matches = occurrences
+        .get(&location.range)
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    let [occurrence] = matches else {
         return Err(format!(
             "historical-v2 compiler emitted {} occurrence(s) at the exact public reference of {}::{}",
-            occurrences.len(),
+            matches.len(),
             location.document.0,
             declaration.name
         ));
@@ -1763,22 +1800,21 @@ fn symbol_at_exact_reference<'a>(
 
 fn symbol_at_exact_owner_reference<'a>(
     index: &'a SemanticIndex,
-    document: &crate::semantic_index::SemanticDocument,
+    occurrences: &OccurrencesByRange<'_>,
     declaration: &HistoricalV2SourcePublicDeclaration,
     location: &SemanticLocation,
 ) -> Result<&'a SemanticSymbol, String> {
-    let occurrences = document
-        .occurrences
-        .iter()
-        .filter(|occurrence| occurrence.range == location.range)
-        .collect::<Vec<_>>();
-    if occurrences.is_empty() {
+    let matches = occurrences
+        .get(&location.range)
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    if matches.is_empty() {
         return Err(format!(
             "historical-v2 compiler omitted the exact owner occurrence of {}::{}",
             location.document.0, declaration.name
         ));
     }
-    let symbol_ids = occurrences
+    let symbol_ids = matches
         .iter()
         .map(|occurrence| {
             occurrence.symbol.as_ref().ok_or_else(|| {
@@ -1831,9 +1867,10 @@ fn valid_public_symbol(
 fn declaration_location(
     file: &HistoricalV2SourceFile,
     declaration: &HistoricalV2SourcePublicDeclaration,
-    source: &str,
+    positions: &SourcePositionIndex<'_>,
     encoding: SemanticPositionEncoding,
 ) -> Result<SemanticLocation, String> {
+    let source = positions.source;
     let range = declaration.identifier;
     let module_anchor = declaration.binding == HistoricalV2SourcePublicBindingKind::ModuleAnchor;
     if (!module_anchor && range.start >= range.end)
@@ -1884,8 +1921,8 @@ fn declaration_location(
     Ok(SemanticLocation {
         document: RepositoryPath(file.repository_path.clone()),
         range: SemanticSourceRange {
-            start: semantic_position_at_byte(source, range.start, encoding)?,
-            end: semantic_position_at_byte(source, range.end, encoding)?,
+            start: positions.position(range.start, encoding)?,
+            end: positions.position(range.end, encoding)?,
         },
     })
 }
@@ -1893,9 +1930,10 @@ fn declaration_location(
 fn declaration_owner_location(
     file: &HistoricalV2SourceFile,
     declaration: &HistoricalV2SourcePublicDeclaration,
-    source: &str,
+    positions: &SourcePositionIndex<'_>,
     encoding: SemanticPositionEncoding,
 ) -> Result<Option<SemanticLocation>, String> {
+    let source = positions.source;
     let Some(range) = declaration.owner_identifier else {
         if declaration.owner_identifier_positions.is_some() {
             return Err(format!(
@@ -1930,8 +1968,8 @@ fn declaration_owner_location(
     Ok(Some(SemanticLocation {
         document: RepositoryPath(file.repository_path.clone()),
         range: SemanticSourceRange {
-            start: semantic_position_at_byte(source, range.start, encoding)?,
-            end: semantic_position_at_byte(source, range.end, encoding)?,
+            start: positions.position(range.start, encoding)?,
+            end: positions.position(range.end, encoding)?,
         },
     }))
 }
@@ -1974,29 +2012,60 @@ fn valid_python_alias_anchor(anchor: &str, target: &str, exposed: &str) -> bool 
         }
 }
 
+struct SourcePositionIndex<'a> {
+    source: &'a str,
+    newline_offsets: Vec<usize>,
+}
+
+impl<'a> SourcePositionIndex<'a> {
+    fn new(source: &'a str) -> Self {
+        let newline_offsets = source
+            .bytes()
+            .enumerate()
+            .filter_map(|(offset, byte)| (byte == b'\n').then_some(offset))
+            .collect();
+        Self {
+            source,
+            newline_offsets,
+        }
+    }
+
+    fn position(
+        &self,
+        offset: usize,
+        encoding: SemanticPositionEncoding,
+    ) -> Result<SemanticPosition, String> {
+        if offset > self.source.len() || !self.source.is_char_boundary(offset) {
+            return Err("historical-v2 public declaration is not on a UTF-8 boundary".to_string());
+        }
+        let line = self
+            .newline_offsets
+            .partition_point(|newline| *newline < offset);
+        let line_start = line
+            .checked_sub(1)
+            .map_or(0, |previous| self.newline_offsets[previous] + 1);
+        let line_prefix = &self.source[line_start..offset];
+        let character = match encoding {
+            SemanticPositionEncoding::Utf8 => line_prefix.len(),
+            SemanticPositionEncoding::Utf16 => line_prefix.encode_utf16().count(),
+            SemanticPositionEncoding::Utf32 => line_prefix.chars().count(),
+        };
+        Ok(SemanticPosition {
+            line: u32::try_from(line)
+                .map_err(|_| "historical-v2 public declaration line exceeds u32".to_string())?,
+            character: u32::try_from(character)
+                .map_err(|_| "historical-v2 public declaration column exceeds u32".to_string())?,
+        })
+    }
+}
+
+#[cfg(test)]
 pub(super) fn semantic_position_at_byte(
     source: &str,
     offset: usize,
     encoding: SemanticPositionEncoding,
 ) -> Result<SemanticPosition, String> {
-    if offset > source.len() || !source.is_char_boundary(offset) {
-        return Err("historical-v2 public declaration is not on a UTF-8 boundary".to_string());
-    }
-    let prefix = &source[..offset];
-    let line = prefix.bytes().filter(|byte| *byte == b'\n').count();
-    let line_start = prefix.rfind('\n').map_or(0, |index| index + 1);
-    let line_prefix = &source[line_start..offset];
-    let character = match encoding {
-        SemanticPositionEncoding::Utf8 => line_prefix.len(),
-        SemanticPositionEncoding::Utf16 => line_prefix.encode_utf16().count(),
-        SemanticPositionEncoding::Utf32 => line_prefix.chars().count(),
-    };
-    Ok(SemanticPosition {
-        line: u32::try_from(line)
-            .map_err(|_| "historical-v2 public declaration line exceeds u32".to_string())?,
-        character: u32::try_from(character)
-            .map_err(|_| "historical-v2 public declaration column exceeds u32".to_string())?,
-    })
+    SourcePositionIndex::new(source).position(offset, encoding)
 }
 
 fn compatible_public_symbol_kind(
@@ -2044,4 +2113,50 @@ fn compatible_public_symbol_kind(
             SemanticSymbolCategory::Constant
         )
     )
+}
+
+#[cfg(test)]
+mod position_index_tests {
+    use super::*;
+
+    #[test]
+    fn indexed_positions_match_prefix_scanning_at_every_unicode_boundary() {
+        let source = "éPublic\n😀x\r\nlast\n";
+        let positions = SourcePositionIndex::new(source);
+        for offset in 0..=source.len() {
+            if !source.is_char_boundary(offset) {
+                continue;
+            }
+            let prefix = &source[..offset];
+            let line = prefix.bytes().filter(|byte| *byte == b'\n').count() as u32;
+            let line_start = prefix.rfind('\n').map_or(0, |newline| newline + 1);
+            for encoding in [
+                SemanticPositionEncoding::Utf8,
+                SemanticPositionEncoding::Utf16,
+                SemanticPositionEncoding::Utf32,
+            ] {
+                let character = match encoding {
+                    SemanticPositionEncoding::Utf8 => source[line_start..offset].len(),
+                    SemanticPositionEncoding::Utf16 => {
+                        source[line_start..offset].encode_utf16().count()
+                    }
+                    SemanticPositionEncoding::Utf32 => source[line_start..offset].chars().count(),
+                } as u32;
+                assert_eq!(
+                    positions.position(offset, encoding).unwrap(),
+                    SemanticPosition { line, character }
+                );
+            }
+        }
+        assert!(
+            positions
+                .position(1, SemanticPositionEncoding::Utf8)
+                .is_err()
+        );
+        assert!(
+            positions
+                .position(source.len() + 1, SemanticPositionEncoding::Utf8)
+                .is_err()
+        );
+    }
 }

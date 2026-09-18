@@ -896,6 +896,21 @@ class ManifestTests(unittest.TestCase):
             transport.SEMANTIC_VALIDATION_ASSEMBLY_TIMING_MIGRATION_SOURCE_ARTIFACT_SIZE,
         )
 
+    @staticmethod
+    def _write_semantic_projection_indexing_manifest(path: pathlib.Path) -> None:
+        ManifestTests._write_semantic_validation_assembly_timing_manifest(path)
+        transport.migrate_manifest(
+            path,
+            transport.FRAME_RUN_ID,
+            transport.SEMANTIC_PUBLIC_BINDING_INDEX_MIGRATION_FROM_COLLECTOR_SHA,
+            transport.SEMANTIC_PROJECTION_INDEXING_MIGRATION_NAME,
+            transport.SEMANTIC_PROJECTION_INDEXING_MIGRATION_SOURCE_RUN_ID,
+            transport.SEMANTIC_PROJECTION_INDEXING_MIGRATION_SOURCE_HEAD_SHA,
+            transport.SEMANTIC_PROJECTION_INDEXING_MIGRATION_SOURCE_ARTIFACT_ID,
+            transport.SEMANTIC_PROJECTION_INDEXING_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+            transport.SEMANTIC_PROJECTION_INDEXING_MIGRATION_SOURCE_ARTIFACT_SIZE,
+        )
+
     def test_manifest_round_trips_and_is_create_new(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             path = pathlib.Path(temporary, "manifest.json")
@@ -3726,7 +3741,7 @@ class ManifestTests(unittest.TestCase):
                 with self.subTest(field=field), self.assertRaises(ValueError):
                     transport.validate_manifest(path, transport.FRAME_RUN_ID)
 
-    def test_semantic_projection_indexing_migration_is_exact_and_closes_chain(
+    def test_semantic_projection_indexing_migration_is_exact_before_next_migration(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -3782,7 +3797,7 @@ class ManifestTests(unittest.TestCase):
             self.assertEqual(
                 state_sentinel.read_bytes(), b"assessment-state-must-not-change\x00\xff"
             )
-            with self.assertRaisesRegex(ValueError, "migration chain is closed"):
+            with self.assertRaisesRegex(ValueError, "migration is out of order"):
                 transport.migrate_manifest(
                     path,
                     transport.FRAME_RUN_ID,
@@ -3798,6 +3813,82 @@ class ManifestTests(unittest.TestCase):
             for field in value["collector_migrations"][33]:
                 tampered = json.loads(json.dumps(value))
                 tampered["collector_migrations"][33][field] = True
+                path.write_text(json.dumps(tampered), encoding="utf-8")
+                with self.subTest(field=field), self.assertRaises(ValueError):
+                    transport.validate_manifest(path, transport.FRAME_RUN_ID)
+
+    def test_semantic_public_binding_index_migration_is_exact_and_closes_chain(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = pathlib.Path(temporary, "manifest.json")
+            self._write_semantic_projection_indexing_manifest(path)
+            prior_bytes = path.read_bytes()
+            prior_manifest = json.loads(prior_bytes)
+            state_sentinel = pathlib.Path(temporary, "state-sentinel.bin")
+            state_sentinel.write_bytes(b"assessment-state-must-not-change\x00\xff")
+            target = "b" * 40
+
+            with self.assertRaisesRegex(ValueError, "migration chain drifted"):
+                transport.migrate_manifest(
+                    path,
+                    transport.FRAME_RUN_ID,
+                    target,
+                    transport.SEMANTIC_PUBLIC_BINDING_INDEX_MIGRATION_NAME,
+                    transport.SEMANTIC_PUBLIC_BINDING_INDEX_MIGRATION_SOURCE_RUN_ID,
+                    transport.SEMANTIC_PUBLIC_BINDING_INDEX_MIGRATION_SOURCE_HEAD_SHA,
+                    transport.SEMANTIC_PUBLIC_BINDING_INDEX_MIGRATION_SOURCE_ARTIFACT_ID + 1,
+                    transport.SEMANTIC_PUBLIC_BINDING_INDEX_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+                    transport.SEMANTIC_PUBLIC_BINDING_INDEX_MIGRATION_SOURCE_ARTIFACT_SIZE,
+                )
+            self.assertEqual(path.read_bytes(), prior_bytes)
+
+            self.assertEqual(
+                transport.migrate_manifest(
+                    path,
+                    transport.FRAME_RUN_ID,
+                    target,
+                    transport.SEMANTIC_PUBLIC_BINDING_INDEX_MIGRATION_NAME,
+                    transport.SEMANTIC_PUBLIC_BINDING_INDEX_MIGRATION_SOURCE_RUN_ID,
+                    transport.SEMANTIC_PUBLIC_BINDING_INDEX_MIGRATION_SOURCE_HEAD_SHA,
+                    transport.SEMANTIC_PUBLIC_BINDING_INDEX_MIGRATION_SOURCE_ARTIFACT_ID,
+                    transport.SEMANTIC_PUBLIC_BINDING_INDEX_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+                    transport.SEMANTIC_PUBLIC_BINDING_INDEX_MIGRATION_SOURCE_ARTIFACT_SIZE,
+                ),
+                target,
+            )
+            value = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(value["schema_version"], 36)
+            self.assertEqual(
+                value["collector_migrations"][:34],
+                prior_manifest["collector_migrations"],
+            )
+            self.assertEqual(
+                value["collector_migrations"][34],
+                transport._expected_semantic_public_binding_index_migration(target),
+            )
+            self.assertEqual(
+                transport.validate_manifest(path, transport.FRAME_RUN_ID), target
+            )
+            self.assertEqual(
+                state_sentinel.read_bytes(), b"assessment-state-must-not-change\x00\xff"
+            )
+            with self.assertRaisesRegex(ValueError, "migration chain is closed"):
+                transport.migrate_manifest(
+                    path,
+                    transport.FRAME_RUN_ID,
+                    "c" * 40,
+                    transport.SEMANTIC_PUBLIC_BINDING_INDEX_MIGRATION_NAME,
+                    transport.SEMANTIC_PUBLIC_BINDING_INDEX_MIGRATION_SOURCE_RUN_ID,
+                    transport.SEMANTIC_PUBLIC_BINDING_INDEX_MIGRATION_SOURCE_HEAD_SHA,
+                    transport.SEMANTIC_PUBLIC_BINDING_INDEX_MIGRATION_SOURCE_ARTIFACT_ID,
+                    transport.SEMANTIC_PUBLIC_BINDING_INDEX_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+                    transport.SEMANTIC_PUBLIC_BINDING_INDEX_MIGRATION_SOURCE_ARTIFACT_SIZE,
+                )
+
+            for field in value["collector_migrations"][34]:
+                tampered = json.loads(json.dumps(value))
+                tampered["collector_migrations"][34][field] = True
                 path.write_text(json.dumps(tampered), encoding="utf-8")
                 with self.subTest(field=field), self.assertRaises(ValueError):
                     transport.validate_manifest(path, transport.FRAME_RUN_ID)
@@ -5482,6 +5573,7 @@ class WorkflowContractTests(unittest.TestCase):
             "go-semantic-unit-phase-timing-v1",
             "semantic-validation-assembly-timing-v1",
             "semantic-projection-indexing-v1",
+            "semantic-public-binding-index-v1",
             'migrate-source-required-go-semantic-progress',
             'migrate-inferred-scip-kind-replay',
             'migrate-bounded-qualification-project-model-v8-replay',

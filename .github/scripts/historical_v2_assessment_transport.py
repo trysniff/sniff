@@ -708,6 +708,23 @@ SEMANTIC_PROJECTION_INDEXING_MIGRATION_SOURCE_ARTIFACT_DIGEST = (
 )
 SEMANTIC_PROJECTION_INDEXING_MIGRATION_SOURCE_ARTIFACT_SIZE = 1_307_115_286
 
+SEMANTIC_PUBLIC_BINDING_INDEX_MIGRATION_NAME = "semantic-public-binding-index-v1"
+SEMANTIC_PUBLIC_BINDING_INDEX_MIGRATION_CONTRACT = (
+    "sniffbench-historical-v2-semantic-public-binding-index-migration-v1"
+)
+SEMANTIC_PUBLIC_BINDING_INDEX_MIGRATION_FROM_COLLECTOR_SHA = (
+    "4fa9de2360813f19b243f10e535115d4168226fc"
+)
+SEMANTIC_PUBLIC_BINDING_INDEX_MIGRATION_SOURCE_RUN_ID = 35_329_733_304
+SEMANTIC_PUBLIC_BINDING_INDEX_MIGRATION_SOURCE_HEAD_SHA = (
+    "4fa9de2360813f19b243f10e535115d4168226fc"
+)
+SEMANTIC_PUBLIC_BINDING_INDEX_MIGRATION_SOURCE_ARTIFACT_ID = 10_541_400_372
+SEMANTIC_PUBLIC_BINDING_INDEX_MIGRATION_SOURCE_ARTIFACT_DIGEST = (
+    "sha256:ae96760d176189b895a77ee8675e011f0af027d3ce5779cf5c97cf860c71aea4"
+)
+SEMANTIC_PUBLIC_BINDING_INDEX_MIGRATION_SOURCE_ARTIFACT_SIZE = 1_441_846_590
+
 FRAME_FILE_SHA256 = {
     "environment.txt": "2e87f3c3e1b2005f6b6d09b1bf1b82d30a9433636c3c67f0806cc68e80ab6800",
     "exclusions.json": "74bccb100eb48ab87952bd7eec137b2285edbc68d2547715bc0e06a80e029f76",
@@ -2085,7 +2102,7 @@ def validate_manifest(path: pathlib.Path, frame_run_id: int) -> str:
     schema_version = value.get("schema_version")
     if schema_version == 1:
         expected = _manifest(frame_run_id, collector_sha)
-    elif schema_version in range(2, 36):
+    elif schema_version in range(2, 37):
         migrations = value.get("collector_migrations")
         expected_count = schema_version - 1
         if not isinstance(migrations, list) or len(migrations) != expected_count:
@@ -2245,6 +2262,9 @@ def _migration_record(
     elif migration_name == SEMANTIC_PROJECTION_INDEXING_MIGRATION_NAME:
         contract = SEMANTIC_PROJECTION_INDEXING_MIGRATION_CONTRACT
         source_collector_sha = SEMANTIC_PROJECTION_INDEXING_MIGRATION_FROM_COLLECTOR_SHA
+    elif migration_name == SEMANTIC_PUBLIC_BINDING_INDEX_MIGRATION_NAME:
+        contract = SEMANTIC_PUBLIC_BINDING_INDEX_MIGRATION_CONTRACT
+        source_collector_sha = SEMANTIC_PUBLIC_BINDING_INDEX_MIGRATION_FROM_COLLECTOR_SHA
     else:
         raise ValueError("transport manifest collector migration is not allowlisted")
     return {
@@ -2913,15 +2933,34 @@ def _expected_semantic_projection_indexing_migration(
     )
 
 
+def _expected_semantic_public_binding_index_migration(
+    target_collector_sha: str,
+) -> dict[str, Any]:
+    if (
+        target_collector_sha == SEMANTIC_PUBLIC_BINDING_INDEX_MIGRATION_FROM_COLLECTOR_SHA
+        or re.fullmatch(r"[0-9a-f]{40}", target_collector_sha) is None
+    ):
+        raise ValueError("transport manifest collector migration target is invalid")
+    return _migration_record(
+        SEMANTIC_PUBLIC_BINDING_INDEX_MIGRATION_NAME,
+        target_collector_sha,
+        SEMANTIC_PUBLIC_BINDING_INDEX_MIGRATION_SOURCE_RUN_ID,
+        SEMANTIC_PUBLIC_BINDING_INDEX_MIGRATION_SOURCE_HEAD_SHA,
+        SEMANTIC_PUBLIC_BINDING_INDEX_MIGRATION_SOURCE_ARTIFACT_ID,
+        SEMANTIC_PUBLIC_BINDING_INDEX_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+        SEMANTIC_PUBLIC_BINDING_INDEX_MIGRATION_SOURCE_ARTIFACT_SIZE,
+    )
+
+
 def _validate_collector_migrations(
     migrations: Sequence[Mapping[str, Any]], collector_sha: str
 ) -> None:
-    if len(migrations) not in range(1, 35):
+    if len(migrations) not in range(1, 36):
         raise ValueError("transport manifest collector migration chain is invalid")
     expected = [_expected_storage_migration()]
     if len(migrations) == 2:
         expected.append(_expected_go_preparation_migration(collector_sha))
-    elif len(migrations) in range(3, 35):
+    elif len(migrations) in range(3, 36):
         expected.append(
             _expected_go_preparation_migration(
                 GO_MODULE_DOWNLOAD_MIGRATION_FROM_COLLECTOR_SHA
@@ -3190,7 +3229,15 @@ def _validate_collector_migrations(
             )
         if len(migrations) >= 34:
             expected.append(
-                _expected_semantic_projection_indexing_migration(collector_sha)
+                _expected_semantic_projection_indexing_migration(
+                    SEMANTIC_PUBLIC_BINDING_INDEX_MIGRATION_FROM_COLLECTOR_SHA
+                    if len(migrations) >= 35
+                    else collector_sha
+                )
+            )
+        if len(migrations) >= 35:
+            expected.append(
+                _expected_semantic_public_binding_index_migration(collector_sha)
             )
     elif collector_sha != STORAGE_MIGRATION_TO_COLLECTOR_SHA:
         raise ValueError("transport manifest collector migration target drifted")
@@ -3416,6 +3463,12 @@ def migrate_manifest(
         ]
     elif schema_version == 34:
         expected_name = SEMANTIC_PROJECTION_INDEXING_MIGRATION_NAME
+        migrations = [
+            _require_mapping(item, "transport manifest collector migration")
+            for item in value.get("collector_migrations", [])
+        ]
+    elif schema_version == 35:
+        expected_name = SEMANTIC_PUBLIC_BINDING_INDEX_MIGRATION_NAME
         migrations = [
             _require_mapping(item, "transport manifest collector migration")
             for item in value.get("collector_migrations", [])
