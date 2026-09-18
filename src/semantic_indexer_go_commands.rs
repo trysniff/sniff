@@ -3,6 +3,38 @@ use crate::semantic_index::{
     SemanticIndexerContribution, SemanticIndexerInvocation, SemanticIndexerVariantPlan,
 };
 use serde::Deserialize;
+use std::time::{Duration, Instant};
+
+#[derive(Clone, Copy)]
+pub(super) struct GoUnitTiming {
+    pub(super) enabled: bool,
+    pub(super) world: usize,
+    pub(super) kind: &'static str,
+    pub(super) unit: usize,
+}
+
+impl GoUnitTiming {
+    pub(super) fn start(self, phase: &'static str) {
+        if self.enabled {
+            eprintln!(
+                "sniffbench semantic go unit timing world={} kind={} unit={} phase={phase} event=start",
+                self.world, self.kind, self.unit
+            );
+        }
+    }
+
+    pub(super) fn finish(self, phase: &'static str, elapsed: Duration) {
+        if self.enabled {
+            eprintln!(
+                "sniffbench semantic go unit timing world={} kind={} unit={} phase={phase} phase_ms={}",
+                self.world,
+                self.kind,
+                self.unit,
+                elapsed.as_millis()
+            );
+        }
+    }
+}
 
 #[derive(Debug, Deserialize)]
 #[allow(non_snake_case)]
@@ -172,6 +204,7 @@ pub(super) async fn run_go_scip(
     patterns: Vec<String>,
     expected_documents: &BTreeSet<RepositoryPath>,
     collect_calls: bool,
+    timing: GoUnitTiming,
 ) -> Result<SemanticIndex, SemanticIndexerRunFailure> {
     let spec = execution.spec;
     if patterns.is_empty() {
@@ -235,6 +268,8 @@ pub(super) async fn run_go_scip(
             detail,
         )
     })?;
+    timing.start("indexer-process");
+    let started = Instant::now();
     let output = run_with_runtime_identity(prepared, spec.display_name)
         .await
         .map_err(|detail| {
@@ -246,6 +281,7 @@ pub(super) async fn run_go_scip(
             )
         })?;
     let output = require_go_command_success(spec, output, spec.display_name)?;
+    timing.finish("indexer-process", started.elapsed());
     if !index_path.is_file() {
         return Err(go_output_validation_failure(
             spec,
@@ -259,6 +295,8 @@ pub(super) async fn run_go_scip(
     }
     let document_prefix =
         (execution.module_root != ".").then(|| RepositoryPath(execution.module_root.to_string()));
+    timing.start("scip-ingest-and-calls");
+    let started = Instant::now();
     let result = crate::semantic_index_scip::ingest_scip_file_with_expected_languages_and_prefix(
         execution.repository_root,
         &index_path,
@@ -285,6 +323,9 @@ pub(super) async fn run_go_scip(
         Ok(index)
     })
     .map_err(|detail| go_output_validation_failure(spec, detail, &output));
+    timing.finish("scip-ingest-and-calls", started.elapsed());
+    timing.start("scip-output-cleanup");
+    let started = Instant::now();
     let cleanup = fs::remove_file(&index_path).map_err(|error| {
         indexer_failure(
             spec,
@@ -296,6 +337,7 @@ pub(super) async fn run_go_scip(
             ),
         )
     });
+    timing.finish("scip-output-cleanup", started.elapsed());
     combine_typed_run_and_integrity(result, cleanup)
 }
 

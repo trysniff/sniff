@@ -18,7 +18,7 @@ use serde::Serialize;
 use std::time::{Duration, Instant};
 
 use super::go_commands::{
-    GoScipExecution, discover_go_build_context, go_output_validation_failure,
+    GoScipExecution, GoUnitTiming, discover_go_build_context, go_output_validation_failure,
     package_inventory_invocation, resolve_go_variant_context, run_go_scip, run_go_tool,
     run_go_tool_with_environment,
 };
@@ -793,8 +793,14 @@ async fn run_go_compiler_world(
             world_started,
         );
         let started = Instant::now();
-        let index = run_or_resume_go_unit(progress.as_ref(), unit, root, spec, || {
-            run_go_scip(&scip, shard.patterns(), &expected_documents, true)
+        let timing = GoUnitTiming {
+            enabled: timing_enabled,
+            world: world_ordinal,
+            kind: "document",
+            unit: unit_index + 1,
+        };
+        let index = run_or_resume_go_unit(progress.as_ref(), unit, root, spec, timing, || {
+            run_go_scip(&scip, shard.patterns(), &expected_documents, true, timing)
         })
         .await?;
         let load_or_index = started.elapsed();
@@ -870,8 +876,20 @@ async fn run_go_compiler_world(
             world_started,
         );
         let started = Instant::now();
-        let pair = run_or_resume_go_unit(progress.as_ref(), unit, root, spec, || {
-            run_go_scip(&scip, unit.patterns.clone(), &expected_documents, false)
+        let timing = GoUnitTiming {
+            enabled: timing_enabled,
+            world: world_ordinal,
+            kind: "pair",
+            unit: unit_index + 1,
+        };
+        let pair = run_or_resume_go_unit(progress.as_ref(), unit, root, spec, timing, || {
+            run_go_scip(
+                &scip,
+                unit.patterns.clone(),
+                &expected_documents,
+                false,
+                timing,
+            )
         })
         .await?;
         let load_or_index = started.elapsed();
@@ -1098,24 +1116,32 @@ async fn run_or_resume_go_unit<F, Future>(
     unit: &SemanticProgressUnit,
     repository_root: &Path,
     spec: PinnedIndexer,
+    timing: GoUnitTiming,
     run: F,
 ) -> Result<SemanticIndex, SemanticIndexerRunFailure>
 where
     F: FnOnce() -> Future,
     Future: std::future::Future<Output = Result<SemanticIndex, SemanticIndexerRunFailure>>,
 {
+    timing.start("checkpoint-load");
+    let started = Instant::now();
     if let Some(progress) = progress
         && let Some(index) = progress
             .load(unit, repository_root)
             .map_err(|detail| go_progress_failure(spec, detail))?
     {
+        timing.finish("checkpoint-load", started.elapsed());
         return Ok(index);
     }
+    timing.finish("checkpoint-load", started.elapsed());
     let index = run().await?;
     if let Some(progress) = progress {
+        timing.start("checkpoint-publish");
+        let started = Instant::now();
         progress
             .publish(unit, repository_root, &index)
             .map_err(|detail| go_progress_failure(spec, detail))?;
+        timing.finish("checkpoint-publish", started.elapsed());
     }
     Ok(index)
 }
