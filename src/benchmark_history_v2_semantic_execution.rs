@@ -1,5 +1,5 @@
 use super::*;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 struct SemanticTiming {
     label: &'static str,
@@ -42,6 +42,18 @@ impl SemanticTiming {
             now.duration_since(started).as_millis()
         );
         self.last = Some(now);
+    }
+
+    fn detail(&self, phase: &'static str, elapsed: Duration) {
+        if let Some(started) = self.started {
+            eprintln!(
+                "sniffbench semantic timing label={} phase={} phase_ms={} total_ms={}",
+                self.label,
+                phase,
+                elapsed.as_millis(),
+                started.elapsed().as_millis()
+            );
+        }
     }
 }
 
@@ -93,9 +105,15 @@ async fn census_historical_v2_semantics_typed_internal(
 ) -> Result<SemanticCensusStageResult, HistoricalV2SlotStageError> {
     let mut timing = SemanticTiming::new("census");
     timing.phase_start("scope");
+    timing.phase_start("source_census_validation");
+    let validation_started = Instant::now();
     validate_historical_v2_source_census_commitment(materialization, roots, source_census)
         .map_err(invalid)?;
+    timing.detail("source_census_validation", validation_started.elapsed());
+    timing.phase_start("semantic_scope_derivation");
+    let derivation_started = Instant::now();
     let scope = semantic_scope(materialization, roots, source_census).map_err(infrastructure)?;
+    timing.detail("semantic_scope_derivation", derivation_started.elapsed());
     timing.phase("scope");
     let mut failures = Vec::new();
     let mut stage_errors = Vec::new();
