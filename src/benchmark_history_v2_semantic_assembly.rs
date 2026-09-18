@@ -296,6 +296,10 @@ fn build_variant_contribution(
     let mut public_reexport_hops = BTreeMap::new();
     let mut public_surface_document_paths = BTreeSet::new();
     let mut indexers = Vec::new();
+    let timing =
+        DiagnosticTiming::with_context("semantic_variant_build", "process_variant", || {
+            format!("kind={:?} variant={:?}", inputs.kind, inputs.index.variant)
+        });
     process_semantic_variant(
         SemanticVariantInputs {
             root: inputs.root,
@@ -320,6 +324,11 @@ fn build_variant_contribution(
             indexers: &mut indexers,
         },
     )?;
+    drop(timing);
+    let timing =
+        DiagnosticTiming::with_context("semantic_variant_build", "sort_and_validate", || {
+            format!("kind={:?} variant={:?}", inputs.kind, inputs.index.variant)
+        });
     if indexers.len() != 1 || &indexers[0] != indexer {
         return Err("historical-v2 semantic variant emitted an invalid indexer census".to_string());
     }
@@ -343,6 +352,7 @@ fn build_variant_contribution(
         public_surface_document_paths: public_surface_document_paths.into_iter().collect(),
     };
     validate_variant_contribution(&contribution, indexer)?;
+    drop(timing);
     Ok(contribution)
 }
 

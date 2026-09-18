@@ -1,3 +1,4 @@
+use super::history_v2_diagnostic_timing::DiagnosticTiming;
 use super::history_v2_semantic_exclusion::{
     RETAINED_EVIDENCE_LIMIT, seal_semantic_census_exclusion,
 };
@@ -367,6 +368,10 @@ fn process_semantic_variant(
         public_surface_document_paths,
         indexers,
     } = outputs;
+    let timing =
+        DiagnosticTiming::with_context("semantic_variant_build", "files_and_exclusions", || {
+            format!("kind={kind:?} variant={:?}", index.variant)
+        });
     let files_for_indexer = crate::semantic_indexer_runner::files_for_indexer(files, kind);
     let mut indexed_files = Vec::new();
     for file in files_for_indexer {
@@ -400,7 +405,16 @@ fn process_semantic_variant(
             methods,
         )?;
     }
+    drop(timing);
+    let timing = DiagnosticTiming::with_context("semantic_variant_build", "join_methods", || {
+        format!("kind={kind:?} variant={:?}", index.variant)
+    });
     let join = join_methods(root, &indexed_files, index)?;
+    drop(timing);
+    let timing =
+        DiagnosticTiming::with_context("semantic_variant_build", "method_observations", || {
+            format!("kind={kind:?} variant={:?}", index.variant)
+        });
     for binding in join.bindings.values() {
         let key = (
             binding.method.file.0.clone(),
@@ -424,10 +438,15 @@ fn process_semantic_variant(
             methods,
         )?;
     }
+    drop(timing);
     let mut variant_bindings = Vec::new();
     let mut variant_roots = Vec::new();
     let mut variant_go_roots = Vec::new();
     let mut variant_kotlin_roots = Vec::new();
+    let timing =
+        DiagnosticTiming::with_context("semantic_variant_build", "public_surface_binding", || {
+            format!("kind={kind:?} variant={:?}", index.variant)
+        });
     bind_public_surface(
         PublicSurfaceBindingInputs {
             root,
@@ -446,6 +465,7 @@ fn process_semantic_variant(
             public_surface_document_paths,
         },
     )?;
+    drop(timing);
     public_bindings.extend(variant_bindings);
     public_roots.extend(variant_roots);
     go_package_roots.extend(variant_go_roots);
