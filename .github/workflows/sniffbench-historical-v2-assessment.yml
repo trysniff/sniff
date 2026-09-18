@@ -409,14 +409,16 @@ jobs:
             printf 'SNAPSHOT_ARCHIVE=%s\n' "$archive"
           } >> "$GITHUB_ENV"
 
-          tools_provenance="${RUNNER_TEMP}/historical-v2-assessment-tools-provenance.json"
-          if [[ ! -f "$tools_provenance" || -L "$tools_provenance" ]]; then
-            echo 'assessment tools provenance is not a plain file' >&2
-            exit 1
+          if [[ "$INSPECT_ONLY" != 'true' ]]; then
+            tools_provenance="${RUNNER_TEMP}/historical-v2-assessment-tools-provenance.json"
+            if [[ ! -f "$tools_provenance" || -L "$tools_provenance" ]]; then
+              echo 'assessment tools provenance is not a plain file' >&2
+              exit 1
+            fi
+            tools_provenance_target="$transport_root/tools-provenance-${GITHUB_RUN_ID}.json"
+            test ! -e "$tools_provenance_target"
+            install -m 0644 "$tools_provenance" "$tools_provenance_target"
           fi
-          tools_provenance_target="$transport_root/tools-provenance-${GITHUB_RUN_ID}.json"
-          test ! -e "$tools_provenance_target"
-          install -m 0644 "$tools_provenance" "$tools_provenance_target"
 
       - name: Validate the frozen frame and transport
         shell: bash

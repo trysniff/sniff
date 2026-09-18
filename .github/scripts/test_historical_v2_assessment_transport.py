@@ -5571,6 +5571,12 @@ class WorkflowContractTests(unittest.TestCase):
             "if: ${{ success() && (inputs.inspect_only || steps.assess.outcome == 'success') }}",
             step("Verify resumable assessment state"),
         )
+        restore = step("Initialize or restore assessment roots")
+        self.assertIn("if [[ \"$INSPECT_ONLY\" != 'true' ]]; then", restore)
+        self.assertLess(
+            restore.index("if [[ \"$INSPECT_ONLY\" != 'true' ]]; then"),
+            restore.index('install -m 0644 "$tools_provenance" "$tools_provenance_target"'),
+        )
         self.assertIn('"$STATE_OBSERVER" state-status', step("Verify resumable assessment state"))
         self.assertNotIn("run-slots", step("Verify resumable assessment state"))
         for name in (
