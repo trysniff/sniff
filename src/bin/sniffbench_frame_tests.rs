@@ -226,6 +226,26 @@ fn replay_compiler_census_requires_an_explicit_slot_identity_and_roots() {
     }
 }
 
+#[test]
+fn replay_go_semantic_coverage_requires_an_explicit_slot_identity_and_roots() {
+    let parsed = Args::try_parse_from(replay_go_semantic_coverage_arguments()).unwrap();
+    let Command::ReplayGoSemanticCoverage { .. } = parsed.command else {
+        panic!("replay-go-semantic-coverage command was not parsed");
+    };
+    for required in ["--state-root", "--work-root", "--language", "--slot-number"] {
+        let mut arguments = replay_go_semantic_coverage_arguments();
+        let index = arguments
+            .iter()
+            .position(|value| *value == required)
+            .unwrap();
+        arguments.drain(index..=index + 1);
+        assert!(
+            Args::try_parse_from(arguments).is_err(),
+            "{required} was optional"
+        );
+    }
+}
+
 fn run_slots_arguments() -> Vec<&'static str> {
     vec![
         "sniffbench-frame",
@@ -305,6 +325,12 @@ fn replay_compiler_census_arguments() -> Vec<&'static str> {
         "--slot-number",
         "123",
     ]
+}
+
+fn replay_go_semantic_coverage_arguments() -> Vec<&'static str> {
+    let mut arguments = replay_compiler_census_arguments();
+    arguments[1] = "replay-go-semantic-coverage";
+    arguments
 }
 
 fn state_status_arguments() -> Vec<&'static str> {

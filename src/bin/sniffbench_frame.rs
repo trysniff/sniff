@@ -103,6 +103,11 @@ enum Command {
         #[command(flatten)]
         args: sniffbench_frame_run::ReplayCompilerCensusArgs,
     },
+    /// Reset partial Go semantic progress after the required-document coverage contract changes.
+    ReplayGoSemanticCoverage {
+        #[command(flatten)]
+        args: sniffbench_frame_run::ReplayGoSemanticCoverageArgs,
+    },
 }
 
 #[tokio::main]
@@ -285,6 +290,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Command::ReplayCompilerCensus { args } => {
             sniffbench_frame_run::replay_compiler_census(args)?
+        }
+        Command::ReplayGoSemanticCoverage { args } => {
+            sniffbench_frame_run::replay_go_semantic_coverage(args)?
         }
     }
     Ok(())

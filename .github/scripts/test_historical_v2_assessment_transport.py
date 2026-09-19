@@ -926,6 +926,23 @@ class ManifestTests(unittest.TestCase):
             transport.SEMANTIC_PUBLIC_BINDING_INDEX_MIGRATION_SOURCE_ARTIFACT_SIZE,
         )
 
+    @staticmethod
+    def _write_go_compiler_census_evidence_replay_manifest(
+        path: pathlib.Path,
+    ) -> None:
+        ManifestTests._write_semantic_public_binding_index_manifest(path)
+        transport.migrate_manifest(
+            path,
+            transport.FRAME_RUN_ID,
+            transport.GO_SEMANTIC_REQUIRED_DOCUMENT_COVERAGE_MIGRATION_FROM_COLLECTOR_SHA,
+            transport.GO_COMPILER_CENSUS_EVIDENCE_REPLAY_MIGRATION_NAME,
+            transport.GO_COMPILER_CENSUS_EVIDENCE_REPLAY_MIGRATION_SOURCE_RUN_ID,
+            transport.GO_COMPILER_CENSUS_EVIDENCE_REPLAY_MIGRATION_SOURCE_HEAD_SHA,
+            transport.GO_COMPILER_CENSUS_EVIDENCE_REPLAY_MIGRATION_SOURCE_ARTIFACT_ID,
+            transport.GO_COMPILER_CENSUS_EVIDENCE_REPLAY_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+            transport.GO_COMPILER_CENSUS_EVIDENCE_REPLAY_MIGRATION_SOURCE_ARTIFACT_SIZE,
+        )
+
     def test_manifest_round_trips_and_is_create_new(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             path = pathlib.Path(temporary, "manifest.json")
@@ -3908,7 +3925,7 @@ class ManifestTests(unittest.TestCase):
                 with self.subTest(field=field), self.assertRaises(ValueError):
                     transport.validate_manifest(path, transport.FRAME_RUN_ID)
 
-    def test_go_compiler_census_evidence_replay_migration_is_exact_and_closes_chain(
+    def test_go_compiler_census_evidence_replay_migration_is_exact_before_next_migration(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -3966,7 +3983,7 @@ class ManifestTests(unittest.TestCase):
             self.assertEqual(
                 state_sentinel.read_bytes(), b"assessment-state-must-not-change\x00\xff"
             )
-            with self.assertRaisesRegex(ValueError, "migration chain is closed"):
+            with self.assertRaisesRegex(ValueError, "migration is out of order"):
                 transport.migrate_manifest(
                     path,
                     transport.FRAME_RUN_ID,
@@ -3982,6 +3999,80 @@ class ManifestTests(unittest.TestCase):
             for field in value["collector_migrations"][35]:
                 tampered = json.loads(json.dumps(value))
                 tampered["collector_migrations"][35][field] = True
+                path.write_text(json.dumps(tampered), encoding="utf-8")
+                with self.subTest(field=field), self.assertRaises(ValueError):
+                    transport.validate_manifest(path, transport.FRAME_RUN_ID)
+
+    def test_go_semantic_required_document_coverage_migration_is_exact_and_closes_chain(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = pathlib.Path(temporary, "manifest.json")
+            self._write_go_compiler_census_evidence_replay_manifest(path)
+            prior_bytes = path.read_bytes()
+            prior_manifest = json.loads(prior_bytes)
+            target = "b" * 40
+
+            with self.assertRaisesRegex(ValueError, "migration chain drifted"):
+                transport.migrate_manifest(
+                    path,
+                    transport.FRAME_RUN_ID,
+                    target,
+                    transport.GO_SEMANTIC_REQUIRED_DOCUMENT_COVERAGE_MIGRATION_NAME,
+                    transport.GO_SEMANTIC_REQUIRED_DOCUMENT_COVERAGE_MIGRATION_SOURCE_RUN_ID,
+                    transport.GO_SEMANTIC_REQUIRED_DOCUMENT_COVERAGE_MIGRATION_SOURCE_HEAD_SHA,
+                    transport.GO_SEMANTIC_REQUIRED_DOCUMENT_COVERAGE_MIGRATION_SOURCE_ARTIFACT_ID
+                    + 1,
+                    transport.GO_SEMANTIC_REQUIRED_DOCUMENT_COVERAGE_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+                    transport.GO_SEMANTIC_REQUIRED_DOCUMENT_COVERAGE_MIGRATION_SOURCE_ARTIFACT_SIZE,
+                )
+            self.assertEqual(path.read_bytes(), prior_bytes)
+
+            self.assertEqual(
+                transport.migrate_manifest(
+                    path,
+                    transport.FRAME_RUN_ID,
+                    target,
+                    transport.GO_SEMANTIC_REQUIRED_DOCUMENT_COVERAGE_MIGRATION_NAME,
+                    transport.GO_SEMANTIC_REQUIRED_DOCUMENT_COVERAGE_MIGRATION_SOURCE_RUN_ID,
+                    transport.GO_SEMANTIC_REQUIRED_DOCUMENT_COVERAGE_MIGRATION_SOURCE_HEAD_SHA,
+                    transport.GO_SEMANTIC_REQUIRED_DOCUMENT_COVERAGE_MIGRATION_SOURCE_ARTIFACT_ID,
+                    transport.GO_SEMANTIC_REQUIRED_DOCUMENT_COVERAGE_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+                    transport.GO_SEMANTIC_REQUIRED_DOCUMENT_COVERAGE_MIGRATION_SOURCE_ARTIFACT_SIZE,
+                ),
+                target,
+            )
+            value = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(value["schema_version"], 38)
+            self.assertEqual(
+                value["collector_migrations"][:36],
+                prior_manifest["collector_migrations"],
+            )
+            self.assertEqual(
+                value["collector_migrations"][36],
+                transport._expected_go_semantic_required_document_coverage_migration(
+                    target
+                ),
+            )
+            self.assertEqual(
+                transport.validate_manifest(path, transport.FRAME_RUN_ID), target
+            )
+            with self.assertRaisesRegex(ValueError, "migration chain is closed"):
+                transport.migrate_manifest(
+                    path,
+                    transport.FRAME_RUN_ID,
+                    "c" * 40,
+                    transport.GO_SEMANTIC_REQUIRED_DOCUMENT_COVERAGE_MIGRATION_NAME,
+                    transport.GO_SEMANTIC_REQUIRED_DOCUMENT_COVERAGE_MIGRATION_SOURCE_RUN_ID,
+                    transport.GO_SEMANTIC_REQUIRED_DOCUMENT_COVERAGE_MIGRATION_SOURCE_HEAD_SHA,
+                    transport.GO_SEMANTIC_REQUIRED_DOCUMENT_COVERAGE_MIGRATION_SOURCE_ARTIFACT_ID,
+                    transport.GO_SEMANTIC_REQUIRED_DOCUMENT_COVERAGE_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+                    transport.GO_SEMANTIC_REQUIRED_DOCUMENT_COVERAGE_MIGRATION_SOURCE_ARTIFACT_SIZE,
+                )
+
+            for field in value["collector_migrations"][36]:
+                tampered = json.loads(json.dumps(value))
+                tampered["collector_migrations"][36][field] = True
                 path.write_text(json.dumps(tampered), encoding="utf-8")
                 with self.subTest(field=field), self.assertRaises(ValueError):
                     transport.validate_manifest(path, transport.FRAME_RUN_ID)
@@ -5746,6 +5837,7 @@ class WorkflowContractTests(unittest.TestCase):
             "semantic-projection-indexing-v1",
             "semantic-public-binding-index-v1",
             "go-compiler-census-evidence-replay-v1",
+            "go-semantic-required-document-coverage-v1",
             'migrate-source-required-go-semantic-progress',
             'migrate-inferred-scip-kind-replay',
             'migrate-bounded-qualification-project-model-v8-replay',
@@ -5770,11 +5862,14 @@ class WorkflowContractTests(unittest.TestCase):
             'cd "$COLLECTOR_ROOT"',
             'replay-public-surface-census',
             'replay-compiler-census',
+            'replay-go-semantic-coverage',
             'for slot_number in 123 124 125; do',
             '--state-root "$STATE_ROOT"',
             '--work-root "$WORK_ROOT"',
             '--language go',
             '--slot-number 122',
+            '--slot-number 123',
+            '--slot-number 124',
             '"$COLLECTOR_ROOT/target/release/sniffbench-frame" run-slots',
             '--artifact-root "$FRAME_ARTIFACT_ROOT"',
             'python3 "$COLLECTOR_ROOT/.github/scripts/historical_v2_assessment_transport.py"',

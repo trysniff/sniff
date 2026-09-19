@@ -61,6 +61,15 @@ pub struct HistoricalV2CompilerCensusReplayInputs<'a> {
     pub canonical_repository: &'a str,
 }
 
+pub struct HistoricalV2GoSemanticCoverageReplayInputs<'a> {
+    pub state_root: &'a Path,
+    pub work_root: &'a Path,
+    pub selection_sha256: &'a str,
+    pub language: &'a str,
+    pub slot_number: usize,
+    pub canonical_repository: &'a str,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HistoricalV2PublicSurfaceReplaySummary {
     pub language: String,
@@ -73,6 +82,16 @@ pub struct HistoricalV2PublicSurfaceReplaySummary {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HistoricalV2CompilerCensusReplaySummary {
+    pub language: String,
+    pub slot_number: usize,
+    pub retained_stage: HistoricalV2SlotStage,
+    pub removed_stage_count: usize,
+    pub removed_semantic_progress: bool,
+    pub removed_source_progress: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HistoricalV2GoSemanticCoverageReplaySummary {
     pub language: String,
     pub slot_number: usize,
     pub retained_stage: HistoricalV2SlotStage,
