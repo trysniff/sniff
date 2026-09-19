@@ -715,7 +715,11 @@ fn validate_go_package_roots(
         let packages = go_package_exposures(&source.go_project_model)?;
         let mut roots = Vec::new();
         for semantic_variant in go_variants {
-            roots.extend(go_package_roots_for_variant(&packages, semantic_variant));
+            roots.extend(go_package_roots_for_variant(
+                &packages,
+                semantic_variant,
+                source,
+            ));
         }
         if !roots
             .iter()
