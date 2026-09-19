@@ -631,7 +631,7 @@ async fn run_go_compiler_world(
     let package_inventory_sha256 =
         canonical_sha256(&inventory).map_err(|detail| go_progress_failure(spec, detail))?;
     inventory.retain_semantic_documents(expected_languages);
-    let ignored_documents = inventory.ignored_documents.clone();
+    let ignored_documents = go_variant_ignored_documents(plan, &inventory);
     if inventory
         .packages
         .iter()
@@ -1011,29 +1011,27 @@ fn validate_go_variant_inventory(
         .map(|path| path.0.as_str())
         .take(8)
         .collect::<Vec<_>>();
-    let missing_ignored = plan
-        .ignored_documents
-        .difference(&inventory.ignored_documents)
-        .map(|path| path.0.as_str())
-        .take(8)
-        .collect::<Vec<_>>();
     let invented_ignored = inventory
         .ignored_documents
         .difference(&plan.ignored_documents)
         .map(|path| path.0.as_str())
         .take(8)
         .collect::<Vec<_>>();
-    if missing_selected.is_empty()
-        && invented_selected.is_empty()
-        && missing_ignored.is_empty()
-        && invented_ignored.is_empty()
-    {
+    if missing_selected.is_empty() && invented_selected.is_empty() && invented_ignored.is_empty() {
         return Ok(());
     }
     Err(format!(
-        "Go semantic inventory disagrees with committed variant {}; missing_selected={missing_selected:?}, invented_selected={invented_selected:?}, missing_ignored={missing_ignored:?}, invented_ignored={invented_ignored:?}",
+        "Go semantic inventory disagrees with committed variant {}; missing_selected={missing_selected:?}, invented_selected={invented_selected:?}, invented_ignored={invented_ignored:?}",
         plan.identity.0
     ))
+}
+
+fn go_variant_ignored_documents(
+    plan: Option<&SemanticIndexerVariantPlan>,
+    inventory: &super::go_shards::GoPackageInventory,
+) -> BTreeSet<RepositoryPath> {
+    plan.map(|plan| plan.ignored_documents.clone())
+        .unwrap_or_else(|| inventory.ignored_documents.clone())
 }
 
 fn go_progress_root(
