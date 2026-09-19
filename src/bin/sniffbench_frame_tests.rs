@@ -206,6 +206,26 @@ fn recover_slot_work_requires_every_frozen_boundary() {
     }
 }
 
+#[test]
+fn replay_compiler_census_requires_an_explicit_slot_identity_and_roots() {
+    let parsed = Args::try_parse_from(replay_compiler_census_arguments()).unwrap();
+    let Command::ReplayCompilerCensus { .. } = parsed.command else {
+        panic!("replay-compiler-census command was not parsed");
+    };
+    for required in ["--state-root", "--work-root", "--language", "--slot-number"] {
+        let mut arguments = replay_compiler_census_arguments();
+        let index = arguments
+            .iter()
+            .position(|value| *value == required)
+            .unwrap();
+        arguments.drain(index..=index + 1);
+        assert!(
+            Args::try_parse_from(arguments).is_err(),
+            "{required} was optional"
+        );
+    }
+}
+
 fn run_slots_arguments() -> Vec<&'static str> {
     vec![
         "sniffbench-frame",
@@ -257,6 +277,33 @@ fn recover_slot_work_arguments() -> Vec<&'static str> {
         "payloads.json",
         "--work-root",
         "work",
+    ]
+}
+
+fn replay_compiler_census_arguments() -> Vec<&'static str> {
+    vec![
+        "sniffbench-frame",
+        "replay-compiler-census",
+        "--protocol",
+        "protocol.json",
+        "--artifact-root",
+        "artifacts",
+        "--frame",
+        "frame.json",
+        "--exclusions",
+        "exclusions.json",
+        "--selection",
+        "selection.json",
+        "--payloads",
+        "payloads.json",
+        "--state-root",
+        "state",
+        "--work-root",
+        "work",
+        "--language",
+        "go",
+        "--slot-number",
+        "123",
     ]
 }
 

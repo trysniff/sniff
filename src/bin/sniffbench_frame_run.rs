@@ -2,17 +2,18 @@ use super::invalid_data;
 use clap::{Args, ValueEnum};
 use serde::de::DeserializeOwned;
 use sniff::benchmark::{
-    DockerHistoricalV2TestExecutor, HistoricalV2ExclusionManifest, HistoricalV2Frame,
-    HistoricalV2PublicSurfaceReplayInputs, HistoricalV2SelectedPayloads,
-    HistoricalV2SelectedSlotStateInspection, HistoricalV2SelectedSlotStateInspectionInputs,
-    HistoricalV2SelectedSlotSweepInputs, HistoricalV2SelectedSlotWorkRecoveryInputs,
-    HistoricalV2SemanticCensusExclusion, HistoricalV2SemanticCheckpointKind,
-    HistoricalV2SemanticCheckpointProgress, HistoricalV2SemanticSnapshotSide,
-    HistoricalV2SemanticWorldProgress, HistoricalV2SlotOutcome, HistoricalV2SlotRunDisposition,
-    HistoricalV2SlotSelection, HistoricalV2SlotStage, HistoricalV2SlotStageError,
-    HistoricalV2SlotStageErrorKind, HistoricalV2SlotStageOutcome, HistoricalV2StageArtifactKind,
-    HistoricalV2TerminalExclusionReason, inspect_historical_v2_selected_slot_state,
-    recover_historical_v2_selected_slot_work, replay_historical_v2_public_surface_census,
+    DockerHistoricalV2TestExecutor, HistoricalV2CompilerCensusReplayInputs,
+    HistoricalV2ExclusionManifest, HistoricalV2Frame, HistoricalV2PublicSurfaceReplayInputs,
+    HistoricalV2SelectedPayloads, HistoricalV2SelectedSlotStateInspection,
+    HistoricalV2SelectedSlotStateInspectionInputs, HistoricalV2SelectedSlotSweepInputs,
+    HistoricalV2SelectedSlotWorkRecoveryInputs, HistoricalV2SemanticCensusExclusion,
+    HistoricalV2SemanticCheckpointKind, HistoricalV2SemanticCheckpointProgress,
+    HistoricalV2SemanticSnapshotSide, HistoricalV2SemanticWorldProgress, HistoricalV2SlotOutcome,
+    HistoricalV2SlotRunDisposition, HistoricalV2SlotSelection, HistoricalV2SlotStage,
+    HistoricalV2SlotStageError, HistoricalV2SlotStageErrorKind, HistoricalV2SlotStageOutcome,
+    HistoricalV2StageArtifactKind, HistoricalV2TerminalExclusionReason,
+    inspect_historical_v2_selected_slot_state, recover_historical_v2_selected_slot_work,
+    replay_historical_v2_compiler_census, replay_historical_v2_public_surface_census,
     run_historical_v2_selected_slots_bounded, validate_historical_v2_protocol,
     validate_historical_v2_selected_payloads_commitment,
     validate_historical_v2_semantic_census_exclusion,
@@ -118,6 +119,8 @@ pub(super) struct ReplayPublicSurfaceCensusArgs {
     #[arg(long)]
     slot_number: usize,
 }
+
+pub(super) type ReplayCompilerCensusArgs = ReplayPublicSurfaceCensusArgs;
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum RunThroughStage {
@@ -432,6 +435,25 @@ fn semantic_failure_lines(
 pub(super) fn replay_public_surface_census(
     args: ReplayPublicSurfaceCensusArgs,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    replay_census(args, ReplayCensusMode::PublicSurface)
+}
+
+pub(super) fn replay_compiler_census(
+    args: ReplayCompilerCensusArgs,
+) -> Result<(), Box<dyn std::error::Error>> {
+    replay_census(args, ReplayCensusMode::CompilerCensusIncomplete)
+}
+
+#[derive(Clone, Copy)]
+enum ReplayCensusMode {
+    PublicSurface,
+    CompilerCensusIncomplete,
+}
+
+fn replay_census(
+    args: ReplayPublicSurfaceCensusArgs,
+    mode: ReplayCensusMode,
+) -> Result<(), Box<dyn std::error::Error>> {
     let protocol_bytes =
         read_plain_file(&args.protocol, "historical-v2 protocol", MAX_PROTOCOL_BYTES)?;
     let protocol = validate_historical_v2_protocol(&protocol_bytes).map_err(invalid_data)?;
@@ -487,26 +509,65 @@ pub(super) fn replay_public_surface_census(
             }
         })
         .ok_or_else(|| invalid_data("historical-v2 replay identity changed".to_string()))?;
-    let summary =
-        replay_historical_v2_public_surface_census(HistoricalV2PublicSurfaceReplayInputs {
-            state_root: &args.state_root,
-            work_root: &args.work_root,
-            selection_sha256: &selection.selection_sha256,
-            language: &args.language,
-            slot_number: args.slot_number,
-            canonical_repository,
-        })
-        .map_err(stage_error)?;
-    eprintln!(
-        "Historical-v2 public-surface census replay prepared\nTarget: {}/slot-{:04}\nRetained through: {:?}\nRemoved stages: {}\nRemoved semantic progress: {}\nRemoved source progress: {}",
-        summary.language,
-        summary.slot_number,
-        summary.retained_stage,
-        summary.removed_stage_count,
-        summary.removed_semantic_progress,
-        summary.removed_source_progress
-    );
+    match mode {
+        ReplayCensusMode::PublicSurface => {
+            let summary =
+                replay_historical_v2_public_surface_census(HistoricalV2PublicSurfaceReplayInputs {
+                    state_root: &args.state_root,
+                    work_root: &args.work_root,
+                    selection_sha256: &selection.selection_sha256,
+                    language: &args.language,
+                    slot_number: args.slot_number,
+                    canonical_repository,
+                })
+                .map_err(stage_error)?;
+            report_replay_summary(
+                "public-surface census",
+                &summary.language,
+                summary.slot_number,
+                summary.retained_stage,
+                summary.removed_stage_count,
+                summary.removed_semantic_progress,
+                summary.removed_source_progress,
+            );
+        }
+        ReplayCensusMode::CompilerCensusIncomplete => {
+            let summary =
+                replay_historical_v2_compiler_census(HistoricalV2CompilerCensusReplayInputs {
+                    state_root: &args.state_root,
+                    work_root: &args.work_root,
+                    selection_sha256: &selection.selection_sha256,
+                    language: &args.language,
+                    slot_number: args.slot_number,
+                    canonical_repository,
+                })
+                .map_err(stage_error)?;
+            report_replay_summary(
+                "compiler census",
+                &summary.language,
+                summary.slot_number,
+                summary.retained_stage,
+                summary.removed_stage_count,
+                summary.removed_semantic_progress,
+                summary.removed_source_progress,
+            );
+        }
+    }
     Ok(())
+}
+
+fn report_replay_summary(
+    label: &str,
+    language: &str,
+    slot_number: usize,
+    retained_stage: HistoricalV2SlotStage,
+    removed_stage_count: usize,
+    removed_semantic_progress: bool,
+    removed_source_progress: bool,
+) {
+    eprintln!(
+        "Historical-v2 {label} replay prepared\nTarget: {language}/slot-{slot_number:04}\nRetained through: {retained_stage:?}\nRemoved stages: {removed_stage_count}\nRemoved semantic progress: {removed_semantic_progress}\nRemoved source progress: {removed_source_progress}"
+    );
 }
 
 pub(super) fn should_report_slot(

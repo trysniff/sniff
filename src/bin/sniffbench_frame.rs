@@ -98,6 +98,11 @@ enum Command {
         #[command(flatten)]
         args: sniffbench_frame_run::ReplayPublicSurfaceCensusArgs,
     },
+    /// Replay a terminal incomplete compiler census after its evidence is independently resolved.
+    ReplayCompilerCensus {
+        #[command(flatten)]
+        args: sniffbench_frame_run::ReplayCompilerCensusArgs,
+    },
 }
 
 #[tokio::main]
@@ -277,6 +282,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Command::RecoverSlotWork { args } => sniffbench_frame_run::recover_slot_work(args)?,
         Command::ReplayPublicSurfaceCensus { args } => {
             sniffbench_frame_run::replay_public_surface_census(args)?
+        }
+        Command::ReplayCompilerCensus { args } => {
+            sniffbench_frame_run::replay_compiler_census(args)?
         }
     }
     Ok(())

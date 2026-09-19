@@ -1,3 +1,4 @@
+use super::super::HistoricalV2SemanticCensusExclusionReason;
 use super::super::history_v2_slot_store_support::{
     SlotFileLock, canonical_directory, read_committed_json_limited, read_limited,
     require_plain_directory, sync_directory, validate_slot_path, write_compact_json_new,
@@ -5,9 +6,9 @@ use super::super::history_v2_slot_store_support::{
 };
 use super::{
     HistoricalV2SlotStage, HistoricalV2SlotStageCheckpoint, HistoricalV2SlotStageCheckpointInput,
-    HistoricalV2SlotStageError, HistoricalV2SlotStageOutcome,
-    append_historical_v2_slot_stage_checkpoint, expected_historical_v2_slot_stage,
-    validate_historical_v2_slot_stage_history,
+    HistoricalV2SlotStageError, HistoricalV2SlotStageOutcome, HistoricalV2StageArtifactKind,
+    HistoricalV2TerminalExclusionReason, append_historical_v2_slot_stage_checkpoint,
+    expected_historical_v2_slot_stage, validate_historical_v2_slot_stage_history,
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
@@ -29,6 +30,12 @@ const MAX_SOURCE_CENSUS_ARTIFACT_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_SEMANTIC_CENSUS_ARTIFACT_BYTES: u64 = 1024 * 1024 * 1024;
 // Qualification retains exact public-surface evidence; the hosted Go artifact is about 159 MiB.
 const MAX_QUALIFICATION_ARTIFACT_BYTES: u64 = 256 * 1024 * 1024;
+
+#[derive(Clone, Copy)]
+enum RewindHistoryRequirement {
+    EntirelyCompleted,
+    CompilerCensusIncomplete,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -117,6 +124,32 @@ pub struct HistoricalV2SlotStageJournal {
     rewind_root: PathBuf,
     history: Vec<HistoricalV2StoredSlotStage>,
     _lock: SlotFileLock,
+}
+
+fn compiler_census_incomplete_history(
+    history: &[HistoricalV2StoredSlotStage],
+    retained_index: usize,
+) -> bool {
+    let Some((terminal, completed_prefix)) = history.split_last() else {
+        return false;
+    };
+    retained_index < completed_prefix.len()
+        && completed_prefix.iter().all(|stored| {
+            matches!(
+                stored.checkpoint.outcome,
+                HistoricalV2SlotStageOutcome::Completed { .. }
+            )
+        })
+        && terminal.checkpoint.stage == HistoricalV2SlotStage::SemanticCensus
+        && matches!(
+            &terminal.checkpoint.outcome,
+            HistoricalV2SlotStageOutcome::Excluded {
+                reason: HistoricalV2TerminalExclusionReason::SemanticCensus(reasons),
+                artifact_kind: HistoricalV2StageArtifactKind::SemanticCensusExclusion,
+                ..
+            } if reasons.as_slice()
+                == [HistoricalV2SemanticCensusExclusionReason::CompilerCensusIncomplete]
+        )
 }
 
 impl HistoricalV2SlotStageJournal {
@@ -254,6 +287,24 @@ impl HistoricalV2SlotStageJournal {
         &mut self,
         retained_stage: HistoricalV2SlotStage,
     ) -> Result<usize, HistoricalV2SlotStageError> {
+        self.rewind_after(retained_stage, RewindHistoryRequirement::EntirelyCompleted)
+    }
+
+    pub fn rewind_compiler_census_incomplete_after(
+        &mut self,
+        retained_stage: HistoricalV2SlotStage,
+    ) -> Result<usize, HistoricalV2SlotStageError> {
+        self.rewind_after(
+            retained_stage,
+            RewindHistoryRequirement::CompilerCensusIncomplete,
+        )
+    }
+
+    fn rewind_after(
+        &mut self,
+        retained_stage: HistoricalV2SlotStage,
+        requirement: RewindHistoryRequirement,
+    ) -> Result<usize, HistoricalV2SlotStageError> {
         let current = load_history(&self.slot_root)
             .map_err(|detail| HistoricalV2SlotStageError::invalid(retained_stage, detail))?;
         if current != self.history {
@@ -278,16 +329,29 @@ impl HistoricalV2SlotStageJournal {
                 "historical-v2 rewind has no completed suffix",
             ));
         }
-        if current.iter().any(|stored| {
-            !matches!(
-                stored.checkpoint.outcome,
-                HistoricalV2SlotStageOutcome::Completed { .. }
-            )
-        }) {
-            return Err(HistoricalV2SlotStageError::invalid(
-                retained_stage,
-                "historical-v2 rewind requires an entirely completed history",
-            ));
+        match requirement {
+            RewindHistoryRequirement::EntirelyCompleted
+                if current.iter().any(|stored| {
+                    !matches!(
+                        stored.checkpoint.outcome,
+                        HistoricalV2SlotStageOutcome::Completed { .. }
+                    )
+                }) =>
+            {
+                return Err(HistoricalV2SlotStageError::invalid(
+                    retained_stage,
+                    "historical-v2 rewind requires an entirely completed history",
+                ));
+            }
+            RewindHistoryRequirement::CompilerCensusIncomplete
+                if !compiler_census_incomplete_history(&current, retained_index) =>
+            {
+                return Err(HistoricalV2SlotStageError::invalid(
+                    retained_stage,
+                    "historical-v2 compiler-census rewind requires a completed prefix and one terminal compiler_census_incomplete semantic exclusion",
+                ));
+            }
+            _ => {}
         }
         reject_incomplete_rewind(&self.rewind_root)
             .map_err(|detail| HistoricalV2SlotStageError::invalid(retained_stage, detail))?;

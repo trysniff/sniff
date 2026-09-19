@@ -613,6 +613,75 @@ fn durable_journal_rewind_rejects_terminal_history_without_mutation() {
 }
 
 #[test]
+fn durable_journal_rewinds_only_the_exact_incomplete_compiler_census_terminal() {
+    let temp = tempfile::tempdir().unwrap();
+    let state = temp.path().join("state");
+    {
+        let mut journal = HistoricalV2SlotStageJournal::open(&state, "rust", 1).unwrap();
+        append_completed_stages(&mut journal, 4);
+        journal
+            .append(
+                checkpoint_input(
+                    HistoricalV2SlotStage::SemanticCensus,
+                    HistoricalV2SlotStageOutcome::Excluded {
+                        reason: HistoricalV2TerminalExclusionReason::SemanticCensus(vec![
+                            HistoricalV2SemanticCensusExclusionReason::CompilerCensusIncomplete,
+                        ]),
+                        artifact_kind: HistoricalV2StageArtifactKind::SemanticCensusExclusion,
+                        artifact_sha256: HASH_A.to_string(),
+                    },
+                ),
+                Some(&json!({"reason": "compiler_census_incomplete"})),
+            )
+            .unwrap();
+    }
+
+    let mut journal = HistoricalV2SlotStageJournal::open_existing(&state, "rust", 1).unwrap();
+    assert_eq!(
+        journal
+            .rewind_compiler_census_incomplete_after(HistoricalV2SlotStage::TestMaterialization,)
+            .unwrap(),
+        2
+    );
+    assert_eq!(journal.history().len(), 3);
+    assert!(!state.join("rust/slot-0001/0004-source-census").exists());
+    assert!(!state.join("rust/slot-0001/0005-semantic-census").exists());
+}
+
+#[test]
+fn durable_compiler_census_rewind_rejects_other_semantic_exclusions() {
+    let temp = tempfile::tempdir().unwrap();
+    let state = temp.path().join("state");
+    {
+        let mut journal = HistoricalV2SlotStageJournal::open(&state, "rust", 1).unwrap();
+        append_completed_stages(&mut journal, 4);
+        journal
+            .append(
+                checkpoint_input(
+                    HistoricalV2SlotStage::SemanticCensus,
+                    HistoricalV2SlotStageOutcome::Excluded {
+                        reason: HistoricalV2TerminalExclusionReason::SemanticCensus(vec![
+                            HistoricalV2SemanticCensusExclusionReason::UnsupportedProjectShape,
+                        ]),
+                        artifact_kind: HistoricalV2StageArtifactKind::SemanticCensusExclusion,
+                        artifact_sha256: HASH_A.to_string(),
+                    },
+                ),
+                Some(&json!({"reason": "unsupported_project_shape"})),
+            )
+            .unwrap();
+    }
+
+    let mut journal = HistoricalV2SlotStageJournal::open_existing(&state, "rust", 1).unwrap();
+    let error = journal
+        .rewind_compiler_census_incomplete_after(HistoricalV2SlotStage::TestMaterialization)
+        .unwrap_err();
+    assert_eq!(error.kind, HistoricalV2SlotStageErrorKind::InvalidInput);
+    assert!(error.detail.contains("compiler_census_incomplete"));
+    assert!(state.join("rust/slot-0001/0005-semantic-census").is_dir());
+}
+
+#[test]
 fn durable_journal_rewind_revalidates_bytes_before_mutation() {
     let temp = tempfile::tempdir().unwrap();
     let state = temp.path().join("state");

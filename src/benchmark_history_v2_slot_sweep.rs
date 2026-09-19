@@ -1,17 +1,20 @@
 use super::history_v2_slot_store_support::sync_directory;
 use super::{
+    HistoricalV2CompilerCensusReplayInputs, HistoricalV2CompilerCensusReplaySummary,
     HistoricalV2LanguageQuotaHeadroom, HistoricalV2PayloadStageInputs,
     HistoricalV2PublicSurfaceReplayInputs, HistoricalV2PublicSurfaceReplaySummary,
     HistoricalV2SelectedPayload, HistoricalV2SelectedSlotRunSummary,
     HistoricalV2SelectedSlotStateInspection, HistoricalV2SelectedSlotStateInspectionInputs,
     HistoricalV2SelectedSlotStateInspectionSummary, HistoricalV2SelectedSlotSweepInputs,
     HistoricalV2SelectedSlotSweepSummary, HistoricalV2SelectedSlotWorkRecoveryInputs,
-    HistoricalV2SelectedSlotWorkRecoverySummary, HistoricalV2SemanticCheckpointProgress,
-    HistoricalV2SemanticWorldProgress, HistoricalV2SlotOperations, HistoricalV2SlotOutcome,
-    HistoricalV2SlotRunDisposition, HistoricalV2SlotRunIdentity, HistoricalV2SlotStage,
-    HistoricalV2SlotStageError, HistoricalV2SlotStageJournal, HistoricalV2SlotStageOutcome,
-    run_historical_v2_slot_slice_through, validate_historical_v2_protocol,
-    validate_historical_v2_selected_payloads_commitment, validate_historical_v2_slot_selection,
+    HistoricalV2SelectedSlotWorkRecoverySummary, HistoricalV2SemanticCensusExclusionReason,
+    HistoricalV2SemanticCheckpointProgress, HistoricalV2SemanticWorldProgress,
+    HistoricalV2SlotOperations, HistoricalV2SlotOutcome, HistoricalV2SlotRunDisposition,
+    HistoricalV2SlotRunIdentity, HistoricalV2SlotStage, HistoricalV2SlotStageError,
+    HistoricalV2SlotStageJournal, HistoricalV2SlotStageOutcome, HistoricalV2StageArtifactKind,
+    HistoricalV2TerminalExclusionReason, run_historical_v2_slot_slice_through,
+    validate_historical_v2_protocol, validate_historical_v2_selected_payloads_commitment,
+    validate_historical_v2_slot_selection,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
@@ -295,26 +298,88 @@ pub fn recover_historical_v2_selected_slot_work(
 pub fn replay_historical_v2_public_surface_census(
     inputs: HistoricalV2PublicSurfaceReplayInputs<'_>,
 ) -> Result<HistoricalV2PublicSurfaceReplaySummary, HistoricalV2SlotStageError> {
-    let state_root = existing_plain_directory(inputs.state_root, "historical-v2 state root")?;
-    let work_root = existing_plain_directory(inputs.work_root, "historical-v2 work root")?;
+    let summary = replay_historical_v2_census(
+        inputs.state_root,
+        inputs.work_root,
+        inputs.selection_sha256,
+        inputs.language,
+        inputs.slot_number,
+        inputs.canonical_repository,
+        CensusReplayMode::PublicSurface,
+    )?;
+    Ok(HistoricalV2PublicSurfaceReplaySummary {
+        language: summary.language,
+        slot_number: summary.slot_number,
+        retained_stage: summary.retained_stage,
+        removed_stage_count: summary.removed_stage_count,
+        removed_semantic_progress: summary.removed_semantic_progress,
+        removed_source_progress: summary.removed_source_progress,
+    })
+}
+
+pub fn replay_historical_v2_compiler_census(
+    inputs: HistoricalV2CompilerCensusReplayInputs<'_>,
+) -> Result<HistoricalV2CompilerCensusReplaySummary, HistoricalV2SlotStageError> {
+    let summary = replay_historical_v2_census(
+        inputs.state_root,
+        inputs.work_root,
+        inputs.selection_sha256,
+        inputs.language,
+        inputs.slot_number,
+        inputs.canonical_repository,
+        CensusReplayMode::CompilerCensusIncomplete,
+    )?;
+    Ok(HistoricalV2CompilerCensusReplaySummary {
+        language: summary.language,
+        slot_number: summary.slot_number,
+        retained_stage: summary.retained_stage,
+        removed_stage_count: summary.removed_stage_count,
+        removed_semantic_progress: summary.removed_semantic_progress,
+        removed_source_progress: summary.removed_source_progress,
+    })
+}
+
+#[derive(Clone, Copy)]
+enum CensusReplayMode {
+    PublicSurface,
+    CompilerCensusIncomplete,
+}
+
+struct CensusReplaySummary {
+    language: String,
+    slot_number: usize,
+    retained_stage: HistoricalV2SlotStage,
+    removed_stage_count: usize,
+    removed_semantic_progress: bool,
+    removed_source_progress: bool,
+}
+
+fn replay_historical_v2_census(
+    state_root: &Path,
+    work_root: &Path,
+    selection_sha256: &str,
+    language: &str,
+    slot_number: usize,
+    canonical_repository: &str,
+    mode: CensusReplayMode,
+) -> Result<CensusReplaySummary, HistoricalV2SlotStageError> {
+    let state_root = existing_plain_directory(state_root, "historical-v2 state root")?;
+    let work_root = existing_plain_directory(work_root, "historical-v2 work root")?;
     if overlaps(&state_root, &work_root) {
         return Err(recovery_invalid(
             "historical-v2 state and work roots must not overlap",
         ));
     }
 
-    let mut journal = HistoricalV2SlotStageJournal::open_existing(
-        &state_root,
-        inputs.language,
-        inputs.slot_number,
-    )?;
+    let mut journal =
+        HistoricalV2SlotStageJournal::open_existing(&state_root, language, slot_number)?;
     validate_existing_slot_identity(
         journal.history(),
         HistoricalV2SlotRunIdentity {
-            selection_sha256: inputs.selection_sha256,
-            language: inputs.language,
-            slot_number: inputs.slot_number,
-            canonical_repository: inputs.canonical_repository,
+            selection_sha256,
+            language,
+            slot_number,
+            canonical_repository,
         },
     )?;
     let expected_stages = [
@@ -324,25 +389,18 @@ pub fn replay_historical_v2_public_surface_census(
         HistoricalV2SlotStage::SourceCensus,
         HistoricalV2SlotStage::SemanticCensus,
     ];
-    if journal.history().len() != expected_stages.len()
-        || journal
-            .history()
-            .iter()
-            .zip(expected_stages)
-            .any(|(stored, expected)| {
-                stored.checkpoint.stage != expected
-                    || !matches!(
-                        stored.checkpoint.outcome,
-                        super::HistoricalV2SlotStageOutcome::Completed { .. }
-                    )
-            })
-    {
-        return Err(recovery_invalid(
-            "historical-v2 public-surface replay requires exactly five completed stages",
-        ));
+    if !replay_history_matches(journal.history(), &expected_stages, mode) {
+        return Err(recovery_invalid(match mode {
+            CensusReplayMode::PublicSurface => {
+                "historical-v2 public-surface replay requires exactly five completed stages"
+            }
+            CensusReplayMode::CompilerCensusIncomplete => {
+                "historical-v2 compiler-census replay requires four completed stages followed by one compiler_census_incomplete semantic exclusion"
+            }
+        }));
     }
 
-    let slot_root = exact_replay_slot_root(&work_root, inputs.language, inputs.slot_number)?;
+    let slot_root = exact_replay_slot_root(&work_root, language, slot_number)?;
     let progress_root = slot_root.join("semantic-progress");
     let progress_root = exact_plain_child(
         &slot_root,
@@ -354,8 +412,12 @@ pub fn replay_historical_v2_public_surface_census(
         "source-progress",
         "historical-v2 source progress root",
     )?;
-    let quarantine = slot_root.join(".semantic-progress.public-surface-replay");
-    let source_quarantine = slot_root.join(".source-progress.public-surface-replay");
+    let suffix = match mode {
+        CensusReplayMode::PublicSurface => "public-surface-replay",
+        CensusReplayMode::CompilerCensusIncomplete => "compiler-census-replay",
+    };
+    let quarantine = slot_root.join(format!(".semantic-progress.{suffix}"));
+    let source_quarantine = slot_root.join(format!(".source-progress.{suffix}"));
     match fs::symlink_metadata(&quarantine) {
         Ok(_) => {
             return Err(recovery_invalid(
@@ -407,8 +469,13 @@ pub fn replay_historical_v2_public_surface_census(
     }
     sync_directory(&slot_root).map_err(recovery_infrastructure)?;
 
-    let removed_stage_count =
-        journal.rewind_completed_after(HistoricalV2SlotStage::TestMaterialization)?;
+    let removed_stage_count = match mode {
+        CensusReplayMode::PublicSurface => {
+            journal.rewind_completed_after(HistoricalV2SlotStage::TestMaterialization)?
+        }
+        CensusReplayMode::CompilerCensusIncomplete => journal
+            .rewind_compiler_census_incomplete_after(HistoricalV2SlotStage::TestMaterialization)?,
+    };
     let quarantine = exact_plain_child(
         &slot_root,
         &quarantine,
@@ -433,14 +500,56 @@ pub fn replay_historical_v2_public_surface_census(
     }
     sync_directory(&slot_root).map_err(recovery_infrastructure)?;
 
-    Ok(HistoricalV2PublicSurfaceReplaySummary {
-        language: inputs.language.to_string(),
-        slot_number: inputs.slot_number,
+    Ok(CensusReplaySummary {
+        language: language.to_string(),
+        slot_number,
         retained_stage: HistoricalV2SlotStage::TestMaterialization,
         removed_stage_count,
         removed_semantic_progress: true,
         removed_source_progress: source_progress_root.is_some(),
     })
+}
+
+fn replay_history_matches(
+    history: &[super::HistoricalV2StoredSlotStage],
+    expected_stages: &[HistoricalV2SlotStage],
+    mode: CensusReplayMode,
+) -> bool {
+    if history.len() != expected_stages.len()
+        || history
+            .iter()
+            .zip(expected_stages)
+            .any(|(stored, expected)| stored.checkpoint.stage != *expected)
+    {
+        return false;
+    }
+    match mode {
+        CensusReplayMode::PublicSurface => history.iter().all(|stored| {
+            matches!(
+                stored.checkpoint.outcome,
+                HistoricalV2SlotStageOutcome::Completed { .. }
+            )
+        }),
+        CensusReplayMode::CompilerCensusIncomplete => {
+            let Some((terminal, completed_prefix)) = history.split_last() else {
+                return false;
+            };
+            completed_prefix.iter().all(|stored| {
+                matches!(
+                    stored.checkpoint.outcome,
+                    HistoricalV2SlotStageOutcome::Completed { .. }
+                )
+            }) && matches!(
+                &terminal.checkpoint.outcome,
+                HistoricalV2SlotStageOutcome::Excluded {
+                    reason: HistoricalV2TerminalExclusionReason::SemanticCensus(reasons),
+                    artifact_kind: HistoricalV2StageArtifactKind::SemanticCensusExclusion,
+                    ..
+                } if reasons.as_slice()
+                    == [HistoricalV2SemanticCensusExclusionReason::CompilerCensusIncomplete]
+            )
+        }
+    }
 }
 
 fn optional_replay_progress_root(
