@@ -725,6 +725,25 @@ SEMANTIC_PUBLIC_BINDING_INDEX_MIGRATION_SOURCE_ARTIFACT_DIGEST = (
 )
 SEMANTIC_PUBLIC_BINDING_INDEX_MIGRATION_SOURCE_ARTIFACT_SIZE = 1_441_846_590
 
+GO_COMPILER_CENSUS_EVIDENCE_REPLAY_MIGRATION_NAME = (
+    "go-compiler-census-evidence-replay-v1"
+)
+GO_COMPILER_CENSUS_EVIDENCE_REPLAY_MIGRATION_CONTRACT = (
+    "sniffbench-historical-v2-go-compiler-census-evidence-replay-migration-v1"
+)
+GO_COMPILER_CENSUS_EVIDENCE_REPLAY_MIGRATION_FROM_COLLECTOR_SHA = (
+    "6c74699c738cba2b11f0e5e355e4c33db8656eef"
+)
+GO_COMPILER_CENSUS_EVIDENCE_REPLAY_MIGRATION_SOURCE_RUN_ID = 35_344_715_106
+GO_COMPILER_CENSUS_EVIDENCE_REPLAY_MIGRATION_SOURCE_HEAD_SHA = (
+    "6c74699c738cba2b11f0e5e355e4c33db8656eef"
+)
+GO_COMPILER_CENSUS_EVIDENCE_REPLAY_MIGRATION_SOURCE_ARTIFACT_ID = 10_547_257_303
+GO_COMPILER_CENSUS_EVIDENCE_REPLAY_MIGRATION_SOURCE_ARTIFACT_DIGEST = (
+    "sha256:0e82dd2fbe0af08e9eab91e42d40689070f180a0898f59a24e7dfe37ddae103a"
+)
+GO_COMPILER_CENSUS_EVIDENCE_REPLAY_MIGRATION_SOURCE_ARTIFACT_SIZE = 517_968_656
+
 FRAME_FILE_SHA256 = {
     "environment.txt": "2e87f3c3e1b2005f6b6d09b1bf1b82d30a9433636c3c67f0806cc68e80ab6800",
     "exclusions.json": "74bccb100eb48ab87952bd7eec137b2285edbc68d2547715bc0e06a80e029f76",
@@ -2102,7 +2121,7 @@ def validate_manifest(path: pathlib.Path, frame_run_id: int) -> str:
     schema_version = value.get("schema_version")
     if schema_version == 1:
         expected = _manifest(frame_run_id, collector_sha)
-    elif schema_version in range(2, 37):
+    elif schema_version in range(2, 38):
         migrations = value.get("collector_migrations")
         expected_count = schema_version - 1
         if not isinstance(migrations, list) or len(migrations) != expected_count:
@@ -2265,6 +2284,11 @@ def _migration_record(
     elif migration_name == SEMANTIC_PUBLIC_BINDING_INDEX_MIGRATION_NAME:
         contract = SEMANTIC_PUBLIC_BINDING_INDEX_MIGRATION_CONTRACT
         source_collector_sha = SEMANTIC_PUBLIC_BINDING_INDEX_MIGRATION_FROM_COLLECTOR_SHA
+    elif migration_name == GO_COMPILER_CENSUS_EVIDENCE_REPLAY_MIGRATION_NAME:
+        contract = GO_COMPILER_CENSUS_EVIDENCE_REPLAY_MIGRATION_CONTRACT
+        source_collector_sha = (
+            GO_COMPILER_CENSUS_EVIDENCE_REPLAY_MIGRATION_FROM_COLLECTOR_SHA
+        )
     else:
         raise ValueError("transport manifest collector migration is not allowlisted")
     return {
@@ -2952,15 +2976,35 @@ def _expected_semantic_public_binding_index_migration(
     )
 
 
+def _expected_go_compiler_census_evidence_replay_migration(
+    target_collector_sha: str,
+) -> dict[str, Any]:
+    if (
+        target_collector_sha
+        == GO_COMPILER_CENSUS_EVIDENCE_REPLAY_MIGRATION_FROM_COLLECTOR_SHA
+        or re.fullmatch(r"[0-9a-f]{40}", target_collector_sha) is None
+    ):
+        raise ValueError("transport manifest collector migration target is invalid")
+    return _migration_record(
+        GO_COMPILER_CENSUS_EVIDENCE_REPLAY_MIGRATION_NAME,
+        target_collector_sha,
+        GO_COMPILER_CENSUS_EVIDENCE_REPLAY_MIGRATION_SOURCE_RUN_ID,
+        GO_COMPILER_CENSUS_EVIDENCE_REPLAY_MIGRATION_SOURCE_HEAD_SHA,
+        GO_COMPILER_CENSUS_EVIDENCE_REPLAY_MIGRATION_SOURCE_ARTIFACT_ID,
+        GO_COMPILER_CENSUS_EVIDENCE_REPLAY_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+        GO_COMPILER_CENSUS_EVIDENCE_REPLAY_MIGRATION_SOURCE_ARTIFACT_SIZE,
+    )
+
+
 def _validate_collector_migrations(
     migrations: Sequence[Mapping[str, Any]], collector_sha: str
 ) -> None:
-    if len(migrations) not in range(1, 36):
+    if len(migrations) not in range(1, 37):
         raise ValueError("transport manifest collector migration chain is invalid")
     expected = [_expected_storage_migration()]
     if len(migrations) == 2:
         expected.append(_expected_go_preparation_migration(collector_sha))
-    elif len(migrations) in range(3, 36):
+    elif len(migrations) in range(3, 37):
         expected.append(
             _expected_go_preparation_migration(
                 GO_MODULE_DOWNLOAD_MIGRATION_FROM_COLLECTOR_SHA
@@ -3237,7 +3281,15 @@ def _validate_collector_migrations(
             )
         if len(migrations) >= 35:
             expected.append(
-                _expected_semantic_public_binding_index_migration(collector_sha)
+                _expected_semantic_public_binding_index_migration(
+                    GO_COMPILER_CENSUS_EVIDENCE_REPLAY_MIGRATION_FROM_COLLECTOR_SHA
+                    if len(migrations) >= 36
+                    else collector_sha
+                )
+            )
+        if len(migrations) >= 36:
+            expected.append(
+                _expected_go_compiler_census_evidence_replay_migration(collector_sha)
             )
     elif collector_sha != STORAGE_MIGRATION_TO_COLLECTOR_SHA:
         raise ValueError("transport manifest collector migration target drifted")
@@ -3469,6 +3521,12 @@ def migrate_manifest(
         ]
     elif schema_version == 35:
         expected_name = SEMANTIC_PUBLIC_BINDING_INDEX_MIGRATION_NAME
+        migrations = [
+            _require_mapping(item, "transport manifest collector migration")
+            for item in value.get("collector_migrations", [])
+        ]
+    elif schema_version == 36:
+        expected_name = GO_COMPILER_CENSUS_EVIDENCE_REPLAY_MIGRATION_NAME
         migrations = [
             _require_mapping(item, "transport manifest collector migration")
             for item in value.get("collector_migrations", [])
