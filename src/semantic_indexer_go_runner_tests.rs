@@ -140,8 +140,19 @@ fn go_variant_inventory_requires_exact_nonempty_document_sets() {
 
     assert!(error.contains("missing_selected=[\"fixture/main.go\"]"));
     assert!(error.contains("invented_selected=[\"fixture/invented.go\"]"));
-    assert!(error.contains("missing_ignored=[\"fixture/windows.go\"]"));
     assert!(error.contains("invented_ignored=[\"fixture/other.go\"]"));
+}
+
+#[test]
+fn go_variant_inventory_retains_committed_ignored_documents_absent_from_query() {
+    let plan = variant_plan("linux", &["fixture/main.go"], &["tools/tools.go"]);
+    let inventory = package_inventory(&["fixture/main.go"], &[]);
+
+    validate_go_variant_inventory(&plan, &inventory).unwrap();
+    assert_eq!(
+        go_variant_ignored_documents(Some(&plan), &inventory),
+        plan.ignored_documents
+    );
 }
 
 #[test]
