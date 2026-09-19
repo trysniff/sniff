@@ -58,39 +58,16 @@ pub(super) fn go_semantic_variant_plans(
             .map(|path| RepositoryPath(path.clone()))
             .filter(|path| semantic_documents.contains(path))
             .collect::<BTreeSet<_>>();
-        let module_documents = model
-            .targets
-            .iter()
-            .filter(|target| {
-                target.manifest_repository_path == execution.invocation_anchor_repository_path
-            })
-            .flat_map(|target| {
-                target
-                    .source_repository_paths
-                    .iter()
-                    .chain(&target.ignored_source_repository_paths)
-            })
-            .map(|path| RepositoryPath(path.clone()))
-            .filter(|path| semantic_documents.contains(path))
-            .collect::<BTreeSet<_>>();
-        let target_ignored_documents = targets
-            .iter()
-            .flat_map(|target| {
-                target
-                    .ignored_source_repository_paths
-                    .iter()
-                    .map(|path| RepositoryPath(path.clone()))
-            })
-            .filter(|path| semantic_documents.contains(path))
+        // Semantic assembly evaluates every Go source against every retained
+        // compiler world, including worlds owned by another nested module.
+        let unselected_documents = semantic_documents
+            .difference(&selected_documents)
+            .cloned()
             .collect::<BTreeSet<_>>();
         let (compiler_query, ignored_documents) = match query {
             IntentionalBoundaryProjectModelGoQuery::ModulePackages => (
                 SemanticIndexerCompilerQuery::ProjectPackages,
-                module_documents
-                    .difference(&selected_documents)
-                    .cloned()
-                    .chain(target_ignored_documents)
-                    .collect::<BTreeSet<_>>(),
+                unselected_documents,
             ),
             IntentionalBoundaryProjectModelGoQuery::StandaloneSource {
                 source_repository_path,
@@ -98,7 +75,7 @@ pub(super) fn go_semantic_variant_plans(
                 SemanticIndexerCompilerQuery::ExactSource {
                     source_document: RepositoryPath(source_repository_path.clone()),
                 },
-                target_ignored_documents,
+                unselected_documents,
             ),
         };
         let tags = serde_json::to_string(build_tags)
@@ -749,7 +726,10 @@ mod tests {
             standalone.selected_documents,
             BTreeSet::from([RepositoryPath("plugins/generate.go".to_string())])
         );
-        assert!(standalone.ignored_documents.is_empty());
+        assert_eq!(
+            standalone.ignored_documents,
+            BTreeSet::from([RepositoryPath("api/common.go".to_string())])
+        );
     }
 
     #[test]
@@ -861,8 +841,55 @@ mod tests {
             plan.identity.0 == "test-tools-linux"
                 && plan.compiler_project == Some(RepositoryPath("tools/go.mod".to_string()))
                 && plan.selected_documents.is_empty()
-                && plan.ignored_documents.is_empty()
+                && plan.ignored_documents == semantic_documents
         }));
+    }
+
+    #[test]
+    fn nested_go_modules_classify_each_others_required_sources() {
+        let mut model = go_model();
+        model.executions[0].execution_id = "root-linux".to_string();
+        model.targets[0].execution_id = "root-linux".to_string();
+        model.targets[0].source_repository_paths = vec!["api/root.go".to_string()];
+        model.targets[0].ignored_source_repository_paths.clear();
+
+        let mut nested_execution = model.executions[0].clone();
+        nested_execution.execution_id = "example-linux".to_string();
+        nested_execution.invocation_anchor_repository_path =
+            "documentation/examples/remote_storage/go.mod".to_string();
+        nested_execution.covered_manifest_repository_paths =
+            vec!["documentation/examples/remote_storage/go.mod".to_string()];
+        let mut nested_target = model.targets[0].clone();
+        nested_target.execution_id = nested_execution.execution_id.clone();
+        nested_target.manifest_repository_path =
+            nested_execution.invocation_anchor_repository_path.clone();
+        nested_target.source_repository_paths = vec![
+            "documentation/examples/remote_storage/example_write_adapter/server.go".to_string(),
+        ];
+        model.executions.push(nested_execution);
+        model.targets.push(nested_target);
+        let semantic_documents = semantic_go_documents(&model);
+
+        let plans = go_semantic_variant_plans(&model, &semantic_documents).unwrap();
+        let root = plans
+            .iter()
+            .find(|plan| plan.identity.0 == "root-linux")
+            .unwrap();
+        let nested = plans
+            .iter()
+            .find(|plan| plan.identity.0 == "example-linux")
+            .unwrap();
+
+        assert_eq!(
+            root.ignored_documents,
+            BTreeSet::from([RepositoryPath(
+                "documentation/examples/remote_storage/example_write_adapter/server.go".to_string()
+            )])
+        );
+        assert_eq!(
+            nested.ignored_documents,
+            BTreeSet::from([RepositoryPath("api/root.go".to_string())])
+        );
     }
 
     #[test]
