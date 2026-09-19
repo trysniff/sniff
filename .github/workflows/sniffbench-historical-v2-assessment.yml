@@ -164,6 +164,7 @@ jobs:
               exit 1
             fi
             case "$COLLECTOR_MIGRATION" in
+              go-semantic-effective-test-coverage-v1) ;;
               go-semantic-required-document-coverage-v1) ;;
               go-compiler-census-evidence-replay-v1) ;;
               semantic-public-binding-index-v1) ;;
@@ -734,6 +735,24 @@ jobs:
             --slot-number 123
           "$COLLECTOR_ROOT/target/release/sniffbench-frame" \
             replay-go-semantic-coverage \
+            --protocol "$COLLECTOR_ROOT/sniffbench/historical-v2-protocol.json" \
+            --artifact-root "$FRAME_ARTIFACT_ROOT" \
+            --frame "$FRAME_ROOT/frame.json" \
+            --exclusions "$FRAME_ROOT/exclusions.json" \
+            --selection "$FRAME_ROOT/selection.json" \
+            --payloads "$FRAME_ROOT/selected-payloads.json" \
+            --state-root "$STATE_ROOT" \
+            --work-root "$WORK_ROOT" \
+            --language go \
+            --slot-number 124
+
+      - name: Replay effective Go test coverage
+        if: ${{ !inputs.inspect_only && inputs.collector_migration == 'go-semantic-effective-test-coverage-v1' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$COLLECTOR_ROOT/target/release/sniffbench-frame" \
+            replay-compiler-census \
             --protocol "$COLLECTOR_ROOT/sniffbench/historical-v2-protocol.json" \
             --artifact-root "$FRAME_ARTIFACT_ROOT" \
             --frame "$FRAME_ROOT/frame.json" \
