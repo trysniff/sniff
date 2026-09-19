@@ -1,6 +1,7 @@
 use super::history_v2_slot_store_support::sync_directory;
 use super::{
     HistoricalV2CompilerCensusReplayInputs, HistoricalV2CompilerCensusReplaySummary,
+    HistoricalV2GoSemanticCoverageReplayInputs, HistoricalV2GoSemanticCoverageReplaySummary,
     HistoricalV2LanguageQuotaHeadroom, HistoricalV2PayloadStageInputs,
     HistoricalV2PublicSurfaceReplayInputs, HistoricalV2PublicSurfaceReplaySummary,
     HistoricalV2SelectedPayload, HistoricalV2SelectedSlotRunSummary,
@@ -339,10 +340,38 @@ pub fn replay_historical_v2_compiler_census(
     })
 }
 
+pub fn replay_historical_v2_go_semantic_coverage(
+    inputs: HistoricalV2GoSemanticCoverageReplayInputs<'_>,
+) -> Result<HistoricalV2GoSemanticCoverageReplaySummary, HistoricalV2SlotStageError> {
+    if inputs.language != "go" {
+        return Err(recovery_invalid(
+            "historical-v2 Go semantic-coverage replay requires language go",
+        ));
+    }
+    let summary = replay_historical_v2_census(
+        inputs.state_root,
+        inputs.work_root,
+        inputs.selection_sha256,
+        inputs.language,
+        inputs.slot_number,
+        inputs.canonical_repository,
+        CensusReplayMode::GoSemanticCoverage,
+    )?;
+    Ok(HistoricalV2GoSemanticCoverageReplaySummary {
+        language: summary.language,
+        slot_number: summary.slot_number,
+        retained_stage: summary.retained_stage,
+        removed_stage_count: summary.removed_stage_count,
+        removed_semantic_progress: summary.removed_semantic_progress,
+        removed_source_progress: summary.removed_source_progress,
+    })
+}
+
 #[derive(Clone, Copy)]
 enum CensusReplayMode {
     PublicSurface,
     CompilerCensusIncomplete,
+    GoSemanticCoverage,
 }
 
 struct CensusReplaySummary {
@@ -382,20 +411,35 @@ fn replay_historical_v2_census(
             canonical_repository,
         },
     )?;
-    let expected_stages = [
+    let completed_through_source = [
+        HistoricalV2SlotStage::Payload,
+        HistoricalV2SlotStage::Materialization,
+        HistoricalV2SlotStage::TestMaterialization,
+        HistoricalV2SlotStage::SourceCensus,
+    ];
+    let completed_through_semantic = [
         HistoricalV2SlotStage::Payload,
         HistoricalV2SlotStage::Materialization,
         HistoricalV2SlotStage::TestMaterialization,
         HistoricalV2SlotStage::SourceCensus,
         HistoricalV2SlotStage::SemanticCensus,
     ];
-    if !replay_history_matches(journal.history(), &expected_stages, mode) {
+    let expected_stages = match mode {
+        CensusReplayMode::GoSemanticCoverage => completed_through_source.as_slice(),
+        CensusReplayMode::PublicSurface | CensusReplayMode::CompilerCensusIncomplete => {
+            completed_through_semantic.as_slice()
+        }
+    };
+    if !replay_history_matches(journal.history(), expected_stages, mode) {
         return Err(recovery_invalid(match mode {
             CensusReplayMode::PublicSurface => {
                 "historical-v2 public-surface replay requires exactly five completed stages"
             }
             CensusReplayMode::CompilerCensusIncomplete => {
                 "historical-v2 compiler-census replay requires four completed stages followed by one compiler_census_incomplete semantic exclusion"
+            }
+            CensusReplayMode::GoSemanticCoverage => {
+                "historical-v2 Go semantic-coverage replay requires exactly four completed stages through source census"
             }
         }));
     }
@@ -421,6 +465,47 @@ fn replay_historical_v2_census(
         &progress_root,
         "historical-v2 semantic progress root",
     )?;
+    if matches!(mode, CensusReplayMode::GoSemanticCoverage) {
+        let quarantine = slot_root.join(".semantic-progress.go-semantic-coverage-replay");
+        match fs::symlink_metadata(&quarantine) {
+            Ok(_) => {
+                return Err(recovery_invalid(
+                    "historical-v2 Go semantic-coverage replay quarantine already exists",
+                ));
+            }
+            Err(error) if error.kind() == ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(recovery_infrastructure(format!(
+                    "failed to inspect historical-v2 Go semantic-coverage replay quarantine: {error}"
+                )));
+            }
+        }
+        fs::rename(&progress_root, &quarantine).map_err(|error| {
+            recovery_infrastructure(format!(
+                "failed to quarantine historical-v2 Go semantic progress: {error}"
+            ))
+        })?;
+        sync_directory(&slot_root).map_err(recovery_infrastructure)?;
+        let quarantine = exact_plain_child(
+            &slot_root,
+            &quarantine,
+            "historical-v2 Go semantic-coverage replay quarantine",
+        )?;
+        fs::remove_dir_all(&quarantine).map_err(|error| {
+            recovery_infrastructure(format!(
+                "failed to remove historical-v2 Go semantic progress quarantine: {error}"
+            ))
+        })?;
+        sync_directory(&slot_root).map_err(recovery_infrastructure)?;
+        return Ok(CensusReplaySummary {
+            language: language.to_string(),
+            slot_number,
+            retained_stage: HistoricalV2SlotStage::SourceCensus,
+            removed_stage_count: 0,
+            removed_semantic_progress: true,
+            removed_source_progress: false,
+        });
+    }
     let source_progress_root = optional_replay_progress_root(
         &slot_root,
         "source-progress",
@@ -555,6 +640,12 @@ fn replay_history_matches(
                     == [HistoricalV2SemanticCensusExclusionReason::CompilerCensusIncomplete]
             )
         }
+        CensusReplayMode::GoSemanticCoverage => history.iter().all(|stored| {
+            matches!(
+                stored.checkpoint.outcome,
+                HistoricalV2SlotStageOutcome::Completed { .. }
+            )
+        }),
     }
 }
 
@@ -606,7 +697,7 @@ fn exact_replay_slot_root(
     expected_with_source_progress.insert("source-progress".to_string());
     if observed != expected && observed != expected_with_source_progress {
         return Err(recovery_invalid(
-            "historical-v2 public-surface replay work layout changed",
+            "historical-v2 census replay work layout changed",
         ));
     }
     Ok(slot_root)

@@ -121,6 +121,7 @@ pub(super) struct ReplayPublicSurfaceCensusArgs {
 }
 
 pub(super) type ReplayCompilerCensusArgs = ReplayPublicSurfaceCensusArgs;
+pub(super) type ReplayGoSemanticCoverageArgs = ReplayPublicSurfaceCensusArgs;
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum RunThroughStage {
@@ -444,10 +445,17 @@ pub(super) fn replay_compiler_census(
     replay_census(args, ReplayCensusMode::CompilerCensusIncomplete)
 }
 
+pub(super) fn replay_go_semantic_coverage(
+    args: ReplayGoSemanticCoverageArgs,
+) -> Result<(), Box<dyn std::error::Error>> {
+    replay_census(args, ReplayCensusMode::GoSemanticCoverage)
+}
+
 #[derive(Clone, Copy)]
 enum ReplayCensusMode {
     PublicSurface,
     CompilerCensusIncomplete,
+    GoSemanticCoverage,
 }
 
 fn replay_census(
@@ -544,6 +552,28 @@ fn replay_census(
                 .map_err(stage_error)?;
             report_replay_summary(
                 "compiler census",
+                &summary.language,
+                summary.slot_number,
+                summary.retained_stage,
+                summary.removed_stage_count,
+                summary.removed_semantic_progress,
+                summary.removed_source_progress,
+            );
+        }
+        ReplayCensusMode::GoSemanticCoverage => {
+            let summary = sniff::benchmark::replay_historical_v2_go_semantic_coverage(
+                sniff::benchmark::HistoricalV2GoSemanticCoverageReplayInputs {
+                    state_root: &args.state_root,
+                    work_root: &args.work_root,
+                    selection_sha256: &selection.selection_sha256,
+                    language: &args.language,
+                    slot_number: args.slot_number,
+                    canonical_repository,
+                },
+            )
+            .map_err(stage_error)?;
+            report_replay_summary(
+                "Go semantic coverage",
                 &summary.language,
                 summary.slot_number,
                 summary.retained_stage,
