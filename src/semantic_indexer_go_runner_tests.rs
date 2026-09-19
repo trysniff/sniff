@@ -184,6 +184,28 @@ fn go_variant_inventory_retains_committed_ignored_documents_absent_from_query() 
 }
 
 #[test]
+fn go_variant_inventory_reclassifies_compiler_selected_tests_from_ignored() {
+    let plan = variant_plan(
+        "darwin",
+        &["fixture/main.go"],
+        &["fixture/main_unix_test.go", "fixture/windows.go"],
+    );
+    let mut inventory = package_inventory(
+        &["fixture/main.go", "fixture/main_unix_test.go"],
+        &["fixture/windows.go"],
+    );
+    inventory.test_documents =
+        BTreeSet::from([RepositoryPath("fixture/main_unix_test.go".to_string())]);
+
+    validate_go_variant_inventory(&plan, &inventory).unwrap();
+
+    assert_eq!(
+        go_variant_ignored_documents(Some(&plan), &inventory),
+        BTreeSet::from([RepositoryPath("fixture/windows.go".to_string())])
+    );
+}
+
+#[test]
 fn go_variant_inventory_accepts_only_compiler_classified_test_additions() {
     let plan = variant_plan("linux", &["fixture/main.go"], &[]);
     let mut inventory = package_inventory(&["fixture/main.go", "fixture/main_test.go"], &[]);

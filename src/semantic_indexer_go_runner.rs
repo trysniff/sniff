@@ -1030,8 +1030,20 @@ fn go_variant_ignored_documents(
     plan: Option<&SemanticIndexerVariantPlan>,
     inventory: &super::go_shards::GoPackageInventory,
 ) -> BTreeSet<RepositoryPath> {
-    plan.map(|plan| plan.ignored_documents.clone())
-        .unwrap_or_else(|| inventory.ignored_documents.clone())
+    // Project-model plans commit production coverage; selected tests refine that
+    // cross-context partition when the semantic compiler includes them.
+    let selected = inventory
+        .packages
+        .iter()
+        .flat_map(|package| package.source_documents.iter().cloned())
+        .collect::<BTreeSet<_>>();
+    plan.map(|plan| {
+        plan.ignored_documents
+            .difference(&selected)
+            .cloned()
+            .collect()
+    })
+    .unwrap_or_else(|| inventory.ignored_documents.clone())
 }
 
 fn go_progress_root(
