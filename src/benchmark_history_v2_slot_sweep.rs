@@ -400,6 +400,20 @@ fn replay_historical_v2_census(
         }));
     }
 
+    if matches!(mode, CensusReplayMode::CompilerCensusIncomplete) {
+        require_cleaned_terminal_slot_work(&work_root, language, slot_number)?;
+        let removed_stage_count =
+            journal.rewind_compiler_census_incomplete_after(HistoricalV2SlotStage::Payload)?;
+        return Ok(CensusReplaySummary {
+            language: language.to_string(),
+            slot_number,
+            retained_stage: HistoricalV2SlotStage::Payload,
+            removed_stage_count,
+            removed_semantic_progress: false,
+            removed_source_progress: false,
+        });
+    }
+
     let slot_root = exact_replay_slot_root(&work_root, language, slot_number)?;
     let progress_root = slot_root.join("semantic-progress");
     let progress_root = exact_plain_child(
@@ -412,10 +426,7 @@ fn replay_historical_v2_census(
         "source-progress",
         "historical-v2 source progress root",
     )?;
-    let suffix = match mode {
-        CensusReplayMode::PublicSurface => "public-surface-replay",
-        CensusReplayMode::CompilerCensusIncomplete => "compiler-census-replay",
-    };
+    let suffix = "public-surface-replay";
     let quarantine = slot_root.join(format!(".semantic-progress.{suffix}"));
     let source_quarantine = slot_root.join(format!(".source-progress.{suffix}"));
     match fs::symlink_metadata(&quarantine) {
@@ -469,13 +480,8 @@ fn replay_historical_v2_census(
     }
     sync_directory(&slot_root).map_err(recovery_infrastructure)?;
 
-    let removed_stage_count = match mode {
-        CensusReplayMode::PublicSurface => {
-            journal.rewind_completed_after(HistoricalV2SlotStage::TestMaterialization)?
-        }
-        CensusReplayMode::CompilerCensusIncomplete => journal
-            .rewind_compiler_census_incomplete_after(HistoricalV2SlotStage::TestMaterialization)?,
-    };
+    let removed_stage_count =
+        journal.rewind_completed_after(HistoricalV2SlotStage::TestMaterialization)?;
     let quarantine = exact_plain_child(
         &slot_root,
         &quarantine,
@@ -604,6 +610,37 @@ fn exact_replay_slot_root(
         ));
     }
     Ok(slot_root)
+}
+
+fn require_cleaned_terminal_slot_work(
+    work_root: &Path,
+    language: &str,
+    slot_number: usize,
+) -> Result<(), HistoricalV2SlotStageError> {
+    let language_path = work_root.join(language);
+    let language_root = match fs::symlink_metadata(&language_path) {
+        Ok(_) => exact_plain_child(
+            work_root,
+            &language_path,
+            "historical-v2 language work root",
+        )?,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(recovery_infrastructure(format!(
+                "failed to inspect historical-v2 language work root: {error}"
+            )));
+        }
+    };
+    let slot_path = language_root.join(format!("slot-{slot_number:04}"));
+    match fs::symlink_metadata(&slot_path) {
+        Ok(_) => Err(recovery_invalid(
+            "historical-v2 compiler-census replay requires cleaned terminal slot work",
+        )),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(recovery_infrastructure(format!(
+            "failed to inspect historical-v2 slot work root: {error}"
+        ))),
+    }
 }
 
 fn expected_selected_slot_work(

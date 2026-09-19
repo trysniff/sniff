@@ -875,6 +875,27 @@ fn compiler_census_replay_reopens_only_the_proven_incomplete_terminal() {
     fs::write(slot_root.join("semantic-progress/snapshot.json"), b"stale").unwrap();
     fs::write(slot_root.join("source-progress/inventory.json"), b"stale").unwrap();
 
+    let error = replay_historical_v2_compiler_census(HistoricalV2CompilerCensusReplayInputs {
+        state_root: &state_root,
+        work_root: &work_root,
+        selection_sha256: &fixture.selection.selection_sha256,
+        language: &payload.language,
+        slot_number: payload.slot_number,
+        canonical_repository: &canonical_repository,
+    })
+    .unwrap_err();
+    assert!(error.detail.contains("requires cleaned terminal slot work"));
+    assert!(slot_root.join("semantic-progress/snapshot.json").is_file());
+    let journal = HistoricalV2SlotStageJournal::open_existing(
+        &state_root,
+        &payload.language,
+        payload.slot_number,
+    )
+    .unwrap();
+    assert_eq!(journal.history().len(), 5);
+    drop(journal);
+
+    fs::remove_dir_all(&slot_root).unwrap();
     let summary = replay_historical_v2_compiler_census(HistoricalV2CompilerCensusReplayInputs {
         state_root: &state_root,
         work_root: &work_root,
@@ -885,11 +906,10 @@ fn compiler_census_replay_reopens_only_the_proven_incomplete_terminal() {
     })
     .unwrap();
 
-    assert_eq!(summary.removed_stage_count, 2);
-    assert_eq!(
-        summary.retained_stage,
-        HistoricalV2SlotStage::TestMaterialization
-    );
+    assert_eq!(summary.removed_stage_count, 4);
+    assert_eq!(summary.retained_stage, HistoricalV2SlotStage::Payload);
+    assert!(!summary.removed_semantic_progress);
+    assert!(!summary.removed_source_progress);
     assert!(!slot_root.join("semantic-progress").exists());
     assert!(!slot_root.join("source-progress").exists());
     let journal = HistoricalV2SlotStageJournal::open_existing(
@@ -898,7 +918,7 @@ fn compiler_census_replay_reopens_only_the_proven_incomplete_terminal() {
         payload.slot_number,
     )
     .unwrap();
-    assert_eq!(journal.history().len(), 3);
+    assert_eq!(journal.history().len(), 1);
 }
 
 #[test]
