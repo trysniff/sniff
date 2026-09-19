@@ -779,6 +779,129 @@ fn public_surface_replay_preserves_materializations_and_rewinds_only_stale_censu
 }
 
 #[test]
+fn compiler_census_replay_reopens_only_the_proven_incomplete_terminal() {
+    let fixture = Fixture::new();
+    let mutable = tempfile::tempdir().unwrap();
+    let state_root = mutable.path().join("state");
+    let work_root = mutable.path().join("work");
+    fs::create_dir(&work_root).unwrap();
+    let payload = &fixture.payloads.records[0];
+    let canonical_repository = fixture
+        .selection
+        .slots
+        .iter()
+        .find_map(|slot| match &slot.outcome {
+            HistoricalV2SlotOutcome::Selected {
+                canonical_repository,
+                ..
+            } if slot.language == payload.language && slot.slot_number == payload.slot_number => {
+                Some(canonical_repository.clone())
+            }
+            _ => None,
+        })
+        .unwrap();
+    {
+        let mut journal =
+            HistoricalV2SlotStageJournal::open(&state_root, &payload.language, payload.slot_number)
+                .unwrap();
+        for (stage, artifact_kind) in [
+            (
+                HistoricalV2SlotStage::Payload,
+                HistoricalV2StageArtifactKind::SelectedPayload,
+            ),
+            (
+                HistoricalV2SlotStage::Materialization,
+                HistoricalV2StageArtifactKind::Materialization,
+            ),
+            (
+                HistoricalV2SlotStage::TestMaterialization,
+                HistoricalV2StageArtifactKind::NoTestPatch,
+            ),
+            (
+                HistoricalV2SlotStage::SourceCensus,
+                HistoricalV2StageArtifactKind::SourceCensus,
+            ),
+        ] {
+            journal
+                .append(
+                    HistoricalV2SlotStageCheckpointInput {
+                        selection_sha256: &fixture.selection.selection_sha256,
+                        language: &payload.language,
+                        slot_number: payload.slot_number,
+                        canonical_repository: &canonical_repository,
+                        stage,
+                        outcome: HistoricalV2SlotStageOutcome::Completed {
+                            artifact_kind,
+                            artifact_sha256: "a".repeat(64),
+                        },
+                    },
+                    Some(&serde_json::json!({"stage": format!("{stage:?}")})),
+                )
+                .unwrap();
+        }
+        journal
+            .append(
+                HistoricalV2SlotStageCheckpointInput {
+                    selection_sha256: &fixture.selection.selection_sha256,
+                    language: &payload.language,
+                    slot_number: payload.slot_number,
+                    canonical_repository: &canonical_repository,
+                    stage: HistoricalV2SlotStage::SemanticCensus,
+                    outcome: HistoricalV2SlotStageOutcome::Excluded {
+                        reason: HistoricalV2TerminalExclusionReason::SemanticCensus(vec![
+                            HistoricalV2SemanticCensusExclusionReason::CompilerCensusIncomplete,
+                        ]),
+                        artifact_kind: HistoricalV2StageArtifactKind::SemanticCensusExclusion,
+                        artifact_sha256: "b".repeat(64),
+                    },
+                },
+                Some(&serde_json::json!({"reason": "compiler_census_incomplete"})),
+            )
+            .unwrap();
+    }
+    let slot_root = work_root
+        .join(&payload.language)
+        .join(format!("slot-{:04}", payload.slot_number));
+    for name in [
+        "base-tested",
+        "patched",
+        "patched-tested",
+        "repository",
+        "semantic-progress",
+        "source-progress",
+    ] {
+        fs::create_dir_all(slot_root.join(name)).unwrap();
+    }
+    fs::write(slot_root.join("semantic-progress/snapshot.json"), b"stale").unwrap();
+    fs::write(slot_root.join("source-progress/inventory.json"), b"stale").unwrap();
+
+    let summary = replay_historical_v2_compiler_census(HistoricalV2CompilerCensusReplayInputs {
+        state_root: &state_root,
+        work_root: &work_root,
+        selection_sha256: &fixture.selection.selection_sha256,
+        language: &payload.language,
+        slot_number: payload.slot_number,
+        canonical_repository: &canonical_repository,
+    })
+    .unwrap();
+
+    assert_eq!(summary.removed_stage_count, 2);
+    assert_eq!(
+        summary.retained_stage,
+        HistoricalV2SlotStage::TestMaterialization
+    );
+    assert!(!slot_root.join("semantic-progress").exists());
+    assert!(!slot_root.join("source-progress").exists());
+    let journal = HistoricalV2SlotStageJournal::open_existing(
+        &state_root,
+        &payload.language,
+        payload.slot_number,
+    )
+    .unwrap();
+    assert_eq!(journal.history().len(), 3);
+}
+
+#[test]
 fn public_surface_replay_keeps_the_exact_legacy_layout_compatible() {
     let mutable = tempfile::tempdir().unwrap();
     let work_root = mutable.path().join("work");
