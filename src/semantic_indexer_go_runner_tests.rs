@@ -144,6 +144,34 @@ fn go_variant_inventory_requires_exact_nonempty_document_sets() {
 }
 
 #[test]
+fn go_variant_inventory_excludes_nonsemantic_compiler_documents_before_validation() {
+    let plan = variant_plan("linux", &["fixture/main.go"], &["fixture/windows.go"]);
+    let mut inventory = package_inventory(
+        &["fixture/main.go", "fixture/zz_generated.deepcopy.go"],
+        &["fixture/windows.go", "fixture/zz_generated.windows.go"],
+    );
+    let expected_languages = BTreeMap::from([
+        (
+            RepositoryPath("fixture/main.go".to_string()),
+            "go".to_string(),
+        ),
+        (
+            RepositoryPath("fixture/windows.go".to_string()),
+            "go".to_string(),
+        ),
+    ]);
+
+    inventory.retain_semantic_documents(&expected_languages);
+
+    validate_go_variant_inventory(&plan, &inventory).unwrap();
+    assert_eq!(
+        inventory.packages[0].source_documents,
+        BTreeSet::from([RepositoryPath("fixture/main.go".to_string())])
+    );
+    assert_eq!(inventory.ignored_documents, plan.ignored_documents);
+}
+
+#[test]
 fn go_variant_inventory_retains_committed_ignored_documents_absent_from_query() {
     let plan = variant_plan("linux", &["fixture/main.go"], &["tools/tools.go"]);
     let inventory = package_inventory(&["fixture/main.go"], &[]);

@@ -98,7 +98,17 @@ pub(super) struct PublicSurfaceBindingOutputs<'a> {
 pub(super) fn go_package_roots_for_variant(
     packages: &[HistoricalV2GoPackageExposure],
     semantic_variant: &SemanticIndexVariant,
+    source: &HistoricalV2SourceSnapshotCensus,
 ) -> Vec<HistoricalV2SemanticGoPackageRoot> {
+    let semantic_documents = source
+        .source_files
+        .iter()
+        .filter(|file| {
+            file.language == "go"
+                && file.semantic_coverage == HistoricalV2SourceSemanticCoverage::Required
+        })
+        .map(|file| file.repository_path.as_str())
+        .collect::<BTreeSet<_>>();
     let mut roots = packages
         .iter()
         .filter(|package| package.externally_reachable)
@@ -126,6 +136,7 @@ pub(super) fn go_package_roots_for_variant(
             let mut source_repository_paths = package_variants
                 .iter()
                 .flat_map(|variant| variant.source_repository_paths.iter())
+                .filter(|path| semantic_documents.contains(path.as_str()))
                 .cloned()
                 .collect::<Vec<_>>();
             source_repository_paths.sort();
@@ -133,6 +144,7 @@ pub(super) fn go_package_roots_for_variant(
             let mut ignored_source_repository_paths = package_variants
                 .iter()
                 .flat_map(|variant| variant.ignored_source_repository_paths.iter())
+                .filter(|path| semantic_documents.contains(path.as_str()))
                 .cloned()
                 .collect::<Vec<_>>();
             ignored_source_repository_paths.sort();
@@ -232,7 +244,7 @@ pub(super) fn bind_public_surface(
     };
     kotlin_compilation_roots.extend(kotlin_roots.iter().cloned());
     if kind == SemanticIndexerKind::Go {
-        let roots = go_package_roots_for_variant(&go_packages, &index.variant);
+        let roots = go_package_roots_for_variant(&go_packages, &index.variant, source);
         for root in &roots {
             for repository_path in &root.source_repository_paths {
                 if !index

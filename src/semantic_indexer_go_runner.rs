@@ -624,13 +624,13 @@ async fn run_go_compiler_world(
         &inventory_output.stdout,
     )
     .map_err(|detail| go_output_validation_failure(spec, detail, &inventory_output))?;
+    let package_inventory_sha256 =
+        canonical_sha256(&inventory).map_err(|detail| go_progress_failure(spec, detail))?;
+    inventory.retain_semantic_documents(expected_languages);
     if let Some(plan) = plan {
         validate_go_variant_inventory(plan, &inventory)
             .map_err(|detail| go_output_validation_failure(spec, detail, &inventory_output))?;
     }
-    let package_inventory_sha256 =
-        canonical_sha256(&inventory).map_err(|detail| go_progress_failure(spec, detail))?;
-    inventory.retain_semantic_documents(expected_languages);
     let ignored_documents = go_variant_ignored_documents(plan, &inventory);
     if inventory
         .packages

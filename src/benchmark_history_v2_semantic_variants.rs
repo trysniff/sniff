@@ -56,6 +56,7 @@ pub(super) fn go_semantic_variant_plans(
             .iter()
             .flat_map(|target| target.source_repository_paths.iter())
             .map(|path| RepositoryPath(path.clone()))
+            .filter(|path| semantic_documents.contains(path))
             .collect::<BTreeSet<_>>();
         let module_documents = model
             .targets
@@ -70,6 +71,7 @@ pub(super) fn go_semantic_variant_plans(
                     .chain(&target.ignored_source_repository_paths)
             })
             .map(|path| RepositoryPath(path.clone()))
+            .filter(|path| semantic_documents.contains(path))
             .collect::<BTreeSet<_>>();
         let target_ignored_documents = targets
             .iter()
@@ -79,6 +81,7 @@ pub(super) fn go_semantic_variant_plans(
                     .iter()
                     .map(|path| RepositoryPath(path.clone()))
             })
+            .filter(|path| semantic_documents.contains(path))
             .collect::<BTreeSet<_>>();
         let (compiler_query, ignored_documents) = match query {
             IntentionalBoundaryProjectModelGoQuery::ModulePackages => (
@@ -516,6 +519,27 @@ mod tests {
     }
 
     #[test]
+    fn go_semantic_plan_excludes_nonrequired_compiler_documents() {
+        let mut model = go_model();
+        model.targets[0]
+            .source_repository_paths
+            .push("api/zz_generated.deepcopy.go".to_string());
+        model.targets[0]
+            .ignored_source_repository_paths
+            .push("api/zz_generated.windows.go".to_string());
+        let semantic_documents = BTreeSet::from([RepositoryPath("api/api_amd64.go".to_string())]);
+
+        let plans = go_semantic_variant_plans(&model, &semantic_documents).unwrap();
+
+        assert_eq!(plans.len(), 1);
+        assert_eq!(
+            plans[0].selected_documents,
+            BTreeSet::from([RepositoryPath("api/api_amd64.go".to_string())])
+        );
+        assert!(plans[0].ignored_documents.is_empty());
+    }
+
+    #[test]
     fn source_selected_by_one_go_execution_is_ignored_by_an_empty_execution() {
         let mut model = go_model();
         let mut empty_execution = model.executions[0].clone();
@@ -541,10 +565,7 @@ mod tests {
         assert!(empty.selected_documents.is_empty());
         assert_eq!(
             empty.ignored_documents,
-            BTreeSet::from([
-                RepositoryPath("api/api_amd64.go".to_string()),
-                RepositoryPath("api/api_windows.go".to_string()),
-            ])
+            BTreeSet::from([RepositoryPath("api/api_amd64.go".to_string())])
         );
     }
 
