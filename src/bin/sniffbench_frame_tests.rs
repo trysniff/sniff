@@ -3,7 +3,7 @@ use sniff::benchmark::{
     HistoricalV2SelectedSlotRunSummary, HistoricalV2SemanticCheckpointKind,
     HistoricalV2SemanticCheckpointProgress, HistoricalV2SemanticSnapshotSide,
     HistoricalV2SemanticWorldProgress, HistoricalV2SlotRunDisposition, HistoricalV2SlotRunSummary,
-    HistoricalV2SlotStage,
+    HistoricalV2SlotStage, HistoricalV2SourceCensusProgress,
 };
 
 #[test]
@@ -31,6 +31,20 @@ fn durable_unit_progress_changes_the_hosted_progress_line_without_an_assembly() 
     assert!(before.contains("units=0/15 next=document-00000000 durable_units=0/15"));
     assert!(after.contains("units=0/15 next=document-00000000 durable_units=1/15"));
     assert!(after.starts_with("  go/slot-0122 "));
+}
+
+#[test]
+fn source_census_checkpoint_line_enters_the_durable_progress_ledger() {
+    let progress = HistoricalV2SourceCensusProgress {
+        language: "go".to_string(),
+        slot_number: 124,
+        completed_checkpoint_count: 7,
+    };
+
+    assert_eq!(
+        sniffbench_frame_run::source_census_progress_line(&progress),
+        "  go/slot-0124 source_census_checkpoints=7"
+    );
 }
 
 #[test]
