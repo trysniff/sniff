@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-pub const HISTORICAL_V2_NODE_CONSUMER_PROFILE_CENSUS_SCHEMA_VERSION: u32 = 1;
+pub const HISTORICAL_V2_NODE_CONSUMER_PROFILE_CENSUS_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

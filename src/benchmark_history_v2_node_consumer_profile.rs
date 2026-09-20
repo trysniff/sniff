@@ -26,7 +26,7 @@ mod validation;
 use identity::*;
 use validation::*;
 
-const CONSUMER_PROFILE_CONTRACT: &str = "sniffbench-historical-v2-node-consumer-profiles-v1";
+const CONSUMER_PROFILE_CONTRACT: &str = "sniffbench-historical-v2-node-consumer-profiles-v2";
 const SIDECAR_OUTPUT_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Clone)]

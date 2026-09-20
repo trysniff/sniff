@@ -189,14 +189,7 @@ pub(super) fn run_node_consumer_profile(
     }];
     let mut compiler_mirror = None;
     let containing_file = if document.has_exports {
-        if package_directory.is_empty() {
-            format!(".sniff-consumer-profile-{}/consumer.ts", std::process::id())
-        } else {
-            format!(
-                "{package_directory}/.sniff-consumer-profile-{}/consumer.ts",
-                std::process::id()
-            )
-        }
+        virtual_consumer_path(&package_directory)
     } else {
         let compiler_consumer = runtime.path().join("compiler-consumer");
         let compiler_installed = compiler_consumer
@@ -304,7 +297,7 @@ pub(super) fn run_node_consumer_profile(
         "{:x}",
         Sha256::digest(
             serde_json::to_vec(&(
-                "sniff-node-consumer-profile-toolchain-v2",
+                "sniff-node-consumer-profile-toolchain-v3",
                 &plan.runtime_identity,
                 &session.installed.tree_sha256,
                 &session.node_runtime_sha256,
@@ -360,6 +353,15 @@ fn package_directory(manifest_repository_path: &str) -> Result<String, String> {
         return Err("Node consumer profile received a non-package manifest".to_string());
     };
     Ok(prefix.trim_end_matches('/').to_string())
+}
+
+fn virtual_consumer_path(package_directory: &str) -> String {
+    const CONSUMER_PATH: &str = ".sniff-consumer-profile/consumer.ts";
+    if package_directory.is_empty() {
+        CONSUMER_PATH.to_string()
+    } else {
+        format!("{package_directory}/{CONSUMER_PATH}")
+    }
 }
 
 fn package_relative_target(package_directory: &str, target: &str) -> Result<String, String> {
@@ -546,6 +548,18 @@ mod tests {
         ] {
             assert!(package_name_path(invalid).is_err(), "accepted {invalid}");
         }
+    }
+
+    #[test]
+    fn virtual_consumer_path_is_stable_and_package_scoped() {
+        assert_eq!(
+            virtual_consumer_path(""),
+            ".sniff-consumer-profile/consumer.ts"
+        );
+        assert_eq!(
+            virtual_consumer_path("packages/example"),
+            "packages/example/.sniff-consumer-profile/consumer.ts"
+        );
     }
 
     #[test]
