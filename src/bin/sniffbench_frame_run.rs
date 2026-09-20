@@ -11,11 +11,11 @@ use sniff::benchmark::{
     HistoricalV2SemanticSnapshotSide, HistoricalV2SemanticWorldProgress, HistoricalV2SlotOutcome,
     HistoricalV2SlotRunDisposition, HistoricalV2SlotSelection, HistoricalV2SlotStage,
     HistoricalV2SlotStageError, HistoricalV2SlotStageErrorKind, HistoricalV2SlotStageOutcome,
-    HistoricalV2StageArtifactKind, HistoricalV2TerminalExclusionReason,
-    inspect_historical_v2_selected_slot_state, recover_historical_v2_selected_slot_work,
-    replay_historical_v2_compiler_census, replay_historical_v2_public_surface_census,
-    run_historical_v2_selected_slots_bounded, validate_historical_v2_protocol,
-    validate_historical_v2_selected_payloads_commitment,
+    HistoricalV2SourceCensusProgress, HistoricalV2StageArtifactKind,
+    HistoricalV2TerminalExclusionReason, inspect_historical_v2_selected_slot_state,
+    recover_historical_v2_selected_slot_work, replay_historical_v2_compiler_census,
+    replay_historical_v2_public_surface_census, run_historical_v2_selected_slots_bounded,
+    validate_historical_v2_protocol, validate_historical_v2_selected_payloads_commitment,
     validate_historical_v2_semantic_census_exclusion,
 };
 use std::fs;
@@ -235,6 +235,15 @@ pub(super) fn recover_slot_work(
     for checkpoint in &summary.semantic_checkpoints {
         eprintln!("{}", semantic_checkpoint_progress_line(checkpoint));
     }
+    let source_census_checkpoint_count = summary
+        .source_censuses
+        .iter()
+        .map(|progress| progress.completed_checkpoint_count)
+        .sum::<usize>();
+    eprintln!("Source census checkpoints: {source_census_checkpoint_count}");
+    for progress in &summary.source_censuses {
+        eprintln!("{}", source_census_progress_line(progress));
+    }
     let assessment_source_replay_checkpoint_count = summary
         .assessment_source_replays
         .iter()
@@ -248,6 +257,13 @@ pub(super) fn recover_slot_work(
         );
     }
     Ok(())
+}
+
+pub(super) fn source_census_progress_line(progress: &HistoricalV2SourceCensusProgress) -> String {
+    format!(
+        "  {}/slot-{:04} source_census_checkpoints={}",
+        progress.language, progress.slot_number, progress.completed_checkpoint_count
+    )
 }
 
 pub(super) fn semantic_world_progress_line(world: &HistoricalV2SemanticWorldProgress) -> String {

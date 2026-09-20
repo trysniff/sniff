@@ -13,9 +13,10 @@ use super::{
     HistoricalV2SemanticWorldProgress, HistoricalV2SlotOperations, HistoricalV2SlotOutcome,
     HistoricalV2SlotRunDisposition, HistoricalV2SlotRunIdentity, HistoricalV2SlotStage,
     HistoricalV2SlotStageError, HistoricalV2SlotStageJournal, HistoricalV2SlotStageOutcome,
-    HistoricalV2StageArtifactKind, HistoricalV2TerminalExclusionReason,
-    run_historical_v2_slot_slice_through, validate_historical_v2_protocol,
-    validate_historical_v2_selected_payloads_commitment, validate_historical_v2_slot_selection,
+    HistoricalV2SourceCensusProgress, HistoricalV2StageArtifactKind,
+    HistoricalV2TerminalExclusionReason, run_historical_v2_slot_slice_through,
+    validate_historical_v2_protocol, validate_historical_v2_selected_payloads_commitment,
+    validate_historical_v2_slot_selection,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
@@ -282,11 +283,25 @@ pub fn recover_historical_v2_selected_slot_work(
             }
         }));
     }
-    for root in &layout.source_progress_roots {
-        super::history_v2_source_census::recover_historical_v2_source_progress(root)
-            .map(|_| ())
-            .map_err(recovery_infrastructure)?;
-    }
+    let source_censuses = layout
+        .source_progress_roots
+        .iter()
+        .map(|root| {
+            super::history_v2_source_census::recover_historical_v2_source_progress(&root.root)
+                .map(
+                    |completed_checkpoint_count| HistoricalV2SourceCensusProgress {
+                        language: root.language.clone(),
+                        slot_number: root.slot_number,
+                        completed_checkpoint_count,
+                    },
+                )
+                .map_err(recovery_infrastructure)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let source_censuses = source_censuses
+        .into_iter()
+        .filter(|progress| progress.completed_checkpoint_count > 0)
+        .collect();
     let assessment_source_replays = layout
         .assessment_source_replay_progress_roots
         .iter()
@@ -315,6 +330,7 @@ pub fn recover_historical_v2_selected_slot_work(
         recovered_semantic_root_count,
         semantic_worlds,
         semantic_checkpoints,
+        source_censuses,
         assessment_source_replays,
     })
 }
@@ -931,11 +947,15 @@ fn validate_selected_slot_work_layout(
             }
             let progress_root = slot_root.join("source-progress");
             match fs::symlink_metadata(&progress_root) {
-                Ok(_) => source_progress_roots.push(exact_plain_child(
-                    &slot_root,
-                    &progress_root,
-                    "historical-v2 source progress root",
-                )?),
+                Ok(_) => source_progress_roots.push(SelectedSourceProgressRoot {
+                    language: language.clone(),
+                    slot_number,
+                    root: exact_plain_child(
+                        &slot_root,
+                        &progress_root,
+                        "historical-v2 source progress root",
+                    )?,
+                }),
                 Err(error) if error.kind() == ErrorKind::NotFound => {}
                 Err(error) => {
                     return Err(recovery_infrastructure(format!(
@@ -969,7 +989,9 @@ fn validate_selected_slot_work_layout(
     semantic_progress_roots.sort_by(|left, right| {
         (&left.language, left.slot_number).cmp(&(&right.language, right.slot_number))
     });
-    source_progress_roots.sort();
+    source_progress_roots.sort_by(|left, right| {
+        (&left.language, left.slot_number).cmp(&(&right.language, right.slot_number))
+    });
     assessment_source_replay_progress_roots.sort_by(|left, right| {
         (&left.language, left.slot_number).cmp(&(&right.language, right.slot_number))
     });
@@ -984,11 +1006,17 @@ fn validate_selected_slot_work_layout(
 struct SelectedSlotWorkLayout {
     semantic_roots: Vec<PathBuf>,
     semantic_progress_roots: Vec<SelectedSemanticProgressRoot>,
-    source_progress_roots: Vec<PathBuf>,
+    source_progress_roots: Vec<SelectedSourceProgressRoot>,
     assessment_source_replay_progress_roots: Vec<SelectedAssessmentSourceReplayProgressRoot>,
 }
 
 struct SelectedSemanticProgressRoot {
+    language: String,
+    slot_number: usize,
+    root: PathBuf,
+}
+
+struct SelectedSourceProgressRoot {
     language: String,
     slot_number: usize,
     root: PathBuf,

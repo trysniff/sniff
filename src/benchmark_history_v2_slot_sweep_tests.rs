@@ -589,6 +589,7 @@ fn selected_slot_work_recovery_removes_only_proven_semantic_and_source_state() {
     }
     let interrupted_source = source_progress.join("patched/go-project-model.json.tmp");
     fs::write(&interrupted_source, b"partial").unwrap();
+    fs::write(source_progress.join("base/inventory.json"), b"{}").unwrap();
     let assessment_replay = slot_root.join("assessment-source-replay-progress");
     for side in ["base", "patched"] {
         fs::create_dir_all(assessment_replay.join(side)).unwrap();
@@ -615,6 +616,14 @@ fn selected_slot_work_recovery_removes_only_proven_semantic_and_source_state() {
     assert_eq!(summary.recovered_semantic_root_count, 2);
     assert!(summary.semantic_worlds.is_empty());
     assert!(summary.semantic_checkpoints.is_empty());
+    assert_eq!(
+        summary.source_censuses,
+        vec![HistoricalV2SourceCensusProgress {
+            language: payload.language.clone(),
+            slot_number: payload.slot_number,
+            completed_checkpoint_count: 1,
+        }]
+    );
     assert_eq!(
         summary.assessment_source_replays,
         vec![HistoricalV2AssessmentSourceReplayProgress {

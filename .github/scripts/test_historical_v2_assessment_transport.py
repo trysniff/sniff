@@ -5946,6 +5946,7 @@ class WorkflowContractTests(unittest.TestCase):
             workflow.count(
                 "| grep -E '^(Started semantic compiler worlds:|"
                 "Durable semantic checkpoints:|"
+                "Source census checkpoints:|"
                 "Assessment source replay checkpoints:|  [a-z]+/slot-)'"
             ),
             2,

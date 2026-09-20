@@ -110,7 +110,15 @@ pub struct HistoricalV2SelectedSlotWorkRecoverySummary {
     pub recovered_semantic_root_count: usize,
     pub semantic_worlds: Vec<HistoricalV2SemanticWorldProgress>,
     pub semantic_checkpoints: Vec<HistoricalV2SemanticCheckpointProgress>,
+    pub source_censuses: Vec<HistoricalV2SourceCensusProgress>,
     pub assessment_source_replays: Vec<HistoricalV2AssessmentSourceReplayProgress>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HistoricalV2SourceCensusProgress {
+    pub language: String,
+    pub slot_number: usize,
+    pub completed_checkpoint_count: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
