@@ -463,6 +463,18 @@ pub use release::{
     validate_historical_v2_corpus_bundle,
 };
 
+pub use release::{
+    HISTORICAL_V3_PROTOCOL_SCHEMA_VERSION, HISTORICAL_V3_STREAM_TASK_SCHEMA_VERSION,
+    HistoricalV3AllowedMetadataField, HistoricalV3CandidateIdentity, HistoricalV3CandidateTask,
+    HistoricalV3CandidateWindow, HistoricalV3ForbiddenMetadataField, HistoricalV3Language,
+    HistoricalV3MechanicalRequirement, HistoricalV3Protocol, HistoricalV3ReviewDisposition,
+    HistoricalV3ReviewRecord, HistoricalV3SourceFrameBinding, HistoricalV3StopRule,
+    HistoricalV3StopStatus, HistoricalV3StreamTask, evaluate_historical_v3_review_prefix,
+    historical_v3_candidate_rank_sha256, prepare_historical_v3_stream_task,
+    seal_historical_v3_protocol, validate_historical_v3_protocol,
+    validate_historical_v3_stream_task,
+};
+
 #[cfg(feature = "sniffbench-frame")]
 pub use release::{
     build_historical_v2_frame, extract_historical_v2_selected_payloads,
