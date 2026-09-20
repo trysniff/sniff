@@ -93,8 +93,33 @@ pub fn census_historical_v2_sources_typed_resumable(
     execution::census_historical_v2_sources_typed_inner(materialization, roots, Some(progress_root))
 }
 
-pub fn recover_historical_v2_source_progress(root: &Path) -> Result<(), String> {
+pub fn recover_historical_v2_source_progress(root: &Path) -> Result<usize, String> {
     HistoricalV2SourceProgress::recover_existing(root)
+}
+
+pub(crate) fn recover_historical_v2_source_replay_progress(root: &Path) -> Result<usize, String> {
+    HistoricalV2SourceProgress::recover_replay_existing(root)
+}
+
+#[derive(Debug)]
+pub(crate) struct HistoricalV2ValidatedSourceReplay {
+    materialization_sha256: String,
+    source_census_sha256: String,
+}
+
+impl HistoricalV2ValidatedSourceReplay {
+    pub(crate) fn validate_binding(
+        &self,
+        materialization: &HistoricalV2Materialization,
+        census: &HistoricalV2SourceCensus,
+    ) -> Result<(), String> {
+        if self.materialization_sha256 != materialization.materialization_sha256
+            || self.source_census_sha256 != census.source_census_sha256
+        {
+            return Err("historical-v2 validated source replay binding changed".to_string());
+        }
+        Ok(())
+    }
 }
 
 pub fn validate_historical_v2_source_census(
@@ -117,6 +142,52 @@ pub fn validate_historical_v2_source_census(
         ));
     }
     Ok(())
+}
+
+pub(crate) fn validate_historical_v2_source_census_resumable(
+    materialization: &HistoricalV2Materialization,
+    roots: &HistoricalV2MaterializedRoots,
+    census: &HistoricalV2SourceCensus,
+    progress_root: &Path,
+) -> Result<HistoricalV2ValidatedSourceReplay, HistoricalV2SlotStageError> {
+    validate_historical_v2_materialization(materialization, roots).map_err(invalid)?;
+    validate_historical_v2_source_census_envelope(materialization, census).map_err(invalid)?;
+    if HistoricalV2SourceProgress::replay_is_complete(progress_root, materialization, census)
+        .map_err(infrastructure)?
+    {
+        return Ok(validated_source_replay(materialization, census));
+    }
+    let expected = match census_historical_v2_sources_typed_resumable(
+        materialization,
+        roots,
+        progress_root,
+    )? {
+        HistoricalV2StageResult::Completed(census) => census,
+        HistoricalV2StageResult::Excluded(_) => {
+            return Err(invalid(
+                "historical-v2 source census claims completion for excluded source",
+            ));
+        }
+    };
+    if census != &expected {
+        return Err(invalid(format!(
+            "historical-v2 source census changed {}",
+            describe_source_census_difference(census, &expected)
+        )));
+    }
+    HistoricalV2SourceProgress::publish_replay_completion(progress_root, materialization, census)
+        .map_err(infrastructure)?;
+    Ok(validated_source_replay(materialization, census))
+}
+
+fn validated_source_replay(
+    materialization: &HistoricalV2Materialization,
+    census: &HistoricalV2SourceCensus,
+) -> HistoricalV2ValidatedSourceReplay {
+    HistoricalV2ValidatedSourceReplay {
+        materialization_sha256: materialization.materialization_sha256.clone(),
+        source_census_sha256: census.source_census_sha256.clone(),
+    }
 }
 
 fn describe_source_census_difference(
@@ -211,14 +282,7 @@ pub fn validate_historical_v2_source_census_commitment(
     validate_historical_v2_materialization(materialization, roots)?;
     drop(timing);
     let timing = DiagnosticTiming::new("source_census_validation", "census_commitment");
-    if census.schema_version != HISTORICAL_V2_SOURCE_CENSUS_SCHEMA_VERSION
-        || census.source_census_contract != SOURCE_CENSUS_CONTRACT
-        || census.canonical_repository != materialization.canonical_repository
-        || census.materialization_sha256 != materialization.materialization_sha256
-        || census.source_census_sha256 != source_census_sha256(census)?
-    {
-        return Err("historical-v2 source census commitment changed".to_string());
-    }
+    validate_historical_v2_source_census_envelope(materialization, census)?;
     drop(timing);
     let timing = DiagnosticTiming::new("source_census_validation", "repository_inventories");
     let inventory_repository = format!("github.com/{}", materialization.canonical_repository);
@@ -349,6 +413,21 @@ pub fn validate_historical_v2_source_census_commitment(
         return Err("historical-v2 source census commitment changed".to_string());
     }
     drop(timing);
+    Ok(())
+}
+
+pub(crate) fn validate_historical_v2_source_census_envelope(
+    materialization: &HistoricalV2Materialization,
+    census: &HistoricalV2SourceCensus,
+) -> Result<(), String> {
+    if census.schema_version != HISTORICAL_V2_SOURCE_CENSUS_SCHEMA_VERSION
+        || census.source_census_contract != SOURCE_CENSUS_CONTRACT
+        || census.canonical_repository != materialization.canonical_repository
+        || census.materialization_sha256 != materialization.materialization_sha256
+        || census.source_census_sha256 != source_census_sha256(census)?
+    {
+        return Err("historical-v2 source census commitment changed".to_string());
+    }
     Ok(())
 }
 

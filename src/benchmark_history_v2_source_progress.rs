@@ -6,6 +6,10 @@ use std::path::{Path, PathBuf};
 
 const SOURCE_PROGRESS_SCHEMA_VERSION: u32 = 1;
 const SOURCE_PROGRESS_CONTRACT: &str = "historical-v2-source-progress-v1";
+const SOURCE_REPLAY_COMPLETION_SCHEMA_VERSION: u32 = 1;
+const SOURCE_REPLAY_COMPLETION_CONTRACT: &str = "historical-v2-source-replay-completion-v1";
+const SOURCE_REPLAY_COMPLETION_FILE: &str = "validation.json";
+const SOURCE_REPLAY_COMPLETION_TEMP_FILE: &str = "validation.json.tmp";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -81,6 +85,18 @@ struct SourceProgressCheckpoint {
     checkpoint_sha256: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SourceReplayCompletion {
+    schema_version: u32,
+    completion_contract: String,
+    materialization_sha256: String,
+    canonical_repository: String,
+    source_census_sha256: String,
+    replayed_source_census_sha256: String,
+    completion_sha256: String,
+}
+
 #[derive(Debug)]
 pub(super) struct HistoricalV2SourceProgress {
     root: PathBuf,
@@ -110,14 +126,169 @@ impl HistoricalV2SourceProgress {
         Ok(progress)
     }
 
-    pub(super) fn recover_existing(root: &Path) -> Result<(), String> {
+    pub(super) fn recover_existing(root: &Path) -> Result<usize, String> {
         match std::fs::symlink_metadata(root) {
-            Ok(_) => Self::open(root).map(|_| ()),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Ok(_) => Self::open(root)?.completed_checkpoint_count(),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(0),
             Err(error) => Err(format!(
                 "failed to inspect historical-v2 source progress root: {error}"
             )),
         }
+    }
+
+    pub(super) fn recover_replay_existing(root: &Path) -> Result<usize, String> {
+        match std::fs::symlink_metadata(root) {
+            Ok(_) => {
+                let progress = Self::open_replay(root)?;
+                let checkpoint_count = progress.completed_checkpoint_count()?;
+                match progress.read_replay_completion()? {
+                    Some(completion) => {
+                        validate_replay_completion_shape(&completion, checkpoint_count)?;
+                        checkpoint_count.checked_add(1).ok_or_else(|| {
+                            "historical-v2 source replay progress count overflowed".to_string()
+                        })
+                    }
+                    None => Ok(checkpoint_count),
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(0),
+            Err(error) => Err(format!(
+                "failed to inspect historical-v2 source replay progress root: {error}"
+            )),
+        }
+    }
+
+    pub(super) fn replay_is_complete(
+        root: &Path,
+        materialization: &HistoricalV2Materialization,
+        census: &HistoricalV2SourceCensus,
+    ) -> Result<bool, String> {
+        let progress = Self::open_replay(root)?;
+        let Some(completion) = progress.read_replay_completion()? else {
+            return Ok(false);
+        };
+        validate_replay_completion_shape(&completion, progress.completed_checkpoint_count()?)?;
+        if completion.materialization_sha256 != materialization.materialization_sha256
+            || completion.canonical_repository != materialization.canonical_repository
+            || completion.source_census_sha256 != census.source_census_sha256
+            || completion.replayed_source_census_sha256 != census.source_census_sha256
+        {
+            return Err(
+                "historical-v2 source replay completion changed immutable evidence".to_string(),
+            );
+        }
+        Ok(true)
+    }
+
+    pub(super) fn publish_replay_completion(
+        root: &Path,
+        materialization: &HistoricalV2Materialization,
+        census: &HistoricalV2SourceCensus,
+    ) -> Result<(), String> {
+        let progress = Self::open_replay(root)?;
+        if progress.completed_checkpoint_count()? != replay_checkpoint_count() {
+            return Err(
+                "historical-v2 source replay completion requires every durable checkpoint"
+                    .to_string(),
+            );
+        }
+        if progress.read_replay_completion()?.is_some() {
+            return Err("historical-v2 source replay completion already exists".to_string());
+        }
+        let mut completion = SourceReplayCompletion {
+            schema_version: SOURCE_REPLAY_COMPLETION_SCHEMA_VERSION,
+            completion_contract: SOURCE_REPLAY_COMPLETION_CONTRACT.to_string(),
+            materialization_sha256: materialization.materialization_sha256.clone(),
+            canonical_repository: materialization.canonical_repository.clone(),
+            source_census_sha256: census.source_census_sha256.clone(),
+            replayed_source_census_sha256: census.source_census_sha256.clone(),
+            completion_sha256: String::new(),
+        };
+        completion.completion_sha256 = canonical_sha256(&completion)?;
+        let bytes = serde_json::to_vec(&completion).map_err(|error| {
+            format!("failed to serialize historical-v2 source replay completion: {error}")
+        })?;
+        io::write_atomic_new(
+            &root.join(SOURCE_REPLAY_COMPLETION_FILE),
+            &root.join(SOURCE_REPLAY_COMPLETION_TEMP_FILE),
+            &bytes,
+        )
+    }
+
+    fn open_replay(root: &Path) -> Result<Self, String> {
+        io::ensure_plain_directory(root)?;
+        for side in [
+            HistoricalV2SourceSnapshotSide::Base,
+            HistoricalV2SourceSnapshotSide::Patched,
+        ] {
+            io::ensure_plain_directory(&root.join(side_name(side)))?;
+        }
+        io::require_allowed_entries(
+            root,
+            &[
+                "base",
+                "patched",
+                SOURCE_REPLAY_COMPLETION_FILE,
+                SOURCE_REPLAY_COMPLETION_TEMP_FILE,
+            ],
+            "source replay progress root",
+        )?;
+        let progress = Self {
+            root: root.to_path_buf(),
+        };
+        for side in [
+            HistoricalV2SourceSnapshotSide::Base,
+            HistoricalV2SourceSnapshotSide::Patched,
+        ] {
+            progress.validate_side_entries(side)?;
+            progress.remove_incomplete_units(side)?;
+            progress.validate_side_entries(side)?;
+        }
+        io::remove_incomplete_file(&root.join(SOURCE_REPLAY_COMPLETION_TEMP_FILE))?;
+        Ok(progress)
+    }
+
+    fn read_replay_completion(&self) -> Result<Option<SourceReplayCompletion>, String> {
+        let path = self.root.join(SOURCE_REPLAY_COMPLETION_FILE);
+        match std::fs::symlink_metadata(&path) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(format!(
+                "failed to inspect historical-v2 source replay completion: {error}"
+            )),
+            Ok(_) => io::read_checkpoint(&path).map(Some),
+        }
+    }
+
+    fn completed_checkpoint_count(&self) -> Result<usize, String> {
+        let mut count = 0_usize;
+        for side in [
+            HistoricalV2SourceSnapshotSide::Base,
+            HistoricalV2SourceSnapshotSide::Patched,
+        ] {
+            for unit in HistoricalV2SourceProgressUnit::all() {
+                match std::fs::symlink_metadata(self.side_root(side).join(unit.file_name())) {
+                    Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+                        return Err(format!(
+                            "historical-v2 {} {} source progress is not a plain file",
+                            side_name(side),
+                            unit.stem()
+                        ));
+                    }
+                    Ok(_) => {
+                        count = count.checked_add(1).ok_or_else(|| {
+                            "historical-v2 source progress checkpoint count overflowed".to_string()
+                        })?
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => {
+                        return Err(format!(
+                            "failed to inspect historical-v2 source progress checkpoint: {error}"
+                        ));
+                    }
+                }
+            }
+        }
+        Ok(count)
     }
 
     pub(super) fn load<T: DeserializeOwned>(
@@ -218,6 +389,31 @@ impl HistoricalV2SourceProgress {
             "historical-v2 source side progress",
         )
     }
+}
+
+fn replay_checkpoint_count() -> usize {
+    HistoricalV2SourceProgressUnit::all().len() * 2
+}
+
+fn validate_replay_completion_shape(
+    completion: &SourceReplayCompletion,
+    checkpoint_count: usize,
+) -> Result<(), String> {
+    let mut projection = completion.clone();
+    projection.completion_sha256.clear();
+    if checkpoint_count != replay_checkpoint_count()
+        || completion.schema_version != SOURCE_REPLAY_COMPLETION_SCHEMA_VERSION
+        || completion.completion_contract != SOURCE_REPLAY_COMPLETION_CONTRACT
+        || !is_sha256(&completion.materialization_sha256)
+        || completion.canonical_repository.is_empty()
+        || !is_sha256(&completion.source_census_sha256)
+        || completion.replayed_source_census_sha256 != completion.source_census_sha256
+        || !is_sha256(&completion.completion_sha256)
+        || completion.completion_sha256 != canonical_sha256(&projection)?
+    {
+        return Err("historical-v2 source replay completion changed commitment".to_string());
+    }
+    Ok(())
 }
 
 fn validate_checkpoint(

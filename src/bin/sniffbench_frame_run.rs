@@ -235,6 +235,18 @@ pub(super) fn recover_slot_work(
     for checkpoint in &summary.semantic_checkpoints {
         eprintln!("{}", semantic_checkpoint_progress_line(checkpoint));
     }
+    let assessment_source_replay_checkpoint_count = summary
+        .assessment_source_replays
+        .iter()
+        .map(|progress| progress.completed_checkpoint_count)
+        .sum::<usize>();
+    eprintln!("Assessment source replay checkpoints: {assessment_source_replay_checkpoint_count}");
+    for progress in &summary.assessment_source_replays {
+        eprintln!(
+            "  {}/slot-{:04} assessment_source_replay_checkpoints={}",
+            progress.language, progress.slot_number, progress.completed_checkpoint_count
+        );
+    }
     Ok(())
 }
 
@@ -535,8 +547,11 @@ fn replay_census(
                 summary.slot_number,
                 summary.retained_stage,
                 summary.removed_stage_count,
-                summary.removed_semantic_progress,
-                summary.removed_source_progress,
+                RemovedReplayProgress {
+                    semantic: summary.removed_semantic_progress,
+                    source: summary.removed_source_progress,
+                    assessment_source_replay: summary.removed_assessment_source_replay_progress,
+                },
             );
         }
         ReplayCensusMode::CompilerCensusIncomplete => {
@@ -556,8 +571,11 @@ fn replay_census(
                 summary.slot_number,
                 summary.retained_stage,
                 summary.removed_stage_count,
-                summary.removed_semantic_progress,
-                summary.removed_source_progress,
+                RemovedReplayProgress {
+                    semantic: summary.removed_semantic_progress,
+                    source: summary.removed_source_progress,
+                    assessment_source_replay: summary.removed_assessment_source_replay_progress,
+                },
             );
         }
         ReplayCensusMode::GoSemanticCoverage => {
@@ -578,12 +596,21 @@ fn replay_census(
                 summary.slot_number,
                 summary.retained_stage,
                 summary.removed_stage_count,
-                summary.removed_semantic_progress,
-                summary.removed_source_progress,
+                RemovedReplayProgress {
+                    semantic: summary.removed_semantic_progress,
+                    source: summary.removed_source_progress,
+                    assessment_source_replay: summary.removed_assessment_source_replay_progress,
+                },
             );
         }
     }
     Ok(())
+}
+
+struct RemovedReplayProgress {
+    semantic: bool,
+    source: bool,
+    assessment_source_replay: bool,
 }
 
 fn report_replay_summary(
@@ -592,11 +619,15 @@ fn report_replay_summary(
     slot_number: usize,
     retained_stage: HistoricalV2SlotStage,
     removed_stage_count: usize,
-    removed_semantic_progress: bool,
-    removed_source_progress: bool,
+    removed_progress: RemovedReplayProgress,
 ) {
+    let RemovedReplayProgress {
+        semantic,
+        source,
+        assessment_source_replay,
+    } = removed_progress;
     eprintln!(
-        "Historical-v2 {label} replay prepared\nTarget: {language}/slot-{slot_number:04}\nRetained through: {retained_stage:?}\nRemoved stages: {removed_stage_count}\nRemoved semantic progress: {removed_semantic_progress}\nRemoved source progress: {removed_source_progress}"
+        "Historical-v2 {label} replay prepared\nTarget: {language}/slot-{slot_number:04}\nRetained through: {retained_stage:?}\nRemoved stages: {removed_stage_count}\nRemoved semantic progress: {semantic}\nRemoved source progress: {source}\nRemoved assessment source replay progress: {assessment_source_replay}"
     );
 }
 

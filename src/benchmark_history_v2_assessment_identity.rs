@@ -4,9 +4,11 @@ use super::{
     HistoricalV2MaterializedRoots, HistoricalV2SelectedPayload, HistoricalV2SelectedPayloads,
     HistoricalV2SemanticCensus, HistoricalV2SlotOutcome, HistoricalV2SlotSelection,
     HistoricalV2SourceCensus, HistoricalV2TestMaterialization, HistoricalV2TestMaterializedRoots,
-    validate_historical_v2_protocol, validate_historical_v2_selected_payloads_commitment,
-    validate_historical_v2_semantic_census, validate_historical_v2_semantic_census_commitment,
-    validate_historical_v2_slot_selection, validate_historical_v2_test_materialization,
+    HistoricalV2ValidatedSourceReplay, validate_historical_v2_protocol,
+    validate_historical_v2_selected_payloads_commitment, validate_historical_v2_semantic_census,
+    validate_historical_v2_semantic_census_after_source_validation,
+    validate_historical_v2_semantic_census_commitment, validate_historical_v2_slot_selection,
+    validate_historical_v2_test_materialization,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -40,6 +42,34 @@ pub struct HistoricalV2AssessmentIdentityInputs<'a> {
 pub fn bind_historical_v2_assessment_identity(
     inputs: &HistoricalV2AssessmentIdentityInputs<'_>,
 ) -> Result<HistoricalV2AssessmentIdentity, String> {
+    bind_historical_v2_assessment_identity_with_validator(
+        inputs,
+        validate_historical_v2_semantic_census_commitment,
+    )
+}
+
+pub(crate) fn bind_historical_v2_assessment_identity_after_source_validation(
+    inputs: &HistoricalV2AssessmentIdentityInputs<'_>,
+    validated_source_replay: &HistoricalV2ValidatedSourceReplay,
+) -> Result<HistoricalV2AssessmentIdentity, String> {
+    validated_source_replay.validate_binding(inputs.materialization, inputs.source_census)?;
+    bind_historical_v2_assessment_identity_with_validator(
+        inputs,
+        validate_historical_v2_semantic_census_after_source_validation,
+    )
+}
+
+type SemanticCommitmentValidator = fn(
+    &HistoricalV2Materialization,
+    &HistoricalV2MaterializedRoots,
+    &HistoricalV2SourceCensus,
+    &HistoricalV2SemanticCensus,
+) -> Result<(), String>;
+
+fn bind_historical_v2_assessment_identity_with_validator(
+    inputs: &HistoricalV2AssessmentIdentityInputs<'_>,
+    validate_semantic_commitment: SemanticCommitmentValidator,
+) -> Result<HistoricalV2AssessmentIdentity, String> {
     let protocol = validate_historical_v2_protocol(inputs.protocol_bytes)?;
     validate_historical_v2_slot_selection(
         inputs.protocol_bytes,
@@ -55,7 +85,7 @@ pub fn bind_historical_v2_assessment_identity(
         inputs.selection,
         inputs.payloads,
     )?;
-    validate_historical_v2_semantic_census_commitment(
+    validate_semantic_commitment(
         inputs.materialization,
         inputs.materialized_roots,
         inputs.source_census,

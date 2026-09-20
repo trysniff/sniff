@@ -565,6 +565,110 @@ fn resumable_census_reuses_every_completed_source_unit() {
 }
 
 #[test]
+fn resumable_replay_validation_reuses_progress_and_rejects_exact_drift() {
+    let fixture = Fixture::new();
+    let materialized = fixture.materialize("resumable-validation");
+    let census = census_historical_v2_sources(&materialized.0, &materialized.1).unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let progress_root = state.path().join("assessment-source-replay-progress");
+
+    let validated = validate_historical_v2_source_census_resumable(
+        &materialized.0,
+        &materialized.1,
+        &census,
+        &progress_root,
+    )
+    .unwrap();
+    validated
+        .validate_binding(&materialized.0, &census)
+        .unwrap();
+    let mut different_materialization = materialized.0.clone();
+    different_materialization.materialization_sha256 = "0".repeat(64);
+    assert!(
+        validated
+            .validate_binding(&different_materialization, &census)
+            .is_err()
+    );
+    assert_eq!(
+        recover_historical_v2_source_replay_progress(&progress_root).unwrap(),
+        23
+    );
+    validate_historical_v2_source_census_resumable(
+        &materialized.0,
+        &materialized.1,
+        &census,
+        &progress_root,
+    )
+    .unwrap();
+
+    let mut changed = census.clone();
+    changed.base.source_files[0].methods[0].parser_unit_id = "invented".to_string();
+    changed.source_census_sha256.clear();
+    changed.source_census_sha256 = source_census_sha256(&changed).unwrap();
+    let error = validate_historical_v2_source_census_resumable(
+        &materialized.0,
+        &materialized.1,
+        &changed,
+        &progress_root,
+    )
+    .unwrap_err();
+    assert_eq!(
+        error.kind,
+        HistoricalV2SlotStageErrorKind::InfrastructureFailed
+    );
+    assert!(
+        error
+            .detail
+            .contains("source replay completion changed immutable evidence"),
+        "{}",
+        error.detail
+    );
+
+    let changed_progress_root = state
+        .path()
+        .join("changed-assessment-source-replay-progress");
+    let error = validate_historical_v2_source_census_resumable(
+        &materialized.0,
+        &materialized.1,
+        &changed,
+        &changed_progress_root,
+    )
+    .unwrap_err();
+    assert_eq!(error.kind, HistoricalV2SlotStageErrorKind::InvalidInput);
+    assert!(
+        error
+            .detail
+            .contains("changed at $.base.source_files[0].methods[0].parser_unit_id"),
+        "{}",
+        error.detail
+    );
+
+    let completion_path = progress_root.join("validation.json");
+    let mut completion: serde_json::Value =
+        serde_json::from_slice(&fs::read(&completion_path).unwrap()).unwrap();
+    completion["completion_sha256"] = serde_json::Value::String("0".repeat(64));
+    fs::write(&completion_path, serde_json::to_vec(&completion).unwrap()).unwrap();
+    let error = validate_historical_v2_source_census_resumable(
+        &materialized.0,
+        &materialized.1,
+        &census,
+        &progress_root,
+    )
+    .unwrap_err();
+    assert_eq!(
+        error.kind,
+        HistoricalV2SlotStageErrorKind::InfrastructureFailed
+    );
+    assert!(
+        error
+            .detail
+            .contains("source replay completion changed commitment"),
+        "{}",
+        error.detail
+    );
+}
+
+#[test]
 fn committed_census_accepts_clean_ident_filtered_worktrees() {
     let source = tempfile::tempdir().unwrap();
     git_ok(source.path(), &["init", "-b", "main"]);

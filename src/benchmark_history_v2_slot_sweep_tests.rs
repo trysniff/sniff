@@ -589,6 +589,13 @@ fn selected_slot_work_recovery_removes_only_proven_semantic_and_source_state() {
     }
     let interrupted_source = source_progress.join("patched/go-project-model.json.tmp");
     fs::write(&interrupted_source, b"partial").unwrap();
+    let assessment_replay = slot_root.join("assessment-source-replay-progress");
+    for side in ["base", "patched"] {
+        fs::create_dir_all(assessment_replay.join(side)).unwrap();
+    }
+    fs::write(assessment_replay.join("base/inventory.json"), b"{}").unwrap();
+    let interrupted_replay = assessment_replay.join("patched/parser-census.json.tmp");
+    fs::write(&interrupted_replay, b"partial").unwrap();
     fs::create_dir(slot_root.join("base-tested")).unwrap();
 
     let summary =
@@ -608,6 +615,14 @@ fn selected_slot_work_recovery_removes_only_proven_semantic_and_source_state() {
     assert_eq!(summary.recovered_semantic_root_count, 2);
     assert!(summary.semantic_worlds.is_empty());
     assert!(summary.semantic_checkpoints.is_empty());
+    assert_eq!(
+        summary.assessment_source_replays,
+        vec![HistoricalV2AssessmentSourceReplayProgress {
+            language: payload.language.clone(),
+            slot_number: payload.slot_number,
+            completed_checkpoint_count: 1,
+        }]
+    );
     for root in [&repository, &patched] {
         assert!(!root.join(".sniff-indexer-recovery.json").exists());
         assert!(!root.join(".sniff-indexer-tmp").exists());
@@ -616,6 +631,8 @@ fn selected_slot_work_recovery_removes_only_proven_semantic_and_source_state() {
     assert!(!interrupted_snapshot.exists());
     assert!(source_progress.is_dir());
     assert!(!interrupted_source.exists());
+    assert!(assessment_replay.is_dir());
+    assert!(!interrupted_replay.exists());
     assert!(slot_root.join("base-tested").is_dir());
 }
 
@@ -730,11 +747,17 @@ fn public_surface_replay_preserves_materializations_and_rewinds_only_stale_censu
         "repository",
         "semantic-progress",
         "source-progress",
+        "assessment-source-replay-progress",
     ] {
         fs::create_dir_all(slot_root.join(name)).unwrap();
     }
     fs::write(slot_root.join("semantic-progress/snapshot.json"), b"stale").unwrap();
     fs::write(slot_root.join("source-progress/inventory.json"), b"stale").unwrap();
+    fs::write(
+        slot_root.join("assessment-source-replay-progress/validation.json"),
+        b"stale",
+    )
+    .unwrap();
 
     let summary =
         replay_historical_v2_public_surface_census(HistoricalV2PublicSurfaceReplayInputs {
@@ -750,8 +773,10 @@ fn public_surface_replay_preserves_materializations_and_rewinds_only_stale_censu
     assert_eq!(summary.removed_stage_count, 2);
     assert!(summary.removed_semantic_progress);
     assert!(summary.removed_source_progress);
+    assert!(summary.removed_assessment_source_replay_progress);
     assert!(!slot_root.join("semantic-progress").exists());
     assert!(!slot_root.join("source-progress").exists());
+    assert!(!slot_root.join("assessment-source-replay-progress").exists());
     assert!(
         !slot_root
             .join(".semantic-progress.public-surface-replay")
@@ -760,6 +785,11 @@ fn public_surface_replay_preserves_materializations_and_rewinds_only_stale_censu
     assert!(
         !slot_root
             .join(".source-progress.public-surface-replay")
+            .exists()
+    );
+    assert!(
+        !slot_root
+            .join(".assessment-source-replay-progress.public-surface-replay")
             .exists()
     );
     for name in ["base-tested", "patched", "patched-tested", "repository"] {
@@ -910,6 +940,7 @@ fn compiler_census_replay_reopens_only_the_proven_incomplete_terminal() {
     assert_eq!(summary.retained_stage, HistoricalV2SlotStage::Payload);
     assert!(!summary.removed_semantic_progress);
     assert!(!summary.removed_source_progress);
+    assert!(!summary.removed_assessment_source_replay_progress);
     assert!(!slot_root.join("semantic-progress").exists());
     assert!(!slot_root.join("source-progress").exists());
     let journal = HistoricalV2SlotStageJournal::open_existing(
@@ -1005,6 +1036,7 @@ fn go_semantic_coverage_replay_removes_only_partial_semantic_progress() {
     assert_eq!(summary.retained_stage, HistoricalV2SlotStage::SourceCensus);
     assert!(summary.removed_semantic_progress);
     assert!(!summary.removed_source_progress);
+    assert!(!summary.removed_assessment_source_replay_progress);
     assert!(!slot_root.join("semantic-progress").exists());
     assert!(slot_root.join("source-progress/inventory.json").is_file());
     assert!(

@@ -78,6 +78,7 @@ pub struct HistoricalV2PublicSurfaceReplaySummary {
     pub removed_stage_count: usize,
     pub removed_semantic_progress: bool,
     pub removed_source_progress: bool,
+    pub removed_assessment_source_replay_progress: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -88,6 +89,7 @@ pub struct HistoricalV2CompilerCensusReplaySummary {
     pub removed_stage_count: usize,
     pub removed_semantic_progress: bool,
     pub removed_source_progress: bool,
+    pub removed_assessment_source_replay_progress: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -98,6 +100,7 @@ pub struct HistoricalV2GoSemanticCoverageReplaySummary {
     pub removed_stage_count: usize,
     pub removed_semantic_progress: bool,
     pub removed_source_progress: bool,
+    pub removed_assessment_source_replay_progress: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -107,6 +110,14 @@ pub struct HistoricalV2SelectedSlotWorkRecoverySummary {
     pub recovered_semantic_root_count: usize,
     pub semantic_worlds: Vec<HistoricalV2SemanticWorldProgress>,
     pub semantic_checkpoints: Vec<HistoricalV2SemanticCheckpointProgress>,
+    pub assessment_source_replays: Vec<HistoricalV2AssessmentSourceReplayProgress>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HistoricalV2AssessmentSourceReplayProgress {
+    pub language: String,
+    pub slot_number: usize,
+    pub completed_checkpoint_count: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
