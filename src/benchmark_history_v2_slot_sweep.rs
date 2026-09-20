@@ -1,21 +1,21 @@
 use super::history_v2_slot_store_support::sync_directory;
 use super::{
-    HistoricalV2CompilerCensusReplayInputs, HistoricalV2CompilerCensusReplaySummary,
-    HistoricalV2GoSemanticCoverageReplayInputs, HistoricalV2GoSemanticCoverageReplaySummary,
-    HistoricalV2LanguageQuotaHeadroom, HistoricalV2PayloadStageInputs,
-    HistoricalV2PublicSurfaceReplayInputs, HistoricalV2PublicSurfaceReplaySummary,
-    HistoricalV2SelectedPayload, HistoricalV2SelectedSlotRunSummary,
-    HistoricalV2SelectedSlotStateInspection, HistoricalV2SelectedSlotStateInspectionInputs,
-    HistoricalV2SelectedSlotStateInspectionSummary, HistoricalV2SelectedSlotSweepInputs,
-    HistoricalV2SelectedSlotSweepSummary, HistoricalV2SelectedSlotWorkRecoveryInputs,
-    HistoricalV2SelectedSlotWorkRecoverySummary, HistoricalV2SemanticCensusExclusionReason,
-    HistoricalV2SemanticCheckpointProgress, HistoricalV2SemanticWorldProgress,
-    HistoricalV2SlotOperations, HistoricalV2SlotOutcome, HistoricalV2SlotRunDisposition,
-    HistoricalV2SlotRunIdentity, HistoricalV2SlotStage, HistoricalV2SlotStageError,
-    HistoricalV2SlotStageJournal, HistoricalV2SlotStageOutcome, HistoricalV2StageArtifactKind,
-    HistoricalV2TerminalExclusionReason, run_historical_v2_slot_slice_through,
-    validate_historical_v2_protocol, validate_historical_v2_selected_payloads_commitment,
-    validate_historical_v2_slot_selection,
+    HistoricalV2AssessmentSourceReplayProgress, HistoricalV2CompilerCensusReplayInputs,
+    HistoricalV2CompilerCensusReplaySummary, HistoricalV2GoSemanticCoverageReplayInputs,
+    HistoricalV2GoSemanticCoverageReplaySummary, HistoricalV2LanguageQuotaHeadroom,
+    HistoricalV2PayloadStageInputs, HistoricalV2PublicSurfaceReplayInputs,
+    HistoricalV2PublicSurfaceReplaySummary, HistoricalV2SelectedPayload,
+    HistoricalV2SelectedSlotRunSummary, HistoricalV2SelectedSlotStateInspection,
+    HistoricalV2SelectedSlotStateInspectionInputs, HistoricalV2SelectedSlotStateInspectionSummary,
+    HistoricalV2SelectedSlotSweepInputs, HistoricalV2SelectedSlotSweepSummary,
+    HistoricalV2SelectedSlotWorkRecoveryInputs, HistoricalV2SelectedSlotWorkRecoverySummary,
+    HistoricalV2SemanticCensusExclusionReason, HistoricalV2SemanticCheckpointProgress,
+    HistoricalV2SemanticWorldProgress, HistoricalV2SlotOperations, HistoricalV2SlotOutcome,
+    HistoricalV2SlotRunDisposition, HistoricalV2SlotRunIdentity, HistoricalV2SlotStage,
+    HistoricalV2SlotStageError, HistoricalV2SlotStageJournal, HistoricalV2SlotStageOutcome,
+    HistoricalV2StageArtifactKind, HistoricalV2TerminalExclusionReason,
+    run_historical_v2_slot_slice_through, validate_historical_v2_protocol,
+    validate_historical_v2_selected_payloads_commitment, validate_historical_v2_slot_selection,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
@@ -284,8 +284,30 @@ pub fn recover_historical_v2_selected_slot_work(
     }
     for root in &layout.source_progress_roots {
         super::history_v2_source_census::recover_historical_v2_source_progress(root)
+            .map(|_| ())
             .map_err(recovery_infrastructure)?;
     }
+    let assessment_source_replays = layout
+        .assessment_source_replay_progress_roots
+        .iter()
+        .map(|root| {
+            super::history_v2_source_census::recover_historical_v2_source_replay_progress(
+                &root.root,
+            )
+            .map(
+                |completed_checkpoint_count| HistoricalV2AssessmentSourceReplayProgress {
+                    language: root.language.clone(),
+                    slot_number: root.slot_number,
+                    completed_checkpoint_count,
+                },
+            )
+            .map_err(recovery_infrastructure)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let assessment_source_replays = assessment_source_replays
+        .into_iter()
+        .filter(|progress| progress.completed_checkpoint_count > 0)
+        .collect();
 
     Ok(HistoricalV2SelectedSlotWorkRecoverySummary {
         selected_slot_count: inputs.payloads.records.len(),
@@ -293,6 +315,7 @@ pub fn recover_historical_v2_selected_slot_work(
         recovered_semantic_root_count,
         semantic_worlds,
         semantic_checkpoints,
+        assessment_source_replays,
     })
 }
 
@@ -315,6 +338,8 @@ pub fn replay_historical_v2_public_surface_census(
         removed_stage_count: summary.removed_stage_count,
         removed_semantic_progress: summary.removed_semantic_progress,
         removed_source_progress: summary.removed_source_progress,
+        removed_assessment_source_replay_progress: summary
+            .removed_assessment_source_replay_progress,
     })
 }
 
@@ -337,6 +362,8 @@ pub fn replay_historical_v2_compiler_census(
         removed_stage_count: summary.removed_stage_count,
         removed_semantic_progress: summary.removed_semantic_progress,
         removed_source_progress: summary.removed_source_progress,
+        removed_assessment_source_replay_progress: summary
+            .removed_assessment_source_replay_progress,
     })
 }
 
@@ -364,6 +391,8 @@ pub fn replay_historical_v2_go_semantic_coverage(
         removed_stage_count: summary.removed_stage_count,
         removed_semantic_progress: summary.removed_semantic_progress,
         removed_source_progress: summary.removed_source_progress,
+        removed_assessment_source_replay_progress: summary
+            .removed_assessment_source_replay_progress,
     })
 }
 
@@ -381,6 +410,7 @@ struct CensusReplaySummary {
     removed_stage_count: usize,
     removed_semantic_progress: bool,
     removed_source_progress: bool,
+    removed_assessment_source_replay_progress: bool,
 }
 
 fn replay_historical_v2_census(
@@ -455,6 +485,7 @@ fn replay_historical_v2_census(
             removed_stage_count,
             removed_semantic_progress: false,
             removed_source_progress: false,
+            removed_assessment_source_replay_progress: false,
         });
     }
 
@@ -504,6 +535,7 @@ fn replay_historical_v2_census(
             removed_stage_count: 0,
             removed_semantic_progress: true,
             removed_source_progress: false,
+            removed_assessment_source_replay_progress: false,
         });
     }
     let source_progress_root = optional_replay_progress_root(
@@ -511,9 +543,16 @@ fn replay_historical_v2_census(
         "source-progress",
         "historical-v2 source progress root",
     )?;
+    let assessment_source_replay_progress_root = optional_replay_progress_root(
+        &slot_root,
+        "assessment-source-replay-progress",
+        "historical-v2 assessment source replay progress root",
+    )?;
     let suffix = "public-surface-replay";
     let quarantine = slot_root.join(format!(".semantic-progress.{suffix}"));
     let source_quarantine = slot_root.join(format!(".source-progress.{suffix}"));
+    let assessment_source_replay_quarantine =
+        slot_root.join(format!(".assessment-source-replay-progress.{suffix}"));
     match fs::symlink_metadata(&quarantine) {
         Ok(_) => {
             return Err(recovery_invalid(
@@ -542,6 +581,21 @@ fn replay_historical_v2_census(
             }
         }
     }
+    if assessment_source_replay_progress_root.is_some() {
+        match fs::symlink_metadata(&assessment_source_replay_quarantine) {
+            Ok(_) => {
+                return Err(recovery_invalid(
+                    "historical-v2 public-surface assessment source replay quarantine already exists",
+                ));
+            }
+            Err(error) if error.kind() == ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(recovery_infrastructure(format!(
+                    "failed to inspect historical-v2 public-surface assessment source replay quarantine: {error}"
+                )));
+            }
+        }
+    }
     fs::rename(&progress_root, &quarantine).map_err(|error| {
         recovery_infrastructure(format!(
             "failed to quarantine historical-v2 semantic progress: {error}"
@@ -562,6 +616,32 @@ fn replay_historical_v2_census(
                 )));
             }
         }
+    }
+    if let Some(assessment_source_replay_progress_root) = &assessment_source_replay_progress_root
+        && let Err(error) = fs::rename(
+            assessment_source_replay_progress_root,
+            &assessment_source_replay_quarantine,
+        )
+    {
+        let source_rollback = if let Some(source_progress_root) = &source_progress_root {
+            fs::rename(&source_quarantine, source_progress_root)
+        } else {
+            Ok(())
+        };
+        let semantic_rollback = fs::rename(&quarantine, &progress_root);
+        return Err(recovery_infrastructure(format!(
+            "failed to quarantine historical-v2 assessment source replay progress: {error}; source progress rollback: {}; semantic progress rollback: {}",
+            if source_rollback.is_ok() {
+                "complete"
+            } else {
+                "failed"
+            },
+            if semantic_rollback.is_ok() {
+                "complete"
+            } else {
+                "failed"
+            }
+        )));
     }
     sync_directory(&slot_root).map_err(recovery_infrastructure)?;
 
@@ -589,6 +669,18 @@ fn replay_historical_v2_census(
             ))
         })?;
     }
+    if assessment_source_replay_progress_root.is_some() {
+        let assessment_source_replay_quarantine = exact_plain_child(
+            &slot_root,
+            &assessment_source_replay_quarantine,
+            "historical-v2 public-surface assessment source replay quarantine",
+        )?;
+        fs::remove_dir_all(&assessment_source_replay_quarantine).map_err(|error| {
+            recovery_infrastructure(format!(
+                "failed to remove historical-v2 assessment source replay quarantine: {error}"
+            ))
+        })?;
+    }
     sync_directory(&slot_root).map_err(recovery_infrastructure)?;
 
     Ok(CensusReplaySummary {
@@ -598,6 +690,7 @@ fn replay_historical_v2_census(
         removed_stage_count,
         removed_semantic_progress: true,
         removed_source_progress: source_progress_root.is_some(),
+        removed_assessment_source_replay_progress: assessment_source_replay_progress_root.is_some(),
     })
 }
 
@@ -693,9 +786,17 @@ fn exact_replay_slot_root(
     .into_iter()
     .map(str::to_string)
     .collect::<BTreeSet<_>>();
-    let mut expected_with_source_progress = expected.clone();
-    expected_with_source_progress.insert("source-progress".to_string());
-    if observed != expected && observed != expected_with_source_progress {
+    let allowed_optional = [
+        "source-progress".to_string(),
+        "assessment-source-replay-progress".to_string(),
+    ]
+    .into_iter()
+    .collect::<BTreeSet<_>>();
+    if !expected.is_subset(&observed)
+        || observed
+            .difference(&expected)
+            .any(|entry| !allowed_optional.contains(entry))
+    {
         return Err(recovery_invalid(
             "historical-v2 census replay work layout changed",
         ));
@@ -764,6 +865,7 @@ fn validate_selected_slot_work_layout(
     let mut semantic_roots = Vec::new();
     let mut semantic_progress_roots = Vec::new();
     let mut source_progress_roots = Vec::new();
+    let mut assessment_source_replay_progress_roots = Vec::new();
     for language_entry in read_plain_directory(work_root, "historical-v2 work root")? {
         let language = plain_entry_name(&language_entry, "historical-v2 language work root")?;
         let expected_slots = expected.get(&language).ok_or_else(|| {
@@ -841,6 +943,26 @@ fn validate_selected_slot_work_layout(
                     )));
                 }
             }
+            let progress_root = slot_root.join("assessment-source-replay-progress");
+            match fs::symlink_metadata(&progress_root) {
+                Ok(_) => assessment_source_replay_progress_roots.push(
+                    SelectedAssessmentSourceReplayProgressRoot {
+                        language: language.clone(),
+                        slot_number,
+                        root: exact_plain_child(
+                            &slot_root,
+                            &progress_root,
+                            "historical-v2 assessment source replay progress root",
+                        )?,
+                    },
+                ),
+                Err(error) if error.kind() == ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(recovery_infrastructure(format!(
+                        "failed to inspect historical-v2 assessment source replay progress root: {error}"
+                    )));
+                }
+            }
         }
     }
     semantic_roots.sort();
@@ -848,10 +970,14 @@ fn validate_selected_slot_work_layout(
         (&left.language, left.slot_number).cmp(&(&right.language, right.slot_number))
     });
     source_progress_roots.sort();
+    assessment_source_replay_progress_roots.sort_by(|left, right| {
+        (&left.language, left.slot_number).cmp(&(&right.language, right.slot_number))
+    });
     Ok(SelectedSlotWorkLayout {
         semantic_roots,
         semantic_progress_roots,
         source_progress_roots,
+        assessment_source_replay_progress_roots,
     })
 }
 
@@ -859,9 +985,16 @@ struct SelectedSlotWorkLayout {
     semantic_roots: Vec<PathBuf>,
     semantic_progress_roots: Vec<SelectedSemanticProgressRoot>,
     source_progress_roots: Vec<PathBuf>,
+    assessment_source_replay_progress_roots: Vec<SelectedAssessmentSourceReplayProgressRoot>,
 }
 
 struct SelectedSemanticProgressRoot {
+    language: String,
+    slot_number: usize,
+    root: PathBuf,
+}
+
+struct SelectedAssessmentSourceReplayProgressRoot {
     language: String,
     slot_number: usize,
     root: PathBuf,

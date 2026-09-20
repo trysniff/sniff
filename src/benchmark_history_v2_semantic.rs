@@ -103,6 +103,7 @@ mod variants;
 
 use stage_support::*;
 
+pub(crate) use validation::validate_historical_v2_semantic_census_after_source_validation;
 pub use validation::validate_historical_v2_semantic_census_commitment;
 
 pub(crate) fn recover_historical_v2_semantic_progress(

@@ -13,13 +13,14 @@ use super::{
     HistoricalV2SlotStageExecutor, HistoricalV2SlotStageFuture, HistoricalV2SlotStageOutcome,
     HistoricalV2SourceCensus, HistoricalV2StageArtifactKind, HistoricalV2StageResult,
     HistoricalV2TerminalExclusionReason, HistoricalV2TestMaterializedRoots, HistoricalV2TestRecipe,
-    HistoricalV2TestRecipeOutcome, bind_historical_v2_assessment_identity,
+    HistoricalV2TestRecipeOutcome, bind_historical_v2_assessment_identity_after_source_validation,
     census_historical_v2_semantics_typed_resumable, census_historical_v2_sources_typed_resumable,
     execute_historical_v2_identical_tests, materialize_historical_v2_repository_typed,
     materialize_historical_v2_test_snapshots_typed, prepare_historical_v2_identical_test_plan,
     prepare_historical_v2_test_recipe, qualify_historical_v2_assessment,
-    recover_historical_v2_source_progress, validate_historical_v2_identical_test_execution,
-    validate_historical_v2_materialization,
+    recover_historical_v2_source_progress, recover_historical_v2_source_replay_progress,
+    validate_historical_v2_identical_test_execution, validate_historical_v2_materialization,
+    validate_historical_v2_source_census_resumable,
 };
 use reqwest::Client;
 use std::path::{Path, PathBuf};
@@ -97,6 +98,7 @@ impl<'a, E: HistoricalV2RecoverableTestExecutor> HistoricalV2SlotOperations<'a, 
                 validate_historical_v2_materialization(&materialization, &roots)
                     .map_err(|detail| invalid(context.stage, detail))?;
                 recover_historical_v2_source_progress(&self.source_progress_root())
+                    .map(|_| ())
                     .map_err(|detail| infrastructure(context.stage, detail))
             }
             HistoricalV2SlotStage::SemanticCensus => {
@@ -113,6 +115,13 @@ impl<'a, E: HistoricalV2RecoverableTestExecutor> HistoricalV2SlotOperations<'a, 
                 )
                 .map_err(|detail| infrastructure(context.stage, detail))?;
                 Ok(())
+            }
+            HistoricalV2SlotStage::AssessmentIdentity => {
+                recover_historical_v2_source_replay_progress(
+                    &self.assessment_source_replay_progress_root(),
+                )
+                .map(|_| ())
+                .map_err(|detail| infrastructure(context.stage, detail))
             }
             HistoricalV2SlotStage::IdenticalTests => {
                 let state = self.assessment_state(context)?;
@@ -266,8 +275,21 @@ impl<'a, E: HistoricalV2RecoverableTestExecutor> HistoricalV2SlotOperations<'a, 
         context: HistoricalV2SlotStageContext<'_>,
     ) -> Result<HistoricalV2PreparedStage, HistoricalV2SlotStageError> {
         let state = self.assessment_state(context)?;
-        let value = bind_historical_v2_assessment_identity(&state.inputs(&self.payload_inputs))
-            .map_err(|detail| invalid(context.stage, detail))?;
+        let validated_source_replay = validate_historical_v2_source_census_resumable(
+            &state.materialization,
+            &state.materialized_roots,
+            &state.source_census,
+            &self.assessment_source_replay_progress_root(),
+        )
+        .map_err(|mut error| {
+            error.stage = context.stage;
+            error
+        })?;
+        let value = bind_historical_v2_assessment_identity_after_source_validation(
+            &state.inputs(&self.payload_inputs),
+            &validated_source_replay,
+        )
+        .map_err(|detail| invalid(context.stage, detail))?;
         completed(
             HistoricalV2StageArtifactKind::AssessmentIdentity,
             &value.assessment_identity_sha256,
@@ -472,6 +494,10 @@ impl<'a, E: HistoricalV2RecoverableTestExecutor> HistoricalV2SlotOperations<'a, 
 
     fn source_progress_root(&self) -> PathBuf {
         self.slot_root().join("source-progress")
+    }
+
+    fn assessment_source_replay_progress_root(&self) -> PathBuf {
+        self.slot_root().join("assessment-source-replay-progress")
     }
 
     fn materialized_roots(&self) -> HistoricalV2MaterializedRoots {

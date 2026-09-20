@@ -14,7 +14,7 @@ use super::super::{
     HistoricalV2SourceSemanticCoverage, HistoricalV2SourceSnapshotCensus,
     IntentionalBoundaryIndexerKind, IntentionalBoundarySemanticOrigin,
     IntentionalBoundarySemanticRange, IntentionalBoundarySemanticSymbolCategory,
-    validate_historical_v2_source_census,
+    validate_historical_v2_source_census, validate_historical_v2_source_census_envelope,
 };
 use super::public_surface::go_package_roots_for_variant;
 use super::{
@@ -33,6 +33,21 @@ pub fn validate_historical_v2_semantic_census_commitment(
     census: &HistoricalV2SemanticCensus,
 ) -> Result<(), String> {
     validate_historical_v2_source_census(materialization, roots, source_census)?;
+    validate_historical_v2_semantic_census_after_source_validation(
+        materialization,
+        roots,
+        source_census,
+        census,
+    )
+}
+
+pub(crate) fn validate_historical_v2_semantic_census_after_source_validation(
+    materialization: &HistoricalV2Materialization,
+    roots: &HistoricalV2MaterializedRoots,
+    source_census: &HistoricalV2SourceCensus,
+    census: &HistoricalV2SemanticCensus,
+) -> Result<(), String> {
+    validate_historical_v2_source_census_envelope(materialization, source_census)?;
     let scope = semantic_scope(materialization, roots, source_census)?;
     let changed_indexers = scope
         .changed_indexers

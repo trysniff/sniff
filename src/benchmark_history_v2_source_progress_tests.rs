@@ -186,7 +186,10 @@ fn recovery_removes_known_temporary_files_and_rejects_unknown_entries() {
         .side_root(HistoricalV2SourceSnapshotSide::Patched)
         .join(HistoricalV2SourceProgressUnit::ParserCensus.temp_file_name());
     fs::write(&temp, b"partial").unwrap();
-    HistoricalV2SourceProgress::recover_existing(&root).unwrap();
+    assert_eq!(
+        HistoricalV2SourceProgress::recover_existing(&root).unwrap(),
+        0
+    );
     assert!(!temp.exists());
 
     fs::write(root.join("base").join("unexpected.json"), b"{}").unwrap();
@@ -195,6 +198,44 @@ fn recovery_removes_known_temporary_files_and_rejects_unknown_entries() {
             .unwrap_err()
             .contains("unexpected entry")
     );
+}
+
+#[test]
+fn recovery_reports_only_durable_checkpoint_files() {
+    let state = tempfile::tempdir().unwrap();
+    let root = state.path().join("source-progress");
+    let progress = HistoricalV2SourceProgress::open(&root).unwrap();
+    let materialization = materialization();
+    progress
+        .publish(
+            &materialization,
+            HistoricalV2SourceSnapshotSide::Base,
+            &materialization.base_revision,
+            HistoricalV2SourceProgressUnit::Inventory,
+            &[],
+            &"base inventory",
+        )
+        .unwrap();
+    progress
+        .publish(
+            &materialization,
+            HistoricalV2SourceSnapshotSide::Patched,
+            &materialization.patched_commit_oid,
+            HistoricalV2SourceProgressUnit::Inventory,
+            &[],
+            &"patched inventory",
+        )
+        .unwrap();
+    let interrupted = progress
+        .side_root(HistoricalV2SourceSnapshotSide::Patched)
+        .join(HistoricalV2SourceProgressUnit::ParserCensus.temp_file_name());
+    fs::write(&interrupted, b"partial").unwrap();
+
+    assert_eq!(
+        HistoricalV2SourceProgress::recover_existing(&root).unwrap(),
+        2
+    );
+    assert!(!interrupted.exists());
 }
 
 #[cfg(unix)]
