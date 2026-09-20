@@ -47,7 +47,7 @@ use super::{
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 const SOURCE_CENSUS_CONTRACT: &str = "sniffbench-historical-v2-source-census-v18";
@@ -111,9 +111,95 @@ pub fn validate_historical_v2_source_census(
         }
     };
     if census != &expected {
-        return Err("historical-v2 source census changed".to_string());
+        return Err(format!(
+            "historical-v2 source census changed {}",
+            describe_source_census_difference(census, &expected)
+        ));
     }
     Ok(())
+}
+
+fn describe_source_census_difference(
+    committed: &HistoricalV2SourceCensus,
+    replayed: &HistoricalV2SourceCensus,
+) -> String {
+    let Ok(committed) = serde_json::to_value(committed) else {
+        return "at $ (committed census could not be encoded)".to_string();
+    };
+    let Ok(replayed) = serde_json::to_value(replayed) else {
+        return "at $ (replayed census could not be encoded)".to_string();
+    };
+    first_json_difference(&committed, &replayed, "$")
+        .unwrap_or_else(|| "at $ (encoded values unexpectedly agree)".to_string())
+}
+
+fn first_json_difference(
+    committed: &serde_json::Value,
+    replayed: &serde_json::Value,
+    path: &str,
+) -> Option<String> {
+    match (committed, replayed) {
+        (serde_json::Value::Object(left), serde_json::Value::Object(right)) => {
+            let keys = left
+                .keys()
+                .chain(right.keys())
+                .cloned()
+                .collect::<BTreeSet<_>>();
+            for key in keys {
+                let child_path = format!("{path}.{key}");
+                match (left.get(&key), right.get(&key)) {
+                    (Some(left), Some(right)) => {
+                        if let Some(difference) = first_json_difference(left, right, &child_path) {
+                            return Some(difference);
+                        }
+                    }
+                    (Some(_), None) => {
+                        return Some(format!("at {child_path}: absent from replay"));
+                    }
+                    (None, Some(_)) => {
+                        return Some(format!("at {child_path}: added by replay"));
+                    }
+                    (None, None) => {}
+                }
+            }
+            None
+        }
+        (serde_json::Value::Array(left), serde_json::Value::Array(right)) => {
+            if left.len() != right.len() {
+                return Some(format!(
+                    "at {path}.length: committed={} replayed={}",
+                    left.len(),
+                    right.len()
+                ));
+            }
+            for (index, (left, right)) in left.iter().zip(right).enumerate() {
+                if let Some(difference) =
+                    first_json_difference(left, right, &format!("{path}[{index}]"))
+                {
+                    return Some(difference);
+                }
+            }
+            None
+        }
+        _ if committed == replayed => None,
+        _ => Some(format!(
+            "at {path}: committed={} replayed={}",
+            compact_json_value(committed),
+            compact_json_value(replayed)
+        )),
+    }
+}
+
+fn compact_json_value(value: &serde_json::Value) -> String {
+    const MAX_CHARS: usize = 160;
+    let encoded = serde_json::to_string(value).unwrap_or_else(|_| "<unencodable>".to_string());
+    let mut chars = encoded.chars();
+    let prefix = chars.by_ref().take(MAX_CHARS).collect::<String>();
+    if chars.next().is_some() {
+        format!("{prefix}...")
+    } else {
+        prefix
+    }
 }
 
 pub fn validate_historical_v2_source_census_commitment(
