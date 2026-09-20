@@ -1009,6 +1009,21 @@ class ManifestTests(unittest.TestCase):
             transport.SOURCE_CENSUS_DIAGNOSTICS_MIGRATION_SOURCE_ARTIFACT_SIZE,
         )
 
+    @staticmethod
+    def _write_assessment_source_replay_manifest(path: pathlib.Path) -> None:
+        ManifestTests._write_source_census_diagnostics_manifest(path)
+        transport.migrate_manifest(
+            path,
+            transport.FRAME_RUN_ID,
+            transport.DETERMINISTIC_NODE_CONSUMER_MIGRATION_FROM_COLLECTOR_SHA,
+            transport.ASSESSMENT_SOURCE_REPLAY_MIGRATION_NAME,
+            transport.ASSESSMENT_SOURCE_REPLAY_MIGRATION_SOURCE_RUN_ID,
+            transport.ASSESSMENT_SOURCE_REPLAY_MIGRATION_SOURCE_HEAD_SHA,
+            transport.ASSESSMENT_SOURCE_REPLAY_MIGRATION_SOURCE_ARTIFACT_ID,
+            transport.ASSESSMENT_SOURCE_REPLAY_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+            transport.ASSESSMENT_SOURCE_REPLAY_MIGRATION_SOURCE_ARTIFACT_SIZE,
+        )
+
     def test_manifest_round_trips_and_is_create_new(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             path = pathlib.Path(temporary, "manifest.json")
@@ -4364,7 +4379,7 @@ class ManifestTests(unittest.TestCase):
                 with self.subTest(field=field), self.assertRaises(ValueError):
                     transport.validate_manifest(path, transport.FRAME_RUN_ID)
 
-    def test_assessment_source_replay_migration_is_exact_and_closes_chain(
+    def test_assessment_source_replay_migration_is_exact(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -4372,7 +4387,7 @@ class ManifestTests(unittest.TestCase):
             self._write_source_census_diagnostics_manifest(path)
             prior_bytes = path.read_bytes()
             prior_manifest = json.loads(prior_bytes)
-            target = "e" * 40
+            target = transport.DETERMINISTIC_NODE_CONSUMER_MIGRATION_FROM_COLLECTOR_SHA
 
             with self.assertRaisesRegex(ValueError, "migration chain drifted"):
                 transport.migrate_manifest(
@@ -4415,7 +4430,7 @@ class ManifestTests(unittest.TestCase):
             self.assertEqual(
                 transport.validate_manifest(path, transport.FRAME_RUN_ID), target
             )
-            with self.assertRaisesRegex(ValueError, "migration chain is closed"):
+            with self.assertRaisesRegex(ValueError, "migration is out of order"):
                 transport.migrate_manifest(
                     path,
                     transport.FRAME_RUN_ID,
@@ -4431,6 +4446,77 @@ class ManifestTests(unittest.TestCase):
             for field in value["collector_migrations"][40]:
                 tampered = json.loads(json.dumps(value))
                 tampered["collector_migrations"][40][field] = True
+                path.write_text(json.dumps(tampered), encoding="utf-8")
+                with self.subTest(field=field), self.assertRaises(ValueError):
+                    transport.validate_manifest(path, transport.FRAME_RUN_ID)
+
+    def test_deterministic_node_consumer_migration_is_exact_and_closes_chain(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = pathlib.Path(temporary, "manifest.json")
+            self._write_assessment_source_replay_manifest(path)
+            prior_bytes = path.read_bytes()
+            prior_manifest = json.loads(prior_bytes)
+            target = "f" * 40
+
+            with self.assertRaisesRegex(ValueError, "migration chain drifted"):
+                transport.migrate_manifest(
+                    path,
+                    transport.FRAME_RUN_ID,
+                    target,
+                    transport.DETERMINISTIC_NODE_CONSUMER_MIGRATION_NAME,
+                    transport.DETERMINISTIC_NODE_CONSUMER_MIGRATION_SOURCE_RUN_ID,
+                    transport.DETERMINISTIC_NODE_CONSUMER_MIGRATION_SOURCE_HEAD_SHA,
+                    transport.DETERMINISTIC_NODE_CONSUMER_MIGRATION_SOURCE_ARTIFACT_ID + 1,
+                    transport.DETERMINISTIC_NODE_CONSUMER_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+                    transport.DETERMINISTIC_NODE_CONSUMER_MIGRATION_SOURCE_ARTIFACT_SIZE,
+                )
+            self.assertEqual(path.read_bytes(), prior_bytes)
+
+            self.assertEqual(
+                transport.migrate_manifest(
+                    path,
+                    transport.FRAME_RUN_ID,
+                    target,
+                    transport.DETERMINISTIC_NODE_CONSUMER_MIGRATION_NAME,
+                    transport.DETERMINISTIC_NODE_CONSUMER_MIGRATION_SOURCE_RUN_ID,
+                    transport.DETERMINISTIC_NODE_CONSUMER_MIGRATION_SOURCE_HEAD_SHA,
+                    transport.DETERMINISTIC_NODE_CONSUMER_MIGRATION_SOURCE_ARTIFACT_ID,
+                    transport.DETERMINISTIC_NODE_CONSUMER_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+                    transport.DETERMINISTIC_NODE_CONSUMER_MIGRATION_SOURCE_ARTIFACT_SIZE,
+                ),
+                target,
+            )
+            value = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(value["schema_version"], 43)
+            self.assertEqual(
+                value["collector_migrations"][:41],
+                prior_manifest["collector_migrations"],
+            )
+            self.assertEqual(
+                value["collector_migrations"][41],
+                transport._expected_deterministic_node_consumer_migration(target),
+            )
+            self.assertEqual(
+                transport.validate_manifest(path, transport.FRAME_RUN_ID), target
+            )
+            with self.assertRaisesRegex(ValueError, "migration chain is closed"):
+                transport.migrate_manifest(
+                    path,
+                    transport.FRAME_RUN_ID,
+                    "d" * 40,
+                    transport.DETERMINISTIC_NODE_CONSUMER_MIGRATION_NAME,
+                    transport.DETERMINISTIC_NODE_CONSUMER_MIGRATION_SOURCE_RUN_ID,
+                    transport.DETERMINISTIC_NODE_CONSUMER_MIGRATION_SOURCE_HEAD_SHA,
+                    transport.DETERMINISTIC_NODE_CONSUMER_MIGRATION_SOURCE_ARTIFACT_ID,
+                    transport.DETERMINISTIC_NODE_CONSUMER_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+                    transport.DETERMINISTIC_NODE_CONSUMER_MIGRATION_SOURCE_ARTIFACT_SIZE,
+                )
+
+            for field in value["collector_migrations"][41]:
+                tampered = json.loads(json.dumps(value))
+                tampered["collector_migrations"][41][field] = True
                 path.write_text(json.dumps(tampered), encoding="utf-8")
                 with self.subTest(field=field), self.assertRaises(ValueError):
                     transport.validate_manifest(path, transport.FRAME_RUN_ID)

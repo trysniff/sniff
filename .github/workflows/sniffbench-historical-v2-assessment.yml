@@ -164,6 +164,7 @@ jobs:
               exit 1
             fi
             case "$COLLECTOR_MIGRATION" in
+              deterministic-node-consumer-profiles-v1) ;;
               resumable-assessment-source-replay-v1) ;;
               source-census-difference-diagnostics-v1) ;;
               go-semantic-cross-module-coverage-v1) ;;
@@ -486,6 +487,16 @@ jobs:
                   "$COLLECTOR_MIGRATION" "$RESUME_RUN_ID" "$PRIOR_HEAD_SHA" \
                   "$PRIOR_ARTIFACT_ID" "$PRIOR_ARTIFACT_DIGEST" \
                   "$PRIOR_ARTIFACT_SIZE"
+              elif [[ "$COLLECTOR_MIGRATION" == 'deterministic-node-consumer-profiles-v1' ]]; then
+                collector_sha="$(python3 "$transport" migrate-manifest \
+                  "$manifest" "$FRAME_RUN_ID" \
+                  'f6f7de50a699217f49957ee8d8a4d896077729ad' \
+                  'resumable-assessment-source-replay-v1' \
+                  "$RESUME_RUN_ID" "$PRIOR_HEAD_SHA" \
+                  "$PRIOR_ARTIFACT_ID" "$PRIOR_ARTIFACT_DIGEST" \
+                  "$PRIOR_ARTIFACT_SIZE")"
+                test "$collector_sha" = \
+                  'f6f7de50a699217f49957ee8d8a4d896077729ad'
               fi
               collector_sha="$(python3 "$transport" migrate-manifest \
                 "$manifest" "$FRAME_RUN_ID" "$GITHUB_SHA" \
@@ -698,6 +709,24 @@ jobs:
             --work-root "$WORK_ROOT" \
             --language go \
             --slot-number 122
+
+      - name: Replay nondeterministic Node consumer-profile censuses
+        if: ${{ !inputs.inspect_only && inputs.collector_migration == 'deterministic-node-consumer-profiles-v1' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$COLLECTOR_ROOT/target/release/sniffbench-frame" \
+            replay-public-surface-census \
+            --protocol "$COLLECTOR_ROOT/sniffbench/historical-v2-protocol.json" \
+            --artifact-root "$FRAME_ARTIFACT_ROOT" \
+            --frame "$FRAME_ROOT/frame.json" \
+            --exclusions "$FRAME_ROOT/exclusions.json" \
+            --selection "$FRAME_ROOT/selection.json" \
+            --payloads "$FRAME_ROOT/selected-payloads.json" \
+            --state-root "$STATE_ROOT" \
+            --work-root "$WORK_ROOT" \
+            --language go \
+            --slot-number 124
 
       - name: Replay evidence-resolved incomplete Go compiler censuses
         if: ${{ !inputs.inspect_only && inputs.collector_migration == 'go-compiler-census-evidence-replay-v1' }}
