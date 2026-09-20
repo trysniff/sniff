@@ -1024,6 +1024,21 @@ class ManifestTests(unittest.TestCase):
             transport.ASSESSMENT_SOURCE_REPLAY_MIGRATION_SOURCE_ARTIFACT_SIZE,
         )
 
+    @staticmethod
+    def _write_deterministic_node_consumer_manifest(path: pathlib.Path) -> None:
+        ManifestTests._write_assessment_source_replay_manifest(path)
+        transport.migrate_manifest(
+            path,
+            transport.FRAME_RUN_ID,
+            transport.DETERMINISTIC_NODE_CONSUMER_SLOT_123_MIGRATION_FROM_COLLECTOR_SHA,
+            transport.DETERMINISTIC_NODE_CONSUMER_MIGRATION_NAME,
+            transport.DETERMINISTIC_NODE_CONSUMER_MIGRATION_SOURCE_RUN_ID,
+            transport.DETERMINISTIC_NODE_CONSUMER_MIGRATION_SOURCE_HEAD_SHA,
+            transport.DETERMINISTIC_NODE_CONSUMER_MIGRATION_SOURCE_ARTIFACT_ID,
+            transport.DETERMINISTIC_NODE_CONSUMER_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+            transport.DETERMINISTIC_NODE_CONSUMER_MIGRATION_SOURCE_ARTIFACT_SIZE,
+        )
+
     def test_manifest_round_trips_and_is_create_new(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             path = pathlib.Path(temporary, "manifest.json")
@@ -4450,7 +4465,7 @@ class ManifestTests(unittest.TestCase):
                 with self.subTest(field=field), self.assertRaises(ValueError):
                     transport.validate_manifest(path, transport.FRAME_RUN_ID)
 
-    def test_deterministic_node_consumer_migration_is_exact_and_closes_chain(
+    def test_deterministic_node_consumer_migration_is_exact(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -4501,7 +4516,7 @@ class ManifestTests(unittest.TestCase):
             self.assertEqual(
                 transport.validate_manifest(path, transport.FRAME_RUN_ID), target
             )
-            with self.assertRaisesRegex(ValueError, "migration chain is closed"):
+            with self.assertRaisesRegex(ValueError, "migration is out of order"):
                 transport.migrate_manifest(
                     path,
                     transport.FRAME_RUN_ID,
@@ -4517,6 +4532,80 @@ class ManifestTests(unittest.TestCase):
             for field in value["collector_migrations"][41]:
                 tampered = json.loads(json.dumps(value))
                 tampered["collector_migrations"][41][field] = True
+                path.write_text(json.dumps(tampered), encoding="utf-8")
+                with self.subTest(field=field), self.assertRaises(ValueError):
+                    transport.validate_manifest(path, transport.FRAME_RUN_ID)
+
+    def test_deterministic_node_consumer_slot_123_migration_is_exact_and_closes_chain(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = pathlib.Path(temporary, "manifest.json")
+            self._write_deterministic_node_consumer_manifest(path)
+            prior_bytes = path.read_bytes()
+            prior_manifest = json.loads(prior_bytes)
+            target = "d" * 40
+
+            with self.assertRaisesRegex(ValueError, "migration chain drifted"):
+                transport.migrate_manifest(
+                    path,
+                    transport.FRAME_RUN_ID,
+                    target,
+                    transport.DETERMINISTIC_NODE_CONSUMER_SLOT_123_MIGRATION_NAME,
+                    transport.DETERMINISTIC_NODE_CONSUMER_SLOT_123_MIGRATION_SOURCE_RUN_ID,
+                    transport.DETERMINISTIC_NODE_CONSUMER_SLOT_123_MIGRATION_SOURCE_HEAD_SHA,
+                    transport.DETERMINISTIC_NODE_CONSUMER_SLOT_123_MIGRATION_SOURCE_ARTIFACT_ID
+                    + 1,
+                    transport.DETERMINISTIC_NODE_CONSUMER_SLOT_123_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+                    transport.DETERMINISTIC_NODE_CONSUMER_SLOT_123_MIGRATION_SOURCE_ARTIFACT_SIZE,
+                )
+            self.assertEqual(path.read_bytes(), prior_bytes)
+
+            self.assertEqual(
+                transport.migrate_manifest(
+                    path,
+                    transport.FRAME_RUN_ID,
+                    target,
+                    transport.DETERMINISTIC_NODE_CONSUMER_SLOT_123_MIGRATION_NAME,
+                    transport.DETERMINISTIC_NODE_CONSUMER_SLOT_123_MIGRATION_SOURCE_RUN_ID,
+                    transport.DETERMINISTIC_NODE_CONSUMER_SLOT_123_MIGRATION_SOURCE_HEAD_SHA,
+                    transport.DETERMINISTIC_NODE_CONSUMER_SLOT_123_MIGRATION_SOURCE_ARTIFACT_ID,
+                    transport.DETERMINISTIC_NODE_CONSUMER_SLOT_123_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+                    transport.DETERMINISTIC_NODE_CONSUMER_SLOT_123_MIGRATION_SOURCE_ARTIFACT_SIZE,
+                ),
+                target,
+            )
+            value = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(value["schema_version"], 44)
+            self.assertEqual(
+                value["collector_migrations"][:42],
+                prior_manifest["collector_migrations"],
+            )
+            self.assertEqual(
+                value["collector_migrations"][42],
+                transport._expected_deterministic_node_consumer_slot_123_migration(
+                    target
+                ),
+            )
+            self.assertEqual(
+                transport.validate_manifest(path, transport.FRAME_RUN_ID), target
+            )
+            with self.assertRaisesRegex(ValueError, "migration chain is closed"):
+                transport.migrate_manifest(
+                    path,
+                    transport.FRAME_RUN_ID,
+                    "e" * 40,
+                    transport.DETERMINISTIC_NODE_CONSUMER_SLOT_123_MIGRATION_NAME,
+                    transport.DETERMINISTIC_NODE_CONSUMER_SLOT_123_MIGRATION_SOURCE_RUN_ID,
+                    transport.DETERMINISTIC_NODE_CONSUMER_SLOT_123_MIGRATION_SOURCE_HEAD_SHA,
+                    transport.DETERMINISTIC_NODE_CONSUMER_SLOT_123_MIGRATION_SOURCE_ARTIFACT_ID,
+                    transport.DETERMINISTIC_NODE_CONSUMER_SLOT_123_MIGRATION_SOURCE_ARTIFACT_DIGEST,
+                    transport.DETERMINISTIC_NODE_CONSUMER_SLOT_123_MIGRATION_SOURCE_ARTIFACT_SIZE,
+                )
+
+            for field in value["collector_migrations"][42]:
+                tampered = json.loads(json.dumps(value))
+                tampered["collector_migrations"][42][field] = True
                 path.write_text(json.dumps(tampered), encoding="utf-8")
                 with self.subTest(field=field), self.assertRaises(ValueError):
                     transport.validate_manifest(path, transport.FRAME_RUN_ID)
@@ -6287,6 +6376,8 @@ class WorkflowContractTests(unittest.TestCase):
             "go-semantic-effective-test-coverage-v1",
             "go-semantic-cross-module-coverage-v1",
             "source-census-difference-diagnostics-v1",
+            "deterministic-node-consumer-profiles-slot-123-v1",
+            "Replay remaining nondeterministic Node consumer-profile census",
             'migrate-source-required-go-semantic-progress',
             'migrate-inferred-scip-kind-replay',
             'migrate-bounded-qualification-project-model-v8-replay',
@@ -6349,10 +6440,20 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertLess(manifest_migration, project_model_v9_replay)
         self.assertLess(project_model_v10_replay, v10_manifest_migration)
         replay = workflow.index("- name: Replay stale compiler public-surface censuses")
+        slot_123_replay = workflow.index(
+            "- name: Replay remaining nondeterministic Node consumer-profile census"
+        )
+        next_replay = workflow.index(
+            "- name: Replay evidence-resolved incomplete Go compiler censuses"
+        )
         install = workflow.index("- name: Install every pinned semantic indexer")
         assess = workflow.index("- name: Assess a bounded resumable slot slice")
         self.assertLess(replay, install)
+        self.assertLess(slot_123_replay, install)
         self.assertLess(install, assess)
+        slot_123_segment = workflow[slot_123_replay:next_replay]
+        self.assertIn("--slot-number 123", slot_123_segment)
+        self.assertNotIn("--slot-number 124", slot_123_segment)
 
 
 if __name__ == "__main__":
