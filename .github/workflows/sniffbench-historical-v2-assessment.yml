@@ -165,6 +165,7 @@ jobs:
             fi
             case "$COLLECTOR_MIGRATION" in
               deterministic-node-consumer-profiles-v1) ;;
+              deterministic-node-consumer-profiles-slot-123-v1) ;;
               resumable-assessment-source-replay-v1) ;;
               source-census-difference-diagnostics-v1) ;;
               go-semantic-cross-module-coverage-v1) ;;
@@ -727,6 +728,24 @@ jobs:
             --work-root "$WORK_ROOT" \
             --language go \
             --slot-number 124
+
+      - name: Replay remaining nondeterministic Node consumer-profile census
+        if: ${{ !inputs.inspect_only && inputs.collector_migration == 'deterministic-node-consumer-profiles-slot-123-v1' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$COLLECTOR_ROOT/target/release/sniffbench-frame" \
+            replay-public-surface-census \
+            --protocol "$COLLECTOR_ROOT/sniffbench/historical-v2-protocol.json" \
+            --artifact-root "$FRAME_ARTIFACT_ROOT" \
+            --frame "$FRAME_ROOT/frame.json" \
+            --exclusions "$FRAME_ROOT/exclusions.json" \
+            --selection "$FRAME_ROOT/selection.json" \
+            --payloads "$FRAME_ROOT/selected-payloads.json" \
+            --state-root "$STATE_ROOT" \
+            --work-root "$WORK_ROOT" \
+            --language go \
+            --slot-number 123
 
       - name: Replay evidence-resolved incomplete Go compiler censuses
         if: ${{ !inputs.inspect_only && inputs.collector_migration == 'go-compiler-census-evidence-replay-v1' }}
