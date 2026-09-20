@@ -419,6 +419,11 @@ pub use history_v2_corpus::*;
 mod history_v2_release_partition;
 use history_v2_release_partition::*;
 
+#[path = "benchmark_history_v3_protocol.rs"]
+mod history_v3_protocol;
+
+pub use history_v3_protocol::*;
+
 #[path = "benchmark_intentional_boundary_frame_task.rs"]
 mod intentional_boundary_frame_task;
 
