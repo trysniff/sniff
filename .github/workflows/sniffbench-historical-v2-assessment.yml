@@ -164,6 +164,7 @@ jobs:
               exit 1
             fi
             case "$COLLECTOR_MIGRATION" in
+              resumable-assessment-source-replay-v1) ;;
               source-census-difference-diagnostics-v1) ;;
               go-semantic-cross-module-coverage-v1) ;;
               go-semantic-effective-test-coverage-v1) ;;
@@ -832,7 +833,7 @@ jobs:
               --payloads "$FRAME_ROOT/selected-payloads.json" \
               --work-root "$WORK_ROOT" \
               2>&1 \
-              | grep -E '^(Started semantic compiler worlds:|Durable semantic checkpoints:|  [a-z]+/slot-)'
+              | grep -E '^(Started semantic compiler worlds:|Durable semantic checkpoints:|Assessment source replay checkpoints:|  [a-z]+/slot-)'
           } > "$RUNNER_TEMP/historical-v2-durable-progress-before.txt"
 
       - name: Assess a bounded resumable slot slice
@@ -964,7 +965,7 @@ jobs:
               --payloads "$FRAME_ROOT/selected-payloads.json" \
               --work-root "$WORK_ROOT" \
               2>&1 \
-              | grep -E '^(Started semantic compiler worlds:|Durable semantic checkpoints:|  [a-z]+/slot-)'
+              | grep -E '^(Started semantic compiler worlds:|Durable semantic checkpoints:|Assessment source replay checkpoints:|  [a-z]+/slot-)'
           } > "$RUNNER_TEMP/historical-v2-durable-progress-after.txt"
           if cmp --silent \
             "$RUNNER_TEMP/historical-v2-durable-progress-before.txt" \
