@@ -470,16 +470,30 @@ fn replay_historical_v2_census(
         HistoricalV2SlotStage::SourceCensus,
         HistoricalV2SlotStage::SemanticCensus,
     ];
-    let expected_stages = match mode {
-        CensusReplayMode::GoSemanticCoverage => completed_through_source.as_slice(),
-        CensusReplayMode::PublicSurface | CensusReplayMode::CompilerCensusIncomplete => {
-            completed_through_semantic.as_slice()
+    let completed_through_assessment = [
+        HistoricalV2SlotStage::Payload,
+        HistoricalV2SlotStage::Materialization,
+        HistoricalV2SlotStage::TestMaterialization,
+        HistoricalV2SlotStage::SourceCensus,
+        HistoricalV2SlotStage::SemanticCensus,
+        HistoricalV2SlotStage::AssessmentIdentity,
+    ];
+    let history_matches = match mode {
+        CensusReplayMode::PublicSurface => {
+            replay_history_matches(journal.history(), &completed_through_semantic, mode)
+                || replay_history_matches(journal.history(), &completed_through_assessment, mode)
+        }
+        CensusReplayMode::CompilerCensusIncomplete => {
+            replay_history_matches(journal.history(), &completed_through_semantic, mode)
+        }
+        CensusReplayMode::GoSemanticCoverage => {
+            replay_history_matches(journal.history(), &completed_through_source, mode)
         }
     };
-    if !replay_history_matches(journal.history(), expected_stages, mode) {
+    if !history_matches {
         return Err(recovery_invalid(match mode {
             CensusReplayMode::PublicSurface => {
-                "historical-v2 public-surface replay requires exactly five completed stages"
+                "historical-v2 public-surface replay requires exactly five or six completed stages"
             }
             CensusReplayMode::CompilerCensusIncomplete => {
                 "historical-v2 compiler-census replay requires four completed stages followed by one compiler_census_incomplete semantic exclusion"

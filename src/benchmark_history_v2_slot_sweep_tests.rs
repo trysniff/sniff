@@ -818,6 +818,235 @@ fn public_surface_replay_preserves_materializations_and_rewinds_only_stale_censu
 }
 
 #[test]
+fn public_surface_replay_accepts_assessment_but_rejects_later_completed_stages() {
+    let fixture = Fixture::new();
+    let mutable = tempfile::tempdir().unwrap();
+    let state_root = mutable.path().join("state");
+    let work_root = mutable.path().join("work");
+    fs::create_dir(&work_root).unwrap();
+    let payload = &fixture.payloads.records[0];
+    let canonical_repository = fixture
+        .selection
+        .slots
+        .iter()
+        .find_map(|slot| match &slot.outcome {
+            HistoricalV2SlotOutcome::Selected {
+                canonical_repository,
+                ..
+            } if slot.language == payload.language && slot.slot_number == payload.slot_number => {
+                Some(canonical_repository.clone())
+            }
+            _ => None,
+        })
+        .unwrap();
+    {
+        let mut journal =
+            HistoricalV2SlotStageJournal::open(&state_root, &payload.language, payload.slot_number)
+                .unwrap();
+        for (stage, artifact_kind) in [
+            (
+                HistoricalV2SlotStage::Payload,
+                HistoricalV2StageArtifactKind::SelectedPayload,
+            ),
+            (
+                HistoricalV2SlotStage::Materialization,
+                HistoricalV2StageArtifactKind::Materialization,
+            ),
+            (
+                HistoricalV2SlotStage::TestMaterialization,
+                HistoricalV2StageArtifactKind::NoTestPatch,
+            ),
+            (
+                HistoricalV2SlotStage::SourceCensus,
+                HistoricalV2StageArtifactKind::SourceCensus,
+            ),
+            (
+                HistoricalV2SlotStage::SemanticCensus,
+                HistoricalV2StageArtifactKind::SemanticCensus,
+            ),
+            (
+                HistoricalV2SlotStage::AssessmentIdentity,
+                HistoricalV2StageArtifactKind::AssessmentIdentity,
+            ),
+        ] {
+            journal
+                .append(
+                    HistoricalV2SlotStageCheckpointInput {
+                        selection_sha256: &fixture.selection.selection_sha256,
+                        language: &payload.language,
+                        slot_number: payload.slot_number,
+                        canonical_repository: &canonical_repository,
+                        stage,
+                        outcome: HistoricalV2SlotStageOutcome::Completed {
+                            artifact_kind,
+                            artifact_sha256: "a".repeat(64),
+                        },
+                    },
+                    Some(&serde_json::json!({"stage": format!("{stage:?}")})),
+                )
+                .unwrap();
+        }
+    }
+    let slot_root = work_root
+        .join(&payload.language)
+        .join(format!("slot-{:04}", payload.slot_number));
+    for name in [
+        "base-tested",
+        "patched",
+        "patched-tested",
+        "repository",
+        "semantic-progress",
+        "source-progress",
+        "assessment-source-replay-progress",
+    ] {
+        fs::create_dir_all(slot_root.join(name)).unwrap();
+    }
+    fs::write(slot_root.join("semantic-progress/snapshot.json"), b"stale").unwrap();
+    fs::write(slot_root.join("source-progress/inventory.json"), b"stale").unwrap();
+    fs::write(
+        slot_root.join("assessment-source-replay-progress/validation.json"),
+        b"stale",
+    )
+    .unwrap();
+
+    let neighbor_state = state_root
+        .join(&payload.language)
+        .join("slot-9999")
+        .join("sentinel.bin");
+    let neighbor_work = work_root
+        .join(&payload.language)
+        .join("slot-9999")
+        .join("sentinel.bin");
+    fs::create_dir_all(neighbor_state.parent().unwrap()).unwrap();
+    fs::create_dir_all(neighbor_work.parent().unwrap()).unwrap();
+    fs::write(&neighbor_state, b"neighbor-state").unwrap();
+    fs::write(&neighbor_work, b"neighbor-work").unwrap();
+
+    let summary =
+        replay_historical_v2_public_surface_census(HistoricalV2PublicSurfaceReplayInputs {
+            state_root: &state_root,
+            work_root: &work_root,
+            selection_sha256: &fixture.selection.selection_sha256,
+            language: &payload.language,
+            slot_number: payload.slot_number,
+            canonical_repository: &canonical_repository,
+        })
+        .unwrap();
+
+    assert_eq!(summary.removed_stage_count, 3);
+    assert!(summary.removed_semantic_progress);
+    assert!(summary.removed_source_progress);
+    assert!(summary.removed_assessment_source_replay_progress);
+    assert!(!slot_root.join("semantic-progress").exists());
+    assert!(!slot_root.join("source-progress").exists());
+    assert!(!slot_root.join("assessment-source-replay-progress").exists());
+    for name in ["base-tested", "patched", "patched-tested", "repository"] {
+        assert!(slot_root.join(name).is_dir(), "{name}");
+    }
+    let journal = HistoricalV2SlotStageJournal::open_existing(
+        &state_root,
+        &payload.language,
+        payload.slot_number,
+    )
+    .unwrap();
+    assert_eq!(journal.history().len(), 3);
+    assert_eq!(
+        journal.history().last().unwrap().checkpoint.stage,
+        HistoricalV2SlotStage::TestMaterialization
+    );
+    assert_eq!(fs::read(&neighbor_state).unwrap(), b"neighbor-state");
+    assert_eq!(fs::read(&neighbor_work).unwrap(), b"neighbor-work");
+
+    drop(journal);
+    {
+        let mut journal = HistoricalV2SlotStageJournal::open_existing(
+            &state_root,
+            &payload.language,
+            payload.slot_number,
+        )
+        .unwrap();
+        for (stage, artifact_kind) in [
+            (
+                HistoricalV2SlotStage::SourceCensus,
+                HistoricalV2StageArtifactKind::SourceCensus,
+            ),
+            (
+                HistoricalV2SlotStage::SemanticCensus,
+                HistoricalV2StageArtifactKind::SemanticCensus,
+            ),
+            (
+                HistoricalV2SlotStage::AssessmentIdentity,
+                HistoricalV2StageArtifactKind::AssessmentIdentity,
+            ),
+            (
+                HistoricalV2SlotStage::Qualification,
+                HistoricalV2StageArtifactKind::Qualification,
+            ),
+        ] {
+            journal
+                .append(
+                    HistoricalV2SlotStageCheckpointInput {
+                        selection_sha256: &fixture.selection.selection_sha256,
+                        language: &payload.language,
+                        slot_number: payload.slot_number,
+                        canonical_repository: &canonical_repository,
+                        stage,
+                        outcome: HistoricalV2SlotStageOutcome::Completed {
+                            artifact_kind,
+                            artifact_sha256: "b".repeat(64),
+                        },
+                    },
+                    Some(&serde_json::json!({"stage": format!("{stage:?}")})),
+                )
+                .unwrap();
+        }
+    }
+    for name in [
+        "semantic-progress",
+        "source-progress",
+        "assessment-source-replay-progress",
+    ] {
+        fs::create_dir(slot_root.join(name)).unwrap();
+        fs::write(slot_root.join(name).join("sentinel.bin"), b"must-remain").unwrap();
+    }
+
+    let error = replay_historical_v2_public_surface_census(HistoricalV2PublicSurfaceReplayInputs {
+        state_root: &state_root,
+        work_root: &work_root,
+        selection_sha256: &fixture.selection.selection_sha256,
+        language: &payload.language,
+        slot_number: payload.slot_number,
+        canonical_repository: &canonical_repository,
+    })
+    .unwrap_err();
+
+    assert!(
+        error
+            .detail
+            .contains("requires exactly five or six completed stages")
+    );
+    let journal = HistoricalV2SlotStageJournal::open_existing(
+        &state_root,
+        &payload.language,
+        payload.slot_number,
+    )
+    .unwrap();
+    assert_eq!(journal.history().len(), 7);
+    for name in [
+        "semantic-progress",
+        "source-progress",
+        "assessment-source-replay-progress",
+    ] {
+        assert_eq!(
+            fs::read(slot_root.join(name).join("sentinel.bin")).unwrap(),
+            b"must-remain"
+        );
+    }
+    assert_eq!(fs::read(&neighbor_state).unwrap(), b"neighbor-state");
+    assert_eq!(fs::read(&neighbor_work).unwrap(), b"neighbor-work");
+}
+
+#[test]
 fn compiler_census_replay_reopens_only_the_proven_incomplete_terminal() {
     let fixture = Fixture::new();
     let mutable = tempfile::tempdir().unwrap();
