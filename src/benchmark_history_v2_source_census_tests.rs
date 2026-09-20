@@ -654,7 +654,11 @@ fn replay_rejects_source_census_tampering() {
 
     let error = validate_historical_v2_source_census(&materialized.0, &materialized.1, &census)
         .unwrap_err();
-    assert!(error.contains("changed"), "{error}");
+    assert!(
+        error.contains("changed at $.base.source_files[0].methods[0].parser_unit_id"),
+        "{error}"
+    );
+    assert!(error.contains("invented"), "{error}");
 }
 
 #[test]
