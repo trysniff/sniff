@@ -151,3 +151,20 @@ fn source_frame_policy_recomputes_the_seeded_calendar_day() {
     invalid_start.derivation_period_start_utc = "2026-02-30".to_string();
     assert!(validate_policy(&invalid_start).is_err());
 }
+
+#[test]
+fn source_frame_policy_supports_every_product_language_without_accepting_others() {
+    for language in ["Go", "JavaScript", "Kotlin", "Python", "Rust", "TypeScript"] {
+        let mut candidate = policy();
+        candidate.language = language.to_string();
+        validate_policy(&candidate).unwrap();
+    }
+
+    let mut unsupported = policy();
+    unsupported.language = "Java".to_string();
+    assert!(
+        validate_policy(&unsupported)
+            .unwrap_err()
+            .contains("unsupported contract")
+    );
+}
