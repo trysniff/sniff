@@ -446,7 +446,10 @@ fn validate_policy(policy: &SourceFrameCollectionPolicy) -> Result<(), String> {
         || policy.frame_id.trim().is_empty()
         || policy.source != "https://api.github.com/search/repositories"
         || policy.api_version != "2022-11-28"
-        || policy.language != "Kotlin"
+        || !matches!(
+            policy.language.as_str(),
+            "Go" | "JavaScript" | "Kotlin" | "Python" | "Rust" | "TypeScript"
+        )
         || policy.partition != "utc_hour"
         || policy.ordering != "github_repository_id_ascending"
         || policy.attestation.trim().is_empty()

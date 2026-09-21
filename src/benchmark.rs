@@ -475,6 +475,15 @@ pub use release::{
     validate_historical_v3_stream_task,
 };
 
+pub use release::{
+    HISTORICAL_V3_PRIOR_IDENTITY_SEAL_SCHEMA_VERSION,
+    HISTORICAL_V3_SOURCE_BINDING_AUDIT_SCHEMA_VERSION, HistoricalV3BoundSourceFrame,
+    HistoricalV3PriorArtifactBinding, HistoricalV3PriorBenchmarkIdentitySeal,
+    HistoricalV3SourceBindingAudit, HistoricalV3SourceFrameArtifact,
+    bind_historical_v3_source_frames, prepare_historical_v3_prior_identity_seal,
+    validate_historical_v3_prior_identity_seal, validate_historical_v3_source_binding_audit,
+};
+
 #[cfg(feature = "sniffbench-frame")]
 pub use release::{
     build_historical_v2_frame, extract_historical_v2_selected_payloads,
