@@ -41,7 +41,7 @@ pub fn prepare_historical_v3_prior_identity_seal(
     canonical_repositories.dedup();
 
     let mut seal = HistoricalV3PriorBenchmarkIdentitySeal {
-        schema_version: HISTORICAL_V3_SOURCE_BINDING_AUDIT_SCHEMA_VERSION,
+        schema_version: HISTORICAL_V3_PRIOR_IDENTITY_SEAL_SCHEMA_VERSION,
         seal_contract: PRIOR_IDENTITY_SEAL_CONTRACT.to_string(),
         inputs,
         repositories: canonical_repositories,
@@ -122,7 +122,7 @@ pub fn bind_historical_v3_source_frames(
     }
 
     let mut audit = HistoricalV3SourceBindingAudit {
-        schema_version: HISTORICAL_V3_PRIOR_IDENTITY_SEAL_SCHEMA_VERSION,
+        schema_version: HISTORICAL_V3_SOURCE_BINDING_AUDIT_SCHEMA_VERSION,
         audit_contract: SOURCE_BINDING_AUDIT_CONTRACT.to_string(),
         protocol_sha256: protocol.protocol_sha256.clone(),
         prior_benchmark_identity_seal_sha256: prior_identities.seal_sha256.clone(),
