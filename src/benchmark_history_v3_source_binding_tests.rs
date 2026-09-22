@@ -10,7 +10,7 @@ use sha2::{Digest, Sha256};
 use std::fs;
 use tempfile::TempDir;
 
-struct FrameFixture {
+pub(crate) struct FrameFixture {
     root: TempDir,
     manifest: SourceFrameCollectionManifest,
     frame: Vec<u8>,
@@ -141,7 +141,7 @@ fn frame_fixture(
     }
 }
 
-fn prior_identity_seal() -> HistoricalV3PriorBenchmarkIdentitySeal {
+pub(crate) fn prior_identity_seal() -> HistoricalV3PriorBenchmarkIdentitySeal {
     prepare_historical_v3_prior_identity_seal(vec![
         HistoricalV3PriorArtifactBinding {
             artifact_id: "blind-oss-v1".to_string(),
@@ -157,7 +157,7 @@ fn prior_identity_seal() -> HistoricalV3PriorBenchmarkIdentitySeal {
     .unwrap()
 }
 
-fn protocol(
+pub(crate) fn protocol(
     seal: &HistoricalV3PriorBenchmarkIdentitySeal,
     fixtures: &[FrameFixture],
 ) -> HistoricalV3Protocol {
@@ -194,7 +194,7 @@ fn protocol(
             merged_before_utc: "2026-01-01T00:00:00Z".to_string(),
             github_api_version: "2022-11-28".to_string(),
             partition: "repository_then_merged_at_utc".to_string(),
-            pagination: "github_link_header_until_exhausted".to_string(),
+            pagination: "github_graphql_cursor_until_exhausted".to_string(),
         },
         allowed_metadata_fields: vec![
             HistoricalV3AllowedMetadataField::RepositoryId,
@@ -248,7 +248,7 @@ fn protocol(
     .unwrap()
 }
 
-fn fixtures() -> Vec<FrameFixture> {
+pub(crate) fn fixtures() -> Vec<FrameFixture> {
     [
         (HistoricalV3Language::Go, "Go"),
         (HistoricalV3Language::JavaScript, "JavaScript"),
@@ -274,7 +274,7 @@ fn fixtures() -> Vec<FrameFixture> {
     .collect()
 }
 
-fn artifacts(fixtures: &[FrameFixture]) -> Vec<HistoricalV3SourceFrameArtifact<'_>> {
+pub(crate) fn artifacts(fixtures: &[FrameFixture]) -> Vec<HistoricalV3SourceFrameArtifact<'_>> {
     fixtures
         .iter()
         .map(|fixture| HistoricalV3SourceFrameArtifact {

@@ -108,6 +108,14 @@ fn seals_only_the_locked_blind_fail_closed_protocol() {
             .contains("remain blind")
     );
 
+    let mut changed = protocol.clone();
+    changed.candidate_window.pagination = "github_link_header_until_exhausted".to_string();
+    assert!(
+        seal_historical_v3_protocol(changed)
+            .unwrap_err()
+            .contains("candidate window is invalid")
+    );
+
     let mut changed = protocol;
     changed.protocol_id.push_str("-tampered");
     assert!(
