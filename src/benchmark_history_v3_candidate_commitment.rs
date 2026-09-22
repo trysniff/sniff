@@ -1,14 +1,16 @@
 use super::{
     CHECKPOINT_CONTRACT, GRAPHQL_QUERY, HISTORICAL_V3_CANDIDATE_CHECKPOINT_SCHEMA_VERSION,
     HISTORICAL_V3_CANDIDATE_MANIFEST_SCHEMA_VERSION,
-    HISTORICAL_V3_CANDIDATE_REQUEST_SCHEMA_VERSION, HistoricalV3CandidateCollectionManifest,
-    HistoricalV3CandidatePageCheckpoint, HistoricalV3CandidatePageRequest, HistoricalV3Protocol,
-    HistoricalV3SourceBindingAudit, MANIFEST_CONTRACT, REQUEST_CONTRACT, parse_candidate_page,
-    parse_utc_second,
+    HISTORICAL_V3_CANDIDATE_REQUEST_SCHEMA_VERSION, HistoricalV3CandidateCollection,
+    HistoricalV3CandidateCollectionManifest, HistoricalV3CandidatePageCheckpoint,
+    HistoricalV3CandidatePageRequest, HistoricalV3Protocol, HistoricalV3SourceBindingAudit,
+    MANIFEST_CONTRACT, REQUEST_CONTRACT, parse_candidate_page, parse_utc_second,
+    prepare_historical_v3_stream_task, validate_historical_v3_stream_task,
 };
 use base64::Engine;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
+use std::collections::HashSet;
 
 pub(super) fn seal_page_request(
     mut request: HistoricalV3CandidatePageRequest,
@@ -65,7 +67,7 @@ pub(super) fn validate_page_checkpoint(
     Ok(())
 }
 
-pub(super) fn seal_collection_manifest(
+pub(crate) fn seal_collection_manifest(
     mut manifest: HistoricalV3CandidateCollectionManifest,
 ) -> Result<HistoricalV3CandidateCollectionManifest, String> {
     manifest.manifest_sha256.clear();
@@ -78,14 +80,28 @@ pub(super) fn validate_manifest_fields(
     source_binding_audit: &HistoricalV3SourceBindingAudit,
     manifest: &HistoricalV3CandidateCollectionManifest,
 ) -> Result<(), String> {
+    validate_historical_v3_candidate_manifest_commitment(protocol, manifest)?;
+    if manifest.source_binding_audit_sha256 != source_binding_audit.audit_sha256 {
+        return Err("historical-v3 candidate source binding changed".to_string());
+    }
+    Ok(())
+}
+
+pub fn validate_historical_v3_candidate_manifest_commitment(
+    protocol: &HistoricalV3Protocol,
+    manifest: &HistoricalV3CandidateCollectionManifest,
+) -> Result<(), String> {
     require_sha256(
         "historical-v3 candidate manifest",
         &manifest.manifest_sha256,
     )?;
+    require_sha256(
+        "historical-v3 candidate source binding",
+        &manifest.source_binding_audit_sha256,
+    )?;
     if manifest.schema_version != HISTORICAL_V3_CANDIDATE_MANIFEST_SCHEMA_VERSION
         || manifest.manifest_contract != MANIFEST_CONTRACT
         || manifest.protocol_sha256 != protocol.protocol_sha256
-        || manifest.source_binding_audit_sha256 != source_binding_audit.audit_sha256
         || manifest.query_document_sha256 != sha256(GRAPHQL_QUERY.as_bytes())
     {
         return Err("historical-v3 candidate manifest contract changed".to_string());
@@ -94,6 +110,41 @@ pub(super) fn validate_manifest_fields(
     committed.manifest_sha256.clear();
     if manifest.manifest_sha256 != json_sha256(&committed)? {
         return Err("historical-v3 candidate manifest commitment changed".to_string());
+    }
+    validate_historical_v3_stream_task(protocol, &manifest.stream_task)?;
+    if manifest.candidate_count != manifest.stream_task.candidates.len() {
+        return Err("historical-v3 candidate manifest count changed".to_string());
+    }
+    let mut repositories = HashSet::new();
+    for repository in &manifest.repositories {
+        if repository.repository_id == 0
+            || repository.name_with_owner.trim().is_empty()
+            || !repositories.insert((repository.language, repository.repository_id))
+        {
+            return Err("historical-v3 candidate repository census changed".to_string());
+        }
+    }
+    if manifest.stream_task.candidates.iter().any(|candidate| {
+        !repositories.contains(&(
+            candidate.identity.language,
+            candidate.identity.repository_id,
+        ))
+    }) {
+        return Err("historical-v3 candidate repository identity is absent".to_string());
+    }
+    Ok(())
+}
+
+pub fn validate_historical_v3_candidate_collection_commitment(
+    protocol: &HistoricalV3Protocol,
+    collection: &HistoricalV3CandidateCollection,
+) -> Result<(), String> {
+    validate_historical_v3_candidate_manifest_commitment(protocol, &collection.manifest)?;
+    let expected = prepare_historical_v3_stream_task(protocol, collection.candidates.clone())?;
+    if collection.candidates.len() != collection.manifest.candidate_count
+        || expected != collection.manifest.stream_task
+    {
+        return Err("historical-v3 candidate collection payload changed".to_string());
     }
     Ok(())
 }

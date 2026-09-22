@@ -21,9 +21,14 @@ use source::{candidate_repositories, initial_partitions, split_partition};
 #[path = "benchmark_history_v3_candidate_commitment.rs"]
 mod commitment;
 
+pub(crate) use commitment::seal_collection_manifest;
 use commitment::{
-    decode_page, seal_collection_manifest, seal_page_checkpoint, seal_page_request, sha256,
-    validate_manifest_fields, validate_page_checkpoint,
+    decode_page, seal_page_checkpoint, seal_page_request, sha256, validate_manifest_fields,
+    validate_page_checkpoint,
+};
+pub use commitment::{
+    validate_historical_v3_candidate_collection_commitment,
+    validate_historical_v3_candidate_manifest_commitment,
 };
 
 #[path = "benchmark_history_v3_candidate_replay.rs"]
@@ -40,6 +45,7 @@ use super::{
     HistoricalV3CandidateIdentity, HistoricalV3Language, HistoricalV3PriorBenchmarkIdentitySeal,
     HistoricalV3Protocol, HistoricalV3SourceBindingAudit, HistoricalV3StreamTask,
     prepare_historical_v3_stream_task, validate_historical_v3_protocol,
+    validate_historical_v3_stream_task,
 };
 use std::collections::HashSet;
 use std::path::Path;
@@ -51,6 +57,11 @@ const CHECKPOINT_CONTRACT: &str = "sniffbench-historical-v3-candidate-checkpoint
 const MANIFEST_CONTRACT: &str = "sniffbench-historical-v3-candidate-manifest-v1";
 const MAX_SEARCH_RESULTS: usize = 1_000;
 const PAGE_SIZE: usize = 100;
+
+#[cfg(test)]
+pub(crate) fn historical_v3_candidate_query_sha256_for_tests() -> String {
+    sha256(GRAPHQL_QUERY.as_bytes())
+}
 
 pub async fn collect_historical_v3_candidates<T: HistoricalV3CandidatePageTransport>(
     protocol: &HistoricalV3Protocol,

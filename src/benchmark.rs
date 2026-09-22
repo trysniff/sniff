@@ -493,6 +493,20 @@ pub use release::{
     HistoricalV3CandidatePartition, HistoricalV3CandidatePartitionRecord,
     HistoricalV3CandidateRepository, collect_historical_v3_candidates,
     validate_historical_v3_candidate_collection,
+    validate_historical_v3_candidate_collection_commitment,
+    validate_historical_v3_candidate_manifest_commitment,
+};
+
+pub use release::{
+    HISTORICAL_V3_MATERIALIZATION_EXCLUSION_SCHEMA_VERSION,
+    HISTORICAL_V3_MATERIALIZATION_SCHEMA_VERSION, HistoricalV3GitCommandEvidence,
+    HistoricalV3Materialization, HistoricalV3MaterializationError,
+    HistoricalV3MaterializationErrorKind, HistoricalV3MaterializationExclusion,
+    HistoricalV3MaterializationExclusionEvidence, HistoricalV3MaterializationExclusionReason,
+    HistoricalV3MaterializationOutcome, HistoricalV3MaterializedRoots, HistoricalV3RevisionKind,
+    HistoricalV3UnavailableRevision, materialize_historical_v3_candidate,
+    validate_historical_v3_materialization, validate_historical_v3_materialization_commitment,
+    validate_historical_v3_materialization_exclusion,
 };
 
 #[cfg(feature = "sniffbench-frame")]
