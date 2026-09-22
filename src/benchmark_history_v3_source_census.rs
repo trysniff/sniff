@@ -9,6 +9,9 @@ mod failure_commitment;
 #[path = "benchmark_history_v3_source_census_commitment.rs"]
 mod commitment;
 
+#[path = "benchmark_history_v3_source_census_facts.rs"]
+mod facts;
+
 pub use commitment::{
     validate_historical_v3_source_census_commitment, validate_historical_v3_source_census_exclusion,
 };
@@ -18,7 +21,7 @@ mod runtime;
 
 pub use runtime::run_historical_v3_source_census_stage;
 
-pub(super) const SOURCE_CENSUS_CONTRACT: &str = "sniffbench-historical-v3-source-census-v1";
+pub(super) const SOURCE_CENSUS_CONTRACT: &str = "sniffbench-historical-v3-source-census-v2";
 pub(super) const SOURCE_CENSUS_EXCLUSION_CONTRACT: &str =
     "sniffbench-historical-v3-source-census-exclusion-v1";
 

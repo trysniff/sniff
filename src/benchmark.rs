@@ -467,12 +467,12 @@ pub use release::{
     HISTORICAL_V3_PROTOCOL_SCHEMA_VERSION, HISTORICAL_V3_STREAM_TASK_SCHEMA_VERSION,
     HistoricalV3AllowedMetadataField, HistoricalV3CandidateIdentity, HistoricalV3CandidateTask,
     HistoricalV3CandidateWindow, HistoricalV3ForbiddenMetadataField, HistoricalV3Language,
-    HistoricalV3MechanicalRequirement, HistoricalV3Protocol, HistoricalV3ReviewDisposition,
-    HistoricalV3ReviewRecord, HistoricalV3SourceFrameBinding, HistoricalV3StopRule,
-    HistoricalV3StopStatus, HistoricalV3StreamTask, evaluate_historical_v3_review_prefix,
-    historical_v3_candidate_rank_sha256, prepare_historical_v3_stream_task,
-    seal_historical_v3_protocol, validate_historical_v3_protocol,
-    validate_historical_v3_stream_task,
+    HistoricalV3MechanicalPolicy, HistoricalV3MechanicalRequirement, HistoricalV3Protocol,
+    HistoricalV3ReviewDisposition, HistoricalV3ReviewRecord, HistoricalV3SourceFrameBinding,
+    HistoricalV3StopRule, HistoricalV3StopStatus, HistoricalV3StreamTask,
+    evaluate_historical_v3_review_prefix, historical_v3_candidate_rank_sha256,
+    prepare_historical_v3_stream_task, seal_historical_v3_protocol,
+    validate_historical_v3_protocol, validate_historical_v3_stream_task,
 };
 
 pub use release::{
@@ -522,9 +522,10 @@ pub use release::{
     HISTORICAL_V3_SOURCE_CENSUS_EXCLUSION_SCHEMA_VERSION,
     HISTORICAL_V3_SOURCE_CENSUS_SCHEMA_VERSION, HistoricalV3SourceCensus,
     HistoricalV3SourceCensusExclusion, HistoricalV3SourceCensusExclusionReason,
-    HistoricalV3SourceCensusOutcome, HistoricalV3SourceCensusStageRun, HistoricalV3SourceSide,
-    HistoricalV3SourceSnapshot, HistoricalV3SourceSnapshotEvidence,
-    run_historical_v3_source_census_stage, validate_historical_v3_source_census_commitment,
+    HistoricalV3SourceCensusOutcome, HistoricalV3SourceCensusStageRun, HistoricalV3SourceFileFacts,
+    HistoricalV3SourceMethodFacts, HistoricalV3SourceSide, HistoricalV3SourceSnapshot,
+    HistoricalV3SourceSnapshotEvidence, run_historical_v3_source_census_stage,
+    validate_historical_v3_source_census_commitment,
     validate_historical_v3_source_census_exclusion,
 };
 
@@ -536,6 +537,21 @@ pub use release::{
     HistoricalV3SemanticSnapshotEvidence, HistoricalV3SemanticSurfaceSymbol,
     run_historical_v3_semantic_census_stage, validate_historical_v3_semantic_census_commitment,
     validate_historical_v3_semantic_census_exclusion,
+};
+
+pub use release::{
+    HISTORICAL_V3_MECHANICAL_QUALIFICATION_EXCLUSION_SCHEMA_VERSION,
+    HISTORICAL_V3_MECHANICAL_QUALIFICATION_SCHEMA_VERSION, HistoricalV3ChangedMethod,
+    HistoricalV3MechanicalEvidence, HistoricalV3MechanicalExclusionReason,
+    HistoricalV3MechanicalQualification, HistoricalV3MechanicalQualificationExclusion,
+    HistoricalV3MechanicalQualificationOutcome, HistoricalV3MechanicalQualificationStageRun,
+    HistoricalV3NonProductionRole, HistoricalV3PathChangeKind, HistoricalV3QualifiedPath,
+    HistoricalV3RoleEvidence, HistoricalV3SimplificationKind, HistoricalV3SurfaceChange,
+    HistoricalV3SurfaceDelta, HistoricalV3SurfaceEntry, HistoricalV3UnresolvedChangedMethod,
+    derive_historical_v3_mechanical_qualification,
+    run_historical_v3_mechanical_qualification_stage,
+    validate_historical_v3_mechanical_qualification,
+    validate_historical_v3_mechanical_qualification_exclusion,
 };
 
 #[cfg(feature = "sniffbench-frame")]

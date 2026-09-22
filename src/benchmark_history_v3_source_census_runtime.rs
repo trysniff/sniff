@@ -19,6 +19,7 @@ use super::super::{
     validate_historical_v3_source_census_exclusion,
 };
 use super::commitment::{seal_snapshot, seal_source_census, seal_source_exclusion};
+use super::facts::source_file_facts;
 use super::{SOURCE_CENSUS_CONTRACT, SOURCE_CENSUS_EXCLUSION_CONTRACT};
 use serde::de::DeserializeOwned;
 use std::path::Path;
@@ -170,11 +171,14 @@ fn inspect_snapshot(
             )))
         }
         IntentionalBoundarySourceInspection::Completed(source_census) => {
+            let source_file_facts =
+                source_file_facts(root, &inventory, &source_census).map_err(invalid)?;
             seal_snapshot(HistoricalV3SourceSnapshot {
                 side,
                 revision: revision.to_string(),
                 inventory,
                 source_census,
+                source_file_facts,
                 snapshot_sha256: String::new(),
             })
             .map(Box::new)

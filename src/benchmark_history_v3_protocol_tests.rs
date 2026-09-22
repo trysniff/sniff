@@ -36,6 +36,16 @@ fn protocol() -> HistoricalV3Protocol {
         allowed_metadata_fields: HistoricalV3AllowedMetadataField::ALL.to_vec(),
         forbidden_metadata_fields: HistoricalV3ForbiddenMetadataField::ALL.to_vec(),
         mechanical_requirements: HistoricalV3MechanicalRequirement::ALL.to_vec(),
+        mechanical_policy: HistoricalV3MechanicalPolicy {
+            production_method_minimum: 1,
+            production_method_maximum: 500,
+            generated_path_segments: vec!["generated".to_string()],
+            vendored_path_segments: vec!["vendor".to_string()],
+            documentation_path_segments: vec!["docs".to_string()],
+            fixture_path_segments: vec!["fixtures".to_string()],
+            test_path_segments: vec!["tests".to_string()],
+            test_file_suffixes: vec![".test.ts".to_string(), "_test.go".to_string()],
+        },
         stop_rule: HistoricalV3StopRule {
             accepted_target_per_language: 40,
             distinct_repository_floor_per_language: 20,
@@ -91,6 +101,22 @@ fn review_task(
 fn seals_only_the_locked_blind_fail_closed_protocol() {
     let protocol = protocol();
     validate_historical_v3_protocol(&protocol).unwrap();
+
+    let mut changed = protocol.clone();
+    changed.mechanical_policy.production_method_maximum = 0;
+    assert!(
+        seal_historical_v3_protocol(changed)
+            .unwrap_err()
+            .contains("method bounds")
+    );
+
+    let mut changed = protocol.clone();
+    changed.mechanical_policy.test_path_segments = vec!["generated".to_string()];
+    assert!(
+        seal_historical_v3_protocol(changed)
+            .unwrap_err()
+            .contains("path role segments must be disjoint")
+    );
 
     let mut changed = protocol.clone();
     changed.stop_rule.adjudication_cap_per_language = 401;

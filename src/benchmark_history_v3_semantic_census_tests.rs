@@ -29,7 +29,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-struct GitFixture {
+pub(crate) struct GitFixture {
     _root: tempfile::TempDir,
     repository: PathBuf,
     base: String,
@@ -37,28 +37,29 @@ struct GitFixture {
     merge: String,
 }
 
-fn fixture() -> GitFixture {
+pub(crate) fn fixture() -> GitFixture {
+    fixture_with_source(
+        "src/lib.rs",
+        "pub fn total() -> i32 {\n    let value = 1;\n    value\n}\n",
+        "pub fn total() -> i32 { 2 }\n",
+    )
+}
+
+pub(crate) fn fixture_with_source(path: &str, base_source: &str, merge_source: &str) -> GitFixture {
     let root = tempfile::tempdir().unwrap();
     let repository = root.path().join("source");
     fs::create_dir(&repository).unwrap();
     git(&repository, &["init", "-b", "main"]);
     git(&repository, &["config", "user.name", "Sniff Test"]);
     git(&repository, &["config", "user.email", "sniff-test@invalid"]);
-    fs::create_dir(repository.join("src")).unwrap();
-    fs::write(
-        repository.join("src/lib.rs"),
-        "pub fn total() -> i32 { 1 }\n",
-    )
-    .unwrap();
+    let source_path = repository.join(path);
+    fs::create_dir_all(source_path.parent().unwrap()).unwrap();
+    fs::write(&source_path, base_source).unwrap();
     git(&repository, &["add", "."]);
     git(&repository, &["commit", "-m", "base"]);
     let base = git_text(&repository, &["rev-parse", "HEAD"]);
     git(&repository, &["checkout", "-b", "feature"]);
-    fs::write(
-        repository.join("src/lib.rs"),
-        "pub fn total() -> i32 { 2 }\n",
-    )
-    .unwrap();
+    fs::write(&source_path, merge_source).unwrap();
     git(&repository, &["add", "."]);
     git(&repository, &["commit", "-m", "change source"]);
     let head = git_text(&repository, &["rev-parse", "HEAD"]);
@@ -78,14 +79,14 @@ fn fixture() -> GitFixture {
     }
 }
 
-fn protocol() -> HistoricalV3Protocol {
+pub(crate) fn protocol() -> HistoricalV3Protocol {
     use super::super::history_v3_source_binding::tests as source_fixture;
     let fixtures = source_fixture::fixtures();
     let prior = source_fixture::prior_identity_seal();
     source_fixture::protocol(&prior, &fixtures)
 }
 
-fn collection(
+pub(crate) fn collection(
     protocol: &HistoricalV3Protocol,
     fixture: &GitFixture,
 ) -> HistoricalV3CandidateCollection {
@@ -125,7 +126,7 @@ fn collection(
     }
 }
 
-fn prepare_rank(
+pub(crate) fn prepare_rank(
     protocol: &HistoricalV3Protocol,
     collection: &HistoricalV3CandidateCollection,
     fixture: &GitFixture,
@@ -154,6 +155,28 @@ fn prepare_rank(
         HistoricalV3MaterializationStageRun::Completed { resumed: false, .. }
     ));
     run_historical_v3_source_census_stage(protocol, collection, 1, journal, workspace).unwrap();
+}
+
+pub(crate) async fn prepare_semantic_rank(
+    protocol: &HistoricalV3Protocol,
+    collection: &HistoricalV3CandidateCollection,
+    journal: &Path,
+    workspace: &Path,
+) {
+    let outcome = run_historical_v3_semantic_census_stage_with(
+        protocol,
+        collection,
+        1,
+        journal,
+        workspace,
+        successful_run,
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        outcome,
+        HistoricalV3SemanticCensusStageRun::Completed { resumed: false, .. }
+    ));
 }
 
 #[tokio::test]

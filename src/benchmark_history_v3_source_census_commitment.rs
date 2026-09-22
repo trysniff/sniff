@@ -13,8 +13,8 @@ use super::{
     HISTORICAL_V3_SOURCE_CENSUS_EXCLUSION_SCHEMA_VERSION,
     HISTORICAL_V3_SOURCE_CENSUS_SCHEMA_VERSION, HistoricalV3SourceCensus,
     HistoricalV3SourceCensusExclusion, HistoricalV3SourceCensusExclusionReason,
-    HistoricalV3SourceSide, HistoricalV3SourceSnapshot, HistoricalV3SourceSnapshotEvidence,
-    SOURCE_CENSUS_CONTRACT, SOURCE_CENSUS_EXCLUSION_CONTRACT,
+    HistoricalV3SourceFileFacts, HistoricalV3SourceSide, HistoricalV3SourceSnapshot,
+    HistoricalV3SourceSnapshotEvidence, SOURCE_CENSUS_CONTRACT, SOURCE_CENSUS_EXCLUSION_CONTRACT,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -152,11 +152,60 @@ fn validate_snapshot(
     )
     .map_err(|error| error.detail)?;
     validate_source_census_commitment(&snapshot.inventory, &snapshot.source_census)?;
+    validate_source_file_facts(snapshot)?;
     if snapshot.source_census.source_files.is_empty() || materialization.identity != rank.candidate
     {
         return Err("historical-v3 source snapshot is not reviewable".to_string());
     }
     Ok(())
+}
+
+fn validate_source_file_facts(snapshot: &HistoricalV3SourceSnapshot) -> Result<(), String> {
+    if snapshot.source_file_facts.len() != snapshot.source_census.source_files.len()
+        || snapshot
+            .source_file_facts
+            .windows(2)
+            .any(|pair| pair[0].repository_path >= pair[1].repository_path)
+    {
+        return Err("historical-v3 source facts are incomplete or noncanonical".to_string());
+    }
+    for (facts, source) in snapshot
+        .source_file_facts
+        .iter()
+        .zip(&snapshot.source_census.source_files)
+    {
+        validate_source_file_fact(facts, source)?;
+    }
+    Ok(())
+}
+
+fn validate_source_file_fact(
+    facts: &HistoricalV3SourceFileFacts,
+    source: &super::super::IntentionalBoundarySourceFile,
+) -> Result<(), String> {
+    if facts.repository_path != source.repository_path
+        || facts.source_sha256 != source.source_sha256
+        || !is_lower_sha256(&facts.syntax_sha256)
+        || facts.methods.len() != source.methods.len()
+    {
+        return Err("historical-v3 source facts changed their source identity".to_string());
+    }
+    for (facts, method) in facts.methods.iter().zip(&source.methods) {
+        if facts.parser_unit_id != method.parser_unit_id
+            || facts.source_sha256 != method.source_sha256
+            || !is_lower_sha256(&facts.syntax_sha256)
+        {
+            return Err("historical-v3 source method facts changed their AST identity".to_string());
+        }
+    }
+    Ok(())
+}
+
+fn is_lower_sha256(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 fn validate_side_evidence(

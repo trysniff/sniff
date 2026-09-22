@@ -4,7 +4,7 @@ use super::super::{
 };
 use serde::{Deserialize, Serialize};
 
-pub const HISTORICAL_V3_SOURCE_CENSUS_SCHEMA_VERSION: u32 = 1;
+pub const HISTORICAL_V3_SOURCE_CENSUS_SCHEMA_VERSION: u32 = 2;
 pub const HISTORICAL_V3_SOURCE_CENSUS_EXCLUSION_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -23,11 +23,31 @@ pub enum HistoricalV3SourceCensusExclusionReason {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct HistoricalV3SourceMethodFacts {
+    pub parser_unit_id: String,
+    pub source_sha256: String,
+    pub non_whitespace_line_count: usize,
+    pub syntax_sha256: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HistoricalV3SourceFileFacts {
+    pub repository_path: String,
+    pub source_sha256: String,
+    pub non_whitespace_line_count: usize,
+    pub syntax_sha256: String,
+    pub methods: Vec<HistoricalV3SourceMethodFacts>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct HistoricalV3SourceSnapshot {
     pub side: HistoricalV3SourceSide,
     pub revision: String,
     pub inventory: IntentionalBoundaryRepositoryInventory,
     pub source_census: IntentionalBoundarySourceCensus,
+    pub source_file_facts: Vec<HistoricalV3SourceFileFacts>,
     pub snapshot_sha256: String,
 }
 

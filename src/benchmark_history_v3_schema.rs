@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-pub const HISTORICAL_V3_PROTOCOL_SCHEMA_VERSION: u32 = 1;
+pub const HISTORICAL_V3_PROTOCOL_SCHEMA_VERSION: u32 = 2;
 pub const HISTORICAL_V3_STREAM_TASK_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -150,6 +150,19 @@ pub struct HistoricalV3StopRule {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct HistoricalV3MechanicalPolicy {
+    pub production_method_minimum: usize,
+    pub production_method_maximum: usize,
+    pub generated_path_segments: Vec<String>,
+    pub vendored_path_segments: Vec<String>,
+    pub documentation_path_segments: Vec<String>,
+    pub fixture_path_segments: Vec<String>,
+    pub test_path_segments: Vec<String>,
+    pub test_file_suffixes: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct HistoricalV3Protocol {
     pub schema_version: u32,
     pub protocol_id: String,
@@ -163,6 +176,7 @@ pub struct HistoricalV3Protocol {
     pub allowed_metadata_fields: Vec<HistoricalV3AllowedMetadataField>,
     pub forbidden_metadata_fields: Vec<HistoricalV3ForbiddenMetadataField>,
     pub mechanical_requirements: Vec<HistoricalV3MechanicalRequirement>,
+    pub mechanical_policy: HistoricalV3MechanicalPolicy,
     pub stop_rule: HistoricalV3StopRule,
     pub no_fallbacks: bool,
     pub model_access_forbidden: bool,
