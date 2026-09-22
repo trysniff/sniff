@@ -437,6 +437,11 @@ mod history_v3_candidate_collection;
 
 pub use history_v3_candidate_collection::*;
 
+#[path = "benchmark_history_v3_materialization.rs"]
+mod history_v3_materialization;
+
+pub use history_v3_materialization::*;
+
 #[path = "benchmark_intentional_boundary_frame_task.rs"]
 mod intentional_boundary_frame_task;
 
