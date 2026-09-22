@@ -269,6 +269,33 @@ pub(in crate::benchmark::release) fn flatten_method(
     })
 }
 
+pub(in crate::benchmark::release) fn validate_method_projection(
+    method: &IntentionalBoundarySemanticMethod,
+    index: &SemanticIndex,
+) -> Result<(), String> {
+    let IntentionalBoundarySemanticMethodStatus::Resolved { symbol, .. } = &method.status else {
+        return Ok(());
+    };
+    let identity = SemanticSymbolId(symbol.symbol_id.clone());
+    let indexed = index.symbols.get(&identity).ok_or_else(|| {
+        format!(
+            "historical-v3 method references missing compiler symbol {}",
+            symbol.symbol_id
+        )
+    })?;
+    let projection = SemanticProjectionIndex::new(index);
+    if flatten_symbol(indexed) != **symbol
+        || projection.occurrences_for(&identity) != method.occurrences
+        || projection.calls_for(&identity) != method.calls
+        || projection.relationships_for(&identity) != method.relationships
+        || projection.imports_for(&identity) != method.imports
+        || projection.test_relationships_for(&identity) != method.test_relationships
+    {
+        return Err("historical-v3 method compiler projection changed".to_string());
+    }
+    Ok(())
+}
+
 pub(in crate::benchmark::release) fn flatten_symbol(
     symbol: &crate::semantic_index::SemanticSymbol,
 ) -> IntentionalBoundarySemanticSymbolFacts {

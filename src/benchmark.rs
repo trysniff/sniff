@@ -528,6 +528,16 @@ pub use release::{
     validate_historical_v3_source_census_exclusion,
 };
 
+pub use release::{
+    HISTORICAL_V3_SEMANTIC_CENSUS_EXCLUSION_SCHEMA_VERSION,
+    HISTORICAL_V3_SEMANTIC_CENSUS_SCHEMA_VERSION, HistoricalV3CompilerIndexEvidence,
+    HistoricalV3SemanticCensus, HistoricalV3SemanticCensusExclusion,
+    HistoricalV3SemanticCensusStageRun, HistoricalV3SemanticSnapshot,
+    HistoricalV3SemanticSnapshotEvidence, HistoricalV3SemanticSurfaceSymbol,
+    run_historical_v3_semantic_census_stage, validate_historical_v3_semantic_census_commitment,
+    validate_historical_v3_semantic_census_exclusion,
+};
+
 #[cfg(feature = "sniffbench-frame")]
 pub use release::{
     build_historical_v2_frame, extract_historical_v2_selected_payloads,
