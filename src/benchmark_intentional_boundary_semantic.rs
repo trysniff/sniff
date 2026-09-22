@@ -235,6 +235,7 @@ mod projection;
 
 pub(super) use projection::{
     SemanticProjectionIndex, flatten_method, flatten_symbol, summarize_index,
+    validate_method_projection,
 };
 
 pub(super) fn compute_semantic_census_sha256(
@@ -256,7 +257,7 @@ pub(super) fn compute_semantic_census_sha256(
     .map_err(|error| format!("failed to commit intentional-boundary semantic census: {error}"))
 }
 
-fn flatten_source_references(
+pub(in crate::benchmark::release) fn flatten_source_references(
     indexer: IntentionalBoundaryIndexerKind,
     source_census: &IntentionalBoundarySourceCensus,
     index: &SemanticIndex,
@@ -400,7 +401,9 @@ fn flatten_bool_resolution(
     }
 }
 
-fn indexer_for_language(language: &str) -> Result<SemanticIndexerKind, String> {
+pub(in crate::benchmark::release) fn indexer_for_language(
+    language: &str,
+) -> Result<SemanticIndexerKind, String> {
     match language {
         "typescript" | "javascript" => Ok(SemanticIndexerKind::TypeScriptJavaScript),
         "python" => Ok(SemanticIndexerKind::Python),
