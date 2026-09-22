@@ -447,6 +447,11 @@ mod history_v3_rank_journal;
 
 pub use history_v3_rank_journal::*;
 
+#[path = "benchmark_history_v3_source_census.rs"]
+mod history_v3_source_census;
+
+pub use history_v3_source_census::*;
+
 #[path = "benchmark_intentional_boundary_frame_task.rs"]
 mod intentional_boundary_frame_task;
 
