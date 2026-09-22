@@ -509,6 +509,15 @@ pub use release::{
     validate_historical_v3_materialization_exclusion,
 };
 
+pub use release::{
+    HISTORICAL_V3_RANK_CHECKPOINT_SCHEMA_VERSION, HistoricalV3MaterializationStageRun,
+    HistoricalV3RankArtifactKind, HistoricalV3RankCheckpoint, HistoricalV3RankIdentity,
+    HistoricalV3RankJournal, HistoricalV3RankJournalError, HistoricalV3RankJournalErrorKind,
+    HistoricalV3RankStage, HistoricalV3RankStageOutcome, HistoricalV3StoredRankStage,
+    append_historical_v3_rank_checkpoint, historical_v3_rank_identity,
+    run_historical_v3_materialization_stage, validate_historical_v3_rank_history,
+};
+
 #[cfg(feature = "sniffbench-frame")]
 pub use release::{
     build_historical_v2_frame, extract_historical_v2_selected_payloads,
