@@ -21,6 +21,12 @@ pub struct HistoricalV3SourceFrameArtifact<'a> {
     pub frame: &'a [u8],
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct HistoricalV3SourceRepositoryIdentity {
+    pub name_with_owner: String,
+    pub repository_id: u64,
+}
+
 pub fn prepare_historical_v3_prior_identity_seal(
     mut inputs: Vec<HistoricalV3PriorArtifactBinding>,
 ) -> Result<HistoricalV3PriorBenchmarkIdentitySeal, String> {
@@ -101,13 +107,13 @@ pub fn bind_historical_v3_source_frames(
             return Err("historical-v3 source-frame binding changed".to_string());
         }
 
-        let repositories = parse_source_frame(artifact.frame)?;
+        let repositories = parse_historical_v3_source_frame(artifact.frame)?;
         if repositories.len() != expected.repository_count {
             return Err("historical-v3 source frame repository census changed".to_string());
         }
         let eligible = repositories
             .iter()
-            .filter(|repository| !excluded.contains(repository.as_str()))
+            .filter(|repository| !excluded.contains(repository.name_with_owner.as_str()))
             .cloned()
             .collect::<Vec<_>>();
         let excluded_prior_repository_count = repositories.len() - eligible.len();
@@ -117,7 +123,12 @@ pub fn bind_historical_v3_source_frames(
             repository_count: repositories.len(),
             eligible_repository_count: eligible.len(),
             excluded_prior_repository_count,
-            eligible_repositories_sha256: json_sha256(&eligible)?,
+            eligible_repositories_sha256: json_sha256(
+                &eligible
+                    .iter()
+                    .map(|repository| repository.name_with_owner.as_str())
+                    .collect::<Vec<_>>(),
+            )?,
         });
     }
 
@@ -230,7 +241,9 @@ fn validate_prior_identity_seal_fields(
     Ok(())
 }
 
-fn parse_source_frame(frame: &[u8]) -> Result<Vec<String>, String> {
+pub(super) fn parse_historical_v3_source_frame(
+    frame: &[u8],
+) -> Result<Vec<HistoricalV3SourceRepositoryIdentity>, String> {
     let mut reader = csv::ReaderBuilder::new()
         .has_headers(true)
         .from_reader(frame);
@@ -265,7 +278,10 @@ fn parse_source_frame(frame: &[u8]) -> Result<Vec<String>, String> {
             return Err("historical-v3 source frame has a zero repository ID".to_string());
         }
         repository_ids.push(repository_id);
-        repositories.push(repository);
+        repositories.push(HistoricalV3SourceRepositoryIdentity {
+            name_with_owner: repository,
+            repository_id,
+        });
     }
     if repository_ids.windows(2).any(|pair| pair[0] >= pair[1]) {
         return Err(
@@ -366,4 +382,4 @@ fn require_sha256(label: &str, value: &str) -> Result<(), String> {
 
 #[cfg(test)]
 #[path = "benchmark_history_v3_source_binding_tests.rs"]
-mod tests;
+pub(crate) mod tests;

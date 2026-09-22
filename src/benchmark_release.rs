@@ -429,6 +429,14 @@ mod history_v3_source_binding;
 
 pub use history_v3_source_binding::*;
 
+#[path = "benchmark_history_v3_time.rs"]
+mod history_v3_time;
+
+#[path = "benchmark_history_v3_candidate_collection.rs"]
+mod history_v3_candidate_collection;
+
+pub use history_v3_candidate_collection::*;
+
 #[path = "benchmark_intentional_boundary_frame_task.rs"]
 mod intentional_boundary_frame_task;
 

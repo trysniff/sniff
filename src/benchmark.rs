@@ -484,6 +484,17 @@ pub use release::{
     validate_historical_v3_prior_identity_seal, validate_historical_v3_source_binding_audit,
 };
 
+pub use release::{
+    GithubHistoricalV3CandidateTransport, HISTORICAL_V3_CANDIDATE_CHECKPOINT_SCHEMA_VERSION,
+    HISTORICAL_V3_CANDIDATE_MANIFEST_SCHEMA_VERSION,
+    HISTORICAL_V3_CANDIDATE_REQUEST_SCHEMA_VERSION, HistoricalV3CandidateCollection,
+    HistoricalV3CandidateCollectionManifest, HistoricalV3CandidatePageCheckpoint,
+    HistoricalV3CandidatePageRequest, HistoricalV3CandidatePageTransport,
+    HistoricalV3CandidatePartition, HistoricalV3CandidatePartitionRecord,
+    HistoricalV3CandidateRepository, collect_historical_v3_candidates,
+    validate_historical_v3_candidate_collection,
+};
+
 #[cfg(feature = "sniffbench-frame")]
 pub use release::{
     build_historical_v2_frame, extract_historical_v2_selected_payloads,

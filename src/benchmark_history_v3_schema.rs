@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 pub const HISTORICAL_V3_PROTOCOL_SCHEMA_VERSION: u32 = 1;
 pub const HISTORICAL_V3_STREAM_TASK_SCHEMA_VERSION: u32 = 1;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HistoricalV3Language {
     Go,

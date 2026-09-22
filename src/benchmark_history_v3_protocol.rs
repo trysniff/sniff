@@ -12,7 +12,7 @@ const STREAM_CONTRACT: &str = "sniffbench-historical-v3-stream-task-v1";
 const RANKING_DOMAIN: &str = "sniffbench-historical-v3-candidate-rank-v1";
 const GITHUB_API_VERSION: &str = "2022-11-28";
 const CANDIDATE_PARTITION: &str = "repository_then_merged_at_utc";
-const CANDIDATE_PAGINATION: &str = "github_link_header_until_exhausted";
+const CANDIDATE_PAGINATION: &str = "github_graphql_cursor_until_exhausted";
 
 pub fn seal_historical_v3_protocol(
     mut protocol: HistoricalV3Protocol,
