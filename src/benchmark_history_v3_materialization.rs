@@ -17,6 +17,16 @@ pub use commitment::{
     validate_historical_v3_materialization_exclusion,
 };
 
+pub(super) fn validate_historical_v3_materialization_resume(
+    protocol: &HistoricalV3Protocol,
+    collection: &HistoricalV3CandidateCollection,
+    artifact: &HistoricalV3Materialization,
+    roots: &HistoricalV3MaterializedRoots,
+) -> Result<(), HistoricalV3MaterializationError> {
+    validate_historical_v3_materialization_commitment(protocol, collection, artifact)?;
+    layout::validate_root_layout(roots)
+}
+
 #[path = "benchmark_history_v3_materialization_runtime.rs"]
 mod runtime;
 
