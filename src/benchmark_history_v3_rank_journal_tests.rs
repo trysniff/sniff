@@ -137,6 +137,14 @@ fn committed_materialization_resumes_without_executing_git_again() {
         first,
         HistoricalV3MaterializationStageRun::Completed { resumed: false, .. }
     ));
+    let HistoricalV3MaterializationStageRun::Completed { roots, .. } = &first else {
+        unreachable!();
+    };
+    fs::rename(
+        roots.repository_root.join(".git"),
+        roots.repository_root.join(".git-disabled"),
+    )
+    .unwrap();
 
     let resumed = run_materialization_stage_with(
         &protocol,

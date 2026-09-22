@@ -20,6 +20,7 @@ use super::{
     HistoricalV3CandidateCollection, HistoricalV3Materialization, HistoricalV3MaterializationError,
     HistoricalV3MaterializationErrorKind, HistoricalV3MaterializationExclusion,
     HistoricalV3MaterializationOutcome, HistoricalV3MaterializedRoots, HistoricalV3Protocol,
+    history_v3_materialization::validate_historical_v3_materialization_resume,
     materialize_historical_v3_candidate, validate_historical_v3_materialization,
     validate_historical_v3_materialization_exclusion,
 };
@@ -130,7 +131,7 @@ fn resume_materialization(
                 ));
             }
             let roots = materialized_roots(destination);
-            validate_historical_v3_materialization(protocol, collection, &artifact, &roots)
+            validate_historical_v3_materialization_resume(protocol, collection, &artifact, &roots)
                 .map_err(HistoricalV3RankJournalError::from)?;
             Ok(HistoricalV3MaterializationStageRun::Completed {
                 artifact: Box::new(artifact),
