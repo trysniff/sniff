@@ -47,7 +47,7 @@ pub fn run_historical_v3_materialization_stage(
     )
 }
 
-fn run_materialization_stage_with<F>(
+pub(super) fn run_materialization_stage_with<F>(
     protocol: &HistoricalV3Protocol,
     collection: &HistoricalV3CandidateCollection,
     stream_rank: usize,
@@ -184,7 +184,7 @@ fn read_required_artifact<T: DeserializeOwned>(
         })
 }
 
-fn rank_workspace(
+pub(super) fn rank_workspace(
     root: &Path,
     identity: &HistoricalV3RankIdentity,
 ) -> Result<PathBuf, HistoricalV3RankJournalError> {
@@ -274,7 +274,7 @@ fn remove_uncommitted_workspace(destination: &Path) -> Result<(), HistoricalV3Ra
     })
 }
 
-fn materialized_roots(destination: &Path) -> HistoricalV3MaterializedRoots {
+pub(super) fn materialized_roots(destination: &Path) -> HistoricalV3MaterializedRoots {
     HistoricalV3MaterializedRoots {
         repository_root: destination.join("repository"),
         base_root: destination.join("base"),

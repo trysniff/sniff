@@ -518,6 +518,16 @@ pub use release::{
     run_historical_v3_materialization_stage, validate_historical_v3_rank_history,
 };
 
+pub use release::{
+    HISTORICAL_V3_SOURCE_CENSUS_EXCLUSION_SCHEMA_VERSION,
+    HISTORICAL_V3_SOURCE_CENSUS_SCHEMA_VERSION, HistoricalV3SourceCensus,
+    HistoricalV3SourceCensusExclusion, HistoricalV3SourceCensusExclusionReason,
+    HistoricalV3SourceCensusOutcome, HistoricalV3SourceCensusStageRun, HistoricalV3SourceSide,
+    HistoricalV3SourceSnapshot, HistoricalV3SourceSnapshotEvidence,
+    run_historical_v3_source_census_stage, validate_historical_v3_source_census_commitment,
+    validate_historical_v3_source_census_exclusion,
+};
+
 #[cfg(feature = "sniffbench-frame")]
 pub use release::{
     build_historical_v2_frame, extract_historical_v2_selected_payloads,
