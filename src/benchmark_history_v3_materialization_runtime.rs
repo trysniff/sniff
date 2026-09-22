@@ -239,7 +239,7 @@ fn materialize_created_destination(
 }
 
 #[cfg(test)]
-pub(super) fn materialize_historical_v3_candidate_from_url(
+pub(crate) fn materialize_historical_v3_candidate_from_url(
     protocol: &HistoricalV3Protocol,
     collection: &HistoricalV3CandidateCollection,
     stream_rank: usize,

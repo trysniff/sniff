@@ -22,6 +22,9 @@ mod runtime;
 
 pub use runtime::materialize_historical_v3_candidate;
 
+#[cfg(test)]
+pub(super) use runtime::materialize_historical_v3_candidate_from_url;
+
 use super::{
     HistoricalV3CandidateCollection, HistoricalV3CandidateIdentity, HistoricalV3CandidateTask,
     HistoricalV3Protocol, validate_historical_v3_candidate_collection_commitment,
