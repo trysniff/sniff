@@ -172,7 +172,7 @@ pub(crate) fn protocol(
     seal_historical_v3_protocol(HistoricalV3Protocol {
         schema_version: HISTORICAL_V3_PROTOCOL_SCHEMA_VERSION,
         protocol_id: "synthetic-historical-v3-source-binding".to_string(),
-        protocol_contract: "sniffbench-historical-v3-protocol-v1".to_string(),
+        protocol_contract: "sniffbench-historical-v3-protocol-v2".to_string(),
         ranking_domain: "sniffbench-historical-v3-candidate-rank-v1".to_string(),
         ranking_seed: "3".repeat(64),
         prior_benchmark_identity_seal_sha256: seal.seal_sha256.clone(),
@@ -233,6 +233,16 @@ pub(crate) fn protocol(
             HistoricalV3MechanicalRequirement::IdenticalTestsPass,
             HistoricalV3MechanicalRequirement::NonProductionOnlyChangesExcluded,
         ],
+        mechanical_policy: crate::benchmark::HistoricalV3MechanicalPolicy {
+            production_method_minimum: 1,
+            production_method_maximum: 500,
+            generated_path_segments: vec!["generated".to_string()],
+            vendored_path_segments: vec!["vendor".to_string()],
+            documentation_path_segments: vec!["docs".to_string()],
+            fixture_path_segments: vec!["fixtures".to_string()],
+            test_path_segments: vec!["tests".to_string()],
+            test_file_suffixes: vec![".test.ts".to_string(), "_test.go".to_string()],
+        },
         stop_rule: HistoricalV3StopRule {
             accepted_target_per_language: 40,
             distinct_repository_floor_per_language: 20,

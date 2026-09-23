@@ -32,4 +32,4 @@ pub(super) const SEMANTIC_CENSUS_EXCLUSION_CONTRACT: &str =
 
 #[cfg(test)]
 #[path = "benchmark_history_v3_semantic_census_tests.rs"]
-mod tests;
+pub(crate) mod tests;

@@ -457,6 +457,11 @@ mod history_v3_semantic_census;
 
 pub use history_v3_semantic_census::*;
 
+#[path = "benchmark_history_v3_mechanical_qualification.rs"]
+mod history_v3_mechanical_qualification;
+
+pub use history_v3_mechanical_qualification::*;
+
 #[path = "benchmark_intentional_boundary_frame_task.rs"]
 mod intentional_boundary_frame_task;
 

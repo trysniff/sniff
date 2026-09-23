@@ -7,7 +7,7 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
-const PROTOCOL_CONTRACT: &str = "sniffbench-historical-v3-protocol-v1";
+const PROTOCOL_CONTRACT: &str = "sniffbench-historical-v3-protocol-v2";
 const STREAM_CONTRACT: &str = "sniffbench-historical-v3-stream-task-v1";
 const RANKING_DOMAIN: &str = "sniffbench-historical-v3-candidate-rank-v1";
 const GITHUB_API_VERSION: &str = "2022-11-28";
@@ -260,12 +260,66 @@ fn validate_historical_v3_protocol_fields(protocol: &HistoricalV3Protocol) -> Re
     {
         return Err("historical-v3 evidence policy changed".to_string());
     }
+    validate_mechanical_policy(&protocol.mechanical_policy)?;
     validate_stop_rule(&protocol.stop_rule)?;
     if !protocol.no_fallbacks
         || !protocol.model_access_forbidden
         || !protocol.sniff_output_access_forbidden
     {
         return Err("historical-v3 construction must fail closed and remain blind".to_string());
+    }
+    Ok(())
+}
+
+fn validate_mechanical_policy(policy: &HistoricalV3MechanicalPolicy) -> Result<(), String> {
+    if policy.production_method_minimum == 0
+        || policy.production_method_maximum < policy.production_method_minimum
+    {
+        return Err("historical-v3 mechanical method bounds are invalid".to_string());
+    }
+    let path_segment_groups = [
+        ("generated path segments", &policy.generated_path_segments),
+        ("vendored path segments", &policy.vendored_path_segments),
+        (
+            "documentation path segments",
+            &policy.documentation_path_segments,
+        ),
+        ("fixture path segments", &policy.fixture_path_segments),
+        ("test path segments", &policy.test_path_segments),
+    ];
+    let mut path_segments = BTreeSet::new();
+    for (label, values) in path_segment_groups {
+        validate_policy_strings(label, values, false)?;
+        if values
+            .iter()
+            .any(|value| !path_segments.insert(value.as_str()))
+        {
+            return Err("historical-v3 mechanical path role segments must be disjoint".to_string());
+        }
+    }
+    validate_policy_strings("test file suffixes", &policy.test_file_suffixes, true)?;
+    Ok(())
+}
+
+fn validate_policy_strings(label: &str, values: &[String], suffix: bool) -> Result<(), String> {
+    if values.is_empty()
+        || values.windows(2).any(|pair| pair[0] >= pair[1])
+        || values.iter().any(|value| {
+            value.is_empty()
+                || value != &value.to_ascii_lowercase()
+                || value.contains('/')
+                || value.contains('\\')
+                || value.contains('\0')
+                || (suffix
+                    && value
+                        .chars()
+                        .all(|character| character.is_ascii_alphanumeric()))
+                || (!suffix && (value == "." || value == ".."))
+        })
+    {
+        return Err(format!(
+            "historical-v3 mechanical {label} are not canonical, unique, and ordered"
+        ));
     }
     Ok(())
 }
@@ -364,6 +418,7 @@ fn compute_protocol_sha256(protocol: &HistoricalV3Protocol) -> Result<String, St
         allowed_metadata_fields: &'a [HistoricalV3AllowedMetadataField],
         forbidden_metadata_fields: &'a [HistoricalV3ForbiddenMetadataField],
         mechanical_requirements: &'a [HistoricalV3MechanicalRequirement],
+        mechanical_policy: &'a HistoricalV3MechanicalPolicy,
         stop_rule: &'a HistoricalV3StopRule,
         no_fallbacks: bool,
         model_access_forbidden: bool,
@@ -382,6 +437,7 @@ fn compute_protocol_sha256(protocol: &HistoricalV3Protocol) -> Result<String, St
         allowed_metadata_fields: &protocol.allowed_metadata_fields,
         forbidden_metadata_fields: &protocol.forbidden_metadata_fields,
         mechanical_requirements: &protocol.mechanical_requirements,
+        mechanical_policy: &protocol.mechanical_policy,
         stop_rule: &protocol.stop_rule,
         no_fallbacks: protocol.no_fallbacks,
         model_access_forbidden: protocol.model_access_forbidden,
