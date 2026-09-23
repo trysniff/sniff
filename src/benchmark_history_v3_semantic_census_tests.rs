@@ -353,6 +353,17 @@ async fn inspects_both_sides_before_terminal_semantic_exclusion() {
             } if *side == expected && failures.len() == 1
         ));
     }
+    let proof = super::super::verify_historical_v3_terminal_exclusion(
+        &protocol,
+        &collection,
+        1,
+        journal.path(),
+    )
+    .unwrap();
+    assert_eq!(
+        proof.stage(),
+        super::super::HistoricalV3RankStage::SemanticCensus
+    );
 }
 
 #[tokio::test]

@@ -268,7 +268,7 @@ fn terminal_exclusion_is_committed_and_resumed_without_retry() {
     )
     .unwrap();
     assert!(matches!(
-        first,
+        &first,
         HistoricalV3MaterializationStageRun::Excluded { resumed: false, .. }
     ));
     let resumed = run_materialization_stage_with(
@@ -284,7 +284,31 @@ fn terminal_exclusion_is_committed_and_resumed_without_retry() {
         resumed,
         HistoricalV3MaterializationStageRun::Excluded { resumed: true, .. }
     ));
+    let proof =
+        verify_historical_v3_terminal_exclusion(&protocol, &collection, 1, state.path()).unwrap();
+    assert_eq!(proof.stage(), HistoricalV3RankStage::Materialization);
+    assert_eq!(proof.rank().stream_rank, 1);
     let identity = historical_v3_rank_identity(&protocol, &collection, 1).unwrap();
+    let HistoricalV3MaterializationStageRun::Excluded { artifact, .. } = first else {
+        unreachable!("validated exclusion outcome")
+    };
+    let forged_state = tempfile::tempdir().unwrap();
+    let mut forged = HistoricalV3RankJournal::open(forged_state.path(), &identity).unwrap();
+    forged
+        .append(
+            HistoricalV3RankStage::Materialization,
+            HistoricalV3RankStageOutcome::Excluded {
+                artifact_kind: HistoricalV3RankArtifactKind::MaterializationExclusion,
+                artifact_sha256: "0".repeat(64),
+            },
+            Some(artifact.as_ref()),
+        )
+        .unwrap();
+    drop(forged);
+    let error =
+        verify_historical_v3_terminal_exclusion(&protocol, &collection, 1, forged_state.path())
+            .unwrap_err();
+    assert!(error.detail.contains("artifact hash differs"));
     let journal = HistoricalV3RankJournal::open(state.path(), &identity).unwrap();
     assert_eq!(journal.next_stage(), None);
 }

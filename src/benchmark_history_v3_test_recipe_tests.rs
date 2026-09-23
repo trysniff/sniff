@@ -111,6 +111,17 @@ async fn commits_changed_recipe_input_as_a_typed_terminal_exclusion() {
         artifact.reason,
         HistoricalV3TestRecipeExclusionReason::ChangedRecipeInputs
     );
+    let proof = super::super::verify_historical_v3_terminal_exclusion(
+        &protocol,
+        &collection,
+        1,
+        journal.path(),
+    )
+    .unwrap();
+    assert_eq!(
+        proof.stage(),
+        super::super::HistoricalV3RankStage::TestRecipe
+    );
 }
 
 #[tokio::test]

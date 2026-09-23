@@ -16,6 +16,13 @@ mod store;
 
 pub use store::{HistoricalV3RankJournal, HistoricalV3StoredRankStage};
 
+#[path = "benchmark_history_v3_rank_terminal_proof.rs"]
+mod terminal_proof;
+
+pub use terminal_proof::{
+    HistoricalV3VerifiedTerminalExclusion, verify_historical_v3_terminal_exclusion,
+};
+
 use super::{
     HistoricalV3CandidateCollection, HistoricalV3Materialization, HistoricalV3MaterializationError,
     HistoricalV3MaterializationErrorKind, HistoricalV3MaterializationExclusion,
