@@ -78,6 +78,22 @@ fn protocol() -> HistoricalV3Protocol {
             all_capabilities_dropped: true,
             no_new_privileges: true,
         },
+        human_review_policy: HistoricalV3HumanReviewPolicy {
+            source_only_review: true,
+            independent_reviewers: 2,
+            distinct_dispute_resolver: true,
+            reviewers_must_not_see_sniff_output: true,
+            reviewers_must_not_see_repository_identity: true,
+            reviewers_must_not_see_change_metadata: true,
+            reviewers_must_not_see_each_other_labels: true,
+            human_only_review: true,
+            complete_source_context_required: true,
+            behavior_evidence_required: true,
+            exact_before_mechanism_required: true,
+            exact_after_removal_required: true,
+            relocation_check_required: true,
+            simpler_counterfactual_required: true,
+        },
         stop_rule: HistoricalV3StopRule {
             accepted_target_per_language: 40,
             distinct_repository_floor_per_language: 20,
@@ -190,6 +206,14 @@ fn seals_only_the_locked_blind_fail_closed_protocol() {
         seal_historical_v3_protocol(changed)
             .unwrap_err()
             .contains("identical-test policy")
+    );
+
+    let mut changed = protocol.clone();
+    changed.human_review_policy.independent_reviewers = 3;
+    assert!(
+        seal_historical_v3_protocol(changed)
+            .unwrap_err()
+            .contains("human-review policy")
     );
 
     let mut changed = protocol.clone();

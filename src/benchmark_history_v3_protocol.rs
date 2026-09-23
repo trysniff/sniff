@@ -7,7 +7,7 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
-const PROTOCOL_CONTRACT: &str = "sniffbench-historical-v3-protocol-v4";
+const PROTOCOL_CONTRACT: &str = "sniffbench-historical-v3-protocol-v5";
 const STREAM_CONTRACT: &str = "sniffbench-historical-v3-stream-task-v1";
 const RANKING_DOMAIN: &str = "sniffbench-historical-v3-candidate-rank-v1";
 pub(super) const TEST_RECIPE_SELECTOR_CONTRACT: &str =
@@ -267,12 +267,34 @@ fn validate_historical_v3_protocol_fields(protocol: &HistoricalV3Protocol) -> Re
     validate_mechanical_policy(&protocol.mechanical_policy)?;
     validate_test_recipe_policy(&protocol.test_recipe_policy)?;
     validate_identical_test_policy(&protocol.identical_test_policy)?;
+    validate_human_review_policy(&protocol.human_review_policy)?;
     validate_stop_rule(&protocol.stop_rule)?;
     if !protocol.no_fallbacks
         || !protocol.model_access_forbidden
         || !protocol.sniff_output_access_forbidden
     {
         return Err("historical-v3 construction must fail closed and remain blind".to_string());
+    }
+    Ok(())
+}
+
+fn validate_human_review_policy(policy: &HistoricalV3HumanReviewPolicy) -> Result<(), String> {
+    if !policy.source_only_review
+        || policy.independent_reviewers != 2
+        || !policy.distinct_dispute_resolver
+        || !policy.reviewers_must_not_see_sniff_output
+        || !policy.reviewers_must_not_see_repository_identity
+        || !policy.reviewers_must_not_see_change_metadata
+        || !policy.reviewers_must_not_see_each_other_labels
+        || !policy.human_only_review
+        || !policy.complete_source_context_required
+        || !policy.behavior_evidence_required
+        || !policy.exact_before_mechanism_required
+        || !policy.exact_after_removal_required
+        || !policy.relocation_check_required
+        || !policy.simpler_counterfactual_required
+    {
+        return Err("historical-v3 human-review policy is invalid".to_string());
     }
     Ok(())
 }
