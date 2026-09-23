@@ -41,6 +41,7 @@ impl HistoricalV3IdenticalTestExecutor for PassingExecutor {
 }
 
 pub(crate) struct ReviewFixture {
+    journal_root: tempfile::TempDir,
     protocol: HistoricalV3Protocol,
     collection: HistoricalV3CandidateCollection,
     materialization: HistoricalV3Materialization,
@@ -53,6 +54,10 @@ pub(crate) struct ReviewFixture {
 }
 
 impl ReviewFixture {
+    pub(crate) fn journal_path(&self) -> &std::path::Path {
+        self.journal_root.path()
+    }
+
     pub(crate) fn inputs(&self) -> HistoricalV3SourceReviewInputs<'_> {
         HistoricalV3SourceReviewInputs {
             protocol: &self.protocol,
@@ -201,12 +206,12 @@ async fn preserves_typed_non_slop_consensus_and_real_disputes() {
 }
 
 pub(crate) async fn review_fixture() -> ReviewFixture {
-    let (_git, protocol, collection, journal, workspace, _) = prepared_rank().await;
+    let (_git, protocol, collection, journal_root, workspace, _) = prepared_rank().await;
     run_historical_v3_identical_tests_stage(
         &protocol,
         &collection,
         1,
-        journal.path(),
+        journal_root.path(),
         workspace.path(),
         &PassingExecutor,
     )
@@ -215,14 +220,15 @@ pub(crate) async fn review_fixture() -> ReviewFixture {
         &protocol,
         &collection,
         1,
-        journal.path(),
+        journal_root.path(),
         workspace.path(),
     )
     .unwrap();
     let identity = historical_v3_rank_identity(&protocol, &collection, 1).unwrap();
-    let journal = HistoricalV3RankJournal::open(journal.path(), &identity).unwrap();
+    let journal = HistoricalV3RankJournal::open(journal_root.path(), &identity).unwrap();
     let history = journal.history();
     ReviewFixture {
+        journal_root,
         protocol,
         collection,
         materialization: history[0].read_artifact().unwrap().unwrap(),

@@ -576,8 +576,9 @@ pub use release::{
     HISTORICAL_V3_SOURCE_REVIEW_BUNDLE_SCHEMA_VERSION, HistoricalV3ReviewBehaviorEvidence,
     HistoricalV3ReviewCommandResult, HistoricalV3ReviewMethod, HistoricalV3SourceReviewBundle,
     HistoricalV3SourceReviewInputs, HistoricalV3SourceReviewRoots,
-    HistoricalV3SourceReviewStageRun, build_historical_v3_source_review_bundle,
-    run_historical_v3_source_review_stage, validate_historical_v3_source_review_bundle,
+    HistoricalV3SourceReviewStageRun, HistoricalV3VerifiedSourceReview,
+    build_historical_v3_source_review_bundle, run_historical_v3_source_review_stage,
+    validate_historical_v3_source_review_bundle, verify_historical_v3_source_review_rank,
 };
 
 pub use release::{
@@ -595,10 +596,16 @@ pub use release::{
     HistoricalV3FinalLabelBasis, HistoricalV3FinalLabelOutcome, HistoricalV3LabelResolver,
     HistoricalV3ResolutionItem, HistoricalV3ResolutionWorksheet, HistoricalV3VerifiedFinalReview,
     historical_v3_review_record_from_final_label, prepare_historical_v3_label_resolution,
-    read_historical_v3_final_label, resolve_historical_v3_label,
+    read_historical_v3_final_label, read_historical_v3_label_audit,
+    read_historical_v3_resolution_worksheet, resolve_historical_v3_label,
     validate_historical_v3_final_label, validate_historical_v3_label_resolution,
     verify_historical_v3_final_review, write_historical_v3_final_label_new,
+    write_historical_v3_label_audit_new, write_historical_v3_resolution_worksheet_new,
 };
+
+pub use release::{HistoricalV3ReviewRecordPaths, verify_historical_v3_final_review_from_disk};
+
+pub use release::verify_historical_v3_stop_from_disk;
 
 pub use release::{
     HISTORICAL_V3_SEMANTIC_CENSUS_EXCLUSION_SCHEMA_VERSION,
