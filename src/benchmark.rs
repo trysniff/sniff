@@ -478,6 +478,11 @@ pub use release::{
 };
 
 pub use release::{
+    HistoricalV3OrderedRankOutcome, HistoricalV3OrderedStopStatus,
+    evaluate_historical_v3_ordered_prefix,
+};
+
+pub use release::{
     HISTORICAL_V3_PRIOR_IDENTITY_SEAL_SCHEMA_VERSION,
     HISTORICAL_V3_SOURCE_BINDING_AUDIT_SCHEMA_VERSION, HistoricalV3BoundSourceFrame,
     HistoricalV3PriorArtifactBinding, HistoricalV3PriorBenchmarkIdentitySeal,

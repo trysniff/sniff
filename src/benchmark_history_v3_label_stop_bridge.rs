@@ -1,18 +1,23 @@
 use super::{
     HistoricalV3FinalLabel, HistoricalV3FinalLabelOutcome, HistoricalV3LabelAudit,
-    HistoricalV3LabelWorksheet, HistoricalV3ResolutionWorksheet, HistoricalV3ReviewDisposition,
-    HistoricalV3ReviewRecord, HistoricalV3SourceReviewBundle, HistoricalV3SourceReviewInputs,
-    validate_historical_v3_final_label,
+    HistoricalV3LabelWorksheet, HistoricalV3RankIdentity, HistoricalV3ResolutionWorksheet,
+    HistoricalV3ReviewDisposition, HistoricalV3ReviewRecord, HistoricalV3SourceReviewBundle,
+    HistoricalV3SourceReviewInputs, validate_historical_v3_final_label,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HistoricalV3VerifiedFinalReview {
+    rank: HistoricalV3RankIdentity,
     record: HistoricalV3ReviewRecord,
     source_bundle_sha256: String,
     final_label_sha256: String,
 }
 
 impl HistoricalV3VerifiedFinalReview {
+    pub fn rank(&self) -> &HistoricalV3RankIdentity {
+        &self.rank
+    }
+
     pub fn record(&self) -> &HistoricalV3ReviewRecord {
         &self.record
     }
@@ -67,6 +72,7 @@ pub fn verify_historical_v3_final_review(
         HistoricalV3FinalLabelOutcome::Closed { .. } => HistoricalV3ReviewDisposition::Rejected,
     };
     Ok(HistoricalV3VerifiedFinalReview {
+        rank: rank.clone(),
         record: HistoricalV3ReviewRecord {
             stream_rank: rank.stream_rank,
             rank_sha256: rank.rank_sha256.clone(),

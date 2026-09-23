@@ -46,6 +46,7 @@ async fn derives_acceptance_only_from_a_verified_final_label() {
     )
     .unwrap();
     assert_eq!(proof.record(), &record);
+    assert_eq!(proof.rank(), &inputs.qualification.rank);
     assert_eq!(proof.source_bundle_sha256(), fixture.bundle.bundle_sha256);
     assert_eq!(proof.final_label_sha256(), label.final_sha256);
 

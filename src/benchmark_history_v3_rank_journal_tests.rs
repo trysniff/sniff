@@ -288,6 +288,22 @@ fn terminal_exclusion_is_committed_and_resumed_without_retry() {
         verify_historical_v3_terminal_exclusion(&protocol, &collection, 1, state.path()).unwrap();
     assert_eq!(proof.stage(), HistoricalV3RankStage::Materialization);
     assert_eq!(proof.rank().stream_rank, 1);
+    assert!(matches!(
+        super::super::evaluate_historical_v3_ordered_prefix(
+            &protocol,
+            &collection,
+            proof.rank().language(),
+            &[super::super::HistoricalV3OrderedRankOutcome::Excluded(
+                proof.clone()
+            )],
+        )
+        .unwrap(),
+        super::super::HistoricalV3OrderedStopStatus::FailedSourceExhausted {
+            processed_ranks: 1,
+            reviewed: 0,
+            ..
+        }
+    ));
     let identity = historical_v3_rank_identity(&protocol, &collection, 1).unwrap();
     let HistoricalV3MaterializationStageRun::Excluded { artifact, .. } = first else {
         unreachable!("validated exclusion outcome")

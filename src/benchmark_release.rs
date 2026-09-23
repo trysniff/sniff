@@ -485,6 +485,11 @@ mod history_v3_label_stop_bridge;
 
 pub use history_v3_label_stop_bridge::*;
 
+#[path = "benchmark_history_v3_ordered_stop.rs"]
+mod history_v3_ordered_stop;
+
+pub use history_v3_ordered_stop::*;
+
 #[path = "benchmark_history_v3_semantic_census.rs"]
 mod history_v3_semantic_census;
 
