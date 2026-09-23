@@ -15,6 +15,15 @@ mod layout;
 
 use layout::{create_plain_child, language_name, rank_name, remove_incomplete};
 
+pub(crate) fn historical_v3_rank_journal_path(
+    root: &Path,
+    identity: &HistoricalV3RankIdentity,
+) -> PathBuf {
+    root.join(&identity.stream_task_sha256)
+        .join(language_name(identity))
+        .join(rank_name(identity.stream_rank))
+}
+
 #[path = "benchmark_history_v3_rank_journal_store_transaction.rs"]
 mod transaction;
 
