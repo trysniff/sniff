@@ -20,7 +20,8 @@ pub use store::{HistoricalV3RankJournal, HistoricalV3StoredRankStage};
 mod terminal_proof;
 
 pub use terminal_proof::{
-    HistoricalV3VerifiedTerminalExclusion, verify_historical_v3_terminal_exclusion,
+    HistoricalV3VerifiedQualification, HistoricalV3VerifiedTerminalExclusion,
+    verify_historical_v3_qualified_rank, verify_historical_v3_terminal_exclusion,
 };
 
 use super::{

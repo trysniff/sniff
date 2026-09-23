@@ -50,6 +50,15 @@ async fn qualifies_exact_reduction_rejects_rehashed_tamper_and_resumes_without_g
     );
     assert_eq!(artifact.evidence.changed_methods.len(), 2);
     assert!(artifact.evidence.public_surface.preserved);
+    let proof = super::super::verify_historical_v3_qualified_rank(
+        &protocol,
+        &collection,
+        1,
+        journal.path(),
+    )
+    .unwrap();
+    assert_eq!(proof.rank().stream_rank, 1);
+    assert_eq!(proof.qualification_sha256(), artifact.qualification_sha256);
 
     let identity = historical_v3_rank_identity(&protocol, &collection, 1).unwrap();
     let persisted = HistoricalV3RankJournal::open(journal.path(), &identity).unwrap();

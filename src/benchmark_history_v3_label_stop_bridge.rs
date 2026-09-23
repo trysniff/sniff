@@ -31,6 +31,27 @@ impl HistoricalV3VerifiedFinalReview {
     }
 }
 
+#[cfg(test)]
+impl HistoricalV3VerifiedFinalReview {
+    pub(crate) fn synthetic(
+        rank: HistoricalV3RankIdentity,
+        disposition: HistoricalV3ReviewDisposition,
+    ) -> Self {
+        Self {
+            record: HistoricalV3ReviewRecord {
+                stream_rank: rank.stream_rank,
+                rank_sha256: rank.rank_sha256.clone(),
+                language: rank.language(),
+                repository_id: rank.candidate.repository_id,
+                disposition,
+            },
+            rank,
+            source_bundle_sha256: "a".repeat(64),
+            final_label_sha256: "b".repeat(64),
+        }
+    }
+}
+
 pub fn historical_v3_review_record_from_final_label(
     inputs: &HistoricalV3SourceReviewInputs<'_>,
     bundle: &HistoricalV3SourceReviewBundle,

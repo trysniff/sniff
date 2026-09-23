@@ -1,8 +1,9 @@
 use super::{
     HistoricalV3CandidateCollection, HistoricalV3Language, HistoricalV3Protocol,
     HistoricalV3RankIdentity, HistoricalV3RankStage, HistoricalV3ReviewDisposition,
-    HistoricalV3VerifiedFinalReview, HistoricalV3VerifiedTerminalExclusion,
-    historical_v3_rank_identity, validate_historical_v3_candidate_collection_commitment,
+    HistoricalV3VerifiedFinalReview, HistoricalV3VerifiedReviewCap,
+    HistoricalV3VerifiedTerminalExclusion, historical_v3_rank_identity,
+    validate_historical_v3_candidate_collection_commitment,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -10,20 +11,23 @@ use std::collections::{BTreeMap, BTreeSet};
 pub enum HistoricalV3OrderedRankOutcome {
     Excluded(HistoricalV3VerifiedTerminalExclusion),
     Reviewed(HistoricalV3VerifiedFinalReview),
+    Capped(HistoricalV3VerifiedReviewCap),
 }
 
 impl HistoricalV3OrderedRankOutcome {
-    fn rank(&self) -> &HistoricalV3RankIdentity {
+    pub(super) fn rank(&self) -> &HistoricalV3RankIdentity {
         match self {
             Self::Excluded(proof) => proof.rank(),
             Self::Reviewed(proof) => proof.rank(),
+            Self::Capped(proof) => proof.rank(),
         }
     }
 
-    fn mechanically_qualified(&self) -> bool {
+    pub(super) fn reviewable_qualification(&self) -> bool {
         match self {
             Self::Excluded(proof) => proof.stage() > HistoricalV3RankStage::MechanicalQualification,
             Self::Reviewed(_) => true,
+            Self::Capped(_) => false,
         }
     }
 }
@@ -78,7 +82,7 @@ pub fn evaluate_historical_v3_ordered_prefix(
     }
 
     let rule = &protocol.stop_rule;
-    let mut qualified_by_repository = BTreeMap::<u64, usize>::new();
+    let mut reviewable_by_repository = BTreeMap::<u64, Vec<String>>::new();
     let mut accepted_by_repository = BTreeMap::<u64, usize>::new();
     let mut accepted_repositories = BTreeSet::new();
     let mut reviewed = 0;
@@ -93,15 +97,21 @@ pub fn evaluate_historical_v3_ordered_prefix(
             );
         }
         let repository_id = expected.candidate.repository_id;
-        if outcome.mechanically_qualified() {
-            let qualified = qualified_by_repository.entry(repository_id).or_default();
-            if *qualified >= rule.reviewable_candidate_cap_per_repository {
+        let reviewable = reviewable_by_repository.entry(repository_id).or_default();
+        if let HistoricalV3OrderedRankOutcome::Capped(proof) = outcome {
+            if reviewable.len() != rule.reviewable_candidate_cap_per_repository
+                || proof.prior_reviewable_rank_sha256s() != reviewable
+            {
+                return Err("historical-v3 review cap changed its exact prior ranks".to_string());
+            }
+        } else if outcome.reviewable_qualification() {
+            if reviewable.len() >= rule.reviewable_candidate_cap_per_repository {
                 return Err(
                     "historical-v3 repository review cap requires a committed cap outcome"
                         .to_string(),
                 );
             }
-            *qualified += 1;
+            reviewable.push(expected.rank_sha256.clone());
         }
 
         if let HistoricalV3OrderedRankOutcome::Reviewed(proof) = outcome {

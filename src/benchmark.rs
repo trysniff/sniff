@@ -483,6 +483,12 @@ pub use release::{
 };
 
 pub use release::{
+    HistoricalV3ReviewCapArtifact, HistoricalV3VerifiedReviewCap, prepare_historical_v3_review_cap,
+    read_historical_v3_review_cap, verify_historical_v3_review_cap,
+    write_historical_v3_review_cap_new,
+};
+
+pub use release::{
     HISTORICAL_V3_PRIOR_IDENTITY_SEAL_SCHEMA_VERSION,
     HISTORICAL_V3_SOURCE_BINDING_AUDIT_SCHEMA_VERSION, HistoricalV3BoundSourceFrame,
     HistoricalV3PriorArtifactBinding, HistoricalV3PriorBenchmarkIdentitySeal,
@@ -521,9 +527,10 @@ pub use release::{
     HistoricalV3RankArtifactKind, HistoricalV3RankCheckpoint, HistoricalV3RankIdentity,
     HistoricalV3RankJournal, HistoricalV3RankJournalError, HistoricalV3RankJournalErrorKind,
     HistoricalV3RankStage, HistoricalV3RankStageOutcome, HistoricalV3StoredRankStage,
-    HistoricalV3VerifiedTerminalExclusion, append_historical_v3_rank_checkpoint,
-    historical_v3_rank_identity, run_historical_v3_materialization_stage,
-    validate_historical_v3_rank_history, verify_historical_v3_terminal_exclusion,
+    HistoricalV3VerifiedQualification, HistoricalV3VerifiedTerminalExclusion,
+    append_historical_v3_rank_checkpoint, historical_v3_rank_identity,
+    run_historical_v3_materialization_stage, validate_historical_v3_rank_history,
+    verify_historical_v3_qualified_rank, verify_historical_v3_terminal_exclusion,
 };
 
 pub use release::{

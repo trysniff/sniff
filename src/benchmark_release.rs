@@ -490,6 +490,11 @@ mod history_v3_ordered_stop;
 
 pub use history_v3_ordered_stop::*;
 
+#[path = "benchmark_history_v3_review_cap.rs"]
+mod history_v3_review_cap;
+
+pub use history_v3_review_cap::*;
+
 #[path = "benchmark_history_v3_semantic_census.rs"]
 mod history_v3_semantic_census;
 
