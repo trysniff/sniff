@@ -61,4 +61,4 @@ impl std::error::Error for HistoricalV3IdenticalTestExecutionError {}
 
 #[cfg(test)]
 #[path = "benchmark_history_v3_identical_tests_tests.rs"]
-mod tests;
+pub(crate) mod tests;

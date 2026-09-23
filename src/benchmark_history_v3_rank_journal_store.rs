@@ -116,7 +116,7 @@ impl HistoricalV3RankJournal {
             matches!(
                 stored.checkpoint.outcome,
                 HistoricalV3RankStageOutcome::Excluded { .. }
-                    | HistoricalV3RankStageOutcome::ReadyForSourceReview
+                    | HistoricalV3RankStageOutcome::ReadyForSourceReview { .. }
             )
         }) {
             None
@@ -131,7 +131,7 @@ impl HistoricalV3RankJournal {
         outcome: HistoricalV3RankStageOutcome,
         artifact: Option<&T>,
     ) -> Result<HistoricalV3RankCheckpoint, HistoricalV3RankJournalError> {
-        require_artifact_shape(&outcome, artifact.is_some())
+        require_artifact_shape(artifact.is_some())
             .map_err(|detail| HistoricalV3RankJournalError::invalid(stage, detail))?;
         let checkpoints = self
             .history
@@ -186,15 +186,11 @@ impl HistoricalV3RankJournal {
     }
 }
 
-fn require_artifact_shape(
-    outcome: &HistoricalV3RankStageOutcome,
-    has_artifact: bool,
-) -> Result<(), String> {
-    let expected = !matches!(outcome, HistoricalV3RankStageOutcome::ReadyForSourceReview);
-    if expected == has_artifact {
+fn require_artifact_shape(has_artifact: bool) -> Result<(), String> {
+    if has_artifact {
         Ok(())
     } else {
-        Err("historical-v3 rank outcome and artifact presence disagree".to_string())
+        Err("historical-v3 rank stage requires a committed artifact".to_string())
     }
 }
 

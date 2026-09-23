@@ -2,8 +2,7 @@ use super::super::super::history_v2_slot_store_support::{
     read_limited, require_plain_directory, sync_directory, write_compact_json_new, write_json_new,
 };
 use super::super::{
-    HistoricalV3RankCheckpoint, HistoricalV3RankStage, HistoricalV3RankStageOutcome,
-    validate_historical_v3_rank_history,
+    HistoricalV3RankCheckpoint, HistoricalV3RankStage, validate_historical_v3_rank_history,
 };
 use super::HistoricalV3StoredRankStage;
 use serde::{Deserialize, Serialize};
@@ -133,15 +132,7 @@ fn load_stage(root: &Path, sequence: usize) -> Result<HistoricalV3StoredRankStag
         "historical-v3 rank checkpoint",
     )?)
     .map_err(|error| format!("invalid historical-v3 rank checkpoint: {error}"))?;
-    let has_artifact = !matches!(
-        checkpoint.outcome,
-        HistoricalV3RankStageOutcome::ReadyForSourceReview
-    );
-    let mut expected_names = if has_artifact {
-        vec![ARTIFACT_FILE, CHECKPOINT_FILE, TRANSACTION_FILE]
-    } else {
-        vec![CHECKPOINT_FILE, TRANSACTION_FILE]
-    };
+    let mut expected_names = vec![ARTIFACT_FILE, CHECKPOINT_FILE, TRANSACTION_FILE];
     expected_names.sort_unstable();
     if transaction_file_names(root)? != expected_names {
         return Err("historical-v3 rank transaction file set changed".to_string());
@@ -156,7 +147,7 @@ fn load_stage(root: &Path, sequence: usize) -> Result<HistoricalV3StoredRankStag
         || transaction.transaction_contract != TRANSACTION_CONTRACT
         || transaction.sequence != sequence
         || transaction.checkpoint_sha256 != checkpoint.checkpoint_sha256
-        || transaction.files != committed_files(root, has_artifact)?
+        || transaction.files != committed_files(root, true)?
     {
         return Err("historical-v3 rank transaction commitment changed".to_string());
     }

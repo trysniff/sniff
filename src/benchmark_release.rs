@@ -465,6 +465,11 @@ mod history_v3_identical_tests;
 
 pub use history_v3_identical_tests::*;
 
+#[path = "benchmark_history_v3_source_review.rs"]
+mod history_v3_source_review;
+
+pub use history_v3_source_review::*;
+
 #[path = "benchmark_history_v3_semantic_census.rs"]
 mod history_v3_semantic_census;
 

@@ -553,6 +553,14 @@ pub use release::{
 };
 
 pub use release::{
+    HISTORICAL_V3_SOURCE_REVIEW_BUNDLE_SCHEMA_VERSION, HistoricalV3ReviewBehaviorEvidence,
+    HistoricalV3ReviewCommandResult, HistoricalV3ReviewMethod, HistoricalV3SourceReviewBundle,
+    HistoricalV3SourceReviewInputs, HistoricalV3SourceReviewRoots,
+    HistoricalV3SourceReviewStageRun, build_historical_v3_source_review_bundle,
+    run_historical_v3_source_review_stage, validate_historical_v3_source_review_bundle,
+};
+
+pub use release::{
     HISTORICAL_V3_SEMANTIC_CENSUS_EXCLUSION_SCHEMA_VERSION,
     HISTORICAL_V3_SEMANTIC_CENSUS_SCHEMA_VERSION, HistoricalV3CompilerIndexEvidence,
     HistoricalV3SemanticCensus, HistoricalV3SemanticCensusExclusion,

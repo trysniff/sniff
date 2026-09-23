@@ -4,7 +4,7 @@ use super::super::{
 };
 use serde::{Deserialize, Serialize};
 
-pub const HISTORICAL_V3_RANK_CHECKPOINT_SCHEMA_VERSION: u32 = 1;
+pub const HISTORICAL_V3_RANK_CHECKPOINT_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -64,7 +64,9 @@ pub enum HistoricalV3RankStageOutcome {
         artifact_kind: HistoricalV3RankArtifactKind,
         artifact_sha256: String,
     },
-    ReadyForSourceReview,
+    ReadyForSourceReview {
+        bundle_sha256: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
