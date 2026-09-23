@@ -304,6 +304,31 @@ fn terminal_exclusion_is_committed_and_resumed_without_retry() {
             ..
         }
     ));
+    let outcomes = [super::super::HistoricalV3OrderedRankOutcome::Excluded(
+        proof.clone(),
+    )];
+    let stop = super::super::prepare_historical_v3_stop_artifact(
+        &protocol,
+        &collection,
+        proof.rank().language(),
+        &outcomes,
+    )
+    .unwrap();
+    let stop_path = state.path().join("stop.json");
+    super::super::write_historical_v3_stop_artifact_new(&stop_path, &stop).unwrap();
+    let review_root = tempfile::tempdir().unwrap();
+    assert_eq!(
+        super::super::verify_historical_v3_stop_from_disk(
+            &protocol,
+            &collection,
+            proof.rank().language(),
+            state.path(),
+            review_root.path(),
+            &stop_path,
+        )
+        .unwrap(),
+        stop
+    );
     let identity = historical_v3_rank_identity(&protocol, &collection, 1).unwrap();
     let HistoricalV3MaterializationStageRun::Excluded { artifact, .. } = first else {
         unreachable!("validated exclusion outcome")

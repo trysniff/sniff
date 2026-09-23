@@ -7,7 +7,10 @@ use super::super::{
     HistoricalV3RawIdenticalTestExecution, HistoricalV3SourceReviewInputs,
     historical_v3_rank_identity, run_historical_v3_identical_tests_stage,
 };
-use super::{run_historical_v3_source_review_stage, validate_historical_v3_source_review_bundle};
+use super::{
+    run_historical_v3_source_review_stage, validate_historical_v3_source_review_bundle,
+    verify_historical_v3_source_review_rank,
+};
 use std::fs;
 
 struct PassingExecutor;
@@ -74,6 +77,10 @@ async fn commits_blind_bundle_rejects_rehashed_semantic_tamper_and_resumes_witho
         &PassingExecutor,
     )
     .unwrap();
+    assert!(
+        verify_historical_v3_source_review_rank(&protocol, &collection, 1, journal.path(),)
+            .is_err()
+    );
     let first = run_historical_v3_source_review_stage(
         &protocol,
         &collection,
@@ -82,6 +89,13 @@ async fn commits_blind_bundle_rejects_rehashed_semantic_tamper_and_resumes_witho
         workspace.path(),
     )
     .unwrap();
+    let proof =
+        verify_historical_v3_source_review_rank(&protocol, &collection, 1, journal.path()).unwrap();
+    assert_eq!(proof.bundle(), first.artifact.as_ref());
+    assert_eq!(
+        proof.inputs(&protocol, &collection).qualification.rank,
+        proof.rank().clone()
+    );
     assert!(!first.resumed);
     assert!(first.artifact.source_only);
     assert!(!first.artifact.repository_identity_included);
