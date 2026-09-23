@@ -1,4 +1,4 @@
-use super::super::history_v3_materialization::candidate_context;
+use super::super::validate_historical_v3_candidate_collection_commitment;
 use super::{
     HISTORICAL_V3_RANK_CHECKPOINT_SCHEMA_VERSION, HistoricalV3CandidateCollection,
     HistoricalV3Protocol, HistoricalV3RankArtifactKind, HistoricalV3RankCheckpoint,
@@ -24,16 +24,45 @@ pub fn historical_v3_rank_identity(
     collection: &HistoricalV3CandidateCollection,
     stream_rank: usize,
 ) -> Result<HistoricalV3RankIdentity, String> {
-    let context =
-        candidate_context(protocol, collection, stream_rank).map_err(|error| error.detail)?;
+    validate_historical_v3_candidate_collection_commitment(protocol, collection)?;
+    historical_v3_rank_identity_in_validated_collection(protocol, collection, stream_rank)
+}
+
+pub(crate) fn historical_v3_rank_identity_in_validated_collection(
+    protocol: &HistoricalV3Protocol,
+    collection: &HistoricalV3CandidateCollection,
+    stream_rank: usize,
+) -> Result<HistoricalV3RankIdentity, String> {
+    let task = collection
+        .manifest
+        .stream_task
+        .candidates
+        .get(stream_rank.saturating_sub(1))
+        .filter(|task| task.stream_rank == stream_rank)
+        .ok_or_else(|| "historical-v3 stream rank is absent".to_string())?;
+    let repository = collection
+        .manifest
+        .repositories
+        .iter()
+        .find(|repository| {
+            repository.language == task.identity.language
+                && repository.repository_id == task.identity.repository_id
+        })
+        .ok_or_else(|| "historical-v3 candidate repository is absent".to_string())?;
+    if repository.name_with_owner.split('/').count() != 2
+        || repository.name_with_owner.contains('\\')
+        || repository.name_with_owner.contains(':')
+    {
+        return Err("historical-v3 candidate repository is not canonical GitHub".to_string());
+    }
     let identity = HistoricalV3RankIdentity {
-        protocol_sha256: context.protocol.protocol_sha256.clone(),
-        candidate_manifest_sha256: context.collection.manifest.manifest_sha256.clone(),
-        stream_task_sha256: context.collection.manifest.stream_task.task_sha256.clone(),
-        stream_rank: context.task.stream_rank,
-        rank_sha256: context.task.rank_sha256.clone(),
-        candidate: context.task.identity.clone(),
-        name_with_owner: context.name_with_owner.to_string(),
+        protocol_sha256: protocol.protocol_sha256.clone(),
+        candidate_manifest_sha256: collection.manifest.manifest_sha256.clone(),
+        stream_task_sha256: collection.manifest.stream_task.task_sha256.clone(),
+        stream_rank: task.stream_rank,
+        rank_sha256: task.rank_sha256.clone(),
+        candidate: task.identity.clone(),
+        name_with_owner: repository.name_with_owner.clone(),
     };
     validate_historical_v3_rank_identity(&identity)?;
     Ok(identity)

@@ -19,6 +19,7 @@ pub use store::{HistoricalV3RankJournal, HistoricalV3StoredRankStage};
 #[path = "benchmark_history_v3_rank_terminal_proof.rs"]
 mod terminal_proof;
 
+pub(super) use commitment::historical_v3_rank_identity_in_validated_collection;
 pub use terminal_proof::{
     HistoricalV3VerifiedQualification, HistoricalV3VerifiedTerminalExclusion,
     verify_historical_v3_qualified_rank, verify_historical_v3_terminal_exclusion,

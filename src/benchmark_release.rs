@@ -490,6 +490,11 @@ mod history_v3_ordered_stop;
 
 pub use history_v3_ordered_stop::*;
 
+#[path = "benchmark_history_v3_stop_artifact.rs"]
+mod history_v3_stop_artifact;
+
+pub use history_v3_stop_artifact::*;
+
 #[path = "benchmark_history_v3_review_cap.rs"]
 mod history_v3_review_cap;
 

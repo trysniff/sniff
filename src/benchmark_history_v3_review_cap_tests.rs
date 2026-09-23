@@ -4,7 +4,8 @@ use super::super::{
     HistoricalV3OrderedRankOutcome, HistoricalV3OrderedStopStatus, HistoricalV3ReviewDisposition,
     HistoricalV3VerifiedFinalReview, HistoricalV3VerifiedQualification,
     evaluate_historical_v3_ordered_prefix, historical_v3_rank_identity,
-    prepare_historical_v3_stream_task,
+    prepare_historical_v3_stop_artifact, prepare_historical_v3_stream_task,
+    verify_historical_v3_stop_artifact, write_historical_v3_stop_artifact_new,
 };
 use super::{
     prepare_historical_v3_review_cap, read_historical_v3_review_cap,
@@ -104,6 +105,22 @@ fn commits_only_the_ninth_qualified_candidate_from_the_same_repository() {
             ..
         }
     ));
+    let stop =
+        prepare_historical_v3_stop_artifact(&protocol, &collection, identity.language, &outcomes)
+            .unwrap();
+    let stop_path = directory.path().join("stop.json");
+    write_historical_v3_stop_artifact_new(&stop_path, &stop).unwrap();
+    assert_eq!(
+        verify_historical_v3_stop_artifact(
+            &protocol,
+            &collection,
+            identity.language,
+            &outcomes,
+            &stop_path,
+        )
+        .unwrap(),
+        stop
+    );
 
     let mut tampered = artifact;
     tampered.prior_reviewable_rank_sha256s.reverse();

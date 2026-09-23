@@ -1,10 +1,11 @@
+use super::history_v3_rank_journal::historical_v3_rank_identity_in_validated_collection;
 use super::{
     HistoricalV3CandidateCollection, HistoricalV3Language, HistoricalV3Protocol,
     HistoricalV3RankIdentity, HistoricalV3RankStage, HistoricalV3ReviewDisposition,
     HistoricalV3VerifiedFinalReview, HistoricalV3VerifiedReviewCap,
-    HistoricalV3VerifiedTerminalExclusion, historical_v3_rank_identity,
-    validate_historical_v3_candidate_collection_commitment,
+    HistoricalV3VerifiedTerminalExclusion, validate_historical_v3_candidate_collection_commitment,
 };
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -32,7 +33,8 @@ impl HistoricalV3OrderedRankOutcome {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
 pub enum HistoricalV3OrderedStopStatus {
     Continue {
         processed_ranks: usize,
@@ -90,7 +92,11 @@ pub fn evaluate_historical_v3_ordered_prefix(
 
     for (index, outcome) in outcomes.iter().enumerate() {
         let candidate = candidates[index];
-        let expected = historical_v3_rank_identity(protocol, collection, candidate.stream_rank)?;
+        let expected = historical_v3_rank_identity_in_validated_collection(
+            protocol,
+            collection,
+            candidate.stream_rank,
+        )?;
         if outcome.rank() != &expected {
             return Err(
                 "historical-v3 ordered stop contains a foreign or skipped rank".to_string(),

@@ -483,6 +483,13 @@ pub use release::{
 };
 
 pub use release::{
+    HISTORICAL_V3_STOP_ARTIFACT_SCHEMA_VERSION, HistoricalV3StopArtifact,
+    HistoricalV3StopRankDecision, HistoricalV3StopRankEntry, prepare_historical_v3_stop_artifact,
+    read_historical_v3_stop_artifact, verify_historical_v3_stop_artifact,
+    write_historical_v3_stop_artifact_new,
+};
+
+pub use release::{
     HistoricalV3ReviewCapArtifact, HistoricalV3VerifiedReviewCap, prepare_historical_v3_review_cap,
     read_historical_v3_review_cap, verify_historical_v3_review_cap,
     write_historical_v3_review_cap_new,
