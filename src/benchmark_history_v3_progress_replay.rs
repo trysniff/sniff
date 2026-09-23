@@ -69,7 +69,7 @@ pub fn replay_historical_v3_ordered_progress(
             review_root,
             &outcomes,
         )? {
-            RankReplay::Complete(outcome) => outcomes.push(outcome),
+            RankReplay::Complete(outcome) => outcomes.push(*outcome),
             RankReplay::Pending(next) => {
                 ensure_no_later_state(
                     protocol,

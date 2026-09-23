@@ -13,7 +13,7 @@ use super::{HistoricalV3NextStep, human};
 use std::path::Path;
 
 pub(super) enum RankReplay {
-    Complete(HistoricalV3OrderedRankOutcome),
+    Complete(Box<HistoricalV3OrderedRankOutcome>),
     Pending(HistoricalV3NextStep),
 }
 
@@ -61,7 +61,7 @@ pub(super) fn replay_rank(
             if cap_exists || human_exists {
                 return Err("historical-v3 excluded rank has review records".to_string());
             }
-            Ok(RankReplay::Complete(
+            Ok(RankReplay::Complete(Box::new(
                 HistoricalV3OrderedRankOutcome::Excluded(
                     verify_historical_v3_terminal_exclusion(
                         protocol,
@@ -71,7 +71,7 @@ pub(super) fn replay_rank(
                     )
                     .map_err(|error| error.to_string())?,
                 ),
-            ))
+            )))
         }
         Some(HistoricalV3RankStageOutcome::ReadyForSourceReview { .. }) => {
             if cap_exists {
@@ -85,9 +85,9 @@ pub(super) fn replay_rank(
             )
             .map_err(|error| error.to_string())?;
             match human::replay_human_review(protocol, collection, &source, &paths)? {
-                Some(proof) => Ok(RankReplay::Complete(
+                Some(proof) => Ok(RankReplay::Complete(Box::new(
                     HistoricalV3OrderedRankOutcome::Reviewed(proof),
-                )),
+                ))),
                 None => Ok(RankReplay::Pending(HistoricalV3NextStep::HumanReview)),
             }
         }
@@ -146,7 +146,7 @@ fn replay_qualified_rank(
             journal_root,
         )
         .map_err(|error| error.to_string())?;
-        Ok(RankReplay::Complete(
+        Ok(RankReplay::Complete(Box::new(
             HistoricalV3OrderedRankOutcome::Capped(verify_historical_v3_review_cap(
                 protocol,
                 collection,
@@ -154,7 +154,7 @@ fn replay_qualified_rank(
                 prior,
                 &paths.cap,
             )?),
-        ))
+        )))
     } else {
         if cap_exists {
             return Err("historical-v3 review cap precedes eight candidates".to_string());
