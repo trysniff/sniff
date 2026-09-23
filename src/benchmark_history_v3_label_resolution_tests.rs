@@ -2,7 +2,53 @@ use super::super::history_v3_label_review::tests::{ReviewFixture, review_fixture
 use super::super::{
     HistoricalV3FinalLabelBasis, HistoricalV3FinalLabelOutcome, HistoricalV3LabelResolver,
     HistoricalV3LabelStatus, HistoricalV3ReviewerVerdict, audit_historical_v3_label_reviews,
+    read_historical_v3_label_audit, read_historical_v3_resolution_worksheet,
+    validate_historical_v3_label_audit, write_historical_v3_label_audit_new,
+    write_historical_v3_resolution_worksheet_new,
 };
+
+#[tokio::test]
+async fn persists_audit_and_resolution_create_new_for_replay() {
+    let fixture = review_fixture().await;
+    let worksheets = worksheets(&fixture, HistoricalV3ReviewerVerdict::Slop);
+    let inputs = fixture.inputs();
+    let audit = audit_historical_v3_label_reviews(&inputs, &fixture.bundle, &worksheets).unwrap();
+    let resolution =
+        prepare_historical_v3_label_resolution(&inputs, &fixture.bundle, &worksheets, &audit)
+            .unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let audit_path = directory.path().join("audit.json");
+    let resolution_path = directory.path().join("resolution.json");
+    write_historical_v3_label_audit_new(&audit_path, &audit).unwrap();
+    write_historical_v3_resolution_worksheet_new(&resolution_path, &resolution).unwrap();
+    assert!(write_historical_v3_label_audit_new(&audit_path, &audit).is_err());
+    assert!(write_historical_v3_resolution_worksheet_new(&resolution_path, &resolution).is_err());
+    let stored_audit = read_historical_v3_label_audit(&audit_path).unwrap();
+    let stored_resolution = read_historical_v3_resolution_worksheet(&resolution_path).unwrap();
+    validate_historical_v3_label_audit(&inputs, &fixture.bundle, &worksheets, &stored_audit)
+        .unwrap();
+    validate_historical_v3_label_resolution(
+        &inputs,
+        &fixture.bundle,
+        &worksheets,
+        &stored_audit,
+        &stored_resolution,
+    )
+    .unwrap();
+    let mut altered_audit = stored_audit;
+    altered_audit.audit_sha256 = "0".repeat(64);
+    let altered_path = directory.path().join("altered-audit.json");
+    write_historical_v3_label_audit_new(&altered_path, &altered_audit).unwrap();
+    assert!(
+        validate_historical_v3_label_audit(
+            &inputs,
+            &fixture.bundle,
+            &worksheets,
+            &read_historical_v3_label_audit(&altered_path).unwrap(),
+        )
+        .is_err()
+    );
+}
 use super::{
     prepare_historical_v3_label_resolution, resolve_historical_v3_label,
     validate_historical_v3_final_label, validate_historical_v3_label_resolution,

@@ -480,6 +480,11 @@ mod history_v3_label_resolution;
 
 pub use history_v3_label_resolution::*;
 
+#[path = "benchmark_history_v3_label_record_store.rs"]
+mod history_v3_label_record_store;
+
+pub use history_v3_label_record_store::*;
+
 #[path = "benchmark_history_v3_label_stop_bridge.rs"]
 mod history_v3_label_stop_bridge;
 
