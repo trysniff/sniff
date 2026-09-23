@@ -46,6 +46,23 @@ fn protocol() -> HistoricalV3Protocol {
             test_path_segments: vec!["tests".to_string()],
             test_file_suffixes: vec![".test.ts".to_string(), "_test.go".to_string()],
         },
+        test_recipe_policy: HistoricalV3TestRecipePolicy {
+            selector_contract: TEST_RECIPE_SELECTOR_CONTRACT.to_string(),
+            selectors: HistoricalV3TestRecipeSelector::ALL.to_vec(),
+            maximum_input_file_bytes: 4 * 1024 * 1024,
+            maximum_total_input_bytes: 16 * 1024 * 1024,
+            execution_platform: "linux/amd64".to_string(),
+            network_disabled_during_tests: true,
+            environments: HistoricalV3Language::ALL
+                .into_iter()
+                .map(|language| HistoricalV3TestEnvironmentBinding {
+                    language,
+                    image_digest: format!("sha256:{}", "a".repeat(64)),
+                    toolchain_manifest_sha256: "b".repeat(64),
+                    dependency_store_sha256: "c".repeat(64),
+                })
+                .collect(),
+        },
         stop_rule: HistoricalV3StopRule {
             accepted_target_per_language: 40,
             distinct_repository_floor_per_language: 20,
@@ -124,6 +141,30 @@ fn seals_only_the_locked_blind_fail_closed_protocol() {
         seal_historical_v3_protocol(changed)
             .unwrap_err()
             .contains("stopping rule changed")
+    );
+
+    let mut changed = protocol.clone();
+    changed.test_recipe_policy.selectors.swap(0, 1);
+    assert!(
+        seal_historical_v3_protocol(changed)
+            .unwrap_err()
+            .contains("test-recipe policy")
+    );
+
+    let mut changed = protocol.clone();
+    changed.test_recipe_policy.execution_platform = "linux/arm64".to_string();
+    assert!(
+        seal_historical_v3_protocol(changed)
+            .unwrap_err()
+            .contains("test-recipe policy")
+    );
+
+    let mut changed = protocol.clone();
+    changed.test_recipe_policy.environments.pop();
+    assert!(
+        seal_historical_v3_protocol(changed)
+            .unwrap_err()
+            .contains("every language")
     );
 
     let mut changed = protocol.clone();

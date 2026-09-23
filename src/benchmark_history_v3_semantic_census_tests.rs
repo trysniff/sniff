@@ -46,6 +46,41 @@ pub(crate) fn fixture() -> GitFixture {
 }
 
 pub(crate) fn fixture_with_source(path: &str, base_source: &str, merge_source: &str) -> GitFixture {
+    fixture_with_source_and_recipe(
+        path,
+        base_source,
+        merge_source,
+        Some((cargo_lock(), cargo_lock())),
+    )
+}
+
+pub(crate) fn fixture_with_changed_recipe(
+    path: &str,
+    base_source: &str,
+    merge_source: &str,
+) -> GitFixture {
+    fixture_with_source_and_recipe(
+        path,
+        base_source,
+        merge_source,
+        Some((cargo_lock(), format!("{}# changed\n", cargo_lock()))),
+    )
+}
+
+pub(crate) fn fixture_without_recipe(
+    path: &str,
+    base_source: &str,
+    merge_source: &str,
+) -> GitFixture {
+    fixture_with_source_and_recipe(path, base_source, merge_source, None)
+}
+
+fn fixture_with_source_and_recipe(
+    path: &str,
+    base_source: &str,
+    merge_source: &str,
+    cargo_locks: Option<(String, String)>,
+) -> GitFixture {
     let root = tempfile::tempdir().unwrap();
     let repository = root.path().join("source");
     fs::create_dir(&repository).unwrap();
@@ -55,11 +90,18 @@ pub(crate) fn fixture_with_source(path: &str, base_source: &str, merge_source: &
     let source_path = repository.join(path);
     fs::create_dir_all(source_path.parent().unwrap()).unwrap();
     fs::write(&source_path, base_source).unwrap();
+    if let Some((base_lock, _)) = &cargo_locks {
+        fs::write(repository.join("Cargo.toml"), cargo_manifest()).unwrap();
+        fs::write(repository.join("Cargo.lock"), base_lock).unwrap();
+    }
     git(&repository, &["add", "."]);
     git(&repository, &["commit", "-m", "base"]);
     let base = git_text(&repository, &["rev-parse", "HEAD"]);
     git(&repository, &["checkout", "-b", "feature"]);
     fs::write(&source_path, merge_source).unwrap();
+    if let Some((_, merge_lock)) = &cargo_locks {
+        fs::write(repository.join("Cargo.lock"), merge_lock).unwrap();
+    }
     git(&repository, &["add", "."]);
     git(&repository, &["commit", "-m", "change source"]);
     let head = git_text(&repository, &["rev-parse", "HEAD"]);
@@ -77,6 +119,14 @@ pub(crate) fn fixture_with_source(path: &str, base_source: &str, merge_source: &
         head,
         merge,
     }
+}
+
+fn cargo_manifest() -> &'static str {
+    "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\nedition = \"2024\"\n"
+}
+
+fn cargo_lock() -> String {
+    "version = 3\n\n[[package]]\nname = \"fixture\"\nversion = \"0.1.0\"\n".to_string()
 }
 
 pub(crate) fn protocol() -> HistoricalV3Protocol {

@@ -1,3 +1,6 @@
+use super::super::history_v3_recipe_inputs::{
+    language_recipe_input_path, validate_recipe_input_fact_shape,
+};
 use super::super::intentional_boundary_source_census::INTENTIONAL_BOUNDARY_SOURCE_EXTENSION_CONTRACT;
 use super::super::intentional_boundary_source_census_commitment::validate_source_census_commitment;
 use super::super::{
@@ -39,6 +42,7 @@ pub fn validate_historical_v3_source_census_commitment(
         return Err("historical-v3 source census identity changed".to_string());
     }
     validate_snapshot(
+        protocol,
         &artifact.rank,
         materialization,
         &artifact.base,
@@ -46,6 +50,7 @@ pub fn validate_historical_v3_source_census_commitment(
         &materialization.identity.base_commit,
     )?;
     validate_snapshot(
+        protocol,
         &artifact.rank,
         materialization,
         &artifact.merge,
@@ -84,6 +89,7 @@ pub fn validate_historical_v3_source_census_exclusion(
         return Err("historical-v3 source exclusion identity changed".to_string());
     }
     validate_side_evidence(
+        protocol,
         &artifact.rank,
         materialization,
         &artifact.sides[0],
@@ -91,6 +97,7 @@ pub fn validate_historical_v3_source_census_exclusion(
         &materialization.identity.base_commit,
     )?;
     validate_side_evidence(
+        protocol,
         &artifact.rank,
         materialization,
         &artifact.sides[1],
@@ -128,6 +135,7 @@ pub(super) fn seal_snapshot(
 }
 
 fn validate_snapshot(
+    protocol: &HistoricalV3Protocol,
     rank: &HistoricalV3RankIdentity,
     materialization: &HistoricalV3Materialization,
     snapshot: &HistoricalV3SourceSnapshot,
@@ -153,9 +161,79 @@ fn validate_snapshot(
     .map_err(|error| error.detail)?;
     validate_source_census_commitment(&snapshot.inventory, &snapshot.source_census)?;
     validate_source_file_facts(snapshot)?;
+    validate_recipe_input_facts(snapshot, rank.language(), &protocol.test_recipe_policy)?;
     if snapshot.source_census.source_files.is_empty() || materialization.identity != rank.candidate
     {
         return Err("historical-v3 source snapshot is not reviewable".to_string());
+    }
+    Ok(())
+}
+
+fn validate_recipe_input_facts(
+    snapshot: &HistoricalV3SourceSnapshot,
+    language: super::super::HistoricalV3Language,
+    policy: &super::super::HistoricalV3TestRecipePolicy,
+) -> Result<(), String> {
+    let expected = snapshot
+        .inventory
+        .tracked_entries
+        .iter()
+        .filter(|entry| language_recipe_input_path(language, &entry.repository_path))
+        .collect::<Vec<_>>();
+    if snapshot.recipe_input_facts.len() != expected.len()
+        || snapshot
+            .recipe_input_facts
+            .windows(2)
+            .any(|pair| pair[0].repository_path >= pair[1].repository_path)
+    {
+        return Err("historical-v3 recipe input facts are incomplete or noncanonical".to_string());
+    }
+    let readable_total = expected
+        .iter()
+        .filter(|entry| {
+            entry.kind.is_file_blob()
+                && entry
+                    .byte_length
+                    .is_some_and(|length| length <= policy.maximum_input_file_bytes)
+        })
+        .try_fold(0_u64, |total, entry| {
+            total
+                .checked_add(entry.byte_length.unwrap_or(0))
+                .ok_or_else(|| "historical-v3 recipe input byte count overflowed".to_string())
+        })?;
+    let total_exceeded = readable_total > policy.maximum_total_input_bytes;
+    for (fact, entry) in snapshot.recipe_input_facts.iter().zip(expected) {
+        if fact.repository_path != entry.repository_path
+            || fact.mode != entry.mode
+            || fact.entry_kind != entry.kind
+            || fact.object_id != entry.object_id
+            || fact.byte_length != entry.byte_length
+        {
+            return Err(
+                "historical-v3 recipe input changed its Git inventory identity".to_string(),
+            );
+        }
+        validate_recipe_input_fact_shape(fact, policy)?;
+        if total_exceeded
+            && entry.kind.is_file_blob()
+            && entry
+                .byte_length
+                .is_some_and(|length| length <= policy.maximum_input_file_bytes)
+            && !matches!(
+                fact.input_status,
+                super::HistoricalV3RecipeInputStatus::TotalLimitExceeded
+            )
+        {
+            return Err("historical-v3 recipe input total limit status changed".to_string());
+        }
+        if !total_exceeded
+            && matches!(
+                fact.input_status,
+                super::HistoricalV3RecipeInputStatus::TotalLimitExceeded
+            )
+        {
+            return Err("historical-v3 recipe input invented a total limit".to_string());
+        }
     }
     Ok(())
 }
@@ -209,6 +287,7 @@ fn is_lower_sha256(value: &str) -> bool {
 }
 
 fn validate_side_evidence(
+    protocol: &HistoricalV3Protocol,
     rank: &HistoricalV3RankIdentity,
     materialization: &HistoricalV3Materialization,
     evidence: &HistoricalV3SourceSnapshotEvidence,
@@ -217,6 +296,7 @@ fn validate_side_evidence(
 ) -> Result<(), String> {
     match evidence {
         HistoricalV3SourceSnapshotEvidence::Completed { snapshot } => validate_snapshot(
+            protocol,
             rank,
             materialization,
             snapshot,
