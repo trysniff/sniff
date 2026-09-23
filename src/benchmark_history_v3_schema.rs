@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-pub const HISTORICAL_V3_PROTOCOL_SCHEMA_VERSION: u32 = 4;
+pub const HISTORICAL_V3_PROTOCOL_SCHEMA_VERSION: u32 = 5;
 pub const HISTORICAL_V3_STREAM_TASK_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -228,6 +228,25 @@ pub struct HistoricalV3IdenticalTestPolicy {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct HistoricalV3HumanReviewPolicy {
+    pub source_only_review: bool,
+    pub independent_reviewers: usize,
+    pub distinct_dispute_resolver: bool,
+    pub reviewers_must_not_see_sniff_output: bool,
+    pub reviewers_must_not_see_repository_identity: bool,
+    pub reviewers_must_not_see_change_metadata: bool,
+    pub reviewers_must_not_see_each_other_labels: bool,
+    pub human_only_review: bool,
+    pub complete_source_context_required: bool,
+    pub behavior_evidence_required: bool,
+    pub exact_before_mechanism_required: bool,
+    pub exact_after_removal_required: bool,
+    pub relocation_check_required: bool,
+    pub simpler_counterfactual_required: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct HistoricalV3Protocol {
     pub schema_version: u32,
     pub protocol_id: String,
@@ -244,6 +263,7 @@ pub struct HistoricalV3Protocol {
     pub mechanical_policy: HistoricalV3MechanicalPolicy,
     pub test_recipe_policy: HistoricalV3TestRecipePolicy,
     pub identical_test_policy: HistoricalV3IdenticalTestPolicy,
+    pub human_review_policy: HistoricalV3HumanReviewPolicy,
     pub stop_rule: HistoricalV3StopRule,
     pub no_fallbacks: bool,
     pub model_access_forbidden: bool,

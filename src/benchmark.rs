@@ -466,7 +466,7 @@ pub use release::{
 pub use release::{
     HISTORICAL_V3_PROTOCOL_SCHEMA_VERSION, HISTORICAL_V3_STREAM_TASK_SCHEMA_VERSION,
     HistoricalV3AllowedMetadataField, HistoricalV3CandidateIdentity, HistoricalV3CandidateTask,
-    HistoricalV3CandidateWindow, HistoricalV3ForbiddenMetadataField,
+    HistoricalV3CandidateWindow, HistoricalV3ForbiddenMetadataField, HistoricalV3HumanReviewPolicy,
     HistoricalV3IdenticalTestPolicy, HistoricalV3Language, HistoricalV3MechanicalPolicy,
     HistoricalV3MechanicalRequirement, HistoricalV3Protocol, HistoricalV3ReviewDisposition,
     HistoricalV3ReviewRecord, HistoricalV3SourceFrameBinding, HistoricalV3StopRule,
@@ -558,6 +558,16 @@ pub use release::{
     HistoricalV3SourceReviewInputs, HistoricalV3SourceReviewRoots,
     HistoricalV3SourceReviewStageRun, build_historical_v3_source_review_bundle,
     run_historical_v3_source_review_stage, validate_historical_v3_source_review_bundle,
+};
+
+pub use release::{
+    HISTORICAL_V3_LABEL_REVIEW_SCHEMA_VERSION, HistoricalV3LabelAudit, HistoricalV3LabelStatus,
+    HistoricalV3LabelTask, HistoricalV3LabelWorksheet, HistoricalV3ReviewDecision,
+    HistoricalV3Reviewer, HistoricalV3ReviewerLabel, HistoricalV3ReviewerVerdict,
+    HistoricalV3SourceCitation, audit_historical_v3_label_reviews,
+    prepare_historical_v3_label_review, read_historical_v3_label_worksheet,
+    validate_historical_v3_label_audit, validate_historical_v3_label_review,
+    write_historical_v3_label_worksheet_new,
 };
 
 pub use release::{

@@ -1,7 +1,7 @@
 use super::*;
 use crate::benchmark::{
     HISTORICAL_V3_PROTOCOL_SCHEMA_VERSION, HistoricalV3AllowedMetadataField,
-    HistoricalV3CandidateWindow, HistoricalV3ForbiddenMetadataField,
+    HistoricalV3CandidateWindow, HistoricalV3ForbiddenMetadataField, HistoricalV3HumanReviewPolicy,
     HistoricalV3IdenticalTestPolicy, HistoricalV3MechanicalRequirement,
     HistoricalV3SourceFrameBinding, HistoricalV3StopRule, HistoricalV3TestEnvironmentBinding,
     HistoricalV3TestRecipePolicy, HistoricalV3TestRecipeSelector,
@@ -174,7 +174,7 @@ pub(crate) fn protocol(
     seal_historical_v3_protocol(HistoricalV3Protocol {
         schema_version: HISTORICAL_V3_PROTOCOL_SCHEMA_VERSION,
         protocol_id: "synthetic-historical-v3-source-binding".to_string(),
-        protocol_contract: "sniffbench-historical-v3-protocol-v4".to_string(),
+        protocol_contract: "sniffbench-historical-v3-protocol-v5".to_string(),
         ranking_domain: "sniffbench-historical-v3-candidate-rank-v1".to_string(),
         ranking_seed: "3".repeat(64),
         prior_benchmark_identity_seal_sha256: seal.seal_sha256.clone(),
@@ -247,6 +247,7 @@ pub(crate) fn protocol(
         },
         test_recipe_policy: test_recipe_policy(),
         identical_test_policy: identical_test_policy(),
+        human_review_policy: human_review_policy(),
         stop_rule: HistoricalV3StopRule {
             accepted_target_per_language: 40,
             distinct_repository_floor_per_language: 20,
@@ -260,6 +261,25 @@ pub(crate) fn protocol(
         protocol_sha256: String::new(),
     })
     .unwrap()
+}
+
+pub(crate) fn human_review_policy() -> HistoricalV3HumanReviewPolicy {
+    HistoricalV3HumanReviewPolicy {
+        source_only_review: true,
+        independent_reviewers: 2,
+        distinct_dispute_resolver: true,
+        reviewers_must_not_see_sniff_output: true,
+        reviewers_must_not_see_repository_identity: true,
+        reviewers_must_not_see_change_metadata: true,
+        reviewers_must_not_see_each_other_labels: true,
+        human_only_review: true,
+        complete_source_context_required: true,
+        behavior_evidence_required: true,
+        exact_before_mechanism_required: true,
+        exact_after_removal_required: true,
+        relocation_check_required: true,
+        simpler_counterfactual_required: true,
+    }
 }
 
 pub(crate) fn identical_test_policy() -> HistoricalV3IdenticalTestPolicy {
