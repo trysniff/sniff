@@ -301,11 +301,70 @@ fn rejects_review_evidence_detached_from_the_committed_stream() {
             &task,
             HistoricalV3Language::Rust,
             &[record],
-            false,
         )
         .unwrap_err()
         .contains("not bound")
     );
+}
+
+#[test]
+fn rejects_skipped_language_ranks() {
+    let protocol = protocol();
+    let task = review_task(&protocol, [1, 2, 3]);
+    let skipped = review_record(&task.candidates[1], HistoricalV3ReviewDisposition::Rejected);
+    assert!(
+        evaluate_historical_v3_review_prefix(
+            &protocol,
+            &task,
+            HistoricalV3Language::Rust,
+            &[skipped],
+        )
+        .unwrap_err()
+        .contains("not bound")
+    );
+}
+
+#[test]
+fn rejects_unresolved_disputes_before_stopping() {
+    let protocol = protocol();
+    let task = review_task(&protocol, [1]);
+    let disputed = review_record(&task.candidates[0], HistoricalV3ReviewDisposition::Disputed);
+    assert!(
+        evaluate_historical_v3_review_prefix(
+            &protocol,
+            &task,
+            HistoricalV3Language::Rust,
+            &[disputed],
+        )
+        .unwrap_err()
+        .contains("unresolved dispute")
+    );
+}
+
+#[test]
+fn language_prefix_ignores_interleaved_other_language_ranks() {
+    let protocol = protocol();
+    let mut python = identity(2, 2);
+    python.language = HistoricalV3Language::Python;
+    let task =
+        prepare_historical_v3_stream_task(&protocol, vec![identity(1, 1), python, identity(3, 3)])
+            .unwrap();
+    let records = task
+        .candidates
+        .iter()
+        .filter(|candidate| candidate.identity.language == HistoricalV3Language::Rust)
+        .map(|candidate| review_record(candidate, HistoricalV3ReviewDisposition::Rejected))
+        .collect::<Vec<_>>();
+    assert!(matches!(
+        evaluate_historical_v3_review_prefix(
+            &protocol,
+            &task,
+            HistoricalV3Language::Rust,
+            &records,
+        )
+        .unwrap(),
+        HistoricalV3StopStatus::FailedSourceExhausted { reviewed: 2, .. }
+    ));
 }
 
 #[test]
@@ -325,7 +384,6 @@ fn stops_at_the_first_diverse_forty_case_prefix() {
             &task,
             HistoricalV3Language::Rust,
             &records,
-            false,
         )
         .unwrap(),
         HistoricalV3StopStatus::TargetReached {
@@ -358,7 +416,6 @@ fn stops_at_the_first_diverse_forty_case_prefix() {
             &continued_task,
             HistoricalV3Language::Rust,
             &continued,
-            false,
         )
         .unwrap_err()
         .contains("continued past")
@@ -380,7 +437,6 @@ fn fails_at_the_locked_cap_and_rejects_repository_concentration() {
             &task,
             HistoricalV3Language::Rust,
             &records,
-            false,
         )
         .unwrap(),
         HistoricalV3StopStatus::FailedAdjudicationCap { reviewed: 400, .. }
@@ -398,7 +454,6 @@ fn fails_at_the_locked_cap_and_rejects_repository_concentration() {
             &concentrated_task,
             HistoricalV3Language::Rust,
             &concentrated,
-            false,
         )
         .unwrap_err()
         .contains("acceptance cap")
@@ -408,31 +463,27 @@ fn fails_at_the_locked_cap_and_rejects_repository_concentration() {
 #[test]
 fn distinguishes_more_work_from_terminal_source_exhaustion() {
     let protocol = protocol();
-    let task = review_task(&protocol, [1]);
-    let records = vec![review_record(
-        &task.candidates[0],
-        HistoricalV3ReviewDisposition::Disputed,
-    )];
+    let task = review_task(&protocol, [1, 2]);
+    let first = review_record(&task.candidates[0], HistoricalV3ReviewDisposition::Rejected);
+    let second = review_record(&task.candidates[1], HistoricalV3ReviewDisposition::Rejected);
     assert!(matches!(
         evaluate_historical_v3_review_prefix(
             &protocol,
             &task,
             HistoricalV3Language::Rust,
-            &records,
-            false,
+            std::slice::from_ref(&first),
         )
         .unwrap(),
-        HistoricalV3StopStatus::Continue { .. }
+        HistoricalV3StopStatus::Continue { reviewed: 1, .. }
     ));
     assert!(matches!(
         evaluate_historical_v3_review_prefix(
             &protocol,
             &task,
             HistoricalV3Language::Rust,
-            &records,
-            true,
+            &[first, second],
         )
         .unwrap(),
-        HistoricalV3StopStatus::FailedSourceExhausted { .. }
+        HistoricalV3StopStatus::FailedSourceExhausted { reviewed: 2, .. }
     ));
 }
