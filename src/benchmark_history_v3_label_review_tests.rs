@@ -40,7 +40,7 @@ impl HistoricalV3IdenticalTestExecutor for PassingExecutor {
     }
 }
 
-struct ReviewFixture {
+pub(crate) struct ReviewFixture {
     protocol: HistoricalV3Protocol,
     collection: HistoricalV3CandidateCollection,
     materialization: HistoricalV3Materialization,
@@ -49,11 +49,11 @@ struct ReviewFixture {
     qualification: HistoricalV3MechanicalQualification,
     recipe: HistoricalV3TestRecipe,
     execution: HistoricalV3IdenticalTests,
-    bundle: HistoricalV3SourceReviewBundle,
+    pub(crate) bundle: HistoricalV3SourceReviewBundle,
 }
 
 impl ReviewFixture {
-    fn inputs(&self) -> HistoricalV3SourceReviewInputs<'_> {
+    pub(crate) fn inputs(&self) -> HistoricalV3SourceReviewInputs<'_> {
         HistoricalV3SourceReviewInputs {
             protocol: &self.protocol,
             collection: &self.collection,
@@ -66,7 +66,7 @@ impl ReviewFixture {
         }
     }
 
-    fn worksheet(
+    pub(crate) fn worksheet(
         &self,
         reviewer_id: &str,
         verdict: HistoricalV3ReviewerVerdict,
@@ -200,7 +200,7 @@ async fn preserves_typed_non_slop_consensus_and_real_disputes() {
     );
 }
 
-async fn review_fixture() -> ReviewFixture {
+pub(crate) async fn review_fixture() -> ReviewFixture {
     let (_git, protocol, collection, journal, workspace, _) = prepared_rank().await;
     run_historical_v3_identical_tests_stage(
         &protocol,

@@ -475,6 +475,11 @@ mod history_v3_label_review;
 
 pub use history_v3_label_review::*;
 
+#[path = "benchmark_history_v3_label_resolution.rs"]
+mod history_v3_label_resolution;
+
+pub use history_v3_label_resolution::*;
+
 #[path = "benchmark_history_v3_semantic_census.rs"]
 mod history_v3_semantic_census;
 

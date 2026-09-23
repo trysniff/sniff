@@ -58,7 +58,7 @@ fn validate_reviewer(reviewer: &HistoricalV3Reviewer) -> Result<(), String> {
     Ok(())
 }
 
-fn validate_decision(
+pub(super) fn validate_decision(
     task: &HistoricalV3LabelTask,
     decision: &HistoricalV3ReviewDecision,
 ) -> Result<(), String> {
