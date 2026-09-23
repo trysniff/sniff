@@ -28,4 +28,4 @@ pub(super) const TEST_RECIPE_EXCLUSION_CONTRACT: &str =
 
 #[cfg(test)]
 #[path = "benchmark_history_v3_test_recipe_tests.rs"]
-mod tests;
+pub(crate) mod tests;

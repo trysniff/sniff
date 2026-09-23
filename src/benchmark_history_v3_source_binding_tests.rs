@@ -2,11 +2,11 @@ use super::*;
 use crate::benchmark::{
     HISTORICAL_V3_PROTOCOL_SCHEMA_VERSION, HistoricalV3AllowedMetadataField,
     HistoricalV3CandidateWindow, HistoricalV3ForbiddenMetadataField,
-    HistoricalV3MechanicalRequirement, HistoricalV3SourceFrameBinding, HistoricalV3StopRule,
-    HistoricalV3TestEnvironmentBinding, HistoricalV3TestRecipePolicy,
-    HistoricalV3TestRecipeSelector, SOURCE_FRAME_COLLECTION_MANIFEST_SCHEMA_VERSION,
-    SOURCE_FRAME_COLLECTION_POLICY_SCHEMA_VERSION, SourceFramePageCommitment, SourceFrameRawPage,
-    seal_historical_v3_protocol,
+    HistoricalV3IdenticalTestPolicy, HistoricalV3MechanicalRequirement,
+    HistoricalV3SourceFrameBinding, HistoricalV3StopRule, HistoricalV3TestEnvironmentBinding,
+    HistoricalV3TestRecipePolicy, HistoricalV3TestRecipeSelector,
+    SOURCE_FRAME_COLLECTION_MANIFEST_SCHEMA_VERSION, SOURCE_FRAME_COLLECTION_POLICY_SCHEMA_VERSION,
+    SourceFramePageCommitment, SourceFrameRawPage, seal_historical_v3_protocol,
 };
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -174,7 +174,7 @@ pub(crate) fn protocol(
     seal_historical_v3_protocol(HistoricalV3Protocol {
         schema_version: HISTORICAL_V3_PROTOCOL_SCHEMA_VERSION,
         protocol_id: "synthetic-historical-v3-source-binding".to_string(),
-        protocol_contract: "sniffbench-historical-v3-protocol-v3".to_string(),
+        protocol_contract: "sniffbench-historical-v3-protocol-v4".to_string(),
         ranking_domain: "sniffbench-historical-v3-candidate-rank-v1".to_string(),
         ranking_seed: "3".repeat(64),
         prior_benchmark_identity_seal_sha256: seal.seal_sha256.clone(),
@@ -246,6 +246,7 @@ pub(crate) fn protocol(
             test_file_suffixes: vec![".test.ts".to_string(), "_test.go".to_string()],
         },
         test_recipe_policy: test_recipe_policy(),
+        identical_test_policy: identical_test_policy(),
         stop_rule: HistoricalV3StopRule {
             accepted_target_per_language: 40,
             distinct_repository_floor_per_language: 20,
@@ -259,6 +260,24 @@ pub(crate) fn protocol(
         protocol_sha256: String::new(),
     })
     .unwrap()
+}
+
+pub(crate) fn identical_test_policy() -> HistoricalV3IdenticalTestPolicy {
+    HistoricalV3IdenticalTestPolicy {
+        execution_contract: "sniffbench-historical-v3-identical-test-policy-v1".to_string(),
+        cpu_limit_millis: 4_000,
+        memory_limit_bytes: 8 * 1024 * 1024 * 1024,
+        process_limit: 1_024,
+        temporary_filesystem_bytes: 2 * 1024 * 1024 * 1024,
+        preparation_command_timeout_seconds: 30 * 60,
+        test_command_timeout_seconds: 60 * 60,
+        retained_output_bytes: 64 * 1024,
+        network_disabled_during_all_commands: true,
+        ephemeral_container_filesystem: true,
+        host_source_mounts_forbidden: true,
+        all_capabilities_dropped: true,
+        no_new_privileges: true,
+    }
 }
 
 pub(crate) fn test_recipe_policy() -> HistoricalV3TestRecipePolicy {

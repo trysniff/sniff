@@ -466,15 +466,15 @@ pub use release::{
 pub use release::{
     HISTORICAL_V3_PROTOCOL_SCHEMA_VERSION, HISTORICAL_V3_STREAM_TASK_SCHEMA_VERSION,
     HistoricalV3AllowedMetadataField, HistoricalV3CandidateIdentity, HistoricalV3CandidateTask,
-    HistoricalV3CandidateWindow, HistoricalV3ForbiddenMetadataField, HistoricalV3Language,
-    HistoricalV3MechanicalPolicy, HistoricalV3MechanicalRequirement, HistoricalV3Protocol,
-    HistoricalV3ReviewDisposition, HistoricalV3ReviewRecord, HistoricalV3SourceFrameBinding,
-    HistoricalV3StopRule, HistoricalV3StopStatus, HistoricalV3StreamTask,
-    HistoricalV3TestEnvironmentBinding, HistoricalV3TestRecipePolicy,
-    HistoricalV3TestRecipeSelector, evaluate_historical_v3_review_prefix,
-    historical_v3_candidate_rank_sha256, prepare_historical_v3_stream_task,
-    seal_historical_v3_protocol, validate_historical_v3_protocol,
-    validate_historical_v3_stream_task,
+    HistoricalV3CandidateWindow, HistoricalV3ForbiddenMetadataField,
+    HistoricalV3IdenticalTestPolicy, HistoricalV3Language, HistoricalV3MechanicalPolicy,
+    HistoricalV3MechanicalRequirement, HistoricalV3Protocol, HistoricalV3ReviewDisposition,
+    HistoricalV3ReviewRecord, HistoricalV3SourceFrameBinding, HistoricalV3StopRule,
+    HistoricalV3StopStatus, HistoricalV3StreamTask, HistoricalV3TestEnvironmentBinding,
+    HistoricalV3TestRecipePolicy, HistoricalV3TestRecipeSelector,
+    evaluate_historical_v3_review_prefix, historical_v3_candidate_rank_sha256,
+    prepare_historical_v3_stream_task, seal_historical_v3_protocol,
+    validate_historical_v3_protocol, validate_historical_v3_stream_task,
 };
 
 pub use release::{
@@ -539,6 +539,17 @@ pub use release::{
     HistoricalV3TestRecipeOutcome, HistoricalV3TestRecipeStageRun,
     derive_historical_v3_test_recipe, run_historical_v3_test_recipe_stage,
     validate_historical_v3_test_recipe, validate_historical_v3_test_recipe_exclusion,
+};
+
+pub use release::{
+    HISTORICAL_V3_IDENTICAL_TESTS_SCHEMA_VERSION, HistoricalV3ExecutionCommandEvidence,
+    HistoricalV3ExecutionPhase, HistoricalV3ExecutionSide,
+    HistoricalV3IdenticalTestExclusionReason, HistoricalV3IdenticalTestExecutionError,
+    HistoricalV3IdenticalTestExecutionErrorKind, HistoricalV3IdenticalTestExecutionRequest,
+    HistoricalV3IdenticalTestExecutor, HistoricalV3IdenticalTestOutcome,
+    HistoricalV3IdenticalTests, HistoricalV3IdenticalTestsStageRun,
+    HistoricalV3RawIdenticalTestExecution, historical_v3_execution_identity_sha256,
+    run_historical_v3_identical_tests_stage, validate_historical_v3_identical_tests,
 };
 
 pub use release::{

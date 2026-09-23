@@ -16,6 +16,8 @@ pub(crate) struct BoundedOutput {
     pub(crate) stderr: Vec<u8>,
     pub(crate) stdout_sha256: String,
     pub(crate) stderr_sha256: String,
+    pub(crate) stdout_byte_count: u64,
+    pub(crate) stderr_byte_count: u64,
     pub(crate) timed_out: bool,
     pub(crate) stdout_truncated: bool,
     pub(crate) stderr_truncated: bool,
@@ -106,8 +108,10 @@ fn run_with_optional_input(
         // already killed the process group before waiting for the parent.
         terminate_process_group(child.id())?;
     }
-    let (stdout, stdout_truncated, stdout_sha256) = join_reader(stdout_reader, "stdout")?;
-    let (stderr, stderr_truncated, stderr_sha256) = join_reader(stderr_reader, "stderr")?;
+    let (stdout, stdout_truncated, stdout_sha256, stdout_byte_count) =
+        join_reader(stdout_reader, "stdout")?;
+    let (stderr, stderr_truncated, stderr_sha256, stderr_byte_count) =
+        join_reader(stderr_reader, "stderr")?;
     if let Some(writer) = stdin_writer {
         writer
             .join()
@@ -119,22 +123,35 @@ fn run_with_optional_input(
         stderr,
         stdout_sha256,
         stderr_sha256,
+        stdout_byte_count,
+        stderr_byte_count,
         timed_out,
         stdout_truncated,
         stderr_truncated,
     })
 }
 
-fn read_limited(mut reader: impl Read, limit: usize) -> io::Result<(Vec<u8>, bool, String)> {
+fn read_limited(mut reader: impl Read, limit: usize) -> io::Result<(Vec<u8>, bool, String, u64)> {
     let mut retained = Vec::new();
     let mut truncated = false;
     let mut digest = Sha256::new();
+    let mut byte_count = 0_u64;
     let mut buffer = [0_u8; 8192];
     loop {
         let count = reader.read(&mut buffer)?;
         if count == 0 {
-            return Ok((retained, truncated, format!("{:x}", digest.finalize())));
+            return Ok((
+                retained,
+                truncated,
+                format!("{:x}", digest.finalize()),
+                byte_count,
+            ));
         }
+        let count_u64 = u64::try_from(count)
+            .map_err(|_| io::Error::other("bounded child output chunk length overflowed"))?;
+        byte_count = byte_count
+            .checked_add(count_u64)
+            .ok_or_else(|| io::Error::other("bounded child output byte count overflowed"))?;
         digest.update(&buffer[..count]);
         if retained.len() < limit {
             let keep = count.min(limit - retained.len());
@@ -147,9 +164,9 @@ fn read_limited(mut reader: impl Read, limit: usize) -> io::Result<(Vec<u8>, boo
 }
 
 fn join_reader(
-    reader: thread::JoinHandle<io::Result<(Vec<u8>, bool, String)>>,
+    reader: thread::JoinHandle<io::Result<(Vec<u8>, bool, String, u64)>>,
     label: &str,
-) -> io::Result<(Vec<u8>, bool, String)> {
+) -> io::Result<(Vec<u8>, bool, String, u64)> {
     reader
         .join()
         .map_err(|_| io::Error::other(format!("bounded child {label} reader panicked")))?

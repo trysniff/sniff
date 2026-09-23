@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-pub const HISTORICAL_V3_PROTOCOL_SCHEMA_VERSION: u32 = 3;
+pub const HISTORICAL_V3_PROTOCOL_SCHEMA_VERSION: u32 = 4;
 pub const HISTORICAL_V3_STREAM_TASK_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -210,6 +210,24 @@ pub struct HistoricalV3TestRecipePolicy {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct HistoricalV3IdenticalTestPolicy {
+    pub execution_contract: String,
+    pub cpu_limit_millis: u64,
+    pub memory_limit_bytes: u64,
+    pub process_limit: u64,
+    pub temporary_filesystem_bytes: u64,
+    pub preparation_command_timeout_seconds: u64,
+    pub test_command_timeout_seconds: u64,
+    pub retained_output_bytes: usize,
+    pub network_disabled_during_all_commands: bool,
+    pub ephemeral_container_filesystem: bool,
+    pub host_source_mounts_forbidden: bool,
+    pub all_capabilities_dropped: bool,
+    pub no_new_privileges: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct HistoricalV3Protocol {
     pub schema_version: u32,
     pub protocol_id: String,
@@ -225,6 +243,7 @@ pub struct HistoricalV3Protocol {
     pub mechanical_requirements: Vec<HistoricalV3MechanicalRequirement>,
     pub mechanical_policy: HistoricalV3MechanicalPolicy,
     pub test_recipe_policy: HistoricalV3TestRecipePolicy,
+    pub identical_test_policy: HistoricalV3IdenticalTestPolicy,
     pub stop_rule: HistoricalV3StopRule,
     pub no_fallbacks: bool,
     pub model_access_forbidden: bool,

@@ -63,6 +63,21 @@ fn protocol() -> HistoricalV3Protocol {
                 })
                 .collect(),
         },
+        identical_test_policy: HistoricalV3IdenticalTestPolicy {
+            execution_contract: IDENTICAL_TEST_EXECUTION_POLICY_CONTRACT.to_string(),
+            cpu_limit_millis: 4_000,
+            memory_limit_bytes: 8 * 1024 * 1024 * 1024,
+            process_limit: 1_024,
+            temporary_filesystem_bytes: 2 * 1024 * 1024 * 1024,
+            preparation_command_timeout_seconds: 30 * 60,
+            test_command_timeout_seconds: 60 * 60,
+            retained_output_bytes: 64 * 1024,
+            network_disabled_during_all_commands: true,
+            ephemeral_container_filesystem: true,
+            host_source_mounts_forbidden: true,
+            all_capabilities_dropped: true,
+            no_new_privileges: true,
+        },
         stop_rule: HistoricalV3StopRule {
             accepted_target_per_language: 40,
             distinct_repository_floor_per_language: 20,
@@ -165,6 +180,16 @@ fn seals_only_the_locked_blind_fail_closed_protocol() {
         seal_historical_v3_protocol(changed)
             .unwrap_err()
             .contains("every language")
+    );
+
+    let mut changed = protocol.clone();
+    changed
+        .identical_test_policy
+        .network_disabled_during_all_commands = false;
+    assert!(
+        seal_historical_v3_protocol(changed)
+            .unwrap_err()
+            .contains("identical-test policy")
     );
 
     let mut changed = protocol.clone();
