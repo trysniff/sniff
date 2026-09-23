@@ -478,6 +478,24 @@ pub use release::{
 };
 
 pub use release::{
+    HistoricalV3OrderedRankOutcome, HistoricalV3OrderedStopStatus,
+    evaluate_historical_v3_ordered_prefix,
+};
+
+pub use release::{
+    HISTORICAL_V3_STOP_ARTIFACT_SCHEMA_VERSION, HistoricalV3StopArtifact,
+    HistoricalV3StopRankDecision, HistoricalV3StopRankEntry, prepare_historical_v3_stop_artifact,
+    read_historical_v3_stop_artifact, verify_historical_v3_stop_artifact,
+    write_historical_v3_stop_artifact_new,
+};
+
+pub use release::{
+    HistoricalV3ReviewCapArtifact, HistoricalV3VerifiedReviewCap, prepare_historical_v3_review_cap,
+    read_historical_v3_review_cap, verify_historical_v3_review_cap,
+    write_historical_v3_review_cap_new,
+};
+
+pub use release::{
     HISTORICAL_V3_PRIOR_IDENTITY_SEAL_SCHEMA_VERSION,
     HISTORICAL_V3_SOURCE_BINDING_AUDIT_SCHEMA_VERSION, HistoricalV3BoundSourceFrame,
     HistoricalV3PriorArtifactBinding, HistoricalV3PriorBenchmarkIdentitySeal,
@@ -516,9 +534,10 @@ pub use release::{
     HistoricalV3RankArtifactKind, HistoricalV3RankCheckpoint, HistoricalV3RankIdentity,
     HistoricalV3RankJournal, HistoricalV3RankJournalError, HistoricalV3RankJournalErrorKind,
     HistoricalV3RankStage, HistoricalV3RankStageOutcome, HistoricalV3StoredRankStage,
-    HistoricalV3VerifiedTerminalExclusion, append_historical_v3_rank_checkpoint,
-    historical_v3_rank_identity, run_historical_v3_materialization_stage,
-    validate_historical_v3_rank_history, verify_historical_v3_terminal_exclusion,
+    HistoricalV3VerifiedQualification, HistoricalV3VerifiedTerminalExclusion,
+    append_historical_v3_rank_checkpoint, historical_v3_rank_identity,
+    run_historical_v3_materialization_stage, validate_historical_v3_rank_history,
+    verify_historical_v3_qualified_rank, verify_historical_v3_terminal_exclusion,
 };
 
 pub use release::{
@@ -574,10 +593,11 @@ pub use release::{
 pub use release::{
     HISTORICAL_V3_LABEL_RESOLUTION_SCHEMA_VERSION, HistoricalV3FinalLabel,
     HistoricalV3FinalLabelBasis, HistoricalV3FinalLabelOutcome, HistoricalV3LabelResolver,
-    HistoricalV3ResolutionItem, HistoricalV3ResolutionWorksheet,
+    HistoricalV3ResolutionItem, HistoricalV3ResolutionWorksheet, HistoricalV3VerifiedFinalReview,
     historical_v3_review_record_from_final_label, prepare_historical_v3_label_resolution,
-    resolve_historical_v3_label, validate_historical_v3_final_label,
-    validate_historical_v3_label_resolution,
+    read_historical_v3_final_label, resolve_historical_v3_label,
+    validate_historical_v3_final_label, validate_historical_v3_label_resolution,
+    verify_historical_v3_final_review, write_historical_v3_final_label_new,
 };
 
 pub use release::{

@@ -30,6 +30,57 @@ pub struct HistoricalV3VerifiedTerminalExclusion {
     artifact_sha256: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HistoricalV3VerifiedQualification {
+    rank: HistoricalV3RankIdentity,
+    qualification_sha256: String,
+}
+
+impl HistoricalV3VerifiedQualification {
+    pub fn rank(&self) -> &HistoricalV3RankIdentity {
+        &self.rank
+    }
+
+    pub fn qualification_sha256(&self) -> &str {
+        &self.qualification_sha256
+    }
+}
+
+#[cfg(test)]
+impl HistoricalV3VerifiedQualification {
+    pub(crate) fn synthetic(rank: HistoricalV3RankIdentity) -> Self {
+        Self {
+            rank,
+            qualification_sha256: "c".repeat(64),
+        }
+    }
+}
+
+pub fn verify_historical_v3_qualified_rank(
+    protocol: &HistoricalV3Protocol,
+    collection: &HistoricalV3CandidateCollection,
+    stream_rank: usize,
+    journal_root: &Path,
+) -> Result<HistoricalV3VerifiedQualification, HistoricalV3RankJournalError> {
+    let stage = Stage::MechanicalQualification;
+    let rank = historical_v3_rank_identity(protocol, collection, stream_rank)
+        .map_err(|detail| HistoricalV3RankJournalError::invalid(stage, detail))?;
+    let journal = HistoricalV3RankJournal::open(journal_root, &rank)?;
+    let history = journal.history();
+    if history.len() != 4 {
+        return Err(HistoricalV3RankJournalError::invalid(
+            stage,
+            "historical-v3 review-cap rank is not stopped immediately after qualification",
+        ));
+    }
+    let qualification_sha256 = verify_qualified_prefix(protocol, collection, history)
+        .map_err(|detail| HistoricalV3RankJournalError::invalid(stage, detail))?;
+    Ok(HistoricalV3VerifiedQualification {
+        rank,
+        qualification_sha256,
+    })
+}
+
 impl HistoricalV3VerifiedTerminalExclusion {
     pub fn rank(&self) -> &HistoricalV3RankIdentity {
         &self.rank
@@ -270,6 +321,57 @@ fn verify_exclusion_chain(
         }
     }
     Ok(())
+}
+
+fn verify_qualified_prefix(
+    protocol: &HistoricalV3Protocol,
+    collection: &HistoricalV3CandidateCollection,
+    history: &[HistoricalV3StoredRankStage],
+) -> Result<String, String> {
+    let (materialization, hash) = read_stage::<HistoricalV3Materialization>(
+        history,
+        0,
+        ArtifactKind::Materialization,
+        false,
+    )?;
+    require_hash(&materialization.materialization_sha256, &hash)?;
+    validate_historical_v3_materialization_commitment(protocol, collection, &materialization)
+        .map_err(|error| error.detail)?;
+    let (source_census, hash) =
+        read_stage::<HistoricalV3SourceCensus>(history, 1, ArtifactKind::SourceCensus, false)?;
+    require_hash(&source_census.source_census_sha256, &hash)?;
+    validate_historical_v3_source_census_commitment(
+        protocol,
+        collection,
+        &materialization,
+        &source_census,
+    )?;
+    let (semantic_census, hash) =
+        read_stage::<HistoricalV3SemanticCensus>(history, 2, ArtifactKind::SemanticCensus, false)?;
+    require_hash(&semantic_census.semantic_census_sha256, &hash)?;
+    validate_historical_v3_semantic_census_commitment(
+        protocol,
+        collection,
+        &materialization,
+        &source_census,
+        &semantic_census,
+    )?;
+    let (qualification, hash) = read_stage::<HistoricalV3MechanicalQualification>(
+        history,
+        3,
+        ArtifactKind::MechanicalQualification,
+        false,
+    )?;
+    require_hash(&qualification.qualification_sha256, &hash)?;
+    validate_historical_v3_mechanical_qualification(
+        protocol,
+        collection,
+        &materialization,
+        &source_census,
+        &semantic_census,
+        &qualification,
+    )?;
+    Ok(hash)
 }
 
 fn read_stage<T: DeserializeOwned>(

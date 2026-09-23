@@ -3,7 +3,10 @@ use super::super::{
     HistoricalV3ReviewDisposition, HistoricalV3ReviewerVerdict, audit_historical_v3_label_reviews,
     prepare_historical_v3_label_resolution, resolve_historical_v3_label,
 };
-use super::historical_v3_review_record_from_final_label;
+use super::{
+    historical_v3_review_record_from_final_label, read_historical_v3_final_label,
+    verify_historical_v3_final_review, write_historical_v3_final_label_new,
+};
 
 #[tokio::test]
 async fn derives_acceptance_only_from_a_verified_final_label() {
@@ -36,17 +39,37 @@ async fn derives_acceptance_only_from_a_verified_final_label() {
         record.repository_id,
         inputs.qualification.rank.candidate.repository_id
     );
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("final-label.json");
+    write_historical_v3_final_label_new(&path, &label).unwrap();
+    assert_eq!(read_historical_v3_final_label(&path).unwrap(), label);
+    assert!(write_historical_v3_final_label_new(&path, &label).is_err());
+    let proof = verify_historical_v3_final_review(
+        &inputs,
+        &fixture.bundle,
+        &worksheets,
+        &audit,
+        &resolution,
+        &path,
+    )
+    .unwrap();
+    assert_eq!(proof.record(), &record);
+    assert_eq!(proof.rank(), &inputs.qualification.rank);
+    assert_eq!(proof.source_bundle_sha256(), fixture.bundle.bundle_sha256);
+    assert_eq!(proof.final_label_sha256(), label.final_sha256);
 
     let mut tampered = label;
     tampered.final_sha256 = "0".repeat(64);
+    let tampered_path = directory.path().join("tampered-final-label.json");
+    write_historical_v3_final_label_new(&tampered_path, &tampered).unwrap();
     assert!(
-        historical_v3_review_record_from_final_label(
+        verify_historical_v3_final_review(
             &inputs,
             &fixture.bundle,
             &worksheets,
             &audit,
             &resolution,
-            &tampered,
+            &tampered_path,
         )
         .is_err()
     );
