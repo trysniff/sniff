@@ -571,6 +571,14 @@ pub use release::{
 };
 
 pub use release::{
+    HISTORICAL_V3_LABEL_RESOLUTION_SCHEMA_VERSION, HistoricalV3FinalLabel,
+    HistoricalV3FinalLabelBasis, HistoricalV3FinalLabelOutcome, HistoricalV3LabelResolver,
+    HistoricalV3ResolutionItem, HistoricalV3ResolutionWorksheet,
+    prepare_historical_v3_label_resolution, resolve_historical_v3_label,
+    validate_historical_v3_final_label, validate_historical_v3_label_resolution,
+};
+
+pub use release::{
     HISTORICAL_V3_SEMANTIC_CENSUS_EXCLUSION_SCHEMA_VERSION,
     HISTORICAL_V3_SEMANTIC_CENSUS_SCHEMA_VERSION, HistoricalV3CompilerIndexEvidence,
     HistoricalV3SemanticCensus, HistoricalV3SemanticCensusExclusion,

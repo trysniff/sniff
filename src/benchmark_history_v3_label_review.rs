@@ -9,6 +9,13 @@ mod commitment;
 #[path = "benchmark_history_v3_label_review_validation.rs"]
 mod validation;
 
+pub(super) fn validate_historical_v3_review_decision(
+    task: &HistoricalV3LabelTask,
+    decision: &HistoricalV3ReviewDecision,
+) -> Result<(), String> {
+    validation::validate_decision(task, decision)
+}
+
 pub use commitment::{
     audit_historical_v3_label_reviews, prepare_historical_v3_label_review,
     validate_historical_v3_label_audit, validate_historical_v3_label_review,
@@ -24,4 +31,4 @@ const LABEL_AUDIT_CONTRACT: &str = "sniffbench-historical-v3-label-audit-v1";
 
 #[cfg(test)]
 #[path = "benchmark_history_v3_label_review_tests.rs"]
-mod tests;
+pub(crate) mod tests;
