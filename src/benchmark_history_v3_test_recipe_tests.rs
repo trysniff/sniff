@@ -190,7 +190,7 @@ async fn operational_failure_leaves_test_recipe_rank_open_for_retry() {
     ));
 }
 
-async fn prepare_qualified_rank(
+pub(crate) async fn prepare_qualified_rank(
     protocol: &HistoricalV3Protocol,
     collection: &HistoricalV3CandidateCollection,
     fixture: &semantic_fixture::GitFixture,

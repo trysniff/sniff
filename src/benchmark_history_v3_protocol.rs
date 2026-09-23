@@ -7,11 +7,13 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
-const PROTOCOL_CONTRACT: &str = "sniffbench-historical-v3-protocol-v3";
+const PROTOCOL_CONTRACT: &str = "sniffbench-historical-v3-protocol-v4";
 const STREAM_CONTRACT: &str = "sniffbench-historical-v3-stream-task-v1";
 const RANKING_DOMAIN: &str = "sniffbench-historical-v3-candidate-rank-v1";
 pub(super) const TEST_RECIPE_SELECTOR_CONTRACT: &str =
     "sniffbench-historical-v3-test-recipe-selectors-v1";
+pub(super) const IDENTICAL_TEST_EXECUTION_POLICY_CONTRACT: &str =
+    "sniffbench-historical-v3-identical-test-policy-v1";
 const GITHUB_API_VERSION: &str = "2022-11-28";
 const CANDIDATE_PARTITION: &str = "repository_then_merged_at_utc";
 const CANDIDATE_PAGINATION: &str = "github_graphql_cursor_until_exhausted";
@@ -264,12 +266,33 @@ fn validate_historical_v3_protocol_fields(protocol: &HistoricalV3Protocol) -> Re
     }
     validate_mechanical_policy(&protocol.mechanical_policy)?;
     validate_test_recipe_policy(&protocol.test_recipe_policy)?;
+    validate_identical_test_policy(&protocol.identical_test_policy)?;
     validate_stop_rule(&protocol.stop_rule)?;
     if !protocol.no_fallbacks
         || !protocol.model_access_forbidden
         || !protocol.sniff_output_access_forbidden
     {
         return Err("historical-v3 construction must fail closed and remain blind".to_string());
+    }
+    Ok(())
+}
+
+fn validate_identical_test_policy(policy: &HistoricalV3IdenticalTestPolicy) -> Result<(), String> {
+    if policy.execution_contract != IDENTICAL_TEST_EXECUTION_POLICY_CONTRACT
+        || policy.cpu_limit_millis != 4_000
+        || policy.memory_limit_bytes != 8 * 1024 * 1024 * 1024
+        || policy.process_limit != 1_024
+        || policy.temporary_filesystem_bytes != 2 * 1024 * 1024 * 1024
+        || policy.preparation_command_timeout_seconds != 30 * 60
+        || policy.test_command_timeout_seconds != 60 * 60
+        || policy.retained_output_bytes != 64 * 1024
+        || !policy.network_disabled_during_all_commands
+        || !policy.ephemeral_container_filesystem
+        || !policy.host_source_mounts_forbidden
+        || !policy.all_capabilities_dropped
+        || !policy.no_new_privileges
+    {
+        return Err("historical-v3 identical-test policy is invalid".to_string());
     }
     Ok(())
 }

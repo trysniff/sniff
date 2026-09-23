@@ -460,6 +460,11 @@ mod history_v3_test_recipe;
 
 pub use history_v3_test_recipe::*;
 
+#[path = "benchmark_history_v3_identical_tests.rs"]
+mod history_v3_identical_tests;
+
+pub use history_v3_identical_tests::*;
+
 #[path = "benchmark_history_v3_semantic_census.rs"]
 mod history_v3_semantic_census;
 
