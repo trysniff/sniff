@@ -7,7 +7,7 @@ use super::{
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
-pub(super) const CHECKPOINT_CONTRACT: &str = "sniffbench-historical-v3-rank-stage-checkpoint-v1";
+pub(super) const CHECKPOINT_CONTRACT: &str = "sniffbench-historical-v3-rank-stage-checkpoint-v2";
 
 const STAGES: [HistoricalV3RankStage; 7] = [
     HistoricalV3RankStage::Materialization,
@@ -163,16 +163,20 @@ fn validate_outcome(
                 return Err("historical-v3 rank exclusion artifact is invalid".to_string());
             }
         }
-        HistoricalV3RankStageOutcome::ReadyForSourceReview => {
-            if stage != HistoricalV3RankStage::ReadyForSourceReview {
+        HistoricalV3RankStageOutcome::ReadyForSourceReview { bundle_sha256 } => {
+            if stage != HistoricalV3RankStage::ReadyForSourceReview || !valid_sha256(bundle_sha256)
+            {
                 return Err(
-                    "historical-v3 review readiness is attached to the wrong stage".to_string(),
+                    "historical-v3 review readiness has an invalid bundle commitment".to_string(),
                 );
             }
         }
     }
     if stage == HistoricalV3RankStage::ReadyForSourceReview
-        && !matches!(outcome, HistoricalV3RankStageOutcome::ReadyForSourceReview)
+        && !matches!(
+            outcome,
+            HistoricalV3RankStageOutcome::ReadyForSourceReview { .. }
+        )
     {
         return Err("historical-v3 final rank stage must be ready for source review".to_string());
     }
@@ -227,7 +231,7 @@ fn terminal_outcome(outcome: &HistoricalV3RankStageOutcome) -> bool {
     matches!(
         outcome,
         HistoricalV3RankStageOutcome::Excluded { .. }
-            | HistoricalV3RankStageOutcome::ReadyForSourceReview
+            | HistoricalV3RankStageOutcome::ReadyForSourceReview { .. }
     )
 }
 

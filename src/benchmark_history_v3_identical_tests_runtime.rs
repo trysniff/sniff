@@ -122,7 +122,7 @@ fn resumed(
         | HistoricalV3RankStageOutcome::Excluded {
             artifact_sha256, ..
         } => artifact_sha256,
-        HistoricalV3RankStageOutcome::ReadyForSourceReview => {
+        HistoricalV3RankStageOutcome::ReadyForSourceReview { .. } => {
             return Err(invalid(
                 "historical-v3 identical-test checkpoint has no artifact identity",
             ));

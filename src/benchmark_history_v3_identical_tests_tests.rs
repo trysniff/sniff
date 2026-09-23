@@ -212,7 +212,7 @@ async fn infrastructure_failure_leaves_the_exact_rank_open_for_retry() {
     ));
 }
 
-async fn prepared_rank() -> (
+pub(crate) async fn prepared_rank() -> (
     semantic_fixture::GitFixture,
     super::super::HistoricalV3Protocol,
     super::super::HistoricalV3CandidateCollection,
@@ -241,7 +241,9 @@ async fn prepared_rank() -> (
     (fixture, protocol, collection, journal, workspace, *artifact)
 }
 
-fn passing_events(recipe: &HistoricalV3TestRecipe) -> Vec<HistoricalV3ExecutionCommandEvidence> {
+pub(crate) fn passing_events(
+    recipe: &HistoricalV3TestRecipe,
+) -> Vec<HistoricalV3ExecutionCommandEvidence> {
     let mut events = Vec::new();
     for side in [
         HistoricalV3ExecutionSide::Base,
