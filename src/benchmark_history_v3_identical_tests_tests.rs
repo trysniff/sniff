@@ -169,6 +169,17 @@ async fn commits_candidate_command_failure_as_a_typed_terminal_exclusion() {
         outcome,
         HistoricalV3IdenticalTestsStageRun::Excluded { resumed: false, .. }
     ));
+    let proof = super::super::verify_historical_v3_terminal_exclusion(
+        &protocol,
+        &collection,
+        1,
+        journal.path(),
+    )
+    .unwrap();
+    assert_eq!(
+        proof.stage(),
+        super::super::HistoricalV3RankStage::IdenticalTests
+    );
 }
 
 #[tokio::test]

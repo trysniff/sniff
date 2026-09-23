@@ -239,6 +239,17 @@ fn inspects_both_sides_before_terminal_source_exclusion() {
         } if snapshot.source_census.source_file_count == 1
             && snapshot.source_census.method_count == 1
     ));
+    let proof = super::super::verify_historical_v3_terminal_exclusion(
+        &protocol,
+        &collection,
+        1,
+        journal.path(),
+    )
+    .unwrap();
+    assert_eq!(
+        proof.stage(),
+        super::super::HistoricalV3RankStage::SourceCensus
+    );
 
     let mut artifact = *artifact;
     let (side, revision, inventory) = match &artifact.sides[0] {

@@ -122,6 +122,17 @@ async fn commits_formatting_only_as_a_typed_terminal_exclusion() {
             .reasons
             .contains(&HistoricalV3MechanicalExclusionReason::FormattingOnly)
     );
+    let proof = super::super::verify_historical_v3_terminal_exclusion(
+        &protocol,
+        &collection,
+        1,
+        journal.path(),
+    )
+    .unwrap();
+    assert_eq!(
+        proof.stage(),
+        super::super::HistoricalV3RankStage::MechanicalQualification
+    );
 }
 
 #[tokio::test]
