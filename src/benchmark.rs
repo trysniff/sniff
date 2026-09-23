@@ -588,8 +588,9 @@ pub use release::{
     HistoricalV3FinalLabelBasis, HistoricalV3FinalLabelOutcome, HistoricalV3LabelResolver,
     HistoricalV3ResolutionItem, HistoricalV3ResolutionWorksheet, HistoricalV3VerifiedFinalReview,
     historical_v3_review_record_from_final_label, prepare_historical_v3_label_resolution,
-    resolve_historical_v3_label, validate_historical_v3_final_label,
-    validate_historical_v3_label_resolution, verify_historical_v3_final_review,
+    read_historical_v3_final_label, resolve_historical_v3_label,
+    validate_historical_v3_final_label, validate_historical_v3_label_resolution,
+    verify_historical_v3_final_review, write_historical_v3_final_label_new,
 };
 
 pub use release::{

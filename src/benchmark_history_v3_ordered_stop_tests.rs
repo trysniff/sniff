@@ -24,13 +24,16 @@ async fn verified_final_review_is_counted_at_its_exact_rank() {
     let label =
         resolve_historical_v3_label(&inputs, &fixture.bundle, &worksheets, &audit, &resolution)
             .unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("final-label.json");
+    super::super::write_historical_v3_final_label_new(&path, &label).unwrap();
     let proof = verify_historical_v3_final_review(
         &inputs,
         &fixture.bundle,
         &worksheets,
         &audit,
         &resolution,
-        &label,
+        &path,
     )
     .unwrap();
     let language = inputs.qualification.rank.language();

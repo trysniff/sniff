@@ -1,9 +1,15 @@
+use super::history_v2_slot_store_support::{
+    read_limited, require_plain_directory, write_compact_json_new,
+};
 use super::{
     HistoricalV3FinalLabel, HistoricalV3FinalLabelOutcome, HistoricalV3LabelAudit,
     HistoricalV3LabelWorksheet, HistoricalV3RankIdentity, HistoricalV3ResolutionWorksheet,
     HistoricalV3ReviewDisposition, HistoricalV3ReviewRecord, HistoricalV3SourceReviewBundle,
     HistoricalV3SourceReviewInputs, validate_historical_v3_final_label,
 };
+use std::path::Path;
+
+const MAX_FINAL_LABEL_BYTES: u64 = 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HistoricalV3VerifiedFinalReview {
@@ -60,11 +66,41 @@ pub fn historical_v3_review_record_from_final_label(
     resolution: &HistoricalV3ResolutionWorksheet,
     label: &HistoricalV3FinalLabel,
 ) -> Result<HistoricalV3ReviewRecord, String> {
-    verify_historical_v3_final_review(inputs, bundle, worksheets, audit, resolution, label)
+    derive_validated_final_review(inputs, bundle, worksheets, audit, resolution, label)
         .map(|proof| proof.record)
 }
 
 pub fn verify_historical_v3_final_review(
+    inputs: &HistoricalV3SourceReviewInputs<'_>,
+    bundle: &HistoricalV3SourceReviewBundle,
+    worksheets: &[HistoricalV3LabelWorksheet],
+    audit: &HistoricalV3LabelAudit,
+    resolution: &HistoricalV3ResolutionWorksheet,
+    path: &Path,
+) -> Result<HistoricalV3VerifiedFinalReview, String> {
+    let label = read_historical_v3_final_label(path)?;
+    derive_validated_final_review(inputs, bundle, worksheets, audit, resolution, &label)
+}
+
+pub fn write_historical_v3_final_label_new(
+    path: &Path,
+    label: &HistoricalV3FinalLabel,
+) -> Result<(), String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| "historical-v3 final-label path has no parent".to_string())?;
+    require_plain_directory(parent, "historical-v3 final-label parent")?;
+    write_compact_json_new(path, label, MAX_FINAL_LABEL_BYTES)
+        .map_err(|error| format!("failed to create historical-v3 final label: {error}"))
+}
+
+pub fn read_historical_v3_final_label(path: &Path) -> Result<HistoricalV3FinalLabel, String> {
+    let bytes = read_limited(path, MAX_FINAL_LABEL_BYTES, "historical-v3 final label")?;
+    serde_json::from_slice(&bytes)
+        .map_err(|error| format!("invalid historical-v3 final label: {error}"))
+}
+
+fn derive_validated_final_review(
     inputs: &HistoricalV3SourceReviewInputs<'_>,
     bundle: &HistoricalV3SourceReviewBundle,
     worksheets: &[HistoricalV3LabelWorksheet],
