@@ -5,6 +5,27 @@ use super::{
     validate_historical_v3_final_label,
 };
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HistoricalV3VerifiedFinalReview {
+    record: HistoricalV3ReviewRecord,
+    source_bundle_sha256: String,
+    final_label_sha256: String,
+}
+
+impl HistoricalV3VerifiedFinalReview {
+    pub fn record(&self) -> &HistoricalV3ReviewRecord {
+        &self.record
+    }
+
+    pub fn source_bundle_sha256(&self) -> &str {
+        &self.source_bundle_sha256
+    }
+
+    pub fn final_label_sha256(&self) -> &str {
+        &self.final_label_sha256
+    }
+}
+
 pub fn historical_v3_review_record_from_final_label(
     inputs: &HistoricalV3SourceReviewInputs<'_>,
     bundle: &HistoricalV3SourceReviewBundle,
@@ -13,6 +34,18 @@ pub fn historical_v3_review_record_from_final_label(
     resolution: &HistoricalV3ResolutionWorksheet,
     label: &HistoricalV3FinalLabel,
 ) -> Result<HistoricalV3ReviewRecord, String> {
+    verify_historical_v3_final_review(inputs, bundle, worksheets, audit, resolution, label)
+        .map(|proof| proof.record)
+}
+
+pub fn verify_historical_v3_final_review(
+    inputs: &HistoricalV3SourceReviewInputs<'_>,
+    bundle: &HistoricalV3SourceReviewBundle,
+    worksheets: &[HistoricalV3LabelWorksheet],
+    audit: &HistoricalV3LabelAudit,
+    resolution: &HistoricalV3ResolutionWorksheet,
+    label: &HistoricalV3FinalLabel,
+) -> Result<HistoricalV3VerifiedFinalReview, String> {
     validate_historical_v3_final_label(inputs, bundle, worksheets, audit, resolution, label)?;
     let rank = &inputs.qualification.rank;
     let candidate = rank
@@ -33,12 +66,16 @@ pub fn historical_v3_review_record_from_final_label(
         HistoricalV3FinalLabelOutcome::Accepted { .. } => HistoricalV3ReviewDisposition::Accepted,
         HistoricalV3FinalLabelOutcome::Closed { .. } => HistoricalV3ReviewDisposition::Rejected,
     };
-    Ok(HistoricalV3ReviewRecord {
-        stream_rank: rank.stream_rank,
-        rank_sha256: rank.rank_sha256.clone(),
-        language: rank.language(),
-        repository_id: rank.candidate.repository_id,
-        disposition,
+    Ok(HistoricalV3VerifiedFinalReview {
+        record: HistoricalV3ReviewRecord {
+            stream_rank: rank.stream_rank,
+            rank_sha256: rank.rank_sha256.clone(),
+            language: rank.language(),
+            repository_id: rank.candidate.repository_id,
+            disposition,
+        },
+        source_bundle_sha256: bundle.bundle_sha256.clone(),
+        final_label_sha256: label.final_sha256.clone(),
     })
 }
 

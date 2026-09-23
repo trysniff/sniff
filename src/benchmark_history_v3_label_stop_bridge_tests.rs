@@ -3,7 +3,7 @@ use super::super::{
     HistoricalV3ReviewDisposition, HistoricalV3ReviewerVerdict, audit_historical_v3_label_reviews,
     prepare_historical_v3_label_resolution, resolve_historical_v3_label,
 };
-use super::historical_v3_review_record_from_final_label;
+use super::{historical_v3_review_record_from_final_label, verify_historical_v3_final_review};
 
 #[tokio::test]
 async fn derives_acceptance_only_from_a_verified_final_label() {
@@ -36,11 +36,23 @@ async fn derives_acceptance_only_from_a_verified_final_label() {
         record.repository_id,
         inputs.qualification.rank.candidate.repository_id
     );
+    let proof = verify_historical_v3_final_review(
+        &inputs,
+        &fixture.bundle,
+        &worksheets,
+        &audit,
+        &resolution,
+        &label,
+    )
+    .unwrap();
+    assert_eq!(proof.record(), &record);
+    assert_eq!(proof.source_bundle_sha256(), fixture.bundle.bundle_sha256);
+    assert_eq!(proof.final_label_sha256(), label.final_sha256);
 
     let mut tampered = label;
     tampered.final_sha256 = "0".repeat(64);
     assert!(
-        historical_v3_review_record_from_final_label(
+        verify_historical_v3_final_review(
             &inputs,
             &fixture.bundle,
             &worksheets,

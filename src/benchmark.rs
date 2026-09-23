@@ -574,10 +574,10 @@ pub use release::{
 pub use release::{
     HISTORICAL_V3_LABEL_RESOLUTION_SCHEMA_VERSION, HistoricalV3FinalLabel,
     HistoricalV3FinalLabelBasis, HistoricalV3FinalLabelOutcome, HistoricalV3LabelResolver,
-    HistoricalV3ResolutionItem, HistoricalV3ResolutionWorksheet,
+    HistoricalV3ResolutionItem, HistoricalV3ResolutionWorksheet, HistoricalV3VerifiedFinalReview,
     historical_v3_review_record_from_final_label, prepare_historical_v3_label_resolution,
     resolve_historical_v3_label, validate_historical_v3_final_label,
-    validate_historical_v3_label_resolution,
+    validate_historical_v3_label_resolution, verify_historical_v3_final_review,
 };
 
 pub use release::{
