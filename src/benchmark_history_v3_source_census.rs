@@ -21,7 +21,7 @@ mod runtime;
 
 pub use runtime::run_historical_v3_source_census_stage;
 
-pub(super) const SOURCE_CENSUS_CONTRACT: &str = "sniffbench-historical-v3-source-census-v2";
+pub(super) const SOURCE_CENSUS_CONTRACT: &str = "sniffbench-historical-v3-source-census-v3";
 pub(super) const SOURCE_CENSUS_EXCLUSION_CONTRACT: &str =
     "sniffbench-historical-v3-source-census-exclusion-v1";
 

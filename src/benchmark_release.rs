@@ -450,7 +450,15 @@ pub use history_v3_rank_journal::*;
 #[path = "benchmark_history_v3_source_census.rs"]
 mod history_v3_source_census;
 
+#[path = "benchmark_history_v3_recipe_inputs.rs"]
+mod history_v3_recipe_inputs;
+
 pub use history_v3_source_census::*;
+
+#[path = "benchmark_history_v3_test_recipe.rs"]
+mod history_v3_test_recipe;
+
+pub use history_v3_test_recipe::*;
 
 #[path = "benchmark_history_v3_semantic_census.rs"]
 mod history_v3_semantic_census;

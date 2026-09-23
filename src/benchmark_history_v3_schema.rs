@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-pub const HISTORICAL_V3_PROTOCOL_SCHEMA_VERSION: u32 = 2;
+pub const HISTORICAL_V3_PROTOCOL_SCHEMA_VERSION: u32 = 3;
 pub const HISTORICAL_V3_STREAM_TASK_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -161,6 +161,53 @@ pub struct HistoricalV3MechanicalPolicy {
     pub test_file_suffixes: Vec<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HistoricalV3TestRecipeSelector {
+    NodePackage,
+    Cargo,
+    GoModule,
+    PythonUv,
+    PythonPoetry,
+    PythonPdm,
+    PythonHashedRequirements,
+    GradleWrapper,
+}
+
+impl HistoricalV3TestRecipeSelector {
+    pub(super) const ALL: [Self; 8] = [
+        Self::NodePackage,
+        Self::Cargo,
+        Self::GoModule,
+        Self::PythonUv,
+        Self::PythonPoetry,
+        Self::PythonPdm,
+        Self::PythonHashedRequirements,
+        Self::GradleWrapper,
+    ];
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HistoricalV3TestEnvironmentBinding {
+    pub language: HistoricalV3Language,
+    pub image_digest: String,
+    pub toolchain_manifest_sha256: String,
+    pub dependency_store_sha256: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HistoricalV3TestRecipePolicy {
+    pub selector_contract: String,
+    pub selectors: Vec<HistoricalV3TestRecipeSelector>,
+    pub maximum_input_file_bytes: u64,
+    pub maximum_total_input_bytes: u64,
+    pub execution_platform: String,
+    pub network_disabled_during_tests: bool,
+    pub environments: Vec<HistoricalV3TestEnvironmentBinding>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HistoricalV3Protocol {
@@ -177,6 +224,7 @@ pub struct HistoricalV3Protocol {
     pub forbidden_metadata_fields: Vec<HistoricalV3ForbiddenMetadataField>,
     pub mechanical_requirements: Vec<HistoricalV3MechanicalRequirement>,
     pub mechanical_policy: HistoricalV3MechanicalPolicy,
+    pub test_recipe_policy: HistoricalV3TestRecipePolicy,
     pub stop_rule: HistoricalV3StopRule,
     pub no_fallbacks: bool,
     pub model_access_forbidden: bool,

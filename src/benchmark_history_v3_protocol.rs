@@ -7,9 +7,11 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
-const PROTOCOL_CONTRACT: &str = "sniffbench-historical-v3-protocol-v2";
+const PROTOCOL_CONTRACT: &str = "sniffbench-historical-v3-protocol-v3";
 const STREAM_CONTRACT: &str = "sniffbench-historical-v3-stream-task-v1";
 const RANKING_DOMAIN: &str = "sniffbench-historical-v3-candidate-rank-v1";
+pub(super) const TEST_RECIPE_SELECTOR_CONTRACT: &str =
+    "sniffbench-historical-v3-test-recipe-selectors-v1";
 const GITHUB_API_VERSION: &str = "2022-11-28";
 const CANDIDATE_PARTITION: &str = "repository_then_merged_at_utc";
 const CANDIDATE_PAGINATION: &str = "github_graphql_cursor_until_exhausted";
@@ -261,6 +263,7 @@ fn validate_historical_v3_protocol_fields(protocol: &HistoricalV3Protocol) -> Re
         return Err("historical-v3 evidence policy changed".to_string());
     }
     validate_mechanical_policy(&protocol.mechanical_policy)?;
+    validate_test_recipe_policy(&protocol.test_recipe_policy)?;
     validate_stop_rule(&protocol.stop_rule)?;
     if !protocol.no_fallbacks
         || !protocol.model_access_forbidden
@@ -269,6 +272,56 @@ fn validate_historical_v3_protocol_fields(protocol: &HistoricalV3Protocol) -> Re
         return Err("historical-v3 construction must fail closed and remain blind".to_string());
     }
     Ok(())
+}
+
+fn validate_test_recipe_policy(policy: &HistoricalV3TestRecipePolicy) -> Result<(), String> {
+    const MAXIMUM_FILE_BYTES: u64 = 16 * 1024 * 1024;
+    const MAXIMUM_TOTAL_BYTES: u64 = 64 * 1024 * 1024;
+    if policy.selector_contract != TEST_RECIPE_SELECTOR_CONTRACT
+        || policy.selectors != HistoricalV3TestRecipeSelector::ALL
+        || policy.maximum_input_file_bytes == 0
+        || policy.maximum_input_file_bytes > MAXIMUM_FILE_BYTES
+        || policy.maximum_total_input_bytes < policy.maximum_input_file_bytes
+        || policy.maximum_total_input_bytes > MAXIMUM_TOTAL_BYTES
+        || policy.execution_platform != "linux/amd64"
+        || !policy.network_disabled_during_tests
+    {
+        return Err("historical-v3 test-recipe policy is invalid".to_string());
+    }
+    if policy.environments.len() != HistoricalV3Language::ALL.len()
+        || policy
+            .environments
+            .iter()
+            .map(|environment| environment.language)
+            .ne(HistoricalV3Language::ALL)
+    {
+        return Err(
+            "historical-v3 test environments do not cover every language in order".to_string(),
+        );
+    }
+    for environment in &policy.environments {
+        if !valid_image_digest(&environment.image_digest) {
+            return Err("historical-v3 test environment image digest is invalid".to_string());
+        }
+        require_sha256(
+            "historical-v3 test toolchain manifest",
+            &environment.toolchain_manifest_sha256,
+        )?;
+        require_sha256(
+            "historical-v3 test dependency store",
+            &environment.dependency_store_sha256,
+        )?;
+    }
+    Ok(())
+}
+
+fn valid_image_digest(value: &str) -> bool {
+    value.strip_prefix("sha256:").is_some_and(|digest| {
+        digest.len() == 64
+            && digest
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    })
 }
 
 fn validate_mechanical_policy(policy: &HistoricalV3MechanicalPolicy) -> Result<(), String> {

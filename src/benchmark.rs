@@ -470,9 +470,11 @@ pub use release::{
     HistoricalV3MechanicalPolicy, HistoricalV3MechanicalRequirement, HistoricalV3Protocol,
     HistoricalV3ReviewDisposition, HistoricalV3ReviewRecord, HistoricalV3SourceFrameBinding,
     HistoricalV3StopRule, HistoricalV3StopStatus, HistoricalV3StreamTask,
-    evaluate_historical_v3_review_prefix, historical_v3_candidate_rank_sha256,
-    prepare_historical_v3_stream_task, seal_historical_v3_protocol,
-    validate_historical_v3_protocol, validate_historical_v3_stream_task,
+    HistoricalV3TestEnvironmentBinding, HistoricalV3TestRecipePolicy,
+    HistoricalV3TestRecipeSelector, evaluate_historical_v3_review_prefix,
+    historical_v3_candidate_rank_sha256, prepare_historical_v3_stream_task,
+    seal_historical_v3_protocol, validate_historical_v3_protocol,
+    validate_historical_v3_stream_task,
 };
 
 pub use release::{
@@ -520,13 +522,23 @@ pub use release::{
 
 pub use release::{
     HISTORICAL_V3_SOURCE_CENSUS_EXCLUSION_SCHEMA_VERSION,
-    HISTORICAL_V3_SOURCE_CENSUS_SCHEMA_VERSION, HistoricalV3SourceCensus,
+    HISTORICAL_V3_SOURCE_CENSUS_SCHEMA_VERSION, HistoricalV3RecipeInputFact,
+    HistoricalV3RecipeInputInterpretation, HistoricalV3RecipeInputStatus, HistoricalV3SourceCensus,
     HistoricalV3SourceCensusExclusion, HistoricalV3SourceCensusExclusionReason,
     HistoricalV3SourceCensusOutcome, HistoricalV3SourceCensusStageRun, HistoricalV3SourceFileFacts,
     HistoricalV3SourceMethodFacts, HistoricalV3SourceSide, HistoricalV3SourceSnapshot,
-    HistoricalV3SourceSnapshotEvidence, run_historical_v3_source_census_stage,
-    validate_historical_v3_source_census_commitment,
+    HistoricalV3SourceSnapshotEvidence, HistoricalV3YarnLockGeneration,
+    run_historical_v3_source_census_stage, validate_historical_v3_source_census_commitment,
     validate_historical_v3_source_census_exclusion,
+};
+
+pub use release::{
+    HISTORICAL_V3_TEST_RECIPE_EXCLUSION_SCHEMA_VERSION, HISTORICAL_V3_TEST_RECIPE_SCHEMA_VERSION,
+    HistoricalV3RecipeCommand, HistoricalV3TestRecipe, HistoricalV3TestRecipeExclusion,
+    HistoricalV3TestRecipeExclusionReason, HistoricalV3TestRecipeInputBinding,
+    HistoricalV3TestRecipeOutcome, HistoricalV3TestRecipeStageRun,
+    derive_historical_v3_test_recipe, run_historical_v3_test_recipe_stage,
+    validate_historical_v3_test_recipe, validate_historical_v3_test_recipe_exclusion,
 };
 
 pub use release::{

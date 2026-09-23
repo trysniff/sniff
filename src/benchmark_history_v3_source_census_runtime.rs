@@ -1,4 +1,5 @@
 use super::super::history_v3_rank_journal::{materialized_roots, rank_workspace};
+use super::super::history_v3_recipe_inputs::collect_recipe_input_facts;
 use super::super::intentional_boundary_source_census::{
     INTENTIONAL_BOUNDARY_SOURCE_EXTENSION_CONTRACT, IntentionalBoundarySourceInspection,
     inspect_intentional_boundary_repository_sources_typed,
@@ -65,12 +66,16 @@ pub fn run_historical_v3_source_census_stage(
         .map_err(HistoricalV3RankJournalError::from)?;
     let repository = format!("github.com/{}", identity.name_with_owner);
     let base = inspect_snapshot(
+        protocol,
+        identity.language(),
         HistoricalV3SourceSide::Base,
         &repository,
         &materialization.identity.base_commit,
         &roots.base_root,
     )?;
     let merge = inspect_snapshot(
+        protocol,
+        identity.language(),
         HistoricalV3SourceSide::Merge,
         &repository,
         &materialization.identity.merge_commit,
@@ -147,6 +152,8 @@ pub fn run_historical_v3_source_census_stage(
 }
 
 fn inspect_snapshot(
+    protocol: &HistoricalV3Protocol,
+    language: super::super::HistoricalV3Language,
     side: HistoricalV3SourceSide,
     repository: &str,
     revision: &str,
@@ -173,12 +180,16 @@ fn inspect_snapshot(
         IntentionalBoundarySourceInspection::Completed(source_census) => {
             let source_file_facts =
                 source_file_facts(root, &inventory, &source_census).map_err(invalid)?;
+            let recipe_input_facts =
+                collect_recipe_input_facts(root, &inventory, language, protocol)
+                    .map_err(map_inventory_error)?;
             seal_snapshot(HistoricalV3SourceSnapshot {
                 side,
                 revision: revision.to_string(),
                 inventory,
                 source_census,
                 source_file_facts,
+                recipe_input_facts,
                 snapshot_sha256: String::new(),
             })
             .map(Box::new)

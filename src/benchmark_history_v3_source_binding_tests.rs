@@ -3,8 +3,10 @@ use crate::benchmark::{
     HISTORICAL_V3_PROTOCOL_SCHEMA_VERSION, HistoricalV3AllowedMetadataField,
     HistoricalV3CandidateWindow, HistoricalV3ForbiddenMetadataField,
     HistoricalV3MechanicalRequirement, HistoricalV3SourceFrameBinding, HistoricalV3StopRule,
-    SOURCE_FRAME_COLLECTION_MANIFEST_SCHEMA_VERSION, SOURCE_FRAME_COLLECTION_POLICY_SCHEMA_VERSION,
-    SourceFramePageCommitment, SourceFrameRawPage, seal_historical_v3_protocol,
+    HistoricalV3TestEnvironmentBinding, HistoricalV3TestRecipePolicy,
+    HistoricalV3TestRecipeSelector, SOURCE_FRAME_COLLECTION_MANIFEST_SCHEMA_VERSION,
+    SOURCE_FRAME_COLLECTION_POLICY_SCHEMA_VERSION, SourceFramePageCommitment, SourceFrameRawPage,
+    seal_historical_v3_protocol,
 };
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -172,7 +174,7 @@ pub(crate) fn protocol(
     seal_historical_v3_protocol(HistoricalV3Protocol {
         schema_version: HISTORICAL_V3_PROTOCOL_SCHEMA_VERSION,
         protocol_id: "synthetic-historical-v3-source-binding".to_string(),
-        protocol_contract: "sniffbench-historical-v3-protocol-v2".to_string(),
+        protocol_contract: "sniffbench-historical-v3-protocol-v3".to_string(),
         ranking_domain: "sniffbench-historical-v3-candidate-rank-v1".to_string(),
         ranking_seed: "3".repeat(64),
         prior_benchmark_identity_seal_sha256: seal.seal_sha256.clone(),
@@ -243,6 +245,7 @@ pub(crate) fn protocol(
             test_path_segments: vec!["tests".to_string()],
             test_file_suffixes: vec![".test.ts".to_string(), "_test.go".to_string()],
         },
+        test_recipe_policy: test_recipe_policy(),
         stop_rule: HistoricalV3StopRule {
             accepted_target_per_language: 40,
             distinct_repository_floor_per_language: 20,
@@ -256,6 +259,42 @@ pub(crate) fn protocol(
         protocol_sha256: String::new(),
     })
     .unwrap()
+}
+
+pub(crate) fn test_recipe_policy() -> HistoricalV3TestRecipePolicy {
+    HistoricalV3TestRecipePolicy {
+        selector_contract: "sniffbench-historical-v3-test-recipe-selectors-v1".to_string(),
+        selectors: vec![
+            HistoricalV3TestRecipeSelector::NodePackage,
+            HistoricalV3TestRecipeSelector::Cargo,
+            HistoricalV3TestRecipeSelector::GoModule,
+            HistoricalV3TestRecipeSelector::PythonUv,
+            HistoricalV3TestRecipeSelector::PythonPoetry,
+            HistoricalV3TestRecipeSelector::PythonPdm,
+            HistoricalV3TestRecipeSelector::PythonHashedRequirements,
+            HistoricalV3TestRecipeSelector::GradleWrapper,
+        ],
+        maximum_input_file_bytes: 4 * 1024 * 1024,
+        maximum_total_input_bytes: 16 * 1024 * 1024,
+        execution_platform: "linux/amd64".to_string(),
+        network_disabled_during_tests: true,
+        environments: [
+            HistoricalV3Language::Go,
+            HistoricalV3Language::JavaScript,
+            HistoricalV3Language::Kotlin,
+            HistoricalV3Language::Python,
+            HistoricalV3Language::Rust,
+            HistoricalV3Language::TypeScript,
+        ]
+        .into_iter()
+        .map(|language| HistoricalV3TestEnvironmentBinding {
+            language,
+            image_digest: format!("sha256:{}", "a".repeat(64)),
+            toolchain_manifest_sha256: "b".repeat(64),
+            dependency_store_sha256: "c".repeat(64),
+        })
+        .collect(),
+    }
 }
 
 pub(crate) fn fixtures() -> Vec<FrameFixture> {
