@@ -542,8 +542,8 @@ pub use release::{
 };
 
 pub use release::{
-    HISTORICAL_V3_IDENTICAL_TESTS_SCHEMA_VERSION, HistoricalV3ExecutionCommandEvidence,
-    HistoricalV3ExecutionPhase, HistoricalV3ExecutionSide,
+    DockerHistoricalV3TestExecutor, HISTORICAL_V3_IDENTICAL_TESTS_SCHEMA_VERSION,
+    HistoricalV3ExecutionCommandEvidence, HistoricalV3ExecutionPhase, HistoricalV3ExecutionSide,
     HistoricalV3IdenticalTestExclusionReason, HistoricalV3IdenticalTestExecutionError,
     HistoricalV3IdenticalTestExecutionErrorKind, HistoricalV3IdenticalTestExecutionRequest,
     HistoricalV3IdenticalTestExecutor, HistoricalV3IdenticalTestOutcome,

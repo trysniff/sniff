@@ -55,13 +55,7 @@ pub fn run_historical_v3_identical_tests_stage<E: HistoricalV3IdenticalTestExecu
             recipe: &inputs.recipe,
             base_root: &roots.base_root,
             merge_root: &roots.merge_root,
-            retained_output_bytes: protocol.identical_test_policy.retained_output_bytes,
-            preparation_command_timeout_seconds: protocol
-                .identical_test_policy
-                .preparation_command_timeout_seconds,
-            test_command_timeout_seconds: protocol
-                .identical_test_policy
-                .test_command_timeout_seconds,
+            policy: &protocol.identical_test_policy,
         })
         .map_err(map_execution_error)?;
     let artifact = seal_execution(protocol, &inputs.recipe, raw).map_err(invalid)?;

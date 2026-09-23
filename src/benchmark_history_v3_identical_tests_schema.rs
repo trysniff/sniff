@@ -1,4 +1,6 @@
-use super::super::{HistoricalV3RankIdentity, HistoricalV3TestRecipe};
+use super::super::{
+    HistoricalV3IdenticalTestPolicy, HistoricalV3RankIdentity, HistoricalV3TestRecipe,
+};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
@@ -123,9 +125,7 @@ pub struct HistoricalV3IdenticalTestExecutionRequest<'a> {
     pub recipe: &'a HistoricalV3TestRecipe,
     pub base_root: &'a Path,
     pub merge_root: &'a Path,
-    pub retained_output_bytes: usize,
-    pub preparation_command_timeout_seconds: u64,
-    pub test_command_timeout_seconds: u64,
+    pub policy: &'a HistoricalV3IdenticalTestPolicy,
 }
 
 pub trait HistoricalV3IdenticalTestExecutor {

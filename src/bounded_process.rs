@@ -9,6 +9,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 const OUTPUT_LIMIT: usize = 1024 * 1024;
+type CapturedStream = (Vec<u8>, bool, String, u64);
 
 pub(crate) struct BoundedOutput {
     pub(crate) status: ExitStatus,
@@ -16,7 +17,9 @@ pub(crate) struct BoundedOutput {
     pub(crate) stderr: Vec<u8>,
     pub(crate) stdout_sha256: String,
     pub(crate) stderr_sha256: String,
+    #[allow(dead_code)]
     pub(crate) stdout_byte_count: u64,
+    #[allow(dead_code)]
     pub(crate) stderr_byte_count: u64,
     pub(crate) timed_out: bool,
     pub(crate) stdout_truncated: bool,
@@ -131,7 +134,7 @@ fn run_with_optional_input(
     })
 }
 
-fn read_limited(mut reader: impl Read, limit: usize) -> io::Result<(Vec<u8>, bool, String, u64)> {
+fn read_limited(mut reader: impl Read, limit: usize) -> io::Result<CapturedStream> {
     let mut retained = Vec::new();
     let mut truncated = false;
     let mut digest = Sha256::new();
@@ -164,9 +167,9 @@ fn read_limited(mut reader: impl Read, limit: usize) -> io::Result<(Vec<u8>, boo
 }
 
 fn join_reader(
-    reader: thread::JoinHandle<io::Result<(Vec<u8>, bool, String, u64)>>,
+    reader: thread::JoinHandle<io::Result<CapturedStream>>,
     label: &str,
-) -> io::Result<(Vec<u8>, bool, String, u64)> {
+) -> io::Result<CapturedStream> {
     reader
         .join()
         .map_err(|_| io::Error::other(format!("bounded child {label} reader panicked")))?

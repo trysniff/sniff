@@ -18,6 +18,14 @@ mod runtime;
 
 pub use runtime::run_historical_v3_identical_tests_stage;
 
+#[path = "benchmark_history_v3_identical_tests_docker_support.rs"]
+mod docker_support;
+
+#[path = "benchmark_history_v3_identical_tests_docker.rs"]
+mod docker;
+
+pub use docker::DockerHistoricalV3TestExecutor;
+
 const IDENTICAL_TESTS_CONTRACT: &str = "sniffbench-historical-v3-identical-tests-v1";
 
 impl HistoricalV3IdenticalTestExecutionError {
