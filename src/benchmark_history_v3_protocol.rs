@@ -134,12 +134,13 @@ pub fn validate_historical_v3_stream_task(
     Ok(())
 }
 
+/// Checks an all-adjudicated language prefix. Terminal exclusions require the
+/// separate evidence-bound ordered-stop evaluator before cohort publication.
 pub fn evaluate_historical_v3_review_prefix(
     protocol: &HistoricalV3Protocol,
     task: &HistoricalV3StreamTask,
     language: HistoricalV3Language,
     records: &[HistoricalV3ReviewRecord],
-    source_exhausted: bool,
 ) -> Result<HistoricalV3StopStatus, String> {
     validate_historical_v3_protocol(protocol)?;
     validate_historical_v3_stream_task(protocol, task)?;
@@ -151,24 +152,26 @@ pub fn evaluate_historical_v3_review_prefix(
     if records.len() > rule.adjudication_cap_per_language {
         return Err("historical-v3 review prefix exceeds its adjudication cap".to_string());
     }
-
-    let mut previous_rank = 0;
-    let mut ranks = HashSet::new();
+    let language_candidates = task
+        .candidates
+        .iter()
+        .filter(|candidate| candidate.identity.language == language)
+        .collect::<Vec<_>>();
     let mut reviewed_by_repository = BTreeMap::<u64, usize>::new();
     let mut accepted_by_repository = BTreeMap::<u64, usize>::new();
     let mut accepted = 0;
     let mut accepted_repositories = BTreeSet::new();
 
     for (offset, record) in records.iter().enumerate() {
+        if record.disposition == HistoricalV3ReviewDisposition::Disputed {
+            return Err("historical-v3 review prefix contains an unresolved dispute".to_string());
+        }
         require_sha256("historical-v3 review rank SHA-256", &record.rank_sha256)?;
-        let candidate = record
-            .stream_rank
-            .checked_sub(1)
-            .and_then(|index| task.candidates.get(index))
-            .ok_or_else(|| "historical-v3 review rank is outside the stream task".to_string())?;
+        let candidate = language_candidates.get(offset).ok_or_else(|| {
+            "historical-v3 review rank is outside the language stream".to_string()
+        })?;
         if record.language != language
-            || record.stream_rank <= previous_rank
-            || !ranks.insert(record.rank_sha256.clone())
+            || record.stream_rank != candidate.stream_rank
             || record.rank_sha256 != candidate.rank_sha256
             || record.language != candidate.identity.language
             || record.repository_id != candidate.identity.repository_id
@@ -178,8 +181,6 @@ pub fn evaluate_historical_v3_review_prefix(
                     .to_string(),
             );
         }
-        previous_rank = record.stream_rank;
-
         let reviewed = reviewed_by_repository
             .entry(record.repository_id)
             .or_default();
@@ -222,7 +223,7 @@ pub fn evaluate_historical_v3_review_prefix(
             accepted,
             distinct_accepted_repositories: accepted_repositories.len(),
         }
-    } else if source_exhausted {
+    } else if records.len() == language_candidates.len() {
         HistoricalV3StopStatus::FailedSourceExhausted {
             reviewed: records.len(),
             accepted,
