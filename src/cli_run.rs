@@ -87,6 +87,11 @@ pub enum CliCommand {
 
 #[derive(Subcommand, Debug)]
 pub enum BenchmarkCommand {
+    /// Operate the committed, ordered historical-v3 source and review workflow.
+    HistoricalV3 {
+        #[command(subcommand)]
+        command: HistoricalV3Command,
+    },
     /// Collect a complete, resumable, raw-response-backed GitHub source frame.
     CollectFrame {
         /// Precommitted frame query and deterministic ordering contract.
@@ -555,6 +560,85 @@ pub enum BenchmarkCommand {
     },
 }
 
+#[derive(Subcommand, Debug)]
+pub enum HistoricalV3Command {
+    /// Seal the identities of repositories used in earlier benchmark partitions.
+    SealPrior { inputs: String, output: String },
+    /// Seal the precommitted, candidate-blind historical-v3 protocol.
+    SealProtocol { draft: String, output: String },
+    /// Bind the sealed protocol and six source frames to a durable operator root.
+    Init { config: String },
+    /// Collect or resume the exact GitHub candidate stream without model access.
+    Collect { config: String },
+    /// Replay verified progress for one language without changing state.
+    Status {
+        config: String,
+        #[arg(value_parser = parse_historical_v3_language)]
+        language: crate::benchmark::HistoricalV3Language,
+    },
+    /// Advance exactly one verified stage or publish the verified stop artifact.
+    Advance {
+        config: String,
+        #[arg(value_parser = parse_historical_v3_language)]
+        language: crate::benchmark::HistoricalV3Language,
+    },
+    /// Resume verified stages until human review, terminal stop, or a step cap.
+    Run {
+        config: String,
+        #[arg(value_parser = parse_historical_v3_language)]
+        language: crate::benchmark::HistoricalV3Language,
+        #[arg(long)]
+        max_steps: Option<NonZeroUsize>,
+    },
+    /// Prepare two independent source-only human-review worksheets.
+    PrepareReview {
+        config: String,
+        #[arg(value_parser = parse_historical_v3_language)]
+        language: crate::benchmark::HistoricalV3Language,
+    },
+    /// Validate one independently completed source-only worksheet.
+    ValidateReview {
+        config: String,
+        #[arg(value_parser = parse_historical_v3_language)]
+        language: crate::benchmark::HistoricalV3Language,
+        #[arg(value_parser = clap::value_parser!(u8).range(1..=2))]
+        reviewer: u8,
+    },
+    /// Audit exactly two independent reviews and retain any disagreement.
+    AuditReview {
+        config: String,
+        #[arg(value_parser = parse_historical_v3_language)]
+        language: crate::benchmark::HistoricalV3Language,
+    },
+    /// Prepare a dispute-resolution task from the verified audit.
+    PrepareResolution {
+        config: String,
+        #[arg(value_parser = parse_historical_v3_language)]
+        language: crate::benchmark::HistoricalV3Language,
+    },
+    /// Verify resolution and seal the final human label for the current rank.
+    FinalizeReview {
+        config: String,
+        #[arg(value_parser = parse_historical_v3_language)]
+        language: crate::benchmark::HistoricalV3Language,
+    },
+}
+
+fn parse_historical_v3_language(
+    value: &str,
+) -> Result<crate::benchmark::HistoricalV3Language, String> {
+    use crate::benchmark::HistoricalV3Language;
+    match value {
+        "go" => Ok(HistoricalV3Language::Go),
+        "javascript" => Ok(HistoricalV3Language::JavaScript),
+        "kotlin" => Ok(HistoricalV3Language::Kotlin),
+        "python" => Ok(HistoricalV3Language::Python),
+        "rust" => Ok(HistoricalV3Language::Rust),
+        "typescript" => Ok(HistoricalV3Language::TypeScript),
+        _ => Err("language must be go, javascript, kotlin, python, rust, or typescript".into()),
+    }
+}
+
 #[derive(clap::Args, Debug)]
 pub struct HistoricalV2SourceReviewArgs {
     protocol: String,
@@ -643,6 +727,56 @@ pub async fn run(args: CliArgs) -> Result<i32, Box<dyn std::error::Error>> {
             pipeline::resume(&path, args.skip_dotenv, args.yes, args.budget_usd).await
         }
         Some(CliCommand::Benchmark { command }) => match command {
+            BenchmarkCommand::HistoricalV3 { command } => match command {
+                HistoricalV3Command::SealPrior { inputs, output } => {
+                    pipeline::seal_historical_v3_prior(&inputs, &output).map_err(Into::into)
+                }
+                HistoricalV3Command::SealProtocol { draft, output } => {
+                    pipeline::seal_historical_v3_protocol_cli(&draft, &output).map_err(Into::into)
+                }
+                HistoricalV3Command::Init { config } => {
+                    pipeline::init_historical_v3(&config).map_err(Into::into)
+                }
+                HistoricalV3Command::Collect { config } => pipeline::collect_historical_v3(&config)
+                    .await
+                    .map_err(Into::into),
+                HistoricalV3Command::Status { config, language } => {
+                    pipeline::historical_v3_status(&config, language).map_err(Into::into)
+                }
+                HistoricalV3Command::Advance { config, language } => {
+                    pipeline::advance_historical_v3(&config, language)
+                        .await
+                        .map_err(Into::into)
+                }
+                HistoricalV3Command::Run {
+                    config,
+                    language,
+                    max_steps,
+                } => {
+                    pipeline::run_historical_v3(&config, language, max_steps.map(NonZeroUsize::get))
+                        .await
+                        .map_err(Into::into)
+                }
+                HistoricalV3Command::PrepareReview { config, language } => {
+                    pipeline::prepare_historical_v3_review(&config, language).map_err(Into::into)
+                }
+                HistoricalV3Command::ValidateReview {
+                    config,
+                    language,
+                    reviewer,
+                } => pipeline::validate_historical_v3_review(&config, language, reviewer)
+                    .map_err(Into::into),
+                HistoricalV3Command::AuditReview { config, language } => {
+                    pipeline::audit_historical_v3_review(&config, language).map_err(Into::into)
+                }
+                HistoricalV3Command::PrepareResolution { config, language } => {
+                    pipeline::prepare_historical_v3_resolution(&config, language)
+                        .map_err(Into::into)
+                }
+                HistoricalV3Command::FinalizeReview { config, language } => {
+                    pipeline::finalize_historical_v3_review(&config, language).map_err(Into::into)
+                }
+            },
             BenchmarkCommand::CollectFrame {
                 policy,
                 state_directory,
@@ -1124,7 +1258,7 @@ pub async fn run(args: CliArgs) -> Result<i32, Box<dyn std::error::Error>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{BenchmarkCommand, CliArgs, CliCommand, IndexerCommand};
+    use super::{BenchmarkCommand, CliArgs, CliCommand, HistoricalV3Command, IndexerCommand};
     use clap::Parser;
 
     #[path = "../cli_run_historical_v2_review_tests.rs"]
@@ -2030,6 +2164,105 @@ mod tests {
             let error = CliArgs::try_parse_from(["sniff", flag])
                 .expect_err("legacy optional review mode must not parse");
             assert_eq!(error.kind(), clap::error::ErrorKind::UnknownArgument);
+        }
+    }
+
+    #[test]
+    fn parses_historical_v3_operator_commands_without_a_scan_path() {
+        let args = CliArgs::try_parse_from([
+            "sniff",
+            "benchmark",
+            "historical-v3",
+            "status",
+            "operator.json",
+            "typescript",
+        ])
+        .unwrap();
+        assert!(matches!(
+            args.command,
+            Some(CliCommand::Benchmark {
+                command: BenchmarkCommand::HistoricalV3 {
+                    command: HistoricalV3Command::Status { config, language }
+                }
+            }) if config == "operator.json"
+                && language == crate::benchmark::HistoricalV3Language::TypeScript
+        ));
+
+        let args = CliArgs::try_parse_from([
+            "sniff",
+            "benchmark",
+            "historical-v3",
+            "validate-review",
+            "operator.json",
+            "rust",
+            "2",
+        ])
+        .unwrap();
+        assert!(matches!(
+            args.command,
+            Some(CliCommand::Benchmark {
+                command: BenchmarkCommand::HistoricalV3 {
+                    command: HistoricalV3Command::ValidateReview { reviewer: 2, .. }
+                }
+            })
+        ));
+
+        let args = CliArgs::try_parse_from([
+            "sniff",
+            "benchmark",
+            "historical-v3",
+            "run",
+            "operator.json",
+            "python",
+            "--max-steps",
+            "8",
+        ])
+        .unwrap();
+        assert!(matches!(
+            args.command,
+            Some(CliCommand::Benchmark {
+                command: BenchmarkCommand::HistoricalV3 {
+                    command: HistoricalV3Command::Run {
+                        max_steps: Some(_),
+                        ..
+                    }
+                }
+            })
+        ));
+    }
+
+    #[test]
+    fn rejects_ambiguous_historical_v3_language_and_reviewer() {
+        for args in [
+            vec![
+                "sniff",
+                "benchmark",
+                "historical-v3",
+                "status",
+                "operator.json",
+                "ts",
+            ],
+            vec![
+                "sniff",
+                "benchmark",
+                "historical-v3",
+                "validate-review",
+                "operator.json",
+                "rust",
+                "3",
+            ],
+            vec![
+                "sniff",
+                "benchmark",
+                "historical-v3",
+                "run",
+                "operator.json",
+                "python",
+                "--max-steps",
+                "0",
+            ],
+        ] {
+            assert!(CliArgs::try_parse_from(args).is_err());
         }
     }
 

@@ -13,9 +13,9 @@ use std::fs;
 use tempfile::TempDir;
 
 pub(crate) struct FrameFixture {
-    root: TempDir,
-    manifest: SourceFrameCollectionManifest,
-    frame: Vec<u8>,
+    pub(crate) root: TempDir,
+    pub(crate) manifest: SourceFrameCollectionManifest,
+    pub(crate) frame: Vec<u8>,
 }
 
 fn sha256(bytes: &[u8]) -> String {
