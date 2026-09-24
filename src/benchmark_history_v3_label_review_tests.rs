@@ -76,12 +76,20 @@ impl ReviewFixture {
         reviewer_id: &str,
         verdict: HistoricalV3ReviewerVerdict,
     ) -> HistoricalV3LabelWorksheet {
-        let mut worksheet =
-            prepare_historical_v3_label_review(&self.inputs(), &self.bundle).unwrap();
-        worksheet.reviewer = Some(reviewer(reviewer_id));
-        worksheet.task.decision = decision(&worksheet, verdict);
-        worksheet
+        review_worksheet(&self.inputs(), &self.bundle, reviewer_id, verdict)
     }
+}
+
+pub(crate) fn review_worksheet(
+    inputs: &HistoricalV3SourceReviewInputs<'_>,
+    bundle: &HistoricalV3SourceReviewBundle,
+    reviewer_id: &str,
+    verdict: HistoricalV3ReviewerVerdict,
+) -> HistoricalV3LabelWorksheet {
+    let mut worksheet = prepare_historical_v3_label_review(inputs, bundle).unwrap();
+    worksheet.reviewer = Some(reviewer(reviewer_id));
+    worksheet.task.decision = decision(&worksheet, verdict);
+    worksheet
 }
 
 #[tokio::test]
