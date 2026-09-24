@@ -549,6 +549,18 @@ async fn full_collection_replays_source_binding_pagination_and_resume() {
         )
         .is_err()
     );
+
+    std::fs::write(&manifest_path, serde_json::to_vec(&changed).unwrap()).unwrap();
+    let error = read_historical_v3_candidate_collection_manifest(
+        &manifest_path,
+        &protocol,
+        &prior,
+        &artifacts,
+        &audit,
+        state.path(),
+    )
+    .unwrap_err();
+    assert!(error.contains("manifest commitment changed"));
 }
 
 #[tokio::test]

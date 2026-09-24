@@ -6,6 +6,7 @@ use super::{
     HistoricalV3CandidatePartitionRecord, HistoricalV3PriorBenchmarkIdentitySeal,
     HistoricalV3Protocol, HistoricalV3SourceBindingAudit, HistoricalV3SourceFrameArtifact,
     decode_page, read_committed_page_checkpoint, validate_historical_v3_candidate_collection,
+    validate_historical_v3_source_binding_audit, validate_manifest_fields,
 };
 use std::ffi::OsString;
 use std::fs;
@@ -97,6 +98,13 @@ pub fn read_historical_v3_candidate_collection_manifest(
     )?;
     let manifest: HistoricalV3CandidateCollectionManifest = serde_json::from_slice(&bytes)
         .map_err(|error| format!("invalid historical-v3 candidate manifest: {error}"))?;
+    validate_historical_v3_source_binding_audit(
+        protocol,
+        prior_identities,
+        source_artifacts,
+        source_binding_audit,
+    )?;
+    validate_manifest_fields(protocol, source_binding_audit, &manifest)?;
     let mut candidates = Vec::new();
     for partition in &manifest.partitions {
         if let HistoricalV3CandidatePartitionRecord::Complete {
