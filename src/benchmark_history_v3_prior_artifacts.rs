@@ -8,7 +8,6 @@ use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::Path;
 
-const PROTOCOL: &[u8] = include_bytes!("../sniffbench/historical-v2-protocol.json");
 const PROTOCOL_FILE_SHA256: &str =
     "deb98a285867fc5ea52761c252839d74268f239824bfc1a82027a352695cfc6f";
 
@@ -25,9 +24,12 @@ pub fn derive_frozen_historical_v3_prior_identity_seal(
     exclusions_path: &Path,
     selection_path: &Path,
 ) -> Result<HistoricalV3PriorBenchmarkIdentitySeal, String> {
-    if sha256(PROTOCOL) != PROTOCOL_FILE_SHA256 {
-        return Err("frozen historical-v2 protocol bytes changed".to_string());
-    }
+    let protocol = read_pinned_file(
+        &artifact_root.join("sniffbench/historical-v2-protocol.json"),
+        64 * 1024,
+        PROTOCOL_FILE_SHA256,
+        "protocol",
+    )?;
     let frame = read_pinned_file(frame_path, 128 * 1024 * 1024, FRAME_FILE_SHA256, "frame")?;
     let exclusions = read_pinned_file(
         exclusions_path,
@@ -41,7 +43,7 @@ pub fn derive_frozen_historical_v3_prior_identity_seal(
         SELECTION_FILE_SHA256,
         "selection",
     )?;
-    derive_prior_seal(artifact_root, PROTOCOL, &frame, &exclusions, &selection)
+    derive_prior_seal(artifact_root, &protocol, &frame, &exclusions, &selection)
 }
 
 fn derive_prior_seal(
