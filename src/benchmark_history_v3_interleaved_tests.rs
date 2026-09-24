@@ -159,5 +159,22 @@ async fn interleaved_language_replay_is_independent_but_same_language_stays_orde
     ))
     .unwrap();
     assert!(replay_rust().unwrap_err().contains("out-of-order state"));
+    assert!(
+        advance_historical_v3_ordered_step(
+            &protocol,
+            &collection,
+            HistoricalV3Language::Rust,
+            HistoricalV3RunPaths {
+                journal_root: journal.path(),
+                workspace_root: workspace.path(),
+                review_root: review.path(),
+                stop_path: &rust_stop,
+            },
+            &UnexpectedExecutor,
+        )
+        .await
+        .unwrap_err()
+        .contains("out-of-order state")
+    );
     assert!(replay_python().is_ok());
 }
