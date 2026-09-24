@@ -820,6 +820,15 @@ async fn unresolved_adversarial_review_retries_after_history_expansion() {
 
 #[tokio::test]
 async fn interrupted_method_reviews_resume_from_journal() {
+    assert_method_reviews_resume_after_status(500).await;
+}
+
+#[tokio::test]
+async fn method_http_402_preserves_completed_reviews_for_resume() {
+    assert_method_reviews_resume_after_status(402).await;
+}
+
+async fn assert_method_reviews_resume_after_status(failure_status: u16) {
     let _lock = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
     unsafe {
         env::set_var("SNIFF_LLM_MAX_CONCURRENCY", "1");
@@ -835,7 +844,7 @@ async fn interrupted_method_reviews_resume_from_journal() {
     let single_batch_intent = r#"{"choices":[{"message":{"content":"{\"reviews\":[{\"method_key\":\"m0\",\"intent\":\"Implement fifth.\",\"contract_status\":\"required\",\"necessity_check\":\"Direct implementation.\",\"missing_evidence\":[]}]}"}}],"usage":{"prompt_tokens":10,"completion_tokens":1}}"#;
     let single_batch_semantic = r#"{"choices":[{"message":{"content":"{\"reviews\":[{\"method_key\":\"m0\",\"tier\":\"clean\",\"reason\":\"clean\"}]}"}}],"usage":{"prompt_tokens":10,"completion_tokens":1}}"#;
     let (endpoint, hits) = spawn_http_status_sequence_server_with_bodies(
-        vec![200, 200, 200, 500, 200, 200],
+        vec![200, 200, 200, failure_status, 200, 200],
         vec![
             partial_batch_intent,
             batch_intent,
