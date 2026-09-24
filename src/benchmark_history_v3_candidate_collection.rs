@@ -36,6 +36,14 @@ mod replay;
 
 pub use replay::validate_historical_v3_candidate_collection;
 
+#[path = "benchmark_history_v3_candidate_disk.rs"]
+mod disk;
+
+pub use disk::{
+    read_historical_v3_candidate_collection_manifest,
+    write_historical_v3_candidate_collection_manifest_new,
+};
+
 use super::history_v3_source_binding::{
     HistoricalV3SourceFrameArtifact, HistoricalV3SourceRepositoryIdentity,
     parse_historical_v3_source_frame, validate_historical_v3_source_binding_audit,
