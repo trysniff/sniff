@@ -1,0 +1,93 @@
+# Historical-v3 Operator
+
+This is a maintainer workflow for constructing the candidate-blind historical-v3
+cohort. It is not a normal `sniff` scan. No real v3 candidate collection has
+been run or authorized by this document.
+
+All JSON paths below must be absolute. Keep the operator root outside the
+source repository and retain it between invocations. A missing or mismatched
+artifact fails the command; it does not restart with a new cohort.
+
+## Frozen Prior Identities
+
+`prior-sources.json` points to the exact historical-v2 frame artifact and to
+the original LF source artifacts used by that frame's exclusion manifest:
+
+```json
+{
+  "artifact_root": "/absolute/frozen-v2-source-root",
+  "frame": "/absolute/frozen-v2-frame/frame.json",
+  "exclusions": "/absolute/frozen-v2-frame/exclusions.json",
+  "selection": "/absolute/frozen-v2-frame/selection.json"
+}
+```
+
+The four inputs are checked against the frozen file hashes. Exclusions are
+rederived from the original source artifacts, and the fixed-slot selection is
+replayed. A Windows checkout with converted CRLF fixture bytes is not the
+original LF source artifact root. No handwritten repository-list input is
+accepted.
+
+```console
+sniff benchmark historical-v3 seal-prior prior-sources.json prior-seal.json
+```
+
+## Protocol And Config
+
+Prepare a draft protocol bound to that seal and the six completed source-frame
+manifests, then seal it:
+
+```console
+sniff benchmark historical-v3 seal-protocol draft-protocol.json protocol.json
+```
+
+Before `collect`, the exact sealed protocol bytes and each source-frame policy
+must be published at immutable, public GitHub commits. The operator checks
+unauthenticated GitHub commit objects, exact protocol bytes, and the semantic
+content of each policy. A self-hash or a branch URL is not sufficient. A proof
+of those public responses is retained under the operator root for strict
+offline replay.
+
+The operator config JSON has these required fields:
+
+| Field | Value |
+| --- | --- |
+| `protocol` | Absolute path to the sealed v3 protocol JSON. |
+| `public_protocol_url` | Public `https://raw.githubusercontent.com/OWNER/REPO/COMMIT/PATH` URL for those exact bytes; `COMMIT` is a lowercase 40-character SHA. |
+| `prior_identity_seal` | Absolute path to `prior-seal.json`. |
+| `prior_sources` | The four-path object shown above. It is reverified on every load. |
+| `source_frames` | Exactly six ordered objects, one per protocol language: Go, JavaScript, Kotlin, Python, Rust, TypeScript. Each has absolute `manifest`, `artifact_root`, and `frame` paths plus `public_policy_url` at an immutable public commit. |
+| `operator_root` | Absolute path to a new, dedicated durable state directory. |
+| `github_token_env` | Name of the environment variable holding a GitHub token for candidate collection, for example `GITHUB_TOKEN`. The public precommit proof itself is unauthenticated. |
+| `docker_program` | Docker executable or absolute path used for sealed identical-test execution. |
+
+```console
+sniff benchmark historical-v3 init operator-config.json
+sniff benchmark historical-v3 collect operator-config.json
+sniff benchmark historical-v3 status operator-config.json python
+sniff benchmark historical-v3 run operator-config.json python --max-steps 8
+```
+
+`collect` resumes retained raw pages and never calls a model. `status` is a
+read-only replay. `advance` performs exactly one verified stage; `run` stops at
+the current rank's human-review handoff, a terminal stop, or its step cap.
+Operational failures keep the same rank open for retry.
+
+## Independent Review
+
+For a rank reported as `human_review`, prepare source-only worksheets, have
+two independent humans complete them separately, then validate and audit both.
+The CLI never fabricates their decisions.
+
+```console
+sniff benchmark historical-v3 prepare-review operator-config.json python
+sniff benchmark historical-v3 validate-review operator-config.json python 1
+sniff benchmark historical-v3 validate-review operator-config.json python 2
+sniff benchmark historical-v3 audit-review operator-config.json python
+sniff benchmark historical-v3 prepare-resolution operator-config.json python
+sniff benchmark historical-v3 finalize-review operator-config.json python
+```
+
+If the reviewers disagree, an independent resolver must complete the prepared
+resolution worksheet before finalization. The final label is bound to the
+exact rank and replayed before processing the next one.

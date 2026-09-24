@@ -8,10 +8,9 @@ mod store;
 use crate::benchmark::{
     DockerHistoricalV3TestExecutor, GithubHistoricalV3CandidateTransport,
     HistoricalV3CandidateCollection, HistoricalV3CandidatePageTransport, HistoricalV3Language,
-    HistoricalV3NextStep, HistoricalV3OrderedStopStatus, HistoricalV3PriorArtifactBinding,
-    HistoricalV3Protocol, HistoricalV3ReplayProgress, HistoricalV3RunPaths,
-    advance_historical_v3_ordered_step, collect_historical_v3_candidates,
-    prepare_historical_v3_prior_identity_seal, replay_historical_v3_ordered_progress,
+    HistoricalV3NextStep, HistoricalV3OrderedStopStatus, HistoricalV3Protocol,
+    HistoricalV3ReplayProgress, HistoricalV3RunPaths, advance_historical_v3_ordered_step,
+    collect_historical_v3_candidates, replay_historical_v3_ordered_progress,
     seal_historical_v3_protocol, write_historical_v3_candidate_collection_manifest_new,
 };
 use std::path::Path;
@@ -21,12 +20,9 @@ pub(crate) use review::{
 };
 
 pub(crate) fn seal_prior(inputs: &str, output: &str) -> Result<i32, String> {
-    let bindings: Vec<HistoricalV3PriorArtifactBinding> = store::read_json(
-        Path::new(inputs),
-        64 * 1024 * 1024,
-        "prior artifact bindings",
-    )?;
-    let seal = prepare_historical_v3_prior_identity_seal(bindings)?;
+    let sources: store::PriorSourcePaths =
+        store::read_json(Path::new(inputs), 64 * 1024, "prior source paths")?;
+    let seal = sources.derive()?;
     store::write_json_durable(Path::new(output), &seal)?;
     println!("historical-v3 prior identity seal: {}", seal.seal_sha256);
     Ok(0)
@@ -113,6 +109,10 @@ async fn collect_bound<T: HistoricalV3CandidatePageTransport>(
 
 pub(crate) fn status(config: &str, language: HistoricalV3Language) -> Result<i32, String> {
     let bound = store::load_bound(Path::new(config))?;
+    status_bound(&bound, language)
+}
+
+fn status_bound(bound: &store::BoundInputs, language: HistoricalV3Language) -> Result<i32, String> {
     let collection = bound.collection()?;
     let progress = replay_historical_v3_ordered_progress(
         &bound.unbound.protocol,

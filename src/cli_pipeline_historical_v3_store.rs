@@ -2,9 +2,9 @@ use super::precommit;
 use crate::benchmark::{
     HistoricalV3CandidateCollection, HistoricalV3PriorBenchmarkIdentitySeal, HistoricalV3Protocol,
     HistoricalV3SourceBindingAudit, HistoricalV3SourceFrameArtifact, SourceFrameCollectionManifest,
-    bind_historical_v3_source_frames, read_historical_v3_candidate_collection_manifest,
-    validate_historical_v3_prior_identity_seal, validate_historical_v3_protocol,
-    validate_historical_v3_source_binding_audit,
+    bind_historical_v3_source_frames, derive_frozen_historical_v3_prior_identity_seal,
+    read_historical_v3_candidate_collection_manifest, validate_historical_v3_prior_identity_seal,
+    validate_historical_v3_protocol, validate_historical_v3_source_binding_audit,
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
@@ -30,10 +30,45 @@ pub(super) struct SourceFramePaths {
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub(super) struct PriorSourcePaths {
+    pub artifact_root: PathBuf,
+    pub frame: PathBuf,
+    pub exclusions: PathBuf,
+    pub selection: PathBuf,
+}
+
+impl PriorSourcePaths {
+    fn validate(&self) -> Result<(), String> {
+        for (label, path) in [
+            ("prior artifact root", &self.artifact_root),
+            ("prior frame", &self.frame),
+            ("prior exclusions", &self.exclusions),
+            ("prior selection", &self.selection),
+        ] {
+            require_absolute(path, label)?;
+        }
+        require_plain_directory(&self.artifact_root, "prior artifact root")?;
+        Ok(())
+    }
+
+    pub fn derive(&self) -> Result<HistoricalV3PriorBenchmarkIdentitySeal, String> {
+        self.validate()?;
+        derive_frozen_historical_v3_prior_identity_seal(
+            &self.artifact_root,
+            &self.frame,
+            &self.exclusions,
+            &self.selection,
+        )
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(super) struct OperatorConfig {
     pub protocol: PathBuf,
     pub public_protocol_url: String,
     pub prior_identity_seal: PathBuf,
+    pub prior_sources: PriorSourcePaths,
     pub source_frames: Vec<SourceFramePaths>,
     pub operator_root: PathBuf,
     pub github_token_env: String,
@@ -116,6 +151,15 @@ impl BoundInputs {
 
 pub(super) fn load_unbound(config_path: &Path) -> Result<UnboundInputs, String> {
     let config: OperatorConfig = read_json(config_path, MAX_CONFIG_BYTES, "operator config")?;
+    let expected_prior = config.prior_sources.derive()?;
+    load_unbound_with_prior(config, expected_prior)
+}
+
+fn load_unbound_with_prior(
+    config: OperatorConfig,
+    expected_prior: HistoricalV3PriorBenchmarkIdentitySeal,
+) -> Result<UnboundInputs, String> {
+    config.prior_sources.validate()?;
     for (name, path) in [
         ("protocol", &config.protocol),
         ("prior identity seal", &config.prior_identity_seal),
@@ -151,6 +195,11 @@ pub(super) fn load_unbound(config_path: &Path) -> Result<UnboundInputs, String> 
         "prior identity seal",
     )?;
     validate_historical_v3_prior_identity_seal(&prior)?;
+    if prior != expected_prior {
+        return Err(
+            "historical-v3 prior seal differs from the frozen benchmark artifacts".to_string(),
+        );
+    }
     let frames = config
         .source_frames
         .iter()
@@ -172,6 +221,10 @@ pub(super) fn load_unbound(config_path: &Path) -> Result<UnboundInputs, String> 
 
 pub(super) fn initialize(config_path: &Path) -> Result<BoundInputs, String> {
     let unbound = load_unbound(config_path)?;
+    initialize_loaded(unbound)
+}
+
+fn initialize_loaded(unbound: UnboundInputs) -> Result<BoundInputs, String> {
     let audit =
         bind_historical_v3_source_frames(&unbound.protocol, &unbound.prior, &unbound.artifacts())?;
     if !unbound.config.operator_root.exists() {
@@ -201,6 +254,10 @@ pub(super) fn initialize(config_path: &Path) -> Result<BoundInputs, String> {
 
 pub(super) fn load_bound(config_path: &Path) -> Result<BoundInputs, String> {
     let unbound = load_unbound(config_path)?;
+    load_bound_inputs(unbound)
+}
+
+fn load_bound_inputs(unbound: UnboundInputs) -> Result<BoundInputs, String> {
     let root = canonical_plain_directory(&unbound.config.operator_root, "operator root")?;
     for name in [
         "candidate-state",
@@ -541,14 +598,37 @@ mod tests {
     struct Fixture {
         _root: tempfile::TempDir,
         _frames: Vec<source_fixture::FrameFixture>,
+        prior: HistoricalV3PriorBenchmarkIdentitySeal,
         config: PathBuf,
         frame_paths: Vec<PathBuf>,
     }
 
+    fn synthetic_unbound(
+        config_path: &Path,
+        prior: &HistoricalV3PriorBenchmarkIdentitySeal,
+    ) -> Result<UnboundInputs, String> {
+        let config = read_json(config_path, MAX_CONFIG_BYTES, "operator config")?;
+        load_unbound_with_prior(config, prior.clone())
+    }
+
+    fn synthetic_initialize(fixture: &Fixture) -> Result<BoundInputs, String> {
+        initialize_loaded(synthetic_unbound(&fixture.config, &fixture.prior)?)
+    }
+
+    fn synthetic_load_bound(
+        config_path: &Path,
+        prior: &HistoricalV3PriorBenchmarkIdentitySeal,
+    ) -> Result<BoundInputs, String> {
+        load_bound_inputs(synthetic_unbound(config_path, prior)?)
+    }
+
     fn fixture() -> Fixture {
+        fixture_with_prior(source_fixture::prior_identity_seal())
+    }
+
+    fn fixture_with_prior(prior: HistoricalV3PriorBenchmarkIdentitySeal) -> Fixture {
         let root = tempfile::tempdir().unwrap();
         let frames = source_fixture::fixtures();
-        let prior = source_fixture::prior_identity_seal();
         let protocol = source_fixture::protocol(&prior, &frames);
         let protocol_path = root.path().join("protocol.json");
         let prior_path = root.path().join("prior.json");
@@ -582,6 +662,12 @@ mod tests {
                     1
                 ),
                 prior_identity_seal: prior_path,
+                prior_sources: PriorSourcePaths {
+                    artifact_root: root.path().to_path_buf(),
+                    frame: root.path().join("frozen-frame.json"),
+                    exclusions: root.path().join("frozen-exclusions.json"),
+                    selection: root.path().join("frozen-selection.json"),
+                },
                 source_frames: source_paths,
                 operator_root: root.path().join("operator"),
                 github_token_env: "SNIFF_TEST_GITHUB_TOKEN".to_string(),
@@ -593,6 +679,7 @@ mod tests {
         Fixture {
             _root: root,
             _frames: frames,
+            prior,
             config,
             frame_paths,
         }
@@ -602,10 +689,11 @@ mod tests {
     fn init_pins_six_sources_and_never_treats_a_new_root_as_resume() {
         let fixture = fixture();
         assert!(load_bound(&fixture.config).is_err());
-        let first = initialize(&fixture.config).unwrap();
-        let second = initialize(&fixture.config).unwrap();
+        assert!(initialize(&fixture.config).is_err());
+        let first = synthetic_initialize(&fixture).unwrap();
+        let second = synthetic_initialize(&fixture).unwrap();
         assert_eq!(first.audit, second.audit);
-        let loaded = load_bound(&fixture.config).unwrap();
+        let loaded = synthetic_load_bound(&fixture.config, &fixture.prior).unwrap();
         assert_eq!(loaded.audit, first.audit);
         assert!(loaded.root.join("operator-binding.json").is_file());
 
@@ -614,22 +702,24 @@ mod tests {
         changed.operator_root = fixture._root.path().join("new-root");
         let changed_path = fixture._root.path().join("changed-config.json");
         fs::write(&changed_path, serde_json::to_vec(&changed).unwrap()).unwrap();
-        assert!(load_bound(&changed_path).is_err());
+        assert!(synthetic_load_bound(&changed_path, &fixture.prior).is_err());
         assert!(!changed.operator_root.exists());
 
         changed.operator_root = fixture._root.path().to_path_buf();
         fs::write(&changed_path, serde_json::to_vec(&changed).unwrap()).unwrap();
-        assert!(initialize(&changed_path).is_err());
+        assert!(
+            initialize_loaded(synthetic_unbound(&changed_path, &fixture.prior).unwrap()).is_err()
+        );
         assert!(!fixture._root.path().join("candidate-state").exists());
 
         fs::write(&fixture.frame_paths[0], b"changed source").unwrap();
-        assert!(load_bound(&fixture.config).is_err());
+        assert!(synthetic_load_bound(&fixture.config, &fixture.prior).is_err());
     }
 
     #[tokio::test]
     async fn synthetic_collection_resumes_and_reports_a_pending_rank() {
         let fixture = fixture();
-        let bound = initialize(&fixture.config).unwrap();
+        let bound = synthetic_initialize(&fixture).unwrap();
         let mut public = public_transport(&bound);
         assert!(
             super::super::collect_bound(&bound, &mut ZeroTransport { calls: 0 })
@@ -658,10 +748,9 @@ mod tests {
             .unwrap();
         assert_eq!(resumed.calls, 0);
         assert_eq!(same, collection);
-        assert_eq!(initialize(&fixture.config).unwrap().audit, bound.audit);
+        assert_eq!(synthetic_initialize(&fixture).unwrap().audit, bound.audit);
         assert_eq!(
-            super::super::status(fixture.config.to_str().unwrap(), HistoricalV3Language::Rust)
-                .unwrap(),
+            super::super::status_bound(&bound, HistoricalV3Language::Rust).unwrap(),
             0
         );
         let progress = crate::benchmark::replay_historical_v3_ordered_progress(
@@ -683,7 +772,7 @@ mod tests {
     #[tokio::test]
     async fn mismatched_public_policy_blocks_collection_before_candidate_fetch() {
         let fixture = fixture();
-        let bound = initialize(&fixture.config).unwrap();
+        let bound = synthetic_initialize(&fixture).unwrap();
         let mut public = public_transport(&bound);
         let url = &bound.unbound.config.source_frames[0].public_policy_url;
         public.responses.insert(url.clone(), b"{}".to_vec());
@@ -705,7 +794,7 @@ mod tests {
     #[tokio::test]
     async fn mutable_ref_disguised_as_commit_blocks_collection() {
         let fixture = fixture();
-        let bound = initialize(&fixture.config).unwrap();
+        let bound = synthetic_initialize(&fixture).unwrap();
         let mut public = public_transport(&bound);
         let (api_url, _) = precommit::expected_commits(&bound)
             .unwrap()
@@ -734,7 +823,7 @@ mod tests {
     #[tokio::test]
     async fn tampered_public_precommit_proof_blocks_offline_resume() {
         let fixture = fixture();
-        let bound = initialize(&fixture.config).unwrap();
+        let bound = synthetic_initialize(&fixture).unwrap();
         precommit::ensure_public_precommit(&bound, &mut public_transport(&bound))
             .await
             .unwrap();
@@ -771,5 +860,43 @@ mod tests {
             read_plain(&path, MAX_INPUT_BYTES, "artifact").unwrap(),
             bytes
         );
+    }
+
+    #[test]
+    #[ignore = "requires the frozen historical-v2 frame and LF source artifacts"]
+    fn real_frozen_prior_seals_and_replays_through_operator_config() {
+        let frame_dir = std::env::var_os("SNIFF_HISTORICAL_V2_FRAME_DIR")
+            .expect("set SNIFF_HISTORICAL_V2_FRAME_DIR to the frozen frame artifact");
+        let source_root = std::env::var_os("SNIFF_HISTORICAL_V2_SOURCE_ROOT")
+            .expect("set SNIFF_HISTORICAL_V2_SOURCE_ROOT to exact LF source artifacts");
+        let frame_dir = Path::new(&frame_dir);
+        let sources = PriorSourcePaths {
+            artifact_root: PathBuf::from(source_root),
+            frame: frame_dir.join("frame.json"),
+            exclusions: frame_dir.join("exclusions.json"),
+            selection: frame_dir.join("selection.json"),
+        };
+        let prior = sources.derive().unwrap();
+        let fixture = fixture_with_prior(prior.clone());
+        let inputs = fixture._root.path().join("prior-inputs.json");
+        let output = fixture._root.path().join("sealed-prior.json");
+        fs::write(&inputs, serde_json::to_vec(&sources).unwrap()).unwrap();
+        assert_eq!(
+            super::super::seal_prior(inputs.to_str().unwrap(), output.to_str().unwrap()).unwrap(),
+            0
+        );
+        assert_eq!(
+            read_json::<HistoricalV3PriorBenchmarkIdentitySeal>(&output, MAX_INPUT_BYTES, "prior")
+                .unwrap(),
+            prior
+        );
+        let mut config: OperatorConfig =
+            read_json(&fixture.config, MAX_CONFIG_BYTES, "operator config").unwrap();
+        config.prior_identity_seal = output;
+        config.prior_sources = sources;
+        fs::write(&fixture.config, serde_json::to_vec(&config).unwrap()).unwrap();
+        let bound = initialize(&fixture.config).unwrap();
+        assert_eq!(bound.unbound.prior.repositories.len(), 1279);
+        assert_eq!(load_bound(&fixture.config).unwrap().audit, bound.audit);
     }
 }
