@@ -512,9 +512,10 @@ pub use release::{
     HistoricalV3CandidatePageRequest, HistoricalV3CandidatePageTransport,
     HistoricalV3CandidatePartition, HistoricalV3CandidatePartitionRecord,
     HistoricalV3CandidateRepository, collect_historical_v3_candidates,
-    validate_historical_v3_candidate_collection,
+    read_historical_v3_candidate_collection_manifest, validate_historical_v3_candidate_collection,
     validate_historical_v3_candidate_collection_commitment,
     validate_historical_v3_candidate_manifest_commitment,
+    write_historical_v3_candidate_collection_manifest_new,
 };
 
 pub use release::{

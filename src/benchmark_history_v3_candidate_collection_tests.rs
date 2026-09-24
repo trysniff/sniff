@@ -430,6 +430,125 @@ async fn full_collection_replays_source_binding_pagination_and_resume() {
     .unwrap();
     assert_eq!(resumed.calls, 0);
     assert_eq!(resumed_collection, collection);
+
+    let manifest_path = state.path().join("collection-manifest.json");
+    let pending_path = state.path().join(format!(
+        ".collection-manifest.json.{}.pending",
+        collection.manifest.manifest_sha256
+    ));
+    std::fs::write(&pending_path, b"{").unwrap();
+    write_historical_v3_candidate_collection_manifest_new(
+        &manifest_path,
+        &protocol,
+        &prior,
+        &artifacts,
+        &audit,
+        state.path(),
+        &collection,
+    )
+    .unwrap();
+    assert!(!pending_path.exists());
+    let loaded = read_historical_v3_candidate_collection_manifest(
+        &manifest_path,
+        &protocol,
+        &prior,
+        &artifacts,
+        &audit,
+        state.path(),
+    )
+    .unwrap();
+    assert_eq!(loaded, collection);
+
+    let recovered_path = state.path().join("recovered-manifest.json");
+    let recovered_pending = state.path().join(format!(
+        ".recovered-manifest.json.{}.pending",
+        collection.manifest.manifest_sha256
+    ));
+    std::fs::write(
+        &recovered_pending,
+        serde_json::to_vec(&collection.manifest).unwrap(),
+    )
+    .unwrap();
+    write_historical_v3_candidate_collection_manifest_new(
+        &recovered_path,
+        &protocol,
+        &prior,
+        &artifacts,
+        &audit,
+        state.path(),
+        &collection,
+    )
+    .unwrap();
+    assert!(!recovered_pending.exists());
+    assert_eq!(
+        read_historical_v3_candidate_collection_manifest(
+            &recovered_path,
+            &protocol,
+            &prior,
+            &artifacts,
+            &audit,
+            state.path(),
+        )
+        .unwrap(),
+        collection
+    );
+    assert!(
+        write_historical_v3_candidate_collection_manifest_new(
+            &manifest_path,
+            &protocol,
+            &prior,
+            &artifacts,
+            &audit,
+            state.path(),
+            &collection,
+        )
+        .is_err()
+    );
+
+    let mut changed = collection.manifest.clone();
+    changed.candidate_count += 1;
+    std::fs::write(&manifest_path, serde_json::to_vec(&changed).unwrap()).unwrap();
+    assert!(
+        read_historical_v3_candidate_collection_manifest(
+            &manifest_path,
+            &protocol,
+            &prior,
+            &artifacts,
+            &audit,
+            state.path(),
+        )
+        .is_err()
+    );
+
+    std::fs::write(
+        &manifest_path,
+        serde_json::to_vec(&collection.manifest).unwrap(),
+    )
+    .unwrap();
+    let page = collection
+        .manifest
+        .partitions
+        .iter()
+        .find_map(|partition| match partition {
+            HistoricalV3CandidatePartitionRecord::Complete {
+                page_request_sha256s,
+                ..
+            } => page_request_sha256s.first(),
+            HistoricalV3CandidatePartitionRecord::Split { .. } => None,
+        })
+        .unwrap();
+    std::fs::remove_file(state.path().join("pages").join(format!("{page}.json"))).unwrap();
+    assert!(
+        read_historical_v3_candidate_collection_manifest(
+            &manifest_path,
+            &protocol,
+            &prior,
+            &artifacts,
+            &audit,
+            state.path(),
+        )
+        .is_err()
+    );
 }
 
 #[tokio::test]
