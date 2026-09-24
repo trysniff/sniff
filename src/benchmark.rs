@@ -608,6 +608,10 @@ pub use release::{HistoricalV3ReviewRecordPaths, verify_historical_v3_final_revi
 pub use release::verify_historical_v3_stop_from_disk;
 
 pub use release::{
+    HistoricalV3NextStep, HistoricalV3ReplayProgress, replay_historical_v3_ordered_progress,
+};
+
+pub use release::{
     HISTORICAL_V3_SEMANTIC_CENSUS_EXCLUSION_SCHEMA_VERSION,
     HISTORICAL_V3_SEMANTIC_CENSUS_SCHEMA_VERSION, HistoricalV3CompilerIndexEvidence,
     HistoricalV3SemanticCensus, HistoricalV3SemanticCensusExclusion,

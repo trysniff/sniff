@@ -14,6 +14,7 @@ pub use commitment::{
 #[path = "benchmark_history_v3_rank_journal_store.rs"]
 mod store;
 
+pub(super) use store::historical_v3_rank_journal_path;
 pub use store::{HistoricalV3RankJournal, HistoricalV3StoredRankStage};
 
 #[path = "benchmark_history_v3_rank_terminal_proof.rs"]
