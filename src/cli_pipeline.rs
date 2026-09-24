@@ -55,7 +55,8 @@ pub(crate) use historical_v2_review::{
 pub(crate) use historical_v3::{
     advance as advance_historical_v3, audit_review as audit_historical_v3_review,
     collect as collect_historical_v3, finalize_review as finalize_historical_v3_review,
-    init as init_historical_v3, prepare_resolution as prepare_historical_v3_resolution,
+    init as init_historical_v3, preflight as preflight_historical_v3,
+    prepare_resolution as prepare_historical_v3_resolution,
     prepare_review as prepare_historical_v3_review, run as run_historical_v3,
     seal_prior as seal_historical_v3_prior, seal_protocol as seal_historical_v3_protocol_cli,
     status as historical_v3_status, validate_review as validate_historical_v3_review,

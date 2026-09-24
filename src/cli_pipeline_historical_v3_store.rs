@@ -721,16 +721,18 @@ mod tests {
         let fixture = fixture();
         let bound = synthetic_initialize(&fixture).unwrap();
         let mut public = public_transport(&bound);
-        assert!(
-            super::super::collect_bound(&bound, &mut ZeroTransport { calls: 0 })
-                .await
-                .is_err()
-        );
-        precommit::ensure_public_precommit(&bound, &mut public)
+        let mut blocked = ZeroTransport { calls: 0 };
+        let error = super::super::collect_bound(&bound, &mut blocked)
+            .await
+            .unwrap_err();
+        assert!(error.contains("preflight"));
+        assert_eq!(blocked.calls, 0);
+        assert!(!bound.root.join("public-precommit-proof.json").exists());
+        super::super::preflight_bound(&bound, &mut public)
             .await
             .unwrap();
         assert_eq!(public.calls, 14);
-        precommit::ensure_public_precommit(&bound, &mut public)
+        super::super::preflight_bound(&bound, &mut public)
             .await
             .unwrap();
         assert_eq!(public.calls, 14);

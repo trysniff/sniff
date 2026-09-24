@@ -578,6 +578,8 @@ pub enum HistoricalV3Command {
     },
     /// Bind the sealed protocol and six source frames to a durable operator root.
     Init { config: String },
+    /// Verify public immutable commitments without collecting candidates.
+    Preflight { config: String },
     /// Collect or resume the exact GitHub candidate stream without model access.
     Collect { config: String },
     /// Replay verified progress for one language without changing state.
@@ -746,6 +748,11 @@ pub async fn run(args: CliArgs) -> Result<i32, Box<dyn std::error::Error>> {
                 }
                 HistoricalV3Command::Init { config } => {
                     pipeline::init_historical_v3(&config).map_err(Into::into)
+                }
+                HistoricalV3Command::Preflight { config } => {
+                    pipeline::preflight_historical_v3(&config)
+                        .await
+                        .map_err(Into::into)
                 }
                 HistoricalV3Command::Collect { config } => pipeline::collect_historical_v3(&config)
                     .await
@@ -2179,6 +2186,23 @@ mod tests {
 
     #[test]
     fn parses_historical_v3_operator_commands_without_a_scan_path() {
+        let args = CliArgs::try_parse_from([
+            "sniff",
+            "benchmark",
+            "historical-v3",
+            "preflight",
+            "operator.json",
+        ])
+        .unwrap();
+        assert!(matches!(
+            args.command,
+            Some(CliCommand::Benchmark {
+                command: BenchmarkCommand::HistoricalV3 {
+                    command: HistoricalV3Command::Preflight { config }
+                }
+            }) if config == "operator.json"
+        ));
+
         let args = CliArgs::try_parse_from([
             "sniff",
             "benchmark",
