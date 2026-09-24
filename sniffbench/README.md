@@ -87,6 +87,15 @@ and runner provenance. Its checkout, toolchain, and artifact actions are pinned,
 checkout credentials are not persisted, the workflow receives no repository
 secret, and it does not contact a model provider.
 
+The frozen historical-v3 prior-repository constructor uses the frame artifact from
+main run `32804623556` (artifact `9547888605`), not a supplied repository list.
+The exact file SHA-256 values are `de8dca6b0248229171a3e82f61b3e59e324ebca47c902e315628d4335120719f`
+for `frame.json`, `74bccb100eb48ab87952bd7eec137b2285edbc68d2547715bc0e06a80e029f76`
+for `exclusions.json`, and `e6f06b0b887168205dcaa1d903ffcf54efe6199ea730ee118b28ad8e24925853`
+for `selection.json`. Derivation replays the earlier exclusion sources and the
+fixed-slot selection against the collector's exact LF source bytes; a Windows
+checkout with converted CRLF fixture files is not equivalent evidence.
+
 Only after the fixed selection is committed may the maintainer tool open each
 selected row's patch, install configuration, and test patch. Extraction and
 validation both replay the pinned dataset and frozen selection:

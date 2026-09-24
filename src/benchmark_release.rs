@@ -429,6 +429,11 @@ mod history_v3_source_binding;
 
 pub use history_v3_source_binding::*;
 
+#[path = "benchmark_history_v3_prior_artifacts.rs"]
+mod history_v3_prior_artifacts;
+
+pub use history_v3_prior_artifacts::*;
+
 #[path = "benchmark_history_v3_time.rs"]
 mod history_v3_time;
 
