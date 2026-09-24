@@ -48,11 +48,28 @@ pub(crate) fn init(config: &str) -> Result<i32, String> {
     Ok(0)
 }
 
+pub(crate) async fn preflight(config: &str) -> Result<i32, String> {
+    let bound = store::load_bound(Path::new(config))?;
+    preflight_bound(&bound, &mut precommit::GithubRawTransport::new()).await?;
+    println!(
+        "historical-v3 public precommit verified: {}",
+        bound.root.join("public-precommit-proof.json").display()
+    );
+    Ok(0)
+}
+
+async fn preflight_bound<T: precommit::PublicArtifactTransport>(
+    bound: &store::BoundInputs,
+    transport: &mut T,
+) -> Result<(), String> {
+    precommit::ensure_public_precommit(bound, transport).await
+}
+
 pub(crate) async fn collect(config: &str) -> Result<i32, String> {
     let bound = store::load_bound(Path::new(config))?;
+    precommit::validate_public_precommit(&bound)?;
     let manifest_path = bound.root.join("candidate-manifest.json");
     if manifest_path.exists() {
-        precommit::validate_public_precommit(&bound)?;
         let collection = bound.collection()?;
         println!(
             "historical-v3 collection already verified: {} candidates",
@@ -60,7 +77,6 @@ pub(crate) async fn collect(config: &str) -> Result<i32, String> {
         );
         return Ok(0);
     }
-    precommit::ensure_public_precommit(&bound, &mut precommit::GithubRawTransport::new()).await?;
     let token = std::env::var(&bound.unbound.config.github_token_env).map_err(|_| {
         format!(
             "historical-v3 requires {} for GitHub collection",

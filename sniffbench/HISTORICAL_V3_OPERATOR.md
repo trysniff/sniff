@@ -63,13 +63,18 @@ The operator config JSON has these required fields:
 
 ```console
 sniff benchmark historical-v3 init operator-config.json
+sniff benchmark historical-v3 preflight operator-config.json
 sniff benchmark historical-v3 collect operator-config.json
 sniff benchmark historical-v3 status operator-config.json python
 sniff benchmark historical-v3 run operator-config.json python --max-steps 8
 ```
 
-`collect` resumes retained raw pages and never calls a model. `status` is a
-read-only replay. `advance` performs exactly one verified stage; `run` stops at
+`preflight` verifies the public immutable commitments and retains their proof
+without collecting candidates or requiring a collection token. An existing
+proof is replay-validated offline rather than silently replaced. `collect`
+requires that proof and never fetches it implicitly; it resumes retained raw
+pages and never calls a model. `status` is a read-only replay. `advance`
+performs exactly one verified stage; `run` stops at
 the current rank's human-review handoff, a terminal stop, or its step cap.
 Operational failures keep the same rank open for retry.
 

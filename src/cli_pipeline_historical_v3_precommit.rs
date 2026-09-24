@@ -241,6 +241,12 @@ pub(super) async fn ensure_public_precommit<T: PublicArtifactTransport>(
 
 pub(super) fn validate_public_precommit(bound: &BoundInputs) -> Result<(), String> {
     let path = bound.root.join("public-precommit-proof.json");
+    if !path.exists() {
+        return Err(
+            "historical-v3 public precommit proof is missing; run benchmark historical-v3 preflight before collect"
+                .to_string(),
+        );
+    }
     let proof: PublicPrecommitProof =
         store::read_json(&path, MAX_PROOF_BYTES, "public precommit proof")?;
     let mut unsigned = proof.clone();
