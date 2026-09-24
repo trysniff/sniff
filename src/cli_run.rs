@@ -562,10 +562,20 @@ pub enum BenchmarkCommand {
 
 #[derive(Subcommand, Debug)]
 pub enum HistoricalV3Command {
-    /// Seal the identities of repositories used in earlier benchmark partitions.
-    SealPrior { inputs: String, output: String },
-    /// Seal the precommitted, candidate-blind historical-v3 protocol.
-    SealProtocol { draft: String, output: String },
+    /// Derive the prior identity seal from frozen historical-v2 artifact paths.
+    SealPrior {
+        /// JSON paths to the frozen v2 source root, frame, exclusions, and selection.
+        inputs: String,
+        /// New prior identity seal JSON file.
+        output: String,
+    },
+    /// Seal the candidate-blind protocol; publish its exact bytes before collection.
+    SealProtocol {
+        /// Candidate-blind protocol draft JSON file.
+        draft: String,
+        /// New sealed protocol JSON file.
+        output: String,
+    },
     /// Bind the sealed protocol and six source frames to a durable operator root.
     Init { config: String },
     /// Collect or resume the exact GitHub candidate stream without model access.
