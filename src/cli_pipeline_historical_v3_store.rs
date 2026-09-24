@@ -227,6 +227,7 @@ pub(super) fn initialize(config_path: &Path) -> Result<BoundInputs, String> {
 fn initialize_loaded(unbound: UnboundInputs) -> Result<BoundInputs, String> {
     let audit =
         bind_historical_v3_source_frames(&unbound.protocol, &unbound.prior, &unbound.artifacts())?;
+    validate_frame_capacity(&unbound, &audit)?;
     if !unbound.config.operator_root.exists() {
         fs::create_dir(&unbound.config.operator_root)
             .map_err(|error| format!("failed to create historical-v3 operator root: {error}"))?;
@@ -279,6 +280,7 @@ fn load_bound_inputs(unbound: UnboundInputs) -> Result<BoundInputs, String> {
         &unbound.artifacts(),
         &audit,
     )?;
+    validate_frame_capacity(&unbound, &audit)?;
     let stored: OperatorBinding = read_json(
         &root.join("operator-binding.json"),
         MAX_CONFIG_BYTES,
@@ -292,6 +294,33 @@ fn load_bound_inputs(unbound: UnboundInputs) -> Result<BoundInputs, String> {
         audit,
         root,
     })
+}
+
+fn validate_frame_capacity(
+    unbound: &UnboundInputs,
+    audit: &HistoricalV3SourceBindingAudit,
+) -> Result<(), String> {
+    let stop = &unbound.protocol.stop_rule;
+    let required_repositories = stop.distinct_repository_floor_per_language.max(
+        stop.accepted_target_per_language
+            .div_ceil(stop.accepted_case_cap_per_repository),
+    );
+    for (frame, bound) in unbound.frames.iter().zip(&audit.frames) {
+        if bound.eligible_repository_count < required_repositories {
+            return Err(format!(
+                "historical-v3 {:?} frame has {} eligible repositories, below the {} required by the frozen stop rule",
+                bound.language, bound.eligible_repository_count, required_repositories
+            ));
+        }
+        let earliest_merge = format!("{}T00:00:00Z", frame.manifest.policy.created_day_utc);
+        if earliest_merge >= unbound.protocol.candidate_window.merged_before_utc {
+            return Err(format!(
+                "historical-v3 {:?} frame was created after its candidate window closes",
+                bound.language
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn binding(
@@ -627,8 +656,14 @@ mod tests {
     }
 
     fn fixture_with_prior(prior: HistoricalV3PriorBenchmarkIdentitySeal) -> Fixture {
+        fixture_with_prior_and_frames(prior, source_fixture::operator_fixtures(20))
+    }
+
+    fn fixture_with_prior_and_frames(
+        prior: HistoricalV3PriorBenchmarkIdentitySeal,
+        frames: Vec<source_fixture::FrameFixture>,
+    ) -> Fixture {
         let root = tempfile::tempdir().unwrap();
-        let frames = source_fixture::fixtures();
         let protocol = source_fixture::protocol(&prior, &frames);
         let protocol_path = root.path().join("protocol.json");
         let prior_path = root.path().join("prior.json");
@@ -716,6 +751,36 @@ mod tests {
         assert!(synthetic_load_bound(&fixture.config, &fixture.prior).is_err());
     }
 
+    #[test]
+    fn init_rejects_a_frame_that_cannot_meet_the_frozen_repository_floor() {
+        let fixture = fixture_with_prior_and_frames(
+            source_fixture::prior_identity_seal(),
+            source_fixture::operator_fixtures(19),
+        );
+        let config: OperatorConfig =
+            read_json(&fixture.config, MAX_CONFIG_BYTES, "operator config").unwrap();
+        let error = synthetic_initialize(&fixture).err().unwrap();
+        assert!(error.contains("Go frame has 19 eligible repositories"));
+        assert!(error.contains("20 required by the frozen stop rule"));
+        assert!(!config.operator_root.exists());
+    }
+
+    #[test]
+    fn init_rejects_a_frame_created_after_the_candidate_window() {
+        let fixture = fixture();
+        let config: OperatorConfig =
+            read_json(&fixture.config, MAX_CONFIG_BYTES, "operator config").unwrap();
+        let mut protocol: HistoricalV3Protocol =
+            read_json(&config.protocol, MAX_INPUT_BYTES, "protocol").unwrap();
+        protocol.candidate_window.merged_at_or_after_utc = "2024-01-01T00:00:00Z".to_string();
+        protocol.candidate_window.merged_before_utc = "2025-01-01T00:00:00Z".to_string();
+        let protocol = crate::benchmark::seal_historical_v3_protocol(protocol).unwrap();
+        fs::write(&config.protocol, serde_json::to_vec(&protocol).unwrap()).unwrap();
+        let error = synthetic_initialize(&fixture).err().unwrap();
+        assert!(error.contains("Go frame was created after its candidate window closes"));
+        assert!(!config.operator_root.exists());
+    }
+
     #[tokio::test]
     async fn synthetic_collection_resumes_and_reports_a_pending_rank() {
         let fixture = fixture();
@@ -740,8 +805,8 @@ mod tests {
         let collection = super::super::collect_bound(&bound, &mut transport)
             .await
             .unwrap();
-        assert_eq!(transport.calls, 6);
-        assert_eq!(collection.candidates.len(), 6);
+        assert_eq!(transport.calls, 120);
+        assert_eq!(collection.candidates.len(), 120);
         assert!(bound.root.join("candidate-manifest.json").is_file());
 
         let mut resumed = ZeroTransport { calls: 0 };

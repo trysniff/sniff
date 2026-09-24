@@ -362,6 +362,34 @@ pub(crate) fn fixtures() -> Vec<FrameFixture> {
     .collect()
 }
 
+pub(crate) fn operator_fixtures(fresh_repositories_per_language: usize) -> Vec<FrameFixture> {
+    [
+        (HistoricalV3Language::Go, "Go"),
+        (HistoricalV3Language::JavaScript, "JavaScript"),
+        (HistoricalV3Language::Kotlin, "Kotlin"),
+        (HistoricalV3Language::Python, "Python"),
+        (HistoricalV3Language::Rust, "Rust"),
+        (HistoricalV3Language::TypeScript, "TypeScript"),
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(index, (language, name))| {
+        let names = (0..fresh_repositories_per_language)
+            .map(|slot| format!("Fresh/{name}{slot:02}"))
+            .collect::<Vec<_>>();
+        let mut repositories = names
+            .iter()
+            .enumerate()
+            .map(|(slot, repository)| (index as u64 * 100 + slot as u64 + 10, repository.as_str()))
+            .collect::<Vec<_>>();
+        if index == 0 {
+            repositories.push((1, "Zed/Used"));
+        }
+        frame_fixture(language, name, index, &repositories)
+    })
+    .collect()
+}
+
 pub(crate) fn artifacts(fixtures: &[FrameFixture]) -> Vec<HistoricalV3SourceFrameArtifact<'_>> {
     fixtures
         .iter()
