@@ -1,16 +1,19 @@
+use super::super::history_v3_identical_tests::tests::passing_events;
 use super::super::history_v3_label_review::tests::review_fixture;
 use super::super::history_v3_semantic_census::tests as semantic_fixture;
 use super::super::history_v3_test_recipe::tests::prepare_qualified_rank;
 use super::super::{
     HistoricalV3IdenticalTestExecutionError, HistoricalV3IdenticalTestExecutionRequest,
-    HistoricalV3IdenticalTestExecutor, HistoricalV3NextStep, HistoricalV3RankStage,
-    HistoricalV3RawIdenticalTestExecution, HistoricalV3ReplayProgress,
+    HistoricalV3IdenticalTestExecutor, HistoricalV3IdenticalTestOutcome, HistoricalV3NextStep,
+    HistoricalV3RankStage, HistoricalV3RawIdenticalTestExecution, HistoricalV3ReplayProgress,
     HistoricalV3ReviewRecordPaths, HistoricalV3ReviewerVerdict, audit_historical_v3_label_reviews,
-    prepare_historical_v3_label_resolution, resolve_historical_v3_label,
-    write_historical_v3_final_label_new, write_historical_v3_label_audit_new,
-    write_historical_v3_label_worksheet_new, write_historical_v3_resolution_worksheet_new,
+    prepare_historical_v3_label_resolution, replay_historical_v3_ordered_progress,
+    resolve_historical_v3_label, write_historical_v3_final_label_new,
+    write_historical_v3_label_audit_new, write_historical_v3_label_worksheet_new,
+    write_historical_v3_resolution_worksheet_new,
 };
 use super::{HistoricalV3RunPaths, advance_historical_v3_ordered_step};
+use std::cell::Cell;
 
 struct UnexpectedExecutor;
 
@@ -26,6 +29,130 @@ impl HistoricalV3IdenticalTestExecutor for UnexpectedExecutor {
     {
         panic!("executor must not be called by this runner step")
     }
+}
+
+struct OnceUnavailableExecutor {
+    unavailable: Cell<bool>,
+}
+
+impl HistoricalV3IdenticalTestExecutor for OnceUnavailableExecutor {
+    fn recover(&self, _identity: &str) -> Result<(), HistoricalV3IdenticalTestExecutionError> {
+        Ok(())
+    }
+
+    fn execute(
+        &self,
+        request: &HistoricalV3IdenticalTestExecutionRequest<'_>,
+    ) -> Result<HistoricalV3RawIdenticalTestExecution, HistoricalV3IdenticalTestExecutionError>
+    {
+        if self.unavailable.replace(false) {
+            return Err(HistoricalV3IdenticalTestExecutionError::unavailable(
+                "synthetic interrupted executor",
+            ));
+        }
+        Ok(HistoricalV3RawIdenticalTestExecution {
+            image_digest: request.recipe.image_digest.clone(),
+            toolchain_manifest_sha256: request.recipe.toolchain_manifest_sha256.clone(),
+            dependency_store_sha256: request.recipe.dependency_store_sha256.clone(),
+            events: passing_events(request.recipe),
+            outcome: HistoricalV3IdenticalTestOutcome::Passed,
+        })
+    }
+}
+
+#[tokio::test]
+async fn resumes_local_census_and_retries_an_executor_outage() {
+    let fixture = semantic_fixture::fixture();
+    let protocol = semantic_fixture::protocol();
+    let collection = semantic_fixture::collection(&protocol, &fixture);
+    let language = collection.candidates[0].language;
+    let journal = tempfile::tempdir().unwrap();
+    let workspace = tempfile::tempdir().unwrap();
+    let review = tempfile::tempdir().unwrap();
+    let stop_path = review.path().join("stop.json");
+    semantic_fixture::prepare_rank(
+        &protocol,
+        &collection,
+        &fixture,
+        journal.path(),
+        workspace.path(),
+    );
+    let executor = OnceUnavailableExecutor {
+        unavailable: Cell::new(true),
+    };
+    let replay = || {
+        replay_historical_v3_ordered_progress(
+            &protocol,
+            &collection,
+            language,
+            journal.path(),
+            review.path(),
+            &stop_path,
+        )
+        .unwrap()
+    };
+    let advance = || {
+        advance_historical_v3_ordered_step(
+            &protocol,
+            &collection,
+            language,
+            HistoricalV3RunPaths {
+                journal_root: journal.path(),
+                workspace_root: workspace.path(),
+                review_root: review.path(),
+                stop_path: &stop_path,
+            },
+            &executor,
+        )
+    };
+    for expected in [
+        HistoricalV3RankStage::MechanicalQualification,
+        HistoricalV3RankStage::TestRecipe,
+        HistoricalV3RankStage::IdenticalTests,
+    ] {
+        let progress = advance().await.unwrap();
+        assert!(matches!(
+            progress,
+            HistoricalV3ReplayProgress::PendingRank {
+                processed_ranks: 0,
+                next: HistoricalV3NextStep::RankStage(stage),
+                ..
+            } if stage == expected
+        ));
+        assert_eq!(replay(), progress);
+    }
+    let before_outage = replay();
+    assert!(
+        advance()
+            .await
+            .unwrap_err()
+            .contains("synthetic interrupted executor")
+    );
+    assert_eq!(replay(), before_outage);
+    let after_retry = advance().await.unwrap();
+    assert!(matches!(
+        after_retry,
+        HistoricalV3ReplayProgress::PendingRank {
+            next: HistoricalV3NextStep::RankStage(HistoricalV3RankStage::ReadyForSourceReview),
+            ..
+        }
+    ));
+    assert_eq!(replay(), after_retry);
+    let human = advance().await.unwrap();
+    assert!(matches!(
+        human,
+        HistoricalV3ReplayProgress::PendingRank {
+            next: HistoricalV3NextStep::HumanReview,
+            ..
+        }
+    ));
+    assert_eq!(replay(), human);
+    assert!(
+        advance()
+            .await
+            .unwrap_err()
+            .contains("independent human review")
+    );
 }
 
 #[tokio::test]
