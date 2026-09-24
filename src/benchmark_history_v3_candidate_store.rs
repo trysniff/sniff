@@ -68,24 +68,31 @@ impl RateLimitHints {
     }
 }
 
-fn graphql_errors_present(payload: &[u8]) -> bool {
+fn graphql_rate_limit_error(payload: &[u8], remaining_zero: bool) -> bool {
     serde_json::from_slice::<serde_json::Value>(payload)
         .ok()
         .and_then(|value| {
-            value
-                .get("errors")?
-                .as_array()
-                .map(|errors| !errors.is_empty())
+            value.get("errors")?.as_array().map(|errors| {
+                errors.iter().any(|error| {
+                    remaining_zero
+                        || error
+                            .get("message")
+                            .and_then(serde_json::Value::as_str)
+                            .is_some_and(|message| {
+                                message.to_ascii_lowercase().contains("rate limit")
+                            })
+                })
+            })
         })
         .unwrap_or(false)
 }
 
 fn is_rate_limited(status: StatusCode, hints: &RateLimitHints, payload: &[u8]) -> bool {
-    // GitHub can exhaust a GraphQL quota with HTTP 200 and a populated errors array.
+    // GitHub can report primary or secondary GraphQL limits with HTTP 200.
     status == StatusCode::TOO_MANY_REQUESTS
         || (status == StatusCode::FORBIDDEN
             && (hints.remaining_zero || hints.retry_after_seconds.is_some()))
-        || (status.is_success() && hints.remaining_zero && graphql_errors_present(payload))
+        || (status.is_success() && graphql_rate_limit_error(payload, hints.remaining_zero))
 }
 
 impl GithubHistoricalV3CandidateTransport {
@@ -295,7 +302,7 @@ mod tests {
     use reqwest::header::HeaderValue;
 
     #[test]
-    fn graphql_200_rate_limit_requires_both_errors_and_empty_quota() {
+    fn graphql_200_retries_only_explicit_rate_limit_errors() {
         let mut headers = HeaderMap::new();
         headers.insert("x-ratelimit-remaining", HeaderValue::from_static("0"));
         let hints = RateLimitHints::from_headers(&headers);
@@ -315,6 +322,11 @@ mod tests {
             StatusCode::OK,
             &RateLimitHints::from_headers(&headers),
             br#"{"errors":[{"message":"other error"}]}"#
+        ));
+        assert!(is_rate_limited(
+            StatusCode::OK,
+            &RateLimitHints::from_headers(&headers),
+            br#"{"errors":[{"message":"You have exceeded a secondary rate limit."}]}"#
         ));
         assert!(is_rate_limited(
             StatusCode::TOO_MANY_REQUESTS,
