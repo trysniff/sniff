@@ -4,6 +4,8 @@ use crate::benchmark::{
     derive_historical_v2_frame_record, historical_v2_frame_sha256, validate_historical_v2_protocol,
 };
 
+const PROTOCOL: &[u8] = include_bytes!("../sniffbench/historical-v2-protocol.json");
+
 fn synthetic_inputs() -> (
     HistoricalV2Frame,
     HistoricalV2ExclusionManifest,
