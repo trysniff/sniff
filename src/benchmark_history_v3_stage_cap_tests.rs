@@ -266,6 +266,8 @@ async fn ninth_qualified_rank_publishes_cap_from_eight_persisted_reviews() {
         HistoricalV3ReplayProgress::Terminal { .. }
     ));
     assert_eq!(replay().unwrap(), terminal);
+    std::fs::write(&cap, b"{}").unwrap();
+    assert!(replay().is_err());
     std::fs::remove_file(cap).unwrap();
     assert!(replay().is_err());
 }
