@@ -291,7 +291,33 @@ fn completed_worksheets(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::benchmark::{HistoricalV3ReviewerVerdict, historical_v3_review_fixture};
+    use crate::benchmark::{
+        HistoricalV3FinalLabelBasis, HistoricalV3FinalLabelOutcome, HistoricalV3LabelResolver,
+        HistoricalV3ReviewerVerdict, historical_v3_review_fixture, read_historical_v3_final_label,
+    };
+
+    fn context_for_fixture(
+        fixture: &historical_v3_review_fixture::ReviewFixture,
+        review: &tempfile::TempDir,
+    ) -> ReviewContext {
+        let inputs = fixture.inputs();
+        let source = verify_historical_v3_source_review_rank(
+            inputs.protocol,
+            inputs.collection,
+            inputs.qualification.rank.stream_rank,
+            fixture.journal_path(),
+        )
+        .unwrap();
+        ReviewContext {
+            protocol: inputs.protocol.clone(),
+            collection: inputs.collection.clone(),
+            paths: HistoricalV3ReviewRecordPaths::new(review.path(), source.rank()),
+            source,
+            journal_root: fixture.journal_path().to_path_buf(),
+            review_root: review.path().to_path_buf(),
+            stop_path: review.path().join("stop.json"),
+        }
+    }
 
     #[tokio::test]
     async fn operator_handoff_seals_a_verified_consensus_label() {
@@ -299,24 +325,8 @@ mod tests {
         let inputs = fixture.inputs();
         let rank = inputs.qualification.rank.stream_rank;
         let language = inputs.qualification.rank.language();
-        let source = verify_historical_v3_source_review_rank(
-            inputs.protocol,
-            inputs.collection,
-            rank,
-            fixture.journal_path(),
-        )
-        .unwrap();
         let review = tempfile::tempdir().unwrap();
-        let paths = HistoricalV3ReviewRecordPaths::new(review.path(), source.rank());
-        let context = ReviewContext {
-            protocol: inputs.protocol.clone(),
-            collection: inputs.collection.clone(),
-            source,
-            paths,
-            journal_root: fixture.journal_path().to_path_buf(),
-            review_root: review.path().to_path_buf(),
-            stop_path: review.path().join("stop.json"),
-        };
+        let context = context_for_fixture(&fixture, &review);
 
         prepare_review_context(&context, language).unwrap();
         assert!(context.paths.reviewer_one.is_file());
@@ -349,5 +359,93 @@ mod tests {
             &context.review_root,
         )
         .unwrap();
+    }
+
+    #[tokio::test]
+    async fn operator_dispute_needs_a_distinct_completed_resolution_before_replay() {
+        let fixture = historical_v3_review_fixture::review_fixture().await;
+        let inputs = fixture.inputs();
+        let rank = inputs.qualification.rank.stream_rank;
+        let language = inputs.qualification.rank.language();
+        let review = tempfile::tempdir().unwrap();
+        let context = context_for_fixture(&fixture, &review);
+
+        prepare_review_context(&context, language).unwrap();
+        for (path, reviewer, verdict) in [
+            (
+                &context.paths.reviewer_one,
+                "reviewer-a",
+                HistoricalV3ReviewerVerdict::Clean,
+            ),
+            (
+                &context.paths.reviewer_two,
+                "reviewer-b",
+                HistoricalV3ReviewerVerdict::IntentionalBoundary,
+            ),
+        ] {
+            std::fs::write(
+                path,
+                serde_json::to_vec(&fixture.worksheet(reviewer, verdict)).unwrap(),
+            )
+            .unwrap();
+        }
+        audit_review_context(&context, language).unwrap();
+        prepare_resolution_context(&context, language).unwrap();
+        assert!(finalize_review_context(&context, language).is_err());
+        assert!(!context.paths.final_label.exists());
+
+        let mut resolution =
+            read_historical_v3_resolution_worksheet(&context.paths.resolution).unwrap();
+        resolution.resolver = Some(HistoricalV3LabelResolver {
+            resolver_id: "reviewer-a".to_string(),
+            years_experience: 8,
+            affiliation: "independent".to_string(),
+            independent_from_sniff: true,
+            sniff_output_hidden: true,
+            repository_identity_hidden: true,
+            change_metadata_hidden: true,
+            complete_source_context_inspected: true,
+            behavior_evidence_inspected: true,
+            model_assistance_used: false,
+            attestation: "I independently resolved the blind source evidence.".to_string(),
+        });
+        resolution.item.decision = Some(
+            fixture
+                .worksheet("unused", HistoricalV3ReviewerVerdict::Slop)
+                .task
+                .decision,
+        );
+        std::fs::write(
+            &context.paths.resolution,
+            serde_json::to_vec(&resolution).unwrap(),
+        )
+        .unwrap();
+        assert!(finalize_review_context(&context, language).is_err());
+        assert!(!context.paths.final_label.exists());
+
+        resolution.resolver.as_mut().unwrap().resolver_id = "independent-resolver".to_string();
+        std::fs::write(
+            &context.paths.resolution,
+            serde_json::to_vec(&resolution).unwrap(),
+        )
+        .unwrap();
+        finalize_review_context(&context, language).unwrap();
+        let verified = verify_historical_v3_final_review_from_disk(
+            &context.protocol,
+            &context.collection,
+            rank,
+            &context.journal_root,
+            &context.review_root,
+        )
+        .unwrap();
+        assert_eq!(verified.rank().stream_rank, rank);
+        let final_label = read_historical_v3_final_label(&context.paths.final_label).unwrap();
+        assert!(matches!(
+            final_label.outcome,
+            HistoricalV3FinalLabelOutcome::Accepted {
+                basis: HistoricalV3FinalLabelBasis::DisputeResolution,
+                ..
+            }
+        ));
     }
 }
