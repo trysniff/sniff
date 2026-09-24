@@ -505,6 +505,11 @@ mod history_v3_progress_replay;
 
 pub use history_v3_progress_replay::*;
 
+#[path = "benchmark_history_v3_stage_runner.rs"]
+mod history_v3_stage_runner;
+
+pub use history_v3_stage_runner::*;
+
 #[path = "benchmark_history_v3_ordered_stop.rs"]
 mod history_v3_ordered_stop;
 

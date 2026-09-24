@@ -34,6 +34,11 @@ pub enum HistoricalV3ReplayProgress {
     },
 }
 
+pub(super) struct HistoricalV3VerifiedProgress {
+    pub(super) progress: HistoricalV3ReplayProgress,
+    pub(super) outcomes: Vec<HistoricalV3OrderedRankOutcome>,
+}
+
 pub fn replay_historical_v3_ordered_progress(
     protocol: &HistoricalV3Protocol,
     collection: &HistoricalV3CandidateCollection,
@@ -42,6 +47,25 @@ pub fn replay_historical_v3_ordered_progress(
     review_root: &Path,
     stop_path: &Path,
 ) -> Result<HistoricalV3ReplayProgress, String> {
+    replay_historical_v3_ordered_progress_verified(
+        protocol,
+        collection,
+        language,
+        journal_root,
+        review_root,
+        stop_path,
+    )
+    .map(|verified| verified.progress)
+}
+
+pub(super) fn replay_historical_v3_ordered_progress_verified(
+    protocol: &HistoricalV3Protocol,
+    collection: &HistoricalV3CandidateCollection,
+    language: HistoricalV3Language,
+    journal_root: &Path,
+    review_root: &Path,
+    stop_path: &Path,
+) -> Result<HistoricalV3VerifiedProgress, String> {
     validate_historical_v3_candidate_collection_commitment(protocol, collection)?;
     if !protocol.languages.contains(&language) {
         return Err("historical-v3 progress language is outside the protocol".to_string());
@@ -78,7 +102,10 @@ pub fn replay_historical_v3_ordered_progress(
                     journal_root,
                     review_root,
                 )?;
-                return pending(&outcomes, stop_exists, rank, next);
+                return Ok(HistoricalV3VerifiedProgress {
+                    progress: pending(&outcomes, stop_exists, rank, next)?,
+                    outcomes,
+                });
             }
         }
         if !matches!(
@@ -92,24 +119,30 @@ pub fn replay_historical_v3_ordered_progress(
                 journal_root,
                 review_root,
             )?;
-            return finish(
-                protocol,
-                collection,
-                language,
-                &outcomes,
-                stop_path,
-                stop_exists,
-            );
+            return Ok(HistoricalV3VerifiedProgress {
+                progress: finish(
+                    protocol,
+                    collection,
+                    language,
+                    &outcomes,
+                    stop_path,
+                    stop_exists,
+                )?,
+                outcomes,
+            });
         }
     }
-    finish(
-        protocol,
-        collection,
-        language,
-        &outcomes,
-        stop_path,
-        stop_exists,
-    )
+    Ok(HistoricalV3VerifiedProgress {
+        progress: finish(
+            protocol,
+            collection,
+            language,
+            &outcomes,
+            stop_path,
+            stop_exists,
+        )?,
+        outcomes,
+    })
 }
 
 fn pending(

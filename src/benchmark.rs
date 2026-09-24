@@ -611,6 +611,8 @@ pub use release::{
     HistoricalV3NextStep, HistoricalV3ReplayProgress, replay_historical_v3_ordered_progress,
 };
 
+pub use release::{HistoricalV3RunPaths, advance_historical_v3_ordered_step};
+
 pub use release::{
     HISTORICAL_V3_SEMANTIC_CENSUS_EXCLUSION_SCHEMA_VERSION,
     HISTORICAL_V3_SEMANTIC_CENSUS_SCHEMA_VERSION, HistoricalV3CompilerIndexEvidence,
