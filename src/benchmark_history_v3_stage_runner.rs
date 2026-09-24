@@ -254,3 +254,7 @@ mod tests;
 #[cfg(test)]
 #[path = "benchmark_history_v3_stage_cap_tests.rs"]
 mod cap_tests;
+
+#[cfg(test)]
+#[path = "benchmark_history_v3_interleaved_tests.rs"]
+mod interleaved_tests;

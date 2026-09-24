@@ -15,7 +15,7 @@ use super::super::{
 use super::{HistoricalV3RunPaths, advance_historical_v3_ordered_step};
 use std::cell::Cell;
 
-struct UnexpectedExecutor;
+pub(super) struct UnexpectedExecutor;
 
 impl HistoricalV3IdenticalTestExecutor for UnexpectedExecutor {
     fn recover(&self, _identity: &str) -> Result<(), HistoricalV3IdenticalTestExecutionError> {
