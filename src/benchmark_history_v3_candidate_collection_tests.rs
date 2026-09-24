@@ -101,6 +101,11 @@ struct FakeTransport {
     calls: usize,
 }
 
+struct FaultTransport {
+    responses: VecDeque<Result<Vec<u8>, String>>,
+    calls: usize,
+}
+
 struct CollectionTransport {
     calls: usize,
     split_root: bool,
@@ -141,6 +146,20 @@ impl HistoricalV3CandidatePageTransport for FakeTransport {
             self.responses
                 .pop_front()
                 .ok_or_else(|| "unexpected synthetic fetch".to_string())
+        })
+    }
+}
+
+impl HistoricalV3CandidatePageTransport for FaultTransport {
+    fn fetch<'a>(
+        &'a mut self,
+        _request: &'a HistoricalV3CandidatePageRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, String>> + Send + 'a>> {
+        Box::pin(async move {
+            self.calls += 1;
+            self.responses
+                .pop_front()
+                .ok_or_else(|| "unexpected synthetic fetch".to_string())?
         })
     }
 }
@@ -219,6 +238,81 @@ async fn committed_raw_page_resumes_without_refetching() {
     assert_eq!(resumed.calls, 0);
     assert_eq!(same_checkpoint, checkpoint);
     assert_eq!(same_page, page);
+}
+
+#[tokio::test]
+async fn failed_transport_does_not_commit_a_page_and_retries_the_same_request() {
+    let root = tempfile::tempdir().unwrap();
+    let request = request();
+    let mut transport = FaultTransport {
+        responses: VecDeque::from([
+            Err("synthetic transport unavailable".to_string()),
+            Ok(response(1, false, None)),
+        ]),
+        calls: 0,
+    };
+    assert!(
+        load_or_fetch_page(root.path(), &request, &mut transport)
+            .await
+            .unwrap_err()
+            .contains("transport unavailable")
+    );
+    assert!(!root.path().join("pages").exists());
+    let (_, page) = load_or_fetch_page(root.path(), &request, &mut transport)
+        .await
+        .unwrap();
+    assert_eq!(transport.calls, 2);
+    assert_eq!(page.candidates.len(), 1);
+    assert!(
+        root.path()
+            .join("pages")
+            .join(format!("{}.json", request.request_sha256))
+            .is_file()
+    );
+}
+
+#[tokio::test]
+async fn truncated_response_cannot_commit_and_retries_the_same_request() {
+    let root = tempfile::tempdir().unwrap();
+    let request = request();
+    let complete = response(1, false, None);
+    let mut transport = FaultTransport {
+        responses: VecDeque::from([
+            Ok(complete[..complete.len() / 2].to_vec()),
+            Ok(complete),
+        ]),
+        calls: 0,
+    };
+    assert!(load_or_fetch_page(root.path(), &request, &mut transport)
+        .await
+        .is_err());
+    assert!(!root.path().join("pages").exists());
+    let (_, page) = load_or_fetch_page(root.path(), &request, &mut transport)
+        .await
+        .unwrap();
+    assert_eq!(transport.calls, 2);
+    assert_eq!(page.candidates.len(), 1);
+}
+
+#[tokio::test]
+async fn partial_pending_page_is_removed_before_retry() {
+    let root = tempfile::tempdir().unwrap();
+    let request = request();
+    let pages = root.path().join("pages");
+    std::fs::create_dir(&pages).unwrap();
+    let pending = pages.join(format!("{}.pending", request.request_sha256));
+    std::fs::write(&pending, b"{\"incomplete\":").unwrap();
+    let mut transport = FakeTransport {
+        responses: VecDeque::from([response(1, false, None)]),
+        calls: 0,
+    };
+    let (_, page) = load_or_fetch_page(root.path(), &request, &mut transport)
+        .await
+        .unwrap();
+    assert_eq!(transport.calls, 1);
+    assert_eq!(page.candidates.len(), 1);
+    assert!(!pending.exists());
+    assert!(pages.join(format!("{}.json", request.request_sha256)).is_file());
 }
 
 #[tokio::test]
