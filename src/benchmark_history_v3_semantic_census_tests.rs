@@ -183,17 +183,35 @@ pub(crate) fn prepare_rank(
     journal: &Path,
     workspace: &Path,
 ) {
+    prepare_rank_at(protocol, collection, fixture, 1, journal, workspace);
+}
+
+impl GitFixture {
+    pub(crate) fn add_pull_ref(&self, pull_request_number: usize) {
+        let reference = format!("refs/pull/{pull_request_number}/head");
+        git(&self.repository, &["update-ref", &reference, &self.head]);
+    }
+}
+
+pub(crate) fn prepare_rank_at(
+    protocol: &HistoricalV3Protocol,
+    collection: &HistoricalV3CandidateCollection,
+    fixture: &GitFixture,
+    stream_rank: usize,
+    journal: &Path,
+    workspace: &Path,
+) {
     let materialization = run_materialization_stage_with(
         protocol,
         collection,
-        1,
+        stream_rank,
         journal,
         workspace,
         |destination| {
             materialize_historical_v3_candidate_from_url(
                 protocol,
                 collection,
-                1,
+                stream_rank,
                 destination,
                 fixture.repository.to_str().unwrap(),
             )
@@ -204,7 +222,8 @@ pub(crate) fn prepare_rank(
         materialization,
         HistoricalV3MaterializationStageRun::Completed { resumed: false, .. }
     ));
-    run_historical_v3_source_census_stage(protocol, collection, 1, journal, workspace).unwrap();
+    run_historical_v3_source_census_stage(protocol, collection, stream_rank, journal, workspace)
+        .unwrap();
 }
 
 pub(crate) async fn prepare_semantic_rank(
@@ -213,10 +232,20 @@ pub(crate) async fn prepare_semantic_rank(
     journal: &Path,
     workspace: &Path,
 ) {
+    prepare_semantic_rank_at(protocol, collection, 1, journal, workspace).await;
+}
+
+pub(crate) async fn prepare_semantic_rank_at(
+    protocol: &HistoricalV3Protocol,
+    collection: &HistoricalV3CandidateCollection,
+    stream_rank: usize,
+    journal: &Path,
+    workspace: &Path,
+) {
     let outcome = run_historical_v3_semantic_census_stage_with(
         protocol,
         collection,
-        1,
+        stream_rank,
         journal,
         workspace,
         successful_run,

@@ -250,3 +250,7 @@ fn ensure_plain_child(parent: &Path, child: &Path) -> Result<(), String> {
 #[cfg(test)]
 #[path = "benchmark_history_v3_stage_runner_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "benchmark_history_v3_stage_cap_tests.rs"]
+mod cap_tests;
