@@ -277,15 +277,14 @@ async fn truncated_response_cannot_commit_and_retries_the_same_request() {
     let request = request();
     let complete = response(1, false, None);
     let mut transport = FaultTransport {
-        responses: VecDeque::from([
-            Ok(complete[..complete.len() / 2].to_vec()),
-            Ok(complete),
-        ]),
+        responses: VecDeque::from([Ok(complete[..complete.len() / 2].to_vec()), Ok(complete)]),
         calls: 0,
     };
-    assert!(load_or_fetch_page(root.path(), &request, &mut transport)
-        .await
-        .is_err());
+    assert!(
+        load_or_fetch_page(root.path(), &request, &mut transport)
+            .await
+            .is_err()
+    );
     assert!(!root.path().join("pages").exists());
     let (_, page) = load_or_fetch_page(root.path(), &request, &mut transport)
         .await
@@ -312,7 +311,11 @@ async fn partial_pending_page_is_removed_before_retry() {
     assert_eq!(transport.calls, 1);
     assert_eq!(page.candidates.len(), 1);
     assert!(!pending.exists());
-    assert!(pages.join(format!("{}.json", request.request_sha256)).is_file());
+    assert!(
+        pages
+            .join(format!("{}.json", request.request_sha256))
+            .is_file()
+    );
 }
 
 #[tokio::test]
