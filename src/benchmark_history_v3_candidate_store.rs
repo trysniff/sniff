@@ -2,12 +2,13 @@ use super::{
     HistoricalV3CandidatePageCheckpoint, HistoricalV3CandidatePageRequest, request_body,
     validate_page_checkpoint,
 };
-use reqwest::{Client, StatusCode};
+use reqwest::{Client, StatusCode, header::HeaderMap};
 use std::fs::{self, OpenOptions};
 use std::future::Future;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::time::{Duration, sleep};
 
 pub trait HistoricalV3CandidatePageTransport {
@@ -20,6 +21,71 @@ pub trait HistoricalV3CandidatePageTransport {
 pub struct GithubHistoricalV3CandidateTransport {
     client: Client,
     token: String,
+}
+
+struct RateLimitHints {
+    retry_after_seconds: Option<u64>,
+    reset_at_unix_seconds: Option<u64>,
+    remaining_zero: bool,
+}
+
+impl RateLimitHints {
+    fn from_headers(headers: &HeaderMap) -> Self {
+        let numeric = |name| {
+            headers
+                .get(name)
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| value.parse::<u64>().ok())
+        };
+        Self {
+            retry_after_seconds: numeric("retry-after"),
+            reset_at_unix_seconds: numeric("x-ratelimit-reset"),
+            remaining_zero: numeric("x-ratelimit-remaining") == Some(0),
+        }
+    }
+
+    fn wait(&self, attempt: u32, now_unix_seconds: u64) -> Result<Duration, String> {
+        let reset_wait = if self.remaining_zero {
+            self.reset_at_unix_seconds
+                .map(|reset| reset.saturating_sub(now_unix_seconds).saturating_add(1))
+                .unwrap_or(0)
+        } else {
+            0
+        };
+        let header_wait = reset_wait.max(self.retry_after_seconds.unwrap_or(0));
+        if header_wait > 86_400 {
+            return Err(
+                "historical-v3 GitHub rate limit wait exceeds one day; the exact request remains open"
+                    .to_string(),
+            );
+        }
+        let seconds = if header_wait == 0 {
+            60_u64.saturating_mul(1_u64 << attempt).min(3_600)
+        } else {
+            header_wait
+        };
+        Ok(Duration::from_secs(seconds.max(1)))
+    }
+}
+
+fn graphql_errors_present(payload: &[u8]) -> bool {
+    serde_json::from_slice::<serde_json::Value>(payload)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("errors")?
+                .as_array()
+                .map(|errors| !errors.is_empty())
+        })
+        .unwrap_or(false)
+}
+
+fn is_rate_limited(status: StatusCode, hints: &RateLimitHints, payload: &[u8]) -> bool {
+    // GitHub can exhaust a GraphQL quota with HTTP 200 and a populated errors array.
+    status == StatusCode::TOO_MANY_REQUESTS
+        || (status == StatusCode::FORBIDDEN
+            && (hints.remaining_zero || hints.retry_after_seconds.is_some()))
+        || (status.is_success() && hints.remaining_zero && graphql_errors_present(payload))
 }
 
 impl GithubHistoricalV3CandidateTransport {
@@ -58,16 +124,7 @@ impl HistoricalV3CandidatePageTransport for GithubHistoricalV3CandidateTransport
                 match response {
                     Ok(response) => {
                         let status = response.status();
-                        let retry_after = response
-                            .headers()
-                            .get("retry-after")
-                            .and_then(|value| value.to_str().ok())
-                            .and_then(|value| value.parse::<u64>().ok());
-                        let rate_limited = response
-                            .headers()
-                            .get("x-ratelimit-remaining")
-                            .and_then(|value| value.to_str().ok())
-                            == Some("0");
+                        let rate_limit = RateLimitHints::from_headers(response.headers());
                         let payload = match response.bytes().await {
                             Ok(payload) => payload,
                             Err(error) => {
@@ -75,30 +132,52 @@ impl HistoricalV3CandidatePageTransport for GithubHistoricalV3CandidateTransport
                                     "failed to read historical-v3 GitHub response: {error}"
                                 );
                                 if attempt < 3 {
-                                    sleep(Duration::from_secs(1_u64 << attempt)).await;
+                                    let delay = if status == StatusCode::TOO_MANY_REQUESTS
+                                        || rate_limit.remaining_zero
+                                        || rate_limit.retry_after_seconds.is_some()
+                                    {
+                                        let now = SystemTime::now()
+                                            .duration_since(UNIX_EPOCH)
+                                            .unwrap_or_default()
+                                            .as_secs();
+                                        rate_limit.wait(attempt, now)?
+                                    } else {
+                                        Duration::from_secs(1_u64 << attempt)
+                                    };
+                                    sleep(delay).await;
                                 }
                                 continue;
                             }
                         };
-                        if status.is_success() {
+                        let rate_limited = is_rate_limited(status, &rate_limit, &payload);
+                        if status.is_success() && !rate_limited {
                             return Ok(payload.to_vec());
                         }
                         last_error = format!(
                             "GitHub GraphQL returned {status}: {}",
                             bounded(&payload, 512)
                         );
-                        let retryable = status == StatusCode::TOO_MANY_REQUESTS
-                            || status.is_server_error()
-                            || (status == StatusCode::FORBIDDEN
-                                && (rate_limited || retry_after.is_some()));
+                        let retryable = rate_limited || status.is_server_error();
                         if !retryable {
                             return Err(last_error);
                         }
                         if attempt < 3 {
-                            sleep(Duration::from_secs(
-                                retry_after.unwrap_or(1_u64 << attempt).clamp(1, 120),
-                            ))
-                            .await;
+                            let delay = if rate_limited {
+                                let now = SystemTime::now()
+                                    .duration_since(UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_secs();
+                                rate_limit.wait(attempt, now)?
+                            } else {
+                                Duration::from_secs(1_u64 << attempt)
+                            };
+                            if rate_limited {
+                                eprintln!(
+                                    "historical-v3 GitHub rate limited; waiting {} seconds before retrying the exact request",
+                                    delay.as_secs()
+                                );
+                            }
+                            sleep(delay).await;
                         }
                     }
                     Err(error) => {
@@ -208,4 +287,77 @@ fn pending_path(root: &Path, request_sha256: &str) -> PathBuf {
 
 fn bounded(bytes: &[u8], limit: usize) -> String {
     String::from_utf8_lossy(&bytes[..bytes.len().min(limit)]).into_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use reqwest::header::HeaderValue;
+
+    #[test]
+    fn graphql_200_rate_limit_requires_both_errors_and_empty_quota() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-ratelimit-remaining", HeaderValue::from_static("0"));
+        let hints = RateLimitHints::from_headers(&headers);
+        assert!(is_rate_limited(
+            StatusCode::OK,
+            &hints,
+            br#"{"data":null,"errors":[{"message":"rate limit exceeded"}]}"#
+        ));
+        assert!(!is_rate_limited(
+            StatusCode::OK,
+            &hints,
+            br#"{"data":{"search":{"nodes":[]}},"errors":[]}"#
+        ));
+        assert!(!is_rate_limited(StatusCode::OK, &hints, b"not json"));
+        headers.insert("x-ratelimit-remaining", HeaderValue::from_static("1"));
+        assert!(!is_rate_limited(
+            StatusCode::OK,
+            &RateLimitHints::from_headers(&headers),
+            br#"{"errors":[{"message":"other error"}]}"#
+        ));
+        assert!(is_rate_limited(
+            StatusCode::TOO_MANY_REQUESTS,
+            &RateLimitHints::from_headers(&headers),
+            b""
+        ));
+        assert!(!is_rate_limited(
+            StatusCode::FORBIDDEN,
+            &RateLimitHints::from_headers(&headers),
+            b""
+        ));
+        headers.insert("retry-after", HeaderValue::from_static("60"));
+        assert!(is_rate_limited(
+            StatusCode::FORBIDDEN,
+            &RateLimitHints::from_headers(&headers),
+            b""
+        ));
+    }
+
+    #[test]
+    fn primary_limit_waits_for_reset_even_when_retry_after_is_shorter() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-ratelimit-remaining", HeaderValue::from_static("0"));
+        headers.insert("x-ratelimit-reset", HeaderValue::from_static("1600"));
+        headers.insert("retry-after", HeaderValue::from_static("45"));
+        let hints = RateLimitHints::from_headers(&headers);
+        assert_eq!(hints.wait(0, 1000).unwrap(), Duration::from_secs(601));
+        assert_eq!(hints.wait(0, 1600).unwrap(), Duration::from_secs(45));
+    }
+
+    #[test]
+    fn secondary_limit_backs_off_without_headers_but_never_retries_too_early() {
+        let hints = RateLimitHints::from_headers(&HeaderMap::new());
+        assert_eq!(hints.wait(0, 1000).unwrap(), Duration::from_secs(60));
+        assert_eq!(hints.wait(2, 1000).unwrap(), Duration::from_secs(240));
+
+        let mut headers = HeaderMap::new();
+        headers.insert("x-ratelimit-remaining", HeaderValue::from_static("0"));
+        headers.insert("x-ratelimit-reset", HeaderValue::from_static("87402"));
+        assert!(
+            RateLimitHints::from_headers(&headers)
+                .wait(0, 1000)
+                .is_err()
+        );
+    }
 }
