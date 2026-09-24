@@ -440,6 +440,11 @@ mod history_v3_time;
 #[path = "benchmark_history_v3_candidate_collection.rs"]
 mod history_v3_candidate_collection;
 
+#[cfg(test)]
+pub(crate) use history_v3_label_review::tests as historical_v3_review_fixture;
+#[cfg(test)]
+pub(crate) use history_v3_source_binding::tests as historical_v3_source_fixture;
+
 pub use history_v3_candidate_collection::*;
 
 #[path = "benchmark_history_v3_materialization.rs"]

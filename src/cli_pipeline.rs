@@ -8,6 +8,8 @@ mod graph;
 mod historical_v2_release;
 #[path = "cli_pipeline_historical_v2_review.rs"]
 mod historical_v2_review;
+#[path = "cli_pipeline_historical_v3.rs"]
+mod historical_v3;
 #[path = "cli_pipeline_intentional_boundary.rs"]
 mod intentional_boundary;
 #[path = "cli_pipeline_intentional_boundary_review.rs"]
@@ -49,6 +51,14 @@ pub(crate) use historical_v2_review::{
     prepare_historical_v2_labels, prepare_historical_v2_resolution,
     prepare_historical_v2_source_review, resolve_historical_v2_labels_cli,
     validate_historical_v2_labels, validate_historical_v2_source_review_cli,
+};
+pub(crate) use historical_v3::{
+    advance as advance_historical_v3, audit_review as audit_historical_v3_review,
+    collect as collect_historical_v3, finalize_review as finalize_historical_v3_review,
+    init as init_historical_v3, prepare_resolution as prepare_historical_v3_resolution,
+    prepare_review as prepare_historical_v3_review, run as run_historical_v3,
+    seal_prior as seal_historical_v3_prior, seal_protocol as seal_historical_v3_protocol_cli,
+    status as historical_v3_status, validate_review as validate_historical_v3_review,
 };
 pub(crate) use intentional_boundary::{
     IntentionalBoundaryCollectionInputs, collect_intentional_boundary_benchmark_frame,
