@@ -249,6 +249,7 @@ fn default_scan_reviews_every_supported_language_end_to_end() {
         .filter(|prompt| prompt.contains("COMPILER-RESOLVED METHOD RELATIONSHIPS"))
         .collect::<Vec<_>>();
     assert!(!synthesis_prompts.is_empty(), "expected synthesis to run");
+    let canonical_root = fs::canonicalize(&root).expect("canonical fixture root");
     let mut unit_methods = std::collections::BTreeMap::new();
     let mut relationship_units = std::collections::BTreeSet::new();
     for prompt in &synthesis_prompts {
@@ -272,9 +273,16 @@ fn default_scan_reviews_every_supported_language_end_to_end() {
                 .split_once(" lines=")
                 .map(|(name, _)| name)
                 .expect("synthesis method identity");
-            let file = std::path::Path::new(file)
-                .strip_prefix(&root)
-                .expect("synthesis file belongs to the fixture")
+            let file = fs::canonicalize(file).expect("canonical synthesis file");
+            let file = file
+                .strip_prefix(&canonical_root)
+                .unwrap_or_else(|_| {
+                    panic!(
+                        "synthesis file {} is outside fixture {}",
+                        file.display(),
+                        canonical_root.display()
+                    )
+                })
                 .to_string_lossy()
                 .replace('\\', "/");
             unit_methods.insert(unit.to_string(), (file, method.to_string()));
