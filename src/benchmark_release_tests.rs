@@ -7,6 +7,18 @@ fn digest(text: &str) -> String {
     format!("{:x}", Sha256::digest(text.as_bytes()))
 }
 
+#[test]
+fn public_docs_name_the_current_release_schema() {
+    let readme = include_str!("../README.md");
+    assert!(readme.contains(&format!(
+        "SniffBench v{RELEASE_SCHEMA_VERSION} corpus manifest"
+    )));
+    let benchmark_guide = include_str!("../sniffbench/README.md");
+    assert!(benchmark_guide.contains(&format!(
+        "Release submissions use schema v{RELEASE_SCHEMA_VERSION}."
+    )));
+}
+
 fn snapshot(root: &Path, artifact_path: &str, repository_path: &str, text: &str) -> SourceSnapshot {
     let path = root.join(artifact_path);
     fs::create_dir_all(path.parent().expect("artifact parent")).expect("create artifact dir");

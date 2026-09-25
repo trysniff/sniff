@@ -175,6 +175,15 @@ mod tests {
     }
 
     #[test]
+    fn blind_labeling_guide_keeps_uncertainty_out_of_kinda_slop() {
+        let guide = include_str!("../sniffbench/LABELING.md");
+        assert!(guide.contains(
+            "Kinda Slop is proven but minor unnecessary friction; uncertainty is Unresolved."
+        ));
+        assert!(!guide.contains("simplification confidence is lower"));
+    }
+
+    #[test]
     fn prompt_vocabulary_covers_every_typed_finding_pattern_once() {
         let prompt_names = super::SLOP_PATTERN_PROMPT_LIST
             .replace(", and ", ", ")
