@@ -1078,7 +1078,11 @@ fn grant_acl_with_inheritance(
     let inheritance = if inherit { "(OI)(CI)" } else { "" };
     let rule = format!("*{sid}:{inheritance}{permission}");
     let mut command = Command::new("icacls");
-    command.arg(&path).arg("/grant").arg(rule).arg("/C");
+    command
+        .arg(native_acl_path(&path))
+        .arg("/grant")
+        .arg(rule)
+        .arg("/C");
     let output = run_icacls(command).map_err(|error| match error {
         SandboxError::Unavailable(message) => SandboxError::Unavailable(format!(
             "Windows AppContainer requires icacls for {}: {message}",
@@ -1869,6 +1873,21 @@ mod tests {
         revoke_acl(&normalized, &sid).unwrap();
 
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn inherited_acl_grants_support_paths_longer_than_max_path() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut target = directory.path().to_path_buf();
+        while target.as_os_str().len() <= 280 {
+            target.push("long-path-segment-0123456789");
+        }
+        std::fs::create_dir_all(&target).unwrap();
+        let capability = CapabilitySid::derive(super::PERSISTENT_READ_CAPABILITY).unwrap();
+        let sid = sid_string(capability.sid).unwrap();
+
+        super::grant_acl_with_inheritance(&target, &sid, "RX", true).unwrap();
+        revoke_acl(&target, &sid).unwrap();
     }
 
     #[test]
