@@ -3,10 +3,24 @@ use super::super::source_selection::test_selection_artifacts;
 use super::validate_artifact;
 use super::{
     SourceRepositoryDraft, copy_committed_file, create_composite_source_seal, create_source_seal,
-    dominant_method_language, selected_context_paths, validate_source_seal,
+    dominant_method_language, selected_context_paths, source_seal_output_directory,
+    validate_source_seal,
 };
 use std::fs;
+use std::path::Path;
 use std::process::Command;
+
+#[test]
+fn bare_source_seal_output_uses_current_directory() {
+    assert_eq!(
+        source_seal_output_directory(Path::new("seal.json")),
+        Path::new(".")
+    );
+    assert_eq!(
+        source_seal_output_directory(Path::new("bundle/seal.json")),
+        Path::new("bundle")
+    );
+}
 
 fn git(root: &std::path::Path, args: &[&str]) -> String {
     let output = Command::new("git")
