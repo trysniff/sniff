@@ -6,7 +6,11 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::path::{Component, Path};
 
-pub(crate) const RELEASE_SCHEMA_VERSION: u32 = 7;
+pub(crate) const RELEASE_SCHEMA_VERSION: u32 = 8;
+pub const BASELINE_RAW_OUTPUT_SCHEMA_VERSION: u32 = 1;
+
+#[path = "benchmark_baseline_raw.rs"]
+mod baseline_raw;
 
 #[path = "benchmark_streamed_json_hash.rs"]
 mod streamed_json_hash;
@@ -2257,12 +2261,21 @@ fn validate_baselines(
         }
         require_safe_artifact_path(&baseline.raw_output_artifact_path)?;
         require_sha256("baseline raw_output_sha256", &baseline.raw_output_sha256)?;
-        validate_artifact_hash(
+        let raw_output = read_validated_artifact(
             corpus_root,
             &baseline.raw_output_artifact_path,
             &baseline.raw_output_sha256,
             "baseline raw output",
         )?;
+        baseline_raw::validate_baseline_raw_output(corpus, baseline, &raw_output)?;
+        validate_blind_reviewer(&baseline.extraction_reviewer)?;
+        validate_reviewer_separation(corpus, &baseline.extraction_reviewer)?;
+        if baseline.extraction_attestation.trim().len() < 40 {
+            return Err(format!(
+                "baseline {} requires a substantive complete-extraction attestation",
+                baseline.tool_id
+            ));
+        }
         let covered = baseline
             .covered_case_ids
             .iter()
@@ -2505,6 +2518,15 @@ fn validate_artifact_hash(
     expected_hash: &str,
     label: &str,
 ) -> Result<(), String> {
+    read_validated_artifact(corpus_root, artifact_path, expected_hash, label).map(|_| ())
+}
+
+fn read_validated_artifact(
+    corpus_root: &Path,
+    artifact_path: &str,
+    expected_hash: &str,
+    label: &str,
+) -> Result<Vec<u8>, String> {
     let root = fs::canonicalize(corpus_root).map_err(|error| {
         format!(
             "failed to resolve benchmark corpus root {}: {error}",
@@ -2518,13 +2540,13 @@ fn validate_artifact_hash(
     }
     let bytes = fs::read(&resolved)
         .map_err(|error| format!("failed to read {label} {artifact_path}: {error}"))?;
-    let actual_hash = format!("{:x}", Sha256::digest(bytes));
+    let actual_hash = format!("{:x}", Sha256::digest(&bytes));
     if !actual_hash.eq_ignore_ascii_case(expected_hash) {
         return Err(format!(
             "{label} {artifact_path} hash mismatch: expected {expected_hash}, got {actual_hash}"
         ));
     }
-    Ok(())
+    Ok(bytes)
 }
 
 fn validate_blind_reviewer(reviewer: &BlindReviewer) -> Result<(), String> {

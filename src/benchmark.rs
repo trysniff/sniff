@@ -7,6 +7,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 mod release;
 
 #[cfg(test)]
+pub(crate) use release::RELEASE_SCHEMA_VERSION;
+#[cfg(test)]
 pub(crate) use release::historical_v3_review_fixture;
 #[cfg(test)]
 pub(crate) use release::historical_v3_source_fixture;

@@ -4,7 +4,8 @@ use super::{
 use crate::benchmark::{
     ActualCostReceipt, BenchmarkAdjudication, BenchmarkCase, BenchmarkCorpus, BenchmarkPartition,
     BenchmarkScope, BenchmarkSourceSeal, BlindCaseBundle, LABEL_RESOLUTION_SCHEMA_VERSION,
-    LabelResolver, ReleaseBenchmarkCase, ReviewerDisposition, SourceSnapshot, freeze_corpus,
+    LabelResolver, RELEASE_SCHEMA_VERSION, ReleaseBenchmarkCase, ReviewerDisposition,
+    SourceSnapshot, freeze_corpus,
 };
 use crate::completed_run::{
     COMPLETED_RUN_SCHEMA_VERSION, CompletedRunArtifact, CompletedRunCoverage,
@@ -238,7 +239,7 @@ fn frozen_corpus(root: &std::path::Path) -> BenchmarkCorpus {
     sources.extend(historical_v2_sources);
     freeze_corpus(
         BenchmarkCorpus {
-            schema_version: 7,
+            schema_version: RELEASE_SCHEMA_VERSION,
             corpus_id: "import-corpus".to_string(),
             frozen_at: "2026-08-12T00:00:00Z".to_string(),
             source_commitment_sha256: String::new(),

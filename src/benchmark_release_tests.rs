@@ -1,4 +1,5 @@
 use super::*;
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use std::fs;
 use tempfile::TempDir;
 
@@ -268,11 +269,6 @@ fn corpus() -> (TempDir, BenchmarkCorpus) {
         .computed_label_commitment_sha256()
         .expect("compute commitment");
     fs::create_dir_all(root.path().join("baselines")).expect("create baseline dir");
-    fs::write(
-        root.path().join("baselines/raw.json"),
-        "raw baseline output\n",
-    )
-    .expect("write baseline output");
     fs::create_dir_all(root.path().join("costs")).expect("create cost evidence dir");
     for index in 1..=3 {
         let raw_path = format!("costs/raw-{index}.json");
@@ -391,26 +387,78 @@ fn submission(corpus: &BenchmarkCorpus, root: &std::path::Path) -> BenchmarkSubm
         runs,
         baselines: REQUIRED_BASELINES
             .iter()
-            .map(|tool_id| BenchmarkBaseline {
+            .map(|tool_id| {
+                let run_id = format!("baseline-{tool_id}");
+                let finding_id = format!("{tool_id}-rejected");
+                let raw = BenchmarkBaselineRawOutput {
+                    schema_version: BASELINE_RAW_OUTPUT_SCHEMA_VERSION,
+                    tool_id: (*tool_id).to_string(),
+                    run_id: run_id.clone(),
+                    source_commitment_sha256: corpus.source_commitment_sha256.clone(),
+                    cases: corpus
+                        .cases
+                        .iter()
+                        .enumerate()
+                        .map(|(index, case)| {
+                            let response = format!(
+                                "tool={tool_id}; case={}; finding=rejected\n",
+                                case.label.case_id
+                            );
+                            let finding_start = response.find("finding=rejected").unwrap();
+                            BenchmarkBaselineRawCaseOutput {
+                                case_id: case.label.case_id.clone(),
+                                response_base64: STANDARD.encode(response.as_bytes()),
+                                response_sha256: digest(&response),
+                                findings: if index == 0 {
+                                    vec![BenchmarkBaselineRawFindingSpan {
+                                        finding_id: finding_id.clone(),
+                                        start_byte: finding_start,
+                                        end_byte: finding_start + "finding=rejected".len(),
+                                    }]
+                                } else {
+                                    Vec::new()
+                                },
+                            }
+                        })
+                        .collect(),
+                };
+                let raw_output_artifact_path = format!("baselines/{tool_id}.json");
+                let raw_bytes = serde_json::to_vec_pretty(&raw).expect("serialize baseline output");
+                fs::write(root.join(&raw_output_artifact_path), &raw_bytes)
+                    .expect("write baseline output");
+                BenchmarkBaseline {
                 tool_id: (*tool_id).to_string(),
                 tool_version: "test-version".to_string(),
-                run_id: format!("baseline-{tool_id}"),
+                run_id,
                 corpus_id: corpus.corpus_id.clone(),
                 source_commitment_sha256: corpus.source_commitment_sha256.clone(),
                 label_commitment_sha256: corpus.label_commitment_sha256.clone(),
-                raw_output_artifact_path: "baselines/raw.json".to_string(),
-                raw_output_sha256: digest("raw baseline output\n"),
+                raw_output_artifact_path,
+                raw_output_sha256: format!("{:x}", Sha256::digest(&raw_bytes)),
                 covered_case_ids: corpus
                     .cases
                     .iter()
                     .map(|case| case.label.case_id.clone())
                     .collect(),
                 findings: vec![BenchmarkBaselineFinding {
-                    finding_id: format!("{tool_id}-rejected"),
+                    finding_id,
                     matched_case_id: None,
                     reviewer_disposition: ReviewerDisposition::Rejected,
                     reviewer_minutes: 10.0,
                 }],
+                extraction_reviewer: BlindReviewer {
+                    reviewer_id: format!("baseline-extractor-{tool_id}"),
+                    years_experience: 8,
+                    affiliation: "Independent evaluator".to_string(),
+                    independent_from_sniff: true,
+                    labels_hidden_during_review: true,
+                    attestation: "I independently extracted baseline findings without hidden labels."
+                        .to_string(),
+                },
+                extraction_attestation:
+                    "I checked every baseline case response and recorded every actionable finding."
+                        .to_string(),
+            }
             })
             .collect(),
     }
@@ -700,12 +748,90 @@ fn release_submission_is_bound_to_sources_and_raw_baseline_outputs() {
 
     let valid_submission = submission(&corpus, root.path());
     fs::write(
-        root.path().join("baselines/raw.json"),
+        root.path()
+            .join(&valid_submission.baselines[0].raw_output_artifact_path),
         "tampered baseline output\n",
     )
     .expect("tamper baseline output");
     let error = evaluate_release(&corpus, &valid_submission, root.path()).unwrap_err();
     assert!(error.contains("baseline raw output") && error.contains("hash mismatch"));
+}
+
+fn rewrite_baseline_raw(
+    root: &Path,
+    baseline: &mut BenchmarkBaseline,
+    edit: impl FnOnce(&mut BenchmarkBaselineRawOutput),
+) {
+    let path = root.join(&baseline.raw_output_artifact_path);
+    let mut raw: BenchmarkBaselineRawOutput =
+        serde_json::from_slice(&fs::read(&path).expect("read baseline output"))
+            .expect("parse baseline output");
+    edit(&mut raw);
+    let bytes = serde_json::to_vec_pretty(&raw).expect("serialize baseline output");
+    fs::write(path, &bytes).expect("rewrite baseline output");
+    baseline.raw_output_sha256 = format!("{:x}", Sha256::digest(&bytes));
+}
+
+#[test]
+fn baseline_coverage_claim_requires_a_raw_response_for_every_case() {
+    let (root, corpus) = corpus();
+    let mut submission = submission(&corpus, root.path());
+    rewrite_baseline_raw(root.path(), &mut submission.baselines[0], |raw| {
+        raw.cases.pop();
+    });
+
+    let error = evaluate_release(&corpus, &submission, root.path()).unwrap_err();
+    assert!(error.contains("complete frozen source corpus"), "{error}");
+}
+
+#[test]
+fn baseline_findings_must_have_matching_raw_response_spans() {
+    let (root, corpus) = corpus();
+    let mut submission = submission(&corpus, root.path());
+    rewrite_baseline_raw(root.path(), &mut submission.baselines[0], |raw| {
+        raw.cases[0].findings.clear();
+    });
+
+    let error = evaluate_release(&corpus, &submission, root.path()).unwrap_err();
+    assert!(
+        error.contains("does not account for every case and finding"),
+        "{error}"
+    );
+
+    let finding_id = submission.baselines[0].findings[0].finding_id.clone();
+    rewrite_baseline_raw(root.path(), &mut submission.baselines[0], |raw| {
+        raw.cases[0].findings.push(BenchmarkBaselineRawFindingSpan {
+            finding_id,
+            start_byte: 0,
+            end_byte: 999_999,
+        });
+    });
+    let error = evaluate_release(&corpus, &submission, root.path()).unwrap_err();
+    assert!(error.contains("invalid raw response span"), "{error}");
+}
+
+#[test]
+fn baseline_extraction_requires_independent_attestation() {
+    let (root, corpus) = corpus();
+    let mut submission = submission(&corpus, root.path());
+    submission.baselines[0].extraction_attestation.clear();
+
+    let error = evaluate_release(&corpus, &submission, root.path()).unwrap_err();
+    assert!(error.contains("complete-extraction attestation"), "{error}");
+}
+
+#[test]
+fn baseline_extractor_cannot_also_adjudicate_labels() {
+    let (root, corpus) = corpus();
+    let mut submission = submission(&corpus, root.path());
+    submission.baselines[0].extraction_reviewer.reviewer_id =
+        corpus.cases[1].adjudications[0].reviewer_id.clone();
+
+    let error = evaluate_release(&corpus, &submission, root.path()).unwrap_err();
+    assert!(
+        error.contains("also adjudicated a frozen corpus label"),
+        "{error}"
+    );
 }
 
 #[test]
