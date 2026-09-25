@@ -23,6 +23,13 @@ use std::fs;
 use std::io::{Error as IoError, ErrorKind, Write};
 use std::path::Path;
 
+fn containing_directory(path: &str) -> &Path {
+    Path::new(path)
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
+}
+
 /// Evaluate a complete external benchmark ledger without loading configuration
 /// or contacting an LLM provider.
 pub(crate) fn benchmark(
@@ -31,9 +38,7 @@ pub(crate) fn benchmark(
 ) -> Result<i32, Box<dyn std::error::Error>> {
     let corpus = read_json::<BenchmarkCorpus>(cases_path)?;
     let submission = read_json::<BenchmarkSubmission>(predictions_path)?;
-    let corpus_root = Path::new(cases_path)
-        .parent()
-        .unwrap_or_else(|| Path::new("."));
+    let corpus_root = containing_directory(cases_path);
     let metrics = evaluate_release(&corpus, &submission, corpus_root).map_err(|error| {
         IoError::new(
             ErrorKind::InvalidData,
@@ -58,9 +63,7 @@ pub(crate) fn freeze_benchmark(
     output_path: &str,
 ) -> Result<i32, Box<dyn std::error::Error>> {
     let draft = read_json::<BenchmarkCorpus>(draft_path)?;
-    let corpus_root = Path::new(draft_path)
-        .parent()
-        .unwrap_or_else(|| Path::new("."));
+    let corpus_root = containing_directory(draft_path);
     let frozen = freeze_corpus(draft, corpus_root).map_err(|error| {
         IoError::new(
             ErrorKind::InvalidData,
@@ -81,9 +84,7 @@ pub(crate) fn seal_non_blind_benchmark_sources(
     output_path: &str,
 ) -> Result<i32, Box<dyn std::error::Error>> {
     let draft = read_json::<NonBlindSourceSeal>(draft_path)?;
-    let artifact_root = Path::new(draft_path)
-        .parent()
-        .unwrap_or_else(|| Path::new("."));
+    let artifact_root = containing_directory(draft_path);
     let frozen = freeze_non_blind_source_seal(draft, artifact_root).map_err(|error| {
         IoError::new(
             ErrorKind::InvalidData,
@@ -644,9 +645,7 @@ pub(crate) fn prepare_benchmark_labels(
     output_path: &str,
 ) -> Result<i32, Box<dyn std::error::Error>> {
     let (seal, seal_bytes) = read_source_seal(seal_path)?;
-    let seal_root = Path::new(seal_path)
-        .parent()
-        .unwrap_or_else(|| Path::new("."));
+    let seal_root = containing_directory(seal_path);
     let worksheet =
         prepare_label_review(&seal, seal_root, &sha256(&seal_bytes)).map_err(|error| {
             IoError::new(
@@ -670,9 +669,7 @@ pub(crate) fn validate_benchmark_labels(
     review_path: &str,
 ) -> Result<i32, Box<dyn std::error::Error>> {
     let (seal, seal_bytes) = read_source_seal(seal_path)?;
-    let seal_root = Path::new(seal_path)
-        .parent()
-        .unwrap_or_else(|| Path::new("."));
+    let seal_root = containing_directory(seal_path);
     let review = read_json::<LabelReviewWorksheet>(review_path)?;
     validate_label_review(&seal, seal_root, &sha256(&seal_bytes), &review).map_err(|error| {
         IoError::new(
@@ -715,9 +712,7 @@ pub(crate) fn audit_benchmark_labels(
     review_paths: &[String],
 ) -> Result<i32, Box<dyn std::error::Error>> {
     let (seal, seal_bytes) = read_source_seal(seal_path)?;
-    let seal_root = Path::new(seal_path)
-        .parent()
-        .unwrap_or_else(|| Path::new("."));
+    let seal_root = containing_directory(seal_path);
     let reviews = review_paths
         .iter()
         .map(|path| read_json::<LabelReviewWorksheet>(path))
@@ -773,9 +768,7 @@ pub(crate) fn resolve_benchmark_labels(
         )
     })?;
     let resolution = read_json::<LabelResolutionManifest>(resolution_path)?;
-    let root = Path::new(resolution_path)
-        .parent()
-        .unwrap_or_else(|| Path::new("."));
+    let root = containing_directory(resolution_path);
     let bundle = build_blind_case_bundle(&seal, &sha256(&seal_bytes), &audit, &resolution, root)
         .map_err(|error| {
             IoError::new(
@@ -798,9 +791,7 @@ pub(crate) fn prepare_benchmark_run(
     artifact_paths: &[String],
 ) -> Result<i32, Box<dyn std::error::Error>> {
     let corpus = read_json::<BenchmarkCorpus>(corpus_path)?;
-    let corpus_root = Path::new(corpus_path)
-        .parent()
-        .unwrap_or_else(|| Path::new("."));
+    let corpus_root = containing_directory(corpus_path);
     let artifacts = artifact_paths
         .iter()
         .map(std::path::PathBuf::from)
@@ -825,9 +816,7 @@ pub(crate) fn import_benchmark_run(
 ) -> Result<i32, Box<dyn std::error::Error>> {
     let corpus = read_json::<BenchmarkCorpus>(corpus_path)?;
     let review = read_json::<BenchmarkRunReview>(review_path)?;
-    let corpus_root = Path::new(corpus_path)
-        .parent()
-        .unwrap_or_else(|| Path::new("."));
+    let corpus_root = containing_directory(corpus_path);
     let run = import_reviewed_run(&corpus, corpus_root, &review).map_err(|error| {
         IoError::new(
             ErrorKind::InvalidData,
@@ -881,7 +870,7 @@ fn read_source_seal(
     path: &str,
 ) -> Result<(BenchmarkSourceSeal, Vec<u8>), Box<dyn std::error::Error>> {
     let (seal, bytes) = read_source_seal_manifest(path)?;
-    let root = Path::new(path).parent().unwrap_or_else(|| Path::new("."));
+    let root = containing_directory(path);
     validate_source_seal(&seal, root).map_err(|error| {
         IoError::new(
             ErrorKind::InvalidData,
@@ -917,8 +906,8 @@ fn sha256(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        audit_benchmark_source_selection, benchmark, prepare_benchmark_source_selection,
-        seal_benchmark_sources, write_new_file,
+        audit_benchmark_source_selection, benchmark, containing_directory,
+        prepare_benchmark_source_selection, seal_benchmark_sources, write_new_file,
     };
     use crate::benchmark::{
         SOURCE_SAMPLING_POLICY_SCHEMA_VERSION, SourceAssessmentEvidence,
@@ -928,6 +917,7 @@ mod tests {
     use sha2::{Digest, Sha256};
     use std::collections::{BTreeMap, HashMap};
     use std::fs;
+    use std::path::Path;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -940,6 +930,22 @@ mod tests {
                 .expect("system clock should be after the Unix epoch")
                 .as_nanos()
         ))
+    }
+
+    #[test]
+    fn benchmark_input_parent_uses_current_directory_for_bare_filename() {
+        assert_eq!(
+            containing_directory("blind-source-seal.json"),
+            Path::new(".")
+        );
+        assert_eq!(
+            containing_directory("./blind-source-seal.json"),
+            Path::new(".")
+        );
+        assert_eq!(
+            containing_directory("seal/blind-source-seal.json"),
+            Path::new("seal")
+        );
     }
 
     #[test]
