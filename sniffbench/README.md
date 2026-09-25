@@ -4,6 +4,22 @@ SniffBench is Sniff's reproducible evaluation protocol. Blind OSS source
 selection, source sealing, independent method labeling, run import, and final
 evaluation use create-new, hash-bound artifacts.
 
+## Release comparison evidence
+
+Release submissions use schema v8. Each comparison baseline must retain one
+raw-response bundle with a hash-checked UTF-8 response for every frozen case.
+The bundle records the tool and run IDs, source commitment, per-case response
+bytes as base64, response SHA-256, and exact byte spans for every claimed
+finding. The submission separately names the complete covered-case set and an
+independent, label-blind extraction reviewer who attests that every actionable
+response finding was recorded. The reviewer cannot also adjudicate corpus
+labels. `sniff benchmark evaluate` rejects missing cases, unanchored findings,
+tampered responses, and mismatched commitments offline.
+
+These checks prove the submission is internally consistent. They do not prove
+that a third-party tool was actually invoked or that the reviewer was truthful;
+retain independent execution receipts and publish that limitation with results.
+
 ## Candidate-blind historical v2
 
 Historical-v2 is a separate, precommitted protocol; it does not reroll or

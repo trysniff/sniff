@@ -23,10 +23,18 @@ to `true`. Maintainer status is preserved in the final audit.
 Every method must receive exactly one `tier`:
 
 - `slop`: unnecessary or misleading machinery with a clear, material burden.
-- `kinda_slop`: evidenced unnecessary machinery whose burden is real but small
-  or whose simplification confidence is lower.
+- `kinda_slop`: proven unnecessary machinery whose burden is real but minor.
 - `clean`: no evidenced unnecessary or misleading machinery.
 - `unresolved`: the sealed evidence is insufficient to decide safely.
+
+Kinda Slop is proven but minor unnecessary friction; uncertainty is Unresolved.
+
+> Protocol clarification (2026-09-25): an earlier guide allowed lower
+> confidence to become `kinda_slop`. That contradicted the four-verdict
+> contract. Insufficient evidence requires `unresolved`. The source seal and
+> review template were not changed; no public reviewer commitment had been
+> posted on [issue #36](https://github.com/trysniff/sniff/issues/36) at this
+> correction.
 
 `clean` and `unresolved` decisions use pattern `none`. Findings use exactly one
 of these mechanism names:
