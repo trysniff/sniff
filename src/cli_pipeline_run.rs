@@ -215,9 +215,7 @@ async fn build_run_report(
     execution: llm::ReviewExecutionContext<'_>,
 ) -> Result<(RunReport, bool, Vec<crate::types::FileRecord>), Box<dyn std::error::Error>> {
     let compiler_methods_expected = file_records.iter().map(|file| file.methods.len()).sum();
-    let compiler_methods_covered = execution
-        .compiler_method_contexts
-        .map_or(0, std::collections::BTreeMap::len);
+    let compiler_methods_covered = execution.compiler_method_contexts.len();
     let review = llm::prepare_review_artifacts(path, config, file_records, execution).await?;
 
     let mut stats = stats::generate_stats(stats::StatsInput {
@@ -309,7 +307,7 @@ pub async fn run(
         return Ok(3);
     }
     eprintln!("Building compiler semantic index...");
-    let compiler_method_contexts =
+    let compiler_method_evidence =
         super::preflight::build_compiler_method_contexts(&repository_root, &file_records)
             .await
             .map_err(|err| IoError::other(format!("compiler semantic indexing failed: {err}")))?;
@@ -317,7 +315,7 @@ pub async fn run(
         crate::config_loader::resolve_proof_commands(target_path).map_err(IoError::other)?;
     eprintln!(
         "Compiler semantic context ready for {} methods.",
-        compiler_method_contexts.len()
+        compiler_method_evidence.contexts.len()
     );
     if journal_path.exists() {
         eprintln!("Resuming completed reviews from {}", journal_path.display());
@@ -337,7 +335,8 @@ pub async fn run(
             journal_path: Some(&journal_path),
             semantic_cache: &semantic_cache,
             budget_usd,
-            compiler_method_contexts: Some(&compiler_method_contexts),
+            compiler_method_contexts: &compiler_method_evidence.contexts,
+            compiler_method_references: &compiler_method_evidence.references,
             repository_root: &repository_root,
             proof_test_command: proof_commands.test_command.as_deref(),
             proof_differential_command: proof_commands.differential_command.as_deref(),
