@@ -192,6 +192,35 @@ pub struct BenchmarkBaseline {
     pub raw_output_sha256: String,
     pub covered_case_ids: Vec<String>,
     pub findings: Vec<BenchmarkBaselineFinding>,
+    pub extraction_reviewer: BlindReviewer,
+    pub extraction_attestation: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BenchmarkBaselineRawOutput {
+    pub schema_version: u32,
+    pub tool_id: String,
+    pub run_id: String,
+    pub source_commitment_sha256: String,
+    pub cases: Vec<BenchmarkBaselineRawCaseOutput>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BenchmarkBaselineRawCaseOutput {
+    pub case_id: String,
+    pub response_base64: String,
+    pub response_sha256: String,
+    pub findings: Vec<BenchmarkBaselineRawFindingSpan>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BenchmarkBaselineRawFindingSpan {
+    pub finding_id: String,
+    pub start_byte: usize,
+    pub end_byte: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
