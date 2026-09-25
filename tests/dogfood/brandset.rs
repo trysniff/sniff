@@ -132,32 +132,32 @@ fn default_scan_reviews_every_supported_language_end_to_end() {
     write_file(
         &root,
         "src/math.py",
-        "def add(left, right):\n    return left + right\n",
+        "def add(left, right):\n    return left + right\n\ndef callPythonAdd(value):\n    return add(value, value)\n",
     );
     write_file(
         &root,
         "src/format.ts",
-        "export function formatValue(value: string): string {\n  return value.trim();\n}\n",
+        "export function formatValue(value: string): string {\n  return value.trim();\n}\n\nexport function callTypescriptFormat(value: string): string {\n  return formatValue(value);\n}\n",
     );
     write_file(
         &root,
         "src/legacy.js",
-        "export function normalizeValue(value) {\n  return String(value).trim();\n}\n",
+        "export function normalizeValue(value) {\n  return String(value).trim();\n}\n\nexport function callJavascriptNormalize(value) {\n  return normalizeValue(value);\n}\n",
     );
     write_file(
         &root,
         "src/lib.rs",
-        "pub fn normalize_value(value: &str) -> String {\n    value.trim().to_string()\n}\n",
+        "pub fn normalize_value(value: &str) -> String {\n    value.trim().to_string()\n}\n\npub fn call_rust_normalize(value: &str) -> String {\n    normalize_value(value)\n}\n",
     );
     write_file(
         &root,
         "main.go",
-        "package main\n\nfunc normalizeValue(value string) string {\n    return value\n}\n\nvar _ = normalizeValue(\"\")\n",
+        "package main\n\nfunc normalizeValue(value string) string {\n    return value\n}\n\nfunc callGoNormalize(value string) string {\n    return normalizeValue(value)\n}\n\nvar _ = callGoNormalize(\"\")\n",
     );
     write_file(
         &root,
         "src/main/kotlin/Main.kt",
-        "fun normalizeValue(value: String): String {\n    return value.trim()\n}\n",
+        "fun normalizeValue(value: String): String {\n    return value.trim()\n}\n\nfun callKotlinNormalize(value: String): String {\n    return normalizeValue(value)\n}\n",
     );
 
     let mut command = Command::new(env!("CARGO_BIN_EXE_sniff"));
@@ -186,9 +186,9 @@ fn default_scan_reviews_every_supported_language_end_to_end() {
 
     let report = fs::read_to_string(root.join("sniff-report.md")).unwrap();
     assert!(
-        report.contains("AI response coverage:** 6 of 6 review records emitted, 0 missing")
+        report.contains("AI response coverage:** 12 of 12 review records emitted, 0 missing")
             && report
-                .contains("Trusted method verdicts:** 6 of 6 resolved, 0 unresolved, 0 missing"),
+                .contains("Trusted method verdicts:** 12 of 12 resolved, 0 unresolved, 0 missing"),
         "expected every language method to be reviewed:\n{report}"
     );
     assert!(
@@ -216,6 +216,100 @@ fn default_scan_reviews_every_supported_language_end_to_end() {
             "expected method evidence from {filename}:\n{prompt_text}"
         );
     }
+
+    let synthesis_prompts = prompts
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|request| request_prompt(request))
+        .filter(|prompt| prompt.contains("COMPILER-RESOLVED METHOD RELATIONSHIPS"))
+        .collect::<Vec<_>>();
+    assert!(!synthesis_prompts.is_empty(), "expected synthesis to run");
+    let mut unit_methods = std::collections::BTreeMap::new();
+    let mut relationship_units = std::collections::BTreeSet::new();
+    for prompt in &synthesis_prompts {
+        let census = prompt
+            .split_once("METHOD CENSUS:\n---\n")
+            .expect("synthesis method census")
+            .1;
+        for record in census.split("\n---\n") {
+            let mut lines = record.lines();
+            let (Some(unit), Some(metadata)) = (
+                lines.next().and_then(|line| line.strip_prefix("unit_id=")),
+                lines.next(),
+            ) else {
+                continue;
+            };
+            let method = metadata
+                .split_once(" method=")
+                .and_then(|(_, rest)| rest.split_once(" lines="))
+                .map(|(name, _)| name)
+                .expect("synthesis method identity");
+            unit_methods.insert(unit.to_string(), method.to_string());
+        }
+        let relationships = prompt
+            .split_once("COMPILER-RESOLVED METHOD RELATIONSHIPS (Call or Reference; Reference is not necessarily a call):\n")
+            .expect("compiler relationship packet")
+            .1
+            .split_once("SUPPLEMENTAL CUSTOM-GRAPH SNIPPETS")
+            .expect("supplemental packet boundary")
+            .0;
+        for line in relationships
+            .lines()
+            .filter(|line| line.starts_with("source="))
+        {
+            let source = line
+                .split_once("source=")
+                .and_then(|(_, rest)| rest.split_once(' '))
+                .map(|(unit, _)| unit)
+                .expect("source unit");
+            let target = line
+                .split_once("target=")
+                .and_then(|(_, rest)| rest.split_once(' '))
+                .map(|(unit, _)| unit)
+                .expect("target unit");
+            relationship_units.insert((source.to_string(), target.to_string()));
+        }
+    }
+    let actual = relationship_units
+        .into_iter()
+        .map(|(source, target)| {
+            (
+                unit_methods
+                    .get(&source)
+                    .expect("known source unit")
+                    .clone(),
+                unit_methods
+                    .get(&target)
+                    .expect("known target unit")
+                    .clone(),
+            )
+        })
+        .collect::<std::collections::BTreeSet<_>>();
+    let expected = std::collections::BTreeSet::from([
+        ("callPythonAdd".to_string(), "add".to_string()),
+        (
+            "callTypescriptFormat".to_string(),
+            "formatValue".to_string(),
+        ),
+        (
+            "callJavascriptNormalize".to_string(),
+            "normalizeValue".to_string(),
+        ),
+        (
+            "call_rust_normalize".to_string(),
+            "normalize_value".to_string(),
+        ),
+        ("callGoNormalize".to_string(), "normalizeValue".to_string()),
+        (
+            "callKotlinNormalize".to_string(),
+            "normalizeValue".to_string(),
+        ),
+    ]);
+    assert_eq!(
+        actual, expected,
+        "compiler relationships must cover all six languages"
+    );
 
     let _ = fs::remove_dir_all(&root);
 }
