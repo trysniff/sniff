@@ -90,22 +90,34 @@ revision, and language and share the same tier, pattern, and boundary status.
 
 ## Workflow
 
-1. Download and verify the source-seal archive from the
-   `sniffbench-blind-oss-v1-source-seal` GitHub prerelease.
-2. Work from a fresh copy of `independent-review-template.json`.
-3. Complete the reviewer object and every method decision independently.
-4. Save at any time and validate completed decisions plus remaining counts:
+1. Download the frozen [source-seal archive](https://github.com/trysniff/sniff/releases/download/sniffbench-blind-oss-v1-source-seal/sniffbench-blind-oss-v1-source-seal.zip).
+   Its SHA-256 is `9cfca885c88ce7f8d2c7cc01114b6bc129acd5e2dfa432ef3b255858a51b65a9`,
+   as committed in the [source-seal result](blind-oss-v1-source-seal-result.json).
+   Verify the downloaded ZIP before extracting it: use `sha256sum` on Linux,
+   `shasum -a 256` on macOS, or `Get-FileHash -Algorithm SHA256` in PowerShell,
+   followed by the ZIP filename.
+2. From the extracted directory containing `blind-source-seal.json`, validate
+   the sealed source and create your own blank worksheet:
 
 ```console
-sniff benchmark label-status \
-  blind-source-seal.json in-progress-review.json
+sniff benchmark prepare-labels blind-source-seal.json in-progress-review.json
+```
+
+   The prerelease also contains `independent-review-template.json` (SHA-256
+   `5e241377c8ceadf143021f450155625c2b1df4ee928261d8e201bff11360458b`).
+   Use a fresh copy if you prefer the template; do not inspect another
+   reviewer's worksheet.
+3. Complete the reviewer object and every method decision independently.
+4. Save at any time and check completed decisions plus remaining counts:
+
+```console
+sniff benchmark label-status blind-source-seal.json in-progress-review.json
 ```
 
 5. Validate the completed worksheet offline:
 
 ```console
-sniff benchmark validate-labels \
-  blind-source-seal.json completed-review.json
+sniff benchmark validate-labels blind-source-seal.json completed-review.json
 ```
 
 6. Compute the SHA-256 of the exact validated JSON file.
