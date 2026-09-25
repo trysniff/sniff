@@ -46,6 +46,12 @@ type DefinitionLineIndex<'a> =
 /// prompts cannot silently replace compiler facts with name-based guesses.
 pub type CompilerMethodContexts = BTreeMap<String, String>;
 
+#[path = "semantic_method_relationships.rs"]
+mod relationships;
+#[cfg(test)]
+pub use relationships::CompilerRelationshipKind;
+pub use relationships::{CompilerMethodReference, compiler_method_references};
+
 pub fn method_context_key(file_path: &str, method_name: &str, start_line: usize) -> String {
     format!(
         "{}::{}:{}",
@@ -559,7 +565,8 @@ fn repository_relative_path(root: &Path, file: &Path) -> Result<RepositoryPath, 
 mod tests {
     use super::*;
     use crate::semantic_index::{
-        SemanticDocument, SemanticIndexProvenance, SemanticPosition, SemanticPositionEncoding,
+        SemanticCallEdge, SemanticDispatch, SemanticDocument, SemanticIndexProvenance,
+        SemanticOccurrence, SemanticOccurrenceRole, SemanticPosition, SemanticPositionEncoding,
         SemanticSignature, SemanticSourceRange, SemanticSymbol, SemanticSymbolKind,
         SemanticVisibility,
     };
@@ -728,6 +735,170 @@ mod tests {
         let context = contexts.get(&key).expect("compiler method context");
         assert!(context.contains("compiler symbol: resolved rust test process"));
         assert!(context.contains("compiler signature: fn process(value: i32) -> i32"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    fn reference_fixture() -> (
+        std::path::PathBuf,
+        Vec<FileRecord>,
+        SemanticIndex,
+        SemanticMethodJoin,
+    ) {
+        let (root, mut files, mut index) = fixture(Vec::new(), 0, false, false);
+        let target_path = root.join("src").join("target.rs");
+        let target_source = "fn target(value: i32) -> i32 { value }\n";
+        fs::write(&target_path, target_source).unwrap();
+        let mut target_file = files[0].clone();
+        target_file.file_path = target_path.to_string_lossy().to_string();
+        target_file.source = target_source.to_string();
+        target_file.methods[0].name = "target".to_string();
+        target_file.methods[0].file_path = target_file.file_path.clone();
+        target_file.methods[0].source = target_source.to_string();
+        let target_document = RepositoryPath("src/target.rs".to_string());
+        let target_id = SemanticSymbolId("rust test target".to_string());
+        let mut target_symbol = index.symbols.values().next().unwrap().clone();
+        target_symbol.id = target_id.clone();
+        target_symbol.provider_identity = target_id.0.clone();
+        target_symbol.display_name = Some("target".to_string());
+        target_symbol.definitions = BTreeSet::from([SemanticLocation {
+            document: target_document.clone(),
+            range: SemanticSourceRange {
+                start: SemanticPosition {
+                    line: 0,
+                    character: 3,
+                },
+                end: SemanticPosition {
+                    line: 0,
+                    character: 9,
+                },
+            },
+        }]);
+        index.symbols.insert(target_id.clone(), target_symbol);
+        index.documents.insert(
+            target_document.clone(),
+            SemanticDocument {
+                path: target_document,
+                language: "rust".to_string(),
+                position_encoding: SemanticPositionEncoding::Utf8,
+                embedded_text: None,
+                occurrences: Vec::new(),
+            },
+        );
+        index
+            .documents
+            .get_mut(&RepositoryPath("src/lib.rs".to_string()))
+            .unwrap()
+            .occurrences
+            .push(SemanticOccurrence {
+                range: SemanticSourceRange {
+                    start: SemanticPosition {
+                        line: 0,
+                        character: 30,
+                    },
+                    end: SemanticPosition {
+                        line: 0,
+                        character: 36,
+                    },
+                },
+                symbol: Some(target_id),
+                roles: BTreeSet::from([SemanticOccurrenceRole::Read]),
+                override_documentation: Vec::new(),
+            });
+        files.push(target_file);
+        let join = join_methods(&root, &files, &index).unwrap();
+        join.require_complete().unwrap();
+        (root, files, index, join)
+    }
+
+    #[test]
+    fn compiler_relationships_join_cross_file_occurrences_by_symbol() {
+        let (root, files, index, join) = reference_fixture();
+        let references = compiler_method_references(&root, &files, &index, &join).unwrap();
+        assert_eq!(references.len(), 1);
+        assert_eq!(references[0].kind, CompilerRelationshipKind::Reference);
+        assert_eq!(references[0].file.0, "src/lib.rs");
+        assert!(references[0].source_method.contains("lib.rs::process:1"));
+        assert!(references[0].target_method.contains("target.rs::target:1"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn explicit_compiler_call_edges_remain_distinct_from_references() {
+        let (root, files, mut index, join) = reference_fixture();
+        let path = RepositoryPath("src/lib.rs".to_string());
+        index.documents.get_mut(&path).unwrap().occurrences.clear();
+        index.calls.insert(SemanticCallEdge {
+            caller: SemanticSymbolId("rust test process".to_string()),
+            callsite: SemanticLocation {
+                document: path,
+                range: SemanticSourceRange {
+                    start: SemanticPosition {
+                        line: 0,
+                        character: 30,
+                    },
+                    end: SemanticPosition {
+                        line: 0,
+                        character: 36,
+                    },
+                },
+            },
+            callee: SemanticResolution::Resolved {
+                value: SemanticSymbolId("rust test target".to_string()),
+            },
+            dispatch: SemanticDispatch::Static,
+        });
+        let references = compiler_method_references(&root, &files, &index, &join).unwrap();
+        assert_eq!(references.len(), 1);
+        assert_eq!(references[0].kind, CompilerRelationshipKind::Call);
+        let mut misplaced = index.calls.iter().next().unwrap().clone();
+        index.calls.clear();
+        misplaced.callsite.document = RepositoryPath("src/target.rs".to_string());
+        index.calls.insert(misplaced);
+        assert!(
+            compiler_method_references(&root, &files, &index, &join)
+                .unwrap()
+                .is_empty()
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn compiler_relationships_do_not_guess_missing_or_ambiguous_occurrences() {
+        let (root, files, mut index, mut join) = reference_fixture();
+        let path = RepositoryPath("src/lib.rs".to_string());
+        index.documents.get_mut(&path).unwrap().occurrences[0].symbol = None;
+        assert!(
+            compiler_method_references(&root, &files, &index, &join)
+                .unwrap()
+                .is_empty()
+        );
+        index.documents.get_mut(&path).unwrap().occurrences[0].symbol =
+            Some(SemanticSymbolId("rust test target".to_string()));
+        index.documents.get_mut(&path).unwrap().occurrences[0].roles =
+            BTreeSet::from([SemanticOccurrenceRole::Import]);
+        assert!(
+            compiler_method_references(&root, &files, &index, &join)
+                .unwrap()
+                .is_empty()
+        );
+        index.documents.get_mut(&path).unwrap().occurrences[0]
+            .roles
+            .clear();
+        let source = join
+            .bindings
+            .values()
+            .find(|binding| binding.method.file == path)
+            .unwrap()
+            .clone();
+        let mut ambiguous_owner = source.clone();
+        ambiguous_owner.method.name = "same_span".to_string();
+        join.bindings
+            .insert(ambiguous_owner.method.clone(), ambiguous_owner);
+        assert!(
+            compiler_method_references(&root, &files, &index, &join)
+                .unwrap()
+                .is_empty()
+        );
         let _ = fs::remove_dir_all(root);
     }
 
