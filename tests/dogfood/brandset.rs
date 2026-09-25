@@ -141,6 +141,26 @@ fn default_scan_reviews_every_supported_language_end_to_end() {
     );
     write_file(
         &root,
+        "src/choice_a.ts",
+        "export function selectValue(value: string): string {\n  return value.trim();\n}\n",
+    );
+    write_file(
+        &root,
+        "src/choice_b.ts",
+        "export function selectValue(value: string): string {\n  return value.toUpperCase();\n}\n",
+    );
+    write_file(
+        &root,
+        "src/use_a.ts",
+        "import { selectValue } from './choice_a';\n\nexport function callChoiceA(value: string): string {\n  return selectValue(value);\n}\n",
+    );
+    write_file(
+        &root,
+        "src/use_b.ts",
+        "import { selectValue } from './choice_b';\n\nexport function callChoiceB(value: string): string {\n  return selectValue(value);\n}\n",
+    );
+    write_file(
+        &root,
         "src/legacy.js",
         "export function normalizeValue(value) {\n  return String(value).trim();\n}\n\nexport function callJavascriptNormalize(value) {\n  return normalizeValue(value);\n}\n",
     );
@@ -186,9 +206,9 @@ fn default_scan_reviews_every_supported_language_end_to_end() {
 
     let report = fs::read_to_string(root.join("sniff-report.md")).unwrap();
     assert!(
-        report.contains("AI response coverage:** 12 of 12 review records emitted, 0 missing")
+        report.contains("AI response coverage:** 16 of 16 review records emitted, 0 missing")
             && report
-                .contains("Trusted method verdicts:** 12 of 12 resolved, 0 unresolved, 0 missing"),
+                .contains("Trusted method verdicts:** 16 of 16 resolved, 0 unresolved, 0 missing"),
         "expected every language method to be reviewed:\n{report}"
     );
     assert!(
@@ -206,6 +226,10 @@ fn default_scan_reviews_every_supported_language_end_to_end() {
     for filename in [
         "math.py",
         "format.ts",
+        "choice_a.ts",
+        "choice_b.ts",
+        "use_a.ts",
+        "use_b.ts",
         "legacy.js",
         "lib.rs",
         "main.go",
@@ -225,6 +249,7 @@ fn default_scan_reviews_every_supported_language_end_to_end() {
         .filter(|prompt| prompt.contains("COMPILER-RESOLVED METHOD RELATIONSHIPS"))
         .collect::<Vec<_>>();
     assert!(!synthesis_prompts.is_empty(), "expected synthesis to run");
+    let canonical_root = fs::canonicalize(&root).expect("canonical fixture root");
     let mut unit_methods = std::collections::BTreeMap::new();
     let mut relationship_units = std::collections::BTreeSet::new();
     for prompt in &synthesis_prompts {
@@ -240,12 +265,27 @@ fn default_scan_reviews_every_supported_language_end_to_end() {
             ) else {
                 continue;
             };
-            let method = metadata
-                .split_once(" method=")
-                .and_then(|(_, rest)| rest.split_once(" lines="))
+            let (file, method_details) = metadata
+                .strip_prefix("file=")
+                .and_then(|rest| rest.split_once(" method="))
+                .expect("synthesis file identity");
+            let method = method_details
+                .split_once(" lines=")
                 .map(|(name, _)| name)
                 .expect("synthesis method identity");
-            unit_methods.insert(unit.to_string(), method.to_string());
+            let file = fs::canonicalize(file).expect("canonical synthesis file");
+            let file = file
+                .strip_prefix(&canonical_root)
+                .unwrap_or_else(|_| {
+                    panic!(
+                        "synthesis file {} is outside fixture {}",
+                        file.display(),
+                        canonical_root.display()
+                    )
+                })
+                .to_string_lossy()
+                .replace('\\', "/");
+            unit_methods.insert(unit.to_string(), (file, method.to_string()));
         }
         let relationships = prompt
             .split_once("COMPILER-RESOLVED METHOD RELATIONSHIPS (Call or Reference; Reference is not necessarily a call):\n")
@@ -286,26 +326,47 @@ fn default_scan_reviews_every_supported_language_end_to_end() {
             )
         })
         .collect::<std::collections::BTreeSet<_>>();
-    let expected = std::collections::BTreeSet::from([
-        ("callPythonAdd".to_string(), "add".to_string()),
+    let expected = [
+        (("src/math.py", "callPythonAdd"), ("src/math.py", "add")),
         (
-            "callTypescriptFormat".to_string(),
-            "formatValue".to_string(),
+            ("src/format.ts", "callTypescriptFormat"),
+            ("src/format.ts", "formatValue"),
         ),
         (
-            "callJavascriptNormalize".to_string(),
-            "normalizeValue".to_string(),
+            ("src/use_a.ts", "callChoiceA"),
+            ("src/choice_a.ts", "selectValue"),
         ),
         (
-            "call_rust_normalize".to_string(),
-            "normalize_value".to_string(),
+            ("src/use_b.ts", "callChoiceB"),
+            ("src/choice_b.ts", "selectValue"),
         ),
-        ("callGoNormalize".to_string(), "normalizeValue".to_string()),
         (
-            "callKotlinNormalize".to_string(),
-            "normalizeValue".to_string(),
+            ("src/legacy.js", "callJavascriptNormalize"),
+            ("src/legacy.js", "normalizeValue"),
         ),
-    ]);
+        (
+            ("src/lib.rs", "call_rust_normalize"),
+            ("src/lib.rs", "normalize_value"),
+        ),
+        (
+            ("main.go", "callGoNormalize"),
+            ("main.go", "normalizeValue"),
+        ),
+        (
+            ("src/main/kotlin/Main.kt", "callKotlinNormalize"),
+            ("src/main/kotlin/Main.kt", "normalizeValue"),
+        ),
+    ]
+    .into_iter()
+    .map(
+        |((source_file, source_method), (target_file, target_method))| {
+            (
+                (source_file.to_string(), source_method.to_string()),
+                (target_file.to_string(), target_method.to_string()),
+            )
+        },
+    )
+    .collect::<std::collections::BTreeSet<_>>();
     assert_eq!(
         actual, expected,
         "compiler relationships must cover all six languages"
