@@ -1549,10 +1549,9 @@ struct PersistentAccess<'a> {
 
 impl PersistentAccess<'_> {
     fn can_execute(&self, executable: &Path) -> Result<bool, SandboxError> {
-        if !covered_by_persistent_path(executable, self.executable_paths)? {
-            return Ok(false);
-        }
-        if self.execute_capability_enabled {
+        if self.execute_capability_enabled
+            && covered_by_persistent_path(executable, self.executable_paths)?
+        {
             return Ok(true);
         }
         if executable.is_dir() {
@@ -1890,6 +1889,24 @@ mod tests {
         );
         assert!(!paths.iter().any(|(path, _)| path == Path::new(r"C:\")));
         assert!(!paths.iter().any(|(path, _)| path == Path::new(r"C:\work")));
+    }
+
+    #[test]
+    fn globally_executable_declared_tool_needs_no_temporary_grant() {
+        let directory = tempfile::tempdir().unwrap();
+        let bin = directory.path().join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let executable = bin.join("java.exe");
+        std::fs::write(&executable, b"fixture").unwrap();
+        super::grant_acl(&bin, "S-1-15-2-1", "RX").unwrap();
+
+        let access = super::PersistentAccess {
+            read_only_paths: &[],
+            executable_paths: &[],
+            read_capability_enabled: false,
+            execute_capability_enabled: false,
+        };
+        assert!(access.can_execute(&executable).unwrap());
     }
 
     #[test]
