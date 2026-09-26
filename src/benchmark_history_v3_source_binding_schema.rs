@@ -2,7 +2,7 @@ use super::HistoricalV3Language;
 use serde::{Deserialize, Serialize};
 
 pub const HISTORICAL_V3_PRIOR_IDENTITY_SEAL_SCHEMA_VERSION: u32 = 1;
-pub const HISTORICAL_V3_SOURCE_BINDING_AUDIT_SCHEMA_VERSION: u32 = 1;
+pub const HISTORICAL_V3_SOURCE_BINDING_AUDIT_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

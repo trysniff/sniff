@@ -7,7 +7,7 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
-const PROTOCOL_CONTRACT: &str = "sniffbench-historical-v3-protocol-v5";
+const PROTOCOL_CONTRACT: &str = "sniffbench-historical-v3-protocol-v6";
 const STREAM_CONTRACT: &str = "sniffbench-historical-v3-stream-task-v1";
 const RANKING_DOMAIN: &str = "sniffbench-historical-v3-candidate-rank-v1";
 pub(super) const TEST_RECIPE_SELECTOR_CONTRACT: &str =
@@ -252,6 +252,9 @@ fn validate_historical_v3_protocol_fields(protocol: &HistoricalV3Protocol) -> Re
         "historical-v3 prior benchmark identity seal",
         &protocol.prior_benchmark_identity_seal_sha256,
     )?;
+    if protocol.repository_created_after_utc != HISTORICAL_V3_REPOSITORY_CREATED_AFTER_UTC {
+        return Err("historical-v3 repository creation cutoff changed".to_string());
+    }
     if protocol.languages != HistoricalV3Language::ALL {
         return Err(
             "historical-v3 protocol must cover the exact supported language set".to_string(),
@@ -511,6 +514,7 @@ fn compute_protocol_sha256(protocol: &HistoricalV3Protocol) -> Result<String, St
         ranking_domain: &'a str,
         ranking_seed: &'a str,
         prior_benchmark_identity_seal_sha256: &'a str,
+        repository_created_after_utc: &'a str,
         languages: &'a [HistoricalV3Language],
         source_frames: &'a [HistoricalV3SourceFrameBinding],
         candidate_window: &'a HistoricalV3CandidateWindow,
@@ -530,6 +534,7 @@ fn compute_protocol_sha256(protocol: &HistoricalV3Protocol) -> Result<String, St
         ranking_domain: &protocol.ranking_domain,
         ranking_seed: &protocol.ranking_seed,
         prior_benchmark_identity_seal_sha256: &protocol.prior_benchmark_identity_seal_sha256,
+        repository_created_after_utc: &protocol.repository_created_after_utc,
         languages: &protocol.languages,
         source_frames: &protocol.source_frames,
         candidate_window: &protocol.candidate_window,

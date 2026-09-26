@@ -4,8 +4,8 @@ mod schema;
 pub use schema::*;
 
 use super::{
-    HistoricalV3Language, HistoricalV3Protocol, SourceFrameCollectionManifest,
-    validate_historical_v3_protocol, validate_source_frame_manifest,
+    HISTORICAL_V3_REPOSITORY_CREATED_AFTER_UTC, HistoricalV3Language, HistoricalV3Protocol,
+    SourceFrameCollectionManifest, validate_historical_v3_protocol, validate_source_frame_manifest,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -13,7 +13,7 @@ use std::collections::HashSet;
 use std::path::Path;
 
 const PRIOR_IDENTITY_SEAL_CONTRACT: &str = "sniffbench-historical-v3-prior-identities-v1";
-const SOURCE_BINDING_AUDIT_CONTRACT: &str = "sniffbench-historical-v3-source-binding-v1";
+const SOURCE_BINDING_AUDIT_CONTRACT: &str = "sniffbench-historical-v3-source-binding-v2";
 
 pub struct HistoricalV3SourceFrameArtifact<'a> {
     pub manifest: &'a SourceFrameCollectionManifest,
@@ -25,6 +25,7 @@ pub struct HistoricalV3SourceFrameArtifact<'a> {
 pub(super) struct HistoricalV3SourceRepositoryIdentity {
     pub name_with_owner: String,
     pub repository_id: u64,
+    pub created_at: String,
 }
 
 pub fn prepare_historical_v3_prior_identity_seal(
@@ -106,8 +107,21 @@ pub fn bind_historical_v3_source_frames(
         {
             return Err("historical-v3 source-frame binding changed".to_string());
         }
+        if artifact.manifest.policy.created_day_utc.as_str()
+            <= &HISTORICAL_V3_REPOSITORY_CREATED_AFTER_UTC[..10]
+        {
+            return Err(
+                "historical-v3 source frame predates the committed repository creation cutoff"
+                    .to_string(),
+            );
+        }
 
         let repositories = parse_historical_v3_source_frame(artifact.frame)?;
+        if repositories.iter().any(|repository| {
+            repository.created_at.as_str() <= protocol.repository_created_after_utc.as_str()
+        }) {
+            return Err("historical-v3 source frame contains a repository created before the committed cutoff".to_string());
+        }
         if repositories.len() != expected.repository_count {
             return Err("historical-v3 source frame repository census changed".to_string());
         }
@@ -277,10 +291,27 @@ pub(super) fn parse_historical_v3_source_frame(
         if repository_id == 0 {
             return Err("historical-v3 source frame has a zero repository ID".to_string());
         }
+        let created_at = record[1]
+            .split(';')
+            .find_map(|field| field.strip_prefix("created_at="))
+            .ok_or_else(|| {
+                "historical-v3 source frame omits repository creation time".to_string()
+            })?;
+        if created_at.len() != 20
+            || !created_at.ends_with('Z')
+            || !created_at.bytes().enumerate().all(|(index, byte)| {
+                matches!(index, 4 | 7 | 10 | 13 | 16 | 19) || byte.is_ascii_digit()
+            })
+        {
+            return Err(
+                "historical-v3 source frame has an invalid repository creation time".to_string(),
+            );
+        }
         repository_ids.push(repository_id);
         repositories.push(HistoricalV3SourceRepositoryIdentity {
             name_with_owner: repository,
             repository_id,
+            created_at: created_at.to_string(),
         });
     }
     if repository_ids.windows(2).any(|pair| pair[0] >= pair[1]) {
