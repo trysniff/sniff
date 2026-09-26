@@ -405,6 +405,7 @@ fn submission(corpus: &BenchmarkCorpus, root: &std::path::Path) -> BenchmarkSubm
                 let raw = BenchmarkBaselineRawOutput {
                     schema_version: BASELINE_RAW_OUTPUT_SCHEMA_VERSION,
                     tool_id: (*tool_id).to_string(),
+                    tool_version: "test-version".to_string(),
                     run_id: run_id.clone(),
                     source_commitment_sha256: corpus.source_commitment_sha256.clone(),
                     cases: corpus
@@ -820,6 +821,40 @@ fn baseline_findings_must_have_matching_raw_response_spans() {
     });
     let error = evaluate_release(&corpus, &submission, root.path()).unwrap_err();
     assert!(error.contains("invalid raw response span"), "{error}");
+}
+
+#[test]
+fn baseline_tool_version_must_match_committed_raw_output() {
+    let (root, corpus) = corpus();
+    let mut submission = submission(&corpus, root.path());
+    submission.baselines[0].tool_version = "different-version".to_string();
+
+    let error = evaluate_release(&corpus, &submission, root.path()).unwrap_err();
+    assert!(error.contains("raw output is not bound"), "{error}");
+}
+
+#[test]
+fn baseline_raw_tool_version_cannot_change_with_recomputed_hash() {
+    let (root, corpus) = corpus();
+    let mut submission = submission(&corpus, root.path());
+    rewrite_baseline_raw(root.path(), &mut submission.baselines[0], |raw| {
+        raw.tool_version = "different-version".to_string();
+    });
+
+    let error = evaluate_release(&corpus, &submission, root.path()).unwrap_err();
+    assert!(error.contains("raw output is not bound"), "{error}");
+}
+
+#[test]
+fn old_baseline_raw_schema_is_rejected() {
+    let (root, corpus) = corpus();
+    let mut submission = submission(&corpus, root.path());
+    rewrite_baseline_raw(root.path(), &mut submission.baselines[0], |raw| {
+        raw.schema_version = 1;
+    });
+
+    let error = evaluate_release(&corpus, &submission, root.path()).unwrap_err();
+    assert!(error.contains("raw output is not bound"), "{error}");
 }
 
 #[test]

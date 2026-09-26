@@ -8,10 +8,12 @@ evaluation use create-new, hash-bound artifacts.
 
 Release submissions use schema v8. Each comparison baseline must retain one
 raw-response bundle with a hash-checked UTF-8 response for every frozen case.
-The bundle records the tool and run IDs, source commitment, per-case response
-bytes as base64, response SHA-256, and exact byte spans for every claimed
-finding. The submission separately names the complete covered-case set and an
-independent, label-blind extraction reviewer who attests that every actionable
+The raw-bundle schema v2 records the tool ID and version, run ID, source
+commitment, per-case response bytes as base64, response SHA-256, and exact byte
+spans for every claimed finding. The tool version must match the submission;
+v1 raw bundles are rejected. The submission separately names the complete
+covered-case set and an independent, label-blind extraction reviewer who
+attests that every actionable
 response finding was recorded. The reviewer cannot also adjudicate corpus
 labels. `sniff benchmark evaluate` rejects missing cases, unanchored findings,
 tampered responses, and mismatched commitments offline.
