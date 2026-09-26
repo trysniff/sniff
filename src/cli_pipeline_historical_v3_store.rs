@@ -664,7 +664,10 @@ mod tests {
         frames: Vec<source_fixture::FrameFixture>,
     ) -> Fixture {
         let root = tempfile::tempdir().unwrap();
-        let protocol = source_fixture::protocol(&prior, &frames);
+        let mut protocol = source_fixture::protocol(&prior, &frames);
+        protocol.candidate_window.merged_at_or_after_utc = "2026-08-08T00:00:00Z".to_string();
+        protocol.candidate_window.merged_before_utc = "2026-09-01T00:00:00Z".to_string();
+        let protocol = crate::benchmark::seal_historical_v3_protocol(protocol).unwrap();
         let protocol_path = root.path().join("protocol.json");
         let prior_path = root.path().join("prior.json");
         fs::write(&protocol_path, serde_json::to_vec(&protocol).unwrap()).unwrap();
