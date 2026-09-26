@@ -21,7 +21,9 @@ filters, and immutable-ID ordering. Every admitted repository must have `created
 after `2026-08-07T20:46:11Z`; a matching name is not identity proof.
 
 After the policy commit is public and immutable, collect each language's
-frame with `sniff benchmark collect-frame POLICY STATE_ROOT FRAME_CSV MANIFEST`.
+frame with `sniff benchmark collect-frame POLICY STATE_ROOT FRAME_CSV MANIFEST
+--transport gh`. This explicit transport requires an authenticated GitHub CLI
+(`gh`) in `PATH`; there is no automatic fallback to the Rust HTTP client.
 Retain every raw page under its durable state root, then use
 `sniff benchmark validate-frame MANIFEST STATE_ROOT FRAME_CSV` to replay it.
 Use a different new state root and output pair for each policy; do not reroll

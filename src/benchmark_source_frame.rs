@@ -5,7 +5,7 @@ mod schema;
 mod transport;
 
 pub use schema::*;
-use transport::fetch_search_page;
+use transport::{fetch_search_page, fetch_search_page_gh};
 
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -17,6 +17,12 @@ use tokio::time::Duration;
 
 const GITHUB_SEARCH_LIMIT: usize = 1_000;
 const GITHUB_PAGE_SIZE: usize = 100;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum SourceFrameTransport {
+    Http,
+    Gh,
+}
 
 #[derive(Debug, Deserialize)]
 struct GithubSearchResponse {
@@ -42,6 +48,25 @@ pub async fn collect_source_frame(
     frame_output: &Path,
     manifest_output: &Path,
     github_token: Option<&str>,
+) -> Result<SourceFrameCollectionManifest, String> {
+    collect_source_frame_with_transport(
+        policy,
+        state_directory,
+        frame_output,
+        manifest_output,
+        github_token,
+        SourceFrameTransport::Http,
+    )
+    .await
+}
+
+pub async fn collect_source_frame_with_transport(
+    policy: SourceFrameCollectionPolicy,
+    state_directory: &Path,
+    frame_output: &Path,
+    manifest_output: &Path,
+    github_token: Option<&str>,
+    transport: SourceFrameTransport,
 ) -> Result<SourceFrameCollectionManifest, String> {
     validate_policy(&policy)?;
     let artifact_root = manifest_output
@@ -91,6 +116,7 @@ pub async fn collect_source_frame(
                 &query,
                 &checkpoint_key,
                 1,
+                transport,
             )
             .await?;
             let parsed = parse_search_response(&first.1)?;
@@ -111,6 +137,7 @@ pub async fn collect_source_frame(
                         &query,
                         &checkpoint_key,
                         page,
+                        transport,
                     )
                     .await?,
                 );
@@ -351,6 +378,7 @@ async fn load_or_fetch_page(
     query: &str,
     checkpoint_key: &str,
     page: usize,
+    transport: SourceFrameTransport,
 ) -> Result<(PathBuf, SourceFrameRawPage), String> {
     let path = state_directory.join(format!("{checkpoint_key}-page-{page:03}.json"));
     if path.is_file() {
@@ -373,7 +401,10 @@ async fn load_or_fetch_page(
         validate_checkpointable_page(&raw)?;
         return Ok((path, raw));
     }
-    let response = fetch_search_page(client, github_token, query, page).await?;
+    let response = match transport {
+        SourceFrameTransport::Http => fetch_search_page(client, github_token, query, page).await?,
+        SourceFrameTransport::Gh => fetch_search_page_gh(github_token, query, page).await?,
+    };
     let raw = SourceFrameRawPage {
         query: query.to_string(),
         page,

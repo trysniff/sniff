@@ -1,5 +1,6 @@
 use reqwest::{Client, StatusCode, header::HeaderMap};
 use std::time::{SystemTime, UNIX_EPOCH};
+use tokio::process::Command;
 use tokio::time::{Duration, sleep};
 
 use super::{GITHUB_PAGE_SIZE, bounded};
@@ -147,6 +148,74 @@ pub(super) async fn fetch_search_page(
     }
     Err(format!(
         "GitHub search failed after four attempts; the exact page remains open: {last_error}"
+    ))
+}
+
+pub(super) async fn fetch_search_page_gh(
+    github_token: Option<&str>,
+    query: &str,
+    page: usize,
+) -> Result<String, String> {
+    let mut last_error = String::new();
+    for attempt in 0..4_u32 {
+        sleep(Duration::from_secs(3)).await;
+        let mut command = Command::new("gh");
+        command.kill_on_drop(true).args([
+            "api",
+            "--method",
+            "GET",
+            "search/repositories",
+            "-H",
+            "Accept: application/vnd.github+json",
+            "-H",
+            "X-GitHub-Api-Version: 2022-11-28",
+        ]);
+        command
+            .arg("-f")
+            .arg(format!("q={query}"))
+            .arg("-f")
+            .arg("sort=created")
+            .arg("-f")
+            .arg("order=asc")
+            .arg("-f")
+            .arg(format!("per_page={GITHUB_PAGE_SIZE}"))
+            .arg("-f")
+            .arg(format!("page={page}"));
+        if let Some(token) = github_token.filter(|token| !token.trim().is_empty()) {
+            command.env("GH_TOKEN", token.trim());
+        }
+        match tokio::time::timeout(Duration::from_secs(90), command.output()).await {
+            Ok(Ok(output)) if output.status.success() => {
+                return String::from_utf8(output.stdout)
+                    .map_err(|error| format!("GitHub CLI returned non-UTF-8 JSON: {error}"));
+            }
+            Ok(Ok(output)) => {
+                last_error = format!(
+                    "GitHub CLI exited with {}: {}",
+                    output.status,
+                    bounded(&String::from_utf8_lossy(&output.stderr), 512)
+                );
+                if output.status.code().is_some_and(|code| code == 127)
+                    || last_error.contains("HTTP 401")
+                    || last_error.contains("HTTP 422")
+                {
+                    return Err(last_error);
+                }
+            }
+            Ok(Err(error)) => {
+                last_error = format!("failed to launch GitHub CLI: {error}");
+                if error.kind() == std::io::ErrorKind::NotFound {
+                    return Err(last_error);
+                }
+            }
+            Err(_) => last_error = "GitHub CLI search timed out after 90 seconds".to_string(),
+        }
+        if attempt < 3 {
+            sleep(Duration::from_secs(1_u64 << attempt)).await;
+        }
+    }
+    Err(format!(
+        "GitHub CLI search failed after four attempts; the exact page remains open: {last_error}"
     ))
 }
 
