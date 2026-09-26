@@ -7,7 +7,8 @@ evaluation use create-new, hash-bound artifacts.
 ## Model-judged development reviews
 
 Model-judged reviews are a separate, experimental evidence track. A submission
-records the provider, exact model/version, run and prompt identities, blinded
+records the declared provider and model label, optional observed revision,
+run and prompt identities, blinded
 input attestations, source-seal commitment, method decisions, and source quotes.
 Use the published [source-review prompt](MODEL_REVIEW_PROMPT.md) for future
 agent shards, committing any shard-specific method assignment before review.
@@ -36,7 +37,10 @@ Each raw input has `reviewer` and `decisions` fields. The reviewer records
 `reviewer_id`, `provider`, `model`, `model_version`, `run_id`, and a lowercase
 SHA-256 of the exact prompt, plus true `fresh_context`,
 `sniff_output_hidden`, `other_reviews_hidden`, and
-`source_context_inspected` attestations. Each decision records `method_id`,
+`source_context_inspected` attestations. Use `null` for `model_version` when
+the host does not expose an exact revision; do not invent one. Provider and
+model fields are declarations, not authenticated execution receipts. Each
+decision records `method_id`,
 `tier`, `mechanism`, `evidence_artifact_path`, `exact_source_quote`,
 `rationale`, `behavior_preserving_simplification`, and `missing_evidence`.
 Only `slop` and `kinda_slop` decisions supply a concrete simplification that

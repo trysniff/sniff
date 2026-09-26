@@ -31,7 +31,9 @@ Return only JSON with a `reviewer` object and a `decisions` array. The reviewer
 object records `reviewer_id`, `provider`, `model`, `model_version`, `run_id`,
 `prompt_sha256`, `fresh_context`, `sniff_output_hidden`,
 `other_reviews_hidden`, and `source_context_inspected`. Do not claim a true
-attestation if it did not hold. Each decision records `method_id`, `tier`,
+attestation if it did not hold. Use `null` for `model_version` if the host
+does not expose an exact revision; never guess it. Each decision records
+`method_id`, `tier`,
 `mechanism`, `evidence_artifact_path`, `exact_source_quote`, `rationale`,
 `behavior_preserving_simplification`, and `missing_evidence`. Use an empty
 simplification for `clean` or `unresolved`; provide a concrete one for `slop`

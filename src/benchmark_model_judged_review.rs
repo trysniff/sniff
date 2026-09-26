@@ -7,13 +7,21 @@ use std::path::Path;
 
 pub const MODEL_JUDGED_REVIEW_SCHEMA_VERSION: u32 = 1;
 
+fn deserialize_model_version<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<String>::deserialize(deserializer)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ModelJudgedReviewer {
     pub reviewer_id: String,
     pub provider: String,
     pub model: String,
-    pub model_version: String,
+    #[serde(deserialize_with = "deserialize_model_version")]
+    pub model_version: Option<String>,
     pub run_id: String,
     pub prompt_sha256: String,
     pub fresh_context: bool,
@@ -226,12 +234,18 @@ fn validate_submission_against_task(
         &reviewer.reviewer_id,
         &reviewer.provider,
         &reviewer.model,
-        &reviewer.model_version,
         &reviewer.run_id,
     ] {
         if value.trim().is_empty() {
             return Err("model-judged reviewer provenance is incomplete".to_string());
         }
+    }
+    if reviewer
+        .model_version
+        .as_ref()
+        .is_some_and(|version| version.trim().is_empty())
+    {
+        return Err("model-judged reviewer provided an empty model version".to_string());
     }
     require_sha256(&reviewer.prompt_sha256)?;
     if !reviewer.fresh_context

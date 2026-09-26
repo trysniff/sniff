@@ -32,7 +32,7 @@ fn submission(
             reviewer_id: reviewer_id.to_string(),
             provider: "example-provider".to_string(),
             model: "example-model".to_string(),
-            model_version: "2026-09-26".to_string(),
+            model_version: Some("2026-09-26".to_string()),
             run_id: run_id.to_string(),
             prompt_sha256: "a".repeat(64),
             fresh_context: true,
@@ -128,6 +128,28 @@ fn model_review_rejects_unblinded_or_forged_evidence() {
             .unwrap_err()
             .contains("behavior-preserving simplification")
     );
+}
+
+#[test]
+fn missing_model_revision_is_explicit_not_invented() {
+    let (root, seal, seal_hash) = fixture();
+    let expected = prepare_label_review(&seal, root.path(), &seal_hash).unwrap();
+    let mut review = submission(&expected, "agent-a", "run-a");
+    review.reviewer.model_version = None;
+    review.submission_sha256 = review.computed_sha256().unwrap();
+    validate_model_judged_submission(&seal, root.path(), &seal_hash, &review).unwrap();
+
+    review.reviewer.model_version = Some(String::new());
+    review.submission_sha256 = review.computed_sha256().unwrap();
+    assert!(
+        validate_model_judged_submission(&seal, root.path(), &seal_hash, &review)
+            .unwrap_err()
+            .contains("empty model version")
+    );
+
+    let mut omitted = serde_json::to_value(&review.reviewer).unwrap();
+    omitted.as_object_mut().unwrap().remove("model_version");
+    assert!(serde_json::from_value::<ModelJudgedReviewer>(omitted).is_err());
 }
 
 #[test]
