@@ -9,6 +9,8 @@ evaluation use create-new, hash-bound artifacts.
 Model-judged reviews are a separate, experimental evidence track. A submission
 records the provider, exact model/version, run and prompt identities, blinded
 input attestations, source-seal commitment, method decisions, and source quotes.
+Use the published [source-review prompt](MODEL_REVIEW_PROMPT.md) for future
+agent shards, committing any shard-specific method assignment before review.
 Two submissions can be audited for tier agreement only. The audit permits
 partial method sets; it does not establish exhaustive coverage, ground-truth
 accuracy, reviewer independence, or human validation. It cannot satisfy the
