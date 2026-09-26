@@ -24,7 +24,8 @@ pub fn prepare_historical_v3_label_resolution(
     if !inputs
         .protocol
         .human_review_policy
-        .distinct_dispute_resolver
+        .as_ref()
+        .is_some_and(|policy| policy.distinct_dispute_resolver)
     {
         return Err("historical-v3 resolution protocol changed".to_string());
     }

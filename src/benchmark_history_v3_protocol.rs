@@ -8,6 +8,7 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 const PROTOCOL_CONTRACT: &str = "sniffbench-historical-v3-protocol-v6";
+const MODEL_PROTOCOL_CONTRACT: &str = "sniffbench-historical-v3-model-judged-protocol-v7";
 const STREAM_CONTRACT: &str = "sniffbench-historical-v3-stream-task-v1";
 const RANKING_DOMAIN: &str = "sniffbench-historical-v3-candidate-rank-v1";
 pub(super) const TEST_RECIPE_SELECTOR_CONTRACT: &str =
@@ -240,9 +241,14 @@ pub fn evaluate_historical_v3_review_prefix(
 }
 
 fn validate_historical_v3_protocol_fields(protocol: &HistoricalV3Protocol) -> Result<(), String> {
-    if protocol.schema_version != HISTORICAL_V3_PROTOCOL_SCHEMA_VERSION
-        || protocol.protocol_id.trim().is_empty()
-        || protocol.protocol_contract != PROTOCOL_CONTRACT
+    if !matches!(
+        protocol.schema_version,
+        HISTORICAL_V3_PROTOCOL_SCHEMA_VERSION | HISTORICAL_V3_MODEL_PROTOCOL_SCHEMA_VERSION
+    ) || protocol.protocol_id.trim().is_empty()
+        || (protocol.schema_version == HISTORICAL_V3_PROTOCOL_SCHEMA_VERSION
+            && protocol.protocol_contract != PROTOCOL_CONTRACT)
+        || (protocol.schema_version == HISTORICAL_V3_MODEL_PROTOCOL_SCHEMA_VERSION
+            && protocol.protocol_contract != MODEL_PROTOCOL_CONTRACT)
         || protocol.ranking_domain != RANKING_DOMAIN
     {
         return Err("historical-v3 protocol uses an unsupported contract".to_string());
@@ -271,13 +277,50 @@ fn validate_historical_v3_protocol_fields(protocol: &HistoricalV3Protocol) -> Re
     validate_mechanical_policy(&protocol.mechanical_policy)?;
     validate_test_recipe_policy(&protocol.test_recipe_policy)?;
     validate_identical_test_policy(&protocol.identical_test_policy)?;
-    validate_human_review_policy(&protocol.human_review_policy)?;
+    match protocol.schema_version {
+        HISTORICAL_V3_PROTOCOL_SCHEMA_VERSION => {
+            if protocol.model_review_policy.is_some() || !protocol.model_access_forbidden {
+                return Err(
+                    "historical-v3 human protocol cannot authorize model review".to_string()
+                );
+            }
+            validate_human_review_policy(protocol.human_review_policy.as_ref().ok_or_else(
+                || "historical-v3 human protocol lacks its human-review policy".to_string(),
+            )?)?;
+        }
+        HISTORICAL_V3_MODEL_PROTOCOL_SCHEMA_VERSION => {
+            if protocol.human_review_policy.is_some() || protocol.model_access_forbidden {
+                return Err(
+                    "historical-v3 model protocol cannot use human-review authority".to_string(),
+                );
+            }
+            validate_model_review_policy(protocol.model_review_policy.as_ref().ok_or_else(
+                || "historical-v3 model protocol lacks its model-review policy".to_string(),
+            )?)?;
+        }
+        _ => unreachable!("schema version checked above"),
+    }
     validate_stop_rule(&protocol.stop_rule)?;
-    if !protocol.no_fallbacks
-        || !protocol.model_access_forbidden
-        || !protocol.sniff_output_access_forbidden
-    {
+    if !protocol.no_fallbacks || !protocol.sniff_output_access_forbidden {
         return Err("historical-v3 construction must fail closed and remain blind".to_string());
+    }
+    Ok(())
+}
+
+fn validate_model_review_policy(policy: &HistoricalV3ModelReviewPolicy) -> Result<(), String> {
+    require_sha256(
+        "historical-v3 approved agent prompt",
+        &policy.approved_prompt_sha256,
+    )?;
+    if !policy.source_only_review
+        || policy.independent_reviewers != 2
+        || policy.prompt_public_url.trim().is_empty()
+        || !policy.exact_presented_material_record_required
+        || !policy.invocation_response_record_required
+        || !policy.disagreements_remain_unresolved
+        || !policy.human_gold_claim_forbidden
+    {
+        return Err("historical-v3 model-review policy is invalid".to_string());
     }
     Ok(())
 }
@@ -527,7 +570,7 @@ fn compute_protocol_sha256(protocol: &HistoricalV3Protocol) -> Result<String, St
         model_access_forbidden: bool,
         sniff_output_access_forbidden: bool,
     }
-    json_sha256(&Commitment {
+    let base = Commitment {
         schema_version: protocol.schema_version,
         protocol_id: &protocol.protocol_id,
         protocol_contract: &protocol.protocol_contract,
@@ -546,7 +589,17 @@ fn compute_protocol_sha256(protocol: &HistoricalV3Protocol) -> Result<String, St
         no_fallbacks: protocol.no_fallbacks,
         model_access_forbidden: protocol.model_access_forbidden,
         sniff_output_access_forbidden: protocol.sniff_output_access_forbidden,
-    })
+    };
+    if protocol.schema_version == HISTORICAL_V3_MODEL_PROTOCOL_SCHEMA_VERSION {
+        json_sha256(&(
+            &base,
+            protocol.model_review_policy.as_ref().ok_or_else(|| {
+                "historical-v3 model protocol lacks its model-review policy".to_string()
+            })?,
+        ))
+    } else {
+        json_sha256(&base)
+    }
 }
 
 fn compute_stream_task_sha256(task: &HistoricalV3StreamTask) -> Result<String, String> {

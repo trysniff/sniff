@@ -472,17 +472,19 @@ pub use release::{
 };
 
 pub use release::{
-    HISTORICAL_V3_PROTOCOL_SCHEMA_VERSION, HISTORICAL_V3_STREAM_TASK_SCHEMA_VERSION,
-    HistoricalV3AllowedMetadataField, HistoricalV3CandidateIdentity, HistoricalV3CandidateTask,
-    HistoricalV3CandidateWindow, HistoricalV3ForbiddenMetadataField, HistoricalV3HumanReviewPolicy,
+    HISTORICAL_V3_MODEL_PROTOCOL_SCHEMA_VERSION, HISTORICAL_V3_PROTOCOL_SCHEMA_VERSION,
+    HISTORICAL_V3_STREAM_TASK_SCHEMA_VERSION, HistoricalV3AllowedMetadataField,
+    HistoricalV3CandidateIdentity, HistoricalV3CandidateTask, HistoricalV3CandidateWindow,
+    HistoricalV3ForbiddenMetadataField, HistoricalV3HumanReviewPolicy,
     HistoricalV3IdenticalTestPolicy, HistoricalV3Language, HistoricalV3MechanicalPolicy,
-    HistoricalV3MechanicalRequirement, HistoricalV3Protocol, HistoricalV3ReviewDisposition,
-    HistoricalV3ReviewRecord, HistoricalV3SourceFrameBinding, HistoricalV3StopRule,
-    HistoricalV3StopStatus, HistoricalV3StreamTask, HistoricalV3TestEnvironmentBinding,
-    HistoricalV3TestRecipePolicy, HistoricalV3TestRecipeSelector,
-    evaluate_historical_v3_review_prefix, historical_v3_candidate_rank_sha256,
-    prepare_historical_v3_stream_task, seal_historical_v3_protocol,
-    validate_historical_v3_protocol, validate_historical_v3_stream_task,
+    HistoricalV3MechanicalRequirement, HistoricalV3ModelReviewPolicy, HistoricalV3Protocol,
+    HistoricalV3ReviewDisposition, HistoricalV3ReviewRecord, HistoricalV3SourceFrameBinding,
+    HistoricalV3StopRule, HistoricalV3StopStatus, HistoricalV3StreamTask,
+    HistoricalV3TestEnvironmentBinding, HistoricalV3TestRecipePolicy,
+    HistoricalV3TestRecipeSelector, evaluate_historical_v3_review_prefix,
+    historical_v3_candidate_rank_sha256, prepare_historical_v3_stream_task,
+    seal_historical_v3_protocol, validate_historical_v3_protocol,
+    validate_historical_v3_stream_task,
 };
 
 pub use release::{
