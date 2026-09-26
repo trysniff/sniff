@@ -27,6 +27,8 @@ pub struct SourceFrameCollectionPolicy {
     pub attestation: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub amendment_of_policy_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub predecessor_policy: Option<Box<SourceFrameCollectionPolicy>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

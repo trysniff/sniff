@@ -594,9 +594,9 @@ fn validate_policy(policy: &SourceFrameCollectionPolicy) -> Result<(), String> {
         || (policy.schema_version != SOURCE_FRAME_COLLECTION_POLICY_SCHEMA_VERSION
             && policy.derivation_rule != "rotated_full_period_days")
         || (policy.schema_version == SOURCE_FRAME_COLLECTION_FIVE_MINUTE_SCHEMA_VERSION
-            && policy.amendment_of_policy_sha256.is_none())
+            && (policy.amendment_of_policy_sha256.is_none() || policy.predecessor_policy.is_none()))
         || (policy.schema_version != SOURCE_FRAME_COLLECTION_FIVE_MINUTE_SCHEMA_VERSION
-            && policy.amendment_of_policy_sha256.is_some())
+            && (policy.amendment_of_policy_sha256.is_some() || policy.predecessor_policy.is_some()))
         || policy.derivation_period_days == 0
         || policy.derivation_period_days > 366
     {
@@ -605,6 +605,36 @@ fn validate_policy(policy: &SourceFrameCollectionPolicy) -> Result<(), String> {
     require_hex_commitment("source-frame derivation seed", &policy.derivation_seed)?;
     if let Some(prior) = &policy.amendment_of_policy_sha256 {
         require_sha256("source-frame amended policy SHA-256", prior)?;
+        let predecessor = policy
+            .predecessor_policy
+            .as_ref()
+            .ok_or_else(|| "source-frame amendment lacks its predecessor policy".to_string())?;
+        if predecessor.schema_version != SOURCE_FRAME_COLLECTION_FULL_PERIOD_SCHEMA_VERSION {
+            return Err(
+                "source-frame amendment predecessor must use the hourly full-period policy"
+                    .to_string(),
+            );
+        }
+        validate_policy(predecessor)?;
+        if &json_sha256(predecessor)? != prior {
+            return Err("source-frame amendment predecessor commitment changed".to_string());
+        }
+        if policy.source != predecessor.source
+            || policy.api_version != predecessor.api_version
+            || policy.language != predecessor.language
+            || policy.created_day_utc != predecessor.created_day_utc
+            || policy.derivation_seed != predecessor.derivation_seed
+            || policy.derivation_period_start_utc != predecessor.derivation_period_start_utc
+            || policy.derivation_period_days != predecessor.derivation_period_days
+            || policy.derivation_rule != predecessor.derivation_rule
+            || policy.include_forks != predecessor.include_forks
+            || policy.include_archived != predecessor.include_archived
+            || policy.include_mirrors != predecessor.include_mirrors
+            || policy.include_templates != predecessor.include_templates
+            || policy.ordering != predecessor.ordering
+        {
+            return Err("source-frame amendment changed its predecessor cohort".to_string());
+        }
     }
     let seed_prefix = u32::from_str_radix(&policy.derivation_seed[..8], 16)
         .map_err(|_| "source-frame derivation seed prefix is invalid".to_string())?;

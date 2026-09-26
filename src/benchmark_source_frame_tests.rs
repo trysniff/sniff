@@ -50,7 +50,7 @@ fn five_minute_amendments_preserve_the_original_cohorts() {
     if !policies_dir.exists() && !root.join(".git").exists() {
         return;
     }
-    for language in ["javascript", "python"] {
+    for language in ["javascript", "python", "typescript"] {
         let original: SourceFrameCollectionPolicy = serde_json::from_slice(
             &fs::read(policies_dir.join(format!("{language}-policy.json"))).unwrap(),
         )
@@ -68,6 +68,7 @@ fn five_minute_amendments_preserve_the_original_cohorts() {
             amended.amendment_of_policy_sha256,
             Some(json_sha256(&original).unwrap())
         );
+        assert_eq!(amended.predecessor_policy.as_deref(), Some(&original));
         assert_eq!(amended.language, original.language);
         assert_eq!(amended.created_day_utc, original.created_day_utc);
         assert_eq!(amended.derivation_seed, original.derivation_seed);
@@ -106,8 +107,33 @@ fn five_minute_partition_rejects_relocated_repository_and_missing_window() {
     policy.created_day_utc = "2026-08-08".to_string();
     policy.derivation_seed = "0".repeat(64);
     policy.derivation_rule = "rotated_full_period_days".to_string();
-    policy.amendment_of_policy_sha256 = Some("1".repeat(64));
+    let mut predecessor = policy.clone();
+    predecessor.schema_version = SOURCE_FRAME_COLLECTION_FULL_PERIOD_SCHEMA_VERSION;
+    predecessor.partition = "utc_hour".to_string();
+    policy.amendment_of_policy_sha256 = Some(json_sha256(&predecessor).unwrap());
+    policy.predecessor_policy = Some(Box::new(predecessor));
     validate_policy(&policy).unwrap();
+    let mut changed_cohort = policy.clone();
+    changed_cohort.include_forks = true;
+    assert!(
+        validate_policy(&changed_cohort)
+            .unwrap_err()
+            .contains("changed its predecessor cohort")
+    );
+    let mut changed_predecessor = policy.clone();
+    changed_predecessor
+        .predecessor_policy
+        .as_mut()
+        .unwrap()
+        .include_forks = true;
+    assert!(
+        validate_policy(&changed_predecessor)
+            .unwrap_err()
+            .contains("predecessor commitment changed")
+    );
+    let mut missing_predecessor = policy.clone();
+    missing_predecessor.predecessor_policy = None;
+    assert!(validate_policy(&missing_predecessor).is_err());
     let partitions = frame_partitions(&policy).unwrap();
     assert_eq!(partitions.len(), 2_016);
     assert_eq!(partitions[0].bounds(&policy).1, "2026-08-08T00:04:59Z");
@@ -235,6 +261,7 @@ fn policy() -> SourceFrameCollectionPolicy {
         ordering: "github_repository_id_ascending".to_string(),
         attestation: "The date and query contract were fixed before collection.".to_string(),
         amendment_of_policy_sha256: None,
+        predecessor_policy: None,
     }
 }
 

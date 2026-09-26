@@ -21,17 +21,20 @@ filters, and immutable-ID ordering. Every admitted repository must have `created
 after `2026-08-07T20:46:11Z`; a matching name is not identity proof.
 
 The original JavaScript policy stopped when the August 12 04:00 UTC hour
-reported 1,144 results, and the original Python policy stopped when the
-August 12 01:00 UTC hour reported 1,040 results. Both exceed GitHub Search's
-1,000-result completeness limit. Their partial raw checkpoints remain
-retained, not accepted as frames. The separate
-[JavaScript](historical-v3-source-frames/javascript-five-minute-policy.json)
-and [Python](historical-v3-source-frames/python-five-minute-policy.json)
+reported 1,144 results, Python stopped when the August 12 01:00 UTC hour
+reported 1,040, and TypeScript stopped when the August 12 05:00 UTC hour
+reported 1,033. All exceed GitHub Search's 1,000-result completeness limit.
+Their partial raw checkpoints remain retained, not accepted as frames. The separate
+[JavaScript](historical-v3-source-frames/javascript-five-minute-policy.json),
+[Python](historical-v3-source-frames/python-five-minute-policy.json),
+and [TypeScript](historical-v3-source-frames/typescript-five-minute-policy.json)
 five-minute amendments keep their original seven dates, seeds, languages,
 filters, and repository ordering. Each partitions every hour into twelve
 non-overlapping five-minute windows, not just the observed overflowing hour.
 Their 2,016 query windows cover the same respective cohorts and bind the
-original policy SHA-256 values. Publish each amendment at an immutable public
+original policy SHA-256 values. Each amended policy embeds its exact hourly
+predecessor; collection and replay verify its hash and unchanged cohort fields.
+Publish each amendment at an immutable public
 commit before starting its new state root. If a five-minute window still
 exceeds 1,000 results, stop; do not silently split it or switch dates. These
 amendments were made after the observed hourly caps, not falsely represented
