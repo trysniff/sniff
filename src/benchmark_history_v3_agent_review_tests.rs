@@ -1,7 +1,7 @@
 use super::super::history_v3_label_review::tests::review_fixture;
 use super::*;
 
-const PROMPT: &[u8] = include_bytes!("../sniffbench/HISTORICAL_V3_AGENT_REVIEW_PROMPT.md");
+const PROMPT: &[u8] = b"Review the sealed source and behavior evidence without Sniff output.";
 
 fn reviewer(agent_id: &str, run_id: &str) -> HistoricalV3AgentReviewer {
     HistoricalV3AgentReviewer {

@@ -25,7 +25,6 @@ include = [
   "/TRADEMARKS.md",
   "/gold_fixtures/**",
   "/scripts/**",
-  "/sniffbench/HISTORICAL_V3_AGENT_REVIEW_PROMPT.md",
   "/src/*.rs",
   "/src/benchmark_python_pip_runner.py",
   "/src/benchmark_python_runtime_contract_runner.py",
