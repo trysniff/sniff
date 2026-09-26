@@ -338,7 +338,7 @@ fn derive_source_frame(
             .get(&raw.query)
             .ok_or_else(|| "GitHub response belongs to an uncommitted query".to_string())?;
         for repository in parsed.items {
-            validate_repository(policy, &expected_start, &expected_end, &repository)?;
+            validate_repository(policy, expected_start, expected_end, &repository)?;
             let identity = normalize_full_name(&repository.full_name)?;
             if repositories
                 .insert(repository.id, repository.clone())
