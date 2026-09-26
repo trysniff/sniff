@@ -258,7 +258,8 @@ pub(crate) fn protocol(
         },
         test_recipe_policy: test_recipe_policy(),
         identical_test_policy: identical_test_policy(),
-        human_review_policy: human_review_policy(),
+        human_review_policy: Some(human_review_policy()),
+        model_review_policy: None,
         stop_rule: HistoricalV3StopRule {
             accepted_target_per_language: 40,
             distinct_repository_floor_per_language: 20,
