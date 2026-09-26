@@ -76,6 +76,7 @@ pub(super) async fn fetch_search_page(
         let mut request = client
             .get("https://api.github.com/search/repositories")
             .header("Accept", "application/vnd.github+json")
+            .header("Accept-Encoding", "identity")
             .header("X-GitHub-Api-Version", "2022-11-28")
             .query(&[
                 ("q", query.to_string()),

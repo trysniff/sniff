@@ -68,6 +68,7 @@ pub async fn collect_source_frame(
         .map_err(|error| format!("failed to create source-frame state: {error}"))?;
     let client = Client::builder()
         .user_agent("trysniff-sniffbench-frame-collector/1")
+        .http1_only()
         .connect_timeout(Duration::from_secs(15))
         .timeout(Duration::from_secs(60))
         .build()
