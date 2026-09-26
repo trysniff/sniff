@@ -231,8 +231,24 @@ pub(crate) async fn prepared_rank() -> (
     tempfile::TempDir,
     HistoricalV3TestRecipe,
 ) {
+    prepared_rank_with_protocol(std::convert::identity).await
+}
+
+pub(crate) async fn prepared_rank_with_protocol<F>(
+    configure_protocol: F,
+) -> (
+    semantic_fixture::GitFixture,
+    super::super::HistoricalV3Protocol,
+    super::super::HistoricalV3CandidateCollection,
+    tempfile::TempDir,
+    tempfile::TempDir,
+    HistoricalV3TestRecipe,
+)
+where
+    F: FnOnce(super::super::HistoricalV3Protocol) -> super::super::HistoricalV3Protocol,
+{
     let fixture = semantic_fixture::fixture();
-    let protocol = semantic_fixture::protocol();
+    let protocol = configure_protocol(semantic_fixture::protocol());
     let collection = semantic_fixture::collection(&protocol, &fixture);
     let journal = tempfile::tempdir().unwrap();
     let workspace = tempfile::tempdir().unwrap();

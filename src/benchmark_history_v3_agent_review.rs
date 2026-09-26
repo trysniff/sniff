@@ -6,7 +6,24 @@ use super::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-pub const HISTORICAL_V3_AGENT_REVIEW_SCHEMA_VERSION: u32 = 1;
+pub const HISTORICAL_V3_AGENT_REVIEW_SCHEMA_VERSION: u32 = 2;
+const AGENT_PRESENTATION_CONTRACT: &str = "sniffbench-historical-v3-agent-presentation-v1";
+const MAX_PRESENTATION_BYTES: usize = 64 * 1024 * 1024;
+const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HistoricalV3AgentModelOutput {
+    reviewer: HistoricalV3AgentReviewer,
+    decision: HistoricalV3ReviewDecision,
+}
+
+#[derive(Serialize)]
+struct HistoricalV3AgentPresentation<'a> {
+    contract: &'static str,
+    prompt: &'a str,
+    source_bundle: &'a HistoricalV3SourceReviewBundle,
+}
 
 fn deserialize_model_version<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
 where
@@ -44,6 +61,10 @@ pub struct HistoricalV3AgentReviewSubmission {
     pub review_item_id: String,
     pub reviewer: HistoricalV3AgentReviewer,
     pub decision: HistoricalV3ReviewDecision,
+    pub invocation_request: String,
+    pub invocation_request_sha256: String,
+    pub raw_response: String,
+    pub raw_response_sha256: String,
     pub submission_sha256: String,
 }
 
@@ -56,6 +77,10 @@ impl HistoricalV3AgentReviewSubmission {
             &self.review_item_id,
             &self.reviewer,
             &self.decision,
+            &self.invocation_request,
+            &self.invocation_request_sha256,
+            &self.raw_response,
+            &self.raw_response_sha256,
         ))
     }
 }
@@ -100,16 +125,21 @@ pub fn seal_historical_v3_agent_review(
     inputs: &HistoricalV3SourceReviewInputs<'_>,
     bundle: &HistoricalV3SourceReviewBundle,
     prompt_bytes: &[u8],
-    reviewer: HistoricalV3AgentReviewer,
-    decision: HistoricalV3ReviewDecision,
+    raw_response: String,
 ) -> Result<HistoricalV3AgentReviewSubmission, String> {
+    let output = parse_model_output(&raw_response)?;
+    let invocation_request = canonical_invocation_request(prompt_bytes, bundle)?;
     let mut submission = HistoricalV3AgentReviewSubmission {
         schema_version: HISTORICAL_V3_AGENT_REVIEW_SCHEMA_VERSION,
         protocol_sha256: inputs.protocol.protocol_sha256.clone(),
         source_bundle_sha256: bundle.bundle_sha256.clone(),
         review_item_id: bundle.review_item_id.clone(),
-        reviewer,
-        decision,
+        reviewer: output.reviewer,
+        decision: output.decision,
+        invocation_request_sha256: sha256(invocation_request.as_bytes()),
+        invocation_request,
+        raw_response_sha256: sha256(raw_response.as_bytes()),
+        raw_response,
         submission_sha256: String::new(),
     };
     submission.submission_sha256 = submission.computed_sha256()?;
@@ -126,6 +156,21 @@ pub fn validate_historical_v3_agent_review(
     validate_historical_v3_source_review_bundle(inputs, bundle)?;
     if prompt_bytes.is_empty() {
         return Err("historical-v3 agent prompt is empty".to_string());
+    }
+    let policy = inputs
+        .protocol
+        .model_review_policy
+        .as_ref()
+        .ok_or_else(|| {
+            "historical-v3 agent review requires model-judged protocol authority".to_string()
+        })?;
+    if inputs.protocol.schema_version != super::HISTORICAL_V3_MODEL_PROTOCOL_SCHEMA_VERSION {
+        return Err("historical-v3 agent review requires protocol v7".to_string());
+    }
+    if sha256(prompt_bytes) != policy.approved_prompt_sha256 {
+        return Err(
+            "historical-v3 agent prompt differs from the approved protocol bytes".to_string(),
+        );
     }
     if submission.schema_version != HISTORICAL_V3_AGENT_REVIEW_SCHEMA_VERSION
         || submission.protocol_sha256 != inputs.protocol.protocol_sha256
@@ -156,6 +201,21 @@ pub fn validate_historical_v3_agent_review(
     require_sha256(&reviewer.prompt_sha256)?;
     if reviewer.prompt_sha256 != format!("{:x}", Sha256::digest(prompt_bytes)) {
         return Err("historical-v3 agent prompt does not match its exact bytes".to_string());
+    }
+    if submission.invocation_request.len() > MAX_PRESENTATION_BYTES
+        || submission.invocation_request != canonical_invocation_request(prompt_bytes, bundle)?
+        || submission.invocation_request_sha256 != sha256(submission.invocation_request.as_bytes())
+    {
+        return Err("historical-v3 agent invocation changed its source-only material".to_string());
+    }
+    require_sha256(&submission.invocation_request_sha256)?;
+    if submission.raw_response_sha256 != sha256(submission.raw_response.as_bytes()) {
+        return Err("historical-v3 agent raw response commitment changed".to_string());
+    }
+    require_sha256(&submission.raw_response_sha256)?;
+    let output = parse_model_output(&submission.raw_response)?;
+    if output.reviewer != submission.reviewer || output.decision != submission.decision {
+        return Err("historical-v3 agent decision differs from its raw response".to_string());
     }
     if !reviewer.fresh_context
         || !reviewer.sniff_output_hidden
@@ -188,6 +248,36 @@ pub fn validate_historical_v3_agent_review(
         return Err("historical-v3 agent review commitment changed".to_string());
     }
     Ok(())
+}
+
+fn canonical_invocation_request(
+    prompt_bytes: &[u8],
+    bundle: &HistoricalV3SourceReviewBundle,
+) -> Result<String, String> {
+    let prompt = std::str::from_utf8(prompt_bytes)
+        .map_err(|_| "historical-v3 agent prompt must be UTF-8".to_string())?;
+    let encoded = serde_json::to_string(&HistoricalV3AgentPresentation {
+        contract: AGENT_PRESENTATION_CONTRACT,
+        prompt,
+        source_bundle: bundle,
+    })
+    .map_err(|error| format!("cannot present historical-v3 source bundle: {error}"))?;
+    if encoded.len() > MAX_PRESENTATION_BYTES {
+        return Err("historical-v3 agent presentation exceeds its byte cap".to_string());
+    }
+    Ok(encoded)
+}
+
+fn parse_model_output(raw_response: &str) -> Result<HistoricalV3AgentModelOutput, String> {
+    if raw_response.is_empty() || raw_response.len() > MAX_RESPONSE_BYTES {
+        return Err("historical-v3 agent response exceeds its byte cap".to_string());
+    }
+    serde_json::from_str(raw_response)
+        .map_err(|error| format!("historical-v3 agent response is not exact JSON: {error}"))
+}
+
+fn sha256(bytes: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(bytes))
 }
 
 pub fn audit_historical_v3_agent_reviews(

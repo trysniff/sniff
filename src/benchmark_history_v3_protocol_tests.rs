@@ -549,6 +549,27 @@ fn model_protocol_is_distinct_from_the_human_review_authority() {
             .contains("commitment changed")
     );
 
+    let mut changed_environment = model.clone();
+    changed_environment.test_recipe_policy.environments[0].toolchain_manifest_sha256 = sha('d');
+    assert!(
+        validate_historical_v3_protocol(&changed_environment)
+            .unwrap_err()
+            .contains("commitment changed")
+    );
+
+    let mut mutable_prompt = model.clone();
+    mutable_prompt
+        .model_review_policy
+        .as_mut()
+        .unwrap()
+        .prompt_public_url =
+        "https://raw.githubusercontent.com/trysniff/sniff/main/prompt.md".to_string();
+    assert!(
+        seal_historical_v3_protocol(mutable_prompt)
+            .unwrap_err()
+            .contains("immutable GitHub commit")
+    );
+
     let mut mixed = model.clone();
     mixed.human_review_policy = human.human_review_policy.clone();
     assert!(

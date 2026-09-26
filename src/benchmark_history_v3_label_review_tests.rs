@@ -1,14 +1,17 @@
-use super::super::history_v3_identical_tests::tests::{passing_events, prepared_rank};
+use super::super::history_v3_identical_tests::tests::{
+    passing_events, prepared_rank_with_protocol,
+};
 use super::super::{
     HistoricalV3CandidateCollection, HistoricalV3IdenticalTestExecutionError,
     HistoricalV3IdenticalTestExecutionRequest, HistoricalV3IdenticalTestExecutor,
     HistoricalV3IdenticalTestOutcome, HistoricalV3IdenticalTests, HistoricalV3LabelStatus,
     HistoricalV3Materialization, HistoricalV3MechanicalQualification, HistoricalV3Protocol,
     HistoricalV3RankJournal, HistoricalV3RawIdenticalTestExecution, HistoricalV3ReviewDecision,
-    HistoricalV3Reviewer, HistoricalV3ReviewerVerdict, HistoricalV3SemanticCensus,
-    HistoricalV3SourceCensus, HistoricalV3SourceReviewBundle, HistoricalV3SourceReviewInputs,
-    HistoricalV3SourceSide, HistoricalV3TestRecipe, historical_v3_rank_identity,
-    run_historical_v3_identical_tests_stage, run_historical_v3_source_review_stage,
+    HistoricalV3ReviewMethod, HistoricalV3Reviewer, HistoricalV3ReviewerVerdict,
+    HistoricalV3SemanticCensus, HistoricalV3SourceCensus, HistoricalV3SourceReviewBundle,
+    HistoricalV3SourceReviewInputs, HistoricalV3SourceSide, HistoricalV3TestRecipe,
+    historical_v3_rank_identity, run_historical_v3_identical_tests_stage,
+    run_historical_v3_source_review_stage,
 };
 use super::{
     HistoricalV3LabelWorksheet, HistoricalV3SourceCitation, audit_historical_v3_label_reviews,
@@ -88,7 +91,7 @@ pub(crate) fn review_worksheet(
 ) -> HistoricalV3LabelWorksheet {
     let mut worksheet = prepare_historical_v3_label_review(inputs, bundle).unwrap();
     worksheet.reviewer = Some(reviewer(reviewer_id));
-    worksheet.task.decision = decision(&worksheet, verdict);
+    worksheet.task.decision = decision_for_methods(&worksheet.task.methods, verdict);
     worksheet
 }
 
@@ -214,7 +217,15 @@ async fn preserves_typed_non_slop_consensus_and_real_disputes() {
 }
 
 pub(crate) async fn review_fixture() -> ReviewFixture {
-    let (_git, protocol, collection, journal_root, workspace, _) = prepared_rank().await;
+    review_fixture_with_protocol(std::convert::identity).await
+}
+
+pub(crate) async fn review_fixture_with_protocol<F>(configure_protocol: F) -> ReviewFixture
+where
+    F: FnOnce(HistoricalV3Protocol) -> HistoricalV3Protocol,
+{
+    let (_git, protocol, collection, journal_root, workspace, _) =
+        prepared_rank_with_protocol(configure_protocol).await;
     run_historical_v3_identical_tests_stage(
         &protocol,
         &collection,
@@ -266,13 +277,11 @@ fn reviewer(reviewer_id: &str) -> HistoricalV3Reviewer {
     }
 }
 
-fn decision(
-    worksheet: &HistoricalV3LabelWorksheet,
+pub(crate) fn decision_for_methods(
+    methods: &[HistoricalV3ReviewMethod],
     verdict: HistoricalV3ReviewerVerdict,
 ) -> HistoricalV3ReviewDecision {
-    let mut citations = worksheet
-        .task
-        .methods
+    let mut citations = methods
         .iter()
         .filter(|method| {
             method.side == HistoricalV3SourceSide::Base

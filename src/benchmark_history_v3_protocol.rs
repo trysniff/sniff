@@ -312,15 +312,44 @@ fn validate_model_review_policy(policy: &HistoricalV3ModelReviewPolicy) -> Resul
         "historical-v3 approved agent prompt",
         &policy.approved_prompt_sha256,
     )?;
+    validate_immutable_prompt_url(&policy.prompt_public_url)?;
     if !policy.source_only_review
         || policy.independent_reviewers != 2
-        || policy.prompt_public_url.trim().is_empty()
         || !policy.exact_presented_material_record_required
         || !policy.invocation_response_record_required
         || !policy.disagreements_remain_unresolved
         || !policy.human_gold_claim_forbidden
     {
         return Err("historical-v3 model-review policy is invalid".to_string());
+    }
+    Ok(())
+}
+
+fn validate_immutable_prompt_url(value: &str) -> Result<(), String> {
+    let url = reqwest::Url::parse(value)
+        .map_err(|_| "historical-v3 agent prompt URL is invalid".to_string())?;
+    let segments = url
+        .path_segments()
+        .ok_or_else(|| "historical-v3 agent prompt URL has no path".to_string())?
+        .collect::<Vec<_>>();
+    if url.scheme() != "https"
+        || url.host_str() != Some("raw.githubusercontent.com")
+        || url.port().is_some()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+        || segments.len() < 4
+        || segments[..2].iter().any(|segment| segment.is_empty())
+        || segments[2].len() != 40
+        || !segments[2]
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        || segments[3..].iter().any(|segment| segment.is_empty())
+    {
+        return Err(
+            "historical-v3 agent prompt URL must name an immutable GitHub commit".to_string(),
+        );
     }
     Ok(())
 }
@@ -596,6 +625,8 @@ fn compute_protocol_sha256(protocol: &HistoricalV3Protocol) -> Result<String, St
             protocol.model_review_policy.as_ref().ok_or_else(|| {
                 "historical-v3 model protocol lacks its model-review policy".to_string()
             })?,
+            &protocol.test_recipe_policy,
+            &protocol.identical_test_policy,
         ))
     } else {
         json_sha256(&base)
