@@ -1359,7 +1359,10 @@ pub async fn run(args: CliArgs) -> Result<i32, Box<dyn std::error::Error>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{BenchmarkCommand, CliArgs, CliCommand, HistoricalV3Command, IndexerCommand};
+    use super::{
+        BenchmarkCommand, CliArgs, CliCommand, HistoricalV3Command, IndexerCommand,
+        SourceFrameTransport,
+    };
     use clap::Parser;
 
     #[path = "../cli_run_historical_v2_review_tests.rs"]
