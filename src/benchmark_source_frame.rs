@@ -18,6 +18,45 @@ use tokio::time::Duration;
 const GITHUB_SEARCH_LIMIT: usize = 1_000;
 const GITHUB_PAGE_SIZE: usize = 100;
 
+#[derive(Clone)]
+struct FramePartition {
+    day: String,
+    hour: usize,
+    minute: usize,
+}
+
+impl FramePartition {
+    fn bounds(&self, policy: &SourceFrameCollectionPolicy) -> (String, String) {
+        let width = if policy.schema_version == SOURCE_FRAME_COLLECTION_FIVE_MINUTE_SCHEMA_VERSION {
+            5
+        } else {
+            60
+        };
+        (
+            format!("{}T{:02}:{:02}:00Z", self.day, self.hour, self.minute),
+            format!(
+                "{}T{:02}:{:02}:59Z",
+                self.day,
+                self.hour,
+                self.minute + width - 1
+            ),
+        )
+    }
+
+    fn checkpoint_key(&self, policy: &SourceFrameCollectionPolicy) -> String {
+        match policy.schema_version {
+            SOURCE_FRAME_COLLECTION_POLICY_SCHEMA_VERSION => format!("hour-{:02}", self.hour),
+            SOURCE_FRAME_COLLECTION_FULL_PERIOD_SCHEMA_VERSION => {
+                format!("day-{}-hour-{:02}", self.day, self.hour)
+            }
+            _ => format!(
+                "day-{}-hour-{:02}-minute-{:02}",
+                self.day, self.hour, self.minute
+            ),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum SourceFrameTransport {
     Http,
@@ -100,48 +139,41 @@ pub async fn collect_source_frame_with_transport(
         .build()
         .map_err(|error| format!("failed to build GitHub frame client: {error}"))?;
     let mut raw_pages = Vec::new();
-    for day in frame_days(&policy)? {
-        for hour in 0..24 {
-            let query = hourly_query_for_day(&policy, &day, hour);
-            let checkpoint_key =
-                if policy.schema_version == SOURCE_FRAME_COLLECTION_FULL_PERIOD_SCHEMA_VERSION {
-                    format!("day-{day}-hour-{hour:02}")
-                } else {
-                    format!("hour-{hour:02}")
-                };
-            let first = load_or_fetch_page(
-                &client,
-                github_token,
-                state_directory,
-                &query,
-                &checkpoint_key,
-                1,
-                transport,
-            )
-            .await?;
-            let parsed = parse_search_response(&first.1)?;
-            if parsed.total_count > GITHUB_SEARCH_LIMIT {
-                return Err(format!(
-                    "GitHub search partition {query:?} has {} results and exceeds the 1,000-result completeness limit",
-                    parsed.total_count
-                ));
-            }
-            let pages = parsed.total_count.div_ceil(GITHUB_PAGE_SIZE).max(1);
-            raw_pages.push(first);
-            for page in 2..=pages {
-                raw_pages.push(
-                    load_or_fetch_page(
-                        &client,
-                        github_token,
-                        state_directory,
-                        &query,
-                        &checkpoint_key,
-                        page,
-                        transport,
-                    )
-                    .await?,
-                );
-            }
+    for partition in frame_partitions(&policy)? {
+        let query = partition_query(&policy, &partition);
+        let checkpoint_key = partition.checkpoint_key(&policy);
+        let first = load_or_fetch_page(
+            &client,
+            github_token,
+            state_directory,
+            &query,
+            &checkpoint_key,
+            1,
+            transport,
+        )
+        .await?;
+        let parsed = parse_search_response(&first.1)?;
+        if parsed.total_count > GITHUB_SEARCH_LIMIT {
+            return Err(format!(
+                "GitHub search partition {query:?} has {} results and exceeds the 1,000-result completeness limit",
+                parsed.total_count
+            ));
+        }
+        let pages = parsed.total_count.div_ceil(GITHUB_PAGE_SIZE).max(1);
+        raw_pages.push(first);
+        for page in 2..=pages {
+            raw_pages.push(
+                load_or_fetch_page(
+                    &client,
+                    github_token,
+                    state_directory,
+                    &query,
+                    &checkpoint_key,
+                    page,
+                    transport,
+                )
+                .await?,
+            );
         }
     }
     build_source_frame(
@@ -272,6 +304,13 @@ fn derive_source_frame(
     let mut identities = HashSet::new();
     let mut page_commitments = Vec::new();
     let mut partitions = BTreeMap::<String, (usize, BTreeMap<usize, usize>)>::new();
+    let expected_partitions = frame_partitions(policy)?
+        .into_iter()
+        .map(|partition| {
+            let query = partition_query(policy, &partition);
+            (query, partition.bounds(policy))
+        })
+        .collect::<BTreeMap<_, _>>();
     for (path, raw) in raw_pages {
         validate_raw_page(&raw)?;
         let parsed = parse_search_response(&raw)?;
@@ -295,9 +334,11 @@ fn derive_source_frame(
         {
             return Err("GitHub search pagination changed within one partition".to_string());
         }
-        let expected_prefix = expected_hour_prefix(policy, &raw.query)?;
+        let (expected_start, expected_end) = expected_partitions
+            .get(&raw.query)
+            .ok_or_else(|| "GitHub response belongs to an uncommitted query".to_string())?;
         for repository in parsed.items {
-            validate_repository(policy, &expected_prefix, &repository)?;
+            validate_repository(policy, &expected_start, &expected_end, &repository)?;
             let identity = normalize_full_name(&repository.full_name)?;
             if repositories
                 .insert(repository.id, repository.clone())
@@ -327,22 +368,25 @@ fn derive_source_frame(
             response_sha256: raw.response_sha256,
         });
     }
-    for day in frame_days(policy)? {
-        for hour in 0..24 {
-            let query = hourly_query_for_day(policy, &day, hour);
-            let Some((total_count, pages)) = partitions.remove(&query) else {
-                return Err(format!(
-                    "source frame is missing UTC hour partition {day}T{hour:02}"
-                ));
-            };
-            let expected_pages = total_count.div_ceil(GITHUB_PAGE_SIZE).max(1);
-            if pages.keys().copied().ne(1..=expected_pages)
-                || pages.values().sum::<usize>() != total_count
-            {
-                return Err(format!(
-                    "GitHub search partition {query:?} does not contain its complete page and item census"
-                ));
-            }
+    for query in expected_partitions.keys() {
+        let Some((total_count, pages)) = partitions.remove(query) else {
+            let width =
+                if policy.schema_version == SOURCE_FRAME_COLLECTION_FIVE_MINUTE_SCHEMA_VERSION {
+                    "five-minute"
+                } else {
+                    "hour"
+                };
+            return Err(format!(
+                "source frame is missing UTC {width} partition {query:?}"
+            ));
+        };
+        let expected_pages = total_count.div_ceil(GITHUB_PAGE_SIZE).max(1);
+        if pages.keys().copied().ne(1..=expected_pages)
+            || pages.values().sum::<usize>() != total_count
+        {
+            return Err(format!(
+                "GitHub search partition {query:?} does not contain its complete page and item census"
+            ));
         }
     }
     if !partitions.is_empty() {
@@ -424,9 +468,20 @@ fn hourly_query(policy: &SourceFrameCollectionPolicy, hour: usize) -> String {
     hourly_query_for_day(policy, &policy.created_day_utc, hour)
 }
 
+#[cfg(test)]
 fn hourly_query_for_day(policy: &SourceFrameCollectionPolicy, day: &str, hour: usize) -> String {
-    let start = format!("{day}T{hour:02}:00:00Z");
-    let end = format!("{day}T{hour:02}:59:59Z");
+    partition_query(
+        policy,
+        &FramePartition {
+            day: day.to_string(),
+            hour,
+            minute: 0,
+        },
+    )
+}
+
+fn partition_query(policy: &SourceFrameCollectionPolicy, partition: &FramePartition) -> String {
+    let (start, end) = partition.bounds(policy);
     format!(
         "language:{} created:{start}..{end} fork:{} archived:{} mirror:{} template:{}",
         policy.language,
@@ -495,11 +550,13 @@ fn validate_checkpointable_page(raw: &SourceFrameRawPage) -> Result<(), String> 
 
 fn validate_repository(
     policy: &SourceFrameCollectionPolicy,
-    expected_prefix: &str,
+    expected_start: &str,
+    expected_end: &str,
     repository: &GithubSearchRepository,
 ) -> Result<(), String> {
     if repository.id == 0
-        || !repository.created_at.starts_with(expected_prefix)
+        || repository.created_at.as_str() < expected_start
+        || repository.created_at.as_str() > expected_end
         || repository.fork != policy.include_forks
         || repository.archived != policy.include_archived
         || repository.mirror_url.is_some() != policy.include_mirrors
@@ -513,23 +570,12 @@ fn validate_repository(
     Ok(())
 }
 
-fn expected_hour_prefix(
-    policy: &SourceFrameCollectionPolicy,
-    query: &str,
-) -> Result<String, String> {
-    let (expected_day, expected_hour) = frame_days(policy)?
-        .into_iter()
-        .flat_map(|day| (0..24).map(move |hour| (day.clone(), hour)))
-        .find(|(day, hour)| hourly_query_for_day(policy, day, *hour) == query)
-        .ok_or_else(|| "GitHub response belongs to an uncommitted query".to_string())?;
-    Ok(format!("{expected_day}T{expected_hour:02}:"))
-}
-
 fn validate_policy(policy: &SourceFrameCollectionPolicy) -> Result<(), String> {
     if !matches!(
         policy.schema_version,
         SOURCE_FRAME_COLLECTION_POLICY_SCHEMA_VERSION
             | SOURCE_FRAME_COLLECTION_FULL_PERIOD_SCHEMA_VERSION
+            | SOURCE_FRAME_COLLECTION_FIVE_MINUTE_SCHEMA_VERSION
     ) || policy.frame_id.trim().is_empty()
         || policy.source != "https://api.github.com/search/repositories"
         || policy.api_version != "2022-11-28"
@@ -537,19 +583,29 @@ fn validate_policy(policy: &SourceFrameCollectionPolicy) -> Result<(), String> {
             policy.language.as_str(),
             "Go" | "JavaScript" | "Kotlin" | "Python" | "Rust" | "TypeScript"
         )
-        || policy.partition != "utc_hour"
+        || (policy.schema_version == SOURCE_FRAME_COLLECTION_FIVE_MINUTE_SCHEMA_VERSION
+            && policy.partition != "utc_five_minute")
+        || (policy.schema_version != SOURCE_FRAME_COLLECTION_FIVE_MINUTE_SCHEMA_VERSION
+            && policy.partition != "utc_hour")
         || policy.ordering != "github_repository_id_ascending"
         || policy.attestation.trim().is_empty()
         || (policy.schema_version == SOURCE_FRAME_COLLECTION_POLICY_SCHEMA_VERSION
             && policy.derivation_rule != "first_8_hex_u32_mod_period_days")
-        || (policy.schema_version == SOURCE_FRAME_COLLECTION_FULL_PERIOD_SCHEMA_VERSION
+        || (policy.schema_version != SOURCE_FRAME_COLLECTION_POLICY_SCHEMA_VERSION
             && policy.derivation_rule != "rotated_full_period_days")
+        || (policy.schema_version == SOURCE_FRAME_COLLECTION_FIVE_MINUTE_SCHEMA_VERSION
+            && policy.amendment_of_policy_sha256.is_none())
+        || (policy.schema_version != SOURCE_FRAME_COLLECTION_FIVE_MINUTE_SCHEMA_VERSION
+            && policy.amendment_of_policy_sha256.is_some())
         || policy.derivation_period_days == 0
         || policy.derivation_period_days > 366
     {
         return Err("source-frame collection policy uses an unsupported contract".to_string());
     }
     require_hex_commitment("source-frame derivation seed", &policy.derivation_seed)?;
+    if let Some(prior) = &policy.amendment_of_policy_sha256 {
+        require_sha256("source-frame amended policy SHA-256", prior)?;
+    }
     let seed_prefix = u32::from_str_radix(&policy.derivation_seed[..8], 16)
         .map_err(|_| "source-frame derivation seed prefix is invalid".to_string())?;
     let offset = (u64::from(seed_prefix)
@@ -563,6 +619,28 @@ fn validate_policy(policy: &SourceFrameCollectionPolicy) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+fn frame_partitions(policy: &SourceFrameCollectionPolicy) -> Result<Vec<FramePartition>, String> {
+    let minutes: &[usize] =
+        if policy.schema_version == SOURCE_FRAME_COLLECTION_FIVE_MINUTE_SCHEMA_VERSION {
+            &[0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55]
+        } else {
+            &[0]
+        };
+    let mut partitions = Vec::new();
+    for day in frame_days(policy)? {
+        for hour in 0..24 {
+            for &minute in minutes {
+                partitions.push(FramePartition {
+                    day: day.clone(),
+                    hour,
+                    minute,
+                });
+            }
+        }
+    }
+    Ok(partitions)
 }
 
 fn frame_days(policy: &SourceFrameCollectionPolicy) -> Result<Vec<String>, String> {

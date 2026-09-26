@@ -72,6 +72,7 @@ fn frame_fixture_at(
         include_templates: false,
         ordering: "github_repository_id_ascending".to_string(),
         attestation: format!("Synthetic {language:?} source frame."),
+        amendment_of_policy_sha256: None,
     };
     let mut commitments = Vec::new();
     for hour in 0..24 {
