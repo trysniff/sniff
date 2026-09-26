@@ -50,6 +50,7 @@ fn submission(
                 evidence_artifact_path: method.artifact_path.clone(),
                 exact_source_quote: method.source.clone(),
                 rationale: "No unnecessary machinery is visible in source.".to_string(),
+                behavior_preserving_simplification: String::new(),
                 missing_evidence: Vec::new(),
             })
             .collect(),
@@ -77,6 +78,8 @@ fn model_reviews_are_source_bound_and_not_human_labels() {
     assert_eq!(sealed, first);
     let mut second = submission(&expected, "agent-b", "run-b");
     second.decisions[0].tier = FindingTier::KindaSlop;
+    second.decisions[0].behavior_preserving_simplification =
+        "Remove the unnecessary wrapper without changing the return value.".to_string();
     second.submission_sha256 = second.computed_sha256().unwrap();
     validate_model_judged_submission(&seal, root.path(), &seal_hash, &first).unwrap();
     let audit =
@@ -115,6 +118,15 @@ fn model_review_rejects_unblinded_or_forged_evidence() {
         validate_model_judged_submission(&seal, root.path(), &seal_hash, &review)
             .unwrap_err()
             .contains("no exact source quote")
+    );
+
+    review.decisions[0].exact_source_quote = expected.methods[0].source.clone();
+    review.decisions[0].tier = FindingTier::Slop;
+    review.submission_sha256 = review.computed_sha256().unwrap();
+    assert!(
+        validate_model_judged_submission(&seal, root.path(), &seal_hash, &review)
+            .unwrap_err()
+            .contains("behavior-preserving simplification")
     );
 }
 

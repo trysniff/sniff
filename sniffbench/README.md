@@ -36,7 +36,10 @@ SHA-256 of the exact prompt, plus true `fresh_context`,
 `sniff_output_hidden`, `other_reviews_hidden`, and
 `source_context_inspected` attestations. Each decision records `method_id`,
 `tier`, `mechanism`, `evidence_artifact_path`, `exact_source_quote`,
-`rationale`, and `missing_evidence`. The seal command fills the source/task
+`rationale`, `behavior_preserving_simplification`, and `missing_evidence`.
+Only `slop` and `kinda_slop` decisions supply a concrete simplification that
+preserves behavior; a correctness fix, missing error, or performance concern
+alone is not slop. The seal command fills the source/task
 commitments and submission hash; it rejects invented methods or quotes.
 
 A six-method source-only agent pilot on September 26, 2026 had exact tier

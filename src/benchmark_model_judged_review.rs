@@ -31,6 +31,7 @@ pub struct ModelJudgedDecision {
     pub evidence_artifact_path: String,
     pub exact_source_quote: String,
     pub rationale: String,
+    pub behavior_preserving_simplification: String,
     pub missing_evidence: Vec<String>,
 }
 
@@ -258,6 +259,19 @@ fn validate_submission_against_task(
             .ok_or_else(|| "model-judged submission invents a method".to_string())?;
         if decision.mechanism.trim().is_empty() || decision.rationale.trim().is_empty() {
             return Err("model-judged decision lacks a mechanism or rationale".to_string());
+        }
+        let simplification = decision.behavior_preserving_simplification.trim();
+        if matches!(decision.tier, FindingTier::Slop | FindingTier::KindaSlop)
+            && simplification.is_empty()
+        {
+            return Err(
+                "model-judged slop decision lacks a behavior-preserving simplification".to_string(),
+            );
+        }
+        if matches!(decision.tier, FindingTier::Clean | FindingTier::Unresolved)
+            && !simplification.is_empty()
+        {
+            return Err("clean or unresolved model judgment claims a simplification".to_string());
         }
         if decision.tier == FindingTier::Unresolved && decision.missing_evidence.is_empty() {
             return Err("unresolved model judgment must state missing evidence".to_string());
