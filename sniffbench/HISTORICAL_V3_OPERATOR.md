@@ -104,6 +104,13 @@ Operational failures keep the same rank open for retry.
 
 ## Independent Review
 
+The separate [agent-review prompt](HISTORICAL_V3_AGENT_REVIEW_PROMPT.md)
+and model-judged artifact schema are preparatory development evidence only.
+The operator commands below still enforce the human-only protocol. Do not
+claim an agent is a human reviewer or submit agent judgments through these
+commands; explicit operator routing and a distinct model-judged resolution
+policy are required before agent adjudication can advance a v3 rank.
+
 For a rank reported as `human_review`, prepare source-only worksheets, have
 two independent humans complete them separately, then validate and audit both.
 The CLI never fabricates their decisions.

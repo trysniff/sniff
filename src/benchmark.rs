@@ -616,6 +616,13 @@ pub use release::{
 pub use release::{HistoricalV3ReviewRecordPaths, verify_historical_v3_final_review_from_disk};
 
 pub use release::{
+    HISTORICAL_V3_AGENT_REVIEW_SCHEMA_VERSION, HistoricalV3AgentReviewAudit,
+    HistoricalV3AgentReviewLabel, HistoricalV3AgentReviewSubmission, HistoricalV3AgentReviewer,
+    audit_historical_v3_agent_reviews, seal_historical_v3_agent_review,
+    validate_historical_v3_agent_audit, validate_historical_v3_agent_review,
+};
+
+pub use release::{
     MODEL_JUDGED_REVIEW_SCHEMA_VERSION, ModelJudgedAudit, ModelJudgedDecision,
     ModelJudgedMethodAgreement, ModelJudgedRawReview, ModelJudgedReviewer, ModelJudgedSubmission,
     audit_model_judged_reviews, seal_model_judged_review, validate_model_judged_audit,
