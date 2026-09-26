@@ -11,7 +11,33 @@ records the declared provider and model label, optional observed revision,
 run and prompt identities, blinded
 input attestations, source-seal commitment, method decisions, and source quotes.
 Use the published [source-review prompt](MODEL_REVIEW_PROMPT.md) for future
-agent shards, committing any shard-specific method assignment before review.
+agent shards. Freeze and commit a deterministic assignment manifest before
+review. It derives the complete method census from the source seal, groups
+methods by repository into fresh-context shards of at most eight, and requires
+two independent run slots per shard. Pass each pilot-exposed method with a
+separate `--exclude-method-id` option; the manifest commits the exclusions.
+
+```console
+sniff benchmark prepare-model-assignments blind-source-seal.json sniffbench/MODEL_REVIEW_PROMPT.md assignments.json --exclude-method-id <pilot-method-id>
+sniff benchmark validate-model-assignments blind-source-seal.json sniffbench/MODEL_REVIEW_PROMPT.md assignments.json
+```
+
+The example shows one exclusion; the frozen Blind OSS v1 assignment must pass
+all six IDs listed below. The validator recomputes the entire roster from
+the sealed source and exact prompt bytes. It does not execute agent runs or
+prove that assignments were followed. An independent submission ledger and
+complete two-reviewer coverage audit are still required before claiming a
+model-judged census.
+
+The frozen [Blind OSS v1 model-review assignments](model-review-v1-assignments.json)
+exclude those six pilot methods and assign the remaining 1,601 methods to
+207 repository-local shards with two reviewer slots each (414 planned runs).
+The manifest's source-seal artifact SHA-256 is
+`33bf6eaac53c3e58c6d4ff2f3ecf54321ef59b1c7f81a58f5e19790bb7b4f5a4`;
+its exact prompt SHA-256 is
+`89a0cdb5bdab2d5f472d6a2e869f60aa4a035849c2ce3bbd69de82e25d4201ef`.
+These are assignments, not completed reviews or a precision result.
+
 Two submissions can be audited for tier agreement only. The audit permits
 partial method sets; it does not establish exhaustive coverage, ground-truth
 accuracy, reviewer independence, or human validation. It cannot satisfy the
@@ -30,8 +56,8 @@ sniff benchmark audit-model-reviews blind-source-seal.json agent-a.json agent-b.
 
 The caller supplies the model-run outputs; these commands validate provenance
 and source anchoring but do not run an agent, prove the attestation, or infer
-quality from agreement. A future shard plan must precommit complete method
-coverage before model-judged results can be summarized as a census.
+quality from agreement. The assignment manifest alone cannot turn partial
+submissions into an exhaustive census.
 
 Each raw input has `reviewer` and `decisions` fields. The reviewer records
 `reviewer_id`, `provider`, `model`, `model_version`, `run_id`, and a lowercase

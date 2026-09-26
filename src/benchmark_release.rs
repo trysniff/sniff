@@ -1095,6 +1095,11 @@ mod model_judged_review;
 
 pub use model_judged_review::*;
 
+#[path = "benchmark_model_review_assignments.rs"]
+mod model_review_assignments;
+
+pub use model_review_assignments::*;
+
 #[path = "benchmark_label_resolution.rs"]
 mod label_resolution;
 
