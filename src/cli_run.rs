@@ -254,6 +254,27 @@ pub enum BenchmarkCommand {
         /// New model-judged agreement audit; never a human label audit.
         output: String,
     },
+    /// Freeze deterministic two-agent source-only shards before review begins.
+    PrepareModelAssignments {
+        /// Label-free source seal whose method census is assigned.
+        seal: String,
+        /// Exact reviewer prompt whose bytes are committed in the manifest.
+        prompt: String,
+        /// New assignment manifest; existing files are never overwritten.
+        output: String,
+        /// Pilot-exposed method to exclude; repeat for each excluded method.
+        #[arg(long = "exclude-method-id")]
+        excluded_method_ids: Vec<String>,
+        /// Maximum methods per fresh agent context, from 1 to 8.
+        #[arg(long, default_value_t = 8)]
+        max_methods_per_shard: usize,
+    },
+    /// Replay a model-review assignment manifest against source and prompt bytes.
+    ValidateModelAssignments {
+        seal: String,
+        prompt: String,
+        manifest: String,
+    },
     /// Verify an in-progress label worksheet and report completed and pending work.
     LabelStatus {
         /// Label-free source seal used to create the worksheet.
@@ -936,6 +957,24 @@ pub async fn run(args: CliArgs) -> Result<i32, Box<dyn std::error::Error>> {
                 second,
                 output,
             } => pipeline::audit_model_reviews(&seal, &first, &second, &output),
+            BenchmarkCommand::PrepareModelAssignments {
+                seal,
+                prompt,
+                output,
+                excluded_method_ids,
+                max_methods_per_shard,
+            } => pipeline::prepare_model_assignments(
+                &seal,
+                &prompt,
+                &output,
+                max_methods_per_shard,
+                &excluded_method_ids,
+            ),
+            BenchmarkCommand::ValidateModelAssignments {
+                seal,
+                prompt,
+                manifest,
+            } => pipeline::validate_model_assignments(&seal, &prompt, &manifest),
             BenchmarkCommand::LabelStatus { seal, review } => {
                 pipeline::benchmark_label_status(&seal, &review)
             }
@@ -2124,6 +2163,36 @@ mod tests {
                 && first == "agent-a.json"
                 && second == "agent-b.json"
                 && output == "model-audit.json"
+        ));
+
+        let assignments = CliArgs::try_parse_from([
+            "sniff",
+            "benchmark",
+            "prepare-model-assignments",
+            "blind-source-seal.json",
+            "model-prompt.md",
+            "assignments.json",
+            "--exclude-method-id",
+            "pilot-method",
+            "--max-methods-per-shard",
+            "4",
+        ])
+        .expect("model assignment arguments");
+        assert!(matches!(
+            assignments.command,
+            Some(CliCommand::Benchmark {
+                command: BenchmarkCommand::PrepareModelAssignments {
+                    seal,
+                    prompt,
+                    output,
+                    excluded_method_ids,
+                    max_methods_per_shard,
+                }
+            }) if seal == "blind-source-seal.json"
+                && prompt == "model-prompt.md"
+                && output == "assignments.json"
+                && excluded_method_ids == ["pilot-method"]
+                && max_methods_per_shard == 4
         ));
 
         let audit = CliArgs::try_parse_from([

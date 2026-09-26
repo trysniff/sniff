@@ -8,16 +8,18 @@ use crate::benchmark::{
 };
 use crate::benchmark::{
     BenchmarkSourceSeal, LabelResolutionManifest, LabelReviewAudit, LabelReviewWorksheet,
-    ModelJudgedRawReview, ModelJudgedSubmission, SourceFrameCollectionPolicy, SourceSamplingPolicy,
-    SourceSelectionAudit, SourceSelectionComponentAudit, SourceSelectionCompositePolicy,
-    SourceSelectionWorksheet, assess_source_selection, audit_label_reviews,
-    audit_model_judged_reviews, audit_source_selection, audit_source_selection_component,
-    build_blind_case_bundle, collect_source_frame, combine_source_selections,
-    create_composite_source_seal, create_source_seal, extend_source_selection,
-    inspect_label_review_progress, prepare_label_resolution, prepare_label_review,
+    ModelJudgedRawReview, ModelJudgedSubmission, ModelReviewAssignments,
+    SourceFrameCollectionPolicy, SourceSamplingPolicy, SourceSelectionAudit,
+    SourceSelectionComponentAudit, SourceSelectionCompositePolicy, SourceSelectionWorksheet,
+    assess_source_selection, audit_label_reviews, audit_model_judged_reviews,
+    audit_source_selection, audit_source_selection_component, build_blind_case_bundle,
+    collect_source_frame, combine_source_selections, create_composite_source_seal,
+    create_source_seal, extend_source_selection, inspect_label_review_progress,
+    prepare_label_resolution, prepare_label_review, prepare_model_review_assignments,
     prepare_source_selection, prepare_source_selection_extension, seal_model_judged_review,
     source_selection_draft, validate_label_review, validate_label_review_audit,
-    validate_model_judged_submission, validate_source_frame_manifest, validate_source_seal,
+    validate_model_judged_submission, validate_model_review_assignments,
+    validate_source_frame_manifest, validate_source_seal,
 };
 use crate::benchmark_import::{BenchmarkRunReview, import_reviewed_run, prepare_run_review};
 use std::fs;
@@ -757,6 +759,62 @@ pub(crate) fn audit_model_reviews(
     eprintln!(
         "Model-judged agreement audit written to {output_path}. Agreements: {}. Disputes: {}. Not human validation or an accuracy score.",
         audit.agreement_count, audit.disputed_count
+    );
+    Ok(0)
+}
+
+pub(crate) fn prepare_model_assignments(
+    seal_path: &str,
+    prompt_path: &str,
+    output_path: &str,
+    max_methods_per_shard: usize,
+    excluded_method_ids: &[String],
+) -> Result<i32, Box<dyn std::error::Error>> {
+    let (seal, seal_bytes) = read_source_seal(seal_path)?;
+    let prompt_bytes = fs::read(prompt_path)?;
+    let manifest = prepare_model_review_assignments(
+        &seal,
+        containing_directory(seal_path),
+        &sha256(&seal_bytes),
+        &prompt_bytes,
+        max_methods_per_shard,
+        excluded_method_ids,
+    )
+    .map_err(|error| IoError::new(ErrorKind::InvalidData, error))?;
+    write_new_file(
+        Path::new(output_path),
+        &serde_json::to_vec_pretty(&manifest)?,
+    )?;
+    eprintln!(
+        "Frozen model-review assignments written to {output_path}. Methods: {}. Shards: {}. Agent runs required: {}. Not human labels.",
+        manifest.included_method_count,
+        manifest.shards.len(),
+        manifest.shards.len() * 2
+    );
+    Ok(0)
+}
+
+pub(crate) fn validate_model_assignments(
+    seal_path: &str,
+    prompt_path: &str,
+    manifest_path: &str,
+) -> Result<i32, Box<dyn std::error::Error>> {
+    let (seal, seal_bytes) = read_source_seal(seal_path)?;
+    let prompt_bytes = fs::read(prompt_path)?;
+    let manifest = read_json::<ModelReviewAssignments>(manifest_path)?;
+    validate_model_review_assignments(
+        &seal,
+        containing_directory(seal_path),
+        &sha256(&seal_bytes),
+        &prompt_bytes,
+        &manifest,
+    )
+    .map_err(|error| IoError::new(ErrorKind::InvalidData, error))?;
+    eprintln!(
+        "Verified source-bound model-review assignments {manifest_path}. Methods: {}. Shards: {}. Agent runs required: {}.",
+        manifest.included_method_count,
+        manifest.shards.len(),
+        manifest.shards.len() * 2
     );
     Ok(0)
 }

@@ -621,6 +621,11 @@ pub use release::{
     validate_model_judged_submission,
 };
 
+pub use release::{
+    MODEL_REVIEW_ASSIGNMENTS_SCHEMA_VERSION, ModelReviewAssignments, ModelReviewShard,
+    prepare_model_review_assignments, validate_model_review_assignments,
+};
+
 pub use release::verify_historical_v3_stop_from_disk;
 
 pub use release::{
