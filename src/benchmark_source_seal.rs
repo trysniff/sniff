@@ -273,7 +273,7 @@ fn create_prevalidated_source_seal(
             output_path.display()
         ));
     }
-    let output_parent = output_path.parent().unwrap_or_else(|| Path::new("."));
+    let output_parent = source_seal_output_directory(output_path);
     if !output_parent.is_dir() {
         return Err(format!(
             "source-seal output parent does not exist: {}",
@@ -328,6 +328,13 @@ fn create_prevalidated_source_seal(
         }
     }
     result
+}
+
+fn source_seal_output_directory(output_path: &Path) -> &Path {
+    output_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
 }
 
 fn build_source_seal(
