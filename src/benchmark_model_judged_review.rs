@@ -46,6 +46,13 @@ pub struct ModelJudgedSubmission {
     pub submission_sha256: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModelJudgedRawReview {
+    pub reviewer: ModelJudgedReviewer,
+    pub decisions: Vec<ModelJudgedDecision>,
+}
+
 impl ModelJudgedSubmission {
     pub fn computed_sha256(&self) -> Result<String, String> {
         hash_json(&(
@@ -101,6 +108,27 @@ pub fn validate_model_judged_submission(
 ) -> Result<(), String> {
     let expected = prepare_label_review(seal, seal_root, source_seal_artifact_sha256)?;
     validate_submission_against_task(&expected, submission)
+}
+
+pub fn seal_model_judged_review(
+    seal: &BenchmarkSourceSeal,
+    seal_root: &Path,
+    source_seal_artifact_sha256: &str,
+    raw: ModelJudgedRawReview,
+) -> Result<ModelJudgedSubmission, String> {
+    let expected = prepare_label_review(seal, seal_root, source_seal_artifact_sha256)?;
+    let mut submission = ModelJudgedSubmission {
+        schema_version: MODEL_JUDGED_REVIEW_SCHEMA_VERSION,
+        source_seal_artifact_sha256: expected.source_seal_artifact_sha256.clone(),
+        source_seal_commitment_sha256: expected.source_seal_commitment_sha256.clone(),
+        task_commitment_sha256: expected.task_commitment_sha256.clone(),
+        reviewer: raw.reviewer,
+        decisions: raw.decisions,
+        submission_sha256: String::new(),
+    };
+    submission.submission_sha256 = submission.computed_sha256()?;
+    validate_submission_against_task(&expected, &submission)?;
+    Ok(submission)
 }
 
 pub fn audit_model_judged_reviews(

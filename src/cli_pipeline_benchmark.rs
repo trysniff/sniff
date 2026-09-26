@@ -8,16 +8,16 @@ use crate::benchmark::{
 };
 use crate::benchmark::{
     BenchmarkSourceSeal, LabelResolutionManifest, LabelReviewAudit, LabelReviewWorksheet,
-    ModelJudgedSubmission, SourceFrameCollectionPolicy, SourceSamplingPolicy, SourceSelectionAudit,
-    SourceSelectionComponentAudit, SourceSelectionCompositePolicy, SourceSelectionWorksheet,
-    assess_source_selection, audit_label_reviews, audit_model_judged_reviews,
-    audit_source_selection, audit_source_selection_component, build_blind_case_bundle,
-    collect_source_frame, combine_source_selections, create_composite_source_seal,
-    create_source_seal, extend_source_selection, inspect_label_review_progress,
-    prepare_label_resolution, prepare_label_review, prepare_source_selection,
-    prepare_source_selection_extension, source_selection_draft, validate_label_review,
-    validate_label_review_audit, validate_model_judged_submission, validate_source_frame_manifest,
-    validate_source_seal,
+    ModelJudgedRawReview, ModelJudgedSubmission, SourceFrameCollectionPolicy, SourceSamplingPolicy,
+    SourceSelectionAudit, SourceSelectionComponentAudit, SourceSelectionCompositePolicy,
+    SourceSelectionWorksheet, assess_source_selection, audit_label_reviews,
+    audit_model_judged_reviews, audit_source_selection, audit_source_selection_component,
+    build_blind_case_bundle, collect_source_frame, combine_source_selections,
+    create_composite_source_seal, create_source_seal, extend_source_selection,
+    inspect_label_review_progress, prepare_label_resolution, prepare_label_review,
+    prepare_source_selection, prepare_source_selection_extension, seal_model_judged_review,
+    source_selection_draft, validate_label_review, validate_label_review_audit,
+    validate_model_judged_submission, validate_source_frame_manifest, validate_source_seal,
 };
 use crate::benchmark_import::{BenchmarkRunReview, import_reviewed_run, prepare_run_review};
 use std::fs;
@@ -707,6 +707,31 @@ pub(crate) fn validate_model_review(
         "Verified model-judged submission {review_path}. Agent run: {}. Methods: {}. Not human labels.",
         review.reviewer.run_id,
         review.decisions.len()
+    );
+    Ok(0)
+}
+
+pub(crate) fn seal_model_review(
+    seal_path: &str,
+    raw_path: &str,
+    output_path: &str,
+) -> Result<i32, Box<dyn std::error::Error>> {
+    let (seal, seal_bytes) = read_source_seal(seal_path)?;
+    let raw = read_json::<ModelJudgedRawReview>(raw_path)?;
+    let submission = seal_model_judged_review(
+        &seal,
+        containing_directory(seal_path),
+        &sha256(&seal_bytes),
+        raw,
+    )
+    .map_err(|error| IoError::new(ErrorKind::InvalidData, error))?;
+    write_new_file(
+        Path::new(output_path),
+        &serde_json::to_vec_pretty(&submission)?,
+    )?;
+    eprintln!(
+        "Source-bound model-judged submission written to {output_path}. Methods: {}. Not human labels.",
+        submission.decisions.len()
     );
     Ok(0)
 }

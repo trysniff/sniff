@@ -234,6 +234,15 @@ pub enum BenchmarkCommand {
         /// Completed model-judged submission.
         review: String,
     },
+    /// Bind raw agent decisions to a sealed source task in a new artifact.
+    SealModelReview {
+        /// Label-free source seal used for source-only judgment.
+        seal: String,
+        /// Raw JSON with reviewer provenance and method decisions.
+        raw: String,
+        /// New source-bound model-judged submission.
+        output: String,
+    },
     /// Audit tier agreement between two source-bound model runs.
     AuditModelReviews {
         /// Label-free source seal used for both submissions.
@@ -917,6 +926,9 @@ pub async fn run(args: CliArgs) -> Result<i32, Box<dyn std::error::Error>> {
             }
             BenchmarkCommand::ValidateModelReview { seal, review } => {
                 pipeline::validate_model_review(&seal, &review)
+            }
+            BenchmarkCommand::SealModelReview { seal, raw, output } => {
+                pipeline::seal_model_review(&seal, &raw, &output)
             }
             BenchmarkCommand::AuditModelReviews {
                 seal,
@@ -2069,6 +2081,24 @@ mod tests {
             Some(CliCommand::Benchmark {
                 command: BenchmarkCommand::ValidateModelReview { seal, review }
             }) if seal == "blind-source-seal.json" && review == "agent-a.json"
+        ));
+
+        let model_seal = CliArgs::try_parse_from([
+            "sniff",
+            "benchmark",
+            "seal-model-review",
+            "blind-source-seal.json",
+            "raw-agent-a.json",
+            "agent-a.json",
+        ])
+        .expect("seal model review arguments");
+        assert!(matches!(
+            model_seal.command,
+            Some(CliCommand::Benchmark {
+                command: BenchmarkCommand::SealModelReview { seal, raw, output }
+            }) if seal == "blind-source-seal.json"
+                && raw == "raw-agent-a.json"
+                && output == "agent-a.json"
         ));
 
         let model_audit = CliArgs::try_parse_from([

@@ -18,6 +18,8 @@ Completed JSON submissions can be checked and paired without contacting a
 model provider:
 
 ```console
+sniff benchmark seal-model-review blind-source-seal.json raw-agent-a.json agent-a.json
+sniff benchmark seal-model-review blind-source-seal.json raw-agent-b.json agent-b.json
 sniff benchmark validate-model-review blind-source-seal.json agent-a.json
 sniff benchmark validate-model-review blind-source-seal.json agent-b.json
 sniff benchmark audit-model-reviews blind-source-seal.json agent-a.json agent-b.json model-audit.json
@@ -27,6 +29,15 @@ The caller supplies the model-run outputs; these commands validate provenance
 and source anchoring but do not run an agent, prove the attestation, or infer
 quality from agreement. A future shard plan must precommit complete method
 coverage before model-judged results can be summarized as a census.
+
+Each raw input has `reviewer` and `decisions` fields. The reviewer records
+`reviewer_id`, `provider`, `model`, `model_version`, `run_id`, and a lowercase
+SHA-256 of the exact prompt, plus true `fresh_context`,
+`sniff_output_hidden`, `other_reviews_hidden`, and
+`source_context_inspected` attestations. Each decision records `method_id`,
+`tier`, `mechanism`, `evidence_artifact_path`, `exact_source_quote`,
+`rationale`, and `missing_evidence`. The seal command fills the source/task
+commitments and submission hash; it rejects invented methods or quotes.
 
 A six-method source-only agent pilot on September 26, 2026 had exact tier
 agreement on three methods. The pilot labels are not gold labels, and several

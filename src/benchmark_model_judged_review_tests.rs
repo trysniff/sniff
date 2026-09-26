@@ -64,6 +64,17 @@ fn model_reviews_are_source_bound_and_not_human_labels() {
     let (root, seal, seal_hash) = fixture();
     let expected = prepare_label_review(&seal, root.path(), &seal_hash).unwrap();
     let first = submission(&expected, "agent-a", "run-a");
+    let sealed = seal_model_judged_review(
+        &seal,
+        root.path(),
+        &seal_hash,
+        ModelJudgedRawReview {
+            reviewer: first.reviewer.clone(),
+            decisions: first.decisions.clone(),
+        },
+    )
+    .unwrap();
+    assert_eq!(sealed, first);
     let mut second = submission(&expected, "agent-b", "run-b");
     second.decisions[0].tier = FindingTier::KindaSlop;
     second.submission_sha256 = second.computed_sha256().unwrap();
