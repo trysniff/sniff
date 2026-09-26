@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 
 pub const SOURCE_FRAME_COLLECTION_POLICY_SCHEMA_VERSION: u32 = 1;
 pub const SOURCE_FRAME_COLLECTION_FULL_PERIOD_SCHEMA_VERSION: u32 = 2;
+pub const SOURCE_FRAME_COLLECTION_FIVE_MINUTE_SCHEMA_VERSION: u32 = 3;
 pub const SOURCE_FRAME_COLLECTION_MANIFEST_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -24,6 +25,10 @@ pub struct SourceFrameCollectionPolicy {
     pub include_templates: bool,
     pub ordering: String,
     pub attestation: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub amendment_of_policy_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub predecessor_policy: Option<Box<SourceFrameCollectionPolicy>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

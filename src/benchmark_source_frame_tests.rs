@@ -44,6 +44,142 @@ fn post_august_seven_historical_v3_frame_policies_are_fixed_and_valid() {
 }
 
 #[test]
+fn five_minute_amendments_preserve_the_original_cohorts() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let policies_dir = root.join("sniffbench/historical-v3-source-frames");
+    if !policies_dir.exists() && !root.join(".git").exists() {
+        return;
+    }
+    for language in ["javascript", "python", "typescript"] {
+        let original: SourceFrameCollectionPolicy = serde_json::from_slice(
+            &fs::read(policies_dir.join(format!("{language}-policy.json"))).unwrap(),
+        )
+        .unwrap();
+        let amended: SourceFrameCollectionPolicy = serde_json::from_slice(
+            &fs::read(policies_dir.join(format!("{language}-five-minute-policy.json"))).unwrap(),
+        )
+        .unwrap();
+        validate_policy(&amended).unwrap();
+        assert_eq!(
+            amended.schema_version,
+            SOURCE_FRAME_COLLECTION_FIVE_MINUTE_SCHEMA_VERSION
+        );
+        assert_eq!(
+            amended.amendment_of_policy_sha256,
+            Some(json_sha256(&original).unwrap())
+        );
+        assert_eq!(amended.predecessor_policy.as_deref(), Some(&original));
+        assert_eq!(amended.language, original.language);
+        assert_eq!(amended.created_day_utc, original.created_day_utc);
+        assert_eq!(amended.derivation_seed, original.derivation_seed);
+        assert_eq!(
+            amended.derivation_period_start_utc,
+            original.derivation_period_start_utc
+        );
+        assert_eq!(
+            amended.derivation_period_days,
+            original.derivation_period_days
+        );
+        assert_eq!(amended.derivation_rule, original.derivation_rule);
+        assert_eq!(amended.include_forks, original.include_forks);
+        assert_eq!(amended.include_archived, original.include_archived);
+        assert_eq!(amended.include_mirrors, original.include_mirrors);
+        assert_eq!(amended.include_templates, original.include_templates);
+        assert_eq!(amended.ordering, original.ordering);
+        let partitions = frame_partitions(&amended).unwrap();
+        assert_eq!(partitions.len(), 2_016);
+        assert_eq!(partitions[0].bounds(&amended).0, "2026-08-12T00:00:00Z");
+        assert_eq!(partitions[0].bounds(&amended).1, "2026-08-12T00:04:59Z");
+        assert_eq!(
+            partitions.last().unwrap().bounds(&amended).1,
+            "2026-08-11T23:59:59Z"
+        );
+    }
+}
+
+#[test]
+fn five_minute_partition_rejects_relocated_repository_and_missing_window() {
+    let mut policy = policy();
+    policy.schema_version = SOURCE_FRAME_COLLECTION_FIVE_MINUTE_SCHEMA_VERSION;
+    policy.partition = "utc_five_minute".to_string();
+    policy.derivation_period_start_utc = "2026-08-08".to_string();
+    policy.derivation_period_days = 7;
+    policy.created_day_utc = "2026-08-08".to_string();
+    policy.derivation_seed = "0".repeat(64);
+    policy.derivation_rule = "rotated_full_period_days".to_string();
+    let mut predecessor = policy.clone();
+    predecessor.schema_version = SOURCE_FRAME_COLLECTION_FULL_PERIOD_SCHEMA_VERSION;
+    predecessor.partition = "utc_hour".to_string();
+    policy.amendment_of_policy_sha256 = Some(json_sha256(&predecessor).unwrap());
+    policy.predecessor_policy = Some(Box::new(predecessor));
+    validate_policy(&policy).unwrap();
+    let mut changed_cohort = policy.clone();
+    changed_cohort.include_forks = true;
+    assert!(
+        validate_policy(&changed_cohort)
+            .unwrap_err()
+            .contains("changed its predecessor cohort")
+    );
+    let mut changed_predecessor = policy.clone();
+    changed_predecessor
+        .predecessor_policy
+        .as_mut()
+        .unwrap()
+        .include_forks = true;
+    assert!(
+        validate_policy(&changed_predecessor)
+            .unwrap_err()
+            .contains("predecessor commitment changed")
+    );
+    let mut missing_predecessor = policy.clone();
+    missing_predecessor.predecessor_policy = None;
+    assert!(validate_policy(&missing_predecessor).is_err());
+    let partitions = frame_partitions(&policy).unwrap();
+    assert_eq!(partitions.len(), 2_016);
+    assert_eq!(partitions[0].bounds(&policy).1, "2026-08-08T00:04:59Z");
+    assert_eq!(partitions[1].bounds(&policy).0, "2026-08-08T00:05:00Z");
+
+    let (start, end) = partitions[0].bounds(&policy);
+    let repository = GithubSearchRepository {
+        id: 42,
+        full_name: "Example/FortyTwo".to_string(),
+        created_at: "2026-08-08T00:05:00Z".to_string(),
+        fork: false,
+        archived: false,
+        mirror_url: None,
+        is_template: false,
+    };
+    assert!(validate_repository(&policy, &start, &end, &repository).is_err());
+
+    let output = tempfile::tempdir().unwrap();
+    let state = output.path().join("raw");
+    fs::create_dir_all(&state).unwrap();
+    let pages = partitions
+        .iter()
+        .take(2_015)
+        .map(|partition| {
+            let query = partition_query(&policy, partition);
+            let page = raw(
+                &query,
+                1,
+                r#"{"total_count":0,"incomplete_results":false,"items":[]}"#,
+            );
+            let path = state.join(format!(
+                "{}-page-001.json",
+                partition.checkpoint_key(&policy)
+            ));
+            fs::write(&path, serde_json::to_vec_pretty(&page).unwrap()).unwrap();
+            (path, page)
+        })
+        .collect();
+    assert!(
+        derive_source_frame(&policy, output.path(), pages)
+            .unwrap_err()
+            .contains("missing UTC five-minute partition")
+    );
+}
+
+#[test]
 fn full_period_frame_requires_every_hour_and_replays_raw_pages() {
     let mut policy = policy();
     policy.schema_version = SOURCE_FRAME_COLLECTION_FULL_PERIOD_SCHEMA_VERSION;
@@ -124,6 +260,8 @@ fn policy() -> SourceFrameCollectionPolicy {
         include_templates: false,
         ordering: "github_repository_id_ascending".to_string(),
         attestation: "The date and query contract were fixed before collection.".to_string(),
+        amendment_of_policy_sha256: None,
+        predecessor_policy: None,
     }
 }
 
