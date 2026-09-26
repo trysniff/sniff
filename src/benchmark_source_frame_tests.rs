@@ -1,5 +1,119 @@
 use super::*;
 
+#[test]
+fn post_august_seven_historical_v3_frame_policies_are_fixed_and_valid() {
+    let policies = [
+        (
+            "Go",
+            include_str!("../sniffbench/historical-v3-source-frames/go-policy.json"),
+        ),
+        (
+            "JavaScript",
+            include_str!("../sniffbench/historical-v3-source-frames/javascript-policy.json"),
+        ),
+        (
+            "Kotlin",
+            include_str!("../sniffbench/historical-v3-source-frames/kotlin-policy.json"),
+        ),
+        (
+            "Python",
+            include_str!("../sniffbench/historical-v3-source-frames/python-policy.json"),
+        ),
+        (
+            "Rust",
+            include_str!("../sniffbench/historical-v3-source-frames/rust-policy.json"),
+        ),
+        (
+            "TypeScript",
+            include_str!("../sniffbench/historical-v3-source-frames/typescript-policy.json"),
+        ),
+    ];
+    let mut frame_ids = std::collections::HashSet::new();
+    for (language, bytes) in policies {
+        let policy: SourceFrameCollectionPolicy = serde_json::from_str(bytes).unwrap();
+        validate_policy(&policy).unwrap();
+        assert_eq!(
+            policy.schema_version,
+            SOURCE_FRAME_COLLECTION_FULL_PERIOD_SCHEMA_VERSION
+        );
+        assert_eq!(policy.language, language);
+        assert!(policy.created_day_utc.as_str() > "2026-08-07");
+        assert_eq!(policy.derivation_period_start_utc, "2026-08-08");
+        assert_eq!(policy.derivation_period_days, 7);
+        assert!(frame_ids.insert(policy.frame_id.clone()));
+        let seed = format!(
+            "{:x}",
+            Sha256::digest(format!(
+                "sniff-historical-v3-post-aug-2026-09-26-{language}"
+            ))
+        );
+        assert_eq!(policy.derivation_seed, seed);
+        let days = frame_days(&policy).unwrap();
+        assert_eq!(days.len(), 7);
+        assert_eq!(days[0], policy.created_day_utc);
+        assert_eq!(days.into_iter().collect::<HashSet<_>>().len(), 7);
+    }
+}
+
+#[test]
+fn full_period_frame_requires_every_hour_and_replays_raw_pages() {
+    let policy: SourceFrameCollectionPolicy = serde_json::from_str(include_str!(
+        "../sniffbench/historical-v3-source-frames/go-policy.json"
+    ))
+    .unwrap();
+    let output = tempfile::tempdir().unwrap();
+    let state = output.path().join("raw");
+    fs::create_dir_all(&state).unwrap();
+    let days = frame_days(&policy).unwrap();
+    let final_day = days.last().unwrap();
+    let mut pages = Vec::new();
+    for day in &days {
+        for hour in 0..24 {
+            let query = hourly_query_for_day(&policy, day, hour);
+            let response = if day == final_day && hour == 23 {
+                serde_json::json!({
+                    "total_count": 1,
+                    "incomplete_results": false,
+                    "items": [{
+                        "id": 42,
+                        "full_name": "Example/FortyTwo",
+                        "created_at": format!("{day}T23:12:00Z"),
+                        "fork": false,
+                        "archived": false,
+                        "mirror_url": null,
+                        "is_template": false
+                    }]
+                })
+                .to_string()
+            } else {
+                r#"{"total_count":0,"incomplete_results":false,"items":[]}"#.to_string()
+            };
+            let page = raw(&query, 1, &response);
+            let path = state.join(format!("day-{day}-hour-{hour:02}-page-001.json"));
+            fs::write(&path, serde_json::to_vec_pretty(&page).unwrap()).unwrap();
+            pages.push((path, page));
+        }
+    }
+    assert_eq!(pages.len(), 168);
+    assert!(
+        derive_source_frame(&policy, output.path(), pages[..167].to_vec())
+            .unwrap_err()
+            .contains("missing UTC hour partition")
+    );
+    let manifest = build_source_frame(
+        policy,
+        &state,
+        &output.path().join("frame.csv"),
+        &output.path().join("manifest.json"),
+        pages,
+    )
+    .unwrap();
+    assert_eq!(manifest.pages.len(), 168);
+    assert_eq!(manifest.repository_count, 1);
+    let frame = fs::read(output.path().join("frame.csv")).unwrap();
+    validate_source_frame_manifest(&manifest, output.path(), &frame).unwrap();
+}
+
 fn policy() -> SourceFrameCollectionPolicy {
     SourceFrameCollectionPolicy {
         schema_version: SOURCE_FRAME_COLLECTION_POLICY_SCHEMA_VERSION,
@@ -102,6 +216,7 @@ fn source_frame_rejects_incomplete_or_over_limit_partitions() {
         r#"{"total_count":1001,"incomplete_results":false,"items":[]}"#,
     ] {
         let page = raw(&query, 1, response);
+        assert!(validate_checkpointable_page(&page).is_err());
         let page_path = state.join(format!("{}.json", sha256(response.as_bytes())));
         fs::write(&page_path, serde_json::to_vec_pretty(&page).unwrap()).unwrap();
         let error = build_source_frame(

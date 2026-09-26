@@ -2,6 +2,7 @@ use super::json_sha256;
 use serde::{Deserialize, Serialize};
 
 pub const SOURCE_FRAME_COLLECTION_POLICY_SCHEMA_VERSION: u32 = 1;
+pub const SOURCE_FRAME_COLLECTION_FULL_PERIOD_SCHEMA_VERSION: u32 = 2;
 pub const SOURCE_FRAME_COLLECTION_MANIFEST_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

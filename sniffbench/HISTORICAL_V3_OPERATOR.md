@@ -8,6 +8,28 @@ All JSON paths below must be absolute. Keep the operator root outside the
 source repository and retain it between invocations. A missing or mismatched
 artifact fails the command; it does not restart with a new cohort.
 
+## Post-August-7 Source Frames
+
+The six [source-frame policies](historical-v3-source-frames/) were fixed before
+collection or inspection of candidate identities. Each collects the entire
+August 8-14, 2026 UTC period. SHA-256 of
+`sniff-historical-v3-post-aug-2026-09-26-<language>` supplies the seed; its
+first eight hexadecimal digits modulo seven select the starting day, and the
+collector then rotates through all seven days. The seed changes ordering,
+not inclusion. The policy fixes the GitHub API, all 168 hourly partitions,
+filters, and immutable-ID ordering. Every admitted repository must have `created_at` strictly
+after `2026-08-07T20:46:11Z`; a matching name is not identity proof.
+
+After the policy commit is public and immutable, collect each language's
+frame with `sniff benchmark collect-frame POLICY STATE_ROOT FRAME_CSV MANIFEST`.
+Retain every raw page under its durable state root, then use
+`sniff benchmark validate-frame MANIFEST STATE_ROOT FRAME_CSV` to replay it.
+Use a different new state root and output pair for each policy; do not reroll
+or select a replacement period after seeing yield. Collection uses the GitHub
+API, not an LLM. These seven-day frames may still fail to supply the desired
+number of real behavior-preserving slop cases. That remains an observed
+benchmark limitation, not permission to change the frozen selection rule.
+
 ## Frozen Prior Identities
 
 `prior-sources.json` points to the exact historical-v2 frame artifact and to
