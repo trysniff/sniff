@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
-pub const HISTORICAL_V3_PROTOCOL_SCHEMA_VERSION: u32 = 5;
+pub const HISTORICAL_V3_PROTOCOL_SCHEMA_VERSION: u32 = 6;
+pub const HISTORICAL_V3_REPOSITORY_CREATED_AFTER_UTC: &str = "2026-08-07T20:46:11Z";
 pub const HISTORICAL_V3_STREAM_TASK_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -254,6 +255,7 @@ pub struct HistoricalV3Protocol {
     pub ranking_domain: String,
     pub ranking_seed: String,
     pub prior_benchmark_identity_seal_sha256: String,
+    pub repository_created_after_utc: String,
     pub languages: Vec<HistoricalV3Language>,
     pub source_frames: Vec<HistoricalV3SourceFrameBinding>,
     pub candidate_window: HistoricalV3CandidateWindow,

@@ -29,6 +29,7 @@ pub(super) fn candidate_repositories(
         for HistoricalV3SourceRepositoryIdentity {
             name_with_owner,
             repository_id,
+            ..
         } in parse_historical_v3_source_frame(artifact.frame)?
         {
             if !excluded.contains(name_with_owner.as_str()) {

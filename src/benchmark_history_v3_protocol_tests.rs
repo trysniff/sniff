@@ -24,6 +24,7 @@ fn protocol() -> HistoricalV3Protocol {
         ranking_domain: RANKING_DOMAIN.to_string(),
         ranking_seed: sha('4'),
         prior_benchmark_identity_seal_sha256: sha('5'),
+        repository_created_after_utc: HISTORICAL_V3_REPOSITORY_CREATED_AFTER_UTC.to_string(),
         languages: HistoricalV3Language::ALL.to_vec(),
         source_frames,
         candidate_window: HistoricalV3CandidateWindow {
@@ -149,6 +150,14 @@ fn review_task(
 fn seals_only_the_locked_blind_fail_closed_protocol() {
     let protocol = protocol();
     validate_historical_v3_protocol(&protocol).unwrap();
+
+    let mut changed = protocol.clone();
+    changed.repository_created_after_utc = "2026-08-06T20:46:11Z".to_string();
+    assert!(
+        seal_historical_v3_protocol(changed)
+            .unwrap_err()
+            .contains("repository creation cutoff changed")
+    );
 
     let mut changed = protocol.clone();
     changed.mechanical_policy.production_method_maximum = 0;

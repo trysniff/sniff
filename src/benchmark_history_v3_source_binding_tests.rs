@@ -41,6 +41,16 @@ fn frame_fixture(
     index: usize,
     repositories: &[(u64, &str)],
 ) -> FrameFixture {
+    frame_fixture_at(language, github_language, index, repositories, "2026-08-08")
+}
+
+fn frame_fixture_at(
+    language: HistoricalV3Language,
+    github_language: &str,
+    index: usize,
+    repositories: &[(u64, &str)],
+    created_day: &str,
+) -> FrameFixture {
     let root = tempfile::tempdir().unwrap();
     let raw_root = root.path().join("raw");
     fs::create_dir(&raw_root).unwrap();
@@ -50,9 +60,9 @@ fn frame_fixture(
         source: "https://api.github.com/search/repositories".to_string(),
         api_version: "2022-11-28".to_string(),
         language: github_language.to_string(),
-        created_day_utc: "2025-01-01".to_string(),
+        created_day_utc: created_day.to_string(),
         derivation_seed: format!("{index:08x}{}", "0".repeat(32)),
-        derivation_period_start_utc: "2025-01-01".to_string(),
+        derivation_period_start_utc: created_day.to_string(),
         derivation_period_days: 1,
         derivation_rule: "first_8_hex_u32_mod_period_days".to_string(),
         partition: "utc_hour".to_string(),
@@ -73,7 +83,7 @@ fn frame_fixture(
                     serde_json::json!({
                         "id": id,
                         "full_name": repository,
-                        "created_at": "2025-01-01T00:01:00Z",
+                        "created_at": format!("{created_day}T00:01:00Z"),
                         "fork": false,
                         "archived": false,
                         "mirror_url": null,
@@ -120,8 +130,8 @@ fn frame_fixture(
     let mut frame = String::from("repo,metadata\n");
     for (id, repository) in ordered {
         frame.push_str(&format!(
-            "github.com/{},github_repository_id={id};created_at=2025-01-01T00:01:00Z\n",
-            repository.to_ascii_lowercase()
+            "github.com/{},github_repository_id={id};created_at={created_day}T00:01:00Z\n",
+            repository.to_ascii_lowercase(),
         ));
     }
     let frame = frame.into_bytes();
@@ -174,10 +184,11 @@ pub(crate) fn protocol(
     seal_historical_v3_protocol(HistoricalV3Protocol {
         schema_version: HISTORICAL_V3_PROTOCOL_SCHEMA_VERSION,
         protocol_id: "synthetic-historical-v3-source-binding".to_string(),
-        protocol_contract: "sniffbench-historical-v3-protocol-v5".to_string(),
+        protocol_contract: "sniffbench-historical-v3-protocol-v6".to_string(),
         ranking_domain: "sniffbench-historical-v3-candidate-rank-v1".to_string(),
         ranking_seed: "3".repeat(64),
         prior_benchmark_identity_seal_sha256: seal.seal_sha256.clone(),
+        repository_created_after_utc: HISTORICAL_V3_REPOSITORY_CREATED_AFTER_UTC.to_string(),
         languages: languages.to_vec(),
         source_frames: fixtures
             .iter()
@@ -476,5 +487,34 @@ fn binding_rejects_protocol_seal_drift_and_raw_frame_tampering() {
         bind_historical_v3_source_frames(&protocol, &seal, &artifacts(&fixtures))
             .unwrap_err()
             .contains("commitment changed")
+    );
+}
+
+#[test]
+fn binding_rejects_pre_cutoff_repository_frames() {
+    let mut fixtures = fixtures();
+    fixtures[0] = frame_fixture_at(
+        HistoricalV3Language::Go,
+        "Go",
+        0,
+        &[(1, "Zed/Used"), (2, "Alpha/Go")],
+        "2026-08-07",
+    );
+    let seal = prior_identity_seal();
+    let protocol = protocol(&seal, &fixtures);
+    assert!(
+        bind_historical_v3_source_frames(&protocol, &seal, &artifacts(&fixtures))
+            .unwrap_err()
+            .contains("predates the committed repository creation cutoff")
+    );
+}
+
+#[test]
+fn source_frame_parser_requires_creation_timestamp() {
+    let frame = b"repo,metadata\ngithub.com/example/repo,github_repository_id=1\n";
+    assert!(
+        parse_historical_v3_source_frame(frame)
+            .unwrap_err()
+            .contains("omits repository creation time")
     );
 }
