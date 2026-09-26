@@ -9,11 +9,11 @@ use crate::benchmark::{
 use crate::benchmark::{
     BenchmarkSourceSeal, LabelResolutionManifest, LabelReviewAudit, LabelReviewWorksheet,
     ModelJudgedRawReview, ModelJudgedSubmission, ModelReviewAssignments,
-    SourceFrameCollectionPolicy, SourceSamplingPolicy, SourceSelectionAudit,
+    SourceFrameCollectionPolicy, SourceFrameTransport, SourceSamplingPolicy, SourceSelectionAudit,
     SourceSelectionComponentAudit, SourceSelectionCompositePolicy, SourceSelectionWorksheet,
     assess_source_selection, audit_label_reviews, audit_model_judged_reviews,
     audit_source_selection, audit_source_selection_component, build_blind_case_bundle,
-    collect_source_frame, combine_source_selections, create_composite_source_seal,
+    collect_source_frame_with_transport, combine_source_selections, create_composite_source_seal,
     create_source_seal, extend_source_selection, inspect_label_review_progress,
     prepare_label_resolution, prepare_label_review, prepare_model_review_assignments,
     prepare_source_selection, prepare_source_selection_extension, seal_model_judged_review,
@@ -339,17 +339,19 @@ pub(crate) async fn collect_benchmark_source_frame(
     state_directory: &str,
     frame_output: &str,
     manifest_output: &str,
+    transport: SourceFrameTransport,
 ) -> Result<i32, Box<dyn std::error::Error>> {
     let policy = read_json::<SourceFrameCollectionPolicy>(policy_path)?;
     let token = std::env::var("GH_TOKEN")
         .ok()
         .or_else(|| std::env::var("GITHUB_TOKEN").ok());
-    let manifest = collect_source_frame(
+    let manifest = collect_source_frame_with_transport(
         policy,
         Path::new(state_directory),
         Path::new(frame_output),
         Path::new(manifest_output),
         token.as_deref(),
+        transport,
     )
     .await
     .map_err(|error| {

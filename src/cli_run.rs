@@ -1,3 +1,4 @@
+use crate::benchmark::SourceFrameTransport;
 use clap::{Parser, Subcommand};
 use std::num::NonZeroUsize;
 
@@ -102,6 +103,9 @@ pub enum BenchmarkCommand {
         frame_output: String,
         /// New hash-bound collection manifest.
         manifest_output: String,
+        /// Explicit GitHub API transport; `gh` requires GitHub CLI in PATH.
+        #[arg(long, value_enum, default_value_t = SourceFrameTransport::Http)]
+        transport: SourceFrameTransport,
     },
     /// Replay a frozen source frame from its hash-bound raw GitHub responses.
     ValidateFrame {
@@ -847,12 +851,14 @@ pub async fn run(args: CliArgs) -> Result<i32, Box<dyn std::error::Error>> {
                 state_directory,
                 frame_output,
                 manifest_output,
+                transport,
             } => {
                 pipeline::collect_benchmark_source_frame(
                     &policy,
                     &state_directory,
                     &frame_output,
                     &manifest_output,
+                    transport,
                 )
                 .await
             }
@@ -1353,7 +1359,10 @@ pub async fn run(args: CliArgs) -> Result<i32, Box<dyn std::error::Error>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{BenchmarkCommand, CliArgs, CliCommand, HistoricalV3Command, IndexerCommand};
+    use super::{
+        BenchmarkCommand, CliArgs, CliCommand, HistoricalV3Command, IndexerCommand,
+        SourceFrameTransport,
+    };
     use clap::Parser;
 
     #[path = "../cli_run_historical_v2_review_tests.rs"]
@@ -1915,12 +1924,36 @@ mod tests {
                     policy,
                     state_directory,
                     frame_output,
-                    manifest_output
+                    manifest_output,
+                    transport,
                 }
             }) if policy == "frame-policy.json"
                 && state_directory == "frame-state"
                 && frame_output == "frame.csv"
                 && manifest_output == "frame-manifest.json"
+                && transport == SourceFrameTransport::Http
+        ));
+
+        let gh = CliArgs::try_parse_from([
+            "sniff",
+            "benchmark",
+            "collect-frame",
+            "frame-policy.json",
+            "frame-state",
+            "frame.csv",
+            "frame-manifest.json",
+            "--transport",
+            "gh",
+        ])
+        .expect("explicit GitHub CLI source-frame transport");
+        assert!(matches!(
+            gh.command,
+            Some(CliCommand::Benchmark {
+                command: BenchmarkCommand::CollectFrame {
+                    transport: SourceFrameTransport::Gh,
+                    ..
+                }
+            })
         ));
 
         let validate = CliArgs::try_parse_from([
