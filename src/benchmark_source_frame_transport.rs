@@ -160,16 +160,19 @@ pub(super) async fn fetch_search_page_gh(
     for attempt in 0..4_u32 {
         sleep(Duration::from_secs(3)).await;
         let mut command = Command::new("gh");
-        command.kill_on_drop(true).args([
-            "api",
-            "--method",
-            "GET",
-            "search/repositories",
-            "-H",
-            "Accept: application/vnd.github+json",
-            "-H",
-            "X-GitHub-Api-Version: 2022-11-28",
-        ]);
+        command
+            .kill_on_drop(true)
+            .env("GH_HOST", "github.com")
+            .args([
+                "api",
+                "--method",
+                "GET",
+                "search/repositories",
+                "-H",
+                "Accept: application/vnd.github+json",
+                "-H",
+                "X-GitHub-Api-Version: 2022-11-28",
+            ]);
         command
             .arg("-f")
             .arg(format!("q={query}"))
