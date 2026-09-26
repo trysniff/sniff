@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 pub const HISTORICAL_V3_PROTOCOL_SCHEMA_VERSION: u32 = 6;
+pub const HISTORICAL_V3_MODEL_PROTOCOL_SCHEMA_VERSION: u32 = 7;
 pub const HISTORICAL_V3_REPOSITORY_CREATED_AFTER_UTC: &str = "2026-08-07T20:46:11Z";
 pub const HISTORICAL_V3_STREAM_TASK_SCHEMA_VERSION: u32 = 1;
 
@@ -248,6 +249,19 @@ pub struct HistoricalV3HumanReviewPolicy {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct HistoricalV3ModelReviewPolicy {
+    pub source_only_review: bool,
+    pub independent_reviewers: usize,
+    pub approved_prompt_sha256: String,
+    pub prompt_public_url: String,
+    pub exact_presented_material_record_required: bool,
+    pub invocation_response_record_required: bool,
+    pub disagreements_remain_unresolved: bool,
+    pub human_gold_claim_forbidden: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct HistoricalV3Protocol {
     pub schema_version: u32,
     pub protocol_id: String,
@@ -265,7 +279,10 @@ pub struct HistoricalV3Protocol {
     pub mechanical_policy: HistoricalV3MechanicalPolicy,
     pub test_recipe_policy: HistoricalV3TestRecipePolicy,
     pub identical_test_policy: HistoricalV3IdenticalTestPolicy,
-    pub human_review_policy: HistoricalV3HumanReviewPolicy,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub human_review_policy: Option<HistoricalV3HumanReviewPolicy>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_review_policy: Option<HistoricalV3ModelReviewPolicy>,
     pub stop_rule: HistoricalV3StopRule,
     pub no_fallbacks: bool,
     pub model_access_forbidden: bool,

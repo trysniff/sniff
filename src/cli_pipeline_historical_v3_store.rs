@@ -189,6 +189,9 @@ fn load_unbound_with_prior(
     }
     let protocol = read_json(&config.protocol, MAX_INPUT_BYTES, "protocol")?;
     validate_historical_v3_protocol(&protocol)?;
+    if protocol.model_review_policy.is_some() {
+        return Err("historical-v3 model-judged operator is not wired; human commands cannot consume agent reviews".to_string());
+    }
     let prior = read_json(
         &config.prior_identity_seal,
         MAX_INPUT_BYTES,
@@ -721,6 +724,37 @@ mod tests {
             config,
             frame_paths,
         }
+    }
+
+    #[test]
+    fn human_operator_rejects_model_protocol_before_creating_state() {
+        let fixture = fixture();
+        let config: OperatorConfig =
+            read_json(&fixture.config, MAX_CONFIG_BYTES, "operator config").unwrap();
+        let mut protocol: HistoricalV3Protocol =
+            read_json(&config.protocol, MAX_INPUT_BYTES, "protocol").unwrap();
+        protocol.schema_version = crate::benchmark::HISTORICAL_V3_MODEL_PROTOCOL_SCHEMA_VERSION;
+        protocol.protocol_contract =
+            "sniffbench-historical-v3-model-judged-protocol-v7".to_string();
+        protocol.human_review_policy = None;
+        protocol.model_review_policy = Some(crate::benchmark::HistoricalV3ModelReviewPolicy {
+            source_only_review: true,
+            independent_reviewers: 2,
+            approved_prompt_sha256: "a".repeat(64),
+            prompt_public_url: "https://raw.githubusercontent.com/trysniff/sniff/0000000000000000000000000000000000000000/sniffbench/HISTORICAL_V3_AGENT_REVIEW_PROMPT.md".to_string(),
+            exact_presented_material_record_required: true,
+            invocation_response_record_required: true,
+            disagreements_remain_unresolved: true,
+            human_gold_claim_forbidden: true,
+        });
+        protocol.model_access_forbidden = false;
+        let protocol = crate::benchmark::seal_historical_v3_protocol(protocol).unwrap();
+        fs::write(&config.protocol, serde_json::to_vec(&protocol).unwrap()).unwrap();
+        let error = synthetic_unbound(&fixture.config, &fixture.prior)
+            .err()
+            .unwrap();
+        assert!(error.contains("model-judged operator is not wired"));
+        assert!(!config.operator_root.exists());
     }
 
     #[test]
