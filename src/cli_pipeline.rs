@@ -29,6 +29,7 @@ mod stats;
 
 pub(crate) use benchmark_run::{
     assess_benchmark_source_selection, assess_non_blind_benchmark_history, audit_benchmark_labels,
+    audit_model_reviews,
     audit_benchmark_source_selection, audit_benchmark_source_selection_component, benchmark,
     benchmark_label_status, collect_benchmark_source_frame, combine_benchmark_source_selections,
     extend_benchmark_source_selection, freeze_benchmark, import_benchmark_run,
@@ -37,7 +38,7 @@ pub(crate) use benchmark_run::{
     prepare_intentional_boundary_benchmark_frame_task, prepare_non_blind_benchmark_history,
     prepare_non_blind_benchmark_history_assessment, resolve_benchmark_labels,
     seal_benchmark_sources, seal_composite_benchmark_sources, seal_non_blind_benchmark_sources,
-    validate_benchmark_labels, validate_benchmark_source_frame,
+    validate_benchmark_labels, validate_benchmark_source_frame, validate_model_review,
     validate_historical_v2_benchmark_protocol, validate_intentional_boundary_benchmark_frame_task,
     validate_intentional_boundary_benchmark_protocol,
 };

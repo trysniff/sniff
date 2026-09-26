@@ -614,6 +614,12 @@ pub use release::{
 
 pub use release::{HistoricalV3ReviewRecordPaths, verify_historical_v3_final_review_from_disk};
 
+pub use release::{
+    MODEL_JUDGED_REVIEW_SCHEMA_VERSION, ModelJudgedAudit, ModelJudgedDecision,
+    ModelJudgedMethodAgreement, ModelJudgedReviewer, ModelJudgedSubmission,
+    audit_model_judged_reviews, validate_model_judged_audit, validate_model_judged_submission,
+};
+
 pub use release::verify_historical_v3_stop_from_disk;
 
 pub use release::{
