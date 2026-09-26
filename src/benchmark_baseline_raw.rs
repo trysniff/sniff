@@ -19,6 +19,7 @@ pub(super) fn validate_baseline_raw_output(
     })?;
     if raw.schema_version != BASELINE_RAW_OUTPUT_SCHEMA_VERSION
         || raw.tool_id != baseline.tool_id
+        || raw.tool_version != baseline.tool_version
         || raw.run_id != baseline.run_id
         || raw.source_commitment_sha256 != corpus.source_commitment_sha256
         || raw.cases.len() != corpus.cases.len()

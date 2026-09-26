@@ -201,6 +201,7 @@ pub struct BenchmarkBaseline {
 pub struct BenchmarkBaselineRawOutput {
     pub schema_version: u32,
     pub tool_id: String,
+    pub tool_version: String,
     pub run_id: String,
     pub source_commitment_sha256: String,
     pub cases: Vec<BenchmarkBaselineRawCaseOutput>,

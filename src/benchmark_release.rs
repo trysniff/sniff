@@ -7,7 +7,7 @@ use std::fs;
 use std::path::{Component, Path};
 
 pub(crate) const RELEASE_SCHEMA_VERSION: u32 = 8;
-pub const BASELINE_RAW_OUTPUT_SCHEMA_VERSION: u32 = 1;
+pub const BASELINE_RAW_OUTPUT_SCHEMA_VERSION: u32 = 2;
 
 #[path = "benchmark_baseline_raw.rs"]
 mod baseline_raw;
