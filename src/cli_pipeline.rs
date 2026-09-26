@@ -29,17 +29,18 @@ mod stats;
 
 pub(crate) use benchmark_run::{
     assess_benchmark_source_selection, assess_non_blind_benchmark_history, audit_benchmark_labels,
-    audit_benchmark_source_selection, audit_benchmark_source_selection_component, benchmark,
-    benchmark_label_status, collect_benchmark_source_frame, combine_benchmark_source_selections,
-    extend_benchmark_source_selection, freeze_benchmark, import_benchmark_run,
-    prepare_benchmark_label_resolution, prepare_benchmark_labels, prepare_benchmark_run,
-    prepare_benchmark_source_selection, prepare_benchmark_source_selection_extension,
+    audit_benchmark_source_selection, audit_benchmark_source_selection_component,
+    audit_model_reviews, benchmark, benchmark_label_status, collect_benchmark_source_frame,
+    combine_benchmark_source_selections, extend_benchmark_source_selection, freeze_benchmark,
+    import_benchmark_run, prepare_benchmark_label_resolution, prepare_benchmark_labels,
+    prepare_benchmark_run, prepare_benchmark_source_selection,
+    prepare_benchmark_source_selection_extension,
     prepare_intentional_boundary_benchmark_frame_task, prepare_non_blind_benchmark_history,
     prepare_non_blind_benchmark_history_assessment, resolve_benchmark_labels,
-    seal_benchmark_sources, seal_composite_benchmark_sources, seal_non_blind_benchmark_sources,
-    validate_benchmark_labels, validate_benchmark_source_frame,
+    seal_benchmark_sources, seal_composite_benchmark_sources, seal_model_review,
+    seal_non_blind_benchmark_sources, validate_benchmark_labels, validate_benchmark_source_frame,
     validate_historical_v2_benchmark_protocol, validate_intentional_boundary_benchmark_frame_task,
-    validate_intentional_boundary_benchmark_protocol,
+    validate_intentional_boundary_benchmark_protocol, validate_model_review,
 };
 pub(crate) use historical_v2_release::{
     HistoricalV2AggregateInputs, HistoricalV2CorpusPublishInputs,

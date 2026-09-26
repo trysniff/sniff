@@ -4,6 +4,64 @@ SniffBench is Sniff's reproducible evaluation protocol. Blind OSS source
 selection, source sealing, independent method labeling, run import, and final
 evaluation use create-new, hash-bound artifacts.
 
+## Model-judged development reviews
+
+Model-judged reviews are a separate, experimental evidence track. A submission
+records the declared provider and model label, optional observed revision,
+run and prompt identities, blinded
+input attestations, source-seal commitment, method decisions, and source quotes.
+Use the published [source-review prompt](MODEL_REVIEW_PROMPT.md) for future
+agent shards, committing any shard-specific method assignment before review.
+Two submissions can be audited for tier agreement only. The audit permits
+partial method sets; it does not establish exhaustive coverage, ground-truth
+accuracy, reviewer independence, or human validation. It cannot satisfy the
+human-only blind labeling and release gates below.
+
+Completed JSON submissions can be checked and paired without contacting a
+model provider:
+
+```console
+sniff benchmark seal-model-review blind-source-seal.json raw-agent-a.json agent-a.json
+sniff benchmark seal-model-review blind-source-seal.json raw-agent-b.json agent-b.json
+sniff benchmark validate-model-review blind-source-seal.json agent-a.json
+sniff benchmark validate-model-review blind-source-seal.json agent-b.json
+sniff benchmark audit-model-reviews blind-source-seal.json agent-a.json agent-b.json model-audit.json
+```
+
+The caller supplies the model-run outputs; these commands validate provenance
+and source anchoring but do not run an agent, prove the attestation, or infer
+quality from agreement. A future shard plan must precommit complete method
+coverage before model-judged results can be summarized as a census.
+
+Each raw input has `reviewer` and `decisions` fields. The reviewer records
+`reviewer_id`, `provider`, `model`, `model_version`, `run_id`, and a lowercase
+SHA-256 of the exact prompt, plus true `fresh_context`,
+`sniff_output_hidden`, `other_reviews_hidden`, and
+`source_context_inspected` attestations. Use `null` for `model_version` when
+the host does not expose an exact revision; do not invent one. Provider and
+model fields are declarations, not authenticated execution receipts. Each
+decision records `method_id`,
+`tier`, `mechanism`, `evidence_artifact_path`, `exact_source_quote`,
+`rationale`, `behavior_preserving_simplification`, and `missing_evidence`.
+Only `slop` and `kinda_slop` decisions supply a concrete simplification that
+preserves behavior; a correctness fix, missing error, or performance concern
+alone is not slop. The seal command fills the source/task
+commitments and submission hash; it rejects invented methods or quotes.
+
+A six-method source-only agent pilot on September 26, 2026 had exact tier
+agreement on three methods. The pilot labels are not gold labels, and several
+rationales drifted toward bug-finding instead of unnecessary machinery. These
+six method IDs were exposed and must be excluded from any later blind score:
+
+```text
+03ff6e271599dd9c81530d3fda3a0506baaf978e90d65663c937d7a62c9e45ed
+4880d73d45992e1fba7040e9e8c2127fcf07639bb4e9fc5406d5c48bb37071b7
+02889f37a22df47576db140a831c275b612722fc67ccece9ab7efc3766df314e
+0765d0a81fdf5647f3daad39684fd38e55ea9899fe65400658635a7b42201172
+01587aa333f4214b56bedfe3e0b517a8960d70e478cd97a3953c2458cf5c3d47
+04817a56e53ab2366549e458b41d33e6178acb7ad3dabf22d22f670967a9ec77
+```
+
 ## Release comparison evidence
 
 Release submissions use schema v8. Each comparison baseline must retain one

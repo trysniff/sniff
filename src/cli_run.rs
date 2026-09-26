@@ -227,6 +227,33 @@ pub enum BenchmarkCommand {
         /// Independently completed reviewer worksheet.
         review: String,
     },
+    /// Validate a model-judged development review, never a human gold label.
+    ValidateModelReview {
+        /// Label-free source seal used for source-only judgment.
+        seal: String,
+        /// Completed model-judged submission.
+        review: String,
+    },
+    /// Bind raw agent decisions to a sealed source task in a new artifact.
+    SealModelReview {
+        /// Label-free source seal used for source-only judgment.
+        seal: String,
+        /// Raw JSON with reviewer provenance and method decisions.
+        raw: String,
+        /// New source-bound model-judged submission.
+        output: String,
+    },
+    /// Audit tier agreement between two source-bound model runs.
+    AuditModelReviews {
+        /// Label-free source seal used for both submissions.
+        seal: String,
+        /// First completed model-judged submission.
+        first: String,
+        /// Second completed model-judged submission.
+        second: String,
+        /// New model-judged agreement audit; never a human label audit.
+        output: String,
+    },
     /// Verify an in-progress label worksheet and report completed and pending work.
     LabelStatus {
         /// Label-free source seal used to create the worksheet.
@@ -897,6 +924,18 @@ pub async fn run(args: CliArgs) -> Result<i32, Box<dyn std::error::Error>> {
             BenchmarkCommand::ValidateLabels { seal, review } => {
                 pipeline::validate_benchmark_labels(&seal, &review)
             }
+            BenchmarkCommand::ValidateModelReview { seal, review } => {
+                pipeline::validate_model_review(&seal, &review)
+            }
+            BenchmarkCommand::SealModelReview { seal, raw, output } => {
+                pipeline::seal_model_review(&seal, &raw, &output)
+            }
+            BenchmarkCommand::AuditModelReviews {
+                seal,
+                first,
+                second,
+                output,
+            } => pipeline::audit_model_reviews(&seal, &first, &second, &output),
             BenchmarkCommand::LabelStatus { seal, review } => {
                 pipeline::benchmark_label_status(&seal, &review)
             }
@@ -2027,6 +2066,64 @@ mod tests {
             Some(CliCommand::Benchmark {
                 command: BenchmarkCommand::ValidateLabels { seal, review }
             }) if seal == "blind-source-seal.json" && review == "review-a.json"
+        ));
+
+        let model_review = CliArgs::try_parse_from([
+            "sniff",
+            "benchmark",
+            "validate-model-review",
+            "blind-source-seal.json",
+            "agent-a.json",
+        ])
+        .expect("validate model review arguments");
+        assert!(matches!(
+            model_review.command,
+            Some(CliCommand::Benchmark {
+                command: BenchmarkCommand::ValidateModelReview { seal, review }
+            }) if seal == "blind-source-seal.json" && review == "agent-a.json"
+        ));
+
+        let model_seal = CliArgs::try_parse_from([
+            "sniff",
+            "benchmark",
+            "seal-model-review",
+            "blind-source-seal.json",
+            "raw-agent-a.json",
+            "agent-a.json",
+        ])
+        .expect("seal model review arguments");
+        assert!(matches!(
+            model_seal.command,
+            Some(CliCommand::Benchmark {
+                command: BenchmarkCommand::SealModelReview { seal, raw, output }
+            }) if seal == "blind-source-seal.json"
+                && raw == "raw-agent-a.json"
+                && output == "agent-a.json"
+        ));
+
+        let model_audit = CliArgs::try_parse_from([
+            "sniff",
+            "benchmark",
+            "audit-model-reviews",
+            "blind-source-seal.json",
+            "agent-a.json",
+            "agent-b.json",
+            "model-audit.json",
+        ])
+        .expect("audit model review arguments");
+        assert!(matches!(
+            model_audit.command,
+            Some(CliCommand::Benchmark {
+                command: BenchmarkCommand::AuditModelReviews {
+                    seal,
+                    first,
+                    second,
+                    output,
+                }
+            }) if seal == "blind-source-seal.json"
+                && first == "agent-a.json"
+                && second == "agent-b.json"
+                && output == "model-audit.json"
         ));
 
         let audit = CliArgs::try_parse_from([

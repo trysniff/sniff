@@ -8,15 +8,16 @@ use crate::benchmark::{
 };
 use crate::benchmark::{
     BenchmarkSourceSeal, LabelResolutionManifest, LabelReviewAudit, LabelReviewWorksheet,
-    SourceFrameCollectionPolicy, SourceSamplingPolicy, SourceSelectionAudit,
-    SourceSelectionComponentAudit, SourceSelectionCompositePolicy, SourceSelectionWorksheet,
-    assess_source_selection, audit_label_reviews, audit_source_selection,
-    audit_source_selection_component, build_blind_case_bundle, collect_source_frame,
-    combine_source_selections, create_composite_source_seal, create_source_seal,
-    extend_source_selection, inspect_label_review_progress, prepare_label_resolution,
-    prepare_label_review, prepare_source_selection, prepare_source_selection_extension,
+    ModelJudgedRawReview, ModelJudgedSubmission, SourceFrameCollectionPolicy, SourceSamplingPolicy,
+    SourceSelectionAudit, SourceSelectionComponentAudit, SourceSelectionCompositePolicy,
+    SourceSelectionWorksheet, assess_source_selection, audit_label_reviews,
+    audit_model_judged_reviews, audit_source_selection, audit_source_selection_component,
+    build_blind_case_bundle, collect_source_frame, combine_source_selections,
+    create_composite_source_seal, create_source_seal, extend_source_selection,
+    inspect_label_review_progress, prepare_label_resolution, prepare_label_review,
+    prepare_source_selection, prepare_source_selection_extension, seal_model_judged_review,
     source_selection_draft, validate_label_review, validate_label_review_audit,
-    validate_source_frame_manifest, validate_source_seal,
+    validate_model_judged_submission, validate_source_frame_manifest, validate_source_seal,
 };
 use crate::benchmark_import::{BenchmarkRunReview, import_reviewed_run, prepare_run_review};
 use std::fs;
@@ -685,6 +686,77 @@ pub(crate) fn validate_benchmark_labels(
         "Verified complete source-only label worksheet {review_path}. Reviewer: {}. Methods: {}.",
         reviewer.reviewer_id,
         review.methods.len()
+    );
+    Ok(0)
+}
+
+pub(crate) fn validate_model_review(
+    seal_path: &str,
+    review_path: &str,
+) -> Result<i32, Box<dyn std::error::Error>> {
+    let (seal, seal_bytes) = read_source_seal(seal_path)?;
+    let review = read_json::<ModelJudgedSubmission>(review_path)?;
+    validate_model_judged_submission(
+        &seal,
+        containing_directory(seal_path),
+        &sha256(&seal_bytes),
+        &review,
+    )
+    .map_err(|error| IoError::new(ErrorKind::InvalidData, error))?;
+    eprintln!(
+        "Verified model-judged submission {review_path}. Agent run: {}. Methods: {}. Not human labels.",
+        review.reviewer.run_id,
+        review.decisions.len()
+    );
+    Ok(0)
+}
+
+pub(crate) fn seal_model_review(
+    seal_path: &str,
+    raw_path: &str,
+    output_path: &str,
+) -> Result<i32, Box<dyn std::error::Error>> {
+    let (seal, seal_bytes) = read_source_seal(seal_path)?;
+    let raw = read_json::<ModelJudgedRawReview>(raw_path)?;
+    let submission = seal_model_judged_review(
+        &seal,
+        containing_directory(seal_path),
+        &sha256(&seal_bytes),
+        raw,
+    )
+    .map_err(|error| IoError::new(ErrorKind::InvalidData, error))?;
+    write_new_file(
+        Path::new(output_path),
+        &serde_json::to_vec_pretty(&submission)?,
+    )?;
+    eprintln!(
+        "Source-bound model-judged submission written to {output_path}. Methods: {}. Not human labels.",
+        submission.decisions.len()
+    );
+    Ok(0)
+}
+
+pub(crate) fn audit_model_reviews(
+    seal_path: &str,
+    first_path: &str,
+    second_path: &str,
+    output_path: &str,
+) -> Result<i32, Box<dyn std::error::Error>> {
+    let (seal, seal_bytes) = read_source_seal(seal_path)?;
+    let first = read_json::<ModelJudgedSubmission>(first_path)?;
+    let second = read_json::<ModelJudgedSubmission>(second_path)?;
+    let audit = audit_model_judged_reviews(
+        &seal,
+        containing_directory(seal_path),
+        &sha256(&seal_bytes),
+        &first,
+        &second,
+    )
+    .map_err(|error| IoError::new(ErrorKind::InvalidData, error))?;
+    write_new_file(Path::new(output_path), &serde_json::to_vec_pretty(&audit)?)?;
+    eprintln!(
+        "Model-judged agreement audit written to {output_path}. Agreements: {}. Disputes: {}. Not human validation or an accuracy score.",
+        audit.agreement_count, audit.disputed_count
     );
     Ok(0)
 }
