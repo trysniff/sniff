@@ -2,35 +2,23 @@ use super::*;
 
 #[test]
 fn post_august_seven_historical_v3_frame_policies_are_fixed_and_valid() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let policies_dir = root.join("sniffbench/historical-v3-source-frames");
+    if !policies_dir.exists() && !root.join(".git").exists() {
+        return; // The published crate intentionally excludes repository-only benchmark policies.
+    }
     let policies = [
-        (
-            "Go",
-            include_str!("../sniffbench/historical-v3-source-frames/go-policy.json"),
-        ),
-        (
-            "JavaScript",
-            include_str!("../sniffbench/historical-v3-source-frames/javascript-policy.json"),
-        ),
-        (
-            "Kotlin",
-            include_str!("../sniffbench/historical-v3-source-frames/kotlin-policy.json"),
-        ),
-        (
-            "Python",
-            include_str!("../sniffbench/historical-v3-source-frames/python-policy.json"),
-        ),
-        (
-            "Rust",
-            include_str!("../sniffbench/historical-v3-source-frames/rust-policy.json"),
-        ),
-        (
-            "TypeScript",
-            include_str!("../sniffbench/historical-v3-source-frames/typescript-policy.json"),
-        ),
+        ("Go", "go-policy.json"),
+        ("JavaScript", "javascript-policy.json"),
+        ("Kotlin", "kotlin-policy.json"),
+        ("Python", "python-policy.json"),
+        ("Rust", "rust-policy.json"),
+        ("TypeScript", "typescript-policy.json"),
     ];
     let mut frame_ids = std::collections::HashSet::new();
-    for (language, bytes) in policies {
-        let policy: SourceFrameCollectionPolicy = serde_json::from_str(bytes).unwrap();
+    for (language, file) in policies {
+        let bytes = fs::read_to_string(policies_dir.join(file)).unwrap();
+        let policy: SourceFrameCollectionPolicy = serde_json::from_str(&bytes).unwrap();
         validate_policy(&policy).unwrap();
         assert_eq!(
             policy.schema_version,
@@ -57,10 +45,13 @@ fn post_august_seven_historical_v3_frame_policies_are_fixed_and_valid() {
 
 #[test]
 fn full_period_frame_requires_every_hour_and_replays_raw_pages() {
-    let policy: SourceFrameCollectionPolicy = serde_json::from_str(include_str!(
-        "../sniffbench/historical-v3-source-frames/go-policy.json"
-    ))
-    .unwrap();
+    let mut policy = policy();
+    policy.schema_version = SOURCE_FRAME_COLLECTION_FULL_PERIOD_SCHEMA_VERSION;
+    policy.derivation_period_start_utc = "2026-08-08".to_string();
+    policy.derivation_period_days = 7;
+    policy.created_day_utc = "2026-08-08".to_string();
+    policy.derivation_seed = "0".repeat(64);
+    policy.derivation_rule = "rotated_full_period_days".to_string();
     let output = tempfile::tempdir().unwrap();
     let state = output.path().join("raw");
     fs::create_dir_all(&state).unwrap();
