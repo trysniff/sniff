@@ -73,24 +73,46 @@ pub async fn collect_source_frame(
         .build()
         .map_err(|error| format!("failed to build GitHub frame client: {error}"))?;
     let mut raw_pages = Vec::new();
-    for hour in 0..24 {
-        let query = hourly_query(&policy, hour);
-        let first =
-            load_or_fetch_page(&client, github_token, state_directory, &query, hour, 1).await?;
-        let parsed = parse_search_response(&first.1)?;
-        if parsed.total_count > GITHUB_SEARCH_LIMIT {
-            return Err(format!(
-                "GitHub search partition {query:?} has {} results and exceeds the 1,000-result completeness limit",
-                parsed.total_count
-            ));
-        }
-        let pages = parsed.total_count.div_ceil(GITHUB_PAGE_SIZE).max(1);
-        raw_pages.push(first);
-        for page in 2..=pages {
-            raw_pages.push(
-                load_or_fetch_page(&client, github_token, state_directory, &query, hour, page)
+    for day in frame_days(&policy)? {
+        for hour in 0..24 {
+            let query = hourly_query_for_day(&policy, &day, hour);
+            let checkpoint_key =
+                if policy.schema_version == SOURCE_FRAME_COLLECTION_FULL_PERIOD_SCHEMA_VERSION {
+                    format!("day-{day}-hour-{hour:02}")
+                } else {
+                    format!("hour-{hour:02}")
+                };
+            let first = load_or_fetch_page(
+                &client,
+                github_token,
+                state_directory,
+                &query,
+                &checkpoint_key,
+                1,
+            )
+            .await?;
+            let parsed = parse_search_response(&first.1)?;
+            if parsed.total_count > GITHUB_SEARCH_LIMIT {
+                return Err(format!(
+                    "GitHub search partition {query:?} has {} results and exceeds the 1,000-result completeness limit",
+                    parsed.total_count
+                ));
+            }
+            let pages = parsed.total_count.div_ceil(GITHUB_PAGE_SIZE).max(1);
+            raw_pages.push(first);
+            for page in 2..=pages {
+                raw_pages.push(
+                    load_or_fetch_page(
+                        &client,
+                        github_token,
+                        state_directory,
+                        &query,
+                        &checkpoint_key,
+                        page,
+                    )
                     .await?,
-            );
+                );
+            }
         }
     }
     build_source_frame(
@@ -244,8 +266,9 @@ fn derive_source_frame(
         {
             return Err("GitHub search pagination changed within one partition".to_string());
         }
+        let expected_prefix = expected_hour_prefix(policy, &raw.query)?;
         for repository in parsed.items {
-            validate_repository(policy, &raw.query, &repository)?;
+            validate_repository(policy, &expected_prefix, &repository)?;
             let identity = normalize_full_name(&repository.full_name)?;
             if repositories
                 .insert(repository.id, repository.clone())
@@ -275,24 +298,28 @@ fn derive_source_frame(
             response_sha256: raw.response_sha256,
         });
     }
-    for hour in 0..24 {
-        let query = hourly_query(policy, hour);
-        let Some((total_count, pages)) = partitions.remove(&query) else {
-            return Err(format!(
-                "source frame is missing UTC hour partition {hour:02}"
-            ));
-        };
-        let expected_pages = total_count.div_ceil(GITHUB_PAGE_SIZE).max(1);
-        if pages.keys().copied().ne(1..=expected_pages)
-            || pages.values().sum::<usize>() != total_count
-        {
-            return Err(format!(
-                "GitHub search partition {query:?} does not contain its complete page and item census"
-            ));
+    for day in frame_days(policy)? {
+        for hour in 0..24 {
+            let query = hourly_query_for_day(policy, &day, hour);
+            let Some((total_count, pages)) = partitions.remove(&query) else {
+                return Err(format!(
+                    "source frame is missing UTC hour partition {day}T{hour:02}"
+                ));
+            };
+            let expected_pages = total_count.div_ceil(GITHUB_PAGE_SIZE).max(1);
+            if pages.keys().copied().ne(1..=expected_pages)
+                || pages.values().sum::<usize>() != total_count
+            {
+                return Err(format!(
+                    "GitHub search partition {query:?} does not contain its complete page and item census"
+                ));
+            }
         }
     }
     if !partitions.is_empty() {
-        return Err("source frame contains a query outside the precommitted UTC day".to_string());
+        return Err(
+            "source frame contains a query outside the precommitted UTC period".to_string(),
+        );
     }
     page_commitments.sort_by(|left, right| {
         (&left.query, left.page, &left.artifact_path).cmp(&(
@@ -320,10 +347,10 @@ async fn load_or_fetch_page(
     github_token: Option<&str>,
     state_directory: &Path,
     query: &str,
-    hour: usize,
+    checkpoint_key: &str,
     page: usize,
 ) -> Result<(PathBuf, SourceFrameRawPage), String> {
-    let path = state_directory.join(format!("hour-{hour:02}-page-{page:03}.json"));
+    let path = state_directory.join(format!("{checkpoint_key}-page-{page:03}.json"));
     if path.is_file() {
         let raw: SourceFrameRawPage = serde_json::from_slice(
             &fs::read(&path)
@@ -341,7 +368,7 @@ async fn load_or_fetch_page(
                 path.display()
             ));
         }
-        validate_raw_page(&raw)?;
+        validate_checkpointable_page(&raw)?;
         return Ok((path, raw));
     }
     let response = fetch_search_page(client, github_token, query, page).await?;
@@ -352,16 +379,21 @@ async fn load_or_fetch_page(
         response_sha256: sha256(response.as_bytes()),
         response,
     };
-    validate_raw_page(&raw)?;
+    validate_checkpointable_page(&raw)?;
     let bytes = serde_json::to_vec_pretty(&raw)
         .map_err(|error| format!("failed to serialize source-frame page: {error}"))?;
     write_atomic_checkpoint(&path, &bytes, "source-frame page")?;
     Ok((path, raw))
 }
 
+#[cfg(test)]
 fn hourly_query(policy: &SourceFrameCollectionPolicy, hour: usize) -> String {
-    let start = format!("{}T{hour:02}:00:00Z", policy.created_day_utc);
-    let end = format!("{}T{hour:02}:59:59Z", policy.created_day_utc);
+    hourly_query_for_day(policy, &policy.created_day_utc, hour)
+}
+
+fn hourly_query_for_day(policy: &SourceFrameCollectionPolicy, day: &str, hour: usize) -> String {
+    let start = format!("{day}T{hour:02}:00:00Z");
+    let end = format!("{day}T{hour:02}:59:59Z");
     format!(
         "language:{} created:{start}..{end} fork:{} archived:{} mirror:{} template:{}",
         policy.language,
@@ -417,17 +449,24 @@ fn validate_raw_page(raw: &SourceFrameRawPage) -> Result<(), String> {
     Ok(())
 }
 
+fn validate_checkpointable_page(raw: &SourceFrameRawPage) -> Result<(), String> {
+    validate_raw_page(raw)?;
+    if parse_search_response(raw)?.incomplete_results {
+        return Err(
+            "GitHub returned incomplete source-frame results; the exact page remains open"
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
 fn validate_repository(
     policy: &SourceFrameCollectionPolicy,
-    query: &str,
+    expected_prefix: &str,
     repository: &GithubSearchRepository,
 ) -> Result<(), String> {
-    let expected_hour = (0..24)
-        .find(|hour| hourly_query(policy, *hour) == query)
-        .ok_or_else(|| "GitHub response belongs to an uncommitted query".to_string())?;
-    let expected_prefix = format!("{}T{expected_hour:02}:", policy.created_day_utc);
     if repository.id == 0
-        || !repository.created_at.starts_with(&expected_prefix)
+        || !repository.created_at.starts_with(expected_prefix)
         || repository.fork != policy.include_forks
         || repository.archived != policy.include_archived
         || repository.mirror_url.is_some() != policy.include_mirrors
@@ -441,9 +480,24 @@ fn validate_repository(
     Ok(())
 }
 
+fn expected_hour_prefix(
+    policy: &SourceFrameCollectionPolicy,
+    query: &str,
+) -> Result<String, String> {
+    let (expected_day, expected_hour) = frame_days(policy)?
+        .into_iter()
+        .flat_map(|day| (0..24).map(move |hour| (day.clone(), hour)))
+        .find(|(day, hour)| hourly_query_for_day(policy, day, *hour) == query)
+        .ok_or_else(|| "GitHub response belongs to an uncommitted query".to_string())?;
+    Ok(format!("{expected_day}T{expected_hour:02}:"))
+}
+
 fn validate_policy(policy: &SourceFrameCollectionPolicy) -> Result<(), String> {
-    if policy.schema_version != SOURCE_FRAME_COLLECTION_POLICY_SCHEMA_VERSION
-        || policy.frame_id.trim().is_empty()
+    if !matches!(
+        policy.schema_version,
+        SOURCE_FRAME_COLLECTION_POLICY_SCHEMA_VERSION
+            | SOURCE_FRAME_COLLECTION_FULL_PERIOD_SCHEMA_VERSION
+    ) || policy.frame_id.trim().is_empty()
         || policy.source != "https://api.github.com/search/repositories"
         || policy.api_version != "2022-11-28"
         || !matches!(
@@ -453,7 +507,10 @@ fn validate_policy(policy: &SourceFrameCollectionPolicy) -> Result<(), String> {
         || policy.partition != "utc_hour"
         || policy.ordering != "github_repository_id_ascending"
         || policy.attestation.trim().is_empty()
-        || policy.derivation_rule != "first_8_hex_u32_mod_period_days"
+        || (policy.schema_version == SOURCE_FRAME_COLLECTION_POLICY_SCHEMA_VERSION
+            && policy.derivation_rule != "first_8_hex_u32_mod_period_days")
+        || (policy.schema_version == SOURCE_FRAME_COLLECTION_FULL_PERIOD_SCHEMA_VERSION
+            && policy.derivation_rule != "rotated_full_period_days")
         || policy.derivation_period_days == 0
         || policy.derivation_period_days > 366
     {
@@ -473,6 +530,23 @@ fn validate_policy(policy: &SourceFrameCollectionPolicy) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+fn frame_days(policy: &SourceFrameCollectionPolicy) -> Result<Vec<String>, String> {
+    if policy.schema_version == SOURCE_FRAME_COLLECTION_POLICY_SCHEMA_VERSION {
+        return Ok(vec![policy.created_day_utc.clone()]);
+    }
+    let seed_prefix = u32::from_str_radix(&policy.derivation_seed[..8], 16)
+        .map_err(|_| "source-frame derivation seed prefix is invalid".to_string())?;
+    let offset = (seed_prefix as usize) % policy.derivation_period_days;
+    (0..policy.derivation_period_days)
+        .map(|step| {
+            add_days(
+                &policy.derivation_period_start_utc,
+                (offset + step) % policy.derivation_period_days,
+            )
+        })
+        .collect()
 }
 
 fn add_days(value: &str, days: usize) -> Result<String, String> {
