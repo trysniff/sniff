@@ -77,6 +77,7 @@ pub(super) async fn fetch_search_page(
             .get("https://api.github.com/search/repositories")
             .header("Accept", "application/vnd.github+json")
             .header("Accept-Encoding", "identity")
+            .header("Connection", "close")
             .header("X-GitHub-Api-Version", "2022-11-28")
             .query(&[
                 ("q", query.to_string()),
@@ -95,7 +96,7 @@ pub(super) async fn fetch_search_page(
                 let payload = match response.text().await {
                     Ok(payload) => payload,
                     Err(error) => {
-                        last_error = format!("failed to read GitHub search response: {error}");
+                        last_error = format!("failed to read GitHub search response: {error:?}");
                         if attempt < 3 {
                             let delay = if status == StatusCode::TOO_MANY_REQUESTS
                                 || hints.remaining_zero

@@ -69,8 +69,9 @@ pub async fn collect_source_frame(
     let client = Client::builder()
         .user_agent("trysniff-sniffbench-frame-collector/1")
         .http1_only()
+        .pool_max_idle_per_host(0)
         .connect_timeout(Duration::from_secs(15))
-        .timeout(Duration::from_secs(60))
+        .timeout(Duration::from_secs(120))
         .build()
         .map_err(|error| format!("failed to build GitHub frame client: {error}"))?;
     let mut raw_pages = Vec::new();
