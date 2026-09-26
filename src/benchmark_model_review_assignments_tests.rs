@@ -72,6 +72,20 @@ fn assignments_replay_with_exact_census_and_two_slots() {
         )
         .is_err()
     );
+
+    let mut weakened = manifest.clone();
+    weakened.shards[0].reviewer_slots = 1;
+    weakened.manifest_sha256 = weakened.computed_sha256().unwrap();
+    assert!(
+        validate_model_review_assignments(
+            &seal,
+            root.path(),
+            &seal_hash,
+            b"source-only prompt v1",
+            &weakened,
+        )
+        .is_err()
+    );
 }
 
 #[test]
