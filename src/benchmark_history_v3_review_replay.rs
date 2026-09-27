@@ -1,3 +1,4 @@
+use super::history_v2_slot_store_support::read_limited;
 use super::{
     HistoricalV3CandidateCollection, HistoricalV3Protocol, HistoricalV3RankIdentity,
     HistoricalV3VerifiedFinalReview, read_historical_v3_label_audit,
@@ -17,6 +18,7 @@ pub struct HistoricalV3ReviewRecordPaths {
     pub agent_one: PathBuf,
     pub agent_two: PathBuf,
     pub agent_audit: PathBuf,
+    pub agent_invocation: PathBuf,
 }
 
 impl HistoricalV3ReviewRecordPaths {
@@ -32,6 +34,7 @@ impl HistoricalV3ReviewRecordPaths {
             agent_one: directory.join("agent-one.json"),
             agent_two: directory.join("agent-two.json"),
             agent_audit: directory.join("agent-audit.json"),
+            agent_invocation: directory.join("agent-invocation.json"),
         }
     }
 }
@@ -50,7 +53,13 @@ pub fn verify_historical_v3_agent_review_from_disk(
     let first = super::read_historical_v3_agent_submission(&paths.agent_one)?;
     let second = super::read_historical_v3_agent_submission(&paths.agent_two)?;
     let audit = super::read_historical_v3_agent_audit(&paths.agent_audit)?;
-    let prompt = super::historical_v3_agent_prompt_from_submission(&first)?;
+    let invocation = read_limited(
+        &paths.agent_invocation,
+        64 * 1024 * 1024,
+        "historical-v3 agent invocation",
+    )?;
+    let prompt =
+        super::validate_historical_v3_agent_invocation(protocol, source.bundle(), &invocation)?;
     let proof = super::verify_historical_v3_agent_review(
         &source.inputs(protocol, collection),
         source.bundle(),

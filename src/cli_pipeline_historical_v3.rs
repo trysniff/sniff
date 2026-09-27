@@ -1,3 +1,5 @@
+#[path = "cli_pipeline_historical_v3_agent.rs"]
+mod agent;
 #[path = "cli_pipeline_historical_v3_precommit.rs"]
 mod precommit;
 #[path = "cli_pipeline_historical_v3_review.rs"]
@@ -15,6 +17,7 @@ use crate::benchmark::{
 };
 use std::path::Path;
 
+pub(crate) use agent::{audit_agent_review, prepare_agent_review, submit_agent_review};
 pub(crate) use review::{
     audit_review, finalize_review, prepare_resolution, prepare_review, validate_review,
 };

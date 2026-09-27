@@ -23,7 +23,7 @@ behavior-preserving change based on intuition alone.
 
 Return only JSON with a `reviewer` object and a `decision` object. Record the
 declared provider, model, exact revision if exposed (`model_version: null`
-otherwise), unique run ID, and SHA-256 of these exact prompt bytes. Set each
+otherwise), unique run ID, and the invocation's `prompt_sha256` value. Set each
 source-only isolation and inspection field to true only if it actually held.
 Reviewer keys are `agent_id`, `provider`, `model`, `model_version`, `run_id`,
 `prompt_sha256`, `fresh_context`, `sniff_output_hidden`,

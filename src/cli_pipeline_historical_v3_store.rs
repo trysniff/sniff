@@ -189,9 +189,6 @@ fn load_unbound_with_prior(
     }
     let protocol = read_json(&config.protocol, MAX_INPUT_BYTES, "protocol")?;
     validate_historical_v3_protocol(&protocol)?;
-    if protocol.model_review_policy.is_some() {
-        return Err("historical-v3 model-judged operator is not wired; human commands cannot consume agent reviews".to_string());
-    }
     let prior = read_json(
         &config.prior_identity_seal,
         MAX_INPUT_BYTES,
@@ -376,10 +373,26 @@ pub(super) fn read_plain(path: &Path, limit: u64, label: &str) -> Result<Vec<u8>
 }
 
 pub(super) fn write_json_durable<T: Serialize>(path: &Path, value: &T) -> Result<(), String> {
+    write_json_durable_limited(path, value, MAX_INPUT_BYTES)
+}
+
+pub(super) fn write_json_durable_limited<T: Serialize>(
+    path: &Path,
+    value: &T,
+    limit: u64,
+) -> Result<(), String> {
     let mut bytes = serde_json::to_vec(value)
         .map_err(|error| format!("failed to serialize historical-v3 artifact: {error}"))?;
     bytes.push(b'\n');
-    if bytes.len() as u64 > MAX_INPUT_BYTES {
+    write_bytes_durable_limited(path, &bytes, limit)
+}
+
+pub(super) fn write_bytes_durable_limited(
+    path: &Path,
+    bytes: &[u8],
+    limit: u64,
+) -> Result<(), String> {
+    if bytes.len() as u64 > limit {
         return Err("historical-v3 artifact exceeds its size limit".to_string());
     }
     let parent = path
@@ -387,7 +400,7 @@ pub(super) fn write_json_durable<T: Serialize>(path: &Path, value: &T) -> Result
         .ok_or_else(|| "historical-v3 artifact path has no parent".to_string())?;
     require_plain_directory(parent, "artifact parent")?;
     if path.exists() {
-        let existing = read_plain(path, MAX_INPUT_BYTES, "existing historical-v3 artifact")?;
+        let existing = read_plain(path, limit, "existing historical-v3 artifact")?;
         return if existing == bytes {
             Ok(())
         } else {
@@ -399,7 +412,7 @@ pub(super) fn write_json_durable<T: Serialize>(path: &Path, value: &T) -> Result
         path.file_name()
             .ok_or_else(|| "historical-v3 artifact path has no filename".to_string())?,
     );
-    pending_name.push(format!(".{}.pending", sha256(&bytes)));
+    pending_name.push(format!(".{}.pending", sha256(bytes)));
     let pending = parent.join(pending_name);
     if pending.exists() {
         let metadata = fs::symlink_metadata(&pending)
@@ -407,7 +420,7 @@ pub(super) fn write_json_durable<T: Serialize>(path: &Path, value: &T) -> Result
         if !metadata.is_file() || metadata.file_type().is_symlink() {
             return Err("historical-v3 pending artifact is not a plain file".to_string());
         }
-        if read_plain(&pending, MAX_INPUT_BYTES, "pending historical-v3 artifact")? != bytes {
+        if read_plain(&pending, limit, "pending historical-v3 artifact")? != bytes {
             fs::remove_file(&pending)
                 .map_err(|error| format!("failed to clear incomplete artifact: {error}"))?;
         }
@@ -418,7 +431,7 @@ pub(super) fn write_json_durable<T: Serialize>(path: &Path, value: &T) -> Result
             .create_new(true)
             .open(&pending)
             .map_err(|error| format!("failed to create pending artifact: {error}"))?;
-        file.write_all(&bytes)
+        file.write_all(bytes)
             .and_then(|_| file.sync_all())
             .map_err(|error| format!("failed to persist pending artifact: {error}"))?;
     }
@@ -426,7 +439,7 @@ pub(super) fn write_json_durable<T: Serialize>(path: &Path, value: &T) -> Result
         Ok(()) => {}
         Err(error) => {
             let published_matches = path.exists()
-                && read_plain(path, MAX_INPUT_BYTES, "published historical-v3 artifact")? == bytes;
+                && read_plain(path, limit, "published historical-v3 artifact")? == bytes;
             if !published_matches {
                 return Err(format!("failed to publish historical-v3 artifact: {error}"));
             }
@@ -761,7 +774,7 @@ mod tests {
     }
 
     #[test]
-    fn human_operator_rejects_model_protocol_before_creating_state() {
+    fn model_protocol_can_bind_without_using_human_authority() {
         let fixture = fixture();
         let config: OperatorConfig =
             read_json(&fixture.config, MAX_CONFIG_BYTES, "operator config").unwrap();
@@ -784,11 +797,12 @@ mod tests {
         protocol.model_access_forbidden = false;
         let protocol = crate::benchmark::seal_historical_v3_protocol(protocol).unwrap();
         fs::write(&config.protocol, serde_json::to_vec(&protocol).unwrap()).unwrap();
-        let error = synthetic_unbound(&fixture.config, &fixture.prior)
-            .err()
-            .unwrap();
-        assert!(error.contains("model-judged operator is not wired"));
+        let unbound = synthetic_unbound(&fixture.config, &fixture.prior).unwrap();
+        assert!(unbound.protocol.human_review_policy.is_none());
         assert!(!config.operator_root.exists());
+        let bound = synthetic_initialize(&fixture).unwrap();
+        assert!(bound.unbound.protocol.model_review_policy.is_some());
+        assert!(config.operator_root.exists());
     }
 
     #[test]
@@ -1002,6 +1016,10 @@ mod tests {
         assert_eq!(proof["schema_version"], 2);
         assert!(proof["agent_prompt"].is_object());
         assert_eq!(
+            precommit::verified_agent_prompt_bytes(&bound).unwrap(),
+            prompt
+        );
+        assert_eq!(
             base64::engine::general_purpose::STANDARD
                 .decode(proof["agent_prompt"]["fetched_base64"].as_str().unwrap())
                 .unwrap(),
@@ -1063,6 +1081,15 @@ mod tests {
             read_plain(&path, MAX_INPUT_BYTES, "artifact").unwrap(),
             bytes
         );
+        let invocation_path = root.path().join("agent-invocation.json");
+        let invocation = b"{\"prompt\":\"exact\"}";
+        write_bytes_durable_limited(&invocation_path, invocation, 1024).unwrap();
+        write_bytes_durable_limited(&invocation_path, invocation, 1024).unwrap();
+        assert_eq!(
+            read_plain(&invocation_path, 1024, "invocation").unwrap(),
+            invocation
+        );
+        assert!(write_bytes_durable_limited(&invocation_path, b"{}", 1024).is_err());
     }
 
     #[test]

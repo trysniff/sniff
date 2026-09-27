@@ -686,6 +686,27 @@ pub enum HistoricalV3Command {
         #[arg(value_parser = parse_historical_v3_language)]
         language: crate::benchmark::HistoricalV3Language,
     },
+    /// Persist the exact source-only invocation for two fresh model reviewers.
+    PrepareAgentReview {
+        config: String,
+        #[arg(value_parser = parse_historical_v3_language)]
+        language: crate::benchmark::HistoricalV3Language,
+    },
+    /// Validate and seal one agent's exact raw JSON response.
+    SubmitAgentReview {
+        config: String,
+        #[arg(value_parser = parse_historical_v3_language)]
+        language: crate::benchmark::HistoricalV3Language,
+        #[arg(value_parser = clap::value_parser!(u8).range(1..=2))]
+        agent: u8,
+        response: String,
+    },
+    /// Audit both independent model reviews without resolving disagreement.
+    AuditAgentReview {
+        config: String,
+        #[arg(value_parser = parse_historical_v3_language)]
+        language: crate::benchmark::HistoricalV3Language,
+    },
 }
 
 fn parse_historical_v3_language(
@@ -844,6 +865,23 @@ pub async fn run(args: CliArgs) -> Result<i32, Box<dyn std::error::Error>> {
                 }
                 HistoricalV3Command::FinalizeReview { config, language } => {
                     pipeline::finalize_historical_v3_review(&config, language).map_err(Into::into)
+                }
+                HistoricalV3Command::PrepareAgentReview { config, language } => {
+                    pipeline::prepare_historical_v3_agent_review(&config, language)
+                        .map_err(Into::into)
+                }
+                HistoricalV3Command::SubmitAgentReview {
+                    config,
+                    language,
+                    agent,
+                    response,
+                } => {
+                    pipeline::submit_historical_v3_agent_review(&config, language, agent, &response)
+                        .map_err(Into::into)
+                }
+                HistoricalV3Command::AuditAgentReview { config, language } => {
+                    pipeline::audit_historical_v3_agent_review(&config, language)
+                        .map_err(Into::into)
                 }
             },
             BenchmarkCommand::CollectFrame {
