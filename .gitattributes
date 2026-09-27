@@ -1,2 +1,3 @@
 *.patch text eol=lf
 sniffbench/*.json text eol=lf
+sniffbench/historical-v3-id-census/*.json text eol=lf
