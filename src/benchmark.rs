@@ -686,6 +686,13 @@ pub use release::{
     validate_public_id_census_policy,
 };
 
+pub use release::{
+    PUBLIC_ID_CENSUS_GRAPHQL_QUERY, PUBLIC_ID_CENSUS_POLICY_COMMIT_SHA, PublicIdCensusExchange,
+    PublicIdCensusFailedAttempt, PublicIdCensusPreflight, PublicIdCensusReplay,
+    PublicIdCensusRequest, public_id_census_graphql_body, replay_public_id_census,
+    replay_public_id_census_stream,
+};
+
 /// One labeled unit in a SniffBench corpus. The label is hidden from the
 /// analyzer during a run and is used only after predictions are collected.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

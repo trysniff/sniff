@@ -2,6 +2,11 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
+#[path = "benchmark_public_id_census_replay.rs"]
+mod replay;
+
+pub use replay::*;
+
 pub const PUBLIC_ID_CENSUS_POLICY_SCHEMA_VERSION: u32 = 1;
 pub const PUBLIC_ID_CENSUS_PUBLIC_POLICY_SHA256: &str =
     "9ab97d4dc42f4904052678d68cb36855a28197fb7973870a1534454995f2aa50";
