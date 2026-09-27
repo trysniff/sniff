@@ -699,6 +699,11 @@ pub use release::{
     validate_public_id_census_manifest,
 };
 
+pub use release::{
+    PublicIdCensusHttpResponse, PublicIdCensusTransport, PublicIdCensusTransportError,
+    collect_public_id_census,
+};
+
 /// One labeled unit in a SniffBench corpus. The label is hidden from the
 /// analyzer during a run and is used only after predictions are collected.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -143,11 +143,35 @@ pub fn replay_public_id_census_stream<I>(
 where
     I: IntoIterator<Item = Result<PublicIdCensusExchange, String>>,
 {
+    let mut exchanges = exchanges.into_iter();
+    let result = replay_public_id_census_with_source(policy, preflight, |_, _, _| {
+        exchanges
+            .next()
+            .ok_or("public-ID census exchange transcript ended early".to_string())?
+    })?;
+    if exchanges.next().transpose()?.is_some() {
+        return Err("public-ID census has exchanges after the upper time boundary".to_string());
+    }
+    Ok(result)
+}
+
+pub(super) fn replay_public_id_census_with_source<F>(
+    policy: &PublicIdCensusPolicy,
+    preflight: &PublicIdCensusPreflight,
+    source: F,
+) -> Result<PublicIdCensusReplay, String>
+where
+    F: FnMut(
+        PublicIdCensusRequest,
+        String,
+        Option<String>,
+    ) -> Result<PublicIdCensusExchange, String>,
+{
     validate_public_id_census_policy(policy)?;
     validate_preflight(policy, preflight)?;
     let mut replay = ReplayCursor {
         policy,
-        exchanges: exchanges.into_iter(),
+        source,
         last_received_at: preflight.fetched_at_utc.clone(),
         probe_cache: HashMap::new(),
     };
@@ -302,9 +326,6 @@ where
     if !saw_upper_witness {
         return Err("public-ID census crawl omitted its probed upper witness".to_string());
     }
-    if replay.exchanges.next().transpose()?.is_some() {
-        return Err("public-ID census has exchanges after the upper time boundary".to_string());
-    }
     Ok(PublicIdCensusReplay {
         frames,
         listed_repository_count,
@@ -316,16 +337,20 @@ where
     })
 }
 
-struct ReplayCursor<'a, I> {
+struct ReplayCursor<'a, F> {
     policy: &'a PublicIdCensusPolicy,
-    exchanges: I,
+    source: F,
     last_received_at: String,
     probe_cache: HashMap<u64, GraphqlRepository>,
 }
 
-impl<I> ReplayCursor<'_, I>
+impl<F> ReplayCursor<'_, F>
 where
-    I: Iterator<Item = Result<PublicIdCensusExchange, String>>,
+    F: FnMut(
+        PublicIdCensusRequest,
+        String,
+        Option<String>,
+    ) -> Result<PublicIdCensusExchange, String>,
 {
     fn probe(&mut self, since: u64) -> Result<Option<ProbeRepository>, String> {
         let page = self.rest(since)?;
@@ -392,13 +417,14 @@ where
     }
 
     fn rest(&mut self, since: u64) -> Result<RestPage, String> {
-        let exchange = self.next()?;
-        if exchange.request != (PublicIdCensusRequest::Rest { since })
-            || exchange.request_url
-                != format!(
-                    "{}?per_page={}&since={since}",
-                    self.policy.source, self.policy.rest_page_size
-                )
+        let request = PublicIdCensusRequest::Rest { since };
+        let url = format!(
+            "{}?per_page={}&since={since}",
+            self.policy.source, self.policy.rest_page_size
+        );
+        let exchange = self.next(request.clone(), url.clone(), None)?;
+        if exchange.request != request
+            || exchange.request_url != url
             || exchange.request_body.is_some()
         {
             return Err("public-ID census REST request changed".to_string());
@@ -440,14 +466,15 @@ where
         node_ids: &[String],
         listed: &[RestRepository],
     ) -> Result<Vec<GraphqlRepository>, String> {
-        let exchange = self.next()?;
-        if exchange.request
-            != (PublicIdCensusRequest::Graphql {
-                node_ids: node_ids.to_vec(),
-            })
+        let request = PublicIdCensusRequest::Graphql {
+            node_ids: node_ids.to_vec(),
+        };
+        let body = public_id_census_graphql_body(node_ids)?;
+        let url = self.policy.metadata_source.clone();
+        let exchange = self.next(request.clone(), url.clone(), Some(body.clone()))?;
+        if exchange.request != request
             || exchange.request_url != self.policy.metadata_source
-            || exchange.request_body.as_deref()
-                != Some(public_id_census_graphql_body(node_ids)?.as_str())
+            || exchange.request_body.as_deref() != Some(body.as_str())
             || exchange.response_link.is_some()
         {
             return Err("public-ID census GraphQL request changed".to_string());
@@ -506,11 +533,13 @@ where
             .collect()
     }
 
-    fn next(&mut self) -> Result<PublicIdCensusExchange, String> {
-        let exchange = self
-            .exchanges
-            .next()
-            .ok_or("public-ID census exchange transcript ended early".to_string())??;
+    fn next(
+        &mut self,
+        request: PublicIdCensusRequest,
+        url: String,
+        body: Option<String>,
+    ) -> Result<PublicIdCensusExchange, String> {
+        let exchange = (self.source)(request, url, body)?;
         if exchange.received_at_utc < self.last_received_at
             || exchange
                 .failed_attempts
@@ -529,7 +558,7 @@ struct ProbeRepository {
     created_at: String,
 }
 
-fn validate_exchange(
+pub(super) fn validate_exchange(
     exchange: &PublicIdCensusExchange,
     policy: &PublicIdCensusPolicy,
 ) -> Result<(), String> {
@@ -579,7 +608,7 @@ fn validate_exchange(
     Ok(())
 }
 
-fn validate_preflight(
+pub(super) fn validate_preflight(
     policy: &PublicIdCensusPolicy,
     preflight: &PublicIdCensusPreflight,
 ) -> Result<(), String> {
