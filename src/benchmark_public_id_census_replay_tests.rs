@@ -131,7 +131,7 @@ fn graphql(repositories: &[FixtureRepository]) -> PublicIdCensusExchange {
     )
 }
 
-fn transcript() -> Vec<PublicIdCensusExchange> {
+pub(crate) fn transcript() -> Vec<PublicIdCensusExchange> {
     let rows = repositories();
     vec![
         rest(0, &rows),
@@ -154,7 +154,7 @@ fn replace_response(exchange: &mut PublicIdCensusExchange, value: serde_json::Va
     exchange.response_sha256 = format!("{:x}", Sha256::digest(exchange.response_body.as_bytes()));
 }
 
-fn preflight_fixture() -> PublicIdCensusPreflight {
+pub(crate) fn preflight_fixture() -> PublicIdCensusPreflight {
     let bytes = std::fs::read_to_string(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("sniffbench/historical-v3-id-census/policy.json"),

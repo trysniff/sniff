@@ -8,6 +8,8 @@ use std::collections::{BTreeMap, HashSet};
 
 pub const PUBLIC_ID_CENSUS_GRAPHQL_QUERY: &str = "query PublicIdCensusNodes($ids:[ID!]!){nodes(ids:$ids){__typename ... on Repository{id databaseId nameWithOwner createdAt primaryLanguage{name} isArchived isFork isTemplate mirrorUrl isPrivate}}}";
 pub const PUBLIC_ID_CENSUS_POLICY_COMMIT_SHA: &str = "6e0cbc8eb211d12d15b4428b8a648024f0aad82a";
+pub const PUBLIC_ID_CENSUS_MAX_FRAME_BYTES: usize = 512 * 1024 * 1024;
+const MAX_TOTAL_FRAME_BYTES: usize = 1024 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -198,6 +200,7 @@ where
         .iter()
         .map(|language| (language.clone(), b"repo,metadata\n".to_vec()))
         .collect::<BTreeMap<_, _>>();
+    let mut total_frame_bytes = frames.values().map(Vec::len).sum::<usize>();
     let mut names = HashSet::new();
     let mut since = lower;
     let mut previous_id = None;
@@ -279,13 +282,19 @@ where
             if !names.insert(name.clone()) {
                 return Err("public-ID census repeats a canonical repository name".to_string());
             }
-            frame.extend_from_slice(
-                format!(
-                    "github.com/{name},github_repository_id={};created_at={}\n",
-                    listed.id, repository.created_at
-                )
-                .as_bytes(),
+            let row = format!(
+                "github.com/{name},github_repository_id={};created_at={}\n",
+                listed.id, repository.created_at
             );
+            total_frame_bytes = total_frame_bytes
+                .checked_add(row.len())
+                .ok_or("public-ID census frame size overflowed")?;
+            if total_frame_bytes > MAX_TOTAL_FRAME_BYTES
+                || frame.len() + row.len() > PUBLIC_ID_CENSUS_MAX_FRAME_BYTES
+            {
+                return Err("public-ID census derived frames exceed the memory bound".to_string());
+            }
+            frame.extend_from_slice(row.as_bytes());
         }
         if let Some(id) = crossing_id {
             break id;
@@ -686,4 +695,4 @@ fn canonical_name(value: &str) -> Result<String, String> {
 
 #[cfg(test)]
 #[path = "benchmark_public_id_census_replay_tests.rs"]
-mod tests;
+pub(crate) mod tests;
