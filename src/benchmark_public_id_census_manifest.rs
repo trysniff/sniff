@@ -11,8 +11,9 @@ use std::fs;
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 
-pub const PUBLIC_ID_CENSUS_MANIFEST_SCHEMA_VERSION: u32 = 1;
-const MAX_RAW_EXCHANGE_BYTES: u64 = 32 * 1024 * 1024;
+pub const PUBLIC_ID_CENSUS_MANIFEST_SCHEMA_VERSION: u32 = 2;
+pub(super) const MAX_RAW_EXCHANGE_BYTES: u64 = 32 * 1024 * 1024;
+const MAX_PREFLIGHT_BYTES: u64 = 1024 * 1024;
 const MAX_FRAME_BYTES: u64 = PUBLIC_ID_CENSUS_MAX_FRAME_BYTES as u64;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -40,6 +41,8 @@ pub struct PublicIdCensusManifest {
     pub policy: PublicIdCensusPolicy,
     pub policy_sha256: String,
     pub preflight: PublicIdCensusPreflight,
+    pub preflight_artifact_path: String,
+    pub preflight_artifact_sha256: String,
     pub exchanges: Vec<PublicIdCensusExchangeCommitment>,
     pub frames: Vec<PublicIdCensusFrameCommitment>,
     pub listed_repository_count: usize,
@@ -59,6 +62,8 @@ impl PublicIdCensusManifest {
             policy: &'a PublicIdCensusPolicy,
             policy_sha256: &'a str,
             preflight: &'a PublicIdCensusPreflight,
+            preflight_artifact_path: &'a str,
+            preflight_artifact_sha256: &'a str,
             exchanges: &'a [PublicIdCensusExchangeCommitment],
             frames: &'a [PublicIdCensusFrameCommitment],
             listed_repository_count: usize,
@@ -73,6 +78,8 @@ impl PublicIdCensusManifest {
             policy: &self.policy,
             policy_sha256: &self.policy_sha256,
             preflight: &self.preflight,
+            preflight_artifact_path: &self.preflight_artifact_path,
+            preflight_artifact_sha256: &self.preflight_artifact_sha256,
             exchanges: &self.exchanges,
             frames: &self.frames,
             listed_repository_count: self.listed_repository_count,
@@ -99,6 +106,12 @@ pub fn prepare_public_id_census_manifest(
         return Err("public-ID census manifest lacks its complete source artifacts".to_string());
     }
     let root = canonical_root(artifact_root)?;
+    let preflight_bytes = read_artifact(&root, "preflight.json", MAX_PREFLIGHT_BYTES)?;
+    let recorded_preflight: PublicIdCensusPreflight = serde_json::from_slice(&preflight_bytes)
+        .map_err(|error| format!("invalid public-ID census preflight artifact: {error}"))?;
+    if recorded_preflight != preflight {
+        return Err("public-ID census preflight artifact differs from replay".to_string());
+    }
     let exchanges = exchange_paths
         .iter()
         .enumerate()
@@ -143,6 +156,8 @@ pub fn prepare_public_id_census_manifest(
         policy_sha256: public_id_census_policy_sha256(&policy)?,
         policy,
         preflight,
+        preflight_artifact_path: "preflight.json".to_string(),
+        preflight_artifact_sha256: sha256(&preflight_bytes),
         exchanges,
         frames,
         listed_repository_count: derived.listed_repository_count,
@@ -168,6 +183,7 @@ pub fn validate_public_id_census_manifest(
     validate_public_id_census_policy(&manifest.policy)?;
     require_sha256(&manifest.policy_sha256)?;
     require_sha256(&manifest.manifest_sha256)?;
+    require_sha256(&manifest.preflight_artifact_sha256)?;
     if manifest.policy_sha256 != public_id_census_policy_sha256(&manifest.policy)?
         || manifest.manifest_sha256 != manifest.computed_manifest_sha256()?
         || manifest.exchanges.is_empty()
@@ -178,6 +194,22 @@ pub fn validate_public_id_census_manifest(
     let root = canonical_root(artifact_root)?;
     let mut paths = HashSet::new();
     let mut frame_files = HashSet::new();
+    if manifest.preflight_artifact_path != "preflight.json" {
+        return Err("public-ID census preflight artifact path changed".to_string());
+    }
+    let preflight_bytes = read_artifact(
+        &root,
+        &manifest.preflight_artifact_path,
+        MAX_PREFLIGHT_BYTES,
+    )?;
+    let recorded_preflight: PublicIdCensusPreflight = serde_json::from_slice(&preflight_bytes)
+        .map_err(|error| format!("invalid public-ID census preflight artifact: {error}"))?;
+    if sha256(&preflight_bytes) != manifest.preflight_artifact_sha256
+        || recorded_preflight != manifest.preflight
+    {
+        return Err("public-ID census preflight artifact commitment changed".to_string());
+    }
+    paths.insert(resolve_artifact(&root, &manifest.preflight_artifact_path)?);
     for (sequence, exchange) in manifest.exchanges.iter().enumerate() {
         require_sha256(&exchange.artifact_sha256)?;
         let resolved = resolve_artifact(&root, &exchange.artifact_path)?;
@@ -247,7 +279,7 @@ fn canonical_root(root: &Path) -> Result<PathBuf, String> {
         .map_err(|error| format!("failed to resolve public-ID census artifact root: {error}"))
 }
 
-fn read_artifact(root: &Path, relative: &str, limit: u64) -> Result<Vec<u8>, String> {
+pub(super) fn read_artifact(root: &Path, relative: &str, limit: u64) -> Result<Vec<u8>, String> {
     let path = resolve_artifact(root, relative)?;
     let file = fs::File::open(&path)
         .map_err(|error| format!("failed to open public-ID census artifact: {error}"))?;

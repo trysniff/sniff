@@ -39,6 +39,11 @@ fn fixture() -> (TestRoot, PublicIdCensusManifest) {
     let preflight = super::super::replay::tests::preflight_fixture();
     let exchanges = super::super::replay::tests::transcript();
     let derived = super::super::replay_public_id_census(&policy, &preflight, &exchanges).unwrap();
+    fs::write(
+        root.0.join("preflight.json"),
+        serde_json::to_vec(&preflight).unwrap(),
+    )
+    .unwrap();
     fs::create_dir(root.0.join("raw")).unwrap();
     fs::create_dir(root.0.join("frames")).unwrap();
     let exchange_paths = exchanges
@@ -99,6 +104,16 @@ fn rejects_changed_or_missing_raw_exchange() {
     assert!(validate_public_id_census_manifest(&manifest, &root.0).is_err());
     let (root, manifest) = fixture();
     fs::remove_file(root.0.join(&manifest.exchanges[0].artifact_path)).unwrap();
+    assert!(validate_public_id_census_manifest(&manifest, &root.0).is_err());
+}
+
+#[test]
+fn rejects_changed_or_missing_preflight_artifact() {
+    let (root, manifest) = fixture();
+    fs::remove_file(root.0.join("preflight.json")).unwrap();
+    assert!(validate_public_id_census_manifest(&manifest, &root.0).is_err());
+    let (root, manifest) = fixture();
+    fs::write(root.0.join("preflight.json"), b"{}" as &[u8]).unwrap();
     assert!(validate_public_id_census_manifest(&manifest, &root.0).is_err());
 }
 
