@@ -700,6 +700,9 @@ fn parse_next_since(
         ) {
             return Err("public-ID census Link relation is unsupported".to_string());
         }
+        if rel == "rel=\"first\"" && raw_url == format!("{}{{?since}}", policy.source) {
+            continue;
+        }
         let url = Url::parse(raw_url)
             .map_err(|error| format!("invalid public-ID census next URL: {error}"))?;
         let expected = Url::parse(&policy.source).map_err(|error| error.to_string())?;
