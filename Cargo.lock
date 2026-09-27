@@ -2152,6 +2152,7 @@ dependencies = [
  "reqwest",
  "rustpython-ast",
  "rustpython-parser",
+ "same-file",
  "scip",
  "serde",
  "serde_json",
