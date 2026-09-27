@@ -4,10 +4,10 @@ use super::{
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 pub const PUBLIC_ID_CENSUS_GRAPHQL_QUERY: &str = "query PublicIdCensusNodes($ids:[ID!]!){nodes(ids:$ids){__typename ... on Repository{id databaseId nameWithOwner createdAt primaryLanguage{name} isArchived isFork isTemplate mirrorUrl isPrivate}}}";
-pub const PUBLIC_ID_CENSUS_POLICY_COMMIT_SHA: &str = "6e0cbc8eb211d12d15b4428b8a648024f0aad82a";
+pub const PUBLIC_ID_CENSUS_POLICY_COMMIT_SHA: &str = "50c38d47e2d73db748b1a11f1b063b48ca4c5041";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -67,7 +67,7 @@ pub struct PublicIdCensusReplay {
     pub upper_boundary_repository_id: u64,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 struct RestRepository {
     id: u64,
     node_id: String,
@@ -86,7 +86,7 @@ struct GraphqlData {
     nodes: Vec<Option<GraphqlRepository>>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct GraphqlRepository {
     #[serde(rename = "__typename")]
@@ -103,7 +103,7 @@ struct GraphqlRepository {
     is_private: bool,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 struct GraphqlLanguage {
     name: String,
 }
@@ -147,6 +147,7 @@ where
         policy,
         exchanges: exchanges.into_iter(),
         last_received_at: preflight.fetched_at_utc.clone(),
+        probe_cache: HashMap::new(),
     };
     let start = policy.created_at_or_after_utc.as_str();
     let end = policy.created_before_utc.as_str();
@@ -213,12 +214,7 @@ where
         if page.repositories.is_empty() {
             return Err("public-ID census crawl ended before the upper time boundary".to_string());
         }
-        let node_ids = page
-            .repositories
-            .iter()
-            .map(|repository| repository.node_id.clone())
-            .collect::<Vec<_>>();
-        let metadata = replay.graphql(&node_ids, &page.repositories)?;
+        let metadata = replay.enrich_page(&page.repositories)?;
         let mut crossing_id = None;
         for (listed, repository) in page.repositories.iter().zip(metadata) {
             if repository.created_at > page.received_at_utc {
@@ -315,6 +311,7 @@ struct ReplayCursor<'a, I> {
     policy: &'a PublicIdCensusPolicy,
     exchanges: I,
     last_received_at: String,
+    probe_cache: HashMap<u64, GraphqlRepository>,
 }
 
 impl<I> ReplayCursor<'_, I>
@@ -326,14 +323,23 @@ where
         let Some(first) = page.repositories.first() else {
             return Ok(None);
         };
-        let metadata = self.graphql(
-            std::slice::from_ref(&first.node_id),
-            std::slice::from_ref(first),
-        )?;
-        let repository = metadata
-            .into_iter()
-            .next()
-            .ok_or("public-ID census probe has no GraphQL repository")?;
+        let repository = if let Some(cached) = self.probe_cache.get(&first.id) {
+            if cached.id != first.node_id {
+                return Err("public-ID census probe node identity changed".to_string());
+            }
+            cached.clone()
+        } else {
+            let repository = self
+                .graphql(
+                    std::slice::from_ref(&first.node_id),
+                    std::slice::from_ref(first),
+                )?
+                .into_iter()
+                .next()
+                .ok_or("public-ID census probe has no GraphQL repository")?;
+            self.probe_cache.insert(first.id, repository.clone());
+            repository
+        };
         if repository.created_at > page.received_at_utc {
             return Err("public-ID census REST probe predates its first repository".to_string());
         }
@@ -341,6 +347,39 @@ where
             id: first.id,
             created_at: repository.created_at,
         }))
+    }
+
+    fn enrich_page(&mut self, listed: &[RestRepository]) -> Result<Vec<GraphqlRepository>, String> {
+        let unknown = listed
+            .iter()
+            .filter(|repository| !self.probe_cache.contains_key(&repository.id))
+            .cloned()
+            .collect::<Vec<_>>();
+        let fetched = if unknown.is_empty() {
+            Vec::new()
+        } else {
+            let node_ids = unknown
+                .iter()
+                .map(|repository| repository.node_id.clone())
+                .collect::<Vec<_>>();
+            self.graphql(&node_ids, &unknown)?
+        };
+        let mut fetched = fetched.into_iter();
+        listed
+            .iter()
+            .map(|repository| {
+                if let Some(cached) = self.probe_cache.get(&repository.id) {
+                    if cached.id != repository.node_id {
+                        return Err("public-ID census crawl node identity changed".to_string());
+                    }
+                    Ok(cached.clone())
+                } else {
+                    fetched
+                        .next()
+                        .ok_or("public-ID census GraphQL page has missing metadata".to_string())
+                }
+            })
+            .collect()
     }
 
     fn rest(&mut self, since: u64) -> Result<RestPage, String> {

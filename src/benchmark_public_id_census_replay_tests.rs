@@ -137,15 +137,12 @@ fn transcript() -> Vec<PublicIdCensusExchange> {
         rest(0, &rows),
         graphql(&rows[..1]),
         rest(1, &rows),
-        graphql(&rows[..1]),
         rest(2, &rows),
         graphql(&rows[1..2]),
         rest(1, &rows),
-        graphql(&rows[..1]),
         rest(2, &rows),
-        graphql(&rows[1..2]),
         rest(1, &rows),
-        graphql(&rows),
+        graphql(&rows[2..]),
     ]
 }
 
@@ -201,20 +198,41 @@ fn derives_six_frames_from_one_ordered_transcript() {
 }
 
 #[test]
+fn observes_each_rest_id_through_graphql_once() {
+    let policy = committed_public_id_census_policy().unwrap();
+    let exchanges = transcript();
+    let observed = exchanges
+        .iter()
+        .filter_map(|exchange| match &exchange.request {
+            PublicIdCensusRequest::Graphql { node_ids } => Some(node_ids.iter()),
+            PublicIdCensusRequest::Rest { .. } => None,
+        })
+        .flatten()
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(observed, ["node-2", "node-3", "node-4", "node-5"]);
+    assert!(replay_fixture(&policy, &exchanges).is_ok());
+
+    let mut repeated = exchanges;
+    repeated.insert(3, graphql(&repositories()[..1]));
+    assert!(replay_fixture(&policy, &repeated).is_err());
+}
+
+#[test]
 fn rejects_null_or_mismatched_graphql_node() {
     let policy = committed_public_id_census_policy().unwrap();
     let mut exchanges = transcript();
     let mut response: serde_json::Value =
-        serde_json::from_str(&exchanges[11].response_body).unwrap();
-    response["data"]["nodes"][1] = serde_json::Value::Null;
-    replace_response(&mut exchanges[11], response);
+        serde_json::from_str(&exchanges[8].response_body).unwrap();
+    response["data"]["nodes"][0] = serde_json::Value::Null;
+    replace_response(&mut exchanges[8], response);
     assert!(replay_fixture(&policy, &exchanges).is_err());
 
     let mut exchanges = transcript();
     let mut response: serde_json::Value =
-        serde_json::from_str(&exchanges[11].response_body).unwrap();
-    response["data"]["nodes"][1]["databaseId"] = serde_json::json!(99);
-    replace_response(&mut exchanges[11], response);
+        serde_json::from_str(&exchanges[8].response_body).unwrap();
+    response["data"]["nodes"][0]["databaseId"] = serde_json::json!(99);
+    replace_response(&mut exchanges[8], response);
     assert!(replay_fixture(&policy, &exchanges).is_err());
 }
 
@@ -233,10 +251,10 @@ fn rejects_incomplete_or_extended_transcript() {
 fn rejects_uncommitted_page_or_wrong_cursor() {
     let policy = committed_public_id_census_policy().unwrap();
     let mut exchanges = transcript();
-    exchanges[10].response_sha256 = "0".repeat(64);
+    exchanges[7].response_sha256 = "0".repeat(64);
     assert!(replay_fixture(&policy, &exchanges).is_err());
     let mut exchanges = transcript();
-    exchanges[10].request = PublicIdCensusRequest::Rest { since: 2 };
+    exchanges[7].request = PublicIdCensusRequest::Rest { since: 2 };
     assert!(replay_fixture(&policy, &exchanges).is_err());
 }
 
@@ -245,16 +263,16 @@ fn rejects_creation_order_inversion_and_private_node() {
     let policy = committed_public_id_census_policy().unwrap();
     let mut exchanges = transcript();
     let mut response: serde_json::Value =
-        serde_json::from_str(&exchanges[11].response_body).unwrap();
-    response["data"]["nodes"][2]["createdAt"] = serde_json::json!("2026-08-07T23:00:00Z");
-    replace_response(&mut exchanges[11], response);
+        serde_json::from_str(&exchanges[8].response_body).unwrap();
+    response["data"]["nodes"][0]["createdAt"] = serde_json::json!("2026-08-07T23:00:00Z");
+    replace_response(&mut exchanges[8], response);
     assert!(replay_fixture(&policy, &exchanges).is_err());
 
     let mut exchanges = transcript();
     let mut response: serde_json::Value =
-        serde_json::from_str(&exchanges[11].response_body).unwrap();
-    response["data"]["nodes"][2]["isPrivate"] = serde_json::Value::Bool(true);
-    replace_response(&mut exchanges[11], response);
+        serde_json::from_str(&exchanges[8].response_body).unwrap();
+    response["data"]["nodes"][0]["isPrivate"] = serde_json::Value::Bool(true);
+    replace_response(&mut exchanges[8], response);
     assert!(replay_fixture(&policy, &exchanges).is_err());
 }
 
@@ -273,7 +291,7 @@ fn rejects_missing_or_changed_public_preflight() {
 fn validates_retry_evidence_and_limit() {
     let policy = committed_public_id_census_policy().unwrap();
     let mut exchanges = transcript();
-    let crawl = &mut exchanges[10];
+    let crawl = &mut exchanges[7];
     crawl.failed_attempts.push(PublicIdCensusFailedAttempt {
         request: crawl.request.clone(),
         request_url: crawl.request_url.clone(),
@@ -286,10 +304,10 @@ fn validates_retry_evidence_and_limit() {
         transport_error: None,
     });
     assert!(replay_fixture(&policy, &exchanges).is_ok());
-    exchanges[10].failed_attempts[0].response_status = Some(404);
+    exchanges[7].failed_attempts[0].response_status = Some(404);
     assert!(replay_fixture(&policy, &exchanges).is_err());
-    exchanges[10].failed_attempts[0].response_status = Some(429);
-    exchanges[10].failed_attempts = vec![exchanges[10].failed_attempts[0].clone(); 12];
+    exchanges[7].failed_attempts[0].response_status = Some(429);
+    exchanges[7].failed_attempts = vec![exchanges[7].failed_attempts[0].clone(); 12];
     assert!(replay_fixture(&policy, &exchanges).is_err());
 }
 
@@ -301,13 +319,13 @@ fn rejects_short_page_with_next_and_malformed_final_link() {
         {"id": 2, "node_id": "node-2", "full_name": "before/repo"},
         {"id": 3, "node_id": "node-3", "full_name": "go/repo"},
     ]);
-    replace_response(&mut exchanges[10], short);
-    exchanges[10].response_link = Some(
+    replace_response(&mut exchanges[7], short);
+    exchanges[7].response_link = Some(
         "<https://api.github.com/repositories?per_page=100&since=3>; rel=\"next\"".to_string(),
     );
     assert!(replay_fixture(&policy, &exchanges).is_err());
     let mut exchanges = transcript();
-    exchanges[10].response_link = Some("not a Link header".to_string());
+    exchanges[7].response_link = Some("not a Link header".to_string());
     assert!(replay_fixture(&policy, &exchanges).is_err());
 }
 
@@ -316,9 +334,9 @@ fn rejects_impossible_utc_creation_time() {
     let policy = committed_public_id_census_policy().unwrap();
     let mut exchanges = transcript();
     let mut response: serde_json::Value =
-        serde_json::from_str(&exchanges[11].response_body).unwrap();
-    response["data"]["nodes"][2]["createdAt"] = serde_json::json!("2026-08-14T99:99:99Z");
-    replace_response(&mut exchanges[11], response);
+        serde_json::from_str(&exchanges[8].response_body).unwrap();
+    response["data"]["nodes"][0]["createdAt"] = serde_json::json!("2026-08-14T99:99:99Z");
+    replace_response(&mut exchanges[8], response);
     assert!(replay_fixture(&policy, &exchanges).is_err());
 }
 
@@ -328,8 +346,8 @@ fn rejects_crawl_that_omits_the_probed_first_in_window_repository() {
     let mut exchanges = transcript();
     let rows = repositories();
     let omitted = [rows[0].clone(), rows[2].clone(), rows[3].clone()];
-    exchanges[10] = rest(1, &omitted);
-    exchanges[11] = graphql(&omitted);
+    exchanges[7] = rest(1, &omitted);
+    exchanges[8] = graphql(&omitted[1..]);
     assert!(replay_fixture(&policy, &exchanges).is_err());
 }
 
@@ -337,7 +355,7 @@ fn rejects_crawl_that_omits_the_probed_first_in_window_repository() {
 fn rejects_unclassified_transport_retry() {
     let policy = committed_public_id_census_policy().unwrap();
     let mut exchanges = transcript();
-    let crawl = &mut exchanges[10];
+    let crawl = &mut exchanges[7];
     crawl.failed_attempts.push(PublicIdCensusFailedAttempt {
         request: crawl.request.clone(),
         request_url: crawl.request_url.clone(),
@@ -358,12 +376,12 @@ fn rejects_omitted_nullable_metadata_fields() {
     for field in ["mirrorUrl", "primaryLanguage"] {
         let mut exchanges = transcript();
         let mut response: serde_json::Value =
-            serde_json::from_str(&exchanges[11].response_body).unwrap();
-        response["data"]["nodes"][1]
+            serde_json::from_str(&exchanges[8].response_body).unwrap();
+        response["data"]["nodes"][0]
             .as_object_mut()
             .unwrap()
             .remove(field);
-        replace_response(&mut exchanges[11], response);
+        replace_response(&mut exchanges[8], response);
         assert!(replay_fixture(&policy, &exchanges).is_err(), "{field}");
     }
 }
@@ -373,9 +391,9 @@ fn rejects_creation_after_graphql_receipt() {
     let policy = committed_public_id_census_policy().unwrap();
     let mut exchanges = transcript();
     let mut response: serde_json::Value =
-        serde_json::from_str(&exchanges[11].response_body).unwrap();
-    response["data"]["nodes"][3]["createdAt"] = serde_json::json!("2026-09-28T00:00:00Z");
-    replace_response(&mut exchanges[11], response);
+        serde_json::from_str(&exchanges[8].response_body).unwrap();
+    response["data"]["nodes"][1]["createdAt"] = serde_json::json!("2026-09-28T00:00:00Z");
+    replace_response(&mut exchanges[8], response);
     assert!(replay_fixture(&policy, &exchanges).is_err());
 }
 
@@ -401,15 +419,12 @@ fn follows_a_full_page_next_cursor_into_the_upper_boundary_page() {
         rest(0, &rows),
         graphql(&rows[..1]),
         rest(1, &rows),
-        graphql(&rows[..1]),
         rest(2, &rows),
         graphql(&rows[1..2]),
         rest(1, &rows),
-        graphql(&rows[..1]),
         rest(2, &rows),
-        graphql(&rows[1..2]),
         rest(1, &rows),
-        graphql(&rows[..100]),
+        graphql(&rows[2..100]),
         rest(101, &rows),
         graphql(&rows[100..]),
     ];
@@ -430,9 +445,9 @@ fn rejects_rest_listing_before_repository_creation() {
     let policy = committed_public_id_census_policy().unwrap();
     let mut exchanges = transcript();
     let mut response: serde_json::Value =
-        serde_json::from_str(&exchanges[11].response_body).unwrap();
-    response["data"]["nodes"][3]["createdAt"] = serde_json::json!("2026-09-28T00:00:00Z");
-    replace_response(&mut exchanges[11], response);
-    exchanges[11].received_at_utc = "2026-09-29T00:00:00Z".to_string();
+        serde_json::from_str(&exchanges[8].response_body).unwrap();
+    response["data"]["nodes"][1]["createdAt"] = serde_json::json!("2026-09-28T00:00:00Z");
+    replace_response(&mut exchanges[8], response);
+    exchanges[8].received_at_utc = "2026-09-29T00:00:00Z".to_string();
     assert!(replay_fixture(&policy, &exchanges).is_err());
 }
