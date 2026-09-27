@@ -570,6 +570,21 @@ fn model_protocol_is_distinct_from_the_human_review_authority() {
             .contains("immutable GitHub commit")
     );
 
+    let mut encoded_prompt = model.clone();
+    encoded_prompt
+        .model_review_policy
+        .as_mut()
+        .unwrap()
+        .prompt_public_url = format!(
+        "https://raw.githubusercontent.com/trysniff/sniff/{}/agent%20prompt.md",
+        "0".repeat(40)
+    );
+    assert!(
+        seal_historical_v3_protocol(encoded_prompt)
+            .unwrap_err()
+            .contains("immutable GitHub commit")
+    );
+
     let mut mixed = model.clone();
     mixed.human_review_policy = human.human_review_policy.clone();
     assert!(

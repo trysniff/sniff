@@ -339,19 +339,33 @@ fn validate_immutable_prompt_url(value: &str) -> Result<(), String> {
         || url.password().is_some()
         || url.query().is_some()
         || url.fragment().is_some()
+        || url.as_str() != value
         || segments.len() < 4
-        || segments[..2].iter().any(|segment| segment.is_empty())
+        || segments[..2]
+            .iter()
+            .any(|segment| !safe_prompt_url_segment(segment))
         || segments[2].len() != 40
         || !segments[2]
             .bytes()
             .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
-        || segments[3..].iter().any(|segment| segment.is_empty())
+        || segments[3..]
+            .iter()
+            .any(|segment| !safe_prompt_url_segment(segment))
     {
         return Err(
             "historical-v3 agent prompt URL must name an immutable GitHub commit".to_string(),
         );
     }
     Ok(())
+}
+
+fn safe_prompt_url_segment(segment: &str) -> bool {
+    !segment.is_empty()
+        && segment != "."
+        && segment != ".."
+        && segment
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
 }
 
 fn validate_human_review_policy(policy: &HistoricalV3HumanReviewPolicy) -> Result<(), String> {
