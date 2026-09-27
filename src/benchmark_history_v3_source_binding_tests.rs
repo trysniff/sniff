@@ -204,6 +204,7 @@ pub(crate) fn protocol(
                 repository_count: fixture.manifest.repository_count,
             })
             .collect(),
+        source_kind: None,
         candidate_window: HistoricalV3CandidateWindow {
             merged_at_or_after_utc: "2025-01-01T00:00:00Z".to_string(),
             merged_before_utc: "2026-01-01T00:00:00Z".to_string(),

@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 
 pub const HISTORICAL_V3_PROTOCOL_SCHEMA_VERSION: u32 = 6;
 pub const HISTORICAL_V3_MODEL_PROTOCOL_SCHEMA_VERSION: u32 = 7;
+pub const HISTORICAL_V3_PUBLIC_ID_CENSUS_PROTOCOL_SCHEMA_VERSION: u32 = 8;
 pub const HISTORICAL_V3_REPOSITORY_CREATED_AFTER_UTC: &str = "2026-08-07T20:46:11Z";
 pub const HISTORICAL_V3_STREAM_TASK_SCHEMA_VERSION: u32 = 1;
 
@@ -25,6 +26,12 @@ impl HistoricalV3Language {
         Self::Rust,
         Self::TypeScript,
     ];
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HistoricalV3SourceKind {
+    PublicIdCensus,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -272,6 +279,8 @@ pub struct HistoricalV3Protocol {
     pub repository_created_after_utc: String,
     pub languages: Vec<HistoricalV3Language>,
     pub source_frames: Vec<HistoricalV3SourceFrameBinding>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_kind: Option<HistoricalV3SourceKind>,
     pub candidate_window: HistoricalV3CandidateWindow,
     pub allowed_metadata_fields: Vec<HistoricalV3AllowedMetadataField>,
     pub forbidden_metadata_fields: Vec<HistoricalV3ForbiddenMetadataField>,

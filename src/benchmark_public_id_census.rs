@@ -3,13 +3,14 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
 #[path = "benchmark_public_id_census_replay.rs"]
-mod replay;
+pub(crate) mod replay;
 
 pub use replay::*;
 
 #[path = "benchmark_public_id_census_manifest.rs"]
 mod manifest;
 
+pub(crate) use manifest::read_public_id_census_artifact;
 pub use manifest::*;
 
 #[path = "benchmark_public_id_census_lock.rs"]

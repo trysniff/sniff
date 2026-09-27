@@ -27,6 +27,7 @@ fn protocol() -> HistoricalV3Protocol {
         repository_created_after_utc: HISTORICAL_V3_REPOSITORY_CREATED_AFTER_UTC.to_string(),
         languages: HistoricalV3Language::ALL.to_vec(),
         source_frames,
+        source_kind: None,
         candidate_window: HistoricalV3CandidateWindow {
             merged_at_or_after_utc: "2025-01-01T00:00:00Z".to_string(),
             merged_before_utc: "2026-01-01T00:00:00Z".to_string(),
@@ -600,4 +601,55 @@ fn model_protocol_is_distinct_from_the_human_review_authority() {
             .unwrap_err()
             .contains("cannot authorize model review")
     );
+}
+
+#[test]
+fn public_id_census_protocol_requires_one_explicit_six_language_source() {
+    let policy = committed_public_id_census_policy().unwrap();
+    let policy_sha256 = public_id_census_policy_sha256(&policy).unwrap();
+    let mut census = protocol();
+    census.schema_version = HISTORICAL_V3_PUBLIC_ID_CENSUS_PROTOCOL_SCHEMA_VERSION;
+    census.protocol_contract = PUBLIC_ID_CENSUS_PROTOCOL_CONTRACT.to_string();
+    census.source_kind = Some(HistoricalV3SourceKind::PublicIdCensus);
+    census.human_review_policy = None;
+    census.model_review_policy = Some(HistoricalV3ModelReviewPolicy {
+        source_only_review: true,
+        independent_reviewers: 2,
+        approved_prompt_sha256: sha('a'),
+        prompt_public_url:
+            "https://raw.githubusercontent.com/trysniff/sniff/0000000000000000000000000000000000000000/sniffbench/HISTORICAL_V3_AGENT_REVIEW_PROMPT.md".to_string(),
+        exact_presented_material_record_required: true,
+        invocation_response_record_required: true,
+        disagreements_remain_unresolved: true,
+        human_gold_claim_forbidden: true,
+    });
+    census.model_access_forbidden = false;
+    for (frame, language) in census.source_frames.iter_mut().zip(&policy.languages) {
+        frame.frame_id = policy.frame_ids[language].clone();
+        frame.policy_sha256 = policy_sha256.clone();
+        frame.manifest_sha256 = sha('b');
+    }
+    let census = seal_historical_v3_protocol(census).unwrap();
+    validate_historical_v3_protocol(&census).unwrap();
+    assert_eq!(
+        census.source_kind,
+        Some(HistoricalV3SourceKind::PublicIdCensus)
+    );
+
+    let mut absent = census.clone();
+    absent.source_kind = None;
+    assert!(seal_historical_v3_protocol(absent).is_err());
+    let mut mixed = census.clone();
+    mixed.source_frames[1].manifest_sha256 = sha('c');
+    assert!(seal_historical_v3_protocol(mixed).is_err());
+    let mut wrong_frame = census.clone();
+    wrong_frame.source_frames[1].frame_id = "search-derived-frame".to_string();
+    assert!(seal_historical_v3_protocol(wrong_frame).is_err());
+    let mut zero_count = census.clone();
+    zero_count.source_frames[0].repository_count = 0;
+    assert!(seal_historical_v3_protocol(zero_count).is_err());
+    let mut search = census;
+    search.schema_version = HISTORICAL_V3_MODEL_PROTOCOL_SCHEMA_VERSION;
+    search.protocol_contract = MODEL_PROTOCOL_CONTRACT.to_string();
+    assert!(seal_historical_v3_protocol(search).is_err());
 }

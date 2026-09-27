@@ -1,8 +1,9 @@
-use super::HistoricalV3Language;
+use super::{HistoricalV3Language, HistoricalV3SourceKind};
 use serde::{Deserialize, Serialize};
 
 pub const HISTORICAL_V3_PRIOR_IDENTITY_SEAL_SCHEMA_VERSION: u32 = 1;
 pub const HISTORICAL_V3_SOURCE_BINDING_AUDIT_SCHEMA_VERSION: u32 = 2;
+pub const HISTORICAL_V3_PUBLIC_ID_CENSUS_AUDIT_SCHEMA_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -40,6 +41,10 @@ pub struct HistoricalV3SourceBindingAudit {
     pub audit_contract: String,
     pub protocol_sha256: String,
     pub prior_benchmark_identity_seal_sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_kind: Option<HistoricalV3SourceKind>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_manifest_sha256: Option<String>,
     pub frames: Vec<HistoricalV3BoundSourceFrame>,
     pub audit_sha256: String,
 }

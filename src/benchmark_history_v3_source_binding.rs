@@ -5,7 +5,8 @@ pub use schema::*;
 
 use super::{
     HISTORICAL_V3_REPOSITORY_CREATED_AFTER_UTC, HistoricalV3Language, HistoricalV3Protocol,
-    SourceFrameCollectionManifest, validate_historical_v3_protocol, validate_source_frame_manifest,
+    HistoricalV3SourceKind, SourceFrameCollectionManifest, validate_historical_v3_protocol,
+    validate_source_frame_manifest,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -76,6 +77,9 @@ pub fn bind_historical_v3_source_frames(
     artifacts: &[HistoricalV3SourceFrameArtifact<'_>],
 ) -> Result<HistoricalV3SourceBindingAudit, String> {
     validate_historical_v3_protocol(protocol)?;
+    if protocol.source_kind.is_some() {
+        return Err("historical-v3 census protocol cannot bind Search source frames".to_string());
+    }
     validate_historical_v3_prior_identity_seal(prior_identities)?;
     if protocol.prior_benchmark_identity_seal_sha256 != prior_identities.seal_sha256 {
         return Err("historical-v3 protocol is bound to another prior identity seal".to_string());
@@ -151,6 +155,8 @@ pub fn bind_historical_v3_source_frames(
         audit_contract: SOURCE_BINDING_AUDIT_CONTRACT.to_string(),
         protocol_sha256: protocol.protocol_sha256.clone(),
         prior_benchmark_identity_seal_sha256: prior_identities.seal_sha256.clone(),
+        source_kind: None,
+        source_manifest_sha256: None,
         frames,
         audit_sha256: String::new(),
     };
@@ -165,12 +171,19 @@ pub fn validate_historical_v3_source_binding_audit(
     audit: &HistoricalV3SourceBindingAudit,
 ) -> Result<(), String> {
     validate_historical_v3_protocol(protocol)?;
+    if protocol.source_kind.is_some() {
+        return Err(
+            "historical-v3 census protocol cannot validate a Search source audit".to_string(),
+        );
+    }
     validate_historical_v3_prior_identity_seal(prior_identities)?;
     require_sha256("historical-v3 source binding audit", &audit.audit_sha256)?;
     if audit.schema_version != HISTORICAL_V3_SOURCE_BINDING_AUDIT_SCHEMA_VERSION
         || audit.audit_contract != SOURCE_BINDING_AUDIT_CONTRACT
         || audit.protocol_sha256 != protocol.protocol_sha256
         || audit.prior_benchmark_identity_seal_sha256 != prior_identities.seal_sha256
+        || audit.source_kind.is_some()
+        || audit.source_manifest_sha256.is_some()
         || audit.frames.len() != protocol.languages.len()
         || audit.audit_sha256 != compute_source_binding_audit_sha256(audit)?
     {
