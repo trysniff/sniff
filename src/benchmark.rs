@@ -687,10 +687,16 @@ pub use release::{
 };
 
 pub use release::{
-    PUBLIC_ID_CENSUS_GRAPHQL_QUERY, PUBLIC_ID_CENSUS_POLICY_COMMIT_SHA, PublicIdCensusExchange,
-    PublicIdCensusFailedAttempt, PublicIdCensusPreflight, PublicIdCensusReplay,
-    PublicIdCensusRequest, public_id_census_graphql_body, replay_public_id_census,
-    replay_public_id_census_stream,
+    PUBLIC_ID_CENSUS_GRAPHQL_QUERY, PUBLIC_ID_CENSUS_MAX_FRAME_BYTES,
+    PUBLIC_ID_CENSUS_POLICY_COMMIT_SHA, PublicIdCensusExchange, PublicIdCensusFailedAttempt,
+    PublicIdCensusPreflight, PublicIdCensusReplay, PublicIdCensusRequest,
+    public_id_census_graphql_body, replay_public_id_census, replay_public_id_census_stream,
+};
+
+pub use release::{
+    PUBLIC_ID_CENSUS_MANIFEST_SCHEMA_VERSION, PublicIdCensusExchangeCommitment,
+    PublicIdCensusFrameCommitment, PublicIdCensusManifest, prepare_public_id_census_manifest,
+    validate_public_id_census_manifest,
 };
 
 /// One labeled unit in a SniffBench corpus. The label is hidden from the
