@@ -1088,6 +1088,11 @@ mod source_frame;
 
 pub use source_frame::*;
 
+#[path = "benchmark_public_id_census.rs"]
+mod public_id_census;
+
+pub use public_id_census::*;
+
 #[path = "benchmark_source_assessment.rs"]
 mod source_assessment;
 

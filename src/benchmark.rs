@@ -680,6 +680,12 @@ pub use release::{
     write_historical_v2_selected_payloads,
 };
 
+pub use release::{
+    PUBLIC_ID_CENSUS_POLICY_SCHEMA_VERSION, PublicIdCensusPolicy,
+    committed_public_id_census_policy, public_id_census_policy_sha256,
+    validate_public_id_census_policy,
+};
+
 /// One labeled unit in a SniffBench corpus. The label is hidden from the
 /// analyzer during a run and is used only after predictions are collected.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
