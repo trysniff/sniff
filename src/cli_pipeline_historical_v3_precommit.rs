@@ -356,6 +356,19 @@ pub(super) fn validate_public_precommit(bound: &BoundInputs) -> Result<(), Strin
     Ok(())
 }
 
+pub(super) fn verified_agent_prompt_bytes(bound: &BoundInputs) -> Result<Vec<u8>, String> {
+    validate_public_precommit(bound)?;
+    let proof: PublicPrecommitProof = store::read_json(
+        &bound.root.join("public-precommit-proof.json"),
+        MAX_PROOF_BYTES,
+        "public precommit proof",
+    )?;
+    let prompt = proof
+        .agent_prompt
+        .ok_or_else(|| "historical-v3 protocol has no agent prompt".to_string())?;
+    verified_fetched_bytes(&prompt)
+}
+
 fn verified_fetched_bytes(proof: &PublicArtifactProof) -> Result<Vec<u8>, String> {
     verified_encoded_bytes(&proof.fetched_base64, &proof.fetched_sha256)
 }

@@ -91,6 +91,9 @@ unauthenticated GitHub commit objects, exact protocol bytes, and the semantic
 content of each policy. A self-hash or a branch URL is not sufficient. A proof
 of those public responses is retained under the operator root for strict
 offline replay.
+For a model-judged v7 protocol, publish the exact agent prompt at an immutable
+public commit too. `preflight` pins its bytes and checks the protocol's approved
+prompt SHA-256; missing or changed prompt bytes fail before candidate collection.
 
 The operator config JSON has these required fields:
 
@@ -119,17 +122,15 @@ proof is replay-validated offline rather than silently replaced. `collect`
 requires that proof and never fetches it implicitly; it resumes retained raw
 pages and never calls a model. `status` is a read-only replay. `advance`
 performs exactly one verified stage; `run` stops at
-the current rank's human-review handoff, a terminal stop, or its step cap.
+the current rank's authorized human- or agent-review handoff, a terminal stop,
+or its step cap.
 Operational failures keep the same rank open for retry.
 
 ## Independent Review
 
-The separate [agent-review prompt](HISTORICAL_V3_AGENT_REVIEW_PROMPT.md)
-and model-judged artifact schema are preparatory development evidence only.
-The operator commands below still enforce the human-only protocol. Do not
-claim an agent is a human reviewer or submit agent judgments through these
-commands; explicit operator routing and a distinct model-judged resolution
-policy are required before agent adjudication can advance a v3 rank.
+Human-only v6 and model-judged v7 are different protocol authorities. The
+human commands below reject v7; the agent commands reject v6. Do not submit
+agent judgments through a human worksheet or describe them as human gold.
 
 For a rank reported as `human_review`, prepare source-only worksheets, have
 two independent humans complete them separately, then validate and audit both.
@@ -147,3 +148,30 @@ sniff benchmark historical-v3 finalize-review operator-config.json python
 If the reviewers disagree, an independent resolver must complete the prepared
 resolution worksheet before finalization. The final label is bound to the
 exact rank and replayed before processing the next one.
+
+For a v7 rank reported as `agent_review`, prepare the exact source-only
+invocation, present its bytes separately to two fresh independent agents,
+and retain each agent's exact JSON response in a plain file. The CLI does not
+call a model provider. It validates and seals each raw response, checks the
+agents and runs are distinct, and audits both source-bound decisions:
+
+```console
+sniff benchmark historical-v3 prepare-agent-review operator-config.json python
+sniff benchmark historical-v3 submit-agent-review operator-config.json python 1 first-response.json
+sniff benchmark historical-v3 submit-agent-review operator-config.json python 2 second-response.json
+sniff benchmark historical-v3 audit-agent-review operator-config.json python
+```
+
+`prepare-agent-review` prints the path to `agent-invocation.json`; its exact
+bytes contain the approved prompt, its SHA-256, and the sealed source bundle.
+Present only that invocation to each reviewer, not the repository identity,
+change metadata, Sniff output, or the other review. The two response files
+must contain only the raw model JSON, not a paraphrase or an edited decision.
+Submissions for one rank are single-writer; retry a concurrent-lock error after
+the other submission completes rather than running both CLI writes at once.
+Malformed or incomplete responses fail; there is no substitute verdict.
+Agreement on a supported slop pattern may count as an accepted model-judged
+case. Disagreement and uncertainty remain visible and count against the
+review cap but not as accepted cases. Reviewer provenance fields are
+self-declared; this workflow is model-judged development evidence, not
+independent human gold or a measured Sniff precision score.

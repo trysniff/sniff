@@ -9,6 +9,8 @@ mod release;
 #[cfg(test)]
 pub(crate) use release::RELEASE_SCHEMA_VERSION;
 #[cfg(test)]
+pub(crate) use release::historical_v3_agent_review_fixture;
+#[cfg(test)]
 pub(crate) use release::historical_v3_review_fixture;
 #[cfg(test)]
 pub(crate) use release::historical_v3_source_fixture;
@@ -620,8 +622,9 @@ pub use release::{HistoricalV3ReviewRecordPaths, verify_historical_v3_final_revi
 pub use release::{
     HISTORICAL_V3_AGENT_REVIEW_SCHEMA_VERSION, HistoricalV3AgentReviewAudit,
     HistoricalV3AgentReviewLabel, HistoricalV3AgentReviewSubmission, HistoricalV3AgentReviewer,
-    audit_historical_v3_agent_reviews, seal_historical_v3_agent_review,
-    validate_historical_v3_agent_audit, validate_historical_v3_agent_review,
+    audit_historical_v3_agent_reviews, historical_v3_agent_invocation_request,
+    seal_historical_v3_agent_review, validate_historical_v3_agent_audit,
+    validate_historical_v3_agent_invocation, validate_historical_v3_agent_review,
 };
 
 pub use release::{

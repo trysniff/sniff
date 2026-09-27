@@ -4,12 +4,13 @@ use super::super::history_v3_label_review::tests::review_fixture;
 use super::super::{
     HistoricalV3NextStep, HistoricalV3OrderedRankOutcome, HistoricalV3ReplayProgress,
     HistoricalV3ReviewDisposition, HistoricalV3ReviewerVerdict, audit_historical_v3_agent_reviews,
-    audit_historical_v3_label_reviews, prepare_historical_v3_label_resolution,
-    prepare_historical_v3_stop_artifact, replay_historical_v3_ordered_progress,
-    resolve_historical_v3_label, seal_historical_v3_agent_review,
-    verify_historical_v3_stop_from_disk, write_historical_v3_final_label_new,
-    write_historical_v3_label_audit_new, write_historical_v3_label_worksheet_new,
-    write_historical_v3_resolution_worksheet_new, write_historical_v3_stop_artifact_new,
+    audit_historical_v3_label_reviews, historical_v3_agent_invocation_request,
+    prepare_historical_v3_label_resolution, prepare_historical_v3_stop_artifact,
+    replay_historical_v3_ordered_progress, resolve_historical_v3_label,
+    seal_historical_v3_agent_review, verify_historical_v3_stop_from_disk,
+    write_historical_v3_final_label_new, write_historical_v3_label_audit_new,
+    write_historical_v3_label_worksheet_new, write_historical_v3_resolution_worksheet_new,
+    write_historical_v3_stop_artifact_new,
 };
 use super::{
     HistoricalV3ReviewRecordPaths, verify_historical_v3_agent_review_from_disk,
@@ -154,6 +155,8 @@ async fn model_review_replays_raw_submissions_and_audit_without_human_records() 
             ..
         }
     ));
+    let invocation = historical_v3_agent_invocation_request(PROMPT, &fixture.bundle).unwrap();
+    std::fs::write(&paths.agent_invocation, invocation.as_bytes()).unwrap();
     std::fs::write(&paths.agent_one, serde_json::to_vec(&first).unwrap()).unwrap();
     assert!(matches!(
         progress().unwrap(),
@@ -202,6 +205,18 @@ async fn model_review_replays_raw_submissions_and_audit_without_human_records() 
         .unwrap(),
         stop
     );
+    std::fs::write(&paths.agent_invocation, b"{}").unwrap();
+    assert!(
+        verify_historical_v3_agent_review_from_disk(
+            inputs.protocol,
+            inputs.collection,
+            1,
+            fixture.journal_path(),
+            root.path(),
+        )
+        .is_err()
+    );
+    std::fs::write(&paths.agent_invocation, invocation.as_bytes()).unwrap();
     let mut altered = audit.clone();
     altered.audit_sha256 = "0".repeat(64);
     std::fs::write(&paths.agent_audit, serde_json::to_vec(&altered).unwrap()).unwrap();

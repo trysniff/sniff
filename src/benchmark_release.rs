@@ -494,6 +494,9 @@ mod history_v3_agent_review;
 
 pub use history_v3_agent_review::*;
 
+#[cfg(test)]
+pub(crate) use history_v3_agent_review::tests as historical_v3_agent_review_fixture;
+
 #[path = "benchmark_history_v3_label_resolution.rs"]
 mod history_v3_label_resolution;
 

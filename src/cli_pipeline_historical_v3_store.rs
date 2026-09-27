@@ -9,7 +9,6 @@ use crate::benchmark::{
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
 use std::ffi::OsString;
-#[cfg(unix)]
 use std::fs::File;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -189,9 +188,6 @@ fn load_unbound_with_prior(
     }
     let protocol = read_json(&config.protocol, MAX_INPUT_BYTES, "protocol")?;
     validate_historical_v3_protocol(&protocol)?;
-    if protocol.model_review_policy.is_some() {
-        return Err("historical-v3 model-judged operator is not wired; human commands cannot consume agent reviews".to_string());
-    }
     let prior = read_json(
         &config.prior_identity_seal,
         MAX_INPUT_BYTES,
@@ -376,10 +372,26 @@ pub(super) fn read_plain(path: &Path, limit: u64, label: &str) -> Result<Vec<u8>
 }
 
 pub(super) fn write_json_durable<T: Serialize>(path: &Path, value: &T) -> Result<(), String> {
+    write_json_durable_limited(path, value, MAX_INPUT_BYTES)
+}
+
+pub(super) fn write_json_durable_limited<T: Serialize>(
+    path: &Path,
+    value: &T,
+    limit: u64,
+) -> Result<(), String> {
     let mut bytes = serde_json::to_vec(value)
         .map_err(|error| format!("failed to serialize historical-v3 artifact: {error}"))?;
     bytes.push(b'\n');
-    if bytes.len() as u64 > MAX_INPUT_BYTES {
+    write_bytes_durable_limited(path, &bytes, limit)
+}
+
+pub(super) fn write_bytes_durable_limited(
+    path: &Path,
+    bytes: &[u8],
+    limit: u64,
+) -> Result<(), String> {
+    if bytes.len() as u64 > limit {
         return Err("historical-v3 artifact exceeds its size limit".to_string());
     }
     let parent = path
@@ -387,9 +399,17 @@ pub(super) fn write_json_durable<T: Serialize>(path: &Path, value: &T) -> Result
         .ok_or_else(|| "historical-v3 artifact path has no parent".to_string())?;
     require_plain_directory(parent, "artifact parent")?;
     if path.exists() {
-        let existing = read_plain(path, MAX_INPUT_BYTES, "existing historical-v3 artifact")?;
+        let existing = read_plain(path, limit, "existing historical-v3 artifact")?;
         return if existing == bytes {
-            Ok(())
+            File::options()
+                .read(true)
+                .write(true)
+                .open(path)
+                .and_then(|file| file.sync_all())
+                .map_err(|error| {
+                    format!("failed to sync existing historical-v3 artifact: {error}")
+                })?;
+            sync_directory(parent)
         } else {
             Err("historical-v3 artifact already exists with different content".to_string())
         };
@@ -399,7 +419,7 @@ pub(super) fn write_json_durable<T: Serialize>(path: &Path, value: &T) -> Result
         path.file_name()
             .ok_or_else(|| "historical-v3 artifact path has no filename".to_string())?,
     );
-    pending_name.push(format!(".{}.pending", sha256(&bytes)));
+    pending_name.push(format!(".{}.pending", sha256(bytes)));
     let pending = parent.join(pending_name);
     if pending.exists() {
         let metadata = fs::symlink_metadata(&pending)
@@ -407,7 +427,7 @@ pub(super) fn write_json_durable<T: Serialize>(path: &Path, value: &T) -> Result
         if !metadata.is_file() || metadata.file_type().is_symlink() {
             return Err("historical-v3 pending artifact is not a plain file".to_string());
         }
-        if read_plain(&pending, MAX_INPUT_BYTES, "pending historical-v3 artifact")? != bytes {
+        if read_plain(&pending, limit, "pending historical-v3 artifact")? != bytes {
             fs::remove_file(&pending)
                 .map_err(|error| format!("failed to clear incomplete artifact: {error}"))?;
         }
@@ -418,15 +438,22 @@ pub(super) fn write_json_durable<T: Serialize>(path: &Path, value: &T) -> Result
             .create_new(true)
             .open(&pending)
             .map_err(|error| format!("failed to create pending artifact: {error}"))?;
-        file.write_all(&bytes)
+        file.write_all(bytes)
             .and_then(|_| file.sync_all())
             .map_err(|error| format!("failed to persist pending artifact: {error}"))?;
+    } else {
+        File::options()
+            .read(true)
+            .write(true)
+            .open(&pending)
+            .and_then(|file| file.sync_all())
+            .map_err(|error| format!("failed to sync resumed pending artifact: {error}"))?;
     }
     match fs::hard_link(&pending, path) {
         Ok(()) => {}
         Err(error) => {
             let published_matches = path.exists()
-                && read_plain(path, MAX_INPUT_BYTES, "published historical-v3 artifact")? == bytes;
+                && read_plain(path, limit, "published historical-v3 artifact")? == bytes;
             if !published_matches {
                 return Err(format!("failed to publish historical-v3 artifact: {error}"));
             }
@@ -438,6 +465,98 @@ pub(super) fn write_json_durable<T: Serialize>(path: &Path, value: &T) -> Result
             .map_err(|error| format!("failed to clear pending artifact: {error}"))?;
     }
     Ok(())
+}
+
+pub(super) struct AgentReviewLock {
+    file: File,
+}
+
+impl AgentReviewLock {
+    pub(super) fn acquire(path: &Path) -> Result<Self, String> {
+        match fs::symlink_metadata(path) {
+            Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => {}
+            Ok(_) => {
+                return Err("historical-v3 agent-review lock is not a plain file".to_string());
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(format!("failed to inspect agent-review lock: {error}")),
+        }
+        let mut options = OpenOptions::new();
+        options.read(true).write(true).create(true).truncate(false);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.custom_flags(libc::O_NOFOLLOW);
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+            options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+        }
+        let file = options
+            .open(path)
+            .map_err(|error| format!("failed to open agent-review lock: {error}"))?;
+        let metadata = file
+            .metadata()
+            .map_err(|error| format!("failed to inspect opened agent-review lock: {error}"))?;
+        if !metadata.is_file() || metadata.file_type().is_symlink() {
+            return Err("historical-v3 agent-review lock is not a plain file".to_string());
+        }
+        lock_agent_review_file(&file)?;
+        Ok(Self { file })
+    }
+}
+
+impl Drop for AgentReviewLock {
+    fn drop(&mut self) {
+        unlock_agent_review_file(&self.file);
+    }
+}
+
+#[cfg(unix)]
+fn lock_agent_review_file(file: &File) -> Result<(), String> {
+    use std::os::fd::AsRawFd;
+    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+        Ok(())
+    } else {
+        Err(format!(
+            "historical-v3 agent review is already active or cannot be locked: {}",
+            std::io::Error::last_os_error()
+        ))
+    }
+}
+
+#[cfg(unix)]
+fn unlock_agent_review_file(file: &File) {
+    use std::os::fd::AsRawFd;
+    unsafe {
+        libc::flock(file.as_raw_fd(), libc::LOCK_UN);
+    }
+}
+
+#[cfg(windows)]
+fn lock_agent_review_file(file: &File) -> Result<(), String> {
+    use std::os::windows::io::AsRawHandle;
+    let locked = unsafe {
+        windows_sys::Win32::Storage::FileSystem::LockFile(file.as_raw_handle() as _, 0, 0, 1, 0)
+    };
+    if locked != 0 {
+        Ok(())
+    } else {
+        Err(format!(
+            "historical-v3 agent review is already active or cannot be locked: {}",
+            std::io::Error::last_os_error()
+        ))
+    }
+}
+
+#[cfg(windows)]
+fn unlock_agent_review_file(file: &File) {
+    use std::os::windows::io::AsRawHandle;
+    unsafe {
+        windows_sys::Win32::Storage::FileSystem::UnlockFile(file.as_raw_handle() as _, 0, 0, 1, 0);
+    }
 }
 
 pub(super) fn ensure_child_directory(path: &Path, label: &str) -> Result<(), String> {
@@ -761,7 +880,7 @@ mod tests {
     }
 
     #[test]
-    fn human_operator_rejects_model_protocol_before_creating_state() {
+    fn model_protocol_can_bind_without_using_human_authority() {
         let fixture = fixture();
         let config: OperatorConfig =
             read_json(&fixture.config, MAX_CONFIG_BYTES, "operator config").unwrap();
@@ -784,11 +903,12 @@ mod tests {
         protocol.model_access_forbidden = false;
         let protocol = crate::benchmark::seal_historical_v3_protocol(protocol).unwrap();
         fs::write(&config.protocol, serde_json::to_vec(&protocol).unwrap()).unwrap();
-        let error = synthetic_unbound(&fixture.config, &fixture.prior)
-            .err()
-            .unwrap();
-        assert!(error.contains("model-judged operator is not wired"));
+        let unbound = synthetic_unbound(&fixture.config, &fixture.prior).unwrap();
+        assert!(unbound.protocol.human_review_policy.is_none());
         assert!(!config.operator_root.exists());
+        let bound = synthetic_initialize(&fixture).unwrap();
+        assert!(bound.unbound.protocol.model_review_policy.is_some());
+        assert!(config.operator_root.exists());
     }
 
     #[test]
@@ -1002,6 +1122,10 @@ mod tests {
         assert_eq!(proof["schema_version"], 2);
         assert!(proof["agent_prompt"].is_object());
         assert_eq!(
+            precommit::verified_agent_prompt_bytes(&bound).unwrap(),
+            prompt
+        );
+        assert_eq!(
             base64::engine::general_purpose::STANDARD
                 .decode(proof["agent_prompt"]["fetched_base64"].as_str().unwrap())
                 .unwrap(),
@@ -1063,6 +1187,37 @@ mod tests {
             read_plain(&path, MAX_INPUT_BYTES, "artifact").unwrap(),
             bytes
         );
+        let resumed_path = root.path().join("resumed.json");
+        let resumed_pending = root
+            .path()
+            .join(format!(".resumed.json.{}.pending", sha256(&bytes)));
+        fs::write(&resumed_pending, &bytes).unwrap();
+        write_json_durable(&resumed_path, &value).unwrap();
+        assert_eq!(
+            read_plain(&resumed_path, MAX_INPUT_BYTES, "resumed artifact").unwrap(),
+            bytes
+        );
+        assert!(!resumed_pending.exists());
+        let invocation_path = root.path().join("agent-invocation.json");
+        let invocation = b"{\"prompt\":\"exact\"}";
+        write_bytes_durable_limited(&invocation_path, invocation, 1024).unwrap();
+        write_bytes_durable_limited(&invocation_path, invocation, 1024).unwrap();
+        assert_eq!(
+            read_plain(&invocation_path, 1024, "invocation").unwrap(),
+            invocation
+        );
+        assert!(write_bytes_durable_limited(&invocation_path, b"{}", 1024).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn agent_review_lock_rejects_dangling_symlink() {
+        let root = tempfile::tempdir().unwrap();
+        let target = root.path().join("missing-target");
+        let lock = root.path().join("agent-review.lock");
+        std::os::unix::fs::symlink(&target, &lock).unwrap();
+        assert!(AgentReviewLock::acquire(&lock).is_err());
+        assert!(!target.exists());
     }
 
     #[test]

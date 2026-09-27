@@ -222,6 +222,7 @@ fn load_current_review(
     language: HistoricalV3Language,
 ) -> Result<ReviewContext, String> {
     let bound = store::load_bound(Path::new(config))?;
+    require_human_review_authority(&bound.unbound.protocol)?;
     let collection = bound.collection()?;
     let progress = replay_historical_v3_ordered_progress(
         &bound.unbound.protocol,
@@ -262,6 +263,16 @@ fn load_current_review(
     })
 }
 
+fn require_human_review_authority(protocol: &HistoricalV3Protocol) -> Result<(), String> {
+    if protocol.model_review_policy.is_some() {
+        return Err(
+            "historical-v3 human review commands reject model-judged protocol authority"
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
 fn ensure_review_directory(context: &ReviewContext) -> Result<(), String> {
     let root = &context.review_root;
     store::require_plain_directory(root, "review root")?;
@@ -295,6 +306,26 @@ mod tests {
         HistoricalV3FinalLabelBasis, HistoricalV3FinalLabelOutcome, HistoricalV3LabelResolver,
         HistoricalV3ReviewerVerdict, historical_v3_review_fixture, read_historical_v3_final_label,
     };
+
+    #[tokio::test]
+    async fn human_review_commands_reject_model_authority() {
+        let fixture = historical_v3_review_fixture::review_fixture().await;
+        let mut protocol = fixture.inputs().protocol.clone();
+        protocol.model_review_policy = Some(crate::benchmark::HistoricalV3ModelReviewPolicy {
+            source_only_review: true,
+            independent_reviewers: 2,
+            approved_prompt_sha256: "a".repeat(64),
+            prompt_public_url: format!(
+                "https://raw.githubusercontent.com/trysniff/sniff/{}/agent-prompt.md",
+                "0".repeat(40)
+            ),
+            exact_presented_material_record_required: true,
+            invocation_response_record_required: true,
+            disagreements_remain_unresolved: true,
+            human_gold_claim_forbidden: true,
+        });
+        assert!(require_human_review_authority(&protocol).is_err());
+    }
 
     fn context_for_fixture(
         fixture: &historical_v3_review_fixture::ReviewFixture,

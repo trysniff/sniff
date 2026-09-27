@@ -27,6 +27,7 @@ struct HistoricalV3AgentModelOutput {
 struct HistoricalV3AgentPresentation<'a> {
     contract: &'static str,
     prompt: &'a str,
+    prompt_sha256: String,
     source_bundle: &'a HistoricalV3SourceReviewBundle,
 }
 
@@ -311,6 +312,7 @@ fn canonical_invocation_request(
     let encoded = serde_json::to_string(&HistoricalV3AgentPresentation {
         contract: AGENT_PRESENTATION_CONTRACT,
         prompt,
+        prompt_sha256: sha256(prompt_bytes),
         source_bundle: bundle,
     })
     .map_err(|error| format!("cannot present historical-v3 source bundle: {error}"))?;
@@ -318,6 +320,43 @@ fn canonical_invocation_request(
         return Err("historical-v3 agent presentation exceeds its byte cap".to_string());
     }
     Ok(encoded)
+}
+
+pub fn historical_v3_agent_invocation_request(
+    prompt_bytes: &[u8],
+    bundle: &HistoricalV3SourceReviewBundle,
+) -> Result<String, String> {
+    if prompt_bytes.is_empty() {
+        return Err("historical-v3 agent prompt is empty".to_string());
+    }
+    canonical_invocation_request(prompt_bytes, bundle)
+}
+
+pub fn validate_historical_v3_agent_invocation(
+    protocol: &super::HistoricalV3Protocol,
+    bundle: &HistoricalV3SourceReviewBundle,
+    invocation_bytes: &[u8],
+) -> Result<Vec<u8>, String> {
+    let policy = protocol
+        .model_review_policy
+        .as_ref()
+        .ok_or_else(|| "historical-v3 agent invocation requires model authority".to_string())?;
+    let invocation = std::str::from_utf8(invocation_bytes)
+        .map_err(|_| "historical-v3 agent invocation must be UTF-8".to_string())?;
+    let value: serde_json::Value = serde_json::from_str(invocation)
+        .map_err(|error| format!("historical-v3 agent invocation is not JSON: {error}"))?;
+    let prompt = value
+        .get("prompt")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| "historical-v3 agent invocation has no prompt".to_string())?
+        .as_bytes()
+        .to_vec();
+    if sha256(&prompt) != policy.approved_prompt_sha256
+        || invocation != historical_v3_agent_invocation_request(&prompt, bundle)?
+    {
+        return Err("historical-v3 agent invocation differs from the source-only task".to_string());
+    }
+    Ok(prompt)
 }
 
 fn parse_model_output(raw_response: &str) -> Result<HistoricalV3AgentModelOutput, String> {
@@ -402,18 +441,6 @@ pub fn validate_historical_v3_agent_audit(
         return Err("historical-v3 agent audit does not replay".to_string());
     }
     Ok(())
-}
-
-pub fn historical_v3_agent_prompt_from_submission(
-    submission: &HistoricalV3AgentReviewSubmission,
-) -> Result<Vec<u8>, String> {
-    let value: serde_json::Value = serde_json::from_str(&submission.invocation_request)
-        .map_err(|error| format!("historical-v3 agent invocation is not JSON: {error}"))?;
-    value
-        .get("prompt")
-        .and_then(serde_json::Value::as_str)
-        .map(|prompt| prompt.as_bytes().to_vec())
-        .ok_or_else(|| "historical-v3 agent invocation has no prompt".to_string())
 }
 
 pub fn read_historical_v3_agent_submission(
