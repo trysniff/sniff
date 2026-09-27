@@ -1,20 +1,79 @@
+use super::super::history_v3_agent_review::tests::agent_fixture;
 use super::super::history_v3_candidate_collection::seal_collection_manifest;
 use super::super::history_v3_label_review::tests::review_fixture;
 use super::super::history_v3_rank_journal::historical_v3_rank_identity_in_validated_collection;
 use super::super::history_v3_semantic_census::tests as semantic_fixture;
 use super::super::{
-    HistoricalV3ReviewDisposition, HistoricalV3ReviewerVerdict, HistoricalV3VerifiedFinalReview,
-    audit_historical_v3_label_reviews, prepare_historical_v3_label_resolution,
-    prepare_historical_v3_stop_artifact, prepare_historical_v3_stream_task,
-    read_historical_v3_stop_artifact, resolve_historical_v3_label,
-    validate_historical_v3_candidate_collection_commitment, verify_historical_v3_final_review,
-    verify_historical_v3_stop_artifact, write_historical_v3_stop_artifact_new,
+    HistoricalV3ReviewDisposition, HistoricalV3ReviewerVerdict, HistoricalV3VerifiedAgentReview,
+    HistoricalV3VerifiedFinalReview, audit_historical_v3_label_reviews,
+    prepare_historical_v3_label_resolution, prepare_historical_v3_stop_artifact,
+    prepare_historical_v3_stream_task, read_historical_v3_stop_artifact,
+    resolve_historical_v3_label, validate_historical_v3_candidate_collection_commitment,
+    verify_historical_v3_final_review, verify_historical_v3_stop_artifact,
+    write_historical_v3_stop_artifact_new,
 };
 use super::{
     HistoricalV3OrderedRankOutcome, HistoricalV3OrderedStopStatus,
     evaluate_historical_v3_ordered_prefix,
 };
 
+#[tokio::test]
+async fn model_disagreement_counts_as_reviewed_but_never_as_accepted() {
+    let fixture = agent_fixture().await;
+    let inputs = fixture.inputs();
+    let rank = inputs.qualification.rank.clone();
+    let language = rank.language();
+    let disputed = [HistoricalV3OrderedRankOutcome::AgentReviewed(
+        HistoricalV3VerifiedAgentReview::synthetic(
+            rank.clone(),
+            HistoricalV3ReviewDisposition::Disputed,
+        ),
+    )];
+    assert!(matches!(
+        evaluate_historical_v3_ordered_prefix(
+            inputs.protocol,
+            inputs.collection,
+            language,
+            &disputed
+        )
+        .unwrap(),
+        HistoricalV3OrderedStopStatus::FailedSourceExhausted {
+            reviewed: 1,
+            accepted: 0,
+            ..
+        }
+    ));
+    let human = [HistoricalV3OrderedRankOutcome::Reviewed(
+        HistoricalV3VerifiedFinalReview::synthetic(
+            rank.clone(),
+            HistoricalV3ReviewDisposition::Rejected,
+        ),
+    )];
+    assert!(
+        evaluate_historical_v3_ordered_prefix(inputs.protocol, inputs.collection, language, &human)
+            .unwrap_err()
+            .contains("cannot consume human labels")
+    );
+
+    let human_fixture = review_fixture().await;
+    let human_inputs = human_fixture.inputs();
+    let agent = [HistoricalV3OrderedRankOutcome::AgentReviewed(
+        HistoricalV3VerifiedAgentReview::synthetic(
+            human_inputs.qualification.rank.clone(),
+            HistoricalV3ReviewDisposition::Disputed,
+        ),
+    )];
+    assert!(
+        evaluate_historical_v3_ordered_prefix(
+            human_inputs.protocol,
+            human_inputs.collection,
+            human_inputs.qualification.rank.language(),
+            &agent,
+        )
+        .unwrap_err()
+        .contains("cannot consume agent reviews")
+    );
+}
 #[tokio::test]
 async fn verified_final_review_is_counted_at_its_exact_rank() {
     let fixture = review_fixture().await;

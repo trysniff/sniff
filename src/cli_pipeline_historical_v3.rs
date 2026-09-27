@@ -192,6 +192,10 @@ pub(crate) async fn run(
             | HistoricalV3ReplayProgress::PendingRank {
                 next: HistoricalV3NextStep::HumanReview,
                 ..
+            }
+            | HistoricalV3ReplayProgress::PendingRank {
+                next: HistoricalV3NextStep::AgentReview,
+                ..
             } => return render_progress(language, &progress),
             _ => {}
         }
@@ -258,6 +262,7 @@ fn render_progress(
                 HistoricalV3NextStep::RankStage(stage) => format!("{stage:?}"),
                 HistoricalV3NextStep::RepositoryReviewCap => "repository_review_cap".to_string(),
                 HistoricalV3NextStep::HumanReview => "human_review".to_string(),
+                HistoricalV3NextStep::AgentReview => "agent_review".to_string(),
             };
             println!(
                 "historical-v3 {language}: pending rank {} ({} processed), next={next}",

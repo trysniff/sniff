@@ -7,9 +7,10 @@ use super::super::{
     verify_historical_v3_source_review_rank, verify_historical_v3_terminal_exclusion,
 };
 use super::paths::{
-    human_files_exist, plain_file_exists, rank_directory_exists, review_directory_exists,
+    agent_files_exist, human_files_exist, plain_file_exists, rank_directory_exists,
+    review_directory_exists,
 };
-use super::{HistoricalV3NextStep, human};
+use super::{HistoricalV3NextStep, agent, human};
 use std::path::Path;
 
 pub(super) enum RankReplay {
@@ -56,9 +57,14 @@ pub(super) fn replay_rank(
     } else {
         false
     };
+    let agent_exists = if review_exists {
+        agent_files_exist(&paths)?
+    } else {
+        false
+    };
     match last {
         Some(HistoricalV3RankStageOutcome::Excluded { .. }) => {
-            if cap_exists || human_exists {
+            if cap_exists || human_exists || agent_exists {
                 return Err("historical-v3 excluded rank has review records".to_string());
             }
             Ok(RankReplay::Complete(Box::new(
@@ -84,16 +90,35 @@ pub(super) fn replay_rank(
                 journal_root,
             )
             .map_err(|error| error.to_string())?;
-            match human::replay_human_review(protocol, collection, &source, &paths)? {
-                Some(proof) => Ok(RankReplay::Complete(Box::new(
-                    HistoricalV3OrderedRankOutcome::Reviewed(proof),
-                ))),
-                None => Ok(RankReplay::Pending(HistoricalV3NextStep::HumanReview)),
+            if protocol.model_review_policy.is_some() {
+                if human_exists {
+                    return Err(
+                        "historical-v3 model rank contains human review records".to_string()
+                    );
+                }
+                match agent::replay_agent_review(protocol, collection, &source, &paths)? {
+                    Some(proof) => Ok(RankReplay::Complete(Box::new(
+                        HistoricalV3OrderedRankOutcome::AgentReviewed(proof),
+                    ))),
+                    None => Ok(RankReplay::Pending(HistoricalV3NextStep::AgentReview)),
+                }
+            } else {
+                if agent_exists {
+                    return Err(
+                        "historical-v3 human rank contains agent review records".to_string()
+                    );
+                }
+                match human::replay_human_review(protocol, collection, &source, &paths)? {
+                    Some(proof) => Ok(RankReplay::Complete(Box::new(
+                        HistoricalV3OrderedRankOutcome::Reviewed(proof),
+                    ))),
+                    None => Ok(RankReplay::Pending(HistoricalV3NextStep::HumanReview)),
+                }
             }
         }
         _ if completed_count == 4 => {
-            if human_exists {
-                return Err("historical-v3 qualified rank has premature human records".to_string());
+            if human_exists || agent_exists {
+                return Err("historical-v3 qualified rank has premature review records".to_string());
             }
             replay_qualified_rank(
                 protocol,
@@ -106,7 +131,7 @@ pub(super) fn replay_rank(
             )
         }
         _ => {
-            if cap_exists || human_exists {
+            if cap_exists || human_exists || agent_exists {
                 return Err("historical-v3 unfinished rank has review records".to_string());
             }
             let next = next_stage.ok_or_else(|| {

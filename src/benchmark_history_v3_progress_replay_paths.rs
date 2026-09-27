@@ -86,3 +86,11 @@ pub(super) fn human_files_exist(paths: &HistoricalV3ReviewRecordPaths) -> Result
             || plain_file_exists(&paths.final_label, "historical-v3 final label")?,
     )
 }
+
+pub(super) fn agent_files_exist(paths: &HistoricalV3ReviewRecordPaths) -> Result<bool, String> {
+    Ok(
+        plain_file_exists(&paths.agent_one, "historical-v3 first agent review")?
+            || plain_file_exists(&paths.agent_two, "historical-v3 second agent review")?
+            || plain_file_exists(&paths.agent_audit, "historical-v3 agent audit")?,
+    )
+}

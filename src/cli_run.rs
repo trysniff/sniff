@@ -646,7 +646,7 @@ pub enum HistoricalV3Command {
         #[arg(value_parser = parse_historical_v3_language)]
         language: crate::benchmark::HistoricalV3Language,
     },
-    /// Resume verified stages until human review, terminal stop, or a step cap.
+    /// Resume verified stages until the authorized review, terminal stop, or a step cap.
     Run {
         config: String,
         #[arg(value_parser = parse_historical_v3_language)]

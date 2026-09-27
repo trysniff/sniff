@@ -11,7 +11,9 @@ use sha2::{Digest, Sha256};
 use std::path::Path;
 
 pub const HISTORICAL_V3_STOP_ARTIFACT_SCHEMA_VERSION: u32 = 1;
+pub const HISTORICAL_V3_MODEL_STOP_ARTIFACT_SCHEMA_VERSION: u32 = 2;
 const STOP_CONTRACT: &str = "sniffbench-historical-v3-ordered-stop-v1";
+const AGENT_STOP_CONTRACT: &str = "sniffbench-historical-v3-model-ordered-stop-v2";
 const MAX_STOP_BYTES: u64 = 64 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -24,6 +26,11 @@ pub enum HistoricalV3StopRankDecision {
     Reviewed {
         source_bundle_sha256: String,
         final_label_sha256: String,
+        disposition: HistoricalV3ReviewDisposition,
+    },
+    AgentReviewed {
+        source_bundle_sha256: String,
+        audit_sha256: String,
         disposition: HistoricalV3ReviewDisposition,
     },
     Capped {
@@ -81,6 +88,13 @@ pub fn prepare_historical_v3_stop_artifact(
                         disposition: proof.record().disposition,
                     }
                 }
+                HistoricalV3OrderedRankOutcome::AgentReviewed(proof) => {
+                    HistoricalV3StopRankDecision::AgentReviewed {
+                        source_bundle_sha256: proof.source_bundle_sha256().to_string(),
+                        audit_sha256: proof.audit_sha256().to_string(),
+                        disposition: proof.record().disposition,
+                    }
+                }
                 HistoricalV3OrderedRankOutcome::Capped(proof) => {
                     HistoricalV3StopRankDecision::Capped {
                         qualification_sha256: proof.qualification_sha256().to_string(),
@@ -91,8 +105,17 @@ pub fn prepare_historical_v3_stop_artifact(
         })
         .collect();
     let mut artifact = HistoricalV3StopArtifact {
-        schema_version: HISTORICAL_V3_STOP_ARTIFACT_SCHEMA_VERSION,
-        contract: STOP_CONTRACT.to_string(),
+        schema_version: if protocol.model_review_policy.is_some() {
+            HISTORICAL_V3_MODEL_STOP_ARTIFACT_SCHEMA_VERSION
+        } else {
+            HISTORICAL_V3_STOP_ARTIFACT_SCHEMA_VERSION
+        },
+        contract: if protocol.model_review_policy.is_some() {
+            AGENT_STOP_CONTRACT
+        } else {
+            STOP_CONTRACT
+        }
+        .to_string(),
         protocol_sha256: protocol.protocol_sha256.clone(),
         candidate_manifest_sha256: collection.manifest.manifest_sha256.clone(),
         stream_task_sha256: collection.manifest.stream_task.task_sha256.clone(),

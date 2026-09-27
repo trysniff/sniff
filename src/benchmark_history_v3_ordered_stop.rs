@@ -2,8 +2,9 @@ use super::history_v3_rank_journal::historical_v3_rank_identity_in_validated_col
 use super::{
     HistoricalV3CandidateCollection, HistoricalV3Language, HistoricalV3Protocol,
     HistoricalV3RankIdentity, HistoricalV3RankStage, HistoricalV3ReviewDisposition,
-    HistoricalV3VerifiedFinalReview, HistoricalV3VerifiedReviewCap,
-    HistoricalV3VerifiedTerminalExclusion, validate_historical_v3_candidate_collection_commitment,
+    HistoricalV3VerifiedAgentReview, HistoricalV3VerifiedFinalReview,
+    HistoricalV3VerifiedReviewCap, HistoricalV3VerifiedTerminalExclusion,
+    validate_historical_v3_candidate_collection_commitment,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -12,6 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 pub enum HistoricalV3OrderedRankOutcome {
     Excluded(HistoricalV3VerifiedTerminalExclusion),
     Reviewed(HistoricalV3VerifiedFinalReview),
+    AgentReviewed(HistoricalV3VerifiedAgentReview),
     Capped(HistoricalV3VerifiedReviewCap),
 }
 
@@ -20,6 +22,7 @@ impl HistoricalV3OrderedRankOutcome {
         match self {
             Self::Excluded(proof) => proof.rank(),
             Self::Reviewed(proof) => proof.rank(),
+            Self::AgentReviewed(proof) => proof.rank(),
             Self::Capped(proof) => proof.rank(),
         }
     }
@@ -28,6 +31,7 @@ impl HistoricalV3OrderedRankOutcome {
         match self {
             Self::Excluded(proof) => proof.stage() > HistoricalV3RankStage::MechanicalQualification,
             Self::Reviewed(_) => true,
+            Self::AgentReviewed(_) => true,
             Self::Capped(_) => false,
         }
     }
@@ -120,9 +124,28 @@ pub fn evaluate_historical_v3_ordered_prefix(
             reviewable.push(expected.rank_sha256.clone());
         }
 
-        if let HistoricalV3OrderedRankOutcome::Reviewed(proof) = outcome {
+        let disposition = match outcome {
+            HistoricalV3OrderedRankOutcome::Reviewed(proof) => {
+                if protocol.model_review_policy.is_some() {
+                    return Err(
+                        "historical-v3 model protocol cannot consume human labels".to_string()
+                    );
+                }
+                Some(proof.record().disposition)
+            }
+            HistoricalV3OrderedRankOutcome::AgentReviewed(proof) => {
+                if protocol.model_review_policy.is_none() {
+                    return Err(
+                        "historical-v3 human protocol cannot consume agent reviews".to_string()
+                    );
+                }
+                Some(proof.record().disposition)
+            }
+            _ => None,
+        };
+        if let Some(disposition) = disposition {
             reviewed += 1;
-            match proof.record().disposition {
+            match disposition {
                 HistoricalV3ReviewDisposition::Accepted => {
                     accepted += 1;
                     accepted_repositories.insert(repository_id);
@@ -137,9 +160,11 @@ pub fn evaluate_historical_v3_ordered_prefix(
                 }
                 HistoricalV3ReviewDisposition::Rejected => {}
                 HistoricalV3ReviewDisposition::Disputed => {
-                    return Err(
-                        "historical-v3 ordered stop contains an unresolved dispute".to_string()
-                    );
+                    if protocol.model_review_policy.is_none() {
+                        return Err(
+                            "historical-v3 ordered stop contains an unresolved dispute".to_string()
+                        );
+                    }
                 }
             }
         }

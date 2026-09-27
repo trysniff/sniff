@@ -3,9 +3,10 @@ use super::super::history_v3_label_review::tests::{
 };
 use super::*;
 
-const PROMPT: &[u8] = b"Review the sealed source and behavior evidence without Sniff output.";
+pub(crate) const PROMPT: &[u8] =
+    b"Review the sealed source and behavior evidence without Sniff output.";
 
-async fn agent_fixture() -> super::super::history_v3_label_review::tests::ReviewFixture {
+pub(crate) async fn agent_fixture() -> super::super::history_v3_label_review::tests::ReviewFixture {
     review_fixture_with_protocol(|mut protocol| {
         protocol.schema_version = super::super::HISTORICAL_V3_MODEL_PROTOCOL_SCHEMA_VERSION;
         protocol.protocol_contract =
@@ -27,11 +28,14 @@ async fn agent_fixture() -> super::super::history_v3_label_review::tests::Review
     .await
 }
 
-fn response(reviewer: HistoricalV3AgentReviewer, decision: HistoricalV3ReviewDecision) -> String {
+pub(crate) fn response(
+    reviewer: HistoricalV3AgentReviewer,
+    decision: HistoricalV3ReviewDecision,
+) -> String {
     serde_json::to_string(&HistoricalV3AgentModelOutput { reviewer, decision }).unwrap()
 }
 
-fn reviewer(agent_id: &str, run_id: &str) -> HistoricalV3AgentReviewer {
+pub(crate) fn reviewer(agent_id: &str, run_id: &str) -> HistoricalV3AgentReviewer {
     HistoricalV3AgentReviewer {
         agent_id: agent_id.to_string(),
         provider: "example-provider".to_string(),
@@ -214,4 +218,67 @@ async fn agent_review_rejects_forged_citation_reused_run_and_missing_revision_fi
         .unwrap_err()
         .contains("model-judged protocol authority")
     );
+}
+
+#[tokio::test]
+async fn agent_outcomes_never_turn_disagreement_into_a_human_label() {
+    let fixture = agent_fixture().await;
+    for (first_verdict, second_verdict, expected) in [
+        (
+            HistoricalV3ReviewerVerdict::Slop,
+            HistoricalV3ReviewerVerdict::Slop,
+            HistoricalV3ReviewDisposition::Accepted,
+        ),
+        (
+            HistoricalV3ReviewerVerdict::Clean,
+            HistoricalV3ReviewerVerdict::Clean,
+            HistoricalV3ReviewDisposition::Rejected,
+        ),
+        (
+            HistoricalV3ReviewerVerdict::Slop,
+            HistoricalV3ReviewerVerdict::Clean,
+            HistoricalV3ReviewDisposition::Disputed,
+        ),
+    ] {
+        let first = seal_historical_v3_agent_review(
+            &fixture.inputs(),
+            &fixture.bundle,
+            PROMPT,
+            response(
+                reviewer("agent-a", "run-a"),
+                decision_for_methods(&fixture.bundle.methods, first_verdict),
+            ),
+        )
+        .unwrap();
+        let second = seal_historical_v3_agent_review(
+            &fixture.inputs(),
+            &fixture.bundle,
+            PROMPT,
+            response(
+                reviewer("agent-b", "run-b"),
+                decision_for_methods(&fixture.bundle.methods, second_verdict),
+            ),
+        )
+        .unwrap();
+        let audit = audit_historical_v3_agent_reviews(
+            &fixture.inputs(),
+            &fixture.bundle,
+            PROMPT,
+            &first,
+            &second,
+        )
+        .unwrap();
+        let verified = verify_historical_v3_agent_review(
+            &fixture.inputs(),
+            &fixture.bundle,
+            PROMPT,
+            &first,
+            &second,
+            &audit,
+        )
+        .unwrap();
+        assert_eq!(verified.record().disposition, expected);
+        assert_eq!(verified.audit_sha256(), audit.audit_sha256);
+        assert_eq!(verified.rank(), &fixture.inputs().qualification.rank);
+    }
 }

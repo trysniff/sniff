@@ -17,6 +17,7 @@ pub enum HistoricalV3NextStep {
     RankStage(HistoricalV3RankStage),
     RepositoryReviewCap,
     HumanReview,
+    AgentReview,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -192,6 +193,9 @@ mod rank;
 
 #[path = "benchmark_history_v3_progress_replay_human.rs"]
 mod human;
+
+#[path = "benchmark_history_v3_progress_replay_agent.rs"]
+mod agent;
 
 #[cfg(test)]
 #[path = "benchmark_history_v3_progress_replay_tests.rs"]
