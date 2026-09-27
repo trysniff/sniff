@@ -588,6 +588,39 @@ mod tests {
         }
     }
 
+    fn model_precommit_fixture() -> (Fixture, BoundInputs, Vec<u8>) {
+        let fixture = fixture();
+        let mut bound = synthetic_initialize(&fixture).unwrap();
+        let prompt = b"Review only the presented source and behavior evidence.\n".to_vec();
+        let mut protocol = bound.unbound.protocol.clone();
+        protocol.schema_version = crate::benchmark::HISTORICAL_V3_MODEL_PROTOCOL_SCHEMA_VERSION;
+        protocol.protocol_contract =
+            "sniffbench-historical-v3-model-judged-protocol-v7".to_string();
+        protocol.human_review_policy = None;
+        protocol.model_review_policy = Some(crate::benchmark::HistoricalV3ModelReviewPolicy {
+            source_only_review: true,
+            independent_reviewers: 2,
+            approved_prompt_sha256: sha256(&prompt),
+            prompt_public_url: format!(
+                "https://raw.githubusercontent.com/trysniff/sniff/{}/agent-prompt.md",
+                "0".repeat(40)
+            ),
+            exact_presented_material_record_required: true,
+            invocation_response_record_required: true,
+            disagreements_remain_unresolved: true,
+            human_gold_claim_forbidden: true,
+        });
+        protocol.model_access_forbidden = false;
+        let protocol = crate::benchmark::seal_historical_v3_protocol(protocol).unwrap();
+        fs::write(
+            &bound.unbound.config.protocol,
+            serde_json::to_vec(&protocol).unwrap(),
+        )
+        .unwrap();
+        bound.unbound.protocol = protocol;
+        (fixture, bound, prompt)
+    }
+
     impl HistoricalV3CandidatePageTransport for ZeroTransport {
         fn fetch<'a>(
             &'a mut self,
@@ -943,6 +976,68 @@ mod tests {
                 .is_err()
         );
         assert_eq!(candidate.calls, 0);
+    }
+
+    #[tokio::test]
+    async fn model_precommit_pins_and_replays_exact_public_prompt() {
+        let (_fixture, bound, prompt) = model_precommit_fixture();
+        let url = bound
+            .unbound
+            .protocol
+            .model_review_policy
+            .as_ref()
+            .unwrap()
+            .prompt_public_url
+            .clone();
+        let mut public = public_transport(&bound);
+        public.responses.insert(url, prompt.clone());
+        precommit::ensure_public_precommit(&bound, &mut public)
+            .await
+            .unwrap();
+        assert_eq!(public.calls, 16);
+        assert_eq!(
+            precommit::verified_agent_prompt_bytes(&bound).unwrap(),
+            prompt
+        );
+        let proof_path = bound.root.join("public-precommit-proof.json");
+        let proof: serde_json::Value = read_json(&proof_path, 10 * 1024 * 1024, "proof").unwrap();
+        assert_eq!(proof["schema_version"], 2);
+        assert!(proof["agent_prompt"].is_object());
+
+        let mut changed = proof;
+        changed["agent_prompt"]["fetched_base64"] = serde_json::json!("e30=");
+        fs::write(&proof_path, serde_json::to_vec(&changed).unwrap()).unwrap();
+        assert!(precommit::verified_agent_prompt_bytes(&bound).is_err());
+    }
+
+    #[tokio::test]
+    async fn model_precommit_rejects_missing_or_wrong_prompt_before_sealing() {
+        let (_fixture, bound, prompt) = model_precommit_fixture();
+        let url = bound
+            .unbound
+            .protocol
+            .model_review_policy
+            .as_ref()
+            .unwrap()
+            .prompt_public_url
+            .clone();
+        let mut public = public_transport(&bound);
+        assert!(
+            precommit::ensure_public_precommit(&bound, &mut public)
+                .await
+                .is_err()
+        );
+        assert!(!bound.root.join("public-precommit-proof.json").exists());
+        public
+            .responses
+            .insert(url, [prompt, b"changed".to_vec()].concat());
+        assert!(
+            precommit::ensure_public_precommit(&bound, &mut public)
+                .await
+                .unwrap_err()
+                .contains("differs from the approved bytes")
+        );
+        assert!(!bound.root.join("public-precommit-proof.json").exists());
     }
 
     #[test]

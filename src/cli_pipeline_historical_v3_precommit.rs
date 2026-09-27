@@ -34,6 +34,8 @@ struct PublicPrecommitProof {
     commits: Vec<PublicCommitProof>,
     protocol: PublicArtifactProof,
     source_policies: Vec<PublicArtifactProof>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    agent_prompt: Option<PublicArtifactProof>,
     proof_sha256: String,
 }
 
@@ -142,12 +144,21 @@ fn safe_segment(segment: &str) -> bool {
 pub(super) fn expected_commits(bound: &BoundInputs) -> Result<BTreeMap<String, String>, String> {
     let config = &bound.unbound.config;
     let mut commits = BTreeMap::new();
-    for url in std::iter::once(&config.public_protocol_url).chain(
-        config
-            .source_frames
-            .iter()
-            .map(|frame| &frame.public_policy_url),
-    ) {
+    let prompt_url = bound
+        .unbound
+        .protocol
+        .model_review_policy
+        .as_ref()
+        .map(|policy| &policy.prompt_public_url);
+    for url in std::iter::once(&config.public_protocol_url)
+        .chain(
+            config
+                .source_frames
+                .iter()
+                .map(|frame| &frame.public_policy_url),
+        )
+        .chain(prompt_url)
+    {
         validate_public_url(url)?;
         let parsed = reqwest::Url::parse(url).map_err(|error| error.to_string())?;
         let parts = parsed
@@ -227,11 +238,32 @@ pub(super) async fn ensure_public_precommit<T: PublicArtifactTransport>(
             fetched_base64: STANDARD.encode(&remote),
         });
     }
+    let agent_prompt = if let Some(policy) = &bound.unbound.protocol.model_review_policy {
+        let fetched = transport.fetch(&policy.prompt_public_url).await?;
+        if fetched.is_empty() || fetched.len() > MAX_PUBLIC_ARTIFACT_BYTES {
+            return Err("public precommit agent prompt has invalid size".to_string());
+        }
+        let digest = sha256(&fetched);
+        if digest != policy.approved_prompt_sha256 {
+            return Err(
+                "public precommit agent prompt differs from the approved bytes".to_string(),
+            );
+        }
+        Some(PublicArtifactProof {
+            url: policy.prompt_public_url.clone(),
+            semantic_sha256: digest.clone(),
+            fetched_sha256: digest,
+            fetched_base64: STANDARD.encode(&fetched),
+        })
+    } else {
+        None
+    };
     let mut proof = PublicPrecommitProof {
-        schema_version: 1,
+        schema_version: if agent_prompt.is_some() { 2 } else { 1 },
         commits,
         protocol,
         source_policies,
+        agent_prompt,
         proof_sha256: String::new(),
     };
     proof.proof_sha256 = sha256(&serde_json::to_vec(&proof).map_err(|error| error.to_string())?);
@@ -251,7 +283,9 @@ pub(super) fn validate_public_precommit(bound: &BoundInputs) -> Result<(), Strin
         store::read_json(&path, MAX_PROOF_BYTES, "public precommit proof")?;
     let mut unsigned = proof.clone();
     unsigned.proof_sha256.clear();
-    if proof.schema_version != 1
+    let model_policy = bound.unbound.protocol.model_review_policy.as_ref();
+    let expected_schema = if model_policy.is_some() { 2 } else { 1 };
+    if proof.schema_version != expected_schema
         || proof.proof_sha256
             != sha256(&serde_json::to_vec(&unsigned).map_err(|error| error.to_string())?)
         || proof.protocol.url != bound.unbound.config.public_protocol_url
@@ -305,7 +339,34 @@ pub(super) fn validate_public_precommit(bound: &BoundInputs) -> Result<(), Strin
             return Err("public precommit source policy proof changed".to_string());
         }
     }
+    match (model_policy, &proof.agent_prompt) {
+        (Some(policy), Some(prompt)) => {
+            let fetched = verified_fetched_bytes(prompt)?;
+            if fetched.is_empty()
+                || prompt.url != policy.prompt_public_url
+                || prompt.semantic_sha256 != policy.approved_prompt_sha256
+                || sha256(&fetched) != policy.approved_prompt_sha256
+            {
+                return Err("public precommit agent prompt proof changed".to_string());
+            }
+        }
+        (None, None) => {}
+        _ => return Err("public precommit agent prompt authority changed".to_string()),
+    }
     Ok(())
+}
+
+pub(super) fn verified_agent_prompt_bytes(bound: &BoundInputs) -> Result<Vec<u8>, String> {
+    validate_public_precommit(bound)?;
+    let proof: PublicPrecommitProof = store::read_json(
+        &bound.root.join("public-precommit-proof.json"),
+        MAX_PROOF_BYTES,
+        "public precommit proof",
+    )?;
+    let prompt = proof
+        .agent_prompt
+        .ok_or_else(|| "historical-v3 protocol has no agent prompt".to_string())?;
+    verified_fetched_bytes(&prompt)
 }
 
 fn verified_fetched_bytes(proof: &PublicArtifactProof) -> Result<Vec<u8>, String> {
