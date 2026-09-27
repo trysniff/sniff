@@ -163,6 +163,10 @@ mod tests {
             return;
         }
         let bytes = std::fs::read(path).unwrap();
+        let bytes = String::from_utf8(bytes)
+            .unwrap()
+            .replace("\r\n", "\n")
+            .into_bytes();
         let public: PublicIdCensusPolicy = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(public, committed_public_id_census_policy().unwrap());
         assert_eq!(
