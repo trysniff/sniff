@@ -54,6 +54,9 @@ pub async fn advance_historical_v3_ordered_step<E: HistoricalV3IdenticalTestExec
             HistoricalV3NextStep::HumanReview => {
                 return Err("historical-v3 rank requires independent human review".to_string());
             }
+            HistoricalV3NextStep::AgentReview => {
+                return Err("historical-v3 rank requires independent agent review".to_string());
+            }
             HistoricalV3NextStep::RepositoryReviewCap => {
                 let qualification = verify_historical_v3_qualified_rank(
                     protocol,

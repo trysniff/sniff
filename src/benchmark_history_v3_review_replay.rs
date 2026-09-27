@@ -14,6 +14,9 @@ pub struct HistoricalV3ReviewRecordPaths {
     pub audit: PathBuf,
     pub resolution: PathBuf,
     pub final_label: PathBuf,
+    pub agent_one: PathBuf,
+    pub agent_two: PathBuf,
+    pub agent_audit: PathBuf,
 }
 
 impl HistoricalV3ReviewRecordPaths {
@@ -26,8 +29,40 @@ impl HistoricalV3ReviewRecordPaths {
             audit: directory.join("audit.json"),
             resolution: directory.join("resolution.json"),
             final_label: directory.join("final-label.json"),
+            agent_one: directory.join("agent-one.json"),
+            agent_two: directory.join("agent-two.json"),
+            agent_audit: directory.join("agent-audit.json"),
         }
     }
+}
+
+pub fn verify_historical_v3_agent_review_from_disk(
+    protocol: &HistoricalV3Protocol,
+    collection: &HistoricalV3CandidateCollection,
+    stream_rank: usize,
+    journal_root: &Path,
+    review_root: &Path,
+) -> Result<super::HistoricalV3VerifiedAgentReview, String> {
+    let source =
+        verify_historical_v3_source_review_rank(protocol, collection, stream_rank, journal_root)
+            .map_err(|error| error.to_string())?;
+    let paths = HistoricalV3ReviewRecordPaths::new(review_root, source.rank());
+    let first = super::read_historical_v3_agent_submission(&paths.agent_one)?;
+    let second = super::read_historical_v3_agent_submission(&paths.agent_two)?;
+    let audit = super::read_historical_v3_agent_audit(&paths.agent_audit)?;
+    let prompt = super::historical_v3_agent_prompt_from_submission(&first)?;
+    let proof = super::verify_historical_v3_agent_review(
+        &source.inputs(protocol, collection),
+        source.bundle(),
+        &prompt,
+        &first,
+        &second,
+        &audit,
+    )?;
+    if proof.rank() != source.rank() {
+        return Err("historical-v3 agent review moved to another rank".to_string());
+    }
+    Ok(proof)
 }
 
 pub fn verify_historical_v3_final_review_from_disk(

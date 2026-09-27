@@ -164,7 +164,9 @@ pub fn evaluate_historical_v3_review_prefix(
     let mut accepted_repositories = BTreeSet::new();
 
     for (offset, record) in records.iter().enumerate() {
-        if record.disposition == HistoricalV3ReviewDisposition::Disputed {
+        if record.disposition == HistoricalV3ReviewDisposition::Disputed
+            && protocol.model_review_policy.is_none()
+        {
             return Err("historical-v3 review prefix contains an unresolved dispute".to_string());
         }
         require_sha256("historical-v3 review rank SHA-256", &record.rank_sha256)?;

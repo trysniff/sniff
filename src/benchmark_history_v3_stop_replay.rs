@@ -1,12 +1,12 @@
 use super::history_v3_rank_journal::historical_v3_rank_identity_in_validated_collection;
 use super::{
     HistoricalV3CandidateCollection, HistoricalV3Language, HistoricalV3OrderedRankOutcome,
-    HistoricalV3Protocol, HistoricalV3ReviewRecordPaths, HistoricalV3StopArtifact,
-    HistoricalV3StopRankDecision, read_historical_v3_stop_artifact,
-    validate_historical_v3_candidate_collection_commitment,
-    verify_historical_v3_final_review_from_disk, verify_historical_v3_qualified_rank,
-    verify_historical_v3_review_cap, verify_historical_v3_stop_artifact,
-    verify_historical_v3_terminal_exclusion,
+    HistoricalV3Protocol, HistoricalV3ReplayProgress, HistoricalV3ReviewRecordPaths,
+    HistoricalV3StopArtifact, HistoricalV3StopRankDecision, read_historical_v3_stop_artifact,
+    replay_historical_v3_ordered_progress, validate_historical_v3_candidate_collection_commitment,
+    verify_historical_v3_agent_review_from_disk, verify_historical_v3_final_review_from_disk,
+    verify_historical_v3_qualified_rank, verify_historical_v3_review_cap,
+    verify_historical_v3_stop_artifact, verify_historical_v3_terminal_exclusion,
 };
 use std::path::Path;
 
@@ -53,8 +53,25 @@ pub fn verify_historical_v3_stop_from_disk(
                 )
             }
             HistoricalV3StopRankDecision::Reviewed { .. } => {
+                if protocol.model_review_policy.is_some() {
+                    return Err("historical-v3 model stop cannot replay human labels".to_string());
+                }
                 HistoricalV3OrderedRankOutcome::Reviewed(
                     verify_historical_v3_final_review_from_disk(
+                        protocol,
+                        collection,
+                        candidate.stream_rank,
+                        journal_root,
+                        review_root,
+                    )?,
+                )
+            }
+            HistoricalV3StopRankDecision::AgentReviewed { .. } => {
+                if protocol.model_review_policy.is_none() {
+                    return Err("historical-v3 human stop cannot replay agent reviews".to_string());
+                }
+                HistoricalV3OrderedRankOutcome::AgentReviewed(
+                    verify_historical_v3_agent_review_from_disk(
                         protocol,
                         collection,
                         candidate.stream_rank,
@@ -83,5 +100,17 @@ pub fn verify_historical_v3_stop_from_disk(
         };
         outcomes.push(outcome);
     }
-    verify_historical_v3_stop_artifact(protocol, collection, language, &outcomes, stop_path)
+    let verified =
+        verify_historical_v3_stop_artifact(protocol, collection, language, &outcomes, stop_path)?;
+    match replay_historical_v3_ordered_progress(
+        protocol,
+        collection,
+        language,
+        journal_root,
+        review_root,
+        stop_path,
+    )? {
+        HistoricalV3ReplayProgress::Terminal { artifact } if artifact == verified => Ok(verified),
+        _ => Err("historical-v3 stop differs from ordered record replay".to_string()),
+    }
 }

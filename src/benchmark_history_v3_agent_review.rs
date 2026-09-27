@@ -1,15 +1,20 @@
+use super::history_v2_slot_store_support::read_limited;
 use super::{
-    HistoricalV3LabelTask, HistoricalV3ReviewDecision, HistoricalV3ReviewerVerdict,
+    HistoricalV3LabelTask, HistoricalV3RankIdentity, HistoricalV3ReviewDecision,
+    HistoricalV3ReviewDisposition, HistoricalV3ReviewRecord, HistoricalV3ReviewerVerdict,
     HistoricalV3SourceReviewBundle, HistoricalV3SourceReviewInputs,
     validate_historical_v3_source_review_bundle,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::path::Path;
 
 pub const HISTORICAL_V3_AGENT_REVIEW_SCHEMA_VERSION: u32 = 2;
 const AGENT_PRESENTATION_CONTRACT: &str = "sniffbench-historical-v3-agent-presentation-v1";
 const MAX_PRESENTATION_BYTES: usize = 64 * 1024 * 1024;
 const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
+const MAX_SUBMISSION_BYTES: u64 = 256 * 1024 * 1024;
+const MAX_AUDIT_BYTES: u64 = 4 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -104,6 +109,53 @@ pub struct HistoricalV3AgentReviewAudit {
     pub tier_agreement: bool,
     pub slop_pattern_agreement: bool,
     pub audit_sha256: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HistoricalV3VerifiedAgentReview {
+    rank: HistoricalV3RankIdentity,
+    record: HistoricalV3ReviewRecord,
+    source_bundle_sha256: String,
+    audit_sha256: String,
+}
+
+impl HistoricalV3VerifiedAgentReview {
+    pub fn rank(&self) -> &HistoricalV3RankIdentity {
+        &self.rank
+    }
+
+    pub fn record(&self) -> &HistoricalV3ReviewRecord {
+        &self.record
+    }
+
+    pub fn source_bundle_sha256(&self) -> &str {
+        &self.source_bundle_sha256
+    }
+
+    pub fn audit_sha256(&self) -> &str {
+        &self.audit_sha256
+    }
+}
+
+#[cfg(test)]
+impl HistoricalV3VerifiedAgentReview {
+    pub(crate) fn synthetic(
+        rank: HistoricalV3RankIdentity,
+        disposition: HistoricalV3ReviewDisposition,
+    ) -> Self {
+        Self {
+            record: HistoricalV3ReviewRecord {
+                stream_rank: rank.stream_rank,
+                rank_sha256: rank.rank_sha256.clone(),
+                language: rank.language(),
+                repository_id: rank.candidate.repository_id,
+                disposition,
+            },
+            rank,
+            source_bundle_sha256: "a".repeat(64),
+            audit_sha256: "b".repeat(64),
+        }
+    }
 }
 
 impl HistoricalV3AgentReviewAudit {
@@ -352,6 +404,66 @@ pub fn validate_historical_v3_agent_audit(
     Ok(())
 }
 
+pub fn historical_v3_agent_prompt_from_submission(
+    submission: &HistoricalV3AgentReviewSubmission,
+) -> Result<Vec<u8>, String> {
+    let value: serde_json::Value = serde_json::from_str(&submission.invocation_request)
+        .map_err(|error| format!("historical-v3 agent invocation is not JSON: {error}"))?;
+    value
+        .get("prompt")
+        .and_then(serde_json::Value::as_str)
+        .map(|prompt| prompt.as_bytes().to_vec())
+        .ok_or_else(|| "historical-v3 agent invocation has no prompt".to_string())
+}
+
+pub fn read_historical_v3_agent_submission(
+    path: &Path,
+) -> Result<HistoricalV3AgentReviewSubmission, String> {
+    let bytes = read_limited(path, MAX_SUBMISSION_BYTES, "historical-v3 agent submission")?;
+    serde_json::from_slice(&bytes)
+        .map_err(|error| format!("invalid historical-v3 agent submission: {error}"))
+}
+
+pub fn read_historical_v3_agent_audit(path: &Path) -> Result<HistoricalV3AgentReviewAudit, String> {
+    let bytes = read_limited(path, MAX_AUDIT_BYTES, "historical-v3 agent audit")?;
+    serde_json::from_slice(&bytes)
+        .map_err(|error| format!("invalid historical-v3 agent audit: {error}"))
+}
+
+pub fn verify_historical_v3_agent_review(
+    inputs: &HistoricalV3SourceReviewInputs<'_>,
+    bundle: &HistoricalV3SourceReviewBundle,
+    prompt_bytes: &[u8],
+    first: &HistoricalV3AgentReviewSubmission,
+    second: &HistoricalV3AgentReviewSubmission,
+    audit: &HistoricalV3AgentReviewAudit,
+) -> Result<HistoricalV3VerifiedAgentReview, String> {
+    validate_historical_v3_agent_audit(inputs, bundle, prompt_bytes, first, second, audit)?;
+    let verdict = audit.labels[0].decision.verdict;
+    let disposition = match verdict {
+        Some(HistoricalV3ReviewerVerdict::Slop) if audit.slop_pattern_agreement => {
+            HistoricalV3ReviewDisposition::Accepted
+        }
+        Some(
+            HistoricalV3ReviewerVerdict::Clean | HistoricalV3ReviewerVerdict::IntentionalBoundary,
+        ) if audit.tier_agreement => HistoricalV3ReviewDisposition::Rejected,
+        _ => HistoricalV3ReviewDisposition::Disputed,
+    };
+    let rank = inputs.qualification.rank.clone();
+    Ok(HistoricalV3VerifiedAgentReview {
+        record: HistoricalV3ReviewRecord {
+            stream_rank: rank.stream_rank,
+            rank_sha256: rank.rank_sha256.clone(),
+            language: rank.language(),
+            repository_id: rank.candidate.repository_id,
+            disposition,
+        },
+        rank,
+        source_bundle_sha256: bundle.bundle_sha256.clone(),
+        audit_sha256: audit.audit_sha256.clone(),
+    })
+}
+
 fn require_sha256(value: &str) -> Result<(), String> {
     if value.len() != 64
         || !value
@@ -371,4 +483,4 @@ fn hash_json(value: &impl Serialize) -> Result<String, String> {
 
 #[cfg(test)]
 #[path = "benchmark_history_v3_agent_review_tests.rs"]
-mod tests;
+pub(crate) mod tests;
