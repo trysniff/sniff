@@ -57,7 +57,7 @@ prior-artifact evidence. The old canonical-name filter may remain as an extra
 conservative exclusion, but it is not the identity-disjointness proof: some
 historical names are now deleted or reused. Before the first REST probe, the
 collector must fetch this policy from an immutable public Git commit, verify
-its exact bytes and SHA-256 against the embedded policy, and retain that
+its exact bytes and SHA-256 against the pinned public hash and typed contract, and retain that
 preflight receipt. GitHub's documented creation ordering is an assumption of
 the boundary proof; an observed inversion fails closed, while live visibility
 changes remain an explicitly disclosed limitation.

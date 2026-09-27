@@ -31,7 +31,7 @@
   "source_failure_rule": "fail_closed_without_search_fallback",
   "transport_retry_rule": "retry_only_transport_timeout_429_or_5xx_with_same_request;retain_attempts;stop_after_12_failed_attempts",
   "prior_identity_rule": "strict_created_at_after_2026-08-07T20:46:11Z_is_prior_cohort_disjointness_proof;name_filter_is_conservative_only",
-  "precommit_rule": "before_first_rest_probe_fetch_immutable_public_git_policy_url;verify_exact_bytes_and_sha256_against_embedded_policy;retain_preflight_receipt",
+  "precommit_rule": "before_first_rest_probe_fetch_immutable_public_git_policy_url;verify_exact_bytes_and_sha256_against_pinned_public_hash_and_typed_contract;retain_preflight_receipt",
   "frame_ids": {
     "Go": "historical-v3-post-aug7-id-census-go",
     "JavaScript": "historical-v3-post-aug7-id-census-javascript",
