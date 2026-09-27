@@ -217,8 +217,12 @@ pub fn validate_historical_v3_agent_review(
         .ok_or_else(|| {
             "historical-v3 agent review requires model-judged protocol authority".to_string()
         })?;
-    if inputs.protocol.schema_version != super::HISTORICAL_V3_MODEL_PROTOCOL_SCHEMA_VERSION {
-        return Err("historical-v3 agent review requires protocol v7".to_string());
+    if !matches!(
+        inputs.protocol.schema_version,
+        super::HISTORICAL_V3_MODEL_PROTOCOL_SCHEMA_VERSION
+            | super::HISTORICAL_V3_PUBLIC_ID_CENSUS_PROTOCOL_SCHEMA_VERSION
+    ) {
+        return Err("historical-v3 agent review requires model protocol v7 or v8".to_string());
     }
     if sha256(prompt_bytes) != policy.approved_prompt_sha256 {
         return Err(

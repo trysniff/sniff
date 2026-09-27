@@ -433,6 +433,11 @@ mod history_v3_source_binding;
 
 pub use history_v3_source_binding::*;
 
+#[path = "benchmark_history_v3_census_binding.rs"]
+mod history_v3_census_binding;
+
+pub use history_v3_census_binding::*;
+
 #[path = "benchmark_history_v3_prior_artifacts.rs"]
 mod history_v3_prior_artifacts;
 
@@ -1091,6 +1096,7 @@ pub use source_frame::*;
 #[path = "benchmark_public_id_census.rs"]
 mod public_id_census;
 
+pub(crate) use public_id_census::read_public_id_census_artifact;
 pub use public_id_census::*;
 
 #[path = "benchmark_source_assessment.rs"]

@@ -146,6 +146,70 @@ pub(crate) fn transcript() -> Vec<PublicIdCensusExchange> {
     ]
 }
 
+pub(crate) fn six_language_transcript() -> Vec<PublicIdCensusExchange> {
+    let rows = vec![
+        FixtureRepository {
+            id: 2,
+            name: "before/repo".to_string(),
+            created_at: "2026-08-07T23:59:59Z",
+            language: Some("Go"),
+        },
+        FixtureRepository {
+            id: 3,
+            name: "go/repo".to_string(),
+            created_at: "2026-08-08T00:00:00Z",
+            language: Some("Go"),
+        },
+        FixtureRepository {
+            id: 4,
+            name: "js/repo".to_string(),
+            created_at: "2026-08-08T00:00:01Z",
+            language: Some("JavaScript"),
+        },
+        FixtureRepository {
+            id: 5,
+            name: "kotlin/repo".to_string(),
+            created_at: "2026-08-08T00:00:02Z",
+            language: Some("Kotlin"),
+        },
+        FixtureRepository {
+            id: 6,
+            name: "python/repo".to_string(),
+            created_at: "2026-08-08T00:00:03Z",
+            language: Some("Python"),
+        },
+        FixtureRepository {
+            id: 7,
+            name: "rust/repo".to_string(),
+            created_at: "2026-08-08T00:00:04Z",
+            language: Some("Rust"),
+        },
+        FixtureRepository {
+            id: 8,
+            name: "ts/repo".to_string(),
+            created_at: "2026-08-08T00:00:05Z",
+            language: Some("TypeScript"),
+        },
+        FixtureRepository {
+            id: 9,
+            name: "after/repo".to_string(),
+            created_at: "2026-08-15T00:00:00Z",
+            language: Some("Rust"),
+        },
+    ];
+    vec![
+        rest(0, &rows),
+        graphql(&rows[..1]),
+        rest(1, &rows),
+        rest(2, &rows),
+        graphql(&rows[1..2]),
+        rest(1, &rows),
+        rest(2, &rows),
+        rest(1, &rows),
+        graphql(&rows[2..]),
+    ]
+}
+
 fn replace_response(exchange: &mut PublicIdCensusExchange, value: serde_json::Value) {
     exchange.response_body = value.to_string();
     exchange.response_sha256 = format!("{:x}", Sha256::digest(exchange.response_body.as_bytes()));

@@ -279,6 +279,15 @@ fn canonical_root(root: &Path) -> Result<PathBuf, String> {
         .map_err(|error| format!("failed to resolve public-ID census artifact root: {error}"))
 }
 
+pub(crate) fn read_public_id_census_artifact(
+    artifact_root: &Path,
+    relative: &str,
+    limit: u64,
+) -> Result<Vec<u8>, String> {
+    let root = canonical_root(artifact_root)?;
+    read_artifact(&root, relative, limit)
+}
+
 pub(super) fn read_artifact(root: &Path, relative: &str, limit: u64) -> Result<Vec<u8>, String> {
     let path = resolve_artifact(root, relative)?;
     let file = fs::File::open(&path)
