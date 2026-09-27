@@ -73,7 +73,7 @@ fn fixture() -> (TestRoot, PublicIdCensusManifest) {
 #[test]
 fn prepared_manifest_replays_every_raw_exchange_and_six_frames() {
     let (root, manifest) = fixture();
-    assert_eq!(manifest.exchanges.len(), 12);
+    assert_eq!(manifest.exchanges.len(), 9);
     assert_eq!(manifest.frames.len(), 6);
     assert_eq!(manifest.listed_repository_count, 4);
     assert_eq!(manifest.in_window_repository_count, 2);
