@@ -210,6 +210,61 @@ pub(crate) fn six_language_transcript() -> Vec<PublicIdCensusExchange> {
     ]
 }
 
+pub(crate) fn capacity_six_language_transcript() -> Vec<PublicIdCensusExchange> {
+    let mut rows = vec![FixtureRepository {
+        id: 2,
+        name: "before/repo".to_string(),
+        created_at: "2026-08-07T23:59:59Z",
+        language: Some("Go"),
+    }];
+    for language in ["Go", "JavaScript", "Kotlin", "Python", "Rust", "TypeScript"] {
+        for index in 0..20 {
+            rows.push(FixtureRepository {
+                id: rows.len() as u64 + 2,
+                name: format!("{}/repo-{index}", language.to_ascii_lowercase()),
+                created_at: "2026-08-08T00:00:00Z",
+                language: Some(language),
+            });
+        }
+    }
+    rows.push(FixtureRepository {
+        id: 123,
+        name: "after/repo".to_string(),
+        created_at: "2026-08-15T00:00:00Z",
+        language: Some("Rust"),
+    });
+    vec![
+        rest(0, &rows),
+        graphql(&rows[..1]),
+        rest(1, &rows),
+        rest(2, &rows),
+        graphql(&rows[1..2]),
+        rest(1, &rows),
+        rest(2, &rows),
+        rest(1, &rows),
+        graphql(&rows[2..100]),
+        rest(101, &rows),
+        graphql(&rows[100..]),
+    ]
+}
+
+#[test]
+fn capacity_fixture_replays_twenty_repositories_per_language() {
+    let replay = replay_public_id_census(
+        &committed_public_id_census_policy().unwrap(),
+        &preflight_fixture(),
+        &capacity_six_language_transcript(),
+    )
+    .unwrap();
+    assert_eq!(replay.frames.len(), 6);
+    assert!(
+        replay
+            .frames
+            .values()
+            .all(|frame| frame.iter().filter(|byte| **byte == b'\n').count() == 21)
+    );
+}
+
 fn replace_response(exchange: &mut PublicIdCensusExchange, value: serde_json::Value) {
     exchange.response_body = value.to_string();
     exchange.response_sha256 = format!("{:x}", Sha256::digest(exchange.response_body.as_bytes()));

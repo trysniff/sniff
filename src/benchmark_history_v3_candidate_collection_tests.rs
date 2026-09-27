@@ -564,6 +564,98 @@ async fn full_collection_replays_source_binding_pagination_and_resume() {
 }
 
 #[tokio::test]
+async fn census_collection_replays_one_manifest_and_rejects_search_dispatch() {
+    use super::super::history_v3_census_binding::tests::fixture;
+    use super::super::history_v3_census_binding::{
+        HistoricalV3PublicIdCensusArtifact, bind_historical_v3_public_id_census_frames,
+    };
+
+    let (root, manifest, prior, protocol) = fixture();
+    let census = HistoricalV3PublicIdCensusArtifact {
+        manifest: &manifest,
+        artifact_root: root.path(),
+    };
+    let audit = bind_historical_v3_public_id_census_frames(&protocol, &prior, &census).unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let mut transport = CollectionTransport {
+        calls: 0,
+        split_root: false,
+    };
+    let collection = collect_historical_v3_candidates_from_census(
+        &protocol,
+        &prior,
+        &census,
+        &audit,
+        state.path(),
+        &mut transport,
+    )
+    .await
+    .unwrap();
+    assert_eq!(transport.calls, 7);
+    assert_eq!(collection.manifest.repositories.len(), 6);
+    validate_historical_v3_candidate_collection_from_census(
+        &protocol,
+        &prior,
+        &census,
+        &audit,
+        state.path(),
+        &collection,
+    )
+    .unwrap();
+    assert!(
+        validate_historical_v3_candidate_collection(
+            &protocol,
+            &prior,
+            &[],
+            &audit,
+            state.path(),
+            &collection,
+        )
+        .is_err()
+    );
+
+    let path = state.path().join("candidate-manifest.json");
+    write_historical_v3_candidate_collection_manifest_new_from_census(
+        &path,
+        &protocol,
+        &prior,
+        &census,
+        &audit,
+        state.path(),
+        &collection,
+    )
+    .unwrap();
+    assert_eq!(
+        read_historical_v3_candidate_collection_manifest_from_census(
+            &path,
+            &protocol,
+            &prior,
+            &census,
+            &audit,
+            state.path(),
+        )
+        .unwrap(),
+        collection
+    );
+    std::fs::write(
+        root.path().join(&manifest.frames[0].artifact_path),
+        b"changed",
+    )
+    .unwrap();
+    assert!(
+        read_historical_v3_candidate_collection_manifest_from_census(
+            &path,
+            &protocol,
+            &prior,
+            &census,
+            &audit,
+            state.path(),
+        )
+        .is_err()
+    );
+}
+
+#[tokio::test]
 async fn full_collection_commits_and_replays_the_split_tree() {
     use super::super::history_v3_source_binding::tests as source_fixture;
 

@@ -161,4 +161,4 @@ fn github_language(language: HistoricalV3Language) -> &'static str {
 
 #[cfg(test)]
 #[path = "benchmark_history_v3_census_binding_tests.rs"]
-mod tests;
+pub(crate) mod tests;

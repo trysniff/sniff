@@ -2,11 +2,11 @@ use super::super::history_v2_slot_store_support::{
     read_limited, require_plain_directory, sync_directory, write_compact_json_new,
 };
 use super::{
-    HistoricalV3CandidateCollection, HistoricalV3CandidateCollectionManifest,
+    CandidateSource, HistoricalV3CandidateCollection, HistoricalV3CandidateCollectionManifest,
     HistoricalV3CandidatePartitionRecord, HistoricalV3PriorBenchmarkIdentitySeal,
-    HistoricalV3Protocol, HistoricalV3SourceBindingAudit, HistoricalV3SourceFrameArtifact,
-    decode_page, read_committed_page_checkpoint, validate_historical_v3_candidate_collection,
-    validate_historical_v3_source_binding_audit, validate_manifest_fields,
+    HistoricalV3Protocol, HistoricalV3PublicIdCensusArtifact, HistoricalV3SourceBindingAudit,
+    HistoricalV3SourceFrameArtifact, decode_page, read_committed_page_checkpoint,
+    validate_collection_with_source, validate_manifest_fields,
 };
 use std::ffi::OsString;
 use std::fs;
@@ -23,10 +23,50 @@ pub fn write_historical_v3_candidate_collection_manifest_new(
     state_root: &Path,
     collection: &HistoricalV3CandidateCollection,
 ) -> Result<(), String> {
-    validate_historical_v3_candidate_collection(
+    write_with_source(
+        path,
         protocol,
         prior_identities,
-        source_artifacts,
+        CandidateSource::Search(source_artifacts),
+        source_binding_audit,
+        state_root,
+        collection,
+    )
+}
+
+pub fn write_historical_v3_candidate_collection_manifest_new_from_census(
+    path: &Path,
+    protocol: &HistoricalV3Protocol,
+    prior_identities: &HistoricalV3PriorBenchmarkIdentitySeal,
+    census: &HistoricalV3PublicIdCensusArtifact<'_>,
+    source_binding_audit: &HistoricalV3SourceBindingAudit,
+    state_root: &Path,
+    collection: &HistoricalV3CandidateCollection,
+) -> Result<(), String> {
+    write_with_source(
+        path,
+        protocol,
+        prior_identities,
+        CandidateSource::PublicIdCensus(census),
+        source_binding_audit,
+        state_root,
+        collection,
+    )
+}
+
+fn write_with_source(
+    path: &Path,
+    protocol: &HistoricalV3Protocol,
+    prior_identities: &HistoricalV3PriorBenchmarkIdentitySeal,
+    source: CandidateSource<'_>,
+    source_binding_audit: &HistoricalV3SourceBindingAudit,
+    state_root: &Path,
+    collection: &HistoricalV3CandidateCollection,
+) -> Result<(), String> {
+    validate_collection_with_source(
+        protocol,
+        prior_identities,
+        source,
         source_binding_audit,
         state_root,
         collection,
@@ -91,6 +131,42 @@ pub fn read_historical_v3_candidate_collection_manifest(
     source_binding_audit: &HistoricalV3SourceBindingAudit,
     state_root: &Path,
 ) -> Result<HistoricalV3CandidateCollection, String> {
+    read_with_source(
+        path,
+        protocol,
+        prior_identities,
+        CandidateSource::Search(source_artifacts),
+        source_binding_audit,
+        state_root,
+    )
+}
+
+pub fn read_historical_v3_candidate_collection_manifest_from_census(
+    path: &Path,
+    protocol: &HistoricalV3Protocol,
+    prior_identities: &HistoricalV3PriorBenchmarkIdentitySeal,
+    census: &HistoricalV3PublicIdCensusArtifact<'_>,
+    source_binding_audit: &HistoricalV3SourceBindingAudit,
+    state_root: &Path,
+) -> Result<HistoricalV3CandidateCollection, String> {
+    read_with_source(
+        path,
+        protocol,
+        prior_identities,
+        CandidateSource::PublicIdCensus(census),
+        source_binding_audit,
+        state_root,
+    )
+}
+
+fn read_with_source(
+    path: &Path,
+    protocol: &HistoricalV3Protocol,
+    prior_identities: &HistoricalV3PriorBenchmarkIdentitySeal,
+    source: CandidateSource<'_>,
+    source_binding_audit: &HistoricalV3SourceBindingAudit,
+    state_root: &Path,
+) -> Result<HistoricalV3CandidateCollection, String> {
     let bytes = read_limited(
         path,
         MAX_COLLECTION_MANIFEST_BYTES,
@@ -98,12 +174,7 @@ pub fn read_historical_v3_candidate_collection_manifest(
     )?;
     let manifest: HistoricalV3CandidateCollectionManifest = serde_json::from_slice(&bytes)
         .map_err(|error| format!("invalid historical-v3 candidate manifest: {error}"))?;
-    validate_historical_v3_source_binding_audit(
-        protocol,
-        prior_identities,
-        source_artifacts,
-        source_binding_audit,
-    )?;
+    super::candidate_repositories(protocol, prior_identities, source, source_binding_audit)?;
     validate_manifest_fields(protocol, source_binding_audit, &manifest)?;
     let mut candidates = Vec::new();
     for partition in &manifest.partitions {
@@ -122,10 +193,10 @@ pub fn read_historical_v3_candidate_collection_manifest(
         manifest,
         candidates,
     };
-    validate_historical_v3_candidate_collection(
+    validate_collection_with_source(
         protocol,
         prior_identities,
-        source_artifacts,
+        source,
         source_binding_audit,
         state_root,
         &collection,

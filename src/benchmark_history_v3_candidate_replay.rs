@@ -1,8 +1,9 @@
 use super::{
-    HISTORICAL_V3_CANDIDATE_REQUEST_SCHEMA_VERSION, HistoricalV3CandidateCollection,
-    HistoricalV3CandidateIdentity, HistoricalV3CandidatePageRequest,
-    HistoricalV3CandidatePartition, HistoricalV3CandidatePartitionRecord,
-    HistoricalV3PriorBenchmarkIdentitySeal, HistoricalV3Protocol, HistoricalV3SourceBindingAudit,
+    CandidateSource, HISTORICAL_V3_CANDIDATE_REQUEST_SCHEMA_VERSION,
+    HistoricalV3CandidateCollection, HistoricalV3CandidateIdentity,
+    HistoricalV3CandidatePageRequest, HistoricalV3CandidatePartition,
+    HistoricalV3CandidatePartitionRecord, HistoricalV3PriorBenchmarkIdentitySeal,
+    HistoricalV3Protocol, HistoricalV3PublicIdCensusArtifact, HistoricalV3SourceBindingAudit,
     HistoricalV3SourceFrameArtifact, MAX_SEARCH_RESULTS, PAGE_SIZE, REQUEST_CONTRACT,
     candidate_repositories, decode_page, initial_partitions, prepare_historical_v3_stream_task,
     read_committed_page_checkpoint, seal_page_request, split_partition, validate_manifest_fields,
@@ -26,12 +27,44 @@ pub fn validate_historical_v3_candidate_collection(
     state_root: &Path,
     collection: &HistoricalV3CandidateCollection,
 ) -> Result<(), String> {
-    let expected_repositories = candidate_repositories(
+    validate_collection_with_source(
         protocol,
         prior_identities,
-        source_artifacts,
+        CandidateSource::Search(source_artifacts),
         source_binding_audit,
-    )?;
+        state_root,
+        collection,
+    )
+}
+
+pub fn validate_historical_v3_candidate_collection_from_census(
+    protocol: &HistoricalV3Protocol,
+    prior_identities: &HistoricalV3PriorBenchmarkIdentitySeal,
+    census: &HistoricalV3PublicIdCensusArtifact<'_>,
+    source_binding_audit: &HistoricalV3SourceBindingAudit,
+    state_root: &Path,
+    collection: &HistoricalV3CandidateCollection,
+) -> Result<(), String> {
+    validate_collection_with_source(
+        protocol,
+        prior_identities,
+        CandidateSource::PublicIdCensus(census),
+        source_binding_audit,
+        state_root,
+        collection,
+    )
+}
+
+pub(super) fn validate_collection_with_source(
+    protocol: &HistoricalV3Protocol,
+    prior_identities: &HistoricalV3PriorBenchmarkIdentitySeal,
+    source: CandidateSource<'_>,
+    source_binding_audit: &HistoricalV3SourceBindingAudit,
+    state_root: &Path,
+    collection: &HistoricalV3CandidateCollection,
+) -> Result<(), String> {
+    let expected_repositories =
+        candidate_repositories(protocol, prior_identities, source, source_binding_audit)?;
     validate_manifest_fields(protocol, source_binding_audit, &collection.manifest)?;
     if collection.manifest.repositories != expected_repositories {
         return Err("historical-v3 candidate repository census changed".to_string());

@@ -438,6 +438,9 @@ mod history_v3_census_binding;
 
 pub use history_v3_census_binding::*;
 
+#[cfg(test)]
+pub(crate) use history_v3_census_binding::tests::capacity_fixture as historical_v3_capacity_census_fixture;
+
 #[path = "benchmark_history_v3_prior_artifacts.rs"]
 mod history_v3_prior_artifacts;
 

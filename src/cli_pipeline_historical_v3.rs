@@ -12,8 +12,10 @@ use crate::benchmark::{
     HistoricalV3CandidateCollection, HistoricalV3CandidatePageTransport, HistoricalV3Language,
     HistoricalV3NextStep, HistoricalV3OrderedStopStatus, HistoricalV3Protocol,
     HistoricalV3ReplayProgress, HistoricalV3RunPaths, advance_historical_v3_ordered_step,
-    collect_historical_v3_candidates, replay_historical_v3_ordered_progress,
-    seal_historical_v3_protocol, write_historical_v3_candidate_collection_manifest_new,
+    collect_historical_v3_candidates, collect_historical_v3_candidates_from_census,
+    replay_historical_v3_ordered_progress, seal_historical_v3_protocol,
+    write_historical_v3_candidate_collection_manifest_new,
+    write_historical_v3_candidate_collection_manifest_new_from_census,
 };
 use std::path::Path;
 
@@ -104,6 +106,28 @@ async fn collect_bound<T: HistoricalV3CandidatePageTransport>(
     let manifest_path = bound.root.join("candidate-manifest.json");
     if manifest_path.exists() {
         return bound.collection();
+    }
+    if bound.unbound.census.is_some() {
+        let census = bound.unbound.census_artifact()?;
+        let collection = collect_historical_v3_candidates_from_census(
+            &bound.unbound.protocol,
+            &bound.unbound.prior,
+            &census,
+            &bound.audit,
+            &bound.root.join("candidate-state"),
+            transport,
+        )
+        .await?;
+        write_historical_v3_candidate_collection_manifest_new_from_census(
+            &manifest_path,
+            &bound.unbound.protocol,
+            &bound.unbound.prior,
+            &census,
+            &bound.audit,
+            &bound.root.join("candidate-state"),
+            &collection,
+        )?;
+        return Ok(collection);
     }
     let collection = collect_historical_v3_candidates(
         &bound.unbound.protocol,

@@ -3,17 +3,37 @@ use crate::benchmark::release::history_v3_source_binding::tests::{
     fixtures, prior_identity_seal, protocol as search_protocol,
 };
 use crate::benchmark::release::public_id_census::replay::tests::{
-    preflight_fixture, six_language_transcript,
+    capacity_six_language_transcript, preflight_fixture, six_language_transcript,
 };
 use crate::benchmark::release::{
     HISTORICAL_V3_MODEL_PROTOCOL_SCHEMA_VERSION, HistoricalV3ModelReviewPolicy,
-    bind_historical_v3_source_frames, committed_public_id_census_policy,
+    PublicIdCensusExchange, bind_historical_v3_source_frames, committed_public_id_census_policy,
     prepare_public_id_census_manifest, replay_public_id_census, seal_historical_v3_protocol,
 };
 use std::collections::BTreeMap;
 use std::fs;
 
-fn fixture() -> (
+pub(crate) fn fixture() -> (
+    tempfile::TempDir,
+    PublicIdCensusManifest,
+    HistoricalV3PriorBenchmarkIdentitySeal,
+    HistoricalV3Protocol,
+) {
+    fixture_from_transcript(six_language_transcript())
+}
+
+pub(crate) fn capacity_fixture() -> (
+    tempfile::TempDir,
+    PublicIdCensusManifest,
+    HistoricalV3PriorBenchmarkIdentitySeal,
+    HistoricalV3Protocol,
+) {
+    fixture_from_transcript(capacity_six_language_transcript())
+}
+
+fn fixture_from_transcript(
+    exchanges: Vec<PublicIdCensusExchange>,
+) -> (
     tempfile::TempDir,
     PublicIdCensusManifest,
     HistoricalV3PriorBenchmarkIdentitySeal,
@@ -22,7 +42,6 @@ fn fixture() -> (
     let root = tempfile::tempdir().unwrap();
     let policy = committed_public_id_census_policy().unwrap();
     let preflight = preflight_fixture();
-    let exchanges = six_language_transcript();
     let derived = replay_public_id_census(&policy, &preflight, &exchanges).unwrap();
     fs::create_dir(root.path().join("raw")).unwrap();
     fs::create_dir(root.path().join("frames")).unwrap();
