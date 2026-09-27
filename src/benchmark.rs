@@ -681,8 +681,8 @@ pub use release::{
 };
 
 pub use release::{
-    PUBLIC_ID_CENSUS_POLICY_SCHEMA_VERSION, PublicIdCensusPolicy,
-    committed_public_id_census_policy, public_id_census_policy_sha256,
+    PUBLIC_ID_CENSUS_POLICY_SCHEMA_VERSION, PUBLIC_ID_CENSUS_PUBLIC_POLICY_SHA256,
+    PublicIdCensusPolicy, committed_public_id_census_policy, public_id_census_policy_sha256,
     validate_public_id_census_policy,
 };
 
