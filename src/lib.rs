@@ -23,6 +23,7 @@ pub(crate) mod repository_proof;
 pub(crate) mod review_journal;
 pub mod roles;
 pub(crate) mod sandbox;
+pub(crate) mod scan_lock;
 pub mod scorer;
 pub(crate) mod semantic_cache;
 pub mod semantic_index;

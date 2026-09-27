@@ -269,6 +269,8 @@ pub async fn run(
     let config = crate::config_loader::resolve_config(target_path)
         .map_err(|err| IoError::new(ErrorKind::InvalidInput, err))?;
     let repository_root = io::repository_root_for_target(target_path);
+    let _scan_lock = crate::scan_lock::RepositoryScanLock::acquire(&repository_root, &report_path)
+        .map_err(IoError::other)?;
     let semantic_cache =
         crate::semantic_cache::SemanticIndexCache::for_repository(&repository_root)
             .map_err(IoError::other)?;

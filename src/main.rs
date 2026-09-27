@@ -18,6 +18,7 @@ mod repository_proof;
 #[path = "analyzer_journal.rs"]
 pub(crate) mod review_journal;
 pub mod roles;
+pub(crate) mod scan_lock;
 pub mod scorer;
 pub(crate) mod semantic_cache;
 pub mod semantic_index;
