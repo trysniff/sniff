@@ -233,7 +233,7 @@ pub(crate) fn capacity_six_language_transcript() -> Vec<PublicIdCensusExchange> 
         created_at: "2026-08-15T00:00:00Z",
         language: Some("Rust"),
     });
-    vec![
+    let mut exchanges = vec![
         rest(0, &rows),
         graphql(&rows[..1]),
         rest(1, &rows),
@@ -245,15 +245,34 @@ pub(crate) fn capacity_six_language_transcript() -> Vec<PublicIdCensusExchange> 
         graphql(&rows[2..100]),
         rest(101, &rows),
         graphql(&rows[100..]),
-    ]
+    ];
+    let first_template = "<https://api.github.com/repositories{?since}>; rel=\"first\"";
+    exchanges[0].response_link = Some(format!(
+        "{}, {first_template}",
+        exchanges[0].response_link.as_deref().unwrap()
+    ));
+    exchanges[9].response_link = Some(first_template.to_string());
+    exchanges
 }
 
 #[test]
 fn capacity_fixture_replays_twenty_repositories_per_language() {
+    let exchanges = capacity_six_language_transcript();
+    assert!(
+        exchanges[0]
+            .response_link
+            .as_ref()
+            .unwrap()
+            .contains("rel=\"next\"")
+    );
+    assert_eq!(
+        exchanges[9].response_link.as_deref(),
+        Some("<https://api.github.com/repositories{?since}>; rel=\"first\"")
+    );
     let replay = replay_public_id_census(
         &committed_public_id_census_policy().unwrap(),
         &preflight_fixture(),
-        &capacity_six_language_transcript(),
+        &exchanges,
     )
     .unwrap();
     assert_eq!(replay.frames.len(), 6);
@@ -263,6 +282,23 @@ fn capacity_fixture_replays_twenty_repositories_per_language() {
             .values()
             .all(|frame| frame.iter().filter(|byte| **byte == b'\n').count() == 21)
     );
+}
+
+#[test]
+fn github_templated_first_link_does_not_change_the_verified_next_cursor() {
+    let policy = committed_public_id_census_policy().unwrap();
+    let link = concat!(
+        "<https://api.github.com/repositories?per_page=100&since=371>; rel=\"next\", ",
+        "<https://api.github.com/repositories{?since}>; rel=\"first\""
+    );
+    assert_eq!(parse_next_since(Some(link), &policy).unwrap(), Some(371));
+    for invalid in [
+        "<https://api.github.com/other{?since}>; rel=\"first\"",
+        "<https://api.github.com/repositories{?since}>; rel=\"next\"",
+        "<https://api.github.com/repositories{?other}>; rel=\"first\"",
+    ] {
+        assert!(parse_next_since(Some(invalid), &policy).is_err());
+    }
 }
 
 fn replace_response(exchange: &mut PublicIdCensusExchange, value: serde_json::Value) {
