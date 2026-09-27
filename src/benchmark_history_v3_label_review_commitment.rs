@@ -54,7 +54,14 @@ pub fn audit_historical_v3_label_reviews(
     bundle: &HistoricalV3SourceReviewBundle,
     worksheets: &[HistoricalV3LabelWorksheet],
 ) -> Result<HistoricalV3LabelAudit, String> {
-    let required = inputs.protocol.human_review_policy.independent_reviewers;
+    let required = inputs
+        .protocol
+        .human_review_policy
+        .as_ref()
+        .ok_or_else(|| {
+            "historical-v3 human label audit requires human-review authority".to_string()
+        })?
+        .independent_reviewers;
     if required != 2 || worksheets.len() != required {
         return Err(format!(
             "historical-v3 label audit requires exactly {required} independent reviews"
@@ -153,7 +160,11 @@ fn pattern_signature(decision: &HistoricalV3ReviewDecision) -> (SlopPattern, Str
 
 fn validate_review_protocol(inputs: &HistoricalV3SourceReviewInputs<'_>) -> Result<(), String> {
     validate_historical_v3_protocol(inputs.protocol)?;
-    let policy = &inputs.protocol.human_review_policy;
+    let policy = inputs
+        .protocol
+        .human_review_policy
+        .as_ref()
+        .ok_or_else(|| "historical-v3 human review requires human-review authority".to_string())?;
     if !policy.source_only_review
         || policy.independent_reviewers != 2
         || !policy.distinct_dispute_resolver

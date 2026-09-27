@@ -79,7 +79,7 @@ fn protocol() -> HistoricalV3Protocol {
             all_capabilities_dropped: true,
             no_new_privileges: true,
         },
-        human_review_policy: HistoricalV3HumanReviewPolicy {
+        human_review_policy: Some(HistoricalV3HumanReviewPolicy {
             source_only_review: true,
             independent_reviewers: 2,
             distinct_dispute_resolver: true,
@@ -94,7 +94,8 @@ fn protocol() -> HistoricalV3Protocol {
             exact_after_removal_required: true,
             relocation_check_required: true,
             simpler_counterfactual_required: true,
-        },
+        }),
+        model_review_policy: None,
         stop_rule: HistoricalV3StopRule {
             accepted_target_per_language: 40,
             distinct_repository_floor_per_language: 20,
@@ -218,7 +219,11 @@ fn seals_only_the_locked_blind_fail_closed_protocol() {
     );
 
     let mut changed = protocol.clone();
-    changed.human_review_policy.independent_reviewers = 3;
+    changed
+        .human_review_policy
+        .as_mut()
+        .unwrap()
+        .independent_reviewers = 3;
     assert!(
         seal_historical_v3_protocol(changed)
             .unwrap_err()
@@ -230,7 +235,7 @@ fn seals_only_the_locked_blind_fail_closed_protocol() {
     assert!(
         seal_historical_v3_protocol(changed)
             .unwrap_err()
-            .contains("remain blind")
+            .contains("cannot authorize model review")
     );
 
     let mut changed = protocol.clone();
@@ -495,4 +500,89 @@ fn distinguishes_more_work_from_terminal_source_exhaustion() {
         .unwrap(),
         HistoricalV3StopStatus::FailedSourceExhausted { reviewed: 2, .. }
     ));
+}
+
+#[test]
+fn model_protocol_is_distinct_from_the_human_review_authority() {
+    let human = protocol();
+    let mut model = human.clone();
+    model.schema_version = HISTORICAL_V3_MODEL_PROTOCOL_SCHEMA_VERSION;
+    model.protocol_contract = MODEL_PROTOCOL_CONTRACT.to_string();
+    model.human_review_policy = None;
+    model.model_review_policy = Some(HistoricalV3ModelReviewPolicy {
+        source_only_review: true,
+        independent_reviewers: 2,
+        approved_prompt_sha256: sha('a'),
+        prompt_public_url:
+            "https://raw.githubusercontent.com/trysniff/sniff/0000000000000000000000000000000000000000/sniffbench/HISTORICAL_V3_AGENT_REVIEW_PROMPT.md".to_string(),
+        exact_presented_material_record_required: true,
+        invocation_response_record_required: true,
+        disagreements_remain_unresolved: true,
+        human_gold_claim_forbidden: true,
+    });
+    model.model_access_forbidden = false;
+    let model = seal_historical_v3_protocol(model).unwrap();
+    validate_historical_v3_protocol(&model).unwrap();
+    assert_ne!(model.protocol_sha256, human.protocol_sha256);
+    assert!(
+        serde_json::to_value(&human)
+            .unwrap()
+            .get("model_review_policy")
+            .is_none()
+    );
+    assert!(
+        serde_json::to_value(&model)
+            .unwrap()
+            .get("human_review_policy")
+            .is_none()
+    );
+
+    let mut changed_prompt = model.clone();
+    changed_prompt
+        .model_review_policy
+        .as_mut()
+        .unwrap()
+        .approved_prompt_sha256 = sha('b');
+    assert!(
+        validate_historical_v3_protocol(&changed_prompt)
+            .unwrap_err()
+            .contains("commitment changed")
+    );
+
+    let mut changed_environment = model.clone();
+    changed_environment.test_recipe_policy.environments[0].toolchain_manifest_sha256 = sha('d');
+    assert!(
+        validate_historical_v3_protocol(&changed_environment)
+            .unwrap_err()
+            .contains("commitment changed")
+    );
+
+    let mut mutable_prompt = model.clone();
+    mutable_prompt
+        .model_review_policy
+        .as_mut()
+        .unwrap()
+        .prompt_public_url =
+        "https://raw.githubusercontent.com/trysniff/sniff/main/prompt.md".to_string();
+    assert!(
+        seal_historical_v3_protocol(mutable_prompt)
+            .unwrap_err()
+            .contains("immutable GitHub commit")
+    );
+
+    let mut mixed = model.clone();
+    mixed.human_review_policy = human.human_review_policy.clone();
+    assert!(
+        seal_historical_v3_protocol(mixed)
+            .unwrap_err()
+            .contains("cannot use human-review authority")
+    );
+
+    let mut unauthorized = human;
+    unauthorized.model_review_policy = model.model_review_policy;
+    assert!(
+        seal_historical_v3_protocol(unauthorized)
+            .unwrap_err()
+            .contains("cannot authorize model review")
+    );
 }
