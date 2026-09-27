@@ -1,36 +1,76 @@
+use super::super::{read_public_id_census_artifact, validate_historical_v3_public_id_census_audit};
 use super::{
-    HistoricalV3CandidatePartition, HistoricalV3CandidateRepository,
+    CandidateSource, HistoricalV3CandidatePartition, HistoricalV3CandidateRepository,
     HistoricalV3PriorBenchmarkIdentitySeal, HistoricalV3Protocol, HistoricalV3SourceBindingAudit,
-    HistoricalV3SourceFrameArtifact, HistoricalV3SourceRepositoryIdentity, format_utc_second,
-    parse_historical_v3_source_frame, parse_utc_second, split_inclusive_utc_range,
-    validate_historical_v3_protocol, validate_historical_v3_source_binding_audit,
+    HistoricalV3SourceRepositoryIdentity, format_utc_second, parse_historical_v3_source_frame,
+    parse_utc_second, split_inclusive_utc_range, validate_historical_v3_protocol,
+    validate_historical_v3_source_binding_audit,
 };
+use sha2::{Digest, Sha256};
+use std::borrow::Cow;
 use std::collections::{HashSet, VecDeque};
+
+const MAX_FRAME_BYTES: u64 = 512 * 1024 * 1024;
 
 pub(super) fn candidate_repositories(
     protocol: &HistoricalV3Protocol,
     prior_identities: &HistoricalV3PriorBenchmarkIdentitySeal,
-    source_artifacts: &[HistoricalV3SourceFrameArtifact<'_>],
+    source: CandidateSource<'_>,
     source_binding_audit: &HistoricalV3SourceBindingAudit,
 ) -> Result<Vec<HistoricalV3CandidateRepository>, String> {
-    validate_historical_v3_source_binding_audit(
-        protocol,
-        prior_identities,
-        source_artifacts,
-        source_binding_audit,
-    )?;
+    let frame_bytes = match source {
+        CandidateSource::Search(artifacts) => {
+            validate_historical_v3_source_binding_audit(
+                protocol,
+                prior_identities,
+                artifacts,
+                source_binding_audit,
+            )?;
+            artifacts
+                .iter()
+                .map(|artifact| Cow::Borrowed(artifact.frame))
+                .collect::<Vec<_>>()
+        }
+        CandidateSource::PublicIdCensus(census) => {
+            validate_historical_v3_public_id_census_audit(
+                protocol,
+                prior_identities,
+                census,
+                source_binding_audit,
+            )?;
+            census
+                .manifest
+                .frames
+                .iter()
+                .map(|frame| {
+                    let bytes = read_public_id_census_artifact(
+                        census.artifact_root,
+                        &frame.artifact_path,
+                        MAX_FRAME_BYTES,
+                    )?;
+                    if format!("{:x}", Sha256::digest(&bytes)) != frame.artifact_sha256 {
+                        return Err(
+                            "historical-v3 census frame changed during candidate loading"
+                                .to_string(),
+                        );
+                    }
+                    Ok(Cow::Owned(bytes))
+                })
+                .collect::<Result<Vec<_>, String>>()?
+        }
+    };
     let excluded = prior_identities
         .repositories
         .iter()
         .map(String::as_str)
         .collect::<HashSet<_>>();
     let mut repositories = Vec::new();
-    for (language, artifact) in protocol.languages.iter().copied().zip(source_artifacts) {
+    for (language, frame) in protocol.languages.iter().copied().zip(frame_bytes) {
         for HistoricalV3SourceRepositoryIdentity {
             name_with_owner,
             repository_id,
             ..
-        } in parse_historical_v3_source_frame(artifact.frame)?
+        } in parse_historical_v3_source_frame(&frame)?
         {
             if !excluded.contains(name_with_owner.as_str()) {
                 repositories.push(HistoricalV3CandidateRepository {

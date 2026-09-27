@@ -35,6 +35,8 @@ struct PublicPrecommitProof {
     protocol: PublicArtifactProof,
     source_policies: Vec<PublicArtifactProof>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    source_manifest_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     agent_prompt: Option<PublicArtifactProof>,
     proof_sha256: String,
 }
@@ -150,13 +152,18 @@ pub(super) fn expected_commits(bound: &BoundInputs) -> Result<BTreeMap<String, S
         .model_review_policy
         .as_ref()
         .map(|policy| &policy.prompt_public_url);
-    for url in std::iter::once(&config.public_protocol_url)
+    let source_urls = config
+        .source_frames
+        .iter()
+        .map(|frame| &frame.public_policy_url)
         .chain(
             config
-                .source_frames
+                .census_source
                 .iter()
-                .map(|frame| &frame.public_policy_url),
-        )
+                .map(|source| &source.public_policy_url),
+        );
+    for url in std::iter::once(&config.public_protocol_url)
+        .chain(source_urls)
         .chain(prompt_url)
     {
         validate_public_url(url)?;
@@ -216,7 +223,8 @@ pub(super) async fn ensure_public_precommit<T: PublicArtifactTransport>(
         fetched_sha256: sha256(&remote_protocol),
         fetched_base64: STANDARD.encode(&remote_protocol),
     };
-    let mut source_policies = Vec::with_capacity(bound.unbound.frames.len());
+    let mut source_policies =
+        Vec::with_capacity(if bound.unbound.census.is_some() { 1 } else { 6 });
     for (paths, frame) in config.source_frames.iter().zip(&bound.unbound.frames) {
         let remote = transport.fetch(&paths.public_policy_url).await?;
         if remote.len() > MAX_PUBLIC_ARTIFACT_BYTES {
@@ -233,6 +241,34 @@ pub(super) async fn ensure_public_precommit<T: PublicArtifactTransport>(
             url: paths.public_policy_url.clone(),
             semantic_sha256: sha256(
                 &serde_json::to_vec(&frame.manifest.policy).map_err(|error| error.to_string())?,
+            ),
+            fetched_sha256: sha256(&remote),
+            fetched_base64: STANDARD.encode(&remote),
+        });
+    }
+    if let (Some(paths), Some(census)) = (&config.census_source, &bound.unbound.census) {
+        let remote = transport.fetch(&paths.public_policy_url).await?;
+        if remote.len() > MAX_PUBLIC_ARTIFACT_BYTES {
+            return Err("public precommit census policy is too large".to_string());
+        }
+        if remote != census.manifest.preflight.fetched_policy.as_bytes() {
+            return Err(
+                "public precommit census policy bytes differ from the sealed preflight".to_string(),
+            );
+        }
+        let policy: serde_json::Value = serde_json::from_slice(&remote)
+            .map_err(|error| format!("invalid public census policy: {error}"))?;
+        if policy
+            != serde_json::to_value(&census.manifest.policy).map_err(|error| error.to_string())?
+        {
+            return Err(
+                "public precommit census policy differs from the bound manifest".to_string(),
+            );
+        }
+        source_policies.push(PublicArtifactProof {
+            url: paths.public_policy_url.clone(),
+            semantic_sha256: sha256(
+                &serde_json::to_vec(&census.manifest.policy).map_err(|error| error.to_string())?,
             ),
             fetched_sha256: sha256(&remote),
             fetched_base64: STANDARD.encode(&remote),
@@ -259,10 +295,21 @@ pub(super) async fn ensure_public_precommit<T: PublicArtifactTransport>(
         None
     };
     let mut proof = PublicPrecommitProof {
-        schema_version: if agent_prompt.is_some() { 2 } else { 1 },
+        schema_version: if bound.unbound.census.is_some() {
+            3
+        } else if agent_prompt.is_some() {
+            2
+        } else {
+            1
+        },
         commits,
         protocol,
         source_policies,
+        source_manifest_sha256: bound
+            .unbound
+            .census
+            .as_ref()
+            .map(|census| census.manifest.manifest_sha256.clone()),
         agent_prompt,
         proof_sha256: String::new(),
     };
@@ -284,12 +331,29 @@ pub(super) fn validate_public_precommit(bound: &BoundInputs) -> Result<(), Strin
     let mut unsigned = proof.clone();
     unsigned.proof_sha256.clear();
     let model_policy = bound.unbound.protocol.model_review_policy.as_ref();
-    let expected_schema = if model_policy.is_some() { 2 } else { 1 };
+    let expected_schema = if bound.unbound.census.is_some() {
+        3
+    } else if model_policy.is_some() {
+        2
+    } else {
+        1
+    };
+    let expected_source_count = if bound.unbound.census.is_some() {
+        1
+    } else {
+        bound.unbound.frames.len()
+    };
     if proof.schema_version != expected_schema
         || proof.proof_sha256
             != sha256(&serde_json::to_vec(&unsigned).map_err(|error| error.to_string())?)
         || proof.protocol.url != bound.unbound.config.public_protocol_url
-        || proof.source_policies.len() != bound.unbound.frames.len()
+        || proof.source_policies.len() != expected_source_count
+        || proof.source_manifest_sha256
+            != bound
+                .unbound
+                .census
+                .as_ref()
+                .map(|census| census.manifest.manifest_sha256.clone())
     {
         return Err("public precommit proof changed".to_string());
     }
@@ -337,6 +401,28 @@ pub(super) fn validate_public_precommit(bound: &BoundInputs) -> Result<(), Strin
                     .map_err(|error| error.to_string())?
         {
             return Err("public precommit source policy proof changed".to_string());
+        }
+    }
+    if let (Some(entry), Some(paths), Some(census)) = (
+        proof.source_policies.first(),
+        &bound.unbound.config.census_source,
+        &bound.unbound.census,
+    ) {
+        let semantic = serde_json::to_vec(&census.manifest.policy)
+            .map_err(|error| format!("failed to verify census policy: {error}"))?;
+        let fetched = verified_fetched_bytes(entry)?;
+        if fetched != census.manifest.preflight.fetched_policy.as_bytes() {
+            return Err("public precommit census policy bytes changed from preflight".to_string());
+        }
+        let fetched_policy: serde_json::Value = serde_json::from_slice(&fetched)
+            .map_err(|error| format!("invalid replayed public census policy: {error}"))?;
+        if entry.url != paths.public_policy_url
+            || entry.semantic_sha256 != sha256(&semantic)
+            || fetched_policy
+                != serde_json::to_value(&census.manifest.policy)
+                    .map_err(|error| error.to_string())?
+        {
+            return Err("public precommit census policy proof changed".to_string());
         }
     }
     match (model_policy, &proof.agent_prompt) {

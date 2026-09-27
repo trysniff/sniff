@@ -7,6 +7,9 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 mod release;
 
 #[cfg(test)]
+pub(crate) use release::historical_v3_capacity_census_fixture;
+
+#[cfg(test)]
 pub(crate) use release::RELEASE_SCHEMA_VERSION;
 #[cfg(test)]
 pub(crate) use release::historical_v3_agent_review_fixture;
@@ -532,10 +535,14 @@ pub use release::{
     HistoricalV3CandidatePageRequest, HistoricalV3CandidatePageTransport,
     HistoricalV3CandidatePartition, HistoricalV3CandidatePartitionRecord,
     HistoricalV3CandidateRepository, collect_historical_v3_candidates,
-    read_historical_v3_candidate_collection_manifest, validate_historical_v3_candidate_collection,
+    collect_historical_v3_candidates_from_census, read_historical_v3_candidate_collection_manifest,
+    read_historical_v3_candidate_collection_manifest_from_census,
+    validate_historical_v3_candidate_collection,
     validate_historical_v3_candidate_collection_commitment,
+    validate_historical_v3_candidate_collection_from_census,
     validate_historical_v3_candidate_manifest_commitment,
     write_historical_v3_candidate_collection_manifest_new,
+    write_historical_v3_candidate_collection_manifest_new_from_census,
 };
 
 pub use release::{

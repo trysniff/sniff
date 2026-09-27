@@ -1,10 +1,15 @@
 use super::precommit;
 use crate::benchmark::{
-    HistoricalV3CandidateCollection, HistoricalV3PriorBenchmarkIdentitySeal, HistoricalV3Protocol,
-    HistoricalV3SourceBindingAudit, HistoricalV3SourceFrameArtifact, SourceFrameCollectionManifest,
-    bind_historical_v3_source_frames, derive_frozen_historical_v3_prior_identity_seal,
-    read_historical_v3_candidate_collection_manifest, validate_historical_v3_prior_identity_seal,
-    validate_historical_v3_protocol, validate_historical_v3_source_binding_audit,
+    HISTORICAL_V3_PUBLIC_ID_CENSUS_PROTOCOL_SCHEMA_VERSION, HistoricalV3CandidateCollection,
+    HistoricalV3PriorBenchmarkIdentitySeal, HistoricalV3Protocol,
+    HistoricalV3PublicIdCensusArtifact, HistoricalV3SourceBindingAudit,
+    HistoricalV3SourceFrameArtifact, PublicIdCensusManifest, SourceFrameCollectionManifest,
+    bind_historical_v3_public_id_census_frames, bind_historical_v3_source_frames,
+    derive_frozen_historical_v3_prior_identity_seal,
+    read_historical_v3_candidate_collection_manifest,
+    read_historical_v3_candidate_collection_manifest_from_census,
+    validate_historical_v3_prior_identity_seal, validate_historical_v3_protocol,
+    validate_historical_v3_public_id_census_audit, validate_historical_v3_source_binding_audit,
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
@@ -24,6 +29,14 @@ pub(super) struct SourceFramePaths {
     pub manifest: PathBuf,
     pub artifact_root: PathBuf,
     pub frame: PathBuf,
+    pub public_policy_url: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct CensusSourcePaths {
+    pub manifest: PathBuf,
+    pub artifact_root: PathBuf,
     pub public_policy_url: String,
 }
 
@@ -68,7 +81,10 @@ pub(super) struct OperatorConfig {
     pub public_protocol_url: String,
     pub prior_identity_seal: PathBuf,
     pub prior_sources: PriorSourcePaths,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub source_frames: Vec<SourceFramePaths>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub census_source: Option<CensusSourcePaths>,
     pub operator_root: PathBuf,
     pub github_token_env: String,
     pub docker_program: String,
@@ -80,11 +96,17 @@ pub(super) struct LoadedFrame {
     pub frame: Vec<u8>,
 }
 
+pub(super) struct LoadedCensus {
+    pub manifest: PublicIdCensusManifest,
+    pub artifact_root: PathBuf,
+}
+
 pub(super) struct UnboundInputs {
     pub config: OperatorConfig,
     pub protocol: HistoricalV3Protocol,
     pub prior: HistoricalV3PriorBenchmarkIdentitySeal,
     pub frames: Vec<LoadedFrame>,
+    pub census: Option<LoadedCensus>,
 }
 
 pub(super) struct BoundInputs {
@@ -116,11 +138,32 @@ impl UnboundInputs {
             })
             .collect()
     }
+
+    pub fn census_artifact(&self) -> Result<HistoricalV3PublicIdCensusArtifact<'_>, String> {
+        let census = self
+            .census
+            .as_ref()
+            .ok_or("historical-v3 census source is missing")?;
+        Ok(HistoricalV3PublicIdCensusArtifact {
+            manifest: &census.manifest,
+            artifact_root: &census.artifact_root,
+        })
+    }
 }
 
 impl BoundInputs {
     pub fn collection(&self) -> Result<HistoricalV3CandidateCollection, String> {
         precommit::validate_public_precommit(self)?;
+        if self.unbound.census.is_some() {
+            return read_historical_v3_candidate_collection_manifest_from_census(
+                &self.root.join("candidate-manifest.json"),
+                &self.unbound.protocol,
+                &self.unbound.prior,
+                &self.unbound.census_artifact()?,
+                &self.audit,
+                &self.root.join("candidate-state"),
+            );
+        }
         read_historical_v3_candidate_collection_manifest(
             &self.root.join("candidate-manifest.json"),
             &self.unbound.protocol,
@@ -166,17 +209,7 @@ fn load_unbound_with_prior(
     ] {
         require_absolute(path, name)?;
     }
-    if config.source_frames.len() != 6 {
-        return Err("historical-v3 operator requires exactly six source frames".to_string());
-    }
     precommit::validate_public_url(&config.public_protocol_url)?;
-    for frame in &config.source_frames {
-        require_absolute(&frame.manifest, "source-frame manifest")?;
-        require_absolute(&frame.artifact_root, "source-frame artifact root")?;
-        require_absolute(&frame.frame, "source-frame CSV")?;
-        require_plain_directory(&frame.artifact_root, "source-frame artifact root")?;
-        precommit::validate_public_url(&frame.public_policy_url)?;
-    }
     if config.github_token_env.is_empty()
         || !config
             .github_token_env
@@ -188,6 +221,34 @@ fn load_unbound_with_prior(
     }
     let protocol = read_json(&config.protocol, MAX_INPUT_BYTES, "protocol")?;
     validate_historical_v3_protocol(&protocol)?;
+    let is_census =
+        protocol.schema_version == HISTORICAL_V3_PUBLIC_ID_CENSUS_PROTOCOL_SCHEMA_VERSION;
+    if is_census {
+        if !config.source_frames.is_empty() || config.census_source.is_none() {
+            return Err("historical-v3 v8 requires only one public-ID census source".to_string());
+        }
+        let paths = config
+            .census_source
+            .as_ref()
+            .expect("checked census source");
+        require_absolute(&paths.manifest, "census manifest")?;
+        require_absolute(&paths.artifact_root, "census artifact root")?;
+        require_plain_directory(&paths.artifact_root, "census artifact root")?;
+        precommit::validate_public_url(&paths.public_policy_url)?;
+    } else {
+        if config.source_frames.len() != 6 || config.census_source.is_some() {
+            return Err(
+                "historical-v3 Search protocol requires exactly six source frames".to_string(),
+            );
+        }
+        for frame in &config.source_frames {
+            require_absolute(&frame.manifest, "source-frame manifest")?;
+            require_absolute(&frame.artifact_root, "source-frame artifact root")?;
+            require_absolute(&frame.frame, "source-frame CSV")?;
+            require_plain_directory(&frame.artifact_root, "source-frame artifact root")?;
+            precommit::validate_public_url(&frame.public_policy_url)?;
+        }
+    }
     let prior = read_json(
         &config.prior_identity_seal,
         MAX_INPUT_BYTES,
@@ -210,11 +271,29 @@ fn load_unbound_with_prior(
             })
         })
         .collect::<Result<Vec<_>, String>>()?;
+    let census = config
+        .census_source
+        .as_ref()
+        .map(|paths| -> Result<LoadedCensus, String> {
+            Ok(LoadedCensus {
+                manifest: read_json(&paths.manifest, MAX_INPUT_BYTES, "census manifest")?,
+                artifact_root: paths.artifact_root.clone(),
+            })
+        })
+        .transpose()?;
+    if let (Some(paths), Some(census)) = (&config.census_source, &census)
+        && paths.public_policy_url != census.manifest.preflight.public_policy_url
+    {
+        return Err(
+            "historical-v3 census public policy URL differs from its preflight".to_string(),
+        );
+    }
     Ok(UnboundInputs {
         config,
         protocol,
         prior,
         frames,
+        census,
     })
 }
 
@@ -224,8 +303,15 @@ pub(super) fn initialize(config_path: &Path) -> Result<BoundInputs, String> {
 }
 
 fn initialize_loaded(unbound: UnboundInputs) -> Result<BoundInputs, String> {
-    let audit =
-        bind_historical_v3_source_frames(&unbound.protocol, &unbound.prior, &unbound.artifacts())?;
+    let audit = if unbound.census.is_some() {
+        bind_historical_v3_public_id_census_frames(
+            &unbound.protocol,
+            &unbound.prior,
+            &unbound.census_artifact()?,
+        )?
+    } else {
+        bind_historical_v3_source_frames(&unbound.protocol, &unbound.prior, &unbound.artifacts())?
+    };
     validate_frame_capacity(&unbound, &audit)?;
     if !unbound.config.operator_root.exists() {
         fs::create_dir(&unbound.config.operator_root)
@@ -273,12 +359,21 @@ fn load_bound_inputs(unbound: UnboundInputs) -> Result<BoundInputs, String> {
         MAX_INPUT_BYTES,
         "source-binding audit",
     )?;
-    validate_historical_v3_source_binding_audit(
-        &unbound.protocol,
-        &unbound.prior,
-        &unbound.artifacts(),
-        &audit,
-    )?;
+    if unbound.census.is_some() {
+        validate_historical_v3_public_id_census_audit(
+            &unbound.protocol,
+            &unbound.prior,
+            &unbound.census_artifact()?,
+            &audit,
+        )?;
+    } else {
+        validate_historical_v3_source_binding_audit(
+            &unbound.protocol,
+            &unbound.prior,
+            &unbound.artifacts(),
+            &audit,
+        )?;
+    }
     validate_frame_capacity(&unbound, &audit)?;
     let stored: OperatorBinding = read_json(
         &root.join("operator-binding.json"),
@@ -304,14 +399,21 @@ fn validate_frame_capacity(
         stop.accepted_target_per_language
             .div_ceil(stop.accepted_case_cap_per_repository),
     );
-    for (frame, bound) in unbound.frames.iter().zip(&audit.frames) {
+    for (index, bound) in audit.frames.iter().enumerate() {
         if bound.eligible_repository_count < required_repositories {
             return Err(format!(
                 "historical-v3 {:?} frame has {} eligible repositories, below the {} required by the frozen stop rule",
                 bound.language, bound.eligible_repository_count, required_repositories
             ));
         }
-        let earliest_merge = format!("{}T00:00:00Z", frame.manifest.policy.created_day_utc);
+        let earliest_merge = if let Some(census) = &unbound.census {
+            census.manifest.policy.repository_created_after_utc.clone()
+        } else {
+            format!(
+                "{}T00:00:00Z",
+                unbound.frames[index].manifest.policy.created_day_utc
+            )
+        };
         if earliest_merge >= unbound.protocol.candidate_window.merged_before_utc {
             return Err(format!(
                 "historical-v3 {:?} frame was created after its candidate window closes",
@@ -702,6 +804,12 @@ mod tests {
                 serde_json::to_vec(&frame.manifest.policy).unwrap(),
             );
         }
+        if let (Some(paths), Some(census)) = (&config.census_source, &bound.unbound.census) {
+            responses.insert(
+                paths.public_policy_url.clone(),
+                census.manifest.preflight.fetched_policy.as_bytes().to_vec(),
+            );
+        }
         MockPublicTransport {
             responses,
             calls: 0,
@@ -863,6 +971,7 @@ mod tests {
                     selection: root.path().join("frozen-selection.json"),
                 },
                 source_frames: source_paths,
+                census_source: None,
                 operator_root: root.path().join("operator"),
                 github_token_env: "SNIFF_TEST_GITHUB_TOKEN".to_string(),
                 docker_program: "docker".to_string(),
@@ -1166,6 +1275,101 @@ mod tests {
                 .contains("differs from the approved bytes")
         );
         assert!(!bound.root.join("public-precommit-proof.json").exists());
+    }
+
+    #[tokio::test]
+    async fn census_config_and_public_precommit_bind_one_manifest_without_search_frames() {
+        use crate::benchmark::historical_v3_capacity_census_fixture as census_fixture;
+
+        let (census_root, manifest, prior, mut protocol) = census_fixture();
+        let fixture = fixture_with_prior(prior.clone());
+        let mut config: OperatorConfig =
+            read_json(&fixture.config, MAX_CONFIG_BYTES, "config").unwrap();
+        let manifest_path = fixture._root.path().join("census-manifest.json");
+        fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+        config.source_frames.clear();
+        config.census_source = Some(CensusSourcePaths {
+            manifest: manifest_path,
+            artifact_root: census_root.path().to_path_buf(),
+            public_policy_url: manifest.preflight.public_policy_url.clone(),
+        });
+        let prompt = b"Review exact source evidence only.\n".to_vec();
+        protocol
+            .model_review_policy
+            .as_mut()
+            .unwrap()
+            .approved_prompt_sha256 = sha256(&prompt);
+        let protocol = crate::benchmark::seal_historical_v3_protocol(protocol).unwrap();
+        fs::write(&config.protocol, serde_json::to_vec(&protocol).unwrap()).unwrap();
+        fs::write(&fixture.config, serde_json::to_vec(&config).unwrap()).unwrap();
+        let bound = synthetic_initialize(&fixture).unwrap();
+        let reloaded = synthetic_load_bound(&fixture.config, &prior).unwrap();
+        assert_eq!(reloaded.audit, bound.audit);
+        let mut public = public_transport(&bound);
+        public.responses.insert(
+            protocol
+                .model_review_policy
+                .as_ref()
+                .unwrap()
+                .prompt_public_url
+                .clone(),
+            prompt,
+        );
+        let policy_url = manifest.preflight.public_policy_url.clone();
+        let exact_policy = public.responses.get(&policy_url).unwrap().clone();
+        let differently_serialized = serde_json::to_vec_pretty(&manifest.policy).unwrap();
+        assert_ne!(differently_serialized, exact_policy);
+        public
+            .responses
+            .insert(policy_url.clone(), differently_serialized);
+        assert!(
+            precommit::ensure_public_precommit(&bound, &mut public)
+                .await
+                .is_err()
+        );
+        assert!(!bound.root.join("public-precommit-proof.json").exists());
+        public.responses.insert(policy_url, exact_policy);
+        precommit::ensure_public_precommit(&bound, &mut public)
+            .await
+            .unwrap();
+        precommit::validate_public_precommit(&bound).unwrap();
+        let proof_path = bound.root.join("public-precommit-proof.json");
+        let mut proof: serde_json::Value =
+            read_json(&proof_path, MAX_INPUT_BYTES, "proof").unwrap();
+        assert_eq!(proof["schema_version"], 3);
+        assert_eq!(proof["source_policies"].as_array().unwrap().len(), 1);
+        assert_eq!(proof["source_manifest_sha256"], manifest.manifest_sha256);
+
+        let mut candidate_transport = ZeroTransport { calls: 0 };
+        let reloaded = synthetic_load_bound(&fixture.config, &prior).unwrap();
+        let collection = super::super::collect_bound(&reloaded, &mut candidate_transport)
+            .await
+            .unwrap();
+        assert_eq!(candidate_transport.calls, 120);
+        assert_eq!(collection.candidates.len(), 120);
+        assert_eq!(reloaded.collection().unwrap(), collection);
+        let mut resumed = ZeroTransport { calls: 0 };
+        assert_eq!(
+            super::super::collect_bound(&reloaded, &mut resumed)
+                .await
+                .unwrap(),
+            collection
+        );
+        assert_eq!(resumed.calls, 0);
+
+        proof["source_manifest_sha256"] = serde_json::json!("f".repeat(64));
+        fs::write(&proof_path, serde_json::to_vec(&proof).unwrap()).unwrap();
+        assert!(precommit::validate_public_precommit(&bound).is_err());
+
+        let mut mixed: OperatorConfig =
+            read_json(&fixture.config, MAX_CONFIG_BYTES, "config").unwrap();
+        mixed.source_frames.push(SourceFramePaths {
+            manifest: fixture._root.path().join("unused.json"),
+            artifact_root: fixture._root.path().to_path_buf(),
+            frame: fixture._root.path().join("unused.csv"),
+            public_policy_url: manifest.preflight.public_policy_url.clone(),
+        });
+        assert!(load_unbound_with_prior(mixed, prior).is_err());
     }
 
     #[test]

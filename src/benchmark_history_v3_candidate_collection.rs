@@ -34,14 +34,20 @@ pub use commitment::{
 #[path = "benchmark_history_v3_candidate_replay.rs"]
 mod replay;
 
-pub use replay::validate_historical_v3_candidate_collection;
+use replay::validate_collection_with_source;
+pub use replay::{
+    validate_historical_v3_candidate_collection,
+    validate_historical_v3_candidate_collection_from_census,
+};
 
 #[path = "benchmark_history_v3_candidate_disk.rs"]
 mod disk;
 
 pub use disk::{
     read_historical_v3_candidate_collection_manifest,
+    read_historical_v3_candidate_collection_manifest_from_census,
     write_historical_v3_candidate_collection_manifest_new,
+    write_historical_v3_candidate_collection_manifest_new_from_census,
 };
 
 use super::history_v3_source_binding::{
@@ -51,8 +57,8 @@ use super::history_v3_source_binding::{
 use super::history_v3_time::{format_utc_second, parse_utc_second, split_inclusive_utc_range};
 use super::{
     HistoricalV3CandidateIdentity, HistoricalV3Language, HistoricalV3PriorBenchmarkIdentitySeal,
-    HistoricalV3Protocol, HistoricalV3SourceBindingAudit, HistoricalV3StreamTask,
-    prepare_historical_v3_stream_task, validate_historical_v3_protocol,
+    HistoricalV3Protocol, HistoricalV3PublicIdCensusArtifact, HistoricalV3SourceBindingAudit,
+    HistoricalV3StreamTask, prepare_historical_v3_stream_task, validate_historical_v3_protocol,
     validate_historical_v3_stream_task,
 };
 use std::collections::HashSet;
@@ -65,6 +71,12 @@ const CHECKPOINT_CONTRACT: &str = "sniffbench-historical-v3-candidate-checkpoint
 const MANIFEST_CONTRACT: &str = "sniffbench-historical-v3-candidate-manifest-v1";
 const MAX_SEARCH_RESULTS: usize = 1_000;
 const PAGE_SIZE: usize = 100;
+
+#[derive(Clone, Copy)]
+pub(super) enum CandidateSource<'a> {
+    Search(&'a [HistoricalV3SourceFrameArtifact<'a>]),
+    PublicIdCensus(&'a HistoricalV3PublicIdCensusArtifact<'a>),
+}
 
 #[cfg(test)]
 pub(crate) fn historical_v3_candidate_query_sha256_for_tests() -> String {
@@ -79,12 +91,46 @@ pub async fn collect_historical_v3_candidates<T: HistoricalV3CandidatePageTransp
     state_root: &Path,
     transport: &mut T,
 ) -> Result<HistoricalV3CandidateCollection, String> {
-    let repositories = candidate_repositories(
+    collect_with_source(
         protocol,
         prior_identities,
-        source_artifacts,
+        CandidateSource::Search(source_artifacts),
         source_binding_audit,
-    )?;
+        state_root,
+        transport,
+    )
+    .await
+}
+
+pub async fn collect_historical_v3_candidates_from_census<T: HistoricalV3CandidatePageTransport>(
+    protocol: &HistoricalV3Protocol,
+    prior_identities: &HistoricalV3PriorBenchmarkIdentitySeal,
+    census: &HistoricalV3PublicIdCensusArtifact<'_>,
+    source_binding_audit: &HistoricalV3SourceBindingAudit,
+    state_root: &Path,
+    transport: &mut T,
+) -> Result<HistoricalV3CandidateCollection, String> {
+    collect_with_source(
+        protocol,
+        prior_identities,
+        CandidateSource::PublicIdCensus(census),
+        source_binding_audit,
+        state_root,
+        transport,
+    )
+    .await
+}
+
+async fn collect_with_source<T: HistoricalV3CandidatePageTransport>(
+    protocol: &HistoricalV3Protocol,
+    prior_identities: &HistoricalV3PriorBenchmarkIdentitySeal,
+    source: CandidateSource<'_>,
+    source_binding_audit: &HistoricalV3SourceBindingAudit,
+    state_root: &Path,
+    transport: &mut T,
+) -> Result<HistoricalV3CandidateCollection, String> {
+    let repositories =
+        candidate_repositories(protocol, prior_identities, source, source_binding_audit)?;
     let query_document_sha256 = sha256(GRAPHQL_QUERY.as_bytes());
     let mut queue = initial_partitions(protocol, &repositories)?;
     let mut partitions = Vec::new();
@@ -205,10 +251,10 @@ pub async fn collect_historical_v3_candidates<T: HistoricalV3CandidatePageTransp
         manifest,
         candidates,
     };
-    validate_historical_v3_candidate_collection(
+    validate_collection_with_source(
         protocol,
         prior_identities,
-        source_artifacts,
+        source,
         source_binding_audit,
         state_root,
         &collection,
