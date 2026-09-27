@@ -9,7 +9,6 @@ use crate::benchmark::{
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
 use std::ffi::OsString;
-#[cfg(unix)]
 use std::fs::File;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -402,7 +401,15 @@ pub(super) fn write_bytes_durable_limited(
     if path.exists() {
         let existing = read_plain(path, limit, "existing historical-v3 artifact")?;
         return if existing == bytes {
-            Ok(())
+            File::options()
+                .read(true)
+                .write(true)
+                .open(path)
+                .and_then(|file| file.sync_all())
+                .map_err(|error| {
+                    format!("failed to sync existing historical-v3 artifact: {error}")
+                })?;
+            sync_directory(parent)
         } else {
             Err("historical-v3 artifact already exists with different content".to_string())
         };
@@ -434,6 +441,13 @@ pub(super) fn write_bytes_durable_limited(
         file.write_all(bytes)
             .and_then(|_| file.sync_all())
             .map_err(|error| format!("failed to persist pending artifact: {error}"))?;
+    } else {
+        File::options()
+            .read(true)
+            .write(true)
+            .open(&pending)
+            .and_then(|file| file.sync_all())
+            .map_err(|error| format!("failed to sync resumed pending artifact: {error}"))?;
     }
     match fs::hard_link(&pending, path) {
         Ok(()) => {}
@@ -451,6 +465,98 @@ pub(super) fn write_bytes_durable_limited(
             .map_err(|error| format!("failed to clear pending artifact: {error}"))?;
     }
     Ok(())
+}
+
+pub(super) struct AgentReviewLock {
+    file: File,
+}
+
+impl AgentReviewLock {
+    pub(super) fn acquire(path: &Path) -> Result<Self, String> {
+        match fs::symlink_metadata(path) {
+            Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => {}
+            Ok(_) => {
+                return Err("historical-v3 agent-review lock is not a plain file".to_string());
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(format!("failed to inspect agent-review lock: {error}")),
+        }
+        let mut options = OpenOptions::new();
+        options.read(true).write(true).create(true).truncate(false);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.custom_flags(libc::O_NOFOLLOW);
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+            options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+        }
+        let file = options
+            .open(path)
+            .map_err(|error| format!("failed to open agent-review lock: {error}"))?;
+        let metadata = file
+            .metadata()
+            .map_err(|error| format!("failed to inspect opened agent-review lock: {error}"))?;
+        if !metadata.is_file() || metadata.file_type().is_symlink() {
+            return Err("historical-v3 agent-review lock is not a plain file".to_string());
+        }
+        lock_agent_review_file(&file)?;
+        Ok(Self { file })
+    }
+}
+
+impl Drop for AgentReviewLock {
+    fn drop(&mut self) {
+        unlock_agent_review_file(&self.file);
+    }
+}
+
+#[cfg(unix)]
+fn lock_agent_review_file(file: &File) -> Result<(), String> {
+    use std::os::fd::AsRawFd;
+    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+        Ok(())
+    } else {
+        Err(format!(
+            "historical-v3 agent review is already active or cannot be locked: {}",
+            std::io::Error::last_os_error()
+        ))
+    }
+}
+
+#[cfg(unix)]
+fn unlock_agent_review_file(file: &File) {
+    use std::os::fd::AsRawFd;
+    unsafe {
+        libc::flock(file.as_raw_fd(), libc::LOCK_UN);
+    }
+}
+
+#[cfg(windows)]
+fn lock_agent_review_file(file: &File) -> Result<(), String> {
+    use std::os::windows::io::AsRawHandle;
+    let locked = unsafe {
+        windows_sys::Win32::Storage::FileSystem::LockFile(file.as_raw_handle() as _, 0, 0, 1, 0)
+    };
+    if locked != 0 {
+        Ok(())
+    } else {
+        Err(format!(
+            "historical-v3 agent review is already active or cannot be locked: {}",
+            std::io::Error::last_os_error()
+        ))
+    }
+}
+
+#[cfg(windows)]
+fn unlock_agent_review_file(file: &File) {
+    use std::os::windows::io::AsRawHandle;
+    unsafe {
+        windows_sys::Win32::Storage::FileSystem::UnlockFile(file.as_raw_handle() as _, 0, 0, 1, 0);
+    }
 }
 
 pub(super) fn ensure_child_directory(path: &Path, label: &str) -> Result<(), String> {
@@ -1081,6 +1187,17 @@ mod tests {
             read_plain(&path, MAX_INPUT_BYTES, "artifact").unwrap(),
             bytes
         );
+        let resumed_path = root.path().join("resumed.json");
+        let resumed_pending = root
+            .path()
+            .join(format!(".resumed.json.{}.pending", sha256(&bytes)));
+        fs::write(&resumed_pending, &bytes).unwrap();
+        write_json_durable(&resumed_path, &value).unwrap();
+        assert_eq!(
+            read_plain(&resumed_path, MAX_INPUT_BYTES, "resumed artifact").unwrap(),
+            bytes
+        );
+        assert!(!resumed_pending.exists());
         let invocation_path = root.path().join("agent-invocation.json");
         let invocation = b"{\"prompt\":\"exact\"}";
         write_bytes_durable_limited(&invocation_path, invocation, 1024).unwrap();
@@ -1090,6 +1207,17 @@ mod tests {
             invocation
         );
         assert!(write_bytes_durable_limited(&invocation_path, b"{}", 1024).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn agent_review_lock_rejects_dangling_symlink() {
+        let root = tempfile::tempdir().unwrap();
+        let target = root.path().join("missing-target");
+        let lock = root.path().join("agent-review.lock");
+        std::os::unix::fs::symlink(&target, &lock).unwrap();
+        assert!(AgentReviewLock::acquire(&lock).is_err());
+        assert!(!target.exists());
     }
 
     #[test]

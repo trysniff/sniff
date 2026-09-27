@@ -167,6 +167,8 @@ bytes contain the approved prompt, its SHA-256, and the sealed source bundle.
 Present only that invocation to each reviewer, not the repository identity,
 change metadata, Sniff output, or the other review. The two response files
 must contain only the raw model JSON, not a paraphrase or an edited decision.
+Submissions for one rank are single-writer; retry a concurrent-lock error after
+the other submission completes rather than running both CLI writes at once.
 Malformed or incomplete responses fail; there is no substitute verdict.
 Agreement on a supported slop pattern may count as an accepted model-judged
 case. Disagreement and uncertainty remain visible and count against the

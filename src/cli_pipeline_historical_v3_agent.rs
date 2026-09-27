@@ -71,6 +71,11 @@ fn submit_agent_review_context(
     response_path: &str,
 ) -> Result<i32, String> {
     require_prepared_invocation(context)?;
+    let lock_path = context
+        .paths
+        .agent_invocation
+        .with_file_name("agent-review.lock");
+    let _lock = store::AgentReviewLock::acquire(&lock_path)?;
     let raw_response = store::read_plain(
         Path::new(response_path),
         MAX_RESPONSE_BYTES,
@@ -319,6 +324,18 @@ mod tests {
             .unwrap(),
             expected.as_bytes(),
         );
+        let lock_path = context
+            .paths
+            .agent_invocation
+            .with_file_name("agent-review.lock");
+        let held_lock = store::AgentReviewLock::acquire(&lock_path).unwrap();
+        assert!(
+            submit_agent_review_context(&context, language, 1, first_path.to_str().unwrap())
+                .unwrap_err()
+                .contains("already active")
+        );
+        assert!(!context.paths.agent_one.exists());
+        drop(held_lock);
         submit_agent_review_context(&context, language, 1, first_path.to_str().unwrap()).unwrap();
         assert!(
             submit_agent_review_context(&context, language, 2, repeated_path.to_str().unwrap(),)
