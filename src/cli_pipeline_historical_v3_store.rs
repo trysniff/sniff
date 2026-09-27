@@ -535,6 +535,7 @@ mod tests {
         HistoricalV3CandidatePageRequest, HistoricalV3CandidatePageTransport, HistoricalV3Language,
         historical_v3_source_fixture as source_fixture,
     };
+    use base64::Engine;
     use std::collections::BTreeMap;
     use std::future::Future;
     use std::pin::Pin;
@@ -995,19 +996,22 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(public.calls, 16);
-        assert_eq!(
-            precommit::verified_agent_prompt_bytes(&bound).unwrap(),
-            prompt
-        );
+        precommit::validate_public_precommit(&bound).unwrap();
         let proof_path = bound.root.join("public-precommit-proof.json");
         let proof: serde_json::Value = read_json(&proof_path, 10 * 1024 * 1024, "proof").unwrap();
         assert_eq!(proof["schema_version"], 2);
         assert!(proof["agent_prompt"].is_object());
+        assert_eq!(
+            base64::engine::general_purpose::STANDARD
+                .decode(proof["agent_prompt"]["fetched_base64"].as_str().unwrap())
+                .unwrap(),
+            prompt
+        );
 
         let mut changed = proof;
         changed["agent_prompt"]["fetched_base64"] = serde_json::json!("e30=");
         fs::write(&proof_path, serde_json::to_vec(&changed).unwrap()).unwrap();
-        assert!(precommit::verified_agent_prompt_bytes(&bound).is_err());
+        assert!(precommit::validate_public_precommit(&bound).is_err());
     }
 
     #[tokio::test]
