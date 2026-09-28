@@ -27,7 +27,14 @@ function Assert-Equal {
 
 function Get-RelativeName {
     param([string]$Name)
-    return $Name.Replace('\', '/').TrimStart('/')
+    $normalized = $Name.Replace('\', '/')
+    if ($normalized.StartsWith('./')) {
+        return $normalized.Substring(2)
+    }
+    if ($normalized.StartsWith('/')) {
+        return $normalized.Substring(1)
+    }
+    return $normalized
 }
 
 $provenance = Get-Content -Raw -LiteralPath $ProvenancePath | ConvertFrom-Json
@@ -116,12 +123,21 @@ Assert-Equal @($sbom.packages).Count 3 "SPDX package count"
 if (-not $sbom.creationInfo -or -not $sbom.creationInfo.creators) {
     throw "SPDX creation metadata is missing"
 }
+foreach ($package in $sbom.packages) {
+    if ($package.filesAnalyzed -cne $false) {
+        throw "SPDX package unexpectedly claims complete file analysis: $($package.SPDXID)"
+    }
+}
 
 $seenFiles = [Collections.Generic.Dictionary[string, object]]::new([StringComparer]::Ordinal)
 foreach ($file in $sbom.files) {
     $name = Get-RelativeName $file.fileName
     if (-not $expected.ContainsKey($name) -or $seenFiles.ContainsKey($name)) {
         throw "Unexpected or duplicate SPDX file: $name"
+    }
+    $rawName = "\" + $name.Replace('/', '\')
+    if ($file.fileName -cne $rawName -and $file.fileName -cne "./$name") {
+        throw "Noncanonical SPDX file path: $($file.fileName)"
     }
     $seenFiles[$name] = $file
     $binaryPath = Join-Path $BundleDirectory ($name.Replace('/', [IO.Path]::DirectorySeparatorChar))
@@ -135,6 +151,7 @@ foreach ($file in $sbom.files) {
             throw "Incorrect existing SPDX checksum for $name"
         }
     }
+    $file.fileName = "./$name"
     $file.checksums = @(@{ algorithm = "SHA256"; checksumValue = $expected[$name].hash })
 }
 
@@ -151,8 +168,11 @@ $root | Add-Member -Force -NotePropertyName sourceInfo -NotePropertyValue "Binar
 $seenPackages = [Collections.Generic.Dictionary[string, object]]::new([StringComparer]::Ordinal)
 foreach ($package in @($sbom.packages | Where-Object { $_.SPDXID -cne $root.SPDXID })) {
     $matches = @($expected.Keys | Where-Object {
-        $package.name -ceq $_ -or
-        $package.sourceInfo -cmatch ([regex]::Escape("\" + $_.Replace('/', '\')) + '$')
+        $rawPackageName = "\" + $_.Replace('/', '\').Replace('.exe', '')
+        $rawSourceInfo = "acquired package info from the following paths: \" + $_.Replace('/', '\')
+        $verifiedSourceInfo = "Built from pinned source commit $($expected[$_].version); executable SHA256 $($expected[$_].hash)."
+        ($package.name -ceq $rawPackageName -and $package.sourceInfo -ceq $rawSourceInfo -and $package.versionInfo -ceq "UNKNOWN") -or
+        ($package.name -ceq $_ -and $package.sourceInfo -ceq $verifiedSourceInfo -and $package.versionInfo -ceq $expected[$_].version)
     })
     Assert-Equal $matches.Count 1 "SPDX binary package identity"
     $name = $matches[0]

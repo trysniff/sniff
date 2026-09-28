@@ -74,9 +74,9 @@ try {
         documentNamespace = "https://example.com/temporary"
         creationInfo = @{ creators = @("Tool: syft-1.42.3"); created = "2026-01-01T00:00:00Z" }
         packages = @(
-            @{ SPDXID = "SPDXRef-Cargo"; name = "\bin\cargo"; sourceInfo = "acquired package info from the following paths: \bin\cargo.exe"; versionInfo = "UNKNOWN" }
-            @{ SPDXID = "SPDXRef-Analyzer"; name = "\bin\rust-analyzer"; sourceInfo = "acquired package info from the following paths: \bin\rust-analyzer.exe"; versionInfo = "UNKNOWN" }
-            @{ SPDXID = "SPDXRef-Root"; name = "CI temporary path"; primaryPackagePurpose = "FILE" }
+            @{ SPDXID = "SPDXRef-Cargo"; name = "\bin\cargo"; sourceInfo = "acquired package info from the following paths: \bin\cargo.exe"; versionInfo = "UNKNOWN"; filesAnalyzed = $false }
+            @{ SPDXID = "SPDXRef-Analyzer"; name = "\bin\rust-analyzer"; sourceInfo = "acquired package info from the following paths: \bin\rust-analyzer.exe"; versionInfo = "UNKNOWN"; filesAnalyzed = $false }
+            @{ SPDXID = "SPDXRef-Root"; name = "CI temporary path"; primaryPackagePurpose = "FILE"; filesAnalyzed = $false }
         )
         files = @(
             @{ SPDXID = "SPDXRef-CargoFile"; fileName = "\bin\cargo.exe"; checksums = @(@{ algorithm = "SHA1"; checksumValue = "0" * 40 }) }
@@ -97,6 +97,9 @@ try {
     foreach ($file in $finished.files) {
         if ($file.checksums[0].algorithm -cne "SHA256" -or $file.checksums[0].checksumValue -ceq ('0' * 64)) {
             throw "Finalized SBOM lacks a real SHA256"
+        }
+        if ($file.fileName -cnotmatch '^\./bin/(cargo|rust-analyzer)\.exe$') {
+            throw "Finalized SBOM file name is not canonical"
         }
     }
     if ($finished.creationInfo.creators -cnotcontains "Tool: sniff-windows-rust-sbom-finalizer-1") {
@@ -137,6 +140,21 @@ try {
         $bad.files[0].fileName = "\BIN\CARGO.EXE"
         [IO.File]::WriteAllText($sbomPath, ($bad | ConvertTo-Json -Depth 20))
     } "uppercase SPDX file path"
+    Assert-Rejected {
+        $bad = $originalSbom | ConvertFrom-Json
+        $bad.files[0].fileName = "\\bin\cargo.exe"
+        [IO.File]::WriteAllText($sbomPath, ($bad | ConvertTo-Json -Depth 20))
+    } "double-leading-separator SPDX file path"
+    Assert-Rejected {
+        $bad = $originalSbom | ConvertFrom-Json
+        $bad.packages[0].sourceInfo = "acquired package info from the following paths: \bin\rust-analyzer.exe"
+        [IO.File]::WriteAllText($sbomPath, ($bad | ConvertTo-Json -Depth 20))
+    } "contradictory package evidence"
+    Assert-Rejected {
+        $bad = $originalSbom | ConvertFrom-Json
+        $bad.packages[0].filesAnalyzed = $true
+        [IO.File]::WriteAllText($sbomPath, ($bad | ConvertTo-Json -Depth 20))
+    } "unsupported file-analysis claim"
     Assert-Rejected {
         $zip = [IO.Compression.ZipFile]::Open($archive, [IO.Compression.ZipArchiveMode]::Update)
         try {
