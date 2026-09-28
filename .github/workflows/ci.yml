@@ -126,11 +126,11 @@ jobs:
       - name: Verify packaged execution contract matches the release artifact
         run: cmp src/benchmark_assets/historical-v2-execution-harness.json sniffbench/historical-v2-execution-harness.json
       - run: cargo package --locked --target-dir target/package-check
-      - name: Keep benchmark data out of the installable crate
+      - name: Keep benchmark data out except the pinned v2 source contract
         run: |
           unexpected="$({ cargo package --locked --list | tr '\\' '/'; } \
             | grep '^sniffbench/' \
-            | grep -v '^sniffbench/README.md$' || true)"
+            | grep -Ev '^sniffbench/(README\.md|historical-v3-id-census-v2/policy\.json)$' || true)"
           if [ -n "$unexpected" ]; then
             echo 'sniffbench data must remain a repository or release artifact:' >&2
             printf '%s\n' "$unexpected" >&2
