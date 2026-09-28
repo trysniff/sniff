@@ -7,6 +7,7 @@ use super::super::{
     validate_historical_v3_identical_tests, validate_historical_v3_mechanical_qualification,
     validate_historical_v3_protocol, validate_historical_v3_test_recipe,
 };
+use super::context::{build_context, validate_context};
 use super::{
     HISTORICAL_V3_SOURCE_REVIEW_BUNDLE_SCHEMA_VERSION, HistoricalV3ReviewBehaviorEvidence,
     HistoricalV3ReviewCommandResult, HistoricalV3ReviewMethod, HistoricalV3SourceReviewBundle,
@@ -58,6 +59,13 @@ pub fn build_historical_v3_source_review_bundle(
             ),
         })
         .collect::<Result<Vec<_>, String>>()?;
+    let context = build_context(
+        qualification,
+        source_census,
+        semantic_census,
+        &base_records,
+        &merge_records,
+    )?;
     let mut bundle = HistoricalV3SourceReviewBundle {
         schema_version: HISTORICAL_V3_SOURCE_REVIEW_BUNDLE_SCHEMA_VERSION,
         bundle_contract: SOURCE_REVIEW_BUNDLE_CONTRACT.to_string(),
@@ -65,6 +73,7 @@ pub fn build_historical_v3_source_review_bundle(
         language: language_name(qualification.rank.language()).to_string(),
         source_only: true,
         repository_identity_included: false,
+        source_identity_may_be_inferable: true,
         change_metadata_included: false,
         sniff_output_included: false,
         prior_labels_included: false,
@@ -72,6 +81,7 @@ pub fn build_historical_v3_source_review_bundle(
         public_surface_delta_sha256: qualification.evidence.public_surface.delta_sha256.clone(),
         simplifications: qualification.evidence.simplifications.clone(),
         methods,
+        context,
         behavior: behavior(recipe, execution),
         bundle_sha256: String::new(),
     };
@@ -96,6 +106,7 @@ pub fn validate_historical_v3_source_review_bundle(
         || bundle.language != language_name(qualification.rank.language())
         || !bundle.source_only
         || bundle.repository_identity_included
+        || !bundle.source_identity_may_be_inferable
         || bundle.change_metadata_included
         || bundle.sniff_output_included
         || bundle.prior_labels_included
@@ -115,6 +126,12 @@ pub fn validate_historical_v3_source_review_bundle(
     {
         validate_review_method(method, changed, semantic_census)?;
     }
+    validate_context(
+        &bundle.context,
+        qualification,
+        inputs.source_census,
+        semantic_census,
+    )?;
     Ok(())
 }
 

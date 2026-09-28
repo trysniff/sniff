@@ -602,8 +602,10 @@ pub use release::{
 
 pub use release::{
     HISTORICAL_V3_SOURCE_REVIEW_BUNDLE_SCHEMA_VERSION, HistoricalV3ReviewBehaviorEvidence,
-    HistoricalV3ReviewCommandResult, HistoricalV3ReviewMethod, HistoricalV3SourceReviewBundle,
-    HistoricalV3SourceReviewInputs, HistoricalV3SourceReviewRoots,
+    HistoricalV3ReviewCommandResult, HistoricalV3ReviewContext, HistoricalV3ReviewContextGap,
+    HistoricalV3ReviewContextGapReason, HistoricalV3ReviewContextItem,
+    HistoricalV3ReviewContextRole, HistoricalV3ReviewContextSource, HistoricalV3ReviewMethod,
+    HistoricalV3SourceReviewBundle, HistoricalV3SourceReviewInputs, HistoricalV3SourceReviewRoots,
     HistoricalV3SourceReviewStageRun, HistoricalV3VerifiedSourceReview,
     build_historical_v3_source_review_bundle, run_historical_v3_source_review_stage,
     validate_historical_v3_source_review_bundle, verify_historical_v3_source_review_rank,

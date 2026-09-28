@@ -5,6 +5,13 @@ changed-method context, relevant callers and contracts in the bundle, and the
 paired behavior-test evidence. Do not read repository identity, PR title or
 description, change metadata, Sniff output, prior labels, or another agent's
 decision. Start in a fresh context for each assigned review item.
+The bundle's `context.sources` contains each verified caller method or complete
+small contract file once; `context.items` links changed-method anchors and
+contract definitions to those sources by `source_index`. Read every link on
+both sides. A `context.gaps` entry means required graph context was not
+available, so use `insufficient_context`, not a conclusive verdict. Exact
+source may itself reveal project identity; if you recognize it, set
+`repository_identity_hidden` to false and use `insufficient_context`.
 
 Decide whether the before-state contains concrete, unnecessary or misleading
 machinery and the after-state removes it without relocating it or changing
@@ -51,7 +58,12 @@ its exact contract justification. For an uncertain verdict, use pattern
 
 Each citation has `side` (`base` or `merge`), `repository_path`,
 `parser_unit_id`, `start_line`, `end_line`, and `quote`. Cite exact complete
-lines from the sealed method source, ordered and unique; include both sides
-when both are available. Use one of the published slop patterns, such as
+lines from the sealed changed-method source, ordered and unique; include
+changed-method citations on both sides when both are available. For a caller
+method in `context.sources`, use that method's `parser_unit_id`. For a whole
+file in `context.sources`, use the linked context item's `target_symbol_id`
+as the citation's `parser_unit_id` and cite exact line numbers from the whole
+file. Never use the pool's numeric `source_index` as a citation ID. Use one
+of the published slop patterns, such as
 `residual_machinery`, `duplicated_semantics`, `ceremonial_logic`,
 `needless_indirection`, `contract_fog`, or `other`. Do not invent a pattern.

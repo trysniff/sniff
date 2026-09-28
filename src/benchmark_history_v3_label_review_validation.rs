@@ -1,4 +1,4 @@
-use super::super::HistoricalV3SourceSide;
+use super::super::{HistoricalV3ReviewContextSource, HistoricalV3SourceSide};
 use super::{
     HistoricalV3LabelTask, HistoricalV3LabelWorksheet, HistoricalV3ReviewDecision,
     HistoricalV3Reviewer, HistoricalV3ReviewerVerdict, HistoricalV3SourceCitation,
@@ -22,7 +22,15 @@ pub(super) fn validate_completed_worksheet(
         .reviewer
         .as_ref()
         .ok_or_else(|| "historical-v3 label worksheet has no reviewer".to_string())?;
-    validate_reviewer(reviewer)?;
+    validate_reviewer(reviewer, &worksheet.task.decision)?;
+    if !worksheet.task.context.resolved_context_complete
+        && worksheet.task.decision.verdict != Some(HistoricalV3ReviewerVerdict::InsufficientContext)
+    {
+        return Err(
+            "historical-v3 human review cannot conclude with missing caller or contract context"
+                .to_string(),
+        );
+    }
     validate_decision(&worksheet.task, &worksheet.task.decision)
 }
 
@@ -33,27 +41,51 @@ fn immutable_task_matches(left: &HistoricalV3LabelTask, right: &HistoricalV3Labe
         && left.public_surface_delta_sha256 == right.public_surface_delta_sha256
         && left.simplifications == right.simplifications
         && left.methods == right.methods
+        && left.context == right.context
         && left.behavior == right.behavior
 }
 
-fn validate_reviewer(reviewer: &HistoricalV3Reviewer) -> Result<(), String> {
+fn validate_reviewer(
+    reviewer: &HistoricalV3Reviewer,
+    decision: &HistoricalV3ReviewDecision,
+) -> Result<(), String> {
     require_text("historical-v3 reviewer ID", &reviewer.reviewer_id)?;
     require_text("historical-v3 reviewer affiliation", &reviewer.affiliation)?;
     require_text("historical-v3 reviewer attestation", &reviewer.attestation)?;
     if reviewer.years_experience == 0
         || !reviewer.independent_from_sniff
         || !reviewer.sniff_output_hidden
-        || !reviewer.repository_identity_hidden
         || !reviewer.change_metadata_hidden
         || !reviewer.other_reviewer_labels_hidden
-        || !reviewer.complete_source_context_inspected
-        || !reviewer.behavior_evidence_inspected
         || reviewer.model_assistance_used
     {
         return Err(
-            "historical-v3 reviewer must be experienced, independent, human-only, source-complete, and blind to identity, metadata, Sniff, and other labels"
+            "historical-v3 reviewer must be experienced, independent, human-only, and blind to identity, metadata, Sniff, and other labels"
                 .to_string(),
         );
+    }
+    if !reviewer.repository_identity_hidden
+        && decision.verdict != Some(HistoricalV3ReviewerVerdict::InsufficientContext)
+    {
+        return Err(
+            "historical-v3 human review cannot conclude after source revealed repository identity"
+                .to_string(),
+        );
+    }
+    if decision.verdict != Some(HistoricalV3ReviewerVerdict::InsufficientContext)
+        && (!reviewer.complete_source_context_inspected || !reviewer.behavior_evidence_inspected)
+    {
+        return Err("historical-v3 human review claims a conclusive verdict without inspecting source and behavior".to_string());
+    }
+    if (!reviewer.complete_source_context_inspected
+        && (decision.before_contains_unnecessary_machinery.is_some()
+            || decision.after_removes_that_machinery.is_some()
+            || decision.removal_not_relocated.is_some()
+            || decision.simpler_counterfactual_matches.is_some()
+            || decision.public_surface_preserved.is_some()))
+        || (!reviewer.behavior_evidence_inspected && decision.behavior_preserved.is_some())
+    {
+        return Err("historical-v3 human review claims evidence it did not inspect".to_string());
     }
     Ok(())
 }
@@ -212,16 +244,23 @@ fn validate_citations(
     if citations.is_empty() || citations.windows(2).any(|pair| pair[0] >= pair[1]) {
         return Err("historical-v3 review requires ordered unique citations".to_string());
     }
-    let sides = citations
+    let changed_sides = citations
         .iter()
+        .filter(|citation| {
+            task.methods.iter().any(|method| {
+                method.side == citation.side
+                    && method.repository_path == citation.repository_path
+                    && method.parser_unit_id == citation.parser_unit_id
+            })
+        })
         .map(|citation| citation.side)
         .collect::<BTreeSet<_>>();
-    if !sides.contains(&HistoricalV3SourceSide::Base)
+    if !changed_sides.contains(&HistoricalV3SourceSide::Base)
         || (task
             .methods
             .iter()
             .any(|method| method.side == HistoricalV3SourceSide::Merge)
-            && !sides.contains(&HistoricalV3SourceSide::Merge))
+            && !changed_sides.contains(&HistoricalV3SourceSide::Merge))
     {
         return Err(
             "historical-v3 review citations do not cover the available before/after source"
@@ -234,38 +273,74 @@ fn validate_citations(
     Ok(())
 }
 
-fn validate_citation(
+pub(super) fn validate_citation(
     task: &HistoricalV3LabelTask,
     citation: &HistoricalV3SourceCitation,
 ) -> Result<(), String> {
     let method = task
         .methods
         .iter()
+        .chain(
+            task.context
+                .sources
+                .iter()
+                .filter_map(|source| match source {
+                    HistoricalV3ReviewContextSource::Method { method } => Some(method.as_ref()),
+                    HistoricalV3ReviewContextSource::File { .. } => None,
+                }),
+        )
         .find(|method| {
             method.side == citation.side
                 && method.repository_path == citation.repository_path
                 && method.parser_unit_id == citation.parser_unit_id
-        })
-        .ok_or_else(|| "historical-v3 citation invents a review method".to_string())?;
-    if citation.start_line < method.start_line
+        });
+    let (start_line, end_line, source, source_start_line) = if let Some(method) = method {
+        (
+            method.start_line,
+            method.end_line,
+            method.source.as_str(),
+            method.start_line,
+        )
+    } else {
+        task.context
+            .items
+            .iter()
+            .find_map(|item| {
+                if item.target_symbol_id != citation.parser_unit_id || item.definition.is_none() {
+                    return None;
+                }
+                match task.context.sources.get(item.source_index)? {
+                    HistoricalV3ReviewContextSource::File {
+                        side,
+                        repository_path,
+                        source,
+                        ..
+                    } if *side == citation.side && repository_path == &citation.repository_path => {
+                        Some((1, source.lines().count(), source.as_str(), 1))
+                    }
+                    _ => None,
+                }
+            })
+            .ok_or_else(|| "historical-v3 citation invents a review source".to_string())?
+    };
+    if citation.start_line < start_line
         || citation.end_line < citation.start_line
-        || citation.end_line > method.end_line
+        || citation.end_line > end_line
     {
-        return Err("historical-v3 citation range escapes its method".to_string());
+        return Err("historical-v3 citation range escapes its source".to_string());
     }
-    let lines = method
-        .source
+    let lines = source
         .lines()
         .map(|line| line.strip_suffix('\r').unwrap_or(line))
         .collect::<Vec<_>>();
-    let start = citation.start_line - method.start_line;
-    let end = citation.end_line - method.start_line + 1;
+    let start = citation.start_line - source_start_line;
+    let end = citation.end_line - source_start_line + 1;
     if end > lines.len() {
-        return Err("historical-v3 citation exceeds its method source".to_string());
+        return Err("historical-v3 citation exceeds its source".to_string());
     }
     let exact = lines[start..end].join("\n");
     if citation.quote != exact || citation.quote.trim().is_empty() {
-        return Err("historical-v3 citation is not exact method source".to_string());
+        return Err("historical-v3 citation is not exact source".to_string());
     }
     Ok(())
 }

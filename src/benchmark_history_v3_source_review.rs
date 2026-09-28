@@ -6,6 +6,9 @@ pub use schema::*;
 #[path = "benchmark_history_v3_source_review_commitment.rs"]
 mod commitment;
 
+#[path = "benchmark_history_v3_source_review_context.rs"]
+mod context;
+
 pub use commitment::{
     build_historical_v3_source_review_bundle, validate_historical_v3_source_review_bundle,
 };
@@ -23,7 +26,7 @@ mod proof;
 
 pub use proof::{HistoricalV3VerifiedSourceReview, verify_historical_v3_source_review_rank};
 
-const SOURCE_REVIEW_BUNDLE_CONTRACT: &str = "sniffbench-historical-v3-source-review-bundle-v1";
+const SOURCE_REVIEW_BUNDLE_CONTRACT: &str = "sniffbench-historical-v3-source-review-bundle-v2";
 const REVIEW_ITEM_CONTRACT: &str = "sniffbench-historical-v3-review-item-v1";
 
 #[cfg(test)]

@@ -315,6 +315,29 @@ async fn insufficient_context_can_honestly_report_missing_inspection() {
     validate_historical_v3_agent_review(&fixture.inputs(), &fixture.bundle, PROMPT, &submission)
         .unwrap();
 
+    let mut identified_reviewer = reviewer("agent-b", "run-b");
+    identified_reviewer.repository_identity_hidden = false;
+    seal_historical_v3_agent_review(
+        &fixture.inputs(),
+        &fixture.bundle,
+        PROMPT,
+        response(identified_reviewer.clone(), submission.decision.clone()),
+    )
+    .unwrap();
+    assert!(
+        seal_historical_v3_agent_review(
+            &fixture.inputs(),
+            &fixture.bundle,
+            PROMPT,
+            response(
+                identified_reviewer,
+                decision_for_methods(&fixture.bundle.methods, HistoricalV3ReviewerVerdict::Slop,)
+            ),
+        )
+        .unwrap_err()
+        .contains("source revealed repository identity")
+    );
+
     let mut unsupported = submission.decision.clone();
     unsupported.behavior_preserved = Some(true);
     assert!(
