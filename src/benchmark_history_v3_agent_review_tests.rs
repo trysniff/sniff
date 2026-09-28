@@ -54,29 +54,37 @@ pub(crate) fn reviewer(agent_id: &str, run_id: &str) -> HistoricalV3AgentReviewe
     }
 }
 
+pub(crate) fn assignment(
+    fixture: &super::super::history_v3_label_review::tests::ReviewFixture,
+) -> HistoricalV3AgentAssignment {
+    prepare_historical_v3_agent_assignment(&fixture.inputs(), &fixture.bundle, PROMPT).unwrap()
+}
+
 #[tokio::test]
 async fn agent_reviews_bind_source_and_preserve_disagreement_without_human_labels() {
     let fixture = agent_fixture().await;
+    let assignment = assignment(&fixture);
     let slop = decision_for_methods(&fixture.bundle.methods, HistoricalV3ReviewerVerdict::Slop);
     let clean = decision_for_methods(&fixture.bundle.methods, HistoricalV3ReviewerVerdict::Clean);
     let first = seal_historical_v3_agent_review(
         &fixture.inputs(),
         &fixture.bundle,
         PROMPT,
-        response(reviewer("agent-a", "run-a"), slop),
+        response(reviewer(&assignment.agent_ids[0], "run-a"), slop),
     )
     .unwrap();
     let second = seal_historical_v3_agent_review(
         &fixture.inputs(),
         &fixture.bundle,
         PROMPT,
-        response(reviewer("agent-b", "run-b"), clean),
+        response(reviewer(&assignment.agent_ids[1], "run-b"), clean),
     )
     .unwrap();
     let audit = audit_historical_v3_agent_reviews(
         &fixture.inputs(),
         &fixture.bundle,
         PROMPT,
+        &assignment,
         &first,
         &second,
     )
@@ -95,6 +103,7 @@ async fn agent_reviews_bind_source_and_preserve_disagreement_without_human_label
         &fixture.inputs(),
         &fixture.bundle,
         PROMPT,
+        &assignment,
         &first,
         &second,
         &audit,
@@ -108,6 +117,7 @@ async fn agent_reviews_bind_source_and_preserve_disagreement_without_human_label
             &fixture.inputs(),
             &fixture.bundle,
             PROMPT,
+            &assignment,
             &first,
             &second,
             &tampered,
@@ -117,14 +127,76 @@ async fn agent_reviews_bind_source_and_preserve_disagreement_without_human_label
 }
 
 #[tokio::test]
+async fn agent_assignment_rejects_swapped_or_tampered_slots() {
+    let fixture = agent_fixture().await;
+    let assignment = assignment(&fixture);
+    let clean = decision_for_methods(&fixture.bundle.methods, HistoricalV3ReviewerVerdict::Clean);
+    let first = seal_historical_v3_agent_review(
+        &fixture.inputs(),
+        &fixture.bundle,
+        PROMPT,
+        response(reviewer(&assignment.agent_ids[0], "run-a"), clean.clone()),
+    )
+    .unwrap();
+    let second = seal_historical_v3_agent_review(
+        &fixture.inputs(),
+        &fixture.bundle,
+        PROMPT,
+        response(reviewer(&assignment.agent_ids[1], "run-b"), clean),
+    )
+    .unwrap();
+    assert!(
+        audit_historical_v3_agent_reviews(
+            &fixture.inputs(),
+            &fixture.bundle,
+            PROMPT,
+            &assignment,
+            &second,
+            &first,
+        )
+        .unwrap_err()
+        .contains("preassigned slot")
+    );
+
+    let mut tampered = assignment.clone();
+    tampered.agent_ids.swap(0, 1);
+    assert!(
+        validate_historical_v3_agent_assignment(
+            &fixture.inputs(),
+            &fixture.bundle,
+            PROMPT,
+            &tampered,
+        )
+        .is_err()
+    );
+    tampered.assignment_sha256 = tampered.computed_sha256().unwrap();
+    assert!(
+        audit_historical_v3_agent_reviews(
+            &fixture.inputs(),
+            &fixture.bundle,
+            PROMPT,
+            &tampered,
+            &first,
+            &second,
+        )
+        .unwrap_err()
+        .contains("valid sealed two-slot task")
+    );
+}
+
+#[tokio::test]
 async fn agent_review_rejects_forged_citation_reused_run_and_missing_revision_field() {
     let fixture = agent_fixture().await;
+    let assignment = assignment(&fixture);
     let decision = decision_for_methods(&fixture.bundle.methods, HistoricalV3ReviewerVerdict::Slop);
     let first = seal_historical_v3_agent_review(
         &fixture.inputs(),
         &fixture.bundle,
         PROMPT,
-        response(reviewer("agent-a", "run-a"), decision.clone()),
+        response(
+            reviewer(&assignment.agent_ids[0], "run-a"),
+            decision.clone(),
+        ),
     )
     .unwrap();
     assert!(
@@ -155,7 +227,7 @@ async fn agent_review_rejects_forged_citation_reused_run_and_missing_revision_fi
         &fixture.inputs(),
         &fixture.bundle,
         PROMPT,
-        response(reviewer("agent-b", "run-a"), decision),
+        response(reviewer(&assignment.agent_ids[1], "run-a"), decision),
     )
     .unwrap();
     assert!(
@@ -163,6 +235,7 @@ async fn agent_review_rejects_forged_citation_reused_run_and_missing_revision_fi
             &fixture.inputs(),
             &fixture.bundle,
             PROMPT,
+            &assignment,
             &first,
             &second,
         )
@@ -297,6 +370,7 @@ async fn insufficient_context_can_honestly_report_missing_inspection() {
 #[tokio::test]
 async fn agent_outcomes_never_turn_disagreement_into_a_human_label() {
     let fixture = agent_fixture().await;
+    let assignment = assignment(&fixture);
     for (first_verdict, second_verdict, expected) in [
         (
             HistoricalV3ReviewerVerdict::Slop,
@@ -319,7 +393,7 @@ async fn agent_outcomes_never_turn_disagreement_into_a_human_label() {
             &fixture.bundle,
             PROMPT,
             response(
-                reviewer("agent-a", "run-a"),
+                reviewer(&assignment.agent_ids[0], "run-a"),
                 decision_for_methods(&fixture.bundle.methods, first_verdict),
             ),
         )
@@ -329,7 +403,7 @@ async fn agent_outcomes_never_turn_disagreement_into_a_human_label() {
             &fixture.bundle,
             PROMPT,
             response(
-                reviewer("agent-b", "run-b"),
+                reviewer(&assignment.agent_ids[1], "run-b"),
                 decision_for_methods(&fixture.bundle.methods, second_verdict),
             ),
         )
@@ -338,6 +412,7 @@ async fn agent_outcomes_never_turn_disagreement_into_a_human_label() {
             &fixture.inputs(),
             &fixture.bundle,
             PROMPT,
+            &assignment,
             &first,
             &second,
         )
@@ -346,6 +421,7 @@ async fn agent_outcomes_never_turn_disagreement_into_a_human_label() {
             &fixture.inputs(),
             &fixture.bundle,
             PROMPT,
+            &assignment,
             &first,
             &second,
             &audit,

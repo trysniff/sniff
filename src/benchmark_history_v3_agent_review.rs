@@ -9,12 +9,125 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::path::Path;
 
-pub const HISTORICAL_V3_AGENT_REVIEW_SCHEMA_VERSION: u32 = 2;
+pub const HISTORICAL_V3_AGENT_REVIEW_SCHEMA_VERSION: u32 = 3;
+pub const HISTORICAL_V3_AGENT_ASSIGNMENT_SCHEMA_VERSION: u32 = 1;
 const AGENT_PRESENTATION_CONTRACT: &str = "sniffbench-historical-v3-agent-presentation-v1";
+const AGENT_SLOT_CARD_CONTRACT: &str = "sniffbench-historical-v3-agent-slot-card-v1";
 const MAX_PRESENTATION_BYTES: usize = 64 * 1024 * 1024;
 const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
 const MAX_SUBMISSION_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_AUDIT_BYTES: u64 = 4 * 1024 * 1024;
+const MAX_ASSIGNMENT_BYTES: u64 = 1024 * 1024;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HistoricalV3AgentAssignment {
+    pub schema_version: u32,
+    pub protocol_sha256: String,
+    pub rank_sha256: String,
+    pub review_item_id: String,
+    pub source_bundle_sha256: String,
+    pub prompt_sha256: String,
+    pub agent_ids: [String; 2],
+    pub assignment_sha256: String,
+}
+
+impl HistoricalV3AgentAssignment {
+    pub fn computed_sha256(&self) -> Result<String, String> {
+        hash_json(&(
+            self.schema_version,
+            &self.protocol_sha256,
+            &self.rank_sha256,
+            &self.review_item_id,
+            &self.source_bundle_sha256,
+            &self.prompt_sha256,
+            &self.agent_ids,
+        ))
+    }
+}
+
+pub fn prepare_historical_v3_agent_assignment(
+    inputs: &HistoricalV3SourceReviewInputs<'_>,
+    bundle: &HistoricalV3SourceReviewBundle,
+    prompt_bytes: &[u8],
+) -> Result<HistoricalV3AgentAssignment, String> {
+    validate_historical_v3_source_review_bundle(inputs, bundle)?;
+    let mut assignment = HistoricalV3AgentAssignment {
+        schema_version: HISTORICAL_V3_AGENT_ASSIGNMENT_SCHEMA_VERSION,
+        protocol_sha256: inputs.protocol.protocol_sha256.clone(),
+        rank_sha256: inputs.qualification.rank.rank_sha256.clone(),
+        review_item_id: bundle.review_item_id.clone(),
+        source_bundle_sha256: bundle.bundle_sha256.clone(),
+        prompt_sha256: sha256(prompt_bytes),
+        agent_ids: assigned_agent_ids(&inputs.qualification.rank.rank_sha256),
+        assignment_sha256: String::new(),
+    };
+    assignment.assignment_sha256 = assignment.computed_sha256()?;
+    validate_historical_v3_agent_assignment(inputs, bundle, prompt_bytes, &assignment)?;
+    Ok(assignment)
+}
+
+fn assigned_agent_ids(rank_sha256: &str) -> [String; 2] {
+    [1, 2].map(|slot| {
+        let input = format!("sniffbench-historical-v3-agent-slot-v1\0{rank_sha256}\0{slot}");
+        format!("slot-{slot}-{}", sha256(input.as_bytes()))
+    })
+}
+
+pub fn validate_historical_v3_agent_assignment(
+    inputs: &HistoricalV3SourceReviewInputs<'_>,
+    bundle: &HistoricalV3SourceReviewBundle,
+    prompt_bytes: &[u8],
+    assignment: &HistoricalV3AgentAssignment,
+) -> Result<(), String> {
+    validate_assignment_hashes(inputs, bundle, assignment)?;
+    if assignment.prompt_sha256 != sha256(prompt_bytes) {
+        return Err("historical-v3 agent assignment changed its prompt bytes".to_string());
+    }
+    Ok(())
+}
+
+pub fn validate_historical_v3_pending_agent_assignment(
+    inputs: &HistoricalV3SourceReviewInputs<'_>,
+    bundle: &HistoricalV3SourceReviewBundle,
+    assignment: &HistoricalV3AgentAssignment,
+) -> Result<(), String> {
+    validate_assignment_hashes(inputs, bundle, assignment)
+}
+
+fn validate_assignment_hashes(
+    inputs: &HistoricalV3SourceReviewInputs<'_>,
+    bundle: &HistoricalV3SourceReviewBundle,
+    assignment: &HistoricalV3AgentAssignment,
+) -> Result<(), String> {
+    let policy = inputs
+        .protocol
+        .model_review_policy
+        .as_ref()
+        .ok_or("historical-v3 agent assignment requires model-review authority")?;
+    if assignment.schema_version != HISTORICAL_V3_AGENT_ASSIGNMENT_SCHEMA_VERSION
+        || assignment.protocol_sha256 != inputs.protocol.protocol_sha256
+        || assignment.rank_sha256 != inputs.qualification.rank.rank_sha256
+        || assignment.review_item_id != bundle.review_item_id
+        || assignment.source_bundle_sha256 != bundle.bundle_sha256
+        || assignment.prompt_sha256 != policy.approved_prompt_sha256
+        || assignment.agent_ids != assigned_agent_ids(&inputs.qualification.rank.rank_sha256)
+        || assignment.assignment_sha256 != assignment.computed_sha256()?
+    {
+        return Err(
+            "historical-v3 agent assignment is not a valid sealed two-slot task".to_string(),
+        );
+    }
+    Ok(())
+}
+
+pub fn read_historical_v3_agent_assignment(
+    path: &Path,
+) -> Result<HistoricalV3AgentAssignment, String> {
+    let bytes = read_limited(path, MAX_ASSIGNMENT_BYTES, "historical-v3 agent assignment")?;
+    serde_json::from_slice(&bytes)
+        .map_err(|error| format!("invalid historical-v3 agent assignment: {error}"))
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -29,6 +142,49 @@ struct HistoricalV3AgentPresentation<'a> {
     prompt: &'a str,
     prompt_sha256: String,
     source_bundle: &'a HistoricalV3SourceReviewBundle,
+}
+
+#[derive(Serialize)]
+struct HistoricalV3AgentSlotCard<'a> {
+    contract: &'static str,
+    slot: u8,
+    agent_id: &'a str,
+    assignment_sha256: &'a str,
+    invocation_sha256: String,
+}
+
+pub fn historical_v3_agent_slot_card(
+    assignment: &HistoricalV3AgentAssignment,
+    invocation_bytes: &[u8],
+    slot: u8,
+) -> Result<String, String> {
+    let index = match slot {
+        1 => 0,
+        2 => 1,
+        _ => return Err("historical-v3 agent slot must be 1 or 2".to_string()),
+    };
+    serde_json::to_string(&HistoricalV3AgentSlotCard {
+        contract: AGENT_SLOT_CARD_CONTRACT,
+        slot,
+        agent_id: &assignment.agent_ids[index],
+        assignment_sha256: &assignment.assignment_sha256,
+        invocation_sha256: sha256(invocation_bytes),
+    })
+    .map_err(|error| format!("cannot present historical-v3 agent slot: {error}"))
+}
+
+pub fn validate_historical_v3_agent_slot_card(
+    assignment: &HistoricalV3AgentAssignment,
+    invocation_bytes: &[u8],
+    slot: u8,
+    card_bytes: &[u8],
+) -> Result<(), String> {
+    if card_bytes != historical_v3_agent_slot_card(assignment, invocation_bytes, slot)?.as_bytes() {
+        return Err(
+            "historical-v3 agent slot card changed from its exact presented bytes".to_string(),
+        );
+    }
+    Ok(())
 }
 
 fn deserialize_model_version<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
@@ -105,6 +261,7 @@ pub struct HistoricalV3AgentReviewAudit {
     pub protocol_sha256: String,
     pub source_bundle_sha256: String,
     pub review_item_id: String,
+    pub assignment_sha256: String,
     pub submission_sha256s: [String; 2],
     pub labels: [HistoricalV3AgentReviewLabel; 2],
     pub tier_agreement: bool,
@@ -166,6 +323,7 @@ impl HistoricalV3AgentReviewAudit {
             &self.protocol_sha256,
             &self.source_bundle_sha256,
             &self.review_item_id,
+            &self.assignment_sha256,
             &self.submission_sha256s,
             &self.labels,
             self.tier_agreement,
@@ -399,11 +557,18 @@ pub fn audit_historical_v3_agent_reviews(
     inputs: &HistoricalV3SourceReviewInputs<'_>,
     bundle: &HistoricalV3SourceReviewBundle,
     prompt_bytes: &[u8],
+    assignment: &HistoricalV3AgentAssignment,
     first: &HistoricalV3AgentReviewSubmission,
     second: &HistoricalV3AgentReviewSubmission,
 ) -> Result<HistoricalV3AgentReviewAudit, String> {
+    validate_historical_v3_agent_assignment(inputs, bundle, prompt_bytes, assignment)?;
     validate_historical_v3_agent_review(inputs, bundle, prompt_bytes, first)?;
     validate_historical_v3_agent_review(inputs, bundle, prompt_bytes, second)?;
+    if first.reviewer.agent_id != assignment.agent_ids[0]
+        || second.reviewer.agent_id != assignment.agent_ids[1]
+    {
+        return Err("historical-v3 agent submission differs from its preassigned slot".to_string());
+    }
     if first
         .reviewer
         .agent_id
@@ -430,6 +595,7 @@ pub fn audit_historical_v3_agent_reviews(
         protocol_sha256: inputs.protocol.protocol_sha256.clone(),
         source_bundle_sha256: bundle.bundle_sha256.clone(),
         review_item_id: bundle.review_item_id.clone(),
+        assignment_sha256: assignment.assignment_sha256.clone(),
         submission_sha256s: [
             first.submission_sha256.clone(),
             second.submission_sha256.clone(),
@@ -456,11 +622,13 @@ pub fn validate_historical_v3_agent_audit(
     inputs: &HistoricalV3SourceReviewInputs<'_>,
     bundle: &HistoricalV3SourceReviewBundle,
     prompt_bytes: &[u8],
+    assignment: &HistoricalV3AgentAssignment,
     first: &HistoricalV3AgentReviewSubmission,
     second: &HistoricalV3AgentReviewSubmission,
     audit: &HistoricalV3AgentReviewAudit,
 ) -> Result<(), String> {
-    let expected = audit_historical_v3_agent_reviews(inputs, bundle, prompt_bytes, first, second)?;
+    let expected =
+        audit_historical_v3_agent_reviews(inputs, bundle, prompt_bytes, assignment, first, second)?;
     if audit != &expected {
         return Err("historical-v3 agent audit does not replay".to_string());
     }
@@ -485,11 +653,20 @@ pub fn verify_historical_v3_agent_review(
     inputs: &HistoricalV3SourceReviewInputs<'_>,
     bundle: &HistoricalV3SourceReviewBundle,
     prompt_bytes: &[u8],
+    assignment: &HistoricalV3AgentAssignment,
     first: &HistoricalV3AgentReviewSubmission,
     second: &HistoricalV3AgentReviewSubmission,
     audit: &HistoricalV3AgentReviewAudit,
 ) -> Result<HistoricalV3VerifiedAgentReview, String> {
-    validate_historical_v3_agent_audit(inputs, bundle, prompt_bytes, first, second, audit)?;
+    validate_historical_v3_agent_audit(
+        inputs,
+        bundle,
+        prompt_bytes,
+        assignment,
+        first,
+        second,
+        audit,
+    )?;
     let verdict = audit.labels[0].decision.verdict;
     let disposition = match verdict {
         Some(HistoricalV3ReviewerVerdict::Slop) if audit.slop_pattern_agreement => {

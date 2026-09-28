@@ -634,11 +634,15 @@ pub use release::{
 pub use release::{HistoricalV3ReviewRecordPaths, verify_historical_v3_final_review_from_disk};
 
 pub use release::{
-    HISTORICAL_V3_AGENT_REVIEW_SCHEMA_VERSION, HistoricalV3AgentReviewAudit,
-    HistoricalV3AgentReviewLabel, HistoricalV3AgentReviewSubmission, HistoricalV3AgentReviewer,
+    HISTORICAL_V3_AGENT_ASSIGNMENT_SCHEMA_VERSION, HISTORICAL_V3_AGENT_REVIEW_SCHEMA_VERSION,
+    HistoricalV3AgentAssignment, HistoricalV3AgentReviewAudit, HistoricalV3AgentReviewLabel,
+    HistoricalV3AgentReviewSubmission, HistoricalV3AgentReviewer,
     audit_historical_v3_agent_reviews, historical_v3_agent_invocation_request,
-    seal_historical_v3_agent_review, validate_historical_v3_agent_audit,
+    historical_v3_agent_slot_card, prepare_historical_v3_agent_assignment,
+    read_historical_v3_agent_assignment, seal_historical_v3_agent_review,
+    validate_historical_v3_agent_assignment, validate_historical_v3_agent_audit,
     validate_historical_v3_agent_invocation, validate_historical_v3_agent_review,
+    validate_historical_v3_agent_slot_card,
 };
 
 pub use release::{

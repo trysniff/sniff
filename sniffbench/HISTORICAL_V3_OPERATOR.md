@@ -162,9 +162,18 @@ sniff benchmark historical-v3 submit-agent-review operator-config.json python 2 
 sniff benchmark historical-v3 audit-agent-review operator-config.json python
 ```
 
-`prepare-agent-review` prints the path to `agent-invocation.json`; its exact
-bytes contain the approved prompt, its SHA-256, and the sealed source bundle.
-Present only that invocation to each reviewer, not the repository identity,
+`prepare-agent-review` derives two fixed slot IDs from the sealed rank and
+records them in `agent-assignment.json` before publishing the invocation.
+The operator cannot choose or swap them after seeing responses. Create two
+fresh agent runs and give each its assigned slot card. Record the actual
+model run identity separately in each response's `run_id`; those identities
+remain self-declared, not cryptographically authenticated. The slot ID is a
+deterministic task pseudonym, not an agent identity credential. The command prints
+paths to the shared `agent-invocation.json` and two
+slot cards. The invocation contains the approved prompt, its SHA-256, and
+the sealed source bundle. Present that invocation plus only the matching
+slot card to each reviewer; the card states the assigned agent ID and binds
+to the exact invocation bytes. Do not present the repository identity,
 change metadata, Sniff output, or the other review. The two response files
 must contain only the raw model JSON, not a paraphrase or an edited decision.
 Submissions for one rank are single-writer; retry a concurrent-lock error after
@@ -175,3 +184,6 @@ case. Disagreement and uncertainty remain visible and count against the
 review cap but not as accepted cases. Reviewer provenance fields are
 self-declared; this workflow is model-judged development evidence, not
 independent human gold or a measured Sniff precision score.
+The v3 agent-review record requires the rank-derived assignment and slot cards.
+Older v2 pilot records cannot be backfilled into this record or counted as
+preassigned benchmark reviews.
