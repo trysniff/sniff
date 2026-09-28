@@ -221,6 +221,80 @@ async fn agent_review_rejects_forged_citation_reused_run_and_missing_revision_fi
 }
 
 #[tokio::test]
+async fn insufficient_context_can_honestly_report_missing_inspection() {
+    let fixture = agent_fixture().await;
+    let mut incomplete_reviewer = reviewer("agent-a", "run-a");
+    incomplete_reviewer.complete_source_context_inspected = false;
+    incomplete_reviewer.behavior_evidence_inspected = false;
+    let mut insufficient = decision_for_methods(
+        &fixture.bundle.methods,
+        HistoricalV3ReviewerVerdict::InsufficientContext,
+    );
+    insufficient.before_contains_unnecessary_machinery = None;
+    insufficient.public_surface_preserved = None;
+    let submission = seal_historical_v3_agent_review(
+        &fixture.inputs(),
+        &fixture.bundle,
+        PROMPT,
+        response(incomplete_reviewer.clone(), insufficient),
+    )
+    .unwrap();
+    validate_historical_v3_agent_review(&fixture.inputs(), &fixture.bundle, PROMPT, &submission)
+        .unwrap();
+
+    let mut unsupported = submission.decision.clone();
+    unsupported.behavior_preserved = Some(true);
+    assert!(
+        seal_historical_v3_agent_review(
+            &fixture.inputs(),
+            &fixture.bundle,
+            PROMPT,
+            response(incomplete_reviewer.clone(), unsupported),
+        )
+        .unwrap_err()
+        .contains("claims evidence")
+    );
+
+    let mut unsupported = submission.decision.clone();
+    unsupported.after_removes_that_machinery = Some(true);
+    assert!(
+        seal_historical_v3_agent_review(
+            &fixture.inputs(),
+            &fixture.bundle,
+            PROMPT,
+            response(incomplete_reviewer.clone(), unsupported),
+        )
+        .unwrap_err()
+        .contains("claims evidence")
+    );
+
+    let mut unsupported = submission.decision.clone();
+    unsupported.public_surface_preserved = Some(true);
+    assert!(
+        seal_historical_v3_agent_review(
+            &fixture.inputs(),
+            &fixture.bundle,
+            PROMPT,
+            response(incomplete_reviewer.clone(), unsupported),
+        )
+        .unwrap_err()
+        .contains("claims evidence")
+    );
+
+    let clean = decision_for_methods(&fixture.bundle.methods, HistoricalV3ReviewerVerdict::Clean);
+    assert!(
+        seal_historical_v3_agent_review(
+            &fixture.inputs(),
+            &fixture.bundle,
+            PROMPT,
+            response(incomplete_reviewer, clean),
+        )
+        .unwrap_err()
+        .contains("conclusive verdict")
+    );
+}
+
+#[tokio::test]
 async fn agent_outcomes_never_turn_disagreement_into_a_human_label() {
     let fixture = agent_fixture().await;
     for (first_verdict, second_verdict, expected) in [
