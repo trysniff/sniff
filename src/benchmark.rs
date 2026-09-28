@@ -707,6 +707,17 @@ pub use release::{
 };
 
 pub use release::{
+    PUBLIC_ID_CENSUS_V2_POLICY_SCHEMA_VERSION, PUBLIC_ID_CENSUS_V2_PUBLIC_POLICY_SHA256,
+    PublicIdCensusV2Policy, committed_public_id_census_v2_policy,
+    public_id_census_v2_policy_sha256, validate_public_id_census_v2_policy,
+};
+
+pub use release::{
+    PUBLIC_ID_CENSUS_V2_POLICY_COMMIT_SHA, PublicIdCensusV2NullRecord, PublicIdCensusV2Replay,
+    replay_public_id_census_v2, replay_public_id_census_v2_stream,
+};
+
+pub use release::{
     PUBLIC_ID_CENSUS_GRAPHQL_QUERY, PUBLIC_ID_CENSUS_MAX_FRAME_BYTES,
     PUBLIC_ID_CENSUS_POLICY_COMMIT_SHA, PublicIdCensusExchange, PublicIdCensusFailedAttempt,
     PublicIdCensusPreflight, PublicIdCensusReplay, PublicIdCensusRequest,

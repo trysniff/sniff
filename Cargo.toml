@@ -32,6 +32,7 @@ include = [
   "/src/benchmark_python_wheelhouse_runner.py",
   "/src/benchmark_assets/**",
   "/src/**/*.rs",
+  "/sniffbench/historical-v3-id-census-v2/policy.json",
   "/tests/**",
   "/sniff.config.toml",
 ]
