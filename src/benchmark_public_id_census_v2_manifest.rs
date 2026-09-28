@@ -20,7 +20,7 @@ pub const PUBLIC_ID_CENSUS_V2_NULL_LEDGER_SCHEMA_VERSION: u32 = 1;
 pub const PUBLIC_ID_CENSUS_V2_ARTIFACT_CONTRACT_SHA256: &str =
     "5a34b709a8a20d06b1170c1c893bf2ea54bff392837fe77cca1389e265ae2973";
 pub const PUBLIC_ID_CENSUS_V2_ARTIFACT_CONTRACT_COMMIT_SHA: &str =
-    "e43e02c57c8c3a816b25b2c21efdc5496208dc8b";
+    "e97bd5c0f2efc90b1f37ea0f74712d4ec5f9014d";
 const ARTIFACT_CONTRACT: &str =
     include_str!("../sniffbench/historical-v3-id-census-v2/artifact-contract.json");
 const MAX_PREFLIGHT_BYTES: u64 = 1024 * 1024;

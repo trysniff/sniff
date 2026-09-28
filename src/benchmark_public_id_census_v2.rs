@@ -25,7 +25,6 @@ mod preflight;
 mod collector;
 
 pub use collector::collect_public_id_census_v2;
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PublicIdCensusV2Policy {
