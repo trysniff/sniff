@@ -150,26 +150,32 @@ fn rust_pin_selects_a_platform_asset_or_reports_unsupported_platform() {
 }
 
 #[test]
-fn windows_rust_pins_use_the_reproducible_v1_2_compatibility_bundles() {
+fn windows_rust_pins_use_the_reproducible_v1_3_compatibility_bundles() {
+    #[cfg(windows)]
+    assert_eq!(
+        pinned_indexer(SemanticIndexerKind::Rust).unwrap().version,
+        "2026-08-03-sniff.2"
+    );
+
     let x64 = rust_analyzer_download_for("windows", "x86_64", false).unwrap();
     assert_eq!(
         x64.url,
-        "https://github.com/trysniff/sniff/releases/download/semantic-indexers-v1.2/sniff-rust-indexer-x86_64-pc-windows-msvc.zip"
+        "https://github.com/trysniff/sniff/releases/download/semantic-indexers-v1.3/sniff-rust-indexer-x86_64-pc-windows-msvc.zip"
     );
     assert_eq!(
         x64.sha256,
-        "4b57083b09b46634eabf24589f7059001de7f91f0007875ed6133c4a1727a6a5"
+        "eb6ae43f057d1b08806c5d983762cbd4ad996da1e73c42faa1b06eae20f42add"
     );
     assert_eq!(x64.archive, DownloadArchive::Zip);
 
     let arm64 = rust_analyzer_download_for("windows", "aarch64", false).unwrap();
     assert_eq!(
         arm64.url,
-        "https://github.com/trysniff/sniff/releases/download/semantic-indexers-v1.2/sniff-rust-indexer-aarch64-pc-windows-msvc.zip"
+        "https://github.com/trysniff/sniff/releases/download/semantic-indexers-v1.3/sniff-rust-indexer-aarch64-pc-windows-msvc.zip"
     );
     assert_eq!(
         arm64.sha256,
-        "dc1d0bdf114919290635f4f2d95eb2c76a744ba406a1ebf62dd38d63069f8361"
+        "8e4b4444cbe4649bf993644e3d7fcfe78bc39b80d0d108a0dc417641ecd335ac"
     );
     assert_eq!(arm64.archive, DownloadArchive::Zip);
 }

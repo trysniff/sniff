@@ -248,7 +248,7 @@ pub(crate) fn pinned_indexer(kind: SemanticIndexerKind) -> Result<PinnedIndexer,
             kind,
             display_name: "rust-analyzer",
             version: if cfg!(windows) {
-                "2026-08-03-sniff.1"
+                "2026-08-03-sniff.2"
             } else {
                 "2026-08-03"
             },
@@ -302,13 +302,13 @@ fn rust_analyzer_download_for(
     let target = (os, architecture);
     let download = match target {
         ("windows", "x86_64") => IndexerDownload {
-            url: "https://github.com/trysniff/sniff/releases/download/semantic-indexers-v1.2/sniff-rust-indexer-x86_64-pc-windows-msvc.zip",
-            sha256: "4b57083b09b46634eabf24589f7059001de7f91f0007875ed6133c4a1727a6a5",
+            url: "https://github.com/trysniff/sniff/releases/download/semantic-indexers-v1.3/sniff-rust-indexer-x86_64-pc-windows-msvc.zip",
+            sha256: "eb6ae43f057d1b08806c5d983762cbd4ad996da1e73c42faa1b06eae20f42add",
             archive: DownloadArchive::Zip,
         },
         ("windows", "aarch64") => IndexerDownload {
-            url: "https://github.com/trysniff/sniff/releases/download/semantic-indexers-v1.2/sniff-rust-indexer-aarch64-pc-windows-msvc.zip",
-            sha256: "dc1d0bdf114919290635f4f2d95eb2c76a744ba406a1ebf62dd38d63069f8361",
+            url: "https://github.com/trysniff/sniff/releases/download/semantic-indexers-v1.3/sniff-rust-indexer-aarch64-pc-windows-msvc.zip",
+            sha256: "8e4b4444cbe4649bf993644e3d7fcfe78bc39b80d0d108a0dc417641ecd335ac",
             archive: DownloadArchive::Zip,
         },
         ("macos", "x86_64") => IndexerDownload {
