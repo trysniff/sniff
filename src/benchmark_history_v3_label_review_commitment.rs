@@ -26,6 +26,7 @@ pub fn prepare_historical_v3_label_review(
         public_surface_delta_sha256: bundle.public_surface_delta_sha256.clone(),
         simplifications: bundle.simplifications.clone(),
         methods: bundle.methods.clone(),
+        context: bundle.context.clone(),
         behavior: bundle.behavior.clone(),
         decision: HistoricalV3ReviewDecision::blank(),
     };

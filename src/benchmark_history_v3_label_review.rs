@@ -26,7 +26,7 @@ mod store;
 
 pub use store::{read_historical_v3_label_worksheet, write_historical_v3_label_worksheet_new};
 
-const LABEL_TASK_CONTRACT: &str = "sniffbench-historical-v3-label-task-v1";
+const LABEL_TASK_CONTRACT: &str = "sniffbench-historical-v3-label-task-v2";
 const LABEL_AUDIT_CONTRACT: &str = "sniffbench-historical-v3-label-audit-v1";
 
 #[cfg(test)]

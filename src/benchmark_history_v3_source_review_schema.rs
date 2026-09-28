@@ -3,12 +3,12 @@ use super::super::{
     HistoricalV3IdenticalTests, HistoricalV3Materialization, HistoricalV3MechanicalQualification,
     HistoricalV3Protocol, HistoricalV3RecipeCommand, HistoricalV3SemanticCensus,
     HistoricalV3SimplificationKind, HistoricalV3SourceCensus, HistoricalV3SourceSide,
-    HistoricalV3TestRecipe, IntentionalBoundarySemanticMethod,
+    HistoricalV3TestRecipe, IntentionalBoundarySemanticMethod, IntentionalBoundarySemanticRange,
 };
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-pub const HISTORICAL_V3_SOURCE_REVIEW_BUNDLE_SCHEMA_VERSION: u32 = 1;
+pub const HISTORICAL_V3_SOURCE_REVIEW_BUNDLE_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Copy)]
 pub struct HistoricalV3SourceReviewInputs<'a> {
@@ -41,6 +41,64 @@ pub struct HistoricalV3ReviewMethod {
     pub source_sha256: String,
     pub source: String,
     pub semantic: IntentionalBoundarySemanticMethod,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HistoricalV3ReviewContextRole {
+    DirectCaller,
+    ContractDefinition,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HistoricalV3ReviewContextGapReason {
+    Unresolved,
+    NoVerifiableSource,
+    OverLimit,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HistoricalV3ReviewContextItem {
+    pub anchor_parser_unit_id: String,
+    pub role: HistoricalV3ReviewContextRole,
+    pub target_symbol_id: String,
+    pub source_index: usize,
+    pub definition: Option<IntentionalBoundarySemanticRange>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum HistoricalV3ReviewContextSource {
+    Method {
+        method: Box<HistoricalV3ReviewMethod>,
+    },
+    File {
+        side: HistoricalV3SourceSide,
+        repository_path: String,
+        source_sha256: String,
+        source: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HistoricalV3ReviewContextGap {
+    pub side: HistoricalV3SourceSide,
+    pub anchor_parser_unit_id: String,
+    pub role: HistoricalV3ReviewContextRole,
+    pub target_symbol_id: Option<String>,
+    pub reason: HistoricalV3ReviewContextGapReason,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HistoricalV3ReviewContext {
+    pub sources: Vec<HistoricalV3ReviewContextSource>,
+    pub items: Vec<HistoricalV3ReviewContextItem>,
+    pub gaps: Vec<HistoricalV3ReviewContextGap>,
+    pub resolved_context_complete: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -82,6 +140,7 @@ pub struct HistoricalV3SourceReviewBundle {
     pub language: String,
     pub source_only: bool,
     pub repository_identity_included: bool,
+    pub source_identity_may_be_inferable: bool,
     pub change_metadata_included: bool,
     pub sniff_output_included: bool,
     pub prior_labels_included: bool,
@@ -89,6 +148,7 @@ pub struct HistoricalV3SourceReviewBundle {
     pub public_surface_delta_sha256: String,
     pub simplifications: Vec<HistoricalV3SimplificationKind>,
     pub methods: Vec<HistoricalV3ReviewMethod>,
+    pub context: HistoricalV3ReviewContext,
     pub behavior: HistoricalV3ReviewBehaviorEvidence,
     pub bundle_sha256: String,
 }

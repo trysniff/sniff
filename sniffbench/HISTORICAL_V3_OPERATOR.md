@@ -171,7 +171,27 @@ remain self-declared, not cryptographically authenticated. The slot ID is a
 deterministic task pseudonym, not an agent identity credential. The command prints
 paths to the shared `agent-invocation.json` and two
 slot cards. The invocation contains the approved prompt, its SHA-256, and
-the sealed source bundle. Present that invocation plus only the matching
+the sealed source bundle. Bundle v2 includes complete, source-census-hashed
+changed methods and a bounded projection of graph-resolved direct callers and
+contract definitions from both frozen revisions. Context uses complete
+parser-method bodies or small whole files, checked against the frozen source
+census hashes. `context.gaps` names relationships that cannot be shown as
+verifiable source or exceed the line/item/file cap; any gap prohibits a
+conclusive verdict. A selected method body that exceeds the byte cap fails
+bundle construction rather than being silently truncated.
+Definition offsets following non-ASCII text also fail closed: this census does
+not retain whether an indexer used UTF-8, UTF-16, or UTF-32 positions, so such
+coordinates cannot yet be proved to identify the same source span.
+`resolved_context_complete` covers relationships present in the sealed semantic
+census; it does not prove the indexer discovered every dynamic caller.
+The repository URL, PR metadata, Sniff output, and prior labels are withheld,
+but exact source can still identify a project. If that happens, the reviewer
+must use `insufficient_context` and attest `repository_identity_hidden: false`;
+the case cannot receive a conclusive blind label.
+This prompt text is versioned by exact SHA-256 in each new protocol. The
+updated citation instructions apply only to a newly sealed protocol; they
+do not rewrite a prior run's approved prompt bytes.
+Present that invocation plus only the matching
 slot card to each reviewer; the card states the assigned agent ID and binds
 to the exact invocation bytes. Do not present the repository identity,
 change metadata, Sniff output, or the other review. The two response files

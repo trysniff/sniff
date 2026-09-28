@@ -434,7 +434,6 @@ pub fn validate_historical_v3_agent_review(
     }
     if !reviewer.fresh_context
         || !reviewer.sniff_output_hidden
-        || !reviewer.repository_identity_hidden
         || !reviewer.change_metadata_hidden
         || !reviewer.other_reviews_hidden
     {
@@ -442,11 +441,27 @@ pub fn validate_historical_v3_agent_review(
             "historical-v3 agent review lacks source-only isolation attestations".to_string(),
         );
     }
+    if !reviewer.repository_identity_hidden
+        && submission.decision.verdict != Some(HistoricalV3ReviewerVerdict::InsufficientContext)
+    {
+        return Err(
+            "historical-v3 agent review cannot conclude after source revealed repository identity"
+                .to_string(),
+        );
+    }
     if submission.decision.verdict != Some(HistoricalV3ReviewerVerdict::InsufficientContext)
         && (!reviewer.complete_source_context_inspected || !reviewer.behavior_evidence_inspected)
     {
         return Err(
             "historical-v3 agent review claims a conclusive verdict without complete source and behavior inspection"
+                .to_string(),
+        );
+    }
+    if !bundle.context.resolved_context_complete
+        && submission.decision.verdict != Some(HistoricalV3ReviewerVerdict::InsufficientContext)
+    {
+        return Err(
+            "historical-v3 agent review cannot conclude with missing caller or contract context"
                 .to_string(),
         );
     }
@@ -471,6 +486,7 @@ pub fn validate_historical_v3_agent_review(
         public_surface_delta_sha256: bundle.public_surface_delta_sha256.clone(),
         simplifications: bundle.simplifications.clone(),
         methods: bundle.methods.clone(),
+        context: bundle.context.clone(),
         behavior: bundle.behavior.clone(),
         decision: HistoricalV3ReviewDecision::blank(),
     };

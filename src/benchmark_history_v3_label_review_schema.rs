@@ -5,7 +5,7 @@ use super::super::{
 use crate::product_contract::SlopPattern;
 use serde::{Deserialize, Serialize};
 
-pub const HISTORICAL_V3_LABEL_REVIEW_SCHEMA_VERSION: u32 = 1;
+pub const HISTORICAL_V3_LABEL_REVIEW_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -96,6 +96,7 @@ pub struct HistoricalV3LabelTask {
     pub public_surface_delta_sha256: String,
     pub simplifications: Vec<HistoricalV3SimplificationKind>,
     pub methods: Vec<HistoricalV3ReviewMethod>,
+    pub context: super::super::HistoricalV3ReviewContext,
     pub behavior: HistoricalV3ReviewBehaviorEvidence,
     pub decision: HistoricalV3ReviewDecision,
 }

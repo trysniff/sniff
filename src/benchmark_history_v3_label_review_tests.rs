@@ -6,12 +6,13 @@ use super::super::{
     HistoricalV3IdenticalTestExecutionRequest, HistoricalV3IdenticalTestExecutor,
     HistoricalV3IdenticalTestOutcome, HistoricalV3IdenticalTests, HistoricalV3LabelStatus,
     HistoricalV3Materialization, HistoricalV3MechanicalQualification, HistoricalV3Protocol,
-    HistoricalV3RankJournal, HistoricalV3RawIdenticalTestExecution, HistoricalV3ReviewDecision,
+    HistoricalV3RankJournal, HistoricalV3RawIdenticalTestExecution, HistoricalV3ReviewContextItem,
+    HistoricalV3ReviewContextRole, HistoricalV3ReviewContextSource, HistoricalV3ReviewDecision,
     HistoricalV3ReviewMethod, HistoricalV3Reviewer, HistoricalV3ReviewerVerdict,
     HistoricalV3SemanticCensus, HistoricalV3SourceCensus, HistoricalV3SourceReviewBundle,
     HistoricalV3SourceReviewInputs, HistoricalV3SourceSide, HistoricalV3TestRecipe,
-    historical_v3_rank_identity, run_historical_v3_identical_tests_stage,
-    run_historical_v3_source_review_stage,
+    IntentionalBoundarySemanticRange, historical_v3_rank_identity,
+    run_historical_v3_identical_tests_stage, run_historical_v3_source_review_stage,
 };
 use super::{
     HistoricalV3LabelWorksheet, HistoricalV3SourceCitation, audit_historical_v3_label_reviews,
@@ -121,6 +122,50 @@ async fn prepares_blank_source_only_task_and_writes_it_create_new() {
 }
 
 #[tokio::test]
+async fn cites_any_exact_line_from_a_verified_whole_file_context() {
+    let fixture = review_fixture().await;
+    let mut task = prepare_historical_v3_label_review(&fixture.inputs(), &fixture.bundle)
+        .unwrap()
+        .task;
+    let source_index = task.context.sources.len();
+    task.context
+        .sources
+        .push(HistoricalV3ReviewContextSource::File {
+            side: HistoricalV3SourceSide::Base,
+            repository_path: "src/contract.rs".to_string(),
+            source_sha256: "0".repeat(64),
+            source: "first contract line\nsecond contract line\n".to_string(),
+        });
+    for line in [0, 1] {
+        task.context.items.push(HistoricalV3ReviewContextItem {
+            anchor_parser_unit_id: task.methods[0].parser_unit_id.clone(),
+            role: HistoricalV3ReviewContextRole::ContractDefinition,
+            target_symbol_id: "fixture::contract".to_string(),
+            source_index,
+            definition: Some(IntentionalBoundarySemanticRange {
+                repository_path: "src/contract.rs".to_string(),
+                start_line_zero_based: line,
+                start_character_zero_based: 0,
+                end_line_zero_based: line,
+                end_character_zero_based: 6,
+            }),
+        });
+    }
+    let citation = HistoricalV3SourceCitation {
+        side: HistoricalV3SourceSide::Base,
+        repository_path: "src/contract.rs".to_string(),
+        parser_unit_id: "fixture::contract".to_string(),
+        start_line: 2,
+        end_line: 2,
+        quote: "second contract line".to_string(),
+    };
+    super::validation::validate_citation(&task, &citation).unwrap();
+    let mut forged = citation;
+    forged.quote = "invented".to_string();
+    assert!(super::validation::validate_citation(&task, &forged).is_err());
+}
+
+#[tokio::test]
 async fn accepts_only_two_distinct_human_reviews_over_the_immutable_task() {
     let fixture = review_fixture().await;
     let first = fixture.worksheet("reviewer-a", HistoricalV3ReviewerVerdict::Slop);
@@ -162,12 +207,36 @@ async fn accepts_only_two_distinct_human_reviews_over_the_immutable_task() {
             .contains("immutable source task")
     );
 
+    let mut tampered_context = first.clone();
+    tampered_context.task.context.resolved_context_complete = false;
+    assert!(
+        validate_historical_v3_label_review(&fixture.inputs(), &fixture.bundle, &tampered_context)
+            .unwrap_err()
+            .contains("immutable source task")
+    );
+
     let mut assisted = first.clone();
     assisted.reviewer.as_mut().unwrap().model_assistance_used = true;
     assert!(
         validate_historical_v3_label_review(&fixture.inputs(), &fixture.bundle, &assisted)
             .unwrap_err()
             .contains("human-only")
+    );
+
+    let mut unsupported_attestation = first.clone();
+    unsupported_attestation
+        .reviewer
+        .as_mut()
+        .unwrap()
+        .complete_source_context_inspected = false;
+    assert!(
+        validate_historical_v3_label_review(
+            &fixture.inputs(),
+            &fixture.bundle,
+            &unsupported_attestation,
+        )
+        .unwrap_err()
+        .contains("without inspecting source")
     );
 
     let mut repeated = second;
