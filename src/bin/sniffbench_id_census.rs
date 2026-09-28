@@ -4,7 +4,8 @@ use reqwest::blocking::{Client, Response};
 use reqwest::header::{ACCEPT, CONTENT_TYPE, DATE, LINK, RETRY_AFTER, USER_AGENT};
 use sniff::benchmark::{
     PublicIdCensusHttpResponse, PublicIdCensusRequest, PublicIdCensusTransport,
-    PublicIdCensusTransportError, collect_public_id_census, committed_public_id_census_policy,
+    PublicIdCensusTransportError, collect_public_id_census, collect_public_id_census_v2,
+    committed_public_id_census_policy, committed_public_id_census_v2_policy,
 };
 use std::io::Read;
 use std::path::PathBuf;
@@ -20,6 +21,8 @@ struct Args {
     output: PathBuf,
     #[arg(long)]
     offline: bool,
+    #[arg(long)]
+    v2: bool,
 }
 
 struct GitHubTransport {
@@ -215,15 +218,28 @@ fn main() {
 
 fn run() -> Result<(), String> {
     let args = Args::parse();
-    let policy = committed_public_id_census_policy()?;
     let mut transport = GitHubTransport::new(args.offline)?;
-    let manifest = collect_public_id_census(&policy, &args.output, &mut transport)?;
-    println!(
-        "public-ID census sealed: {} raw exchanges, {} listed repositories, {} in-window repositories, {} frames",
-        manifest.exchanges.len(),
-        manifest.listed_repository_count,
-        manifest.in_window_repository_count,
-        manifest.frames.len()
-    );
+    if args.v2 {
+        let policy = committed_public_id_census_v2_policy()?;
+        let manifest = collect_public_id_census_v2(&policy, &args.output, &mut transport)?;
+        println!(
+            "public-ID census v2 sealed: {} raw exchanges, {} listed, {} resolved in-window, {} crawled null exclusions, {} frames",
+            manifest.exchanges.len(),
+            manifest.listed_repository_count,
+            manifest.resolved_in_window_count,
+            manifest.crawled_null_count,
+            manifest.frames.len()
+        );
+    } else {
+        let policy = committed_public_id_census_policy()?;
+        let manifest = collect_public_id_census(&policy, &args.output, &mut transport)?;
+        println!(
+            "public-ID census sealed: {} raw exchanges, {} listed repositories, {} in-window repositories, {} frames",
+            manifest.exchanges.len(),
+            manifest.listed_repository_count,
+            manifest.in_window_repository_count,
+            manifest.frames.len()
+        );
+    }
     Ok(())
 }

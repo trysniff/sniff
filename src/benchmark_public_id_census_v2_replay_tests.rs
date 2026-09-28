@@ -387,3 +387,33 @@ fn null_binary_probe_keeps_lower_witness_and_reuses_its_observation() {
         result
     );
 }
+
+#[test]
+fn reused_node_id_is_rejected_before_graphql_enrichment() {
+    let policy = committed_public_id_census_v2_policy().unwrap();
+    let rows = rows();
+    let mut graphql_calls = 0;
+    let result =
+        replay_public_id_census_v2_with_source(&policy, &preflight(), |request, url, body| {
+            let mut exchange = synthetic_exchange(request, url, body, &rows);
+            if matches!(&exchange.request, PublicIdCensusRequest::Rest { .. }) {
+                let mut page: serde_json::Value =
+                    serde_json::from_str(&exchange.response_body).unwrap();
+                let aliased = page
+                    .as_array_mut()
+                    .unwrap()
+                    .iter_mut()
+                    .find(|repository| repository["id"].as_u64() == Some(4))
+                    .unwrap();
+                aliased["node_id"] = serde_json::Value::String("node-3".to_string());
+                exchange.response_body = serde_json::to_string(&page).unwrap();
+                exchange.response_sha256 =
+                    format!("{:x}", Sha256::digest(exchange.response_body.as_bytes()));
+            } else {
+                graphql_calls += 1;
+            }
+            Ok(exchange)
+        });
+    assert!(result.unwrap_err().contains("node ID aliases two REST IDs"));
+    assert_eq!(graphql_calls, 0);
+}

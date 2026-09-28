@@ -19,6 +19,8 @@ pub const PUBLIC_ID_CENSUS_V2_MANIFEST_SCHEMA_VERSION: u32 = 1;
 pub const PUBLIC_ID_CENSUS_V2_NULL_LEDGER_SCHEMA_VERSION: u32 = 1;
 pub const PUBLIC_ID_CENSUS_V2_ARTIFACT_CONTRACT_SHA256: &str =
     "5a34b709a8a20d06b1170c1c893bf2ea54bff392837fe77cca1389e265ae2973";
+pub const PUBLIC_ID_CENSUS_V2_ARTIFACT_CONTRACT_COMMIT_SHA: &str =
+    "e43e02c57c8c3a816b25b2c21efdc5496208dc8b";
 const ARTIFACT_CONTRACT: &str =
     include_str!("../sniffbench/historical-v3-id-census-v2/artifact-contract.json");
 const MAX_PREFLIGHT_BYTES: u64 = 1024 * 1024;
@@ -542,7 +544,9 @@ fn sha256(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
 
-fn validate_contract_preflight(receipt: &PublicIdCensusV2ContractPreflight) -> Result<(), String> {
+pub(crate) fn validate_contract_preflight(
+    receipt: &PublicIdCensusV2ContractPreflight,
+) -> Result<(), String> {
     valid_utc_timestamp(&receipt.fetched_at_utc)?;
     let prefix = "https://raw.githubusercontent.com/trysniff/sniff/";
     let suffix = "/sniffbench/historical-v3-id-census-v2/artifact-contract.json";
@@ -551,10 +555,7 @@ fn validate_contract_preflight(receipt: &PublicIdCensusV2ContractPreflight) -> R
         .strip_prefix(prefix)
         .and_then(|url| url.strip_suffix(suffix))
         .ok_or("public-ID census v2 contract URL is not immutable".to_string())?;
-    if commit.len() != 40
-        || !commit
-            .bytes()
-            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    if commit != PUBLIC_ID_CENSUS_V2_ARTIFACT_CONTRACT_COMMIT_SHA
         || receipt.response_status != 200
         || receipt.fetched_contract_sha256 != PUBLIC_ID_CENSUS_V2_ARTIFACT_CONTRACT_SHA256
         || receipt.fetched_contract != ARTIFACT_CONTRACT.replace("\r\n", "\n")
