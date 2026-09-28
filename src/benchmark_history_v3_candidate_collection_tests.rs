@@ -1,4 +1,5 @@
 use super::*;
+use base64::Engine as _;
 use std::collections::VecDeque;
 use std::future::Future;
 use std::pin::Pin;
@@ -28,6 +29,10 @@ fn request() -> HistoricalV3CandidatePageRequest {
 fn response(issue_count: usize, has_next_page: bool, end_cursor: Option<&str>) -> Vec<u8> {
     serde_json::to_vec(&serde_json::json!({
         "data": {
+            "repository": {
+                "databaseId": 42,
+                "nameWithOwner": "Example/Repository",
+            },
             "search": {
                 "issueCount": issue_count,
                 "pageInfo": {
@@ -82,6 +87,10 @@ fn response_for(
         .unwrap_or_default();
     serde_json::to_vec(&serde_json::json!({
         "data": {
+            "repository": {
+                "databaseId": request.partition.repository_id,
+                "nameWithOwner": request.partition.name_with_owner,
+            },
             "search": {
                 "issueCount": issue_count,
                 "pageInfo": {
@@ -166,6 +175,7 @@ impl HistoricalV3CandidatePageTransport for FaultTransport {
 
 #[test]
 fn graphql_document_requests_only_locked_metadata() {
+    assert!(GRAPHQL_QUERY.contains("followRenames: false"));
     for forbidden in [
         "title",
         "body",
@@ -212,6 +222,144 @@ fn response_parser_rejects_partition_escape_and_unrequested_fields() {
         serde_json::from_slice(&response(1, false, None)).unwrap();
     forbidden["data"]["search"]["nodes"][0]["title"] = "not requested".into();
     assert!(parse_candidate_page(&request, &serde_json::to_vec(&forbidden).unwrap()).is_err());
+}
+
+#[test]
+fn empty_search_page_requires_the_sealed_repository_identity() {
+    let request = request();
+    let original: serde_json::Value = serde_json::from_slice(&response(0, false, None)).unwrap();
+    assert_eq!(
+        parse_candidate_page(&request, &serde_json::to_vec(&original).unwrap())
+            .unwrap()
+            .issue_count,
+        0
+    );
+
+    let mut wrong_id = original.clone();
+    wrong_id["data"]["repository"]["databaseId"] = 99.into();
+    assert!(
+        parse_candidate_page(&request, &serde_json::to_vec(&wrong_id).unwrap())
+            .unwrap_err()
+            .contains("changed identity")
+    );
+
+    let mut renamed = original.clone();
+    renamed["data"]["repository"]["nameWithOwner"] = "example/renamed".into();
+    assert!(
+        parse_candidate_page(&request, &serde_json::to_vec(&renamed).unwrap())
+            .unwrap_err()
+            .contains("changed identity")
+    );
+
+    let mut unresolved = original;
+    unresolved["data"]["repository"] = serde_json::Value::Null;
+    assert!(
+        parse_candidate_page(&request, &serde_json::to_vec(&unresolved).unwrap())
+            .unwrap_err()
+            .contains("did not resolve")
+    );
+}
+
+#[test]
+fn request_binds_repository_lookup_to_the_search_name() {
+    let request = request();
+    let body: serde_json::Value = serde_json::from_slice(&request_body(&request).unwrap()).unwrap();
+    assert_eq!(body["variables"]["owner"], "example");
+    assert_eq!(body["variables"]["name"], "repository");
+    assert!(
+        body["variables"]["query"]
+            .as_str()
+            .unwrap()
+            .contains("repo:example/repository")
+    );
+}
+
+#[tokio::test]
+async fn unresolved_empty_pages_never_commit_a_checkpoint() {
+    let request = request();
+    let original: serde_json::Value = serde_json::from_slice(&response(0, false, None)).unwrap();
+    let mut wrong_id = original.clone();
+    wrong_id["data"]["repository"]["databaseId"] = 99.into();
+    let mut renamed = original.clone();
+    renamed["data"]["repository"]["nameWithOwner"] = "example/renamed".into();
+    let mut unresolved = original;
+    unresolved["data"]["repository"] = serde_json::Value::Null;
+    unresolved["errors"] = serde_json::json!([{ "message": "repository not found" }]);
+
+    for invalid in [wrong_id, renamed, unresolved] {
+        let root = tempfile::tempdir().unwrap();
+        let mut transport = FakeTransport {
+            responses: VecDeque::from([
+                serde_json::to_vec(&invalid).unwrap(),
+                response(0, false, None),
+            ]),
+            calls: 0,
+        };
+        assert!(
+            load_or_fetch_page(root.path(), &request, &mut transport)
+                .await
+                .is_err()
+        );
+        assert!(!root.path().join("pages").exists());
+        let (_, page) = load_or_fetch_page(root.path(), &request, &mut transport)
+            .await
+            .unwrap();
+        assert_eq!(page.issue_count, 0);
+        assert_eq!(transport.calls, 2);
+    }
+}
+
+#[tokio::test]
+async fn v1_checkpoint_remains_untouched_when_v2_refetches() {
+    let root = tempfile::tempdir().unwrap();
+    let request = request();
+    let mut legacy_request = request.clone();
+    legacy_request.schema_version = 1;
+    legacy_request.request_contract = "sniffbench-historical-v3-candidate-request-v1".to_string();
+    // The v1 Search-only query had no repository identity lookup.
+    legacy_request.query_document_sha256 =
+        "67c362dd47aba09b209bc0a3b9435673aa60daee781e882321a2a4a9cf0b4474".to_string();
+    legacy_request.request_sha256.clear();
+    legacy_request.request_sha256 = sha256(&serde_json::to_vec(&legacy_request).unwrap());
+    assert_ne!(legacy_request.request_sha256, request.request_sha256);
+
+    let mut legacy_response: serde_json::Value =
+        serde_json::from_slice(&response(0, false, None)).unwrap();
+    legacy_response["data"]
+        .as_object_mut()
+        .unwrap()
+        .remove("repository");
+    let legacy_response = serde_json::to_vec(&legacy_response).unwrap();
+    let mut legacy = HistoricalV3CandidatePageCheckpoint {
+        schema_version: 1,
+        checkpoint_contract: "sniffbench-historical-v3-candidate-checkpoint-v1".to_string(),
+        request: legacy_request.clone(),
+        response_sha256: sha256(&legacy_response),
+        response_base64: base64::engine::general_purpose::STANDARD.encode(&legacy_response),
+        checkpoint_sha256: String::new(),
+    };
+    legacy.checkpoint_sha256 = sha256(&serde_json::to_vec(&legacy).unwrap());
+    let pages = root.path().join("pages");
+    std::fs::create_dir(&pages).unwrap();
+    let path = pages.join(format!("{}.json", legacy_request.request_sha256));
+    let bytes = serde_json::to_vec(&legacy).unwrap();
+    std::fs::write(&path, &bytes).unwrap();
+
+    let mut transport = FakeTransport {
+        responses: VecDeque::from([response(0, false, None)]),
+        calls: 0,
+    };
+    let (_, page) = load_or_fetch_page(root.path(), &request, &mut transport)
+        .await
+        .unwrap();
+    assert_eq!(page.issue_count, 0);
+    assert_eq!(transport.calls, 1);
+    assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    assert!(
+        pages
+            .join(format!("{}.json", request.request_sha256))
+            .is_file()
+    );
 }
 
 #[tokio::test]

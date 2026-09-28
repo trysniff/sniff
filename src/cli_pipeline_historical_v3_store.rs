@@ -860,6 +860,10 @@ mod tests {
                 let timestamp = &repository.merged_at_or_after_utc;
                 Ok(serde_json::to_vec(&serde_json::json!({
                     "data": {
+                        "repository": {
+                            "databaseId": repository.repository_id,
+                            "nameWithOwner": repository.name_with_owner,
+                        },
                         "search": {
                             "issueCount": 1,
                             "pageInfo": { "hasNextPage": false, "endCursor": null },
