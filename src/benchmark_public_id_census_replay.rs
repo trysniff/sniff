@@ -88,6 +88,12 @@ struct GraphqlData {
     nodes: Vec<Option<GraphqlRepository>>,
 }
 
+#[derive(Debug)]
+enum GraphqlNodeObservation {
+    Repository(GraphqlRepository),
+    NotFound { node_id: String, repository_id: u64 },
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct GraphqlRepository {
@@ -480,57 +486,24 @@ where
             return Err("public-ID census GraphQL request changed".to_string());
         }
         validate_exchange(&exchange, self.policy)?;
-        let raw: serde_json::Value = serde_json::from_str(&exchange.response_body)
-            .map_err(|error| format!("invalid public-ID census GraphQL response: {error}"))?;
-        let raw_nodes = raw
-            .pointer("/data/nodes")
-            .and_then(serde_json::Value::as_array)
-            .ok_or("public-ID census GraphQL omitted node array")?;
-        for node in raw_nodes {
-            let fields = node
-                .as_object()
-                .ok_or("public-ID census GraphQL node is null or malformed")?;
-            if !fields.contains_key("primaryLanguage") || !fields.contains_key("mirrorUrl") {
-                return Err("public-ID census GraphQL omitted nullable metadata".to_string());
-            }
-        }
-        let parsed: GraphqlResponse = serde_json::from_value(raw)
-            .map_err(|error| format!("invalid public-ID census GraphQL node: {error}"))?;
-        if !parsed.errors.is_empty() {
-            return Err("public-ID census GraphQL returned partial or failed data".to_string());
-        }
-        let nodes = parsed
-            .data
-            .ok_or("public-ID census GraphQL omitted data")?
-            .nodes;
-        if nodes.len() != node_ids.len() || listed.len() != node_ids.len() {
-            return Err("public-ID census GraphQL node count changed".to_string());
-        }
-        nodes
-            .into_iter()
-            .zip(node_ids.iter().zip(listed))
-            .map(|(node, (node_id, listed))| {
-                let repository = node.ok_or("public-ID census GraphQL node is null")?;
-                if repository.typename != "Repository"
-                    || repository.id != *node_id
-                    || repository.database_id != Some(listed.id)
-                    || (self.policy.require_public_at_enrichment && repository.is_private)
-                {
-                    return Err(
-                        "public-ID census GraphQL identity or visibility changed".to_string()
-                    );
-                }
-                valid_utc_timestamp(&repository.created_at)?;
-                if repository.created_at > exchange.received_at_utc {
-                    return Err(
-                        "public-ID census repository was created after its GraphQL receipt"
-                            .to_string(),
-                    );
-                }
-                canonical_name(&repository.name_with_owner)?;
-                Ok(repository)
-            })
-            .collect()
+        parse_graphql_observations(
+            &exchange.response_body,
+            node_ids,
+            listed,
+            &exchange.received_at_utc,
+            self.policy.require_public_at_enrichment,
+        )?
+        .into_iter()
+        .map(|observation| match observation {
+            GraphqlNodeObservation::Repository(repository) => Ok(repository),
+            GraphqlNodeObservation::NotFound {
+                node_id,
+                repository_id,
+            } => Err(format!(
+                "public-ID census GraphQL cannot resolve REST repository {repository_id} ({node_id})"
+            )),
+        })
+        .collect()
     }
 
     fn next(
@@ -551,6 +524,116 @@ where
         self.last_received_at = exchange.received_at_utc.clone();
         Ok(exchange)
     }
+}
+
+fn parse_graphql_observations(
+    response_body: &str,
+    node_ids: &[String],
+    listed: &[RestRepository],
+    received_at_utc: &str,
+    require_public: bool,
+) -> Result<Vec<GraphqlNodeObservation>, String> {
+    let raw: serde_json::Value = serde_json::from_str(response_body)
+        .map_err(|error| format!("invalid public-ID census GraphQL response: {error}"))?;
+    let raw_nodes = raw
+        .pointer("/data/nodes")
+        .and_then(serde_json::Value::as_array)
+        .ok_or("public-ID census GraphQL omitted node array")?;
+    for node in raw_nodes.iter().filter(|node| !node.is_null()) {
+        let fields = node
+            .as_object()
+            .ok_or("public-ID census GraphQL node is malformed")?;
+        if !fields.contains_key("primaryLanguage") || !fields.contains_key("mirrorUrl") {
+            return Err("public-ID census GraphQL omitted nullable metadata".to_string());
+        }
+    }
+    let parsed: GraphqlResponse = serde_json::from_value(raw)
+        .map_err(|error| format!("invalid public-ID census GraphQL node: {error}"))?;
+    let nodes = parsed
+        .data
+        .ok_or("public-ID census GraphQL omitted data")?
+        .nodes;
+    if nodes.len() != node_ids.len() || listed.len() != node_ids.len() {
+        return Err("public-ID census GraphQL node count changed".to_string());
+    }
+    if node_ids
+        .iter()
+        .zip(listed)
+        .any(|(node_id, repository)| node_id != &repository.node_id)
+    {
+        return Err("public-ID census GraphQL request differs from REST node order".to_string());
+    }
+    let mut unique_node_ids = HashSet::new();
+    let mut unique_repository_ids = HashSet::new();
+    if node_ids.iter().zip(listed).any(|(node_id, repository)| {
+        !unique_node_ids.insert(node_id) || !unique_repository_ids.insert(repository.id)
+    }) {
+        return Err("public-ID census GraphQL request repeats a REST identity".to_string());
+    }
+    let mut not_found = vec![false; nodes.len()];
+    for error in parsed.errors {
+        let path = error
+            .get("path")
+            .and_then(serde_json::Value::as_array)
+            .ok_or("public-ID census GraphQL error has no node path")?;
+        if error.get("type").and_then(serde_json::Value::as_str) != Some("NOT_FOUND")
+            || path.len() != 2
+            || path[0].as_str() != Some("nodes")
+        {
+            return Err("public-ID census GraphQL returned an unrelated error".to_string());
+        }
+        let index = path[1]
+            .as_u64()
+            .and_then(|index| usize::try_from(index).ok())
+            .ok_or("public-ID census GraphQL error has an invalid node index")?;
+        if index >= nodes.len() || nodes[index].is_some() || not_found[index] {
+            return Err(
+                "public-ID census GraphQL error does not identify one null node".to_string(),
+            );
+        }
+        let expected_message = format!(
+            "Could not resolve to a node with the global id of '{}'.",
+            node_ids[index]
+        );
+        if error.get("message").and_then(serde_json::Value::as_str)
+            != Some(expected_message.as_str())
+        {
+            return Err("public-ID census GraphQL NOT_FOUND names another node".to_string());
+        }
+        not_found[index] = true;
+    }
+    nodes
+        .into_iter()
+        .zip(node_ids.iter().zip(listed))
+        .zip(not_found)
+        .map(|((node, (node_id, listed)), not_found)| match node {
+            Some(repository) => {
+                if repository.typename != "Repository"
+                    || repository.id != *node_id
+                    || repository.database_id != Some(listed.id)
+                    || (require_public && repository.is_private)
+                {
+                    return Err(
+                        "public-ID census GraphQL identity or visibility changed".to_string()
+                    );
+                }
+                valid_utc_timestamp(&repository.created_at)?;
+                if repository.created_at.as_str() > received_at_utc {
+                    return Err(
+                        "public-ID census repository was created after its GraphQL receipt"
+                            .to_string(),
+                    );
+                }
+                canonical_name(&repository.name_with_owner)?;
+                Ok(GraphqlNodeObservation::Repository(repository))
+            }
+            None if not_found => Ok(GraphqlNodeObservation::NotFound {
+                node_id: node_id.clone(),
+                repository_id: listed.id,
+            }),
+            None => Err("public-ID census GraphQL node is null without NOT_FOUND".to_string()),
+        })
+        .collect()
 }
 
 struct ProbeRepository {
