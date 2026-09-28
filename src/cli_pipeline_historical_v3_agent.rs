@@ -1,15 +1,19 @@
 use super::{language_slug, precommit, render_progress, store};
 use crate::benchmark::{
-    HistoricalV3AgentReviewSubmission, HistoricalV3CandidateCollection, HistoricalV3Language,
-    HistoricalV3NextStep, HistoricalV3Protocol, HistoricalV3ReplayProgress,
-    HistoricalV3ReviewRecordPaths, HistoricalV3VerifiedSourceReview,
-    audit_historical_v3_agent_reviews, historical_v3_agent_invocation_request,
+    HistoricalV3AgentAssignment, HistoricalV3AgentReviewSubmission,
+    HistoricalV3CandidateCollection, HistoricalV3Language, HistoricalV3NextStep,
+    HistoricalV3Protocol, HistoricalV3ReplayProgress, HistoricalV3ReviewRecordPaths,
+    HistoricalV3VerifiedSourceReview, audit_historical_v3_agent_reviews,
+    historical_v3_agent_invocation_request, historical_v3_agent_slot_card,
+    prepare_historical_v3_agent_assignment, read_historical_v3_agent_assignment,
     replay_historical_v3_ordered_progress, seal_historical_v3_agent_review,
+    validate_historical_v3_agent_assignment, validate_historical_v3_agent_slot_card,
     verify_historical_v3_source_review_rank,
 };
 use std::path::{Path, PathBuf};
 
 const MAX_INVOCATION_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_SLOT_CARD_BYTES: u64 = 1024 * 1024;
 const MAX_SUBMISSION_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_AUDIT_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_RESPONSE_BYTES: u64 = 1024 * 1024;
@@ -38,18 +42,54 @@ fn prepare_agent_review_context(
     language: HistoricalV3Language,
 ) -> Result<i32, String> {
     ensure_review_directory(context)?;
+    let lock_path = context
+        .paths
+        .agent_invocation
+        .with_file_name("agent-review.lock");
+    let _lock = store::AgentReviewLock::acquire(&lock_path)?;
+    if !context.paths.agent_assignment.exists()
+        && (context.paths.agent_invocation.exists()
+            || context.paths.agent_one_card.exists()
+            || context.paths.agent_two_card.exists()
+            || context.paths.agent_one.exists()
+            || context.paths.agent_two.exists()
+            || context.paths.agent_audit.exists())
+    {
+        return Err("historical-v3 agent invocation predates its assignment".to_string());
+    }
+    let assignment = prepare_historical_v3_agent_assignment(
+        &context
+            .source
+            .inputs(&context.protocol, &context.collection),
+        context.source.bundle(),
+        &context.prompt,
+    )?;
+    store::write_json_durable_limited(
+        &context.paths.agent_assignment,
+        &assignment,
+        MAX_AUDIT_BYTES,
+    )?;
     let invocation =
         historical_v3_agent_invocation_request(&context.prompt, context.source.bundle())?;
+    for (slot, path) in [
+        (1, &context.paths.agent_one_card),
+        (2, &context.paths.agent_two_card),
+    ] {
+        let card = historical_v3_agent_slot_card(&assignment, invocation.as_bytes(), slot)?;
+        store::write_bytes_durable_limited(path, card.as_bytes(), MAX_SLOT_CARD_BYTES)?;
+    }
     store::write_bytes_durable_limited(
         &context.paths.agent_invocation,
         invocation.as_bytes(),
         MAX_INVOCATION_BYTES,
     )?;
     println!(
-        "historical-v3 {}: present {} to two fresh independent agents for rank {}",
+        "historical-v3 {} rank {}: present {} with {} to agent 1, and with {} to agent 2",
         language_slug(language),
-        context.paths.agent_invocation.display(),
         context.source.rank().stream_rank,
+        context.paths.agent_invocation.display(),
+        context.paths.agent_one_card.display(),
+        context.paths.agent_two_card.display(),
     );
     Ok(0)
 }
@@ -70,12 +110,16 @@ fn submit_agent_review_context(
     agent: u8,
     response_path: &str,
 ) -> Result<i32, String> {
-    require_prepared_invocation(context)?;
     let lock_path = context
         .paths
         .agent_invocation
         .with_file_name("agent-review.lock");
     let _lock = store::AgentReviewLock::acquire(&lock_path)?;
+    let assignment = require_prepared_assignment(context)?;
+    require_prepared_invocation(context, &assignment)?;
+    if !(1..=2).contains(&agent) {
+        return Err("historical-v3 agent number must be 1 or 2".to_string());
+    }
     let raw_response = store::read_plain(
         Path::new(response_path),
         MAX_RESPONSE_BYTES,
@@ -91,6 +135,9 @@ fn submit_agent_review_context(
         &context.prompt,
         raw_response,
     )?;
+    if submission.reviewer.agent_id != assignment.agent_ids[(agent - 1) as usize] {
+        return Err("historical-v3 agent response differs from its preassigned slot".to_string());
+    }
     let path = submission_path(&context.paths, agent)?;
     let peer = submission_path(&context.paths, if agent == 1 { 2 } else { 1 })?;
     if peer.exists() {
@@ -107,6 +154,7 @@ fn submit_agent_review_context(
                 .inputs(&context.protocol, &context.collection),
             context.source.bundle(),
             &context.prompt,
+            &assignment,
             first,
             second,
         )?;
@@ -134,7 +182,13 @@ fn audit_agent_review_context(
     context: &AgentContext,
     language: HistoricalV3Language,
 ) -> Result<i32, String> {
-    require_prepared_invocation(context)?;
+    let lock_path = context
+        .paths
+        .agent_invocation
+        .with_file_name("agent-review.lock");
+    let _lock = store::AgentReviewLock::acquire(&lock_path)?;
+    let assignment = require_prepared_assignment(context)?;
+    require_prepared_invocation(context, &assignment)?;
     let first: HistoricalV3AgentReviewSubmission = store::read_json(
         &context.paths.agent_one,
         MAX_SUBMISSION_BYTES,
@@ -151,6 +205,7 @@ fn audit_agent_review_context(
             .inputs(&context.protocol, &context.collection),
         context.source.bundle(),
         &context.prompt,
+        &assignment,
         &first,
         &second,
     )?;
@@ -236,7 +291,10 @@ fn ensure_review_directory(context: &AgentContext) -> Result<(), String> {
     store::ensure_child_directory(&rank, "review rank directory")
 }
 
-fn require_prepared_invocation(context: &AgentContext) -> Result<(), String> {
+fn require_prepared_invocation(
+    context: &AgentContext,
+    assignment: &HistoricalV3AgentAssignment,
+) -> Result<(), String> {
     let expected =
         historical_v3_agent_invocation_request(&context.prompt, context.source.bundle())?;
     let stored = store::read_plain(
@@ -249,7 +307,29 @@ fn require_prepared_invocation(context: &AgentContext) -> Result<(), String> {
             "historical-v3 agent invocation differs from its exact presented bytes".to_string(),
         );
     }
+    for (slot, path) in [
+        (1, &context.paths.agent_one_card),
+        (2, &context.paths.agent_two_card),
+    ] {
+        let card = store::read_plain(path, MAX_SLOT_CARD_BYTES, "historical-v3 agent slot card")?;
+        validate_historical_v3_agent_slot_card(assignment, &stored, slot, &card)?;
+    }
     Ok(())
+}
+
+fn require_prepared_assignment(
+    context: &AgentContext,
+) -> Result<HistoricalV3AgentAssignment, String> {
+    let assignment = read_historical_v3_agent_assignment(&context.paths.agent_assignment)?;
+    validate_historical_v3_agent_assignment(
+        &context
+            .source
+            .inputs(&context.protocol, &context.collection),
+        context.source.bundle(),
+        &context.prompt,
+        &assignment,
+    )?;
+    Ok(assignment)
 }
 
 fn submission_path(paths: &HistoricalV3ReviewRecordPaths, agent: u8) -> Result<&PathBuf, String> {
@@ -296,11 +376,22 @@ mod tests {
             &fixture.bundle.methods,
             HistoricalV3ReviewerVerdict::Slop,
         );
+        let assignment = prepare_historical_v3_agent_assignment(
+            &context
+                .source
+                .inputs(&context.protocol, &context.collection),
+            context.source.bundle(),
+            agent_fixture::PROMPT,
+        )
+        .unwrap();
         let first = agent_fixture::response(
-            agent_fixture::reviewer("agent-a", "run-a"),
+            agent_fixture::reviewer(&assignment.agent_ids[0], "run-a"),
             decision.clone(),
         );
-        let second = agent_fixture::response(agent_fixture::reviewer("agent-b", "run-b"), decision);
+        let second = agent_fixture::response(
+            agent_fixture::reviewer(&assignment.agent_ids[1], "run-b"),
+            decision,
+        );
         let first_path = root.path().join("first-response.json");
         let repeated_path = root.path().join("repeated-response.json");
         let second_path = root.path().join("second-response.json");
@@ -311,10 +402,22 @@ mod tests {
             submit_agent_review_context(&context, language, 1, first_path.to_str().unwrap(),)
                 .is_err()
         );
-        prepare_agent_review_context(&context, language).unwrap();
-        let expected =
+        let invocation =
             historical_v3_agent_invocation_request(agent_fixture::PROMPT, context.source.bundle())
                 .unwrap();
+        std::fs::create_dir_all(context.paths.agent_invocation.parent().unwrap()).unwrap();
+        std::fs::write(&context.paths.agent_invocation, invocation.as_bytes()).unwrap();
+        assert!(
+            prepare_agent_review_context(&context, language)
+                .unwrap_err()
+                .contains("predates its assignment")
+        );
+        std::fs::remove_file(&context.paths.agent_invocation).unwrap();
+        prepare_agent_review_context(&context, language).unwrap();
+        assert!(context.paths.agent_assignment.exists());
+        assert!(context.paths.agent_one_card.exists());
+        assert!(context.paths.agent_two_card.exists());
+        prepare_agent_review_context(&context, language).unwrap();
         assert_eq!(
             store::read_plain(
                 &context.paths.agent_invocation,
@@ -322,7 +425,7 @@ mod tests {
                 "invocation"
             )
             .unwrap(),
-            expected.as_bytes(),
+            invocation.as_bytes(),
         );
         let lock_path = context
             .paths
@@ -340,7 +443,7 @@ mod tests {
         assert!(
             submit_agent_review_context(&context, language, 2, repeated_path.to_str().unwrap(),)
                 .unwrap_err()
-                .contains("repeats")
+                .contains("preassigned slot")
         );
         assert!(!context.paths.agent_two.exists());
         submit_agent_review_context(&context, language, 2, second_path.to_str().unwrap()).unwrap();

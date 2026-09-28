@@ -2,8 +2,10 @@ use super::super::history_v2_slot_store_support::read_limited;
 use super::super::{
     HistoricalV3CandidateCollection, HistoricalV3Protocol, HistoricalV3ReviewRecordPaths,
     HistoricalV3VerifiedAgentReview, HistoricalV3VerifiedSourceReview,
-    read_historical_v3_agent_audit, read_historical_v3_agent_submission,
+    read_historical_v3_agent_assignment, read_historical_v3_agent_audit,
+    read_historical_v3_agent_submission, validate_historical_v3_agent_assignment,
     validate_historical_v3_agent_invocation, validate_historical_v3_agent_review,
+    validate_historical_v3_agent_slot_card, validate_historical_v3_pending_agent_assignment,
     verify_historical_v3_agent_review,
 };
 use super::plain_file_exists;
@@ -17,8 +19,32 @@ pub(super) fn replay_agent_review(
     let first_exists = plain_file_exists(&paths.agent_one, "historical-v3 first agent review")?;
     let second_exists = plain_file_exists(&paths.agent_two, "historical-v3 second agent review")?;
     let audit_exists = plain_file_exists(&paths.agent_audit, "historical-v3 agent audit")?;
+    let assignment_exists =
+        plain_file_exists(&paths.agent_assignment, "historical-v3 agent assignment")?;
     let invocation_exists =
         plain_file_exists(&paths.agent_invocation, "historical-v3 agent invocation")?;
+    let first_card_exists =
+        plain_file_exists(&paths.agent_one_card, "historical-v3 first agent slot card")?;
+    let second_card_exists = plain_file_exists(
+        &paths.agent_two_card,
+        "historical-v3 second agent slot card",
+    )?;
+    if !assignment_exists {
+        if invocation_exists
+            || first_card_exists
+            || second_card_exists
+            || first_exists
+            || second_exists
+            || audit_exists
+        {
+            return Err("historical-v3 agent review lacks its precommitted assignment".to_string());
+        }
+        return Ok(None);
+    }
+    let inputs = source.inputs(protocol, collection);
+    let bundle = source.bundle();
+    let assignment = read_historical_v3_agent_assignment(&paths.agent_assignment)?;
+    validate_historical_v3_pending_agent_assignment(&inputs, bundle, &assignment)?;
     if !invocation_exists {
         if first_exists || second_exists || audit_exists {
             return Err("historical-v3 agent review lacks its presented invocation".to_string());
@@ -28,17 +54,34 @@ pub(super) fn replay_agent_review(
     if audit_exists && (!first_exists || !second_exists) {
         return Err("historical-v3 agent audit skips an independent review".to_string());
     }
-    let inputs = source.inputs(protocol, collection);
-    let bundle = source.bundle();
     let invocation = read_limited(
         &paths.agent_invocation,
         64 * 1024 * 1024,
         "historical-v3 agent invocation",
     )?;
     let prompt = validate_historical_v3_agent_invocation(protocol, bundle, &invocation)?;
+    validate_historical_v3_agent_assignment(&inputs, bundle, &prompt, &assignment)?;
+    for (slot, exists, path) in [
+        (1, first_card_exists, &paths.agent_one_card),
+        (2, second_card_exists, &paths.agent_two_card),
+    ] {
+        if exists {
+            let card = read_limited(path, 1024 * 1024, "historical-v3 agent slot card")?;
+            validate_historical_v3_agent_slot_card(&assignment, &invocation, slot, &card)?;
+        }
+    }
+    if !first_card_exists || !second_card_exists {
+        if first_exists || second_exists || audit_exists {
+            return Err("historical-v3 agent review lacks its presented slot cards".to_string());
+        }
+        return Ok(None);
+    }
     let first = if first_exists {
         let submission = read_historical_v3_agent_submission(&paths.agent_one)?;
         validate_historical_v3_agent_review(&inputs, bundle, &prompt, &submission)?;
+        if submission.reviewer.agent_id != assignment.agent_ids[0] {
+            return Err("historical-v3 first agent differs from its preassigned slot".to_string());
+        }
         Some(submission)
     } else {
         None
@@ -46,6 +89,9 @@ pub(super) fn replay_agent_review(
     let second = if second_exists {
         let submission = read_historical_v3_agent_submission(&paths.agent_two)?;
         validate_historical_v3_agent_review(&inputs, bundle, &prompt, &submission)?;
+        if submission.reviewer.agent_id != assignment.agent_ids[1] {
+            return Err("historical-v3 second agent differs from its preassigned slot".to_string());
+        }
         Some(submission)
     } else {
         None
@@ -57,5 +103,14 @@ pub(super) fn replay_agent_review(
         return Ok(None);
     }
     let audit = read_historical_v3_agent_audit(&paths.agent_audit)?;
-    verify_historical_v3_agent_review(&inputs, bundle, &prompt, &first, &second, &audit).map(Some)
+    verify_historical_v3_agent_review(
+        &inputs,
+        bundle,
+        &prompt,
+        &assignment,
+        &first,
+        &second,
+        &audit,
+    )
+    .map(Some)
 }

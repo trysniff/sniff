@@ -1,16 +1,18 @@
-use super::super::history_v3_agent_review::tests::{PROMPT, agent_fixture, response, reviewer};
+use super::super::history_v3_agent_review::tests::{
+    PROMPT, agent_fixture, assignment, response, reviewer,
+};
 use super::super::history_v3_label_review::tests::decision_for_methods;
 use super::super::history_v3_label_review::tests::review_fixture;
 use super::super::{
     HistoricalV3NextStep, HistoricalV3OrderedRankOutcome, HistoricalV3ReplayProgress,
     HistoricalV3ReviewDisposition, HistoricalV3ReviewerVerdict, audit_historical_v3_agent_reviews,
     audit_historical_v3_label_reviews, historical_v3_agent_invocation_request,
-    prepare_historical_v3_label_resolution, prepare_historical_v3_stop_artifact,
-    replay_historical_v3_ordered_progress, resolve_historical_v3_label,
-    seal_historical_v3_agent_review, verify_historical_v3_stop_from_disk,
-    write_historical_v3_final_label_new, write_historical_v3_label_audit_new,
-    write_historical_v3_label_worksheet_new, write_historical_v3_resolution_worksheet_new,
-    write_historical_v3_stop_artifact_new,
+    historical_v3_agent_slot_card, prepare_historical_v3_label_resolution,
+    prepare_historical_v3_stop_artifact, replay_historical_v3_ordered_progress,
+    resolve_historical_v3_label, seal_historical_v3_agent_review,
+    verify_historical_v3_stop_from_disk, write_historical_v3_final_label_new,
+    write_historical_v3_label_audit_new, write_historical_v3_label_worksheet_new,
+    write_historical_v3_resolution_worksheet_new, write_historical_v3_stop_artifact_new,
 };
 use super::{
     HistoricalV3ReviewRecordPaths, verify_historical_v3_agent_review_from_disk,
@@ -116,24 +118,34 @@ async fn replays_review_from_journal_and_all_committed_human_records() {
 async fn model_review_replays_raw_submissions_and_audit_without_human_records() {
     let fixture = agent_fixture().await;
     let inputs = fixture.inputs();
+    let assignment = assignment(&fixture);
     let decision = decision_for_methods(&fixture.bundle.methods, HistoricalV3ReviewerVerdict::Slop);
     let first = seal_historical_v3_agent_review(
         &inputs,
         &fixture.bundle,
         PROMPT,
-        response(reviewer("agent-a", "run-a"), decision.clone()),
+        response(
+            reviewer(&assignment.agent_ids[0], "run-a"),
+            decision.clone(),
+        ),
     )
     .unwrap();
     let second = seal_historical_v3_agent_review(
         &inputs,
         &fixture.bundle,
         PROMPT,
-        response(reviewer("agent-b", "run-b"), decision),
+        response(reviewer(&assignment.agent_ids[1], "run-b"), decision),
     )
     .unwrap();
-    let audit =
-        audit_historical_v3_agent_reviews(&inputs, &fixture.bundle, PROMPT, &first, &second)
-            .unwrap();
+    let audit = audit_historical_v3_agent_reviews(
+        &inputs,
+        &fixture.bundle,
+        PROMPT,
+        &assignment,
+        &first,
+        &second,
+    )
+    .unwrap();
     let root = tempfile::tempdir().unwrap();
     let paths = HistoricalV3ReviewRecordPaths::new(root.path(), &inputs.qualification.rank);
     std::fs::create_dir_all(paths.agent_audit.parent().unwrap()).unwrap();
@@ -156,6 +168,36 @@ async fn model_review_replays_raw_submissions_and_audit_without_human_records() 
         }
     ));
     let invocation = historical_v3_agent_invocation_request(PROMPT, &fixture.bundle).unwrap();
+    std::fs::write(
+        &paths.agent_assignment,
+        serde_json::to_vec(&assignment).unwrap(),
+    )
+    .unwrap();
+    assert!(matches!(
+        progress().unwrap(),
+        HistoricalV3ReplayProgress::PendingRank {
+            next: HistoricalV3NextStep::AgentReview,
+            ..
+        }
+    ));
+    let first_card = historical_v3_agent_slot_card(&assignment, invocation.as_bytes(), 1).unwrap();
+    let second_card = historical_v3_agent_slot_card(&assignment, invocation.as_bytes(), 2).unwrap();
+    std::fs::write(&paths.agent_one_card, first_card.as_bytes()).unwrap();
+    assert!(matches!(
+        progress().unwrap(),
+        HistoricalV3ReplayProgress::PendingRank {
+            next: HistoricalV3NextStep::AgentReview,
+            ..
+        }
+    ));
+    std::fs::write(&paths.agent_two_card, second_card.as_bytes()).unwrap();
+    assert!(matches!(
+        progress().unwrap(),
+        HistoricalV3ReplayProgress::PendingRank {
+            next: HistoricalV3NextStep::AgentReview,
+            ..
+        }
+    ));
     std::fs::write(&paths.agent_invocation, invocation.as_bytes()).unwrap();
     std::fs::write(&paths.agent_one, serde_json::to_vec(&first).unwrap()).unwrap();
     assert!(matches!(
@@ -233,6 +275,31 @@ async fn model_review_replays_raw_submissions_and_audit_without_human_records() 
         .is_err()
     );
     std::fs::write(&paths.agent_audit, serde_json::to_vec(&audit).unwrap()).unwrap();
+    assert!(matches!(
+        progress().unwrap(),
+        HistoricalV3ReplayProgress::Terminal { .. }
+    ));
+    std::fs::write(&paths.agent_one_card, b"{}").unwrap();
+    assert!(progress().is_err());
+    std::fs::write(&paths.agent_one_card, first_card.as_bytes()).unwrap();
+    assert!(matches!(
+        progress().unwrap(),
+        HistoricalV3ReplayProgress::Terminal { .. }
+    ));
+    std::fs::remove_file(&paths.agent_two_card).unwrap();
+    assert!(progress().is_err());
+    std::fs::write(&paths.agent_two_card, second_card.as_bytes()).unwrap();
+    assert!(matches!(
+        progress().unwrap(),
+        HistoricalV3ReplayProgress::Terminal { .. }
+    ));
+    std::fs::write(&paths.agent_assignment, b"{}").unwrap();
+    assert!(progress().is_err());
+    std::fs::write(
+        &paths.agent_assignment,
+        serde_json::to_vec(&assignment).unwrap(),
+    )
+    .unwrap();
     assert!(matches!(
         progress().unwrap(),
         HistoricalV3ReplayProgress::Terminal { .. }

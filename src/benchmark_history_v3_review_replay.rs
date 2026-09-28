@@ -18,7 +18,10 @@ pub struct HistoricalV3ReviewRecordPaths {
     pub agent_one: PathBuf,
     pub agent_two: PathBuf,
     pub agent_audit: PathBuf,
+    pub agent_assignment: PathBuf,
     pub agent_invocation: PathBuf,
+    pub agent_one_card: PathBuf,
+    pub agent_two_card: PathBuf,
 }
 
 impl HistoricalV3ReviewRecordPaths {
@@ -34,7 +37,10 @@ impl HistoricalV3ReviewRecordPaths {
             agent_one: directory.join("agent-one.json"),
             agent_two: directory.join("agent-two.json"),
             agent_audit: directory.join("agent-audit.json"),
+            agent_assignment: directory.join("agent-assignment.json"),
             agent_invocation: directory.join("agent-invocation.json"),
+            agent_one_card: directory.join("agent-one-card.json"),
+            agent_two_card: directory.join("agent-two-card.json"),
         }
     }
 }
@@ -53,6 +59,7 @@ pub fn verify_historical_v3_agent_review_from_disk(
     let first = super::read_historical_v3_agent_submission(&paths.agent_one)?;
     let second = super::read_historical_v3_agent_submission(&paths.agent_two)?;
     let audit = super::read_historical_v3_agent_audit(&paths.agent_audit)?;
+    let assignment = super::read_historical_v3_agent_assignment(&paths.agent_assignment)?;
     let invocation = read_limited(
         &paths.agent_invocation,
         64 * 1024 * 1024,
@@ -60,10 +67,21 @@ pub fn verify_historical_v3_agent_review_from_disk(
     )?;
     let prompt =
         super::validate_historical_v3_agent_invocation(protocol, source.bundle(), &invocation)?;
+    super::validate_historical_v3_agent_assignment(
+        &source.inputs(protocol, collection),
+        source.bundle(),
+        &prompt,
+        &assignment,
+    )?;
+    for (slot, path) in [(1, &paths.agent_one_card), (2, &paths.agent_two_card)] {
+        let card = read_limited(path, 1024 * 1024, "historical-v3 agent slot card")?;
+        super::validate_historical_v3_agent_slot_card(&assignment, &invocation, slot, &card)?;
+    }
     let proof = super::verify_historical_v3_agent_review(
         &source.inputs(protocol, collection),
         source.bundle(),
         &prompt,
+        &assignment,
         &first,
         &second,
         &audit,
