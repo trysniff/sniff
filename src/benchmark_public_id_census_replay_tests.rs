@@ -392,6 +392,157 @@ fn rejects_null_or_mismatched_graphql_node() {
 }
 
 #[test]
+fn attributes_not_found_to_exact_rest_id_but_v1_still_fails_closed() {
+    let policy = committed_public_id_census_policy().unwrap();
+    let mut exchanges = transcript();
+    let mut response: serde_json::Value =
+        serde_json::from_str(&exchanges[8].response_body).unwrap();
+    response["data"]["nodes"][0] = serde_json::Value::Null;
+    response["errors"] = serde_json::json!([{
+        "type": "NOT_FOUND",
+        "path": ["nodes", 0],
+        "locations": [{"line": 1, "column": 40}],
+        "message": "Could not resolve to a node with the global id of 'node-4'."
+    }]);
+    let listed = [
+        RestRepository {
+            id: 4,
+            node_id: "node-4".to_string(),
+            full_name: "js/repo".to_string(),
+        },
+        RestRepository {
+            id: 5,
+            node_id: "node-5".to_string(),
+            full_name: "after/repo".to_string(),
+        },
+    ];
+    let observations = parse_graphql_observations(
+        &response.to_string(),
+        &["node-4".to_string(), "node-5".to_string()],
+        &listed,
+        "2026-09-27T00:00:00Z",
+        true,
+    )
+    .unwrap();
+    assert!(matches!(
+        &observations[..],
+        [GraphqlNodeObservation::NotFound { node_id, repository_id },
+         GraphqlNodeObservation::Repository(_)]
+            if node_id == "node-4" && *repository_id == 4
+    ));
+    replace_response(&mut exchanges[8], response);
+    assert!(replay_fixture(&policy, &exchanges).is_err());
+}
+
+#[test]
+fn refuses_ambiguous_or_unrelated_graphql_null_errors() {
+    let rows = repositories();
+    let mut response: serde_json::Value =
+        serde_json::from_str(&graphql(&rows[1..3]).response_body).unwrap();
+    response["data"]["nodes"][0] = serde_json::Value::Null;
+    let listed = [
+        RestRepository {
+            id: 3,
+            node_id: "node-3".to_string(),
+            full_name: "go/repo".to_string(),
+        },
+        RestRepository {
+            id: 4,
+            node_id: "node-4".to_string(),
+            full_name: "js/repo".to_string(),
+        },
+    ];
+    let ids = ["node-3".to_string(), "node-4".to_string()];
+    let parses = |response: &serde_json::Value| {
+        parse_graphql_observations(
+            &response.to_string(),
+            &ids,
+            &listed,
+            "2026-09-27T00:00:00Z",
+            true,
+        )
+    };
+    assert!(parses(&response).is_err());
+
+    response["errors"] = serde_json::json!([{
+        "type":"NOT_FOUND",
+        "path":["nodes",0],
+        "message":"Could not resolve to a node with the global id of 'node-3'."
+    }]);
+    assert!(matches!(
+        &parses(&response).unwrap()[..],
+        [
+            GraphqlNodeObservation::NotFound {
+                repository_id: 3,
+                ..
+            },
+            GraphqlNodeObservation::Repository(_)
+        ]
+    ));
+    assert!(
+        parse_graphql_observations(
+            &response.to_string(),
+            &["node-4".to_string(), "node-3".to_string()],
+            &listed,
+            "2026-09-27T00:00:00Z",
+            true,
+        )
+        .is_err()
+    );
+    let mut duplicate_node = listed.clone();
+    duplicate_node[1].node_id = "node-3".to_string();
+    assert!(
+        parse_graphql_observations(
+            &response.to_string(),
+            &["node-3".to_string(), "node-3".to_string()],
+            &duplicate_node,
+            "2026-09-27T00:00:00Z",
+            true,
+        )
+        .unwrap_err()
+        .contains("repeats a REST identity")
+    );
+    let mut duplicate_repository = listed.clone();
+    duplicate_repository[1].id = 3;
+    assert!(
+        parse_graphql_observations(
+            &response.to_string(),
+            &ids,
+            &duplicate_repository,
+            "2026-09-27T00:00:00Z",
+            true,
+        )
+        .unwrap_err()
+        .contains("repeats a REST identity")
+    );
+    response["errors"] = serde_json::json!([{
+        "type":"NOT_FOUND",
+        "path":["nodes",0],
+        "message":"Could not resolve to a node with the global id of 'node-4'."
+    }]);
+    assert!(parses(&response).is_err());
+    for errors in [
+        serde_json::json!([{"type":"FORBIDDEN","path":["nodes",0]}]),
+        serde_json::json!([{"type":"NOT_FOUND","path":["nodes",1]}]),
+        serde_json::json!([{"type":"NOT_FOUND","path":["nodes",2]}]),
+        serde_json::json!([{"type":"NOT_FOUND","path":["nodes",0,"id"]}]),
+        serde_json::json!([{"type":"NOT_FOUND","path":["other",0]}]),
+        serde_json::json!([{"type":"NOT_FOUND","path":["nodes",0]},
+                           {"type":"NOT_FOUND","path":["nodes",0]}]),
+    ] {
+        response["errors"] = errors;
+        assert!(parses(&response).is_err());
+    }
+    response["errors"] = serde_json::json!([{
+        "type":"NOT_FOUND",
+        "path":["nodes",0],
+        "message":"Could not resolve to a node with the global id of 'node-3'."
+    }]);
+    response["data"]["nodes"][1] = serde_json::Value::Null;
+    assert!(parses(&response).is_err());
+}
+
+#[test]
 fn rejects_incomplete_or_extended_transcript() {
     let policy = committed_public_id_census_policy().unwrap();
     let mut exchanges = transcript();
