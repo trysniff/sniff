@@ -15,7 +15,7 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ops::Bound::{Excluded, Unbounded};
 
-pub const PUBLIC_ID_CENSUS_V2_POLICY_COMMIT_SHA: &str = "8ca7dbb872d2dd9e4a60a7ba1f08dd27bc36c6b1";
+pub const PUBLIC_ID_CENSUS_V2_POLICY_COMMIT_SHA: &str = "1cf75d33cc6d25ca840ac5261de4f36c163c6f2a";
 const MAX_FRAME_BYTES: usize = 512 * 1024 * 1024;
 const MAX_TOTAL_FRAME_BYTES: usize = 1024 * 1024 * 1024;
 
