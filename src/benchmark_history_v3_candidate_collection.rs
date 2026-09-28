@@ -66,9 +66,9 @@ use std::path::Path;
 
 use store::{load_page_checkpoint, persist_page_checkpoint, read_committed_page_checkpoint};
 
-const REQUEST_CONTRACT: &str = "sniffbench-historical-v3-candidate-request-v1";
-const CHECKPOINT_CONTRACT: &str = "sniffbench-historical-v3-candidate-checkpoint-v1";
-const MANIFEST_CONTRACT: &str = "sniffbench-historical-v3-candidate-manifest-v1";
+const REQUEST_CONTRACT: &str = "sniffbench-historical-v3-candidate-request-v2";
+const CHECKPOINT_CONTRACT: &str = "sniffbench-historical-v3-candidate-checkpoint-v2";
+const MANIFEST_CONTRACT: &str = "sniffbench-historical-v3-candidate-manifest-v2";
 const MAX_SEARCH_RESULTS: usize = 1_000;
 const PAGE_SIZE: usize = 100;
 
