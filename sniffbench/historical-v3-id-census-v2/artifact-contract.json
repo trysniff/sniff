@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "source_policy_sha256": "af2c32c07def15853bf5c57231c3f362fcba5d0ba8c82e73db0b0a8021e94019",
+  "manifest_schema_version": 1,
+  "null_ledger_schema_version": 1,
+  "manifest_encoding": "UTF-8 compact serde_json::to_vec(PublicIdCensusV2Manifest) in declared Rust field order, no BOM or trailing newline; reject other bytes",
+  "manifest_digest": "SHA-256 of the same typed compact serialization after replacing manifest_sha256 with the empty string",
+  "null_ledger_encoding": "UTF-8 compact serde_json::to_vec(PublicIdCensusV2NullLedger) in declared Rust field order, no BOM or trailing newline; records sorted by ascending numeric repository_id",
+  "null_ledger_reconciliation": "probe_only_null_count plus crawled_null_count equals ledger length; crawled_null_count equals records with crawled true; exact records rederived from raw exchanges",
+  "frame_reconciliation": "resolved_in_window_count minus resolved_ineligible_count equals the sum of six frame repository counts; all six exact frame bytes rederived from raw exchanges",
+  "source_commitment": "policy and artifact-contract preflight receipts, sequential raw exchanges, null ledger, six frames, and manifest counts are SHA-256 bound and replay-validated; no partial manifest",
+  "live_precondition": "Before the first live v2 REST request, fetch this contract and the v2 source policy by immutable public Git commit and verify their exact bytes and pinned SHA-256 values. Offline fixtures do not satisfy this live precondition."
+}

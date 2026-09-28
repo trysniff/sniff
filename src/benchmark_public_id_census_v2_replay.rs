@@ -551,4 +551,4 @@ fn validate_preflight(
 
 #[cfg(test)]
 #[path = "benchmark_public_id_census_v2_replay_tests.rs"]
-mod tests;
+pub(crate) mod tests;

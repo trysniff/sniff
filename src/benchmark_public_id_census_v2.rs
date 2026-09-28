@@ -13,6 +13,11 @@ mod replay;
 
 pub use replay::*;
 
+#[path = "benchmark_public_id_census_v2_manifest.rs"]
+mod manifest;
+
+pub use manifest::*;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PublicIdCensusV2Policy {
