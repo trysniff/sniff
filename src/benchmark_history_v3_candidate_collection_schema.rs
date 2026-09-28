@@ -1,9 +1,9 @@
 use super::{HistoricalV3CandidateIdentity, HistoricalV3Language, HistoricalV3StreamTask};
 use serde::{Deserialize, Serialize};
 
-pub const HISTORICAL_V3_CANDIDATE_REQUEST_SCHEMA_VERSION: u32 = 1;
-pub const HISTORICAL_V3_CANDIDATE_CHECKPOINT_SCHEMA_VERSION: u32 = 1;
-pub const HISTORICAL_V3_CANDIDATE_MANIFEST_SCHEMA_VERSION: u32 = 1;
+pub const HISTORICAL_V3_CANDIDATE_REQUEST_SCHEMA_VERSION: u32 = 2;
+pub const HISTORICAL_V3_CANDIDATE_CHECKPOINT_SCHEMA_VERSION: u32 = 2;
+pub const HISTORICAL_V3_CANDIDATE_MANIFEST_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

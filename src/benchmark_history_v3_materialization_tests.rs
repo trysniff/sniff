@@ -94,7 +94,7 @@ fn collection_with_identity(
         super::super::history_v3_candidate_collection::seal_collection_manifest(
             HistoricalV3CandidateCollectionManifest {
                 schema_version: HISTORICAL_V3_CANDIDATE_MANIFEST_SCHEMA_VERSION,
-                manifest_contract: "sniffbench-historical-v3-candidate-manifest-v1".to_string(),
+                manifest_contract: "sniffbench-historical-v3-candidate-manifest-v2".to_string(),
                 protocol_sha256: protocol.protocol_sha256.clone(),
                 source_binding_audit_sha256: "a".repeat(64),
                 query_document_sha256:

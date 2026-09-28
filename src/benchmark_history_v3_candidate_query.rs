@@ -1,7 +1,8 @@
 use super::{HistoricalV3CandidateIdentity, HistoricalV3CandidatePageRequest, parse_utc_second};
 use serde::{Deserialize, Serialize};
 
-pub(super) const GRAPHQL_QUERY: &str = r#"query HistoricalV3MergedPullRequests($query: String!, $after: String) {
+pub(super) const GRAPHQL_QUERY: &str = r#"query HistoricalV3MergedPullRequests($query: String!, $after: String, $owner: String!, $name: String!) {
+  repository(owner: $owner, name: $name, followRenames: false) { databaseId nameWithOwner }
   search(query: $query, type: ISSUE, first: 100, after: $after) {
     issueCount
     pageInfo { hasNextPage endCursor }
@@ -39,6 +40,8 @@ struct GraphqlBody<'a> {
 struct GraphqlVariables<'a> {
     query: String,
     after: Option<&'a str>,
+    owner: &'a str,
+    name: &'a str,
 }
 
 #[derive(Deserialize)]
@@ -52,6 +55,7 @@ struct GraphqlEnvelope {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct GraphqlData {
+    repository: Option<GraphqlRepository>,
     search: GraphqlSearch,
 }
 
@@ -104,11 +108,19 @@ struct GraphqlError {
 }
 
 pub(super) fn request_body(request: &HistoricalV3CandidatePageRequest) -> Result<Vec<u8>, String> {
+    let (owner, name) = request
+        .partition
+        .name_with_owner
+        .split_once('/')
+        .filter(|(owner, name)| !owner.is_empty() && !name.is_empty() && !name.contains('/'))
+        .ok_or_else(|| "historical-v3 candidate repository name is invalid".to_string())?;
     serde_json::to_vec(&GraphqlBody {
         query: GRAPHQL_QUERY,
         variables: GraphqlVariables {
             query: search_query(request),
             after: request.after_cursor.as_deref(),
+            owner,
+            name,
         },
     })
     .map_err(|error| format!("failed to encode historical-v3 GraphQL request: {error}"))
@@ -131,10 +143,20 @@ pub(super) fn parse_candidate_page(
             "historical-v3 GraphQL response contains errors: {messages}"
         ));
     }
-    let search = envelope
+    let data = envelope
         .data
-        .ok_or_else(|| "historical-v3 GraphQL response has no data".to_string())?
-        .search;
+        .ok_or_else(|| "historical-v3 GraphQL response has no data".to_string())?;
+    let repository = data
+        .repository
+        .ok_or_else(|| "historical-v3 repository lookup did not resolve".to_string())?;
+    if repository.database_id != Some(request.partition.repository_id)
+        || !repository
+            .name_with_owner
+            .eq_ignore_ascii_case(&request.partition.name_with_owner)
+    {
+        return Err("historical-v3 repository lookup changed identity".to_string());
+    }
+    let search = data.search;
     if search.page_info.has_next_page
         && search
             .page_info
