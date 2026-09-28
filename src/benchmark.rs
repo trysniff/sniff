@@ -718,6 +718,15 @@ pub use release::{
 };
 
 pub use release::{
+    PUBLIC_ID_CENSUS_V2_ARTIFACT_CONTRACT_SHA256, PUBLIC_ID_CENSUS_V2_MANIFEST_SCHEMA_VERSION,
+    PUBLIC_ID_CENSUS_V2_NULL_LEDGER_SCHEMA_VERSION, PublicIdCensusV2ContractPreflight,
+    PublicIdCensusV2Manifest, PublicIdCensusV2NullLedger, prepare_public_id_census_v2_manifest,
+    public_id_census_v2_manifest_bytes, public_id_census_v2_null_ledger_bytes,
+    read_public_id_census_v2_manifest, validate_bundled_public_id_census_v2_artifact_contract,
+    validate_public_id_census_v2_manifest,
+};
+
+pub use release::{
     PUBLIC_ID_CENSUS_GRAPHQL_QUERY, PUBLIC_ID_CENSUS_MAX_FRAME_BYTES,
     PUBLIC_ID_CENSUS_POLICY_COMMIT_SHA, PublicIdCensusExchange, PublicIdCensusFailedAttempt,
     PublicIdCensusPreflight, PublicIdCensusReplay, PublicIdCensusRequest,

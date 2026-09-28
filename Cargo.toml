@@ -33,6 +33,7 @@ include = [
   "/src/benchmark_assets/**",
   "/src/**/*.rs",
   "/sniffbench/historical-v3-id-census-v2/policy.json",
+  "/sniffbench/historical-v3-id-census-v2/artifact-contract.json",
   "/tests/**",
   "/sniff.config.toml",
 ]

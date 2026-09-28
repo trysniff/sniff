@@ -19,9 +19,14 @@ visibility reflect their recorded live observations, not state at creation.
 
 The collector fetches this policy by immutable Git commit and verifies its
 exact bytes before the first REST probe. A separate typed v2 artifact contract
-must also be publicly SHA-pinned before any live v2 request; this policy-only
-publication is not a working collector. The collector writes into a fresh v2 root and
-commits each REST or GraphQL request and response before deriving frames.
+must also be publicly SHA-pinned before any live v2 request. Both fetches
+must have separate hash-bound receipts; a completed v2 manifest includes
+them, sequential raw exchanges, the null ledger, and six replayed frames.
+The collector must enforce both preflights **before sending** its first source
+request, because response timestamps alone cannot prove request-send order.
+The policy and offline artifact contract alone are not a working collector.
+The collector writes into a fresh v2 root and commits each REST or GraphQL
+request and response before deriving frames.
 Every unique REST ID receives at most one GraphQL observation, even when a
 probe overlaps a later crawl page. Both resolved and null outcomes are cached
 by numeric ID and node ID. An identity mismatch or an ambiguous GraphQL error

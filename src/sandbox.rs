@@ -2002,7 +2002,9 @@ mod tests {
     fn linux_backend_enforces_aggregate_process_tree_memory() {
         const WORKER_ENV: &str = "SNIFF_LINUX_AGGREGATE_MEMORY_WORKER";
         const DESCENDANT_ENV: &str = "SNIFF_LINUX_AGGREGATE_MEMORY_DESCENDANT";
-        const ALLOCATION_BYTES: usize = 192 * 1024 * 1024;
+        // Exercise the tree-wide RSS cap without hitting a child's RLIMIT_AS first.
+        const ALLOCATION_BYTES: usize = 112 * 1024 * 1024;
+        const DESCENDANTS: usize = 4;
 
         fn hold_resident_memory() {
             let mut allocation = vec![0u8; ALLOCATION_BYTES];
@@ -2019,15 +2021,21 @@ mod tests {
         }
         if std::env::var_os(WORKER_ENV).is_some() {
             let executable = std::env::current_exe().expect("locate Linux memory worker");
-            let mut descendant = std::process::Command::new(executable)
-                .arg("sandbox::tests::linux_backend_enforces_aggregate_process_tree_memory")
-                .arg("--exact")
-                .arg("--nocapture")
-                .env(DESCENDANT_ENV, "1")
-                .spawn()
-                .expect("start Linux memory descendant");
+            let mut descendants = (0..DESCENDANTS)
+                .map(|_| {
+                    std::process::Command::new(&executable)
+                        .arg("sandbox::tests::linux_backend_enforces_aggregate_process_tree_memory")
+                        .arg("--exact")
+                        .arg("--nocapture")
+                        .env(DESCENDANT_ENV, "1")
+                        .spawn()
+                        .expect("start Linux memory descendant")
+                })
+                .collect::<Vec<_>>();
             hold_resident_memory();
-            let _ = descendant.wait();
+            for descendant in &mut descendants {
+                let _ = descendant.wait();
+            }
             return;
         }
 
@@ -2063,7 +2071,7 @@ mod tests {
             allow_local_network: false,
             timeout: Duration::from_secs(15),
             output_limit: 4096,
-            memory_limit: 384 * 1024 * 1024,
+            memory_limit: 512 * 1024 * 1024,
             process_limit: DEFAULT_PROCESS_LIMIT,
         };
 

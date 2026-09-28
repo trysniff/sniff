@@ -145,6 +145,26 @@ fn synthetic_exchange(
     }
 }
 
+pub(crate) fn fixture_transcript() -> (
+    PublicIdCensusV2Policy,
+    PublicIdCensusPreflight,
+    Vec<PublicIdCensusExchange>,
+    PublicIdCensusV2Replay,
+) {
+    let policy = committed_public_id_census_v2_policy().unwrap();
+    let preflight = preflight();
+    let rows = rows();
+    let mut exchanges = Vec::new();
+    let replay =
+        replay_public_id_census_v2_with_source(&policy, &preflight, |request, url, body| {
+            let exchange = synthetic_exchange(request, url, body, &rows);
+            exchanges.push(exchange.clone());
+            Ok(exchange)
+        })
+        .unwrap();
+    (policy, preflight, exchanges, replay)
+}
+
 #[test]
 fn null_on_retained_page_is_audited_and_never_framed() {
     let policy = committed_public_id_census_v2_policy().unwrap();
