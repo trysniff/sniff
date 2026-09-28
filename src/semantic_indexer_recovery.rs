@@ -177,9 +177,10 @@ pub(crate) fn recover_interrupted_semantic_indexing(root: &Path) -> Result<bool,
     )
     .map_err(|error| format!("invalid semantic recovery marker: {error}"))?;
     validate_marker(&marker)?;
-    cleanup_generated_paths(&root, &marker)?;
-    remove_marker(&root)?;
-    Ok(true)
+    Err(format!(
+        "cannot prove compiler workers have exited after interrupted semantic indexing in {}; refusing automatic workspace cleanup",
+        root.display()
+    ))
 }
 
 fn recovery_paths() -> [(&'static str, RecoveryPathKind); 6] {
@@ -820,7 +821,7 @@ mod tests {
     }
 
     #[test]
-    fn interrupted_dependency_preparation_remains_marker_recoverable() {
+    fn interrupted_dependency_preparation_preserves_unproven_workspace() {
         let root = tempfile::tempdir().unwrap();
         let guard = SemanticIndexerRecoveryGuard::begin(root.path()).unwrap();
         let execution_root = guard.prepare_indexer_run().unwrap();
@@ -831,9 +832,10 @@ mod tests {
         fs::write(&module, b"package module\n").unwrap();
         drop(guard);
 
-        assert!(recover_interrupted_semantic_indexing(root.path()).unwrap());
-        assert!(!execution_root.parent().unwrap().exists());
-        assert!(!root.path().join(MARKER).exists());
+        let error = recover_interrupted_semantic_indexing(root.path()).unwrap_err();
+        assert!(error.contains("cannot prove compiler workers have exited"));
+        assert!(module.is_file());
+        assert!(root.path().join(MARKER).is_file());
     }
 
     #[cfg(unix)]
@@ -872,7 +874,7 @@ mod tests {
     }
 
     #[test]
-    fn interrupted_run_is_recovered_from_its_committed_marker() {
+    fn interrupted_run_preserves_its_committed_marker_and_generated_paths() {
         let root = tempfile::tempdir().unwrap();
         let guard = SemanticIndexerRecoveryGuard::begin(root.path()).unwrap();
         fs::create_dir(root.path().join(".sniff-indexer-cache")).unwrap();
@@ -880,15 +882,16 @@ mod tests {
         fs::write(root.path().join("tsconfig.json"), b"generated").unwrap();
         drop(guard);
 
-        assert!(recover_interrupted_semantic_indexing(root.path()).unwrap());
-        assert!(!root.path().join(".sniff-indexer-cache").exists());
-        assert!(!root.path().join("index.scip").exists());
-        assert!(!root.path().join("tsconfig.json").exists());
-        assert!(!recover_interrupted_semantic_indexing(root.path()).unwrap());
+        let error = recover_interrupted_semantic_indexing(root.path()).unwrap_err();
+        assert!(error.contains("cannot prove compiler workers have exited"));
+        assert!(root.path().join(".sniff-indexer-cache").is_dir());
+        assert!(root.path().join("index.scip").is_file());
+        assert!(root.path().join("tsconfig.json").is_file());
+        assert!(root.path().join(MARKER).is_file());
     }
 
     #[test]
-    fn legacy_marker_without_an_ambiguous_typescript_config_is_recoverable() {
+    fn legacy_marker_without_a_worker_proof_is_preserved() {
         let root = tempfile::tempdir().unwrap();
         let mut marker = RecoveryMarker {
             schema_version: LEGACY_SCHEMA_VERSION,
@@ -908,13 +911,14 @@ mod tests {
         write_marker(&root.path().join(MARKER), &marker).unwrap();
         fs::write(root.path().join("index.scip"), b"generated").unwrap();
 
-        assert!(recover_interrupted_semantic_indexing(root.path()).unwrap());
-        assert!(!root.path().join("index.scip").exists());
-        assert!(!root.path().join(MARKER).exists());
+        let error = recover_interrupted_semantic_indexing(root.path()).unwrap_err();
+        assert!(error.contains("cannot prove compiler workers have exited"));
+        assert!(root.path().join("index.scip").is_file());
+        assert!(root.path().join(MARKER).is_file());
     }
 
     #[test]
-    fn previous_v2_marker_remains_recoverable() {
+    fn previous_v2_marker_without_a_worker_proof_is_preserved() {
         let root = tempfile::tempdir().unwrap();
         let mut marker = RecoveryMarker {
             schema_version: PREVIOUS_SCHEMA_VERSION,
@@ -934,9 +938,10 @@ mod tests {
         write_marker(&root.path().join(MARKER), &marker).unwrap();
         fs::write(root.path().join("index.scip"), b"generated").unwrap();
 
-        assert!(recover_interrupted_semantic_indexing(root.path()).unwrap());
-        assert!(!root.path().join("index.scip").exists());
-        assert!(!root.path().join(MARKER).exists());
+        let error = recover_interrupted_semantic_indexing(root.path()).unwrap_err();
+        assert!(error.contains("cannot prove compiler workers have exited"));
+        assert!(root.path().join("index.scip").is_file());
+        assert!(root.path().join(MARKER).is_file());
     }
 
     #[test]
@@ -984,7 +989,7 @@ mod tests {
     }
 
     #[test]
-    fn tampered_external_owner_fails_closed_without_deleting_source_copy() {
+    fn tampered_external_owner_blocks_normal_cleanup_without_deleting_source_copy() {
         let root = tempfile::tempdir().unwrap();
         let guard = SemanticIndexerRecoveryGuard::begin(root.path()).unwrap();
         let execution_root = guard.prepare_indexer_run().unwrap();
@@ -994,15 +999,15 @@ mod tests {
         let owner = execution_root.parent().unwrap().join(EXTERNAL_OWNER_FILE);
         let token = fs::read_to_string(&owner).unwrap();
         fs::write(&owner, b"changed").unwrap();
-        drop(guard);
 
-        let error = recover_interrupted_semantic_indexing(root.path()).unwrap_err();
+        let error = guard.finish_indexer_run().unwrap_err();
 
         assert!(error.contains("ownership marker changed"));
         assert!(proof.is_file());
         assert!(root.path().join(MARKER).is_file());
 
         fs::write(owner, token).unwrap();
-        assert!(recover_interrupted_semantic_indexing(root.path()).unwrap());
+        guard.finish().unwrap();
+        assert!(!root.path().join(MARKER).exists());
     }
 }
