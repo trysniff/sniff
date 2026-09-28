@@ -279,12 +279,32 @@ pub fn validate_historical_v3_agent_review(
         || !reviewer.repository_identity_hidden
         || !reviewer.change_metadata_hidden
         || !reviewer.other_reviews_hidden
-        || !reviewer.complete_source_context_inspected
-        || !reviewer.behavior_evidence_inspected
     {
         return Err(
             "historical-v3 agent review lacks source-only isolation attestations".to_string(),
         );
+    }
+    if submission.decision.verdict != Some(HistoricalV3ReviewerVerdict::InsufficientContext)
+        && (!reviewer.complete_source_context_inspected || !reviewer.behavior_evidence_inspected)
+    {
+        return Err(
+            "historical-v3 agent review claims a conclusive verdict without complete source and behavior inspection"
+                .to_string(),
+        );
+    }
+    if (!reviewer.complete_source_context_inspected
+        && (submission
+            .decision
+            .before_contains_unnecessary_machinery
+            .is_some()
+            || submission.decision.after_removes_that_machinery.is_some()
+            || submission.decision.removal_not_relocated.is_some()
+            || submission.decision.simpler_counterfactual_matches.is_some()
+            || submission.decision.public_surface_preserved.is_some()))
+        || (!reviewer.behavior_evidence_inspected
+            && submission.decision.behavior_preserved.is_some())
+    {
+        return Err("historical-v3 agent review claims evidence it did not inspect".to_string());
     }
     let task = HistoricalV3LabelTask {
         review_item_id: bundle.review_item_id.clone(),
