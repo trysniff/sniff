@@ -560,7 +560,7 @@ fn sweep_rejects_overlapping_mutable_roots() {
 }
 
 #[test]
-fn selected_slot_work_recovery_removes_only_proven_semantic_and_source_state() {
+fn selected_slot_work_recovery_preserves_unproven_semantic_state() {
     let fixture = Fixture::new();
     let mutable = tempfile::tempdir().unwrap();
     let work_root = mutable.path().join("work");
@@ -599,6 +599,76 @@ fn selected_slot_work_recovery_removes_only_proven_semantic_and_source_state() {
     fs::write(&interrupted_replay, b"partial").unwrap();
     fs::create_dir(slot_root.join("base-tested")).unwrap();
 
+    let error =
+        recover_historical_v2_selected_slot_work(HistoricalV2SelectedSlotWorkRecoveryInputs {
+            protocol_bytes: PROTOCOL,
+            artifact_root: fixture.artifacts.path(),
+            frame: &fixture.frame,
+            exclusions: &fixture.exclusions,
+            selection: &fixture.selection,
+            payloads: &fixture.payloads,
+            work_root: &work_root,
+        })
+        .unwrap_err();
+
+    assert_eq!(error.stage, HistoricalV2SlotStage::SemanticCensus);
+    assert_eq!(
+        error.kind,
+        HistoricalV2SlotStageErrorKind::InfrastructureFailed
+    );
+    assert!(
+        error
+            .detail
+            .contains("cannot prove compiler workers have exited")
+    );
+    for root in [&repository, &patched] {
+        assert!(root.join(".sniff-indexer-recovery.json").is_file());
+        assert!(root.join(".sniff-indexer-tmp/cache").is_file());
+    }
+    assert!(semantic_progress.is_dir());
+    assert!(interrupted_snapshot.is_file());
+    assert!(source_progress.is_dir());
+    assert!(interrupted_source.is_file());
+    assert!(assessment_replay.is_dir());
+    assert!(interrupted_replay.is_file());
+    assert!(slot_root.join("base-tested").is_dir());
+}
+
+#[test]
+fn selected_slot_work_without_semantic_marker_recovers_progress() {
+    let fixture = Fixture::new();
+    let mutable = tempfile::tempdir().unwrap();
+    let work_root = mutable.path().join("work");
+    fs::create_dir(&work_root).unwrap();
+    let payload = &fixture.payloads.records[0];
+    let slot_root = work_root
+        .join(&payload.language)
+        .join(format!("slot-{:04}", payload.slot_number));
+    for side in ["repository", "patched"] {
+        fs::create_dir_all(slot_root.join(side)).unwrap();
+    }
+    let semantic_progress = slot_root.join("semantic-progress");
+    for side in ["base", "patched"] {
+        fs::create_dir_all(semantic_progress.join(side)).unwrap();
+    }
+    let interrupted_snapshot = semantic_progress.join("base/snapshot.json.tmp");
+    fs::write(&interrupted_snapshot, b"partial").unwrap();
+    let source_progress = slot_root.join("source-progress");
+    for side in ["base", "patched"] {
+        fs::create_dir_all(source_progress.join(side)).unwrap();
+    }
+    let interrupted_source = source_progress.join("patched/go-project-model.json.tmp");
+    fs::write(&interrupted_source, b"partial").unwrap();
+    fs::write(source_progress.join("base/inventory.json"), b"{}").unwrap();
+    let assessment_replay = slot_root.join("assessment-source-replay-progress");
+    for side in ["base", "patched"] {
+        fs::create_dir_all(assessment_replay.join(side)).unwrap();
+    }
+    fs::write(assessment_replay.join("base/inventory.json"), b"{}").unwrap();
+    let interrupted_replay = assessment_replay.join("patched/parser-census.json.tmp");
+    fs::write(&interrupted_replay, b"partial").unwrap();
+    fs::create_dir(slot_root.join("base-tested")).unwrap();
+
     let summary =
         recover_historical_v2_selected_slot_work(HistoricalV2SelectedSlotWorkRecoveryInputs {
             protocol_bytes: PROTOCOL,
@@ -613,7 +683,7 @@ fn selected_slot_work_recovery_removes_only_proven_semantic_and_source_state() {
 
     assert_eq!(summary.selected_slot_count, 1);
     assert_eq!(summary.materialized_semantic_root_count, 2);
-    assert_eq!(summary.recovered_semantic_root_count, 2);
+    assert_eq!(summary.recovered_semantic_root_count, 0);
     assert!(summary.semantic_worlds.is_empty());
     assert!(summary.semantic_checkpoints.is_empty());
     assert_eq!(
@@ -632,15 +702,8 @@ fn selected_slot_work_recovery_removes_only_proven_semantic_and_source_state() {
             completed_checkpoint_count: 1,
         }]
     );
-    for root in [&repository, &patched] {
-        assert!(!root.join(".sniff-indexer-recovery.json").exists());
-        assert!(!root.join(".sniff-indexer-tmp").exists());
-    }
-    assert!(semantic_progress.is_dir());
     assert!(!interrupted_snapshot.exists());
-    assert!(source_progress.is_dir());
     assert!(!interrupted_source.exists());
-    assert!(assessment_replay.is_dir());
     assert!(!interrupted_replay.exists());
     assert!(slot_root.join("base-tested").is_dir());
 }
