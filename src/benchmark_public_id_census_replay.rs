@@ -70,10 +70,10 @@ pub struct PublicIdCensusReplay {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-struct RestRepository {
-    id: u64,
-    node_id: String,
-    full_name: String,
+pub(crate) struct RestRepository {
+    pub(crate) id: u64,
+    pub(crate) node_id: String,
+    pub(crate) full_name: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -88,32 +88,32 @@ struct GraphqlData {
     nodes: Vec<Option<GraphqlRepository>>,
 }
 
-#[derive(Debug)]
-enum GraphqlNodeObservation {
+#[derive(Debug, Clone)]
+pub(crate) enum GraphqlNodeObservation {
     Repository(GraphqlRepository),
     NotFound { node_id: String, repository_id: u64 },
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct GraphqlRepository {
+pub(crate) struct GraphqlRepository {
     #[serde(rename = "__typename")]
-    typename: String,
-    id: String,
-    database_id: Option<u64>,
-    name_with_owner: String,
-    created_at: String,
-    primary_language: Option<GraphqlLanguage>,
-    is_archived: bool,
-    is_fork: bool,
-    is_template: bool,
-    mirror_url: Option<String>,
-    is_private: bool,
+    pub(crate) typename: String,
+    pub(crate) id: String,
+    pub(crate) database_id: Option<u64>,
+    pub(crate) name_with_owner: String,
+    pub(crate) created_at: String,
+    pub(crate) primary_language: Option<GraphqlLanguage>,
+    pub(crate) is_archived: bool,
+    pub(crate) is_fork: bool,
+    pub(crate) is_template: bool,
+    pub(crate) mirror_url: Option<String>,
+    pub(crate) is_private: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
-struct GraphqlLanguage {
-    name: String,
+pub(crate) struct GraphqlLanguage {
+    pub(crate) name: String,
 }
 
 struct RestPage {
@@ -526,7 +526,7 @@ where
     }
 }
 
-fn parse_graphql_observations(
+pub(crate) fn parse_graphql_observations(
     response_body: &str,
     node_ids: &[String],
     listed: &[RestRepository],
@@ -645,7 +645,14 @@ pub(super) fn validate_exchange(
     exchange: &PublicIdCensusExchange,
     policy: &PublicIdCensusPolicy,
 ) -> Result<(), String> {
-    if exchange.request_api_version != policy.api_version
+    validate_exchange_for_version(exchange, &policy.api_version)
+}
+
+pub(crate) fn validate_exchange_for_version(
+    exchange: &PublicIdCensusExchange,
+    api_version: &str,
+) -> Result<(), String> {
+    if exchange.request_api_version != api_version
         || exchange.response_status != 200
         || exchange.response_sha256
             != format!("{:x}", Sha256::digest(exchange.response_body.as_bytes()))
@@ -717,7 +724,7 @@ pub(super) fn validate_preflight(
     Ok(())
 }
 
-fn valid_utc_timestamp(value: &str) -> Result<(), String> {
+pub(crate) fn valid_utc_timestamp(value: &str) -> Result<(), String> {
     if value.len() != 20
         || !value.ends_with('Z')
         || value.bytes().enumerate().any(|(index, byte)| match index {
@@ -759,6 +766,14 @@ fn parse_next_since(
     link: Option<&str>,
     policy: &PublicIdCensusPolicy,
 ) -> Result<Option<u64>, String> {
+    parse_next_since_for(link, &policy.source, policy.rest_page_size)
+}
+
+pub(crate) fn parse_next_since_for(
+    link: Option<&str>,
+    source: &str,
+    rest_page_size: usize,
+) -> Result<Option<u64>, String> {
     let Some(link) = link else {
         return Ok(None);
     };
@@ -783,12 +798,12 @@ fn parse_next_since(
         ) {
             return Err("public-ID census Link relation is unsupported".to_string());
         }
-        if rel == "rel=\"first\"" && raw_url == format!("{}{{?since}}", policy.source) {
+        if rel == "rel=\"first\"" && raw_url == format!("{source}{{?since}}") {
             continue;
         }
         let url = Url::parse(raw_url)
             .map_err(|error| format!("invalid public-ID census next URL: {error}"))?;
-        let expected = Url::parse(&policy.source).map_err(|error| error.to_string())?;
+        let expected = Url::parse(source).map_err(|error| error.to_string())?;
         if url.scheme() != expected.scheme()
             || url.host_str() != expected.host_str()
             || url.path() != expected.path()
@@ -814,9 +829,7 @@ fn parse_next_since(
             || parameters
                 .iter()
                 .find(|(key, _)| key == "per_page")
-                .is_some_and(|(_, value)| {
-                    value.parse::<usize>().ok() != Some(policy.rest_page_size)
-                })
+                .is_some_and(|(_, value)| value.parse::<usize>().ok() != Some(rest_page_size))
         {
             return Err("public-ID census next URL has unexpected parameters".to_string());
         }
@@ -832,7 +845,7 @@ fn parse_next_since(
     Ok(next)
 }
 
-fn canonical_name(value: &str) -> Result<String, String> {
+pub(crate) fn canonical_name(value: &str) -> Result<String, String> {
     let parts = value.split('/').collect::<Vec<_>>();
     if parts.len() != 2
         || parts.iter().any(|part| {

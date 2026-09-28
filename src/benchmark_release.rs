@@ -1098,9 +1098,12 @@ pub use source_frame::*;
 
 #[path = "benchmark_public_id_census.rs"]
 mod public_id_census;
+#[path = "benchmark_public_id_census_v2.rs"]
+mod public_id_census_v2;
 
 pub(crate) use public_id_census::read_public_id_census_artifact;
 pub use public_id_census::*;
+pub use public_id_census_v2::*;
 
 #[path = "benchmark_source_assessment.rs"]
 mod source_assessment;
