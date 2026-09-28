@@ -42,6 +42,9 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v6
+      - name: Test SBOM identity verifier
+        shell: pwsh
+        run: ./tools/indexers/test-finalize-windows-rust-sbom.ps1
       - name: Build the pinned compatibility bundle
         shell: pwsh
         run: |
@@ -122,6 +125,17 @@ jobs:
           if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $output)) {
             throw "Native Windows ARM64 Syft did not produce the required SPDX SBOM"
           }
+      - name: Verify executable identities in SPDX SBOM
+        shell: pwsh
+        run: |
+          $output = Join-Path $env:RUNNER_TEMP "sniff-rust-indexer-output"
+          $asset = "sniff-rust-indexer-${{ matrix.target }}"
+          ./tools/indexers/finalize-windows-rust-sbom.ps1 `
+            -BundleDirectory (Join-Path $output $asset) `
+            -ArchivePath (Join-Path $output "$asset.zip") `
+            -ProvenancePath (Join-Path $output "$asset.provenance.json") `
+            -ChecksumPath (Join-Path $output "$asset.sha256") `
+            -SbomPath (Join-Path $output "$asset.spdx.json")
       - name: Prove full SCIP indexing inside AppContainer
         shell: pwsh
         run: |
