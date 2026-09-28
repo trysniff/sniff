@@ -102,6 +102,11 @@ try {
     if ($finished.creationInfo.creators -cnotcontains "Tool: sniff-windows-rust-sbom-finalizer-1") {
         throw "Finalized SBOM does not attribute the verifier"
     }
+    foreach ($id in @($finished.packages.SPDXID) + @($finished.files.SPDXID)) {
+        if ($id -cnotmatch '^SPDXRef-[A-Za-z0-9.-]+$') {
+            throw "Invalid finalized SPDX ID: $id"
+        }
+    }
     $namespace = $finished.documentNamespace
     Invoke-Finalizer
     if ((Get-Content -Raw -LiteralPath $sbomPath | ConvertFrom-Json).documentNamespace -cne $namespace) {
@@ -127,6 +132,32 @@ try {
         $bad.files[1].fileName = $bad.files[0].fileName
         [IO.File]::WriteAllText($sbomPath, ($bad | ConvertTo-Json -Depth 20))
     } "duplicate file"
+    Assert-Rejected {
+        $bad = $originalSbom | ConvertFrom-Json
+        $bad.files[0].fileName = "\BIN\CARGO.EXE"
+        [IO.File]::WriteAllText($sbomPath, ($bad | ConvertTo-Json -Depth 20))
+    } "uppercase SPDX file path"
+    Assert-Rejected {
+        $zip = [IO.Compression.ZipFile]::Open($archive, [IO.Compression.ZipArchiveMode]::Update)
+        try {
+            $zip.GetEntry("bin/cargo.exe").Delete()
+            $entry = $zip.CreateEntry("BIN/CARGO.EXE")
+            $stream = $entry.Open()
+            try {
+                $bytes = [Text.Encoding]::UTF8.GetBytes("cargo fixture")
+                $stream.Write($bytes, 0, $bytes.Length)
+            } finally { $stream.Dispose() }
+        } finally { $zip.Dispose() }
+        $newHash = (Get-FileHash -Algorithm SHA256 $archive).Hash.ToLowerInvariant()
+        $changedProvenance = $provenance.Clone()
+        $changedProvenance.archive_sha256 = $newHash
+        [IO.File]::WriteAllText($provenancePath, ($changedProvenance | ConvertTo-Json))
+        @(
+            "$analyzerHash  bin/rust-analyzer.exe"
+            "$cargoHash  bin/cargo.exe"
+            "$newHash  $asset.zip"
+        ) | Set-Content -Encoding ascii -LiteralPath $checksumPath
+    } "uppercase archive entry"
     Write-Output "Windows Rust SBOM finalizer tests passed"
 } finally {
     if (Test-Path -LiteralPath $temp) {

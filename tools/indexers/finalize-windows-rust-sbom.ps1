@@ -41,16 +41,15 @@ Assert-Equal (Split-Path -Leaf $ArchivePath) "$assetName.zip" "Archive name"
 Assert-Equal (Split-Path -Leaf $ChecksumPath) "$assetName.sha256" "Checksum file name"
 Assert-Equal (Split-Path -Leaf $SbomPath) "$assetName.spdx.json" "SBOM name"
 
-$expected = @{
-    "bin/cargo.exe" = @{
-        hash = $provenance.cargo_sha256
-        version = $provenance.cargo_commit
-    }
-    "bin/rust-analyzer.exe" = @{
-        hash = $provenance.rust_analyzer_sha256
-        version = $provenance.rust_analyzer_commit
-    }
-}
+$expected = [Collections.Generic.Dictionary[string, object]]::new([StringComparer]::Ordinal)
+$expected.Add("bin/cargo.exe", @{
+    hash = $provenance.cargo_sha256
+    version = $provenance.cargo_commit
+})
+$expected.Add("bin/rust-analyzer.exe", @{
+    hash = $provenance.rust_analyzer_sha256
+    version = $provenance.rust_analyzer_commit
+})
 Assert-Equal @($expected.Keys).Count 2 "Expected executable count"
 $actualFiles = @(Get-ChildItem -LiteralPath $BundleDirectory -Recurse -File)
 Assert-Equal $actualFiles.Count 2 "Bundle file count"
@@ -74,7 +73,7 @@ foreach ($file in $actualFiles) {
 Assert-Equal (Get-FileHash -Algorithm SHA256 -LiteralPath $ArchivePath).Hash.ToLowerInvariant() $provenance.archive_sha256 "Archive SHA256"
 $checksumLines = @(Get-Content -LiteralPath $ChecksumPath)
 Assert-Equal $checksumLines.Count 3 "Checksum line count"
-$checksums = @{}
+$checksums = [Collections.Generic.Dictionary[string, string]]::new([StringComparer]::Ordinal)
 foreach ($line in $checksumLines) {
     if ($line -cnotmatch '^([0-9a-f]{64})  (.+)$' -or $checksums.ContainsKey($Matches[2])) {
         throw "Invalid or duplicate checksum line: $line"
@@ -90,12 +89,11 @@ Add-Type -AssemblyName System.IO.Compression
 $archive = [IO.Compression.ZipFile]::OpenRead($ArchivePath)
 try {
     Assert-Equal $archive.Entries.Count 2 "Archive entry count"
-    $seenArchiveEntries = @{}
+    $seenArchiveEntries = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
     foreach ($entry in $archive.Entries) {
-        if (-not $expected.ContainsKey($entry.FullName) -or $seenArchiveEntries.ContainsKey($entry.FullName)) {
+        if (-not $expected.ContainsKey($entry.FullName) -or -not $seenArchiveEntries.Add($entry.FullName)) {
             throw "Unexpected or duplicate archive entry: $($entry.FullName)"
         }
-        $seenArchiveEntries[$entry.FullName] = $true
         $stream = $entry.Open()
         $hasher = [Security.Cryptography.SHA256]::Create()
         try {
@@ -119,7 +117,7 @@ if (-not $sbom.creationInfo -or -not $sbom.creationInfo.creators) {
     throw "SPDX creation metadata is missing"
 }
 
-$seenFiles = @{}
+$seenFiles = [Collections.Generic.Dictionary[string, object]]::new([StringComparer]::Ordinal)
 foreach ($file in $sbom.files) {
     $name = Get-RelativeName $file.fileName
     if (-not $expected.ContainsKey($name) -or $seenFiles.ContainsKey($name)) {
@@ -146,11 +144,11 @@ $rootPackages = @($sbom.packages | Where-Object {
 Assert-Equal $rootPackages.Count 1 "SPDX root package count"
 $root = $rootPackages[0]
 $oldRootId = $root.SPDXID
-$root.SPDXID = "SPDXRef-Package-$assetName"
+$root.SPDXID = "SPDXRef-Package-$($assetName.Replace('_', '-'))"
 $root.name = $assetName
 $root | Add-Member -Force -NotePropertyName sourceInfo -NotePropertyValue "Binary bundle; this SBOM inventories shipped executables, not statically linked dependencies."
 
-$seenPackages = @{}
+$seenPackages = [Collections.Generic.Dictionary[string, object]]::new([StringComparer]::Ordinal)
 foreach ($package in @($sbom.packages | Where-Object { $_.SPDXID -cne $root.SPDXID })) {
     $matches = @($expected.Keys | Where-Object {
         $package.name -ceq $_ -or
@@ -177,6 +175,11 @@ foreach ($relationship in $sbom.relationships) {
 }
 $ids = @($sbom.files.SPDXID) + @($sbom.packages.SPDXID)
 Assert-Equal (@($ids | Select-Object -Unique).Count) $ids.Count "Unique SPDX IDs"
+foreach ($id in $ids) {
+    if ($id -cnotmatch '^SPDXRef-[A-Za-z0-9.-]+$') {
+        throw "Invalid SPDX ID: $id"
+    }
+}
 foreach ($relationship in $sbom.relationships) {
     if ($relationship.spdxElementId -cnotin $ids -and $relationship.spdxElementId -cne "SPDXRef-DOCUMENT") {
         throw "Unresolved SPDX relationship source: $($relationship.spdxElementId)"
