@@ -36,10 +36,12 @@ retained lower-boundary witness.
 
 Follow the verified `rel="next"` `since` cursor for each page. Every listed ID
 must be unique, strictly increasing, and greater than its request cursor;
-every next cursor must equal the last listed ID. Enrich each entire REST page
-in its original order with one GraphQL `nodes(ids:[ID!]!)` batch. Require one
-non-null public `Repository` per requested node, positional node-ID and numeric
-ID matches, no GraphQL errors, and nondecreasing UTC `createdAt` across the
+every next cursor must equal the last listed ID. A previously committed
+boundary-probe GraphQL observation is reused when its ID occurs in the crawl;
+the other IDs on the page are enriched in their original order. This is one
+metadata observation per ID, not a fresh observation of every crawled page.
+Require one non-null public `Repository` per requested node, positional node-ID
+and numeric ID matches, no GraphQL errors, and nondecreasing UTC `createdAt` across the
 whole crawl. A null `primaryLanguage` or a language outside the six named
 languages is counted as an ineligible repository, never silently assigned.
 The same applies to forks, archived repositories, mirrors, and templates.
@@ -51,13 +53,16 @@ receipt time, and retries are committed before frames are emitted. Transport
 timeouts, 429s, and 5xx responses may retry the **same** request at most 12
 times; a semantic error (including missing or mismatched metadata) ends the
 census without a frame. Offline replay must reproduce all six ID-ordered CSV
-frames and exclusion counts byte for byte. Prior benchmark exclusions are
-proved disjoint by the strict creation-time cutoff and the pinned pre-cutoff
-prior-artifact evidence. The old canonical-name filter may remain as an extra
-conservative exclusion, but it is not the identity-disjointness proof: some
-historical names are now deleted or reused. Before the first REST probe, the
-collector must fetch this policy from an immutable public Git commit, verify
-its exact bytes and SHA-256 against the pinned public hash and typed contract, and retain that
+frames and exclusion counts byte for byte. Prior-cohort disjointness is a
+separate, unfinished proof gate: the current prior-identity seal records names,
+not immutable repository IDs or checked creation-time bounds for every prior
+partition. The strict creation-time cutoff is sufficient only after those
+prior bounds are verified from pinned evidence. A canonical-name filter is
+conservative but cannot prove disjointness when repositories are renamed or
+names are reused. Do not score real v3 candidate reviews until this gate is
+closed. Before the first REST probe, the collector must fetch this policy
+from an immutable public Git commit, verify its exact bytes and SHA-256 against
+the pinned public hash and typed contract, and retain that
 preflight receipt. GitHub's documented creation ordering is an assumption of
 the boundary proof; an observed inversion fails closed, while live visibility
 changes remain an explicitly disclosed limitation.
