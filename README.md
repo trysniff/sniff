@@ -36,6 +36,10 @@ cargo install sniff-cli --locked
 ```
 
 The first install compiles native dependencies and can take several minutes.
+Semantic indexing requires same-directory hard links on the scanned
+repository's filesystem and directory syncing on the repository and temp
+filesystems. Sniff stops before indexing if it cannot durably publish its
+recovery marker; it does not fall back to an in-place marker write.
 After installation, this setup takes about a minute:
 
 ```console
@@ -99,7 +103,10 @@ cost.
 Each completed method is appended to a durable journal. `sniff status [PATH]`
 reads that journal without loading provider configuration or scanning source
 files. `sniff resume [PATH]` requires an existing journal and continues the
-scan; changed or invalidated work is reviewed again.
+scan; changed or invalidated work is reviewed again. A process killed before
+the journal exists, during compiler indexing, is not yet automatically
+resumable. Sniff retains an interrupted indexer workspace rather than deleting
+it without proof that its worker processes have stopped.
 
 `--budget-usd` is a cumulative estimated limit for one scan. Sniff stops
 admitting new paid review batches when the journaled estimate reaches the

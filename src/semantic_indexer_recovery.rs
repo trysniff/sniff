@@ -13,6 +13,7 @@ const PREVIOUS_CONTRACT: &str = "sniff-semantic-indexer-recovery-v2";
 const LEGACY_SCHEMA_VERSION: u32 = 1;
 const LEGACY_CONTRACT: &str = "sniff-semantic-indexer-recovery-v1";
 const MARKER: &str = ".sniff-indexer-recovery.json";
+const MARKER_STAGING: &str = ".sniff-indexer-recovery.json.tmp";
 const EXTERNAL_RUNTIME_PREFIX: &str = "sniff-semantic-indexer-";
 const EXTERNAL_OWNER_FILE: &str = ".sniff-indexer-owner";
 static EXTERNAL_WORKSPACE_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -63,14 +64,23 @@ impl SemanticIndexerRecoveryGuard {
         let root = fs::canonicalize(root)
             .map_err(|error| format!("failed to resolve semantic recovery root: {error}"))?;
         let marker_path = root.join(MARKER);
-        if marker_path.exists() {
-            return Err(format!(
-                "semantic index recovery is required before indexing {}",
-                root.display()
-            ));
+        match fs::symlink_metadata(&marker_path) {
+            Ok(_) => {
+                return Err(format!(
+                    "semantic index recovery is required before indexing {}",
+                    root.display()
+                ));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(format!(
+                    "failed to inspect semantic recovery marker {}: {error}",
+                    marker_path.display()
+                ));
+            }
         }
         reject_preexisting_private_runtime_paths(&root)?;
-        let external_workspace = reserve_external_workspace(&root)?;
+        let external_workspace = select_external_workspace(&root)?;
         let mut marker = RecoveryMarker {
             schema_version: SCHEMA_VERSION,
             recovery_contract: CONTRACT.to_string(),
@@ -86,16 +96,7 @@ impl SemanticIndexerRecoveryGuard {
             marker_sha256: String::new(),
         };
         marker.marker_sha256 = marker_sha256(&marker)?;
-        if let Err(error) = write_marker(&marker_path, &marker) {
-            let cleanup = cleanup_external_workspace(&root, &marker);
-            return match cleanup {
-                Ok(()) => Err(error),
-                Err(cleanup_error) => Err(format!(
-                    "{error}; additionally, external semantic workspace cleanup failed: {cleanup_error}"
-                )),
-            };
-        }
-        sync_directory(&root)?;
+        write_marker(&marker_path, &marker)?;
         Ok(Self { root, marker })
     }
 
@@ -168,8 +169,33 @@ pub(crate) fn recover_interrupted_semantic_indexing(root: &Path) -> Result<bool,
     let root = fs::canonicalize(root)
         .map_err(|error| format!("failed to resolve semantic recovery root: {error}"))?;
     let marker_path = root.join(MARKER);
-    if !marker_path.exists() {
-        return Ok(false);
+    match fs::symlink_metadata(&marker_path) {
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let staged = root.join(MARKER_STAGING);
+            match fs::symlink_metadata(&staged) {
+                Ok(_) => {
+                    return Err(format!(
+                        "incomplete semantic recovery marker publication at {}; refusing to treat indexing as clean",
+                        staged.display()
+                    ));
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(format!(
+                        "failed to inspect staged semantic recovery marker {}: {error}",
+                        staged.display()
+                    ));
+                }
+            }
+            return Ok(false);
+        }
+        Err(error) => {
+            return Err(format!(
+                "failed to inspect semantic recovery marker {}: {error}",
+                marker_path.display()
+            ));
+        }
     }
     let marker: RecoveryMarker = serde_json::from_slice(
         &fs::read(&marker_path)
@@ -222,7 +248,7 @@ fn cleanup_generated_paths(root: &Path, marker: &RecoveryMarker) -> Result<(), S
     Ok(())
 }
 
-fn reserve_external_workspace(root: &Path) -> Result<ExternalWorkspaceOwnership, String> {
+fn select_external_workspace(root: &Path) -> Result<ExternalWorkspaceOwnership, String> {
     let temp_root =
         normalize_windows_path(fs::canonicalize(std::env::temp_dir()).map_err(|error| {
             format!("failed to resolve operating-system temp directory: {error}")
@@ -235,25 +261,18 @@ fn reserve_external_workspace(root: &Path) -> Result<ExternalWorkspaceOwnership,
             token,
         };
         let runtime = external_runtime_path_from_ownership(&ownership)?;
-        match fs::create_dir(&runtime) {
-            Ok(()) => {
-                if let Err(error) = write_external_owner(&runtime, &ownership.token) {
-                    let _ = fs::remove_dir(&runtime);
-                    return Err(error);
-                }
-                sync_directory(&temp_root)?;
-                return Ok(ownership);
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+        match fs::symlink_metadata(&runtime) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(ownership),
+            Ok(_) => continue,
             Err(error) => {
                 return Err(format!(
-                    "failed to reserve external semantic workspace {}: {error}",
+                    "failed to inspect external semantic workspace {}: {error}",
                     runtime.display()
                 ));
             }
         }
     }
-    Err("failed to reserve a unique external semantic workspace after 64 attempts".to_string())
+    Err("failed to select a unique external semantic workspace after 64 attempts".to_string())
 }
 
 fn external_workspace_token(root: &Path) -> String {
@@ -466,7 +485,7 @@ fn normalize_windows_path(path: PathBuf) -> PathBuf {
 }
 
 fn reject_preexisting_private_runtime_paths(root: &Path) -> Result<(), String> {
-    for relative_path in [INDEXER_TEMP_DIR, INDEXER_CACHE_DIR] {
+    for relative_path in [INDEXER_TEMP_DIR, INDEXER_CACHE_DIR, MARKER_STAGING] {
         let path = root.join(relative_path);
         match fs::symlink_metadata(&path) {
             Ok(_) => {
@@ -632,14 +651,29 @@ fn clear_windows_readonly(path: &Path, metadata: &fs::Metadata) -> Result<(), St
 fn write_marker(path: &Path, marker: &RecoveryMarker) -> Result<(), String> {
     let bytes = serde_json::to_vec(marker)
         .map_err(|error| format!("failed to serialize semantic recovery marker: {error}"))?;
+    let staged = path.with_file_name(MARKER_STAGING);
     let mut file = OpenOptions::new()
         .create_new(true)
         .write(true)
-        .open(path)
-        .map_err(|error| format!("failed to create semantic recovery marker: {error}"))?;
+        .open(&staged)
+        .map_err(|error| format!("failed to stage semantic recovery marker: {error}"))?;
     file.write_all(&bytes)
         .and_then(|()| file.sync_all())
-        .map_err(|error| format!("failed to persist semantic recovery marker: {error}"))
+        .map_err(|error| format!("failed to persist staged semantic recovery marker: {error}"))?;
+    drop(file);
+    fs::hard_link(&staged, path).map_err(|error| {
+        format!(
+            "failed to publish semantic recovery marker with a same-directory hard link: {error}; staged marker retained at {} and no indexer started",
+            staged.display()
+        )
+    })?;
+    let root = path
+        .parent()
+        .ok_or_else(|| "semantic recovery marker has no parent directory".to_string())?;
+    sync_directory(root)?;
+    fs::remove_file(&staged)
+        .map_err(|error| format!("failed to remove staged semantic recovery marker: {error}"))?;
+    sync_directory(root)
 }
 
 fn remove_marker(root: &Path) -> Result<(), String> {
@@ -771,6 +805,77 @@ mod tests {
         assert!(error.contains("unexpected semantic indexer runtime path"));
         assert_eq!(fs::read(private.join("owner.txt")).unwrap(), b"not sniff");
         assert!(!root.path().join(MARKER).exists());
+    }
+
+    #[test]
+    fn begin_publishes_complete_marker_before_creating_external_workspace() {
+        let root = tempfile::tempdir().unwrap();
+        let guard = SemanticIndexerRecoveryGuard::begin(root.path()).unwrap();
+        let marker_path = root.path().join(MARKER);
+        let persisted: RecoveryMarker =
+            serde_json::from_slice(&fs::read(&marker_path).unwrap()).unwrap();
+
+        validate_marker(&persisted).unwrap();
+        assert_eq!(persisted, guard.marker);
+        assert!(!root.path().join(MARKER_STAGING).exists());
+        assert!(
+            !external_runtime_path(root.path(), &guard.marker)
+                .unwrap()
+                .exists()
+        );
+        guard.finish().unwrap();
+    }
+
+    #[test]
+    fn incomplete_staged_marker_blocks_new_indexing_without_deletion() {
+        let root = tempfile::tempdir().unwrap();
+        let staged = root.path().join(MARKER_STAGING);
+        fs::write(&staged, b"partial marker").unwrap();
+
+        let error = SemanticIndexerRecoveryGuard::begin(root.path())
+            .err()
+            .unwrap();
+
+        assert!(error.contains("unexpected semantic indexer runtime path"));
+        assert_eq!(fs::read(&staged).unwrap(), b"partial marker");
+        assert!(!root.path().join(MARKER).exists());
+        let recovery_error = recover_interrupted_semantic_indexing(root.path()).unwrap_err();
+        assert!(recovery_error.contains("incomplete semantic recovery marker publication"));
+        assert_eq!(fs::read(&staged).unwrap(), b"partial marker");
+    }
+
+    #[test]
+    fn marker_publication_never_replaces_an_existing_marker() {
+        let root = tempfile::tempdir().unwrap();
+        let guard = SemanticIndexerRecoveryGuard::begin(root.path()).unwrap();
+        let marker_path = root.path().join(MARKER);
+        let original = fs::read(&marker_path).unwrap();
+
+        let error = write_marker(&marker_path, &guard.marker).unwrap_err();
+
+        assert!(error.contains("same-directory hard link"));
+        assert_eq!(fs::read(&marker_path).unwrap(), original);
+        assert!(root.path().join(MARKER_STAGING).is_file());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dangling_marker_symlink_is_not_treated_as_absent() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+        let marker_path = root.path().join(MARKER);
+        symlink("missing-marker", &marker_path).unwrap();
+
+        assert!(SemanticIndexerRecoveryGuard::begin(root.path()).is_err());
+        assert!(recover_interrupted_semantic_indexing(root.path()).is_err());
+        assert!(
+            fs::symlink_metadata(&marker_path)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert!(!root.path().join(MARKER_STAGING).exists());
     }
 
     #[test]
