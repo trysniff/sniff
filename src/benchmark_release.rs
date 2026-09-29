@@ -454,6 +454,11 @@ mod history_v3_prior_artifacts;
 
 pub use history_v3_prior_artifacts::*;
 
+#[path = "benchmark_history_v3_scorecard_publication.rs"]
+mod history_v3_scorecard_publication;
+
+pub use history_v3_scorecard_publication::*;
+
 #[path = "benchmark_history_v3_prior_name_audit.rs"]
 mod history_v3_prior_name_audit;
 

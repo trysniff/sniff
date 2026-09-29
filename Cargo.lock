@@ -2171,6 +2171,7 @@ dependencies = [
  "protobuf",
  "regex",
  "reqwest",
+ "ring",
  "rustpython-ast",
  "rustpython-parser",
  "same-file",
