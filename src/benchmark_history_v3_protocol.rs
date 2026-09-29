@@ -3,7 +3,10 @@ mod schema;
 
 pub use schema::*;
 
-use super::{committed_public_id_census_policy, public_id_census_policy_sha256};
+use super::{
+    committed_public_id_census_policy, committed_public_id_census_v2_policy,
+    public_id_census_policy_sha256, public_id_census_v2_policy_sha256,
+};
 
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -13,6 +16,8 @@ const PROTOCOL_CONTRACT: &str = "sniffbench-historical-v3-protocol-v6";
 const MODEL_PROTOCOL_CONTRACT: &str = "sniffbench-historical-v3-model-judged-protocol-v7";
 const PUBLIC_ID_CENSUS_PROTOCOL_CONTRACT: &str =
     "sniffbench-historical-v3-public-id-census-protocol-v8";
+const PUBLIC_ID_CENSUS_V2_PROTOCOL_CONTRACT: &str =
+    "sniffbench-historical-v3-public-id-census-v2-protocol-v9";
 const STREAM_CONTRACT: &str = "sniffbench-historical-v3-stream-task-v1";
 const RANKING_DOMAIN: &str = "sniffbench-historical-v3-candidate-rank-v1";
 pub(super) const TEST_RECIPE_SELECTOR_CONTRACT: &str =
@@ -252,6 +257,7 @@ fn validate_historical_v3_protocol_fields(protocol: &HistoricalV3Protocol) -> Re
         HISTORICAL_V3_PROTOCOL_SCHEMA_VERSION
             | HISTORICAL_V3_MODEL_PROTOCOL_SCHEMA_VERSION
             | HISTORICAL_V3_PUBLIC_ID_CENSUS_PROTOCOL_SCHEMA_VERSION
+            | HISTORICAL_V3_PUBLIC_ID_CENSUS_V2_PROTOCOL_SCHEMA_VERSION
     ) || protocol.protocol_id.trim().is_empty()
         || (protocol.schema_version == HISTORICAL_V3_PROTOCOL_SCHEMA_VERSION
             && protocol.protocol_contract != PROTOCOL_CONTRACT)
@@ -261,8 +267,15 @@ fn validate_historical_v3_protocol_fields(protocol: &HistoricalV3Protocol) -> Re
             && protocol.protocol_contract != PUBLIC_ID_CENSUS_PROTOCOL_CONTRACT)
         || (protocol.schema_version == HISTORICAL_V3_PUBLIC_ID_CENSUS_PROTOCOL_SCHEMA_VERSION
             && protocol.source_kind != Some(HistoricalV3SourceKind::PublicIdCensus))
-        || (protocol.schema_version != HISTORICAL_V3_PUBLIC_ID_CENSUS_PROTOCOL_SCHEMA_VERSION
-            && protocol.source_kind.is_some())
+        || (protocol.schema_version == HISTORICAL_V3_PUBLIC_ID_CENSUS_V2_PROTOCOL_SCHEMA_VERSION
+            && protocol.protocol_contract != PUBLIC_ID_CENSUS_V2_PROTOCOL_CONTRACT)
+        || (protocol.schema_version == HISTORICAL_V3_PUBLIC_ID_CENSUS_V2_PROTOCOL_SCHEMA_VERSION
+            && protocol.source_kind != Some(HistoricalV3SourceKind::PublicIdCensusV2))
+        || (!matches!(
+            protocol.schema_version,
+            HISTORICAL_V3_PUBLIC_ID_CENSUS_PROTOCOL_SCHEMA_VERSION
+                | HISTORICAL_V3_PUBLIC_ID_CENSUS_V2_PROTOCOL_SCHEMA_VERSION
+        ) && protocol.source_kind.is_some())
         || protocol.ranking_domain != RANKING_DOMAIN
     {
         return Err("historical-v3 protocol uses an unsupported contract".to_string());
@@ -283,6 +296,8 @@ fn validate_historical_v3_protocol_fields(protocol: &HistoricalV3Protocol) -> Re
     validate_source_frames(&protocol.source_frames)?;
     if protocol.schema_version == HISTORICAL_V3_PUBLIC_ID_CENSUS_PROTOCOL_SCHEMA_VERSION {
         validate_public_id_census_frames(&protocol.source_frames)?;
+    } else if protocol.schema_version == HISTORICAL_V3_PUBLIC_ID_CENSUS_V2_PROTOCOL_SCHEMA_VERSION {
+        validate_public_id_census_v2_frames(&protocol.source_frames)?;
     }
     validate_candidate_window(&protocol.candidate_window)?;
     if protocol.allowed_metadata_fields != HistoricalV3AllowedMetadataField::ALL
@@ -306,7 +321,8 @@ fn validate_historical_v3_protocol_fields(protocol: &HistoricalV3Protocol) -> Re
             )?)?;
         }
         HISTORICAL_V3_MODEL_PROTOCOL_SCHEMA_VERSION
-        | HISTORICAL_V3_PUBLIC_ID_CENSUS_PROTOCOL_SCHEMA_VERSION => {
+        | HISTORICAL_V3_PUBLIC_ID_CENSUS_PROTOCOL_SCHEMA_VERSION
+        | HISTORICAL_V3_PUBLIC_ID_CENSUS_V2_PROTOCOL_SCHEMA_VERSION => {
             if protocol.human_review_policy.is_some() || protocol.model_access_forbidden {
                 return Err(
                     "historical-v3 model protocol cannot use human-review authority".to_string(),
@@ -586,6 +602,31 @@ fn validate_public_id_census_frames(
     Ok(())
 }
 
+fn validate_public_id_census_v2_frames(
+    frames: &[HistoricalV3SourceFrameBinding],
+) -> Result<(), String> {
+    let policy = committed_public_id_census_v2_policy()?;
+    let policy_sha256 = public_id_census_v2_policy_sha256(&policy)?;
+    let shared_manifest = &frames[0].manifest_sha256;
+    for frame in frames {
+        let language = match frame.language {
+            HistoricalV3Language::Go => "Go",
+            HistoricalV3Language::JavaScript => "JavaScript",
+            HistoricalV3Language::Kotlin => "Kotlin",
+            HistoricalV3Language::Python => "Python",
+            HistoricalV3Language::Rust => "Rust",
+            HistoricalV3Language::TypeScript => "TypeScript",
+        };
+        if frame.policy_sha256 != policy_sha256
+            || frame.manifest_sha256 != *shared_manifest
+            || frame.frame_id != policy.frame_ids[language]
+        {
+            return Err("historical-v3 public-ID census v2 source frames changed".to_string());
+        }
+    }
+    Ok(())
+}
+
 fn validate_candidate_window(window: &HistoricalV3CandidateWindow) -> Result<(), String> {
     if window.github_api_version != GITHUB_API_VERSION
         || window.partition != CANDIDATE_PARTITION
@@ -685,7 +726,11 @@ fn compute_protocol_sha256(protocol: &HistoricalV3Protocol) -> Result<String, St
             &protocol.test_recipe_policy,
             &protocol.identical_test_policy,
         ))
-    } else if protocol.schema_version == HISTORICAL_V3_PUBLIC_ID_CENSUS_PROTOCOL_SCHEMA_VERSION {
+    } else if matches!(
+        protocol.schema_version,
+        HISTORICAL_V3_PUBLIC_ID_CENSUS_PROTOCOL_SCHEMA_VERSION
+            | HISTORICAL_V3_PUBLIC_ID_CENSUS_V2_PROTOCOL_SCHEMA_VERSION
+    ) {
         json_sha256(&(
             &base,
             protocol.source_kind,

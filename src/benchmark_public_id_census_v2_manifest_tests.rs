@@ -3,7 +3,21 @@ use std::fs;
 use tempfile::TempDir;
 
 fn fixture() -> (TempDir, PublicIdCensusV2Manifest) {
-    let (policy, preflight, exchanges, replay) = super::super::replay::tests::fixture_transcript();
+    fixture_from_transcript(super::super::replay::tests::fixture_transcript())
+}
+
+pub(crate) fn six_language_fixture() -> (TempDir, PublicIdCensusV2Manifest) {
+    fixture_from_transcript(super::super::replay::tests::six_language_fixture_transcript())
+}
+
+fn fixture_from_transcript(
+    (policy, preflight, exchanges, replay): (
+        PublicIdCensusV2Policy,
+        PublicIdCensusPreflight,
+        Vec<PublicIdCensusExchange>,
+        PublicIdCensusV2Replay,
+    ),
+) -> (TempDir, PublicIdCensusV2Manifest) {
     let root = tempfile::tempdir().unwrap();
     fs::create_dir(root.path().join("raw")).unwrap();
     fs::create_dir(root.path().join("frames")).unwrap();

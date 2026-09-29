@@ -151,9 +151,61 @@ pub(crate) fn fixture_transcript() -> (
     Vec<PublicIdCensusExchange>,
     PublicIdCensusV2Replay,
 ) {
+    fixture_transcript_with_rows(rows())
+}
+
+pub(crate) fn six_language_fixture_transcript() -> (
+    PublicIdCensusV2Policy,
+    PublicIdCensusPreflight,
+    Vec<PublicIdCensusExchange>,
+    PublicIdCensusV2Replay,
+) {
+    let mut rows = vec![FixtureRepository {
+        id: 2,
+        name: "before/repo",
+        created_at: Some("2026-08-07T23:59:59Z"),
+        language: "Go",
+    }];
+    for (id, name, language) in [
+        (3, "go/repo", "Go"),
+        (4, "javascript/repo", "JavaScript"),
+        (5, "kotlin/repo", "Kotlin"),
+        (6, "python/repo", "Python"),
+        (7, "rust/repo", "Rust"),
+        (8, "typescript/repo", "TypeScript"),
+    ] {
+        rows.push(FixtureRepository {
+            id,
+            name,
+            created_at: Some("2026-08-08T00:00:00Z"),
+            language,
+        });
+    }
+    rows.push(FixtureRepository {
+        id: 9,
+        name: "missing/repo",
+        created_at: None,
+        language: "Go",
+    });
+    rows.push(FixtureRepository {
+        id: 10,
+        name: "after/repo",
+        created_at: Some("2026-08-15T00:00:00Z"),
+        language: "Go",
+    });
+    fixture_transcript_with_rows(rows)
+}
+
+fn fixture_transcript_with_rows(
+    rows: Vec<FixtureRepository>,
+) -> (
+    PublicIdCensusV2Policy,
+    PublicIdCensusPreflight,
+    Vec<PublicIdCensusExchange>,
+    PublicIdCensusV2Replay,
+) {
     let policy = committed_public_id_census_v2_policy().unwrap();
     let preflight = preflight();
-    let rows = rows();
     let mut exchanges = Vec::new();
     let replay =
         replay_public_id_census_v2_with_source(&policy, &preflight, |request, url, body| {

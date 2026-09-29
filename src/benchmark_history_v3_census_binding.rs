@@ -102,6 +102,8 @@ pub fn bind_historical_v3_public_id_census_frames(
         prior_benchmark_identity_seal_sha256: prior_identities.seal_sha256.clone(),
         source_kind: Some(HistoricalV3SourceKind::PublicIdCensus),
         source_manifest_sha256: Some(artifact.manifest.manifest_sha256.clone()),
+        resolvable_population: None,
+        prior_identity_proof_status: None,
         frames,
         audit_sha256: String::new(),
     };
@@ -120,6 +122,8 @@ pub fn validate_historical_v3_public_id_census_audit(
         || audit.source_kind != Some(HistoricalV3SourceKind::PublicIdCensus)
         || audit.source_manifest_sha256.as_deref()
             != Some(artifact.manifest.manifest_sha256.as_str())
+        || audit.resolvable_population.is_some()
+        || audit.prior_identity_proof_status.is_some()
         || audit.audit_sha256 != census_audit_sha256(audit)?
     {
         return Err("historical-v3 census binding audit changed".to_string());

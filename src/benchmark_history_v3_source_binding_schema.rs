@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 pub const HISTORICAL_V3_PRIOR_IDENTITY_SEAL_SCHEMA_VERSION: u32 = 1;
 pub const HISTORICAL_V3_SOURCE_BINDING_AUDIT_SCHEMA_VERSION: u32 = 2;
 pub const HISTORICAL_V3_PUBLIC_ID_CENSUS_AUDIT_SCHEMA_VERSION: u32 = 3;
+pub const HISTORICAL_V3_PUBLIC_ID_CENSUS_V2_AUDIT_SCHEMA_VERSION: u32 = 4;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -29,9 +30,28 @@ pub struct HistoricalV3BoundSourceFrame {
     pub language: HistoricalV3Language,
     pub frame_id: String,
     pub repository_count: usize,
+    /// Eligible under the supplied prior-name seal, not proven disjoint by repository ID.
     pub eligible_repository_count: usize,
     pub excluded_prior_repository_count: usize,
     pub eligible_repositories_sha256: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HistoricalV3ResolvablePopulationAudit {
+    pub listed_repository_count: usize,
+    pub resolved_in_window_count: usize,
+    pub resolved_ineligible_count: usize,
+    pub probe_only_null_count: usize,
+    pub crawled_null_count: usize,
+    pub name_disagreement_count: usize,
+    pub null_ledger_artifact_sha256: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HistoricalV3PriorIdentityProofStatus {
+    NameOnlyUnproven,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -45,6 +65,10 @@ pub struct HistoricalV3SourceBindingAudit {
     pub source_kind: Option<HistoricalV3SourceKind>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_manifest_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolvable_population: Option<HistoricalV3ResolvablePopulationAudit>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prior_identity_proof_status: Option<HistoricalV3PriorIdentityProofStatus>,
     pub frames: Vec<HistoricalV3BoundSourceFrame>,
     pub audit_sha256: String,
 }
