@@ -7,7 +7,11 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 mod release;
 
 #[cfg(test)]
+pub(crate) use release::capacity_census_v2_fixture;
+#[cfg(test)]
 pub(crate) use release::historical_v3_capacity_census_fixture;
+#[cfg(test)]
+pub(crate) use release::historical_v3_census_v2_fixture;
 
 #[cfg(test)]
 pub(crate) use release::RELEASE_SCHEMA_VERSION;

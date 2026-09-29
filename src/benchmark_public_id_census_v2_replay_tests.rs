@@ -196,6 +196,53 @@ pub(crate) fn six_language_fixture_transcript() -> (
     fixture_transcript_with_rows(rows)
 }
 
+pub(crate) fn capacity_six_language_fixture_transcript() -> (
+    PublicIdCensusV2Policy,
+    PublicIdCensusPreflight,
+    Vec<PublicIdCensusExchange>,
+    PublicIdCensusV2Replay,
+) {
+    let mut rows = vec![FixtureRepository {
+        id: 2,
+        name: "before/repo",
+        created_at: Some("2026-08-07T23:59:59Z"),
+        language: "Go",
+    }];
+    let mut id = 3;
+    for (language, slug) in [
+        ("Go", "go"),
+        ("JavaScript", "javascript"),
+        ("Kotlin", "kotlin"),
+        ("Python", "python"),
+        ("Rust", "rust"),
+        ("TypeScript", "typescript"),
+    ] {
+        for index in 0..20 {
+            let name: &'static str = Box::leak(format!("{slug}/repo-{index:02}").into_boxed_str());
+            rows.push(FixtureRepository {
+                id,
+                name,
+                created_at: Some("2026-08-08T00:00:00Z"),
+                language,
+            });
+            id += 1;
+        }
+    }
+    rows.push(FixtureRepository {
+        id,
+        name: "missing/repo",
+        created_at: None,
+        language: "Go",
+    });
+    rows.push(FixtureRepository {
+        id: id + 1,
+        name: "after/repo",
+        created_at: Some("2026-08-15T00:00:00Z"),
+        language: "Go",
+    });
+    fixture_transcript_with_rows(rows)
+}
+
 fn fixture_transcript_with_rows(
     rows: Vec<FixtureRepository>,
 ) -> (

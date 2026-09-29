@@ -444,6 +444,9 @@ mod history_v3_census_v2_binding;
 pub use history_v3_census_v2_binding::*;
 
 #[cfg(test)]
+pub(crate) use history_v3_census_v2_binding::tests::fixture as historical_v3_census_v2_fixture;
+
+#[cfg(test)]
 pub(crate) use history_v3_census_binding::tests::capacity_fixture as historical_v3_capacity_census_fixture;
 
 #[path = "benchmark_history_v3_prior_artifacts.rs"]
@@ -1110,6 +1113,9 @@ pub use source_frame::*;
 mod public_id_census;
 #[path = "benchmark_public_id_census_v2.rs"]
 mod public_id_census_v2;
+
+#[cfg(test)]
+pub(crate) use public_id_census_v2::capacity_census_v2_fixture;
 
 pub(crate) use public_id_census::read_public_id_census_artifact;
 pub use public_id_census::*;

@@ -10,6 +10,10 @@ pub(crate) fn six_language_fixture() -> (TempDir, PublicIdCensusV2Manifest) {
     fixture_from_transcript(super::super::replay::tests::six_language_fixture_transcript())
 }
 
+pub(crate) fn capacity_six_language_fixture() -> (TempDir, PublicIdCensusV2Manifest) {
+    fixture_from_transcript(super::super::replay::tests::capacity_six_language_fixture_transcript())
+}
+
 fn fixture_from_transcript(
     (policy, preflight, exchanges, replay): (
         PublicIdCensusV2Policy,
@@ -88,6 +92,20 @@ fn manifest_replays_six_frames_and_null_ledger() {
     assert_eq!(manifest.listed_repository_count, 5);
     validate_public_id_census_v2_manifest(&manifest, root.path()).unwrap();
     assert_eq!(manifest.manifest_sha256.len(), 64);
+}
+
+#[test]
+fn capacity_fixture_replays_twenty_repositories_per_language() {
+    let (root, manifest) = capacity_six_language_fixture();
+    assert_eq!(manifest.frames.len(), 6);
+    assert!(
+        manifest
+            .frames
+            .iter()
+            .all(|frame| frame.repository_count == 20)
+    );
+    assert_eq!(manifest.crawled_null_count, 1);
+    validate_public_id_census_v2_manifest(&manifest, root.path()).unwrap();
 }
 
 #[test]
