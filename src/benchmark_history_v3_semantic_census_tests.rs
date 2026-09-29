@@ -37,6 +37,12 @@ pub(crate) struct GitFixture {
     merge: String,
 }
 
+impl GitFixture {
+    pub(crate) fn candidate_commits(&self) -> (&str, &str, &str) {
+        (&self.base, &self.head, &self.merge)
+    }
+}
+
 pub(crate) fn fixture() -> GitFixture {
     fixture_with_source(
         "src/lib.rs",

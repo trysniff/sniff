@@ -22,7 +22,7 @@ use super::{
 };
 use crate::product_contract::SlopPattern;
 
-struct PassingExecutor;
+pub(crate) struct PassingExecutor;
 
 impl HistoricalV3IdenticalTestExecutor for PassingExecutor {
     fn recover(&self, _identity: &str) -> Result<(), HistoricalV3IdenticalTestExecutionError> {
