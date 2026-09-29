@@ -2,9 +2,10 @@ use super::history_v2_slot_store_support::{
     read_limited, require_plain_directory, write_compact_json_new,
 };
 use super::{
-    HistoricalV3CandidateCollection, HistoricalV3Language, HistoricalV3OrderedRankOutcome,
-    HistoricalV3OrderedStopStatus, HistoricalV3Protocol, HistoricalV3RankIdentity,
-    HistoricalV3RankStage, HistoricalV3ReviewDisposition, evaluate_historical_v3_ordered_prefix,
+    HISTORICAL_V3_PUBLIC_ID_CENSUS_V2_PROTOCOL_SCHEMA_VERSION, HistoricalV3CandidateCollection,
+    HistoricalV3Language, HistoricalV3OrderedRankOutcome, HistoricalV3OrderedStopStatus,
+    HistoricalV3Protocol, HistoricalV3RankIdentity, HistoricalV3RankStage,
+    HistoricalV3ReviewDisposition, evaluate_historical_v3_ordered_prefix,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -66,6 +67,12 @@ pub fn prepare_historical_v3_stop_artifact(
     language: HistoricalV3Language,
     outcomes: &[HistoricalV3OrderedRankOutcome],
 ) -> Result<HistoricalV3StopArtifact, String> {
+    if protocol.schema_version == HISTORICAL_V3_PUBLIC_ID_CENSUS_V2_PROTOCOL_SCHEMA_VERSION {
+        return Err(
+            "historical-v3 v9 stop publication requires proven prior-cohort repository IDs"
+                .to_string(),
+        );
+    }
     let status = evaluate_historical_v3_ordered_prefix(protocol, collection, language, outcomes)?;
     if matches!(status, HistoricalV3OrderedStopStatus::Continue { .. }) {
         return Err("historical-v3 stop artifact cannot commit a nonterminal prefix".to_string());
@@ -167,4 +174,28 @@ fn stop_sha256(artifact: &HistoricalV3StopArtifact) -> Result<String, String> {
     serde_json::to_vec(&committed)
         .map(|bytes| format!("{:x}", Sha256::digest(bytes)))
         .map_err(|error| format!("failed to commit historical-v3 stop artifact: {error}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn v9_cannot_publish_a_stop_from_name_only_prior_exclusions() {
+        let (_root, _manifest, _prior, protocol) =
+            super::super::history_v3_census_v2_binding::tests::fixture();
+        let git = super::super::history_v3_semantic_census::tests::fixture();
+        let collection =
+            super::super::history_v3_semantic_census::tests::collection(&protocol, &git);
+        assert!(
+            prepare_historical_v3_stop_artifact(
+                &protocol,
+                &collection,
+                HistoricalV3Language::Rust,
+                &[],
+            )
+            .unwrap_err()
+            .contains("requires proven prior-cohort repository IDs")
+        );
+    }
 }
