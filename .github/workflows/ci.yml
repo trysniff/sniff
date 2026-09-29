@@ -81,6 +81,22 @@ jobs:
       - name: Run tests
         if: runner.os != 'Windows'
         run: cargo test --all-targets --locked
+      - name: Replay the pinned Scorecard publication witness
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          query="$(cat src/benchmark_assets/historical-v3-scorecard-publication.graphql)"
+          gh api graphql -f "query=$query" | jq -S . > "$RUNNER_TEMP/scorecard-live.json"
+          jq -S . sniffbench/historical-v3-scorecard-publication-response.json > "$RUNNER_TEMP/scorecard-pinned.json"
+          cmp "$RUNNER_TEMP/scorecard-live.json" "$RUNNER_TEMP/scorecard-pinned.json"
+          frame="$RUNNER_TEMP/scorecard-projects.csv"
+          curl --fail --location --silent --show-error --retry 3 --output "$frame" \
+            https://raw.githubusercontent.com/ossf/scorecard/40c1e35996730d4fdcbdb2e6a23917a2467e29b7/cron/internal/data/projects.csv
+          echo "55b1de849d6d401bd6529a2806d587b53170cfbe7cdbc2ac5799ab65bf42807a  $frame" | sha256sum --check
+          SNIFF_SCORECARD_FRAME_PATH="$frame" cargo test --lib --locked verifies_real_scorecard_publication_witness -- --ignored
       - name: Run Windows unit and non-dogfood integration tests
         if: runner.os == 'Windows'
         shell: pwsh
