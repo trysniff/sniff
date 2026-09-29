@@ -97,6 +97,30 @@ jobs:
             https://raw.githubusercontent.com/ossf/scorecard/40c1e35996730d4fdcbdb2e6a23917a2467e29b7/cron/internal/data/projects.csv
           echo "55b1de849d6d401bd6529a2806d587b53170cfbe7cdbc2ac5799ab65bf42807a  $frame" | sha256sum --check
           SNIFF_SCORECARD_FRAME_PATH="$frame" cargo test --lib --locked verifies_real_scorecard_publication_witness -- --ignored
+      - name: Replay the blind prior repository identities
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          query="$(cat src/benchmark_assets/historical-v3-blind-prior-identities.graphql)"
+          gh api graphql -f "query=$query" \
+            | jq -e 'if has("errors") then error("GitHub GraphQL returned errors") else .data end' \
+            | jq -S . > "$RUNNER_TEMP/blind-identities-live.json"
+          jq -S . sniffbench/historical-v3-blind-prior-identities-response.json \
+            > "$RUNNER_TEMP/blind-identities-pinned.json"
+          cmp "$RUNNER_TEMP/blind-identities-live.json" "$RUNNER_TEMP/blind-identities-pinned.json"
+          mkdir -p "$RUNNER_TEMP/blind-prior"
+          gh release download sniffbench-blind-oss-v1-source-seal --repo trysniff/sniff \
+            --pattern sniffbench-blind-oss-v1-source-seal.zip --dir "$RUNNER_TEMP/blind-prior"
+          archive="$RUNNER_TEMP/blind-prior/sniffbench-blind-oss-v1-source-seal.zip"
+          echo "9cfca885c88ce7f8d2c7cc01114b6bc129acd5e2dfa432ef3b255858a51b65a9  $archive" \
+            | sha256sum --check
+          mkdir -p "$RUNNER_TEMP/blind-prior/extracted"
+          unzip -q "$archive" -d "$RUNNER_TEMP/blind-prior/extracted"
+          SNIFF_BLIND_SEAL_PATH="$RUNNER_TEMP/blind-prior/extracted/blind-source-seal.json" \
+            cargo test --lib --locked verifies_real_blind_prior_temporal_proof -- --ignored
       - name: Run Windows unit and non-dogfood integration tests
         if: runner.os == 'Windows'
         shell: pwsh

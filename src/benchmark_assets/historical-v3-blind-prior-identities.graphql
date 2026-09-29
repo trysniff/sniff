@@ -1,0 +1,23 @@
+query {
+  nodes(ids: [
+    "MDEwOlJlcG9zaXRvcnkxMzU3MjYzODc=",
+    "MDEwOlJlcG9zaXRvcnkxMjQyMTg5NDU=",
+    "MDEwOlJlcG9zaXRvcnkxNDc1OTgxOTU=",
+    "MDEwOlJlcG9zaXRvcnk0OTAxNjQwNg==",
+    "MDEwOlJlcG9zaXRvcnkxOTM0NDg1MTg=",
+    "MDEwOlJlcG9zaXRvcnkxMzYyNDMyNTA=",
+    "MDEwOlJlcG9zaXRvcnkzNzg0Nzk0ODA=",
+    "MDEwOlJlcG9zaXRvcnkxNTA0NzE0NTQ=",
+    "MDEwOlJlcG9zaXRvcnkyNzE5NTM1MjA=",
+    "MDEwOlJlcG9zaXRvcnkyNDg1ODc3Njg=",
+    "R_kgDOSZOyNA",
+    "R_kgDOSZZcTQ"
+  ]) {
+    ... on Repository {
+      id
+      databaseId
+      createdAt
+      nameWithOwner
+    }
+  }
+}
