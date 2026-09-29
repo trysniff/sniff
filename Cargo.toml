@@ -42,6 +42,7 @@ include = [
 default = []
 sniffbench-frame = ["dep:parquet"]
 sniffbench-id-census = []
+sniffbench-prior-name-audit = []
 
 [lib]
 name = "sniff"
@@ -60,6 +61,11 @@ required-features = ["sniffbench-frame"]
 name = "sniffbench-id-census"
 path = "src/bin/sniffbench_id_census.rs"
 required-features = ["sniffbench-id-census"]
+
+[[bin]]
+name = "sniffbench-prior-name-audit"
+path = "src/bin/sniffbench_prior_name_audit.rs"
+required-features = ["sniffbench-prior-name-audit"]
 
 [[test]]
 name = "historical_v2_command_recovery"
