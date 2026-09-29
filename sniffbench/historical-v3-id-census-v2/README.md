@@ -70,11 +70,14 @@ before collection, not an implicit choice left to a live run.
 Resolved `createdAt` values must be nondecreasing by REST ID. Completeness
 within the **resolvable subset** still depends on GitHub's documented
 creation ordering for the REST list, including IDs whose metadata is null.
-The list is not an atomic snapshot. A distinct downstream protocol must bind
-v2's policy hash, manifest, and frame IDs before candidate collection.
-The v9 source binder records `name_only_unproven` for its prior-cohort filter;
-its frame counts are not ID-level disjointness evidence. Candidate collection
-and operator precommit must be wired separately before a v9 run is possible.
+The list is not an atomic snapshot. The distinct v9 protocol and source binder
+commit v2's policy hash, manifest, and frame IDs before candidate collection.
+The v9 operator also verifies both immutable public contract URLs before
+candidate requests. Its source audit records `name_only_unproven` for the
+prior-cohort filter; frame counts are not ID-level disjointness evidence.
+These are offline-verifiable mechanisms, not evidence that a live v2 census
+or real candidate review has been completed. V9 stop publication remains
+closed until prior-cohort repository-ID proof is defined and verified.
 
 Prior-cohort identity and pre-cutoff evidence are a separate scoring gate.
 This source policy alone cannot make any agent judgment a human gold label or
