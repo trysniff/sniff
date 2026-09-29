@@ -164,27 +164,27 @@ async fn replayed_v2_frame_reaches_sealed_review_but_not_unproven_stop() {
     .unwrap();
     let bundle = &source_review.artifact;
     assert!(!bundle.methods.is_empty());
-
-    let identity = historical_v3_rank_identity(&protocol, &collection, 1).unwrap();
-    let journal = HistoricalV3RankJournal::open(journal_root.path(), &identity).unwrap();
-    let history = journal.history();
-    let materialization: HistoricalV3Materialization = history[0].read_artifact().unwrap().unwrap();
-    let source_census: HistoricalV3SourceCensus = history[1].read_artifact().unwrap().unwrap();
-    let semantic_census: HistoricalV3SemanticCensus = history[2].read_artifact().unwrap().unwrap();
-    let qualification: HistoricalV3MechanicalQualification =
-        history[3].read_artifact().unwrap().unwrap();
-    let recipe: HistoricalV3TestRecipe = history[4].read_artifact().unwrap().unwrap();
-    let execution: HistoricalV3IdenticalTests = history[5].read_artifact().unwrap().unwrap();
-    let inputs = HistoricalV3SourceReviewInputs {
-        protocol: &protocol,
-        collection: &collection,
-        materialization: &materialization,
-        source_census: &source_census,
-        semantic_census: &semantic_census,
-        qualification: &qualification,
-        recipe: &recipe,
-        execution: &execution,
-    };
+    let verified =
+        verify_historical_v3_source_review_rank(&protocol, &collection, 1, journal_root.path())
+            .unwrap();
+    assert_eq!(verified.bundle(), bundle.as_ref());
+    let review_root = tempfile::tempdir().unwrap();
+    assert!(matches!(
+        replay_historical_v3_ordered_progress(
+            &protocol,
+            &collection,
+            HistoricalV3Language::Rust,
+            journal_root.path(),
+            review_root.path(),
+            &review_root.path().join("stop.json"),
+        )
+        .unwrap(),
+        HistoricalV3ReplayProgress::PendingRank {
+            next: HistoricalV3NextStep::AgentReview,
+            ..
+        }
+    ));
+    let inputs = verified.inputs(&protocol, &collection);
     let assignment = prepare_historical_v3_agent_assignment(&inputs, bundle, PROMPT).unwrap();
     let decision = decision_for_methods(&bundle.methods, HistoricalV3ReviewerVerdict::Clean);
     let first = seal_historical_v3_agent_review(
