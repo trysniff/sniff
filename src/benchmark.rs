@@ -518,15 +518,23 @@ pub use release::{
 
 pub use release::{
     HISTORICAL_V3_PRIOR_IDENTITY_SEAL_SCHEMA_VERSION,
+    HISTORICAL_V3_PRIOR_V2_TEMPORAL_PROOF_SCHEMA_VERSION,
     HISTORICAL_V3_PUBLIC_ID_CENSUS_AUDIT_SCHEMA_VERSION,
     HISTORICAL_V3_PUBLIC_ID_CENSUS_V2_AUDIT_SCHEMA_VERSION,
     HISTORICAL_V3_SOURCE_BINDING_AUDIT_SCHEMA_VERSION, HistoricalV3BoundSourceFrame,
     HistoricalV3PriorArtifactBinding, HistoricalV3PriorBenchmarkIdentitySeal,
-    HistoricalV3PriorIdentityProofStatus, HistoricalV3ResolvablePopulationAudit,
+    HistoricalV3PriorIdentityProofStatus, HistoricalV3PriorV2PrWitness,
+    HistoricalV3PriorV2TemporalProof, HistoricalV3ResolvablePopulationAudit,
     HistoricalV3SourceBindingAudit, HistoricalV3SourceFrameArtifact,
     bind_historical_v3_source_frames, derive_frozen_historical_v3_prior_identity_seal,
     prepare_historical_v3_prior_identity_seal, validate_historical_v3_prior_identity_seal,
     validate_historical_v3_source_binding_audit,
+};
+
+#[cfg(feature = "sniffbench-frame")]
+pub use release::{
+    derive_frozen_historical_v3_prior_v2_temporal_proof,
+    validate_frozen_historical_v3_prior_v2_temporal_proof,
 };
 
 pub use release::{
