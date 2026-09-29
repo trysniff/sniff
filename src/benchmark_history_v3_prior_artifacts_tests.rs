@@ -121,6 +121,106 @@ fn rejects_a_changed_fixed_slot_selection() {
 }
 
 #[test]
+fn temporal_proof_covers_selected_rows_before_cutoff() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let (frame, exclusions, selection) = synthetic_inputs();
+    let frame_bytes = serde_json::to_vec(&frame).unwrap();
+    let selection_bytes = serde_json::to_vec(&selection).unwrap();
+    let seal = derive_prior_seal(
+        root,
+        PROTOCOL,
+        &frame_bytes,
+        &serde_json::to_vec(&exclusions).unwrap(),
+        &selection_bytes,
+    )
+    .unwrap();
+    let proof =
+        derive_prior_v2_temporal_proof(&seal, &frame, &selection, &frame_bytes, &selection_bytes)
+            .unwrap();
+    assert_eq!(proof.witnesses.len(), 1);
+    assert_eq!(
+        proof.witnesses[0].canonical_repository,
+        "unique-v3-prior-fixture/repo"
+    );
+    assert_eq!(proof.witnesses[0].global_row_index, 0);
+    assert_eq!(proof.witnesses[0].pull_number, 1);
+    assert_eq!(proof.latest_witness_utc, "2026-01-01T00:00:00Z");
+    assert_eq!(proof.prior_seal_sha256, seal.seal_sha256);
+}
+
+#[test]
+fn temporal_proof_rejects_missing_wrong_and_late_rows() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let (frame, exclusions, selection) = synthetic_inputs();
+    let frame_bytes = serde_json::to_vec(&frame).unwrap();
+    let selection_bytes = serde_json::to_vec(&selection).unwrap();
+    let seal = derive_prior_seal(
+        root,
+        PROTOCOL,
+        &frame_bytes,
+        &serde_json::to_vec(&exclusions).unwrap(),
+        &selection_bytes,
+    )
+    .unwrap();
+    let prove = |frame: &HistoricalV2Frame, selection: &HistoricalV2SlotSelection| {
+        derive_prior_v2_temporal_proof(&seal, frame, selection, &frame_bytes, &selection_bytes)
+            .unwrap_err()
+    };
+    let mut missing = selection.clone();
+    if let HistoricalV2SlotOutcome::Selected {
+        global_row_index, ..
+    } = &mut missing
+        .slots
+        .iter_mut()
+        .find(|slot| matches!(slot.outcome, HistoricalV2SlotOutcome::Selected { .. }))
+        .unwrap()
+        .outcome
+    {
+        *global_row_index = usize::MAX;
+    }
+    assert!(prove(&frame, &missing).contains("row is missing"));
+
+    let mut wrong = frame.clone();
+    wrong.records[0].canonical_repository = Some("wrong/repo".to_string());
+    assert!(prove(&wrong, &selection).contains("does not match"));
+
+    let mut late = frame.clone();
+    late.records[0].created_at = HISTORICAL_V3_REPOSITORY_CREATED_AFTER_UTC.to_string();
+    assert!(prove(&late, &selection).contains("not before"));
+
+    let mut malformed = frame.clone();
+    malformed.records[0].created_at = "2026-01-01\u{e9}00:00:0".to_string();
+    assert!(prove(&malformed, &selection).contains("invalid historical-v3 UTC timestamp"));
+}
+
+#[test]
+fn temporal_proof_rejects_incomplete_seal_coverage() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let (frame, exclusions, selection) = synthetic_inputs();
+    let frame_bytes = serde_json::to_vec(&frame).unwrap();
+    let selection_bytes = serde_json::to_vec(&selection).unwrap();
+    let mut seal = derive_prior_seal(
+        root,
+        PROTOCOL,
+        &frame_bytes,
+        &serde_json::to_vec(&exclusions).unwrap(),
+        &selection_bytes,
+    )
+    .unwrap();
+    seal.inputs
+        .iter_mut()
+        .find(|input| input.artifact_id == "historical-v2")
+        .unwrap()
+        .repositories
+        .push("unused/repo".to_string());
+    assert!(
+        derive_prior_v2_temporal_proof(&seal, &frame, &selection, &frame_bytes, &selection_bytes,)
+            .unwrap_err()
+            .contains("do not cover")
+    );
+}
+
+#[test]
 #[ignore = "requires the frozen historical-v2 frame artifact on disk"]
 fn verifies_the_real_frozen_prior_repository_union() {
     let directory = std::env::var_os("SNIFF_HISTORICAL_V2_FRAME_DIR")
@@ -145,5 +245,56 @@ fn verifies_the_real_frozen_prior_repository_union() {
             .repositories
             .len(),
         664
+    );
+}
+
+#[test]
+#[cfg(feature = "sniffbench-frame")]
+#[ignore = "requires the frozen historical-v2 frame artifact on disk"]
+fn verifies_real_frozen_v2_temporal_proof() {
+    let directory = std::env::var_os("SNIFF_HISTORICAL_V2_FRAME_DIR")
+        .expect("set SNIFF_HISTORICAL_V2_FRAME_DIR");
+    let source_root = std::env::var_os("SNIFF_HISTORICAL_V2_SOURCE_ROOT")
+        .expect("set SNIFF_HISTORICAL_V2_SOURCE_ROOT");
+    let dataset_root = std::env::var_os("SNIFF_HISTORICAL_V2_DATASET_ROOT")
+        .expect("set SNIFF_HISTORICAL_V2_DATASET_ROOT to the exact pinned Parquet shards");
+    let directory = Path::new(&directory);
+    let source_root = Path::new(&source_root);
+    let dataset_root = Path::new(&dataset_root);
+    let frame = directory.join("frame.json");
+    let exclusions = directory.join("exclusions.json");
+    let selection = directory.join("selection.json");
+    let proof = derive_frozen_historical_v3_prior_v2_temporal_proof(
+        source_root,
+        dataset_root,
+        &frame,
+        &exclusions,
+        &selection,
+    )
+    .unwrap();
+    assert_eq!(proof.witnesses.len(), 664);
+    assert!(proof.latest_witness_utc < proof.cutoff_utc);
+    validate_frozen_historical_v3_prior_v2_temporal_proof(
+        source_root,
+        dataset_root,
+        &frame,
+        &exclusions,
+        &selection,
+        &proof,
+    )
+    .unwrap();
+    let mut tampered = proof.clone();
+    tampered.latest_witness_utc = "2026-01-01T00:00:00Z".to_string();
+    assert!(
+        validate_frozen_historical_v3_prior_v2_temporal_proof(
+            source_root,
+            dataset_root,
+            &frame,
+            &exclusions,
+            &selection,
+            &tampered,
+        )
+        .unwrap_err()
+        .contains("does not replay")
     );
 }
