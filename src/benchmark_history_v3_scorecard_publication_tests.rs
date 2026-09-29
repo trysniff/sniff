@@ -6,6 +6,14 @@ const RESPONSE: &[u8] =
 const FRAME_BLOB: &str = "01e0927123bd7e8ffcf2ec313ccf1404fe4c5229";
 
 #[test]
+fn git_blob_oid_uses_the_git_object_header() {
+    assert_eq!(
+        git_blob_oid(b""),
+        "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
+    );
+}
+
+#[test]
 fn pinned_source_capture_is_before_cutoff_and_matches_policy() {
     assert_eq!(sha256(POLICY), POLICY_SHA256);
     assert_eq!(sha256(RESPONSE), RESPONSE_SHA256);

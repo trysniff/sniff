@@ -15,8 +15,9 @@ const EVENT_NODE: &str = "HRFPE_lADOEgpjzc71xS6ZzwAAAAbIjjfd";
 const SCORECARD_PUBLICATION_CONTRACT: &str =
     "sniffbench-historical-v3-scorecard-frame-publication-v1";
 
-// Reproduce the captured response against https://api.github.com/graphql.
-pub const SCORECARD_PUBLICATION_QUERY: &str = "query={ node(id:\"HRFPE_lADOEgpjzc71xS6ZzwAAAAbIjjfd\") { ... on HeadRefForcePushedEvent { id createdAt afterCommit { oid } pullRequest { number repository { nameWithOwner } } } } repository(owner:\"ossf\", name:\"scorecard\") { object(expression:\"61aa2b50d672f3da8e52bfd5dd9f1b77532a7752:cron/internal/data/projects.csv\") { oid } } }";
+// Reproduce this query against https://api.github.com/graphql.
+pub const SCORECARD_PUBLICATION_QUERY: &str =
+    include_str!("benchmark_assets/historical-v3-scorecard-publication.graphql");
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
