@@ -393,6 +393,34 @@ sniff benchmark validate-historical-v2-corpus \
 All review, release-evidence, and corpus commands are fully offline and never
 contact a model provider.
 
+### Prior-name observation replay
+
+`sniffbench-prior-name-audit` checks the internal consistency of saved
+repository-name lookup checkpoints without contacting GitHub or a model. It
+derives the frozen historical-v3 prior name seal from the exact historical-v2
+source root and frame artifacts, then requires one bounded checkpoint for
+every sealed name. Missing, extra, duplicate, symlinked, or inconsistent
+checkpoints fail the replay.
+
+```console
+cargo run --locked --features sniffbench-prior-name-audit --bin sniffbench-prior-name-audit -- \
+  --artifact-root EXACT_HISTORICAL_V2_SOURCE_ROOT \
+  --frame FROZEN_FRAME/frame.json \
+  --exclusions FROZEN_FRAME/exclusions.json \
+  --selection FROZEN_FRAME/selection.json \
+  --observation FIRST_CHECKPOINT_DIRECTORY \
+  --observation SECOND_CHECKPOINT_DIRECTORY \
+  --output NEW_PRIOR_NAME_AUDIT.json
+```
+
+The new SHA-256-committed ledger records only what each saved response
+reported: a pre-cutoff repository ID, a post-cutoff ID, or a 404. The
+checkpoints do not establish when the responses were captured, and GitHub
+did not cryptographically sign them. Replay proves internal consistency,
+not provider authenticity or a historical repository identity. A name may
+have been renamed, deleted, or reused, so this ledger cannot repair the
+frozen name-only seal or authorize an official post-August-7 score.
+
 ## Non-blind real evidence
 
 Historical simplifications, research trajectories, and intentional clean
