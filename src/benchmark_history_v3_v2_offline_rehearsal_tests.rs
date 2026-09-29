@@ -57,6 +57,16 @@ impl HistoricalV3CandidatePageTransport for LocalCandidateTransport {
 
 #[tokio::test]
 async fn replayed_v2_frame_reaches_sealed_review_but_not_unproven_stop() {
+    rehearse_v2_source_to_review(false).await;
+}
+
+#[tokio::test]
+#[ignore = "requires the installed pinned Rust semantic indexer"]
+async fn replayed_v2_frame_reaches_review_with_pinned_rust_provider() {
+    rehearse_v2_source_to_review(true).await;
+}
+
+async fn rehearse_v2_source_to_review(real_semantic_indexer: bool) {
     use super::history_v3_agent_review::tests::{PROMPT, response, reviewer};
     use super::history_v3_census_v2_binding::tests::fixture as census_fixture;
     use super::history_v3_label_review::tests::{PassingExecutor, decision_for_methods};
@@ -136,14 +146,52 @@ async fn replayed_v2_frame_reaches_sealed_review_but_not_unproven_stop() {
 
     let journal_root = tempfile::tempdir().unwrap();
     let workspace = tempfile::tempdir().unwrap();
-    prepare_qualified_rank(
-        &protocol,
-        &collection,
-        &git,
-        journal_root.path(),
-        workspace.path(),
-    )
-    .await;
+    if real_semantic_indexer {
+        semantic_fixture::prepare_rank(
+            &protocol,
+            &collection,
+            &git,
+            journal_root.path(),
+            workspace.path(),
+        );
+        let semantic = run_historical_v3_semantic_census_stage(
+            &protocol,
+            &collection,
+            1,
+            journal_root.path(),
+            workspace.path(),
+        )
+        .await
+        .unwrap();
+        let HistoricalV3SemanticCensusStageRun::Completed {
+            artifact,
+            resumed: false,
+        } = semantic
+        else {
+            panic!("pinned Rust indexer must complete both v2 candidate snapshots");
+        };
+        assert!(artifact.base.semantic_census.resolved_method_count > 0);
+        assert!(artifact.merge.semantic_census.resolved_method_count > 0);
+        assert!(matches!(
+            run_historical_v3_mechanical_qualification_stage(
+                &protocol,
+                &collection,
+                1,
+                journal_root.path(),
+            )
+            .unwrap(),
+            HistoricalV3MechanicalQualificationStageRun::Qualified { resumed: false, .. }
+        ));
+    } else {
+        prepare_qualified_rank(
+            &protocol,
+            &collection,
+            &git,
+            journal_root.path(),
+            workspace.path(),
+        )
+        .await;
+    }
     run_historical_v3_test_recipe_stage(&protocol, &collection, 1, journal_root.path()).unwrap();
     run_historical_v3_identical_tests_stage(
         &protocol,
