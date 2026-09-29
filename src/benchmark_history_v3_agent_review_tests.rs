@@ -28,6 +28,33 @@ pub(crate) async fn agent_fixture() -> super::super::history_v3_label_review::te
     .await
 }
 
+#[tokio::test]
+async fn census_v2_protocol_accepts_sealed_source_only_agent_review() {
+    let (_root, _manifest, _prior, mut protocol) =
+        super::super::history_v3_census_v2_binding::tests::fixture();
+    protocol
+        .model_review_policy
+        .as_mut()
+        .unwrap()
+        .approved_prompt_sha256 = sha256(PROMPT);
+    let protocol = super::super::seal_historical_v3_protocol(protocol).unwrap();
+    let fixture = review_fixture_with_protocol(move |_| protocol).await;
+    let assignment = assignment(&fixture);
+    let decision = decision_for_methods(&fixture.bundle.methods, HistoricalV3ReviewerVerdict::Slop);
+    let submission = seal_historical_v3_agent_review(
+        &fixture.inputs(),
+        &fixture.bundle,
+        PROMPT,
+        response(
+            reviewer(&assignment.agent_ids[0], "v9-offline-review"),
+            decision,
+        ),
+    )
+    .unwrap();
+    validate_historical_v3_agent_review(&fixture.inputs(), &fixture.bundle, PROMPT, &submission)
+        .unwrap();
+}
+
 pub(crate) fn response(
     reviewer: HistoricalV3AgentReviewer,
     decision: HistoricalV3ReviewDecision,
