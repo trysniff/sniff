@@ -265,6 +265,42 @@ pub(crate) async fn prepare_semantic_rank_at(
 }
 
 #[tokio::test]
+#[ignore = "requires the installed pinned Rust semantic indexer"]
+async fn pinned_rust_provider_completes_v9_semantic_stage() {
+    let (_source_root, _manifest, _prior, protocol) =
+        super::super::history_v3_census_v2_binding::tests::fixture();
+    let git = fixture();
+    let collection = collection(&protocol, &git);
+    let journal = tempfile::tempdir().unwrap();
+    let workspace = tempfile::tempdir().unwrap();
+    prepare_rank(
+        &protocol,
+        &collection,
+        &git,
+        journal.path(),
+        workspace.path(),
+    );
+    let outcome = super::super::run_historical_v3_semantic_census_stage(
+        &protocol,
+        &collection,
+        1,
+        journal.path(),
+        workspace.path(),
+    )
+    .await
+    .unwrap();
+    let HistoricalV3SemanticCensusStageRun::Completed {
+        artifact,
+        resumed: false,
+    } = outcome
+    else {
+        panic!("pinned Rust indexer must complete both v9 snapshots");
+    };
+    assert!(artifact.base.semantic_census.resolved_method_count > 0);
+    assert!(artifact.merge.semantic_census.resolved_method_count > 0);
+}
+
+#[tokio::test]
 async fn commits_surface_and_resumes_without_git_or_indexers() {
     let fixture = fixture();
     let protocol = protocol();
