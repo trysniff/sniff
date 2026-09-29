@@ -479,6 +479,7 @@ pub use release::{
 pub use release::{
     HISTORICAL_V3_MODEL_PROTOCOL_SCHEMA_VERSION, HISTORICAL_V3_PROTOCOL_SCHEMA_VERSION,
     HISTORICAL_V3_PUBLIC_ID_CENSUS_PROTOCOL_SCHEMA_VERSION,
+    HISTORICAL_V3_PUBLIC_ID_CENSUS_V2_PROTOCOL_SCHEMA_VERSION,
     HISTORICAL_V3_STREAM_TASK_SCHEMA_VERSION, HistoricalV3AllowedMetadataField,
     HistoricalV3CandidateIdentity, HistoricalV3CandidateTask, HistoricalV3CandidateWindow,
     HistoricalV3ForbiddenMetadataField, HistoricalV3HumanReviewPolicy,
@@ -514,12 +515,13 @@ pub use release::{
 pub use release::{
     HISTORICAL_V3_PRIOR_IDENTITY_SEAL_SCHEMA_VERSION,
     HISTORICAL_V3_PUBLIC_ID_CENSUS_AUDIT_SCHEMA_VERSION,
+    HISTORICAL_V3_PUBLIC_ID_CENSUS_V2_AUDIT_SCHEMA_VERSION,
     HISTORICAL_V3_SOURCE_BINDING_AUDIT_SCHEMA_VERSION, HistoricalV3BoundSourceFrame,
     HistoricalV3PriorArtifactBinding, HistoricalV3PriorBenchmarkIdentitySeal,
-    HistoricalV3SourceBindingAudit, HistoricalV3SourceFrameArtifact,
-    bind_historical_v3_source_frames, derive_frozen_historical_v3_prior_identity_seal,
-    prepare_historical_v3_prior_identity_seal, validate_historical_v3_prior_identity_seal,
-    validate_historical_v3_source_binding_audit,
+    HistoricalV3ResolvablePopulationAudit, HistoricalV3SourceBindingAudit,
+    HistoricalV3SourceFrameArtifact, bind_historical_v3_source_frames,
+    derive_frozen_historical_v3_prior_identity_seal, prepare_historical_v3_prior_identity_seal,
+    validate_historical_v3_prior_identity_seal, validate_historical_v3_source_binding_audit,
 };
 
 pub use release::{
@@ -531,6 +533,11 @@ pub use release::{
 pub use release::{
     HistoricalV3PublicIdCensusArtifact, bind_historical_v3_public_id_census_frames,
     validate_historical_v3_public_id_census_audit,
+};
+
+pub use release::{
+    HistoricalV3PublicIdCensusV2Artifact, bind_historical_v3_public_id_census_v2_frames,
+    validate_historical_v3_public_id_census_v2_audit,
 };
 
 pub use release::{

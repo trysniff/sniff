@@ -18,6 +18,9 @@ mod manifest;
 
 pub use manifest::*;
 
+#[cfg(test)]
+pub(crate) use manifest::tests::six_language_fixture as six_language_census_v2_fixture;
+
 #[path = "benchmark_public_id_census_v2_preflight.rs"]
 mod preflight;
 

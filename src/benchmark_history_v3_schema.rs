@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 pub const HISTORICAL_V3_PROTOCOL_SCHEMA_VERSION: u32 = 6;
 pub const HISTORICAL_V3_MODEL_PROTOCOL_SCHEMA_VERSION: u32 = 7;
 pub const HISTORICAL_V3_PUBLIC_ID_CENSUS_PROTOCOL_SCHEMA_VERSION: u32 = 8;
+pub const HISTORICAL_V3_PUBLIC_ID_CENSUS_V2_PROTOCOL_SCHEMA_VERSION: u32 = 9;
 pub const HISTORICAL_V3_REPOSITORY_CREATED_AFTER_UTC: &str = "2026-08-07T20:46:11Z";
 pub const HISTORICAL_V3_STREAM_TASK_SCHEMA_VERSION: u32 = 1;
 
@@ -32,6 +33,7 @@ impl HistoricalV3Language {
 #[serde(rename_all = "snake_case")]
 pub enum HistoricalV3SourceKind {
     PublicIdCensus,
+    PublicIdCensusV2,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

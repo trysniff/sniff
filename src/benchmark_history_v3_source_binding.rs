@@ -157,6 +157,7 @@ pub fn bind_historical_v3_source_frames(
         prior_benchmark_identity_seal_sha256: prior_identities.seal_sha256.clone(),
         source_kind: None,
         source_manifest_sha256: None,
+        resolvable_population: None,
         frames,
         audit_sha256: String::new(),
     };
@@ -184,6 +185,7 @@ pub fn validate_historical_v3_source_binding_audit(
         || audit.prior_benchmark_identity_seal_sha256 != prior_identities.seal_sha256
         || audit.source_kind.is_some()
         || audit.source_manifest_sha256.is_some()
+        || audit.resolvable_population.is_some()
         || audit.frames.len() != protocol.languages.len()
         || audit.audit_sha256 != compute_source_binding_audit_sha256(audit)?
     {

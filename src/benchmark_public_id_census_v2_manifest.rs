@@ -578,4 +578,4 @@ fn require_sha256(value: &str) -> Result<(), String> {
 
 #[cfg(test)]
 #[path = "benchmark_public_id_census_v2_manifest_tests.rs"]
-mod tests;
+pub(crate) mod tests;
