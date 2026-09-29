@@ -1,4 +1,8 @@
-use super::super::{read_public_id_census_artifact, validate_historical_v3_public_id_census_audit};
+use super::super::{
+    PublicIdCensusFrameCommitment, read_public_id_census_artifact,
+    validate_historical_v3_public_id_census_audit,
+    validate_historical_v3_public_id_census_v2_audit,
+};
 use super::{
     CandidateSource, HistoricalV3CandidatePartition, HistoricalV3CandidateRepository,
     HistoricalV3PriorBenchmarkIdentitySeal, HistoricalV3Protocol, HistoricalV3SourceBindingAudit,
@@ -9,6 +13,7 @@ use super::{
 use sha2::{Digest, Sha256};
 use std::borrow::Cow;
 use std::collections::{HashSet, VecDeque};
+use std::path::Path;
 
 const MAX_FRAME_BYTES: u64 = 512 * 1024 * 1024;
 
@@ -38,25 +43,16 @@ pub(super) fn candidate_repositories(
                 census,
                 source_binding_audit,
             )?;
-            census
-                .manifest
-                .frames
-                .iter()
-                .map(|frame| {
-                    let bytes = read_public_id_census_artifact(
-                        census.artifact_root,
-                        &frame.artifact_path,
-                        MAX_FRAME_BYTES,
-                    )?;
-                    if format!("{:x}", Sha256::digest(&bytes)) != frame.artifact_sha256 {
-                        return Err(
-                            "historical-v3 census frame changed during candidate loading"
-                                .to_string(),
-                        );
-                    }
-                    Ok(Cow::Owned(bytes))
-                })
-                .collect::<Result<Vec<_>, String>>()?
+            census_frame_bytes(census.artifact_root, &census.manifest.frames)?
+        }
+        CandidateSource::PublicIdCensusV2(census) => {
+            validate_historical_v3_public_id_census_v2_audit(
+                protocol,
+                prior_identities,
+                census,
+                source_binding_audit,
+            )?;
+            census_frame_bytes(census.artifact_root, &census.manifest.frames)?
         }
     };
     let excluded = prior_identities
@@ -85,6 +81,28 @@ pub(super) fn candidate_repositories(
         return Err("historical-v3 candidate repository census is empty".to_string());
     }
     Ok(repositories)
+}
+
+fn census_frame_bytes(
+    artifact_root: &Path,
+    frames: &[PublicIdCensusFrameCommitment],
+) -> Result<Vec<Cow<'static, [u8]>>, String> {
+    frames
+        .iter()
+        .map(|frame| {
+            let bytes = read_public_id_census_artifact(
+                artifact_root,
+                &frame.artifact_path,
+                MAX_FRAME_BYTES,
+            )?;
+            if format!("{:x}", Sha256::digest(&bytes)) != frame.artifact_sha256 {
+                return Err(
+                    "historical-v3 census frame changed during candidate loading".to_string(),
+                );
+            }
+            Ok(Cow::Owned(bytes))
+        })
+        .collect()
 }
 
 pub(super) fn initial_partitions(

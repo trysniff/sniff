@@ -4,7 +4,7 @@ use crate::benchmark::release::public_id_census_v2::six_language_census_v2_fixtu
 use crate::benchmark::release::seal_historical_v3_protocol;
 use std::fs;
 
-fn fixture() -> (
+pub(crate) fn fixture() -> (
     tempfile::TempDir,
     PublicIdCensusV2Manifest,
     HistoricalV3PriorBenchmarkIdentitySeal,

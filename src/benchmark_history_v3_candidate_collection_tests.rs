@@ -804,6 +804,127 @@ async fn census_collection_replays_one_manifest_and_rejects_search_dispatch() {
 }
 
 #[tokio::test]
+async fn census_v2_candidate_collection_replays_and_rejects_other_sources() {
+    use super::super::history_v3_census_binding::tests::fixture as v1_fixture;
+    use super::super::history_v3_census_binding::{
+        HistoricalV3PublicIdCensusArtifact, bind_historical_v3_public_id_census_frames,
+    };
+    use super::super::history_v3_census_v2_binding::tests::fixture;
+    use super::super::history_v3_census_v2_binding::{
+        HistoricalV3PublicIdCensusV2Artifact, bind_historical_v3_public_id_census_v2_frames,
+    };
+
+    let (root, manifest, prior, protocol) = fixture();
+    let census = HistoricalV3PublicIdCensusV2Artifact {
+        manifest: &manifest,
+        artifact_root: root.path(),
+    };
+    let audit = bind_historical_v3_public_id_census_v2_frames(&protocol, &prior, &census).unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let mut transport = CollectionTransport {
+        calls: 0,
+        split_root: false,
+    };
+    let collection = collect_historical_v3_candidates_from_census_v2(
+        &protocol,
+        &prior,
+        &census,
+        &audit,
+        state.path(),
+        &mut transport,
+    )
+    .await
+    .unwrap();
+    assert_eq!(transport.calls, 7);
+    assert_eq!(collection.manifest.repositories.len(), 6);
+    validate_historical_v3_candidate_collection_from_census_v2(
+        &protocol,
+        &prior,
+        &census,
+        &audit,
+        state.path(),
+        &collection,
+    )
+    .unwrap();
+    assert!(
+        validate_historical_v3_candidate_collection(
+            &protocol,
+            &prior,
+            &[],
+            &audit,
+            state.path(),
+            &collection,
+        )
+        .is_err()
+    );
+    let (v1_root, v1_manifest, v1_prior, v1_protocol) = v1_fixture();
+    let v1_census = HistoricalV3PublicIdCensusArtifact {
+        manifest: &v1_manifest,
+        artifact_root: v1_root.path(),
+    };
+    let v1_audit =
+        bind_historical_v3_public_id_census_frames(&v1_protocol, &v1_prior, &v1_census).unwrap();
+    assert!(
+        validate_historical_v3_candidate_collection_from_census(
+            &protocol,
+            &prior,
+            &v1_census,
+            &audit,
+            state.path(),
+            &collection,
+        )
+        .is_err()
+    );
+    assert!(
+        validate_historical_v3_candidate_collection_from_census_v2(
+            &v1_protocol,
+            &v1_prior,
+            &census,
+            &v1_audit,
+            state.path(),
+            &collection,
+        )
+        .is_err()
+    );
+
+    let path = state.path().join("candidate-v2-manifest.json");
+    write_historical_v3_candidate_collection_manifest_new_from_census_v2(
+        &path,
+        &protocol,
+        &prior,
+        &census,
+        &audit,
+        state.path(),
+        &collection,
+    )
+    .unwrap();
+    assert_eq!(
+        read_historical_v3_candidate_collection_manifest_from_census_v2(
+            &path,
+            &protocol,
+            &prior,
+            &census,
+            &audit,
+            state.path(),
+        )
+        .unwrap(),
+        collection
+    );
+    std::fs::write(root.path().join(&manifest.null_ledger_artifact_path), b"{}").unwrap();
+    assert!(
+        read_historical_v3_candidate_collection_manifest_from_census_v2(
+            &path,
+            &protocol,
+            &prior,
+            &census,
+            &audit,
+            state.path(),
+        )
+        .is_err()
+    );
+}
+
+#[tokio::test]
 async fn full_collection_commits_and_replays_the_split_tree() {
     use super::super::history_v3_source_binding::tests as source_fixture;
 
