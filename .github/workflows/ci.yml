@@ -195,6 +195,9 @@ jobs:
             benchmark::release::history_v3_semantic_census::tests::pinned_rust_provider_completes_v9_semantic_stage \
             -- --exact --ignored --test-threads=1 --nocapture
           cargo test --lib --locked \
+            benchmark::release::history_v3_v2_offline_rehearsal_tests::replayed_v2_frame_reaches_review_with_pinned_rust_provider \
+            -- --exact --ignored --test-threads=1 --nocapture
+          cargo test --lib --locked \
             semantic_indexer_installer::scip_typescript_patch::tests::patched_provider_emits_exact_public_overload_signatures \
             -- --exact --ignored --test-threads=1 --nocapture
           cargo test --lib --locked \
