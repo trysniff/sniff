@@ -72,6 +72,9 @@ within the **resolvable subset** still depends on GitHub's documented
 creation ordering for the REST list, including IDs whose metadata is null.
 The list is not an atomic snapshot. A distinct downstream protocol must bind
 v2's policy hash, manifest, and frame IDs before candidate collection.
+The v9 source binder records `name_only_unproven` for its prior-cohort filter;
+its frame counts are not ID-level disjointness evidence. Candidate collection
+and operator precommit must be wired separately before a v9 run is possible.
 
 Prior-cohort identity and pre-cutoff evidence are a separate scoring gate.
 This source policy alone cannot make any agent judgment a human gold label or

@@ -43,6 +43,10 @@ fn binds_replayed_resolvable_population_with_null_ledger() {
     assert_eq!(population.crawled_null_count, 1);
     assert_eq!(population.probe_only_null_count, 0);
     assert_eq!(population.resolved_in_window_count, 6);
+    assert_eq!(
+        audit.prior_identity_proof_status,
+        Some(HistoricalV3PriorIdentityProofStatus::NameOnlyUnproven)
+    );
     validate_historical_v3_public_id_census_v2_audit(&protocol, &prior, &artifact, &audit).unwrap();
 }
 
@@ -79,6 +83,13 @@ fn rejects_v1_source_and_mutated_population_or_frame_commitments() {
         .as_mut()
         .unwrap()
         .crawled_null_count = 0;
+    assert!(
+        validate_historical_v3_public_id_census_v2_audit(&protocol, &prior, &artifact, &audit)
+            .is_err()
+    );
+    let mut audit =
+        bind_historical_v3_public_id_census_v2_frames(&protocol, &prior, &artifact).unwrap();
+    audit.prior_identity_proof_status = None;
     assert!(
         validate_historical_v3_public_id_census_v2_audit(&protocol, &prior, &artifact, &audit)
             .is_err()

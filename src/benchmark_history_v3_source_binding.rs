@@ -158,6 +158,7 @@ pub fn bind_historical_v3_source_frames(
         source_kind: None,
         source_manifest_sha256: None,
         resolvable_population: None,
+        prior_identity_proof_status: None,
         frames,
         audit_sha256: String::new(),
     };
@@ -186,6 +187,7 @@ pub fn validate_historical_v3_source_binding_audit(
         || audit.source_kind.is_some()
         || audit.source_manifest_sha256.is_some()
         || audit.resolvable_population.is_some()
+        || audit.prior_identity_proof_status.is_some()
         || audit.frames.len() != protocol.languages.len()
         || audit.audit_sha256 != compute_source_binding_audit_sha256(audit)?
     {

@@ -30,6 +30,7 @@ pub struct HistoricalV3BoundSourceFrame {
     pub language: HistoricalV3Language,
     pub frame_id: String,
     pub repository_count: usize,
+    /// Eligible under the supplied prior-name seal, not proven disjoint by repository ID.
     pub eligible_repository_count: usize,
     pub excluded_prior_repository_count: usize,
     pub eligible_repositories_sha256: String,
@@ -47,6 +48,12 @@ pub struct HistoricalV3ResolvablePopulationAudit {
     pub null_ledger_artifact_sha256: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HistoricalV3PriorIdentityProofStatus {
+    NameOnlyUnproven,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HistoricalV3SourceBindingAudit {
@@ -60,6 +67,8 @@ pub struct HistoricalV3SourceBindingAudit {
     pub source_manifest_sha256: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resolvable_population: Option<HistoricalV3ResolvablePopulationAudit>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prior_identity_proof_status: Option<HistoricalV3PriorIdentityProofStatus>,
     pub frames: Vec<HistoricalV3BoundSourceFrame>,
     pub audit_sha256: String,
 }

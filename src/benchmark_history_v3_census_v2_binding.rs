@@ -1,7 +1,8 @@
 use super::{
     HISTORICAL_V3_PUBLIC_ID_CENSUS_V2_AUDIT_SCHEMA_VERSION,
     HISTORICAL_V3_PUBLIC_ID_CENSUS_V2_PROTOCOL_SCHEMA_VERSION, HistoricalV3BoundSourceFrame,
-    HistoricalV3Language, HistoricalV3PriorBenchmarkIdentitySeal, HistoricalV3Protocol,
+    HistoricalV3Language, HistoricalV3PriorBenchmarkIdentitySeal,
+    HistoricalV3PriorIdentityProofStatus, HistoricalV3Protocol,
     HistoricalV3ResolvablePopulationAudit, HistoricalV3SourceBindingAudit, HistoricalV3SourceKind,
     PublicIdCensusV2Manifest, parse_historical_v3_source_frame, read_public_id_census_artifact,
     validate_historical_v3_prior_identity_seal, validate_historical_v3_protocol,
@@ -114,6 +115,7 @@ pub fn bind_historical_v3_public_id_census_v2_frames(
             name_disagreement_count: manifest.name_disagreement_count,
             null_ledger_artifact_sha256: manifest.null_ledger_artifact_sha256.clone(),
         }),
+        prior_identity_proof_status: Some(HistoricalV3PriorIdentityProofStatus::NameOnlyUnproven),
         frames,
         audit_sha256: String::new(),
     };
@@ -133,6 +135,8 @@ pub fn validate_historical_v3_public_id_census_v2_audit(
         || audit.source_manifest_sha256.as_deref()
             != Some(artifact.manifest.manifest_sha256.as_str())
         || audit.resolvable_population.is_none()
+        || audit.prior_identity_proof_status
+            != Some(HistoricalV3PriorIdentityProofStatus::NameOnlyUnproven)
         || audit.audit_sha256 != audit_sha256(audit)?
     {
         return Err("historical-v3 census v2 binding audit changed".to_string());
@@ -154,6 +158,7 @@ fn audit_sha256(audit: &HistoricalV3SourceBindingAudit) -> Result<String, String
         audit.source_kind,
         &audit.source_manifest_sha256,
         &audit.resolvable_population,
+        audit.prior_identity_proof_status,
         &audit.frames,
     ))
 }
