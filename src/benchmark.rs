@@ -549,14 +549,18 @@ pub use release::{
     HistoricalV3CandidatePageRequest, HistoricalV3CandidatePageTransport,
     HistoricalV3CandidatePartition, HistoricalV3CandidatePartitionRecord,
     HistoricalV3CandidateRepository, collect_historical_v3_candidates,
-    collect_historical_v3_candidates_from_census, read_historical_v3_candidate_collection_manifest,
+    collect_historical_v3_candidates_from_census, collect_historical_v3_candidates_from_census_v2,
+    read_historical_v3_candidate_collection_manifest,
     read_historical_v3_candidate_collection_manifest_from_census,
+    read_historical_v3_candidate_collection_manifest_from_census_v2,
     validate_historical_v3_candidate_collection,
     validate_historical_v3_candidate_collection_commitment,
     validate_historical_v3_candidate_collection_from_census,
+    validate_historical_v3_candidate_collection_from_census_v2,
     validate_historical_v3_candidate_manifest_commitment,
     write_historical_v3_candidate_collection_manifest_new,
     write_historical_v3_candidate_collection_manifest_new_from_census,
+    write_historical_v3_candidate_collection_manifest_new_from_census_v2,
 };
 
 pub use release::{

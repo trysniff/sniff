@@ -4,9 +4,9 @@ use super::super::history_v2_slot_store_support::{
 use super::{
     CandidateSource, HistoricalV3CandidateCollection, HistoricalV3CandidateCollectionManifest,
     HistoricalV3CandidatePartitionRecord, HistoricalV3PriorBenchmarkIdentitySeal,
-    HistoricalV3Protocol, HistoricalV3PublicIdCensusArtifact, HistoricalV3SourceBindingAudit,
-    HistoricalV3SourceFrameArtifact, decode_page, read_committed_page_checkpoint,
-    validate_collection_with_source, validate_manifest_fields,
+    HistoricalV3Protocol, HistoricalV3PublicIdCensusArtifact, HistoricalV3PublicIdCensusV2Artifact,
+    HistoricalV3SourceBindingAudit, HistoricalV3SourceFrameArtifact, decode_page,
+    read_committed_page_checkpoint, validate_collection_with_source, validate_manifest_fields,
 };
 use std::ffi::OsString;
 use std::fs;
@@ -48,6 +48,26 @@ pub fn write_historical_v3_candidate_collection_manifest_new_from_census(
         protocol,
         prior_identities,
         CandidateSource::PublicIdCensus(census),
+        source_binding_audit,
+        state_root,
+        collection,
+    )
+}
+
+pub fn write_historical_v3_candidate_collection_manifest_new_from_census_v2(
+    path: &Path,
+    protocol: &HistoricalV3Protocol,
+    prior_identities: &HistoricalV3PriorBenchmarkIdentitySeal,
+    census: &HistoricalV3PublicIdCensusV2Artifact<'_>,
+    source_binding_audit: &HistoricalV3SourceBindingAudit,
+    state_root: &Path,
+    collection: &HistoricalV3CandidateCollection,
+) -> Result<(), String> {
+    write_with_source(
+        path,
+        protocol,
+        prior_identities,
+        CandidateSource::PublicIdCensusV2(census),
         source_binding_audit,
         state_root,
         collection,
@@ -154,6 +174,24 @@ pub fn read_historical_v3_candidate_collection_manifest_from_census(
         protocol,
         prior_identities,
         CandidateSource::PublicIdCensus(census),
+        source_binding_audit,
+        state_root,
+    )
+}
+
+pub fn read_historical_v3_candidate_collection_manifest_from_census_v2(
+    path: &Path,
+    protocol: &HistoricalV3Protocol,
+    prior_identities: &HistoricalV3PriorBenchmarkIdentitySeal,
+    census: &HistoricalV3PublicIdCensusV2Artifact<'_>,
+    source_binding_audit: &HistoricalV3SourceBindingAudit,
+    state_root: &Path,
+) -> Result<HistoricalV3CandidateCollection, String> {
+    read_with_source(
+        path,
+        protocol,
+        prior_identities,
+        CandidateSource::PublicIdCensusV2(census),
         source_binding_audit,
         state_root,
     )

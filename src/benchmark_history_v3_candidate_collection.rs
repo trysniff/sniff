@@ -38,6 +38,7 @@ use replay::validate_collection_with_source;
 pub use replay::{
     validate_historical_v3_candidate_collection,
     validate_historical_v3_candidate_collection_from_census,
+    validate_historical_v3_candidate_collection_from_census_v2,
 };
 
 #[path = "benchmark_history_v3_candidate_disk.rs"]
@@ -46,8 +47,10 @@ mod disk;
 pub use disk::{
     read_historical_v3_candidate_collection_manifest,
     read_historical_v3_candidate_collection_manifest_from_census,
+    read_historical_v3_candidate_collection_manifest_from_census_v2,
     write_historical_v3_candidate_collection_manifest_new,
     write_historical_v3_candidate_collection_manifest_new_from_census,
+    write_historical_v3_candidate_collection_manifest_new_from_census_v2,
 };
 
 use super::history_v3_source_binding::{
@@ -57,9 +60,9 @@ use super::history_v3_source_binding::{
 use super::history_v3_time::{format_utc_second, parse_utc_second, split_inclusive_utc_range};
 use super::{
     HistoricalV3CandidateIdentity, HistoricalV3Language, HistoricalV3PriorBenchmarkIdentitySeal,
-    HistoricalV3Protocol, HistoricalV3PublicIdCensusArtifact, HistoricalV3SourceBindingAudit,
-    HistoricalV3StreamTask, prepare_historical_v3_stream_task, validate_historical_v3_protocol,
-    validate_historical_v3_stream_task,
+    HistoricalV3Protocol, HistoricalV3PublicIdCensusArtifact, HistoricalV3PublicIdCensusV2Artifact,
+    HistoricalV3SourceBindingAudit, HistoricalV3StreamTask, prepare_historical_v3_stream_task,
+    validate_historical_v3_protocol, validate_historical_v3_stream_task,
 };
 use std::collections::HashSet;
 use std::path::Path;
@@ -76,6 +79,7 @@ const PAGE_SIZE: usize = 100;
 pub(super) enum CandidateSource<'a> {
     Search(&'a [HistoricalV3SourceFrameArtifact<'a>]),
     PublicIdCensus(&'a HistoricalV3PublicIdCensusArtifact<'a>),
+    PublicIdCensusV2(&'a HistoricalV3PublicIdCensusV2Artifact<'a>),
 }
 
 #[cfg(test)]
@@ -114,6 +118,27 @@ pub async fn collect_historical_v3_candidates_from_census<T: HistoricalV3Candida
         protocol,
         prior_identities,
         CandidateSource::PublicIdCensus(census),
+        source_binding_audit,
+        state_root,
+        transport,
+    )
+    .await
+}
+
+pub async fn collect_historical_v3_candidates_from_census_v2<
+    T: HistoricalV3CandidatePageTransport,
+>(
+    protocol: &HistoricalV3Protocol,
+    prior_identities: &HistoricalV3PriorBenchmarkIdentitySeal,
+    census: &HistoricalV3PublicIdCensusV2Artifact<'_>,
+    source_binding_audit: &HistoricalV3SourceBindingAudit,
+    state_root: &Path,
+    transport: &mut T,
+) -> Result<HistoricalV3CandidateCollection, String> {
+    collect_with_source(
+        protocol,
+        prior_identities,
+        CandidateSource::PublicIdCensusV2(census),
         source_binding_audit,
         state_root,
         transport,

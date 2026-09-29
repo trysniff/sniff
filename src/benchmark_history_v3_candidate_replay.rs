@@ -3,11 +3,11 @@ use super::{
     HistoricalV3CandidateCollection, HistoricalV3CandidateIdentity,
     HistoricalV3CandidatePageRequest, HistoricalV3CandidatePartition,
     HistoricalV3CandidatePartitionRecord, HistoricalV3PriorBenchmarkIdentitySeal,
-    HistoricalV3Protocol, HistoricalV3PublicIdCensusArtifact, HistoricalV3SourceBindingAudit,
-    HistoricalV3SourceFrameArtifact, MAX_SEARCH_RESULTS, PAGE_SIZE, REQUEST_CONTRACT,
-    candidate_repositories, decode_page, initial_partitions, prepare_historical_v3_stream_task,
-    read_committed_page_checkpoint, seal_page_request, split_partition, validate_manifest_fields,
-    validate_page_checkpoint,
+    HistoricalV3Protocol, HistoricalV3PublicIdCensusArtifact, HistoricalV3PublicIdCensusV2Artifact,
+    HistoricalV3SourceBindingAudit, HistoricalV3SourceFrameArtifact, MAX_SEARCH_RESULTS, PAGE_SIZE,
+    REQUEST_CONTRACT, candidate_repositories, decode_page, initial_partitions,
+    prepare_historical_v3_stream_task, read_committed_page_checkpoint, seal_page_request,
+    split_partition, validate_manifest_fields, validate_page_checkpoint,
 };
 use std::collections::HashSet;
 use std::path::Path;
@@ -49,6 +49,24 @@ pub fn validate_historical_v3_candidate_collection_from_census(
         protocol,
         prior_identities,
         CandidateSource::PublicIdCensus(census),
+        source_binding_audit,
+        state_root,
+        collection,
+    )
+}
+
+pub fn validate_historical_v3_candidate_collection_from_census_v2(
+    protocol: &HistoricalV3Protocol,
+    prior_identities: &HistoricalV3PriorBenchmarkIdentitySeal,
+    census: &HistoricalV3PublicIdCensusV2Artifact<'_>,
+    source_binding_audit: &HistoricalV3SourceBindingAudit,
+    state_root: &Path,
+    collection: &HistoricalV3CandidateCollection,
+) -> Result<(), String> {
+    validate_collection_with_source(
+        protocol,
+        prior_identities,
+        CandidateSource::PublicIdCensusV2(census),
         source_binding_audit,
         state_root,
         collection,
