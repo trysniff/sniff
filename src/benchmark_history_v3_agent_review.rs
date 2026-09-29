@@ -379,8 +379,9 @@ pub fn validate_historical_v3_agent_review(
         inputs.protocol.schema_version,
         super::HISTORICAL_V3_MODEL_PROTOCOL_SCHEMA_VERSION
             | super::HISTORICAL_V3_PUBLIC_ID_CENSUS_PROTOCOL_SCHEMA_VERSION
+            | super::HISTORICAL_V3_PUBLIC_ID_CENSUS_V2_PROTOCOL_SCHEMA_VERSION
     ) {
-        return Err("historical-v3 agent review requires model protocol v7 or v8".to_string());
+        return Err("historical-v3 agent review requires model protocol v7, v8, or v9".to_string());
     }
     if sha256(prompt_bytes) != policy.approved_prompt_sha256 {
         return Err(
