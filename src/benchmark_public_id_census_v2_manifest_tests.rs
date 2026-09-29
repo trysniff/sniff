@@ -16,7 +16,7 @@ fn fixture() -> (TempDir, PublicIdCensusV2Manifest) {
     let contract_preflight = PublicIdCensusV2ContractPreflight {
         public_contract_url: format!(
             "https://raw.githubusercontent.com/trysniff/sniff/{}/sniffbench/historical-v3-id-census-v2/artifact-contract.json",
-            "a".repeat(40)
+            PUBLIC_ID_CENSUS_V2_ARTIFACT_CONTRACT_COMMIT_SHA
         ),
         fetched_contract_sha256: sha256(fetched_contract.as_bytes()),
         fetched_contract,

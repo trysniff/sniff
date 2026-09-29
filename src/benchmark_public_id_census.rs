@@ -14,10 +14,10 @@ pub(crate) use manifest::read_public_id_census_artifact;
 pub use manifest::*;
 
 #[path = "benchmark_public_id_census_lock.rs"]
-mod lock;
+pub(crate) mod lock;
 
 #[path = "benchmark_public_id_census_collector.rs"]
-mod collector;
+pub(crate) mod collector;
 
 pub use collector::*;
 

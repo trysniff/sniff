@@ -1,6 +1,8 @@
 use super::lock::CensusLock;
 use super::manifest::{MAX_RAW_EXCHANGE_BYTES, read_artifact};
-use super::replay::{replay_public_id_census_with_source, validate_exchange, validate_preflight};
+use super::replay::{
+    replay_public_id_census_with_source, validate_exchange_for_version, validate_preflight,
+};
 use super::{
     PUBLIC_ID_CENSUS_POLICY_COMMIT_SHA, PublicIdCensusExchange, PublicIdCensusFailedAttempt,
     PublicIdCensusManifest, PublicIdCensusPolicy, PublicIdCensusPreflight, PublicIdCensusRequest,
@@ -59,11 +61,11 @@ struct InFlightRequest {
     attempt_index: usize,
 }
 
-struct SourceRequest<'a> {
-    policy: &'a PublicIdCensusPolicy,
-    request: &'a PublicIdCensusRequest,
-    url: &'a str,
-    body: Option<&'a str>,
+pub(crate) struct SourceRequest<'a> {
+    pub(crate) api_version: &'a str,
+    pub(crate) request: &'a PublicIdCensusRequest,
+    pub(crate) url: &'a str,
+    pub(crate) body: Option<&'a str>,
 }
 
 pub fn collect_public_id_census<T: PublicIdCensusTransport>(
@@ -78,10 +80,7 @@ pub fn collect_public_id_census<T: PublicIdCensusTransport>(
         .map_err(|error| format!("failed to resolve public-ID census root: {error}"))?;
     let _lock = CensusLock::acquire(&root.join(".collector.lock"))?;
     let manifest_path = root.join("manifest.json");
-    if manifest_path
-        .try_exists()
-        .map_err(|error| error.to_string())?
-    {
+    if plain_file_exists(&manifest_path)? {
         let bytes = read_artifact(&root, "manifest.json", MAX_MANIFEST_BYTES)?;
         let manifest: PublicIdCensusManifest = serde_json::from_slice(&bytes)
             .map_err(|error| format!("invalid public-ID census manifest: {error}"))?;
@@ -122,12 +121,12 @@ pub fn collect_public_id_census<T: PublicIdCensusTransport>(
         let sequence = exchange_paths.len();
         let relative = format!("raw/{sequence:08}.json");
         let path = root.join(&relative);
-        let exchange = if path.try_exists().map_err(|error| error.to_string())? {
+        let exchange = if plain_file_exists(&path)? {
             let bytes = read_artifact(&root, &relative, MAX_RAW_EXCHANGE_BYTES)?;
             let exchange: PublicIdCensusExchange = serde_json::from_slice(&bytes)
                 .map_err(|error| format!("invalid public-ID census checkpoint: {error}"))?;
             finish_committed_request(
-                policy,
+                &policy.api_version,
                 &root,
                 sequence,
                 &request,
@@ -137,13 +136,20 @@ pub fn collect_public_id_census<T: PublicIdCensusTransport>(
             )?;
             exchange
         } else {
-            let failures = load_attempts(policy, &root, sequence, &request, &url, body.as_deref())?;
+            let failures = load_attempts(
+                &policy.api_version,
+                &root,
+                sequence,
+                &request,
+                &url,
+                body.as_deref(),
+            )?;
             let exchange = fetch_with_retries(
                 transport,
                 &root,
                 sequence,
                 SourceRequest {
-                    policy,
+                    api_version: &policy.api_version,
                     request: &request,
                     url: &url,
                     body: body.as_deref(),
@@ -158,7 +164,7 @@ pub fn collect_public_id_census<T: PublicIdCensusTransport>(
             }
             write_new(&path, &bytes)?;
             finish_committed_request(
-                policy,
+                &policy.api_version,
                 &root,
                 sequence,
                 &request,
@@ -253,8 +259,8 @@ fn inflight_path(root: &Path, sequence: usize) -> std::path::PathBuf {
     root.join(format!("attempts/{sequence:08}.inflight.json"))
 }
 
-fn load_attempts(
-    policy: &PublicIdCensusPolicy,
+pub(crate) fn load_attempts(
+    api_version: &str,
     root: &Path,
     sequence: usize,
     request: &PublicIdCensusRequest,
@@ -304,7 +310,7 @@ fn load_attempts(
         request: request.clone(),
         request_url: url.to_string(),
         request_body: body.map(str::to_string),
-        request_api_version: policy.api_version.clone(),
+        request_api_version: api_version.to_string(),
         response_status: 200,
         response_link: None,
         response_date: None,
@@ -313,7 +319,7 @@ fn load_attempts(
         response_sha256: sha256(b""),
         failed_attempts: failures.clone(),
     };
-    validate_exchange(&validation, policy)?;
+    validate_exchange_for_version(&validation, api_version)?;
     let marker_path = inflight_path(root, sequence);
     if marker_path
         .try_exists()
@@ -326,7 +332,7 @@ fn load_attempts(
         if marker.request != *request
             || marker.url != url
             || marker.body.as_deref() != body
-            || marker.api_version != policy.api_version
+            || marker.api_version != api_version
             || marker.attempt_index >= failures.len()
         {
             return Err("public-ID census request has an uncertain in-flight result".to_string());
@@ -336,8 +342,8 @@ fn load_attempts(
     Ok(failures)
 }
 
-fn finish_committed_request(
-    policy: &PublicIdCensusPolicy,
+pub(crate) fn finish_committed_request(
+    api_version: &str,
     root: &Path,
     sequence: usize,
     request: &PublicIdCensusRequest,
@@ -345,7 +351,7 @@ fn finish_committed_request(
     body: Option<&str>,
     exchange: &PublicIdCensusExchange,
 ) -> Result<(), String> {
-    validate_exchange(exchange, policy)?;
+    validate_exchange_for_version(exchange, api_version)?;
     if &exchange.request != request
         || exchange.request_url != url
         || exchange.request_body.as_deref() != body
@@ -394,7 +400,7 @@ fn finish_committed_request(
     Ok(())
 }
 
-fn fetch_with_retries<T: PublicIdCensusTransport>(
+pub(crate) fn fetch_with_retries<T: PublicIdCensusTransport>(
     transport: &mut T,
     root: &Path,
     sequence: usize,
@@ -402,7 +408,7 @@ fn fetch_with_retries<T: PublicIdCensusTransport>(
     mut failures: Vec<PublicIdCensusFailedAttempt>,
 ) -> Result<PublicIdCensusExchange, String> {
     let SourceRequest {
-        policy,
+        api_version,
         request,
         url,
         body,
@@ -415,14 +421,14 @@ fn fetch_with_retries<T: PublicIdCensusTransport>(
             request: request.clone(),
             url: url.to_string(),
             body: body.map(str::to_string),
-            api_version: policy.api_version.clone(),
+            api_version: api_version.to_string(),
             attempt_index: failures.len(),
         };
         let marker_path = inflight_path(root, sequence);
         let marker_bytes = serde_json::to_vec(&marker)
             .map_err(|error| format!("failed to encode public-ID census marker: {error}"))?;
         write_new(&marker_path, &marker_bytes)?;
-        let response = transport.fetch_exchange(request, url, body, &policy.api_version);
+        let response = transport.fetch_exchange(request, url, body, api_version);
         if response
             .as_ref()
             .is_ok_and(|response| response.body.len() as u64 > MAX_RAW_EXCHANGE_BYTES)
@@ -435,7 +441,7 @@ fn fetch_with_retries<T: PublicIdCensusTransport>(
                     request: request.clone(),
                     request_url: url.to_string(),
                     request_body: body.map(str::to_string),
-                    request_api_version: policy.api_version.clone(),
+                    request_api_version: api_version.to_string(),
                     response_status: 200,
                     response_link: response.link,
                     response_date: response.date,
@@ -450,7 +456,7 @@ fn fetch_with_retries<T: PublicIdCensusTransport>(
                     request: request.clone(),
                     request_url: url.to_string(),
                     request_body: body.map(str::to_string),
-                    request_api_version: policy.api_version.clone(),
+                    request_api_version: api_version.to_string(),
                     received_at_utc: response.received_at_utc,
                     response_status: Some(response.status),
                     response_sha256: Some(sha256(response.body.as_bytes())),
@@ -462,7 +468,7 @@ fn fetch_with_retries<T: PublicIdCensusTransport>(
                 request: request.clone(),
                 request_url: url.to_string(),
                 request_body: body.map(str::to_string),
-                request_api_version: policy.api_version.clone(),
+                request_api_version: api_version.to_string(),
                 received_at_utc: canonical_now_utc(),
                 response_status: None,
                 response_sha256: None,
@@ -499,7 +505,7 @@ fn canonical_now_utc() -> String {
     chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string()
 }
 
-fn ensure_exact_raw_files(raw_root: &Path, paths: &[String]) -> Result<(), String> {
+pub(crate) fn ensure_exact_raw_files(raw_root: &Path, paths: &[String]) -> Result<(), String> {
     let mut names = fs::read_dir(raw_root)
         .map_err(|error| format!("failed to list public-ID census raw directory: {error}"))?
         .map(|entry| {
@@ -522,7 +528,7 @@ fn ensure_exact_raw_files(raw_root: &Path, paths: &[String]) -> Result<(), Strin
     Ok(())
 }
 
-fn ensure_empty_attempt_directory(path: &Path) -> Result<(), String> {
+pub(crate) fn ensure_empty_attempt_directory(path: &Path) -> Result<(), String> {
     if fs::read_dir(path)
         .map_err(|error| format!("failed to list public-ID census attempts: {error}"))?
         .next()
@@ -533,7 +539,7 @@ fn ensure_empty_attempt_directory(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn cleanup_orphan_staging(path: &Path) -> Result<(), String> {
+pub(crate) fn cleanup_orphan_staging(path: &Path) -> Result<(), String> {
     for entry in fs::read_dir(path)
         .map_err(|error| format!("failed to list public-ID census staging directory: {error}"))?
     {
@@ -619,7 +625,7 @@ fn remove_known_file(path: &Path) -> Result<(), String> {
     )
 }
 
-fn write_new(path: &Path, bytes: &[u8]) -> Result<(), String> {
+pub(crate) fn write_new(path: &Path, bytes: &[u8]) -> Result<(), String> {
     let parent = path
         .parent()
         .ok_or("public-ID census artifact has no parent directory")?;
@@ -639,6 +645,21 @@ fn write_new(path: &Path, bytes: &[u8]) -> Result<(), String> {
         )
     })?;
     sync_directory(parent)
+}
+
+pub(crate) fn plain_file_exists(path: &Path) -> Result<bool, String> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => Ok(true),
+        Ok(_) => Err(format!(
+            "public-ID census checkpoint is not a plain file: {}",
+            path.display()
+        )),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(format!(
+            "failed to inspect public-ID census checkpoint {}: {error}",
+            path.display()
+        )),
+    }
 }
 
 #[cfg(unix)]

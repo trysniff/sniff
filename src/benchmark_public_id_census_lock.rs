@@ -1,10 +1,10 @@
 use std::fs::{self, File, OpenOptions};
 use std::path::Path;
 
-pub(super) struct CensusLock(File);
+pub(crate) struct CensusLock(File);
 
 impl CensusLock {
-    pub(super) fn acquire(path: &Path) -> Result<Self, String> {
+    pub(crate) fn acquire(path: &Path) -> Result<Self, String> {
         match fs::symlink_metadata(path) {
             Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => {}
             Ok(_) => return Err("public-ID census lock is not a plain file".to_string()),

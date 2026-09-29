@@ -18,6 +18,13 @@ mod manifest;
 
 pub use manifest::*;
 
+#[path = "benchmark_public_id_census_v2_preflight.rs"]
+mod preflight;
+
+#[path = "benchmark_public_id_census_v2_collector.rs"]
+mod collector;
+
+pub use collector::collect_public_id_census_v2;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PublicIdCensusV2Policy {

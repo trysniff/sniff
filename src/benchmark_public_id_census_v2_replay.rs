@@ -110,6 +110,7 @@ where
         sequence: 0,
         last_received_at: preflight.fetched_at_utc.clone(),
         cache: HashMap::new(),
+        node_owners: HashMap::new(),
         resolved_times: BTreeMap::new(),
         null_ledger: BTreeMap::new(),
     };
@@ -312,6 +313,7 @@ struct ReplayCursor<'a, F> {
     sequence: usize,
     last_received_at: String,
     cache: HashMap<u64, CachedObservation>,
+    node_owners: HashMap<String, u64>,
     resolved_times: BTreeMap<u64, String>,
     null_ledger: BTreeMap<u64, PublicIdCensusV2NullRecord>,
 }
@@ -495,6 +497,15 @@ where
         {
             return Err("public-ID census v2 next cursor differs from last ID".to_string());
         }
+        for repository in &repositories {
+            if let Some(owner) = self
+                .node_owners
+                .insert(repository.node_id.clone(), repository.id)
+                && owner != repository.id
+            {
+                return Err("public-ID census v2 node ID aliases two REST IDs".to_string());
+            }
+        }
         Ok(RestPage {
             repositories,
             next_since,
@@ -525,7 +536,7 @@ where
     }
 }
 
-fn validate_preflight(
+pub(crate) fn validate_preflight(
     policy: &PublicIdCensusV2Policy,
     preflight: &PublicIdCensusPreflight,
 ) -> Result<(), String> {
