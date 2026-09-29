@@ -1121,6 +1121,10 @@ pub(crate) use public_id_census::read_public_id_census_artifact;
 pub use public_id_census::*;
 pub use public_id_census_v2::*;
 
+#[cfg(test)]
+#[path = "benchmark_history_v3_v2_offline_rehearsal_tests.rs"]
+mod history_v3_v2_offline_rehearsal_tests;
+
 #[path = "benchmark_source_assessment.rs"]
 mod source_assessment;
 
