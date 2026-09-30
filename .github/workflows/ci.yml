@@ -99,6 +99,12 @@ jobs:
       - name: Run tests
         if: runner.os != 'Windows'
         run: cargo test --all-targets --locked
+      - name: Verify normal TypeScript compiler worlds in the native sandbox
+        shell: bash
+        run: |
+          cargo test --lib --locked \
+            semantic_indexer_runner::typescript_model::tests::normal_scan_ \
+            -- --ignored --test-threads=1 --nocapture
       - name: Replay the pinned Scorecard publication witness
         if: runner.os == 'Linux'
         shell: bash

@@ -113,7 +113,9 @@ fn typescript_legacy_config_parser_installation_is_rejected() {
     };
     super::validate_record(spec, &record).unwrap();
     record.source_identity = record.source_identity.replace(
-        "compiler-api-signatures-and-project-config-v4", "compiler-api-signatures-v3");
+        "compiler-api-signatures-and-project-config-v4",
+        "compiler-api-signatures-v3",
+    );
     assert!(super::validate_record(spec, &record).is_err());
 }
 
