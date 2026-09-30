@@ -5,6 +5,36 @@ use crate::benchmark::{
 };
 
 const PROTOCOL: &[u8] = include_bytes!("../sniffbench/historical-v2-protocol.json");
+const COMMITTED_V2_TEMPORAL_PROOF: &[u8] =
+    include_bytes!("../sniffbench/historical-v3-prior-v2-temporal-proof.json");
+
+#[test]
+fn committed_v2_temporal_proof_has_stable_bytes_and_commitments() {
+    assert_eq!(
+        sha256(COMMITTED_V2_TEMPORAL_PROOF),
+        "ba068b5f9fe011b0c7874c0c6d708477fb2cf56ce383e8c410c993c46403e27f"
+    );
+    let mut proof: HistoricalV3PriorV2TemporalProof =
+        serde_json::from_slice(COMMITTED_V2_TEMPORAL_PROOF).unwrap();
+    assert_eq!(
+        proof.schema_version,
+        HISTORICAL_V3_PRIOR_V2_TEMPORAL_PROOF_SCHEMA_VERSION
+    );
+    assert_eq!(proof.contract, HISTORICAL_V2_TEMPORAL_CONTRACT);
+    assert_eq!(proof.frame_file_sha256, FRAME_FILE_SHA256);
+    assert_eq!(proof.selection_file_sha256, SELECTION_FILE_SHA256);
+    assert_eq!(proof.cutoff_utc, HISTORICAL_V3_REPOSITORY_CREATED_AFTER_UTC);
+    assert_eq!(proof.witnesses.len(), 664);
+    assert!(proof.latest_witness_utc < proof.cutoff_utc);
+    assert!(
+        proof
+            .witnesses
+            .windows(2)
+            .all(|pair| { pair[0].canonical_repository < pair[1].canonical_repository })
+    );
+    let committed_sha = std::mem::take(&mut proof.proof_sha256);
+    assert_eq!(committed_sha, sha256(&serde_json::to_vec(&proof).unwrap()));
+}
 
 fn synthetic_inputs() -> (
     HistoricalV2Frame,

@@ -198,6 +198,31 @@ for `selection.json`. Derivation replays the earlier exclusion sources and the
 fixed-slot selection against the collector's exact LF source bytes; a Windows
 checkout with converted CRLF fixture files is not equivalent evidence.
 
+The historical-v2 prior temporal proof is issued only after replaying all three
+protocol-pinned Parquet shards, the 126,300-row frame, exclusions, and fixed
+selection. The output path must not already exist. Validation repeats that
+source replay and compares the complete saved proof, including all 664 selected
+repository witnesses. This partition proof does not open the historical-v3
+publication gate by itself.
+
+The [committed proof](historical-v3-prior-v2-temporal-proof.json) was issued and
+validated against the pinned shards and frozen artifacts. Its file SHA-256 is
+`ba068b5f9fe011b0c7874c0c6d708477fb2cf56ce383e8c410c993c46403e27f`;
+its internal `proof_sha256` is
+`8965cd16620ea4d5fe775c608b93a3bcf7944cef84e8b06b8b23305435444b00`.
+The commands below reproduce it using a fresh output path and validate the
+committed copy against the same pinned sources.
+
+```console
+cargo run --locked --features sniffbench-frame --bin sniffbench-frame -- \
+  derive-prior-v2-temporal-proof ARTIFACT_ROOT DATASET_ROOT \
+  frame.json exclusions.json selection.json prior-v2-temporal-proof.json
+
+cargo run --locked --features sniffbench-frame --bin sniffbench-frame -- \
+  validate-prior-v2-temporal-proof ARTIFACT_ROOT DATASET_ROOT \
+  frame.json exclusions.json selection.json prior-v2-temporal-proof.json
+```
+
 Only after the fixed selection is committed may the maintainer tool open each
 selected row's patch, install configuration, and test patch. Extraction and
 validation both replay the pinned dataset and frozen selection:

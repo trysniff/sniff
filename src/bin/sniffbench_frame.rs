@@ -11,6 +11,7 @@ use std::io::{Error as IoError, ErrorKind};
 use std::path::PathBuf;
 
 mod sniffbench_frame_run;
+mod sniffbench_frame_temporal;
 
 #[derive(Debug, Parser)]
 #[command(name = "sniffbench-frame", version)]
@@ -77,6 +78,16 @@ enum Command {
         exclusions: PathBuf,
         selection: PathBuf,
         payloads: PathBuf,
+    },
+    /// Issue a source-replayed, create-new temporal proof for the frozen v2 prior.
+    DerivePriorV2TemporalProof {
+        #[command(flatten)]
+        args: sniffbench_frame_temporal::PriorV2TemporalArgs,
+    },
+    /// Replay the pinned shards and validate a saved v2 prior temporal proof.
+    ValidatePriorV2TemporalProof {
+        #[command(flatten)]
+        args: sniffbench_frame_temporal::PriorV2TemporalArgs,
     },
     /// Run or resume every fixed selected slot through its exact next stage.
     RunSlots {
@@ -281,6 +292,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "Historical-v2 selected payloads validated\nSelection SHA-256: {}",
                 selection.selection_sha256
             );
+        }
+        Command::DerivePriorV2TemporalProof { args } => sniffbench_frame_temporal::issue(args)?,
+        Command::ValidatePriorV2TemporalProof { args } => {
+            sniffbench_frame_temporal::validate(args)?
         }
         Command::RunSlots { args } => sniffbench_frame_run::run(args).await?,
         Command::StateStatus { args } => sniffbench_frame_run::state_status(args)?,
