@@ -1,11 +1,16 @@
 use super::HISTORICAL_V3_REPOSITORY_CREATED_AFTER_UTC;
+use super::HistoricalV2ExclusionManifest;
 use super::history_v3_time::parse_utc_second;
 use super::non_blind_history::NonBlindSelectionPolicy;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
+use std::fs;
+use std::path::Path;
+use std::process::Command;
 
 const POLICY_SHA256: &str = "43269a234b55ff406edf1893584418d0eefc3a79eada16764c2114fd7f88c44d";
+const EXCLUSIONS_SHA256: &str = "74bccb100eb48ab87952bd7eec137b2285edbc68d2547715bc0e06a80e029f76";
 const RESPONSE_SHA256: &str = "45d43ea544fe3ee6ecb407657f7bf56a918646b49d4ef74b8f4b673d536c0885";
 const HARNESS_REVISION: &str = "25bd2b9a216df93e85bb46f741c0e2d1f422b111";
 const PROBLEMS_REVISION: &str = "ef6a9dd13911566b6b01075ca121758c9f7b5c5f";
@@ -33,6 +38,7 @@ pub struct SmallPriorRepositoryWitness {
 pub struct SmallPriorTemporalProof {
     pub contract: String,
     pub policy_sha256: String,
+    pub exclusions_sha256: String,
     pub response_sha256: String,
     pub query_sha256: String,
     pub cutoff_utc: String,
@@ -73,7 +79,9 @@ struct GraphqlObject {
 /// Proves existence of three repository IDs, not historical name continuity.
 pub fn derive_small_prior_temporal_proof(
     policy_bytes: &[u8],
+    exclusions_bytes: &[u8],
     response_bytes: &[u8],
+    artifact_root: &Path,
 ) -> Result<SmallPriorTemporalProof, String> {
     if sha256(policy_bytes) != POLICY_SHA256 {
         return Err("small prior policy differs from the frozen source".to_string());
@@ -81,15 +89,22 @@ pub fn derive_small_prior_temporal_proof(
     if sha256(response_bytes) != RESPONSE_SHA256 {
         return Err("small prior GraphQL projection differs from its frozen capture".to_string());
     }
+    if sha256(exclusions_bytes) != EXCLUSIONS_SHA256 {
+        return Err("small prior exclusions differ from the frozen source".to_string());
+    }
     let policy: NonBlindSelectionPolicy = serde_json::from_slice(policy_bytes)
         .map_err(|error| format!("invalid small prior policy: {error}"))?;
     validate_research_policy(&policy)?;
+    let exclusions: HistoricalV2ExclusionManifest = serde_json::from_slice(exclusions_bytes)
+        .map_err(|error| format!("invalid small prior exclusions: {error}"))?;
+    validate_exclusion_membership(&exclusions, artifact_root)?;
     let data: GraphqlData = serde_json::from_slice(response_bytes)
         .map_err(|error| format!("invalid small prior GraphQL projection: {error}"))?;
     let witnesses = validate_response(data)?;
     let mut proof = SmallPriorTemporalProof {
         contract: CONTRACT.to_string(),
         policy_sha256: POLICY_SHA256.to_string(),
+        exclusions_sha256: EXCLUSIONS_SHA256.to_string(),
         response_sha256: RESPONSE_SHA256.to_string(),
         query_sha256: sha256(SMALL_PRIOR_IDENTITIES_QUERY.as_bytes()),
         cutoff_utc: HISTORICAL_V3_REPOSITORY_CREATED_AFTER_UTC.to_string(),
@@ -105,13 +120,106 @@ pub fn derive_small_prior_temporal_proof(
 
 pub fn validate_small_prior_temporal_proof(
     policy_bytes: &[u8],
+    exclusions_bytes: &[u8],
     response_bytes: &[u8],
+    artifact_root: &Path,
     proof: &SmallPriorTemporalProof,
 ) -> Result<(), String> {
-    if proof != &derive_small_prior_temporal_proof(policy_bytes, response_bytes)? {
+    if proof
+        != &derive_small_prior_temporal_proof(
+            policy_bytes,
+            exclusions_bytes,
+            response_bytes,
+            artifact_root,
+        )?
+    {
         return Err("small prior temporal proof does not replay".to_string());
     }
     Ok(())
+}
+
+fn validate_exclusion_membership(
+    exclusions: &HistoricalV2ExclusionManifest,
+    artifact_root: &Path,
+) -> Result<(), String> {
+    let partitions = exclusions
+        .partitions
+        .iter()
+        .filter(|partition| {
+            matches!(
+                partition.partition.as_str(),
+                "slopcodebench" | "synthetic-gold-v1"
+            )
+        })
+        .collect::<Vec<_>>();
+    if exclusions.schema_version != 1 || partitions.len() != 2 {
+        return Err("small prior exclusion partitions are missing".to_string());
+    }
+    let research = partitions
+        .iter()
+        .find(|partition| partition.partition == "slopcodebench")
+        .ok_or("SlopCodeBench exclusion partition is missing")?;
+    if research.repositories != ["gabeorlanski/scb-problems", "sprocketlab/slop-code-bench"]
+        || research.artifacts.len() != 1
+        || research.artifacts[0].artifact_path != "sniffbench/non-blind-v1-selection-policy.json"
+        || research.artifacts[0].artifact_sha256 != POLICY_SHA256
+    {
+        return Err("SlopCodeBench frozen prior membership changed".to_string());
+    }
+    let synthetic = partitions
+        .iter()
+        .find(|partition| partition.partition == "synthetic-gold-v1")
+        .ok_or("synthetic gold exclusion partition is missing")?;
+    if synthetic.repositories != ["trysniff/sniff"] || synthetic.artifacts.len() != 12 {
+        return Err("synthetic gold frozen prior membership changed".to_string());
+    }
+    let root = fs::canonicalize(artifact_root)
+        .map_err(|error| format!("failed to resolve small prior artifact root: {error}"))?;
+    let toplevel = git(&root, &["rev-parse", "--show-toplevel"])?;
+    let toplevel = std::str::from_utf8(&toplevel)
+        .map_err(|error| format!("invalid Git root encoding: {error}"))?;
+    let toplevel = fs::canonicalize(toplevel.trim())
+        .map_err(|error| format!("failed to resolve Git root: {error}"))?;
+    if toplevel != root {
+        return Err("small prior artifact root is not the Git repository root".to_string());
+    }
+    let tree = git(&root, &["rev-parse", "HEAD:gold_fixtures/repo"])?;
+    if tree != format!("{GOLD_TREE_OID}\n").as_bytes() {
+        return Err("synthetic gold Git tree differs from the pinned source".to_string());
+    }
+    let mut paths = BTreeSet::new();
+    for artifact in &synthetic.artifacts {
+        if !artifact.artifact_path.starts_with("gold_fixtures/repo/")
+            || !paths.insert(artifact.artifact_path.as_str())
+        {
+            return Err("synthetic gold artifact path changed".to_string());
+        }
+        let object = format!("HEAD:{}", artifact.artifact_path);
+        let bytes = git(&root, &["show", &object])?;
+        if sha256(&bytes) != artifact.artifact_sha256 {
+            return Err(format!(
+                "synthetic gold artifact differs: {}",
+                artifact.artifact_path
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn git(root: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(args)
+        .output()
+        .map_err(|error| format!("failed to run Git for small prior source: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "failed to resolve small prior Git source: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    Ok(output.stdout)
 }
 
 fn validate_research_policy(policy: &NonBlindSelectionPolicy) -> Result<(), String> {
