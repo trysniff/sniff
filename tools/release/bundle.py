@@ -23,6 +23,36 @@ SCHEMA = "sniff-development-candidate-v1"
 MAX_ARCHIVE_BYTES = 512 * 1024 * 1024
 MAX_FILE_BYTES = 256 * 1024 * 1024
 MAX_ENTRIES = 64
+WINDOWS_DEVICE = re.compile(
+    r"(?:CON|PRN|AUX|NUL|CONIN\$|CONOUT\$|COM[1-9]|LPT[1-9])", re.I
+)
+
+
+def validate_portable_paths(names):
+    aliases = {}
+    files = set(names)
+    for name in names:
+        path = PurePosixPath(name)
+        if (
+            path.is_absolute()
+            or ".." in path.parts
+            or name != path.as_posix()
+            or name == "."
+            or not name.isascii()
+            or re.search(r'[<>:"\\|?*\x00-\x1f\x7f]', name)
+        ):
+            raise ValueError("Unsafe archive entry")
+        for index, part in enumerate(path.parts):
+            if part.endswith((".", " ")) or WINDOWS_DEVICE.fullmatch(
+                part.split(".", 1)[0].rstrip(" ")
+            ):
+                raise ValueError("Unsafe archive entry")
+            prefix = "/".join(path.parts[: index + 1])
+            key = prefix.casefold()
+            if aliases.setdefault(key, prefix) != prefix:
+                raise ValueError("Unsafe archive path alias")
+            if index < len(path.parts) - 1 and prefix in files:
+                raise ValueError("Unsafe archive file/directory conflict")
 
 
 def bounded_archive_bytes(archive):
@@ -125,17 +155,8 @@ def verify(archive, target, commit, extract):
         names = [entry.filename for entry in entries]
         if len(names) != len(set(names)):
             raise ValueError("Duplicate archive entry")
+        validate_portable_paths(names)
         for entry in entries:
-            path = PurePosixPath(entry.filename)
-            if (
-                path.is_absolute()
-                or ".." in path.parts
-                or "\\" in entry.filename
-                or ":" in entry.filename
-                or entry.filename != path.as_posix()
-                or path.as_posix() == "."
-            ):
-                raise ValueError("Unsafe archive entry")
             if stat.S_IFMT(entry.external_attr >> 16) != stat.S_IFREG:
                 raise ValueError("Archive contains a non-file entry")
             executable = "bin/sniff.exe" if "windows" in target else "bin/sniff"
