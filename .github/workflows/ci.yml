@@ -34,6 +34,35 @@ jobs:
           components: clippy
       - run: cargo clippy --all-targets --all-features --locked -- -D warnings
 
+  blind-prior-archive-preflight:
+    name: blind-prior-archive-preflight
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify the released source-seal archive layout
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release download sniffbench-blind-oss-v1-source-seal --repo trysniff/sniff \
+            --pattern sniffbench-blind-oss-v1-source-seal.zip --dir "$RUNNER_TEMP"
+          archive="$RUNNER_TEMP/sniffbench-blind-oss-v1-source-seal.zip"
+          echo "9cfca885c88ce7f8d2c7cc01114b6bc129acd5e2dfa432ef3b255858a51b65a9  $archive" \
+            | sha256sum --check
+          python3 - "$archive" "$RUNNER_TEMP/extracted" <<'PY'
+          import pathlib
+          import sys
+          import zipfile
+
+          target = "blind-source-seal.sources/selection/source-selection-audit.json"
+          with zipfile.ZipFile(sys.argv[1]) as archive:
+              assert target in archive.namelist(), "audit entry missing from archive"
+              archive.extractall(sys.argv[2])
+          extracted = pathlib.Path(sys.argv[2]) / target
+          print(f"Audit extracted: {extracted.exists()} at {extracted}")
+          assert extracted.is_file(), "audit file missing from extracted archive"
+          PY
+
   test:
     name: test-${{ matrix.os }}
     strategy:
