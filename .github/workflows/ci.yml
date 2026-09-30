@@ -38,6 +38,7 @@ jobs:
     name: blind-prior-archive-preflight
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v6
       - name: Verify the released source-seal archive layout
         shell: bash
         env:
@@ -49,19 +50,7 @@ jobs:
           archive="$RUNNER_TEMP/sniffbench-blind-oss-v1-source-seal.zip"
           echo "9cfca885c88ce7f8d2c7cc01114b6bc129acd5e2dfa432ef3b255858a51b65a9  $archive" \
             | sha256sum --check
-          python3 - "$archive" "$RUNNER_TEMP/extracted" <<'PY'
-          import pathlib
-          import sys
-          import zipfile
-
-          target = "blind-source-seal.sources/selection/source-selection-audit.json"
-          with zipfile.ZipFile(sys.argv[1]) as archive:
-              assert target in archive.namelist(), "audit entry missing from archive"
-              archive.extractall(sys.argv[2])
-          extracted = pathlib.Path(sys.argv[2]) / target
-          print(f"Audit extracted: {extracted.exists()} at {extracted}")
-          assert extracted.is_file(), "audit file missing from extracted archive"
-          PY
+          python3 tools/ci/extract_blind_source_seal.py "$archive" "$RUNNER_TEMP/extracted"
 
   test:
     name: test-${{ matrix.os }}
@@ -147,7 +136,7 @@ jobs:
           echo "9cfca885c88ce7f8d2c7cc01114b6bc129acd5e2dfa432ef3b255858a51b65a9  $archive" \
             | sha256sum --check
           mkdir -p "$RUNNER_TEMP/blind-prior/extracted"
-          python3 -c 'import sys, zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])' \
+          python3 tools/ci/extract_blind_source_seal.py \
             "$archive" "$RUNNER_TEMP/blind-prior/extracted"
           SNIFF_BLIND_SEAL_PATH="$RUNNER_TEMP/blind-prior/extracted/blind-source-seal.json" \
             cargo test --lib --locked verifies_real_blind_prior_temporal_proof -- --ignored
