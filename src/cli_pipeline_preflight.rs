@@ -25,9 +25,13 @@ pub(super) async fn build_compiler_method_contexts(
     repository_root: &Path,
     files: &[FileRecord],
 ) -> Result<CompilerMethodEvidence, String> {
-    let outcome = crate::semantic_indexer_runner::run_required_indexers_exhaustive_typed_scoped_with_variants(
-        repository_root, files, files, &BTreeMap::new(),
-    ).await.map_err(|failure| failure.detail)?;
+    let outcome = crate::semantic_indexer_runner::run_required_indexers_with_discovered_worlds(
+        repository_root,
+        files,
+        files,
+    )
+    .await
+    .map_err(|failure| failure.detail)?;
     if let Some(failure) = outcome.failures.into_iter().next() {
         return Err(failure.detail);
     }
