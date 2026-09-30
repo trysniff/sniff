@@ -685,11 +685,9 @@ pub(super) fn collapse_go_list_outputs(
 }
 
 pub(super) fn go_list_context_is_valid(stdout: &str) -> Result<bool, String> {
-    let packages = serde_json::Deserializer::from_str(stdout).into_iter::<GoListPackage>();
     let mut valid = true;
-    for package in packages {
-        let package = package
-            .map_err(|error| format!("failed to parse concatenated go list JSON: {error}"))?;
+    for package in parse_go_list_packages(stdout.as_bytes()) {
+        let package = package?;
         if package.incomplete || package.error.is_some() {
             valid = false;
         }
