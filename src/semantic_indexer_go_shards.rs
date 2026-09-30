@@ -388,7 +388,7 @@ fn validate_shard_coverage(shards: &[GoPackageShard]) -> Result<(), String> {
     Ok(())
 }
 
-fn go_package_relative_directory(root: &Path, raw: &str) -> Result<PathBuf, String> {
+pub(super) fn go_package_relative_directory(root: &Path, raw: &str) -> Result<PathBuf, String> {
     let normalized = raw.replace('\\', "/");
     if normalized == "/workspace" {
         return Ok(PathBuf::new());

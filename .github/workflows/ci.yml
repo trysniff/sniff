@@ -316,6 +316,12 @@ jobs:
             benchmark::release::history_v2_semantic::tests::pinned_python_provider_drives_signatures_and_recursive_public_surfaces \
             -- --exact --ignored --test-threads=1 --nocapture
           cargo test --lib --locked \
+            semantic_indexer_runner::go_model::tests::normal_scan_discovers_every_go_context_without_git_or_model_calls \
+            -- --exact --ignored --test-threads=1 --nocapture
+          cargo test --lib --locked \
+            semantic_indexer_runner::go_runner::tests::qualified_world_observer_rejects_substituted_runtime_image \
+            -- --exact --ignored --test-threads=1 --nocapture
+          cargo test --lib --locked \
             semantic_indexer_runner::go_runner::tests::live_multi_shard_go_index_preserves_calls_and_structural_implementations \
             -- --exact --ignored --test-threads=1 --nocapture
           cargo test --lib --locked \
