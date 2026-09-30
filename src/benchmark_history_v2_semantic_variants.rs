@@ -1,12 +1,11 @@
 use super::super::{
-    IntentionalBoundaryProjectModelCensus, IntentionalBoundaryProjectModelGoArchitecture,
-    IntentionalBoundaryProjectModelGoQuery, IntentionalBoundaryProjectModelProvider,
-    IntentionalBoundaryProjectModelVariant,
+    IntentionalBoundaryProjectModelCensus, IntentionalBoundaryProjectModelExecution,
+    IntentionalBoundaryProjectModelGoArchitecture, IntentionalBoundaryProjectModelGoQuery,
+    IntentionalBoundaryProjectModelProvider, IntentionalBoundaryProjectModelVariant,
 };
 use crate::semantic_index::{
     RepositoryPath, SemanticIndexerCompilerQuery, SemanticIndexerVariantPlan, SemanticVariantId,
 };
-use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 
 pub(super) fn go_semantic_variant_plans(
@@ -20,23 +19,12 @@ pub(super) fn go_semantic_variant_plans(
     {
         return Err("historical-v2 Go variant ledger mixed project-model providers".to_string());
     }
-    let mut plans = Vec::with_capacity(model.executions.len());
-    let mut variants = BTreeMap::new();
-    let mut identities = BTreeSet::new();
     let semantic_modules = semantic_go_module_documents(model, semantic_documents)?;
+    let mut plans = Vec::new();
+    let mut executions = BTreeSet::new();
+    let mut contexts = BTreeSet::new();
     for execution in &model.executions {
-        let IntentionalBoundaryProjectModelVariant::Go {
-            goos,
-            goarch,
-            cgo_enabled,
-            build_tags,
-            architecture,
-            query,
-        } = &execution.variant
-        else {
-            return Err("historical-v2 Go variant ledger contains an untyped variant".to_string());
-        };
-        if !identities.insert(execution.execution_id.as_str()) {
+        if !executions.insert(execution.execution_id.as_str()) {
             return Err(
                 "historical-v2 Go variant ledger repeats an execution identity".to_string(),
             );
@@ -58,234 +46,65 @@ pub(super) fn go_semantic_variant_plans(
             .map(|path| RepositoryPath(path.clone()))
             .filter(|path| semantic_documents.contains(path))
             .collect::<BTreeSet<_>>();
-        // Semantic assembly evaluates every Go source against every retained
-        // compiler world, including worlds owned by another nested module.
-        let unselected_documents = semantic_documents
+        let ignored_documents = semantic_documents
             .difference(&selected_documents)
             .cloned()
             .collect::<BTreeSet<_>>();
-        let (compiler_query, ignored_documents) = match query {
-            IntentionalBoundaryProjectModelGoQuery::ModulePackages => (
-                SemanticIndexerCompilerQuery::ProjectPackages,
-                unselected_documents,
-            ),
-            IntentionalBoundaryProjectModelGoQuery::StandaloneSource {
-                source_repository_path,
-            } => (
-                SemanticIndexerCompilerQuery::ExactSource {
-                    source_document: RepositoryPath(source_repository_path.clone()),
-                },
-                unselected_documents,
-            ),
+        let IntentionalBoundaryProjectModelVariant::Go { query, .. } = &execution.variant else {
+            return Err("historical-v2 Go variant ledger contains an untyped variant".to_string());
         };
-        let tags = serde_json::to_string(build_tags)
-            .map_err(|error| format!("failed to serialize Go build tags: {error}"))?;
-        let architecture_dimension = match architecture {
-            IntentionalBoundaryProjectModelGoArchitecture::Default => "default".to_string(),
-            IntentionalBoundaryProjectModelGoArchitecture::Explicit {
-                environment_variable,
-                value,
-            } => format!("{environment_variable}={value}"),
-        };
-        let dimensions = BTreeMap::from([
-            ("architecture".to_string(), architecture_dimension),
-            ("build_tags".to_string(), tags),
-            ("cgo_enabled".to_string(), cgo_enabled.to_string()),
-            ("goarch".to_string(), goarch.clone()),
-            ("goos".to_string(), goos.clone()),
-            (
-                "query".to_string(),
-                match query {
-                    IntentionalBoundaryProjectModelGoQuery::ModulePackages => {
-                        "module_packages".to_string()
-                    }
-                    IntentionalBoundaryProjectModelGoQuery::StandaloneSource {
-                        source_repository_path,
-                    } => format!("standalone_source:{source_repository_path}"),
-                },
-            ),
-        ]);
-        let mut environment = BTreeMap::from([
-            (
-                "CGO_ENABLED".to_string(),
-                if *cgo_enabled { "1" } else { "0" }.to_string(),
-            ),
-            ("GOARCH".to_string(), goarch.clone()),
-            (
-                "GOFLAGS".to_string(),
-                if build_tags.is_empty() {
-                    String::new()
-                } else {
-                    format!("-tags={}", build_tags.join(","))
-                },
-            ),
-            ("GOOS".to_string(), goos.clone()),
-        ]);
-        if let IntentionalBoundaryProjectModelGoArchitecture::Explicit {
-            environment_variable,
-            value,
-        } = architecture
-            && environment
-                .insert(environment_variable.clone(), value.clone())
-                .is_some()
-        {
-            return Err(format!(
-                "historical-v2 Go variant {} repeats environment variable {environment_variable}",
-                execution.execution_id
-            ));
-        }
-        let plan = SemanticIndexerVariantPlan {
-            identity: SemanticVariantId(execution.execution_id.clone()),
-            dimensions,
-            environment,
-            compiler_query,
-            compiler_project: Some(RepositoryPath(
-                execution.invocation_anchor_repository_path.clone(),
-            )),
-            selected_documents,
-            ignored_documents,
-        };
-        plan.validate()?;
-        if semantic_modules.contains_key(&execution.invocation_anchor_repository_path) {
-            variants.insert(plan.identity.clone(), execution.variant.clone());
-            plans.push(plan);
-        }
-    }
-    select_go_source_coverage_plans(plans, &variants, &semantic_modules)
-}
-
-fn select_go_source_coverage_plans(
-    plans: Vec<SemanticIndexerVariantPlan>,
-    variants: &BTreeMap<SemanticVariantId, IntentionalBoundaryProjectModelVariant>,
-    semantic_modules: &BTreeMap<String, BTreeSet<RepositoryPath>>,
-) -> Result<Vec<SemanticIndexerVariantPlan>, String> {
-    let projects = plans
-        .iter()
-        .map(|plan| {
-            plan.compiler_project.clone().ok_or_else(|| {
-                format!(
-                    "historical-v2 Go compiler world {} has no module",
-                    plan.identity.0
-                )
-            })
-        })
-        .collect::<Result<BTreeSet<_>, _>>()?;
-    let mut selected = BTreeSet::new();
-    for project in projects {
-        let required_documents = semantic_modules
-            .get(&project.0)
-            .ok_or_else(|| {
-                format!(
-                    "historical-v2 Go module {} has no required source ledger",
-                    project.0
-                )
-            })?
-            .iter()
-            .filter(|document| !document.0.ends_with("_test.go"))
-            .cloned()
-            .collect::<BTreeSet<_>>();
-        let candidates = plans
-            .iter()
-            .enumerate()
-            .filter(|(_, plan)| plan.compiler_project.as_ref() == Some(&project))
-            .collect::<Vec<_>>();
-        let baseline = candidates
-            .iter()
-            .min_by(|(_, left), (_, right)| compare_go_plans(left, right, variants))
-            .map(|(index, _)| *index)
-            .ok_or_else(|| {
-                format!(
-                    "historical-v2 Go module {} has no compiler world",
-                    project.0
-                )
-            })?;
-        selected.insert(baseline);
-
-        let compiler_selected_documents = candidates
-            .iter()
-            .flat_map(|(_, plan)| plan.selected_documents.intersection(&required_documents))
-            .cloned()
-            .collect::<BTreeSet<_>>();
-        if let Some(document) = required_documents
-            .difference(&compiler_selected_documents)
-            .next()
-        {
-            return Err(format!(
-                "historical-v2 Go module {} has no compiler world selecting required source {}",
-                project.0, document.0
-            ));
-        }
-        let mut uncovered = required_documents;
-        for document in &plans[baseline].selected_documents {
-            uncovered.remove(document);
-        }
-        while !uncovered.is_empty() {
-            let next = candidates
-                .iter()
-                .filter(|(index, _)| !selected.contains(index))
-                .map(|(index, plan)| {
-                    let coverage = plan.selected_documents.intersection(&uncovered).count();
-                    (*index, *plan, coverage)
-                })
-                .filter(|(_, _, coverage)| *coverage > 0)
-                .max_by(|(_, left, left_coverage), (_, right, right_coverage)| {
-                    left_coverage
-                        .cmp(right_coverage)
-                        .then_with(|| compare_go_plans(right, left, variants))
-                })
-                .map(|(index, _, _)| index)
-                .ok_or_else(|| {
-                    format!(
-                        "historical-v2 Go module {} cannot cover every compiler-selected source",
-                        project.0
-                    )
-                })?;
-            selected.insert(next);
-            for document in &plans[next].selected_documents {
-                uncovered.remove(document);
+        // go list equivalence proves source selection, not equivalent type/API facts.
+        // Each context must run its own semantic indexer, even with identical sources.
+        for variant in std::iter::once(&execution.variant).chain(&execution.equivalent_variants) {
+            let IntentionalBoundaryProjectModelVariant::Go {
+                query: variant_query,
+                ..
+            } = variant
+            else {
+                return Err(
+                    "historical-v2 Go source-equivalence ledger contains an untyped variant"
+                        .to_string(),
+                );
+            };
+            if variant_query != query {
+                return Err(
+                    "historical-v2 Go source-equivalence ledger changed its compiler query"
+                        .to_string(),
+                );
+            }
+            if !contexts.insert((&execution.invocation_anchor_repository_path, variant)) {
+                return Err(
+                    "historical-v2 Go variant ledger repeats a compiler context".to_string()
+                );
+            }
+            let plan = go_semantic_variant_plan(
+                execution,
+                variant,
+                selected_documents.clone(),
+                ignored_documents.clone(),
+            )?;
+            if semantic_modules.contains_key(&execution.invocation_anchor_repository_path) {
+                plans.push(plan);
             }
         }
     }
-
-    let mut selected = plans
-        .into_iter()
-        .enumerate()
-        .filter_map(|(index, plan)| selected.contains(&index).then_some(plan))
-        .collect::<Vec<_>>();
-    selected.sort_by(|left, right| left.identity.cmp(&right.identity));
-    Ok(selected)
+    validate_go_source_coverage(&plans, &semantic_modules)?;
+    plans.sort_by(|left, right| left.identity.cmp(&right.identity));
+    if plans
+        .windows(2)
+        .any(|pair| pair[0].identity == pair[1].identity)
+    {
+        return Err("historical-v2 Go compiler worlds repeat an identity".to_string());
+    }
+    Ok(plans)
 }
 
-fn compare_go_plans(
-    left: &SemanticIndexerVariantPlan,
-    right: &SemanticIndexerVariantPlan,
-    variants: &BTreeMap<SemanticVariantId, IntentionalBoundaryProjectModelVariant>,
-) -> Ordering {
-    let left_variant = variants
-        .get(&left.identity)
-        .expect("validated Go plans retain their compiler variants");
-    let right_variant = variants
-        .get(&right.identity)
-        .expect("validated Go plans retain their compiler variants");
-    go_variant_preference(left_variant)
-        .cmp(&go_variant_preference(right_variant))
-        .then_with(|| left.identity.cmp(&right.identity))
-}
-
-fn go_variant_preference(
+fn go_semantic_variant_plan(
+    execution: &IntentionalBoundaryProjectModelExecution,
     variant: &IntentionalBoundaryProjectModelVariant,
-) -> (
-    bool,
-    bool,
-    bool,
-    bool,
-    bool,
-    bool,
-    &str,
-    &str,
-    &[String],
-    &IntentionalBoundaryProjectModelGoArchitecture,
-) {
+    selected_documents: BTreeSet<RepositoryPath>,
+    ignored_documents: BTreeSet<RepositoryPath>,
+) -> Result<SemanticIndexerVariantPlan, String> {
     let IntentionalBoundaryProjectModelVariant::Go {
         goos,
         goarch,
@@ -295,34 +114,131 @@ fn go_variant_preference(
         query,
     } = variant
     else {
-        unreachable!("Go semantic plans only retain Go variants");
+        return Err("historical-v2 Go compiler world is untyped".to_string());
     };
-    let portable_baseline = goos == "linux"
-        && goarch == "amd64"
-        && !cgo_enabled
-        && build_tags.is_empty()
-        && matches!(
-            architecture,
-            IntentionalBoundaryProjectModelGoArchitecture::Default
-        );
-    (
-        !portable_baseline,
-        !matches!(
-            query,
-            IntentionalBoundaryProjectModelGoQuery::ModulePackages
+    let identity = if variant == &execution.variant {
+        execution.execution_id.clone()
+    } else {
+        format!(
+            "go-source-equivalent-world-v1-{}",
+            super::hash_json(&(
+                "go-source-equivalent-world-v1",
+                &execution.execution_id,
+                variant
+            ))?
+        )
+    };
+    let architecture_dimension = match architecture {
+        IntentionalBoundaryProjectModelGoArchitecture::Default => "default".to_string(),
+        IntentionalBoundaryProjectModelGoArchitecture::Explicit {
+            environment_variable,
+            value,
+        } => format!("{environment_variable}={value}"),
+    };
+    let (compiler_query, query_dimension) = match query {
+        IntentionalBoundaryProjectModelGoQuery::ModulePackages => (
+            SemanticIndexerCompilerQuery::ProjectPackages,
+            "module_packages".to_string(),
         ),
-        !build_tags.is_empty(),
-        *cgo_enabled,
-        !matches!(
-            architecture,
-            IntentionalBoundaryProjectModelGoArchitecture::Default
+        IntentionalBoundaryProjectModelGoQuery::StandaloneSource {
+            source_repository_path,
+        } => (
+            SemanticIndexerCompilerQuery::ExactSource {
+                source_document: RepositoryPath(source_repository_path.clone()),
+            },
+            format!("standalone_source:{source_repository_path}"),
         ),
-        goos != "linux",
-        goos,
-        goarch,
-        build_tags,
-        architecture,
-    )
+    };
+    let dimensions = BTreeMap::from([
+        ("architecture".to_string(), architecture_dimension),
+        (
+            "build_tags".to_string(),
+            serde_json::to_string(build_tags)
+                .map_err(|error| format!("failed to serialize Go build tags: {error}"))?,
+        ),
+        ("cgo_enabled".to_string(), cgo_enabled.to_string()),
+        ("goarch".to_string(), goarch.clone()),
+        ("goos".to_string(), goos.clone()),
+        (
+            "project_model_execution_id".to_string(),
+            execution.execution_id.clone(),
+        ),
+        ("query".to_string(), query_dimension),
+    ]);
+    let mut environment = BTreeMap::from([
+        (
+            "CGO_ENABLED".to_string(),
+            if *cgo_enabled { "1" } else { "0" }.to_string(),
+        ),
+        ("GOARCH".to_string(), goarch.clone()),
+        (
+            "GOFLAGS".to_string(),
+            if build_tags.is_empty() {
+                String::new()
+            } else {
+                format!("-tags={}", build_tags.join(","))
+            },
+        ),
+        ("GOOS".to_string(), goos.clone()),
+    ]);
+    if let IntentionalBoundaryProjectModelGoArchitecture::Explicit {
+        environment_variable,
+        value,
+    } = architecture
+        && environment
+            .insert(environment_variable.clone(), value.clone())
+            .is_some()
+    {
+        return Err(format!(
+            "historical-v2 Go variant {} repeats environment variable {environment_variable}",
+            execution.execution_id
+        ));
+    }
+    let plan = SemanticIndexerVariantPlan {
+        identity: SemanticVariantId(identity),
+        dimensions,
+        environment,
+        compiler_query,
+        compiler_project: Some(RepositoryPath(
+            execution.invocation_anchor_repository_path.clone(),
+        )),
+        selected_documents,
+        ignored_documents,
+    };
+    plan.validate()?;
+    Ok(plan)
+}
+
+fn validate_go_source_coverage(
+    plans: &[SemanticIndexerVariantPlan],
+    semantic_modules: &BTreeMap<String, BTreeSet<RepositoryPath>>,
+) -> Result<(), String> {
+    for (project, documents) in semantic_modules {
+        let candidates = plans
+            .iter()
+            .filter(|plan| plan.compiler_project.as_ref().map(|path| &path.0) == Some(project))
+            .collect::<Vec<_>>();
+        if candidates.is_empty() {
+            return Err(format!(
+                "historical-v2 Go module {project} has no compiler world"
+            ));
+        }
+        let selected = candidates
+            .iter()
+            .flat_map(|plan| &plan.selected_documents)
+            .collect::<BTreeSet<_>>();
+        if let Some(document) = documents
+            .iter()
+            .filter(|document| !document.0.ends_with("_test.go"))
+            .find(|document| !selected.contains(document))
+        {
+            return Err(format!(
+                "historical-v2 Go module {project} has no compiler world selecting required source {}",
+                document.0
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn semantic_go_module_documents(
@@ -547,7 +463,7 @@ mod tests {
     }
 
     #[test]
-    fn redundant_go_platforms_collapse_to_the_portable_baseline() {
+    fn identical_go_sources_keep_distinct_platform_compiler_worlds() {
         let mut model = go_model();
         model.executions[0].execution_id = "linux-amd64".to_string();
         model.executions[0].variant = IntentionalBoundaryProjectModelVariant::Go {
@@ -579,12 +495,83 @@ mod tests {
 
         let plans = go_semantic_variant_plans(&model, &semantic_documents).unwrap();
 
-        assert_eq!(plans.len(), 1);
-        assert_eq!(plans[0].identity.0, "linux-amd64");
+        assert_eq!(plans.len(), 2);
+        assert_eq!(plans[0].identity.0, "freebsd-amd64");
+        assert_eq!(plans[1].identity.0, "linux-amd64");
+        assert_eq!(plans[0].selected_documents, plans[1].selected_documents);
+        assert_ne!(plans[0].environment, plans[1].environment);
     }
 
     #[test]
-    fn source_coverage_keeps_each_world_with_unique_repository_sources() {
+    fn source_equivalent_go_variants_receive_distinct_semantic_worlds() {
+        let mut model = go_model();
+        let mut alternate = model.executions[0].variant.clone();
+        let IntentionalBoundaryProjectModelVariant::Go {
+            goos, architecture, ..
+        } = &mut alternate
+        else {
+            unreachable!()
+        };
+        *goos = "freebsd".to_string();
+        *architecture = IntentionalBoundaryProjectModelGoArchitecture::Default;
+        model.executions[0].equivalent_variants.push(alternate);
+        let documents = semantic_go_documents(&model);
+        let plans = go_semantic_variant_plans(&model, &documents).unwrap();
+        assert_eq!(plans.len(), 2);
+        let primary = plans
+            .iter()
+            .find(|plan| plan.identity.0 == "go-linux-amd64")
+            .unwrap();
+        let alternate = plans
+            .iter()
+            .find(|plan| plan.identity != primary.identity)
+            .unwrap();
+        assert_eq!(alternate.selected_documents, primary.selected_documents);
+        assert_eq!(alternate.ignored_documents, primary.ignored_documents);
+        assert_eq!(alternate.environment["GOOS"], "freebsd");
+        assert!(!alternate.environment.contains_key("GOAMD64"));
+        assert_eq!(
+            alternate.dimensions["project_model_execution_id"],
+            "go-linux-amd64"
+        );
+        assert!(
+            alternate
+                .identity
+                .0
+                .starts_with("go-source-equivalent-world-v1-")
+        );
+        assert_eq!(
+            plans,
+            go_semantic_variant_plans(&model, &documents).unwrap()
+        );
+    }
+
+    #[test]
+    fn source_equivalent_go_variant_cannot_change_the_compiler_query() {
+        let mut model = go_model();
+        let mut alternate = model.executions[0].variant.clone();
+        let IntentionalBoundaryProjectModelVariant::Go { query, .. } = &mut alternate else {
+            unreachable!()
+        };
+        *query = IntentionalBoundaryProjectModelGoQuery::StandaloneSource {
+            source_repository_path: "api/api_amd64.go".to_string(),
+        };
+        model.executions[0].equivalent_variants.push(alternate);
+        let error = go_semantic_variant_plans(&model, &semantic_go_documents(&model)).unwrap_err();
+        assert!(error.contains("changed its compiler query"), "{error}");
+    }
+
+    #[test]
+    fn go_semantic_world_rejects_a_repeated_compiler_context() {
+        let mut model = go_model();
+        let repeated = model.executions[0].variant.clone();
+        model.executions[0].equivalent_variants.push(repeated);
+        let error = go_semantic_variant_plans(&model, &semantic_go_documents(&model)).unwrap_err();
+        assert!(error.contains("repeats a compiler context"), "{error}");
+    }
+
+    #[test]
+    fn source_coverage_keeps_worlds_with_unique_and_overlapping_repository_sources() {
         let mut model = go_model();
         model.executions[0].execution_id = "linux-amd64".to_string();
         model.executions[0].variant = IntentionalBoundaryProjectModelVariant::Go {
@@ -664,7 +651,12 @@ mod tests {
 
         assert_eq!(
             identities,
-            BTreeSet::from(["linux-amd64", "linux-amd64-cgo", "windows-amd64"])
+            BTreeSet::from([
+                "freebsd-amd64",
+                "linux-amd64",
+                "linux-amd64-cgo",
+                "windows-amd64"
+            ])
         );
         let covered = plans
             .iter()
@@ -748,7 +740,7 @@ mod tests {
 
     #[test]
     #[ignore = "requires a sealed historical-v2 Go project-model artifact"]
-    fn sealed_go_project_model_reduces_to_complete_source_coverage() {
+    fn sealed_go_project_model_retains_all_compiler_worlds() {
         let path = std::env::var_os("SNIFF_SEALED_GO_PROJECT_MODEL")
             .expect("SNIFF_SEALED_GO_PROJECT_MODEL must name the sealed model");
         let expected_count = std::env::var("SNIFF_EXPECTED_GO_SEMANTIC_WORLD_COUNT")

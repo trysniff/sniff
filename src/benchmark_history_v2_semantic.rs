@@ -274,14 +274,18 @@ fn build_semantic_snapshot(
     let index_sets = indexes
         .iter()
         .map(|(kind, index)| {
-            (
+            Ok((
                 *kind,
-                SemanticIndexSet::Unqualified {
-                    index: Box::new(index.clone()),
+                if *kind == SemanticIndexerKind::Go {
+                    tests::qualified_go_fixture_index_set(source, index)?
+                } else {
+                    SemanticIndexSet::Unqualified {
+                        index: Box::new(index.clone()),
+                    }
                 },
-            )
+            ))
         })
-        .collect::<BTreeMap<_, _>>();
+        .collect::<Result<BTreeMap<_, _>, String>>()?;
     build_semantic_snapshot_from_sets(
         root,
         source,
