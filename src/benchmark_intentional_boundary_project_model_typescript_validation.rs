@@ -1,4 +1,5 @@
 use super::*;
+use serde_json::Value;
 
 pub(in crate::benchmark::release) fn validate_typescript_target_classification(
     inventory: &IntentionalBoundaryRepositoryInventory,

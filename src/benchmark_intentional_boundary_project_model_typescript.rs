@@ -16,9 +16,11 @@ use super::{
     IntentionalBoundaryProjectModelTypeScriptProject, IntentionalBoundaryProjectModelVariant,
     IntentionalBoundaryRepositoryInventory, validate_intentional_boundary_repository_inventory,
 };
-use crate::semantic_indexer_manifest::{IndexerInstallSource, SemanticIndexerKind, pinned_indexer};
-use serde::Deserialize;
-use serde_json::Value;
+use crate::semantic_indexer_runner::typescript_model_output::{
+    CompilerProject, CompilerWorld,
+    OUTPUT_SCHEMA_VERSION as TYPESCRIPT_PROJECT_MODEL_OUTPUT_SCHEMA_VERSION, is_config_candidate,
+    parse_output, pinned_compiler_version as pinned_typescript_compiler_version,
+};
 use std::collections::BTreeSet;
 use std::path::Path;
 
@@ -33,44 +35,11 @@ pub(super) use validation::{
 
 pub(super) const TYPESCRIPT_PROJECT_MODEL_COMMAND_CONTRACT: &str =
     "sniff-typescript-compiler-project-model-v2";
-pub(super) const TYPESCRIPT_PROJECT_MODEL_OUTPUT_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Clone)]
 pub(super) struct TypeScriptCompilerExecutionOutput {
     pub(super) toolchain_identity_sha256: String,
     pub(super) stdout: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct CompilerOutput {
-    schema_version: u32,
-    typescript_version: String,
-    worlds: Vec<CompilerWorld>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct CompilerWorld {
-    root_config: Option<String>,
-    root_source_files: Vec<String>,
-    inferred: bool,
-    config_closure: Vec<String>,
-    diagnostics: Vec<Value>,
-    projects: Vec<CompilerProject>,
-    selected_source_files: Vec<String>,
-    ignored_source_files: Vec<String>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct CompilerProject {
-    config_path: Option<String>,
-    config_reads: Vec<String>,
-    diagnostics: Vec<Value>,
-    effective_options: Value,
-    references: Vec<String>,
-    selected_source_files: Vec<String>,
 }
 
 pub(in crate::benchmark::release) fn census_intentional_boundary_typescript_project_models_typed(
@@ -220,15 +189,8 @@ fn parse_typescript_project_model(
     {
         return Err("TypeScript project-model toolchain identity is invalid".to_string());
     }
-    let output: CompilerOutput = serde_json::from_slice(stdout)
-        .map_err(|error| format!("failed to parse TypeScript compiler project model: {error}"))?;
+    let output = parse_output(stdout)?;
     let compiler_version = pinned_typescript_compiler_version()?;
-    if output.schema_version != TYPESCRIPT_PROJECT_MODEL_OUTPUT_SCHEMA_VERSION
-        || output.typescript_version != compiler_version
-        || output.worlds.is_empty()
-    {
-        return Err("TypeScript compiler project-model identity changed".to_string());
-    }
     let required = required_sources.iter().cloned().collect::<BTreeSet<_>>();
     let expected_configs = config_candidates.iter().cloned().collect::<BTreeSet<_>>();
     let mut covered = BTreeSet::new();
@@ -530,40 +492,11 @@ fn require_sorted_unique(values: &[String], label: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn is_config_candidate(repository_path: &str) -> bool {
-    let name = repository_path
-        .rsplit('/')
-        .next()
-        .unwrap_or(repository_path);
-    let lower = name.to_ascii_lowercase();
-    lower == "tsconfig.json"
-        || lower == "jsconfig.json"
-        || (lower.starts_with("tsconfig.") && lower.ends_with(".json"))
-        || (lower.starts_with("jsconfig.") && lower.ends_with(".json"))
-}
-
 fn is_typescript_javascript_source(repository_path: &str) -> bool {
     let lower = repository_path.to_ascii_lowercase();
     [".cjs", ".cts", ".js", ".jsx", ".mjs", ".mts", ".ts", ".tsx"]
         .iter()
         .any(|extension| lower.ends_with(extension))
-}
-
-fn pinned_typescript_compiler_version() -> Result<&'static str, String> {
-    let spec = pinned_indexer(SemanticIndexerKind::TypeScriptJavaScript)?;
-    let IndexerInstallSource::NpmTarballs { packages } = spec.source else {
-        return Err("pinned scip-typescript installation is not an npm closure".to_string());
-    };
-    let mut matches = packages
-        .iter()
-        .filter(|package| package.name == "typescript");
-    let package = matches
-        .next()
-        .ok_or_else(|| "pinned scip-typescript closure omitted TypeScript".to_string())?;
-    if matches.next().is_some() {
-        return Err("pinned scip-typescript closure repeats TypeScript".to_string());
-    }
-    Ok(package.version)
 }
 
 impl IntentionalBoundaryProjectModelVariant {

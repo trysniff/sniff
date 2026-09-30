@@ -88,15 +88,35 @@ fn missing_installation_fails_closed() {
 }
 
 #[test]
-fn typescript_installation_identity_commits_the_signature_patch() {
+fn typescript_installation_identity_commits_signature_and_project_config_patches() {
     let spec = pinned_indexer(SemanticIndexerKind::TypeScriptJavaScript).unwrap();
 
     let identity = super::source_identity(spec);
 
     assert!(
-        identity.ends_with(":sniff-signature-patch-compiler-api-signatures-v3"),
+        identity.ends_with(":sniff-signature-patch-compiler-api-signatures-and-project-config-v4"),
         "{identity}"
     );
+}
+
+#[test]
+fn typescript_legacy_config_parser_installation_is_rejected() {
+    let spec = pinned_indexer(SemanticIndexerKind::TypeScriptJavaScript).unwrap();
+    let mut record = super::IndexerInstallationRecord {
+        version: super::INSTALL_RECORD_VERSION,
+        install_contract: super::INDEXER_INSTALL_CONTRACT.to_string(),
+        kind: spec.kind,
+        indexer_version: spec.version.to_string(),
+        source_identity: super::source_identity(spec),
+        entrypoint: super::normalize_path(&spec.entrypoint_relative_path()),
+        tree_sha256: "a".repeat(64),
+    };
+    super::validate_record(spec, &record).unwrap();
+    record.source_identity = record.source_identity.replace(
+        "compiler-api-signatures-and-project-config-v4",
+        "compiler-api-signatures-v3",
+    );
+    assert!(super::validate_record(spec, &record).is_err());
 }
 
 #[test]
