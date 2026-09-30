@@ -107,12 +107,26 @@ async fn discover_at(
             format!("failed to stage TypeScript project-model input: {error}"),
         )
     })?;
-    let compiler = installed
-        .root
-        .join("node_modules/typescript/lib/typescript.js");
+    let compiler = fs::canonicalize(
+        installed
+            .root
+            .join("node_modules/typescript/lib/typescript.js"),
+    )
+    .map_err(|error| {
+        model_failure(
+            spec,
+            SemanticIndexerRunPhase::InstallationVerification,
+            format!("failed to resolve the pinned TypeScript compiler: {error}"),
+        )
+    })?;
     let mut prepared = build_indexer_sandbox_command(spec, root, installed, Vec::new(), None)
         .map_err(|detail| model_failure(spec, SemanticIndexerRunPhase::Preparation, detail))?;
     prepared.command.args = model_arguments(root, &sidecar, &compiler, &input_path);
+    #[cfg(windows)]
+    prepared
+        .command
+        .windows_virtualized_paths
+        .push(root.to_path_buf());
     prepared.command.timeout = Duration::from_secs(5 * 60);
     prepared.command.output_limit = 32 * 1024 * 1024;
     prepared
@@ -139,7 +153,15 @@ async fn discover_at(
             ))?
         )
     );
-    let result = run_with_runtime_identity(prepared, "TypeScript compiler project model").await;
+    let result = run_sandbox_command(prepared.command, "TypeScript compiler project model").await;
+    let integrity = runtime_file_identities(&prepared.runtime_files).and_then(|after| {
+        verify_runtime_identities_unchanged(
+            "TypeScript compiler project model",
+            &identities,
+            &after,
+        )
+    });
+    let result = combine_run_and_integrity(result, integrity);
     require_snapshot(context, root).map_err(|detail| {
         model_failure(spec, SemanticIndexerRunPhase::IntegrityVerification, detail)
     })?;

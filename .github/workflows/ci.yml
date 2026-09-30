@@ -283,8 +283,8 @@ jobs:
             benchmark::release::intentional_boundary_project_model_typescript::tests::real_pinned_compiler_api_emits_the_reference_world \
             -- --exact --ignored --test-threads=1 --nocapture
           cargo test --lib --locked \
-            semantic_indexer_runner::typescript_model::tests::normal_scan_discovers_and_indexes_reference_world_without_git_or_model_calls \
-            -- --exact --ignored --test-threads=1 --nocapture
+            semantic_indexer_runner::typescript_model::tests::normal_scan_ \
+            -- --ignored --test-threads=1 --nocapture
           cargo test --lib --locked \
             benchmark::release::intentional_boundary_project_model_typescript::tests::real_pinned_compiler_api_emits_an_exact_loose_source_world \
             -- --exact --ignored --test-threads=1 --nocapture

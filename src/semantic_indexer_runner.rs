@@ -1268,6 +1268,26 @@ async fn run_one_in_recovery_scope(
             )
         })?;
     }
+    if let Some(expected) =
+        typescript_plan.and_then(|plan| plan.dimensions.get("source_snapshot_sha256"))
+        && repository_snapshot::repository_content_digest_with_generated_index(execution_root)
+            .map_err(|detail| {
+                indexer_failure(
+                    spec,
+                    SemanticIndexerRunFailureKind::InfrastructureFailed,
+                    SemanticIndexerRunPhase::IntegrityVerification,
+                    detail,
+                )
+            })?
+            != *expected
+    {
+        return Err(indexer_failure(
+            spec,
+            SemanticIndexerRunFailureKind::InfrastructureFailed,
+            SemanticIndexerRunPhase::IntegrityVerification,
+            "TypeScript indexing changed its compiler census snapshot; refusing its SCIP output",
+        ));
+    }
     let source_digest_after =
         source_integrity_digest_at(root, execution_root, files).map_err(|detail| {
             indexer_failure(

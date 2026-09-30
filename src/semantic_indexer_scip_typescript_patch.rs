@@ -209,7 +209,7 @@ fn patch_source(source: &str) -> Result<String, String> {
         })
 }
 
-fn replace_exact_once(
+pub(super) fn replace_exact_once(
     source: &str,
     before: &str,
     after: &str,
@@ -224,7 +224,7 @@ fn replace_exact_once(
     Ok(source.replacen(before, after, 1))
 }
 
-fn require_sha256(bytes: &[u8], expected: &str, label: &str) -> Result<(), String> {
+pub(super) fn require_sha256(bytes: &[u8], expected: &str, label: &str) -> Result<(), String> {
     let actual = format!("{:x}", Sha256::digest(bytes));
     if actual != expected {
         return Err(format!(

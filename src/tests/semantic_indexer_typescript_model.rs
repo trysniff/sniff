@@ -150,3 +150,68 @@ async fn normal_scan_discovers_and_indexes_reference_world_without_git_or_model_
     assert!(!root.path().join(".git").exists());
     assert!(!root.path().join(".sniff-indexer-recovery.json").exists());
 }
+
+#[test]
+fn generated_index_does_not_hide_config_or_unreviewed_dependency_mutations() {
+    let root = TempDir::new().unwrap();
+    write(root.path(), "tsconfig.json", r#"{"files":["main.ts"]}"#);
+    write(root.path(), "main.ts", "export function main() {}\n");
+    write(root.path(), "dependency.ts", "export const value = 1;\n");
+    let baseline = repository_snapshot::repository_content_digest(root.path()).unwrap();
+    write(root.path(), "index.scip", "provider output");
+    assert_eq!(
+        repository_snapshot::repository_content_digest_with_generated_index(root.path()).unwrap(),
+        baseline
+    );
+    write(
+        root.path(),
+        "tsconfig.json",
+        r#"{"files":["main.ts"],"compilerOptions":{"strict":true}}"#,
+    );
+    assert_ne!(
+        repository_snapshot::repository_content_digest_with_generated_index(root.path()).unwrap(),
+        baseline
+    );
+    write(root.path(), "tsconfig.json", r#"{"files":["main.ts"]}"#);
+    write(root.path(), "dependency.ts", "export const value = 2;\n");
+    assert_ne!(
+        repository_snapshot::repository_content_digest_with_generated_index(root.path()).unwrap(),
+        baseline
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires the installed checksum-pinned scip-typescript runtime, Node.js, and native sandbox"]
+async fn normal_scan_preserves_implicit_jsconfig_compiler_defaults() {
+    let root = TempDir::new().unwrap();
+    write(root.path(), "jsconfig.json", "{}");
+    write(
+        root.path(),
+        "index.js",
+        "export function answer() { return 42; }\n",
+    );
+    let file =
+        crate::parser::parse_file_checked(root.path().join("index.js").to_str().unwrap()).unwrap();
+    let outcome = run_required_indexers_with_discovered_worlds(
+        root.path(),
+        std::slice::from_ref(&file),
+        std::slice::from_ref(&file),
+    )
+    .await
+    .unwrap();
+    assert!(outcome.failures.is_empty(), "{:?}", outcome.failures);
+    let crate::semantic_index::SemanticIndexSet::Qualified { variants } =
+        &outcome.indexes[&SemanticIndexerKind::TypeScriptJavaScript]
+    else {
+        panic!("jsconfig scan used an unqualified index");
+    };
+    assert_eq!(variants.len(), 1);
+    let evidence = crate::semantic_method_join::build_compiler_method_evidence(
+        root.path(),
+        &[file],
+        &outcome.indexes,
+    )
+    .unwrap();
+    assert_eq!(evidence.contexts.len(), 1);
+    assert!(!root.path().join(".sniff-indexer-recovery.json").exists());
+}
