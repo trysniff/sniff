@@ -16,6 +16,7 @@ include = [
   "/assets/**",
   "/case-studies/**",
   "/CHANGELOG.md",
+  "/CAPABILITIES.md",
   "/Cargo.lock",
   "/LICENSE",
   "/LICENSES/**",
