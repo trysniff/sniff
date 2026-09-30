@@ -118,7 +118,8 @@ jobs:
           echo "9cfca885c88ce7f8d2c7cc01114b6bc129acd5e2dfa432ef3b255858a51b65a9  $archive" \
             | sha256sum --check
           mkdir -p "$RUNNER_TEMP/blind-prior/extracted"
-          unzip -q "$archive" -d "$RUNNER_TEMP/blind-prior/extracted"
+          python3 -c 'import sys, zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])' \
+            "$archive" "$RUNNER_TEMP/blind-prior/extracted"
           SNIFF_BLIND_SEAL_PATH="$RUNNER_TEMP/blind-prior/extracted/blind-source-seal.json" \
             cargo test --lib --locked verifies_real_blind_prior_temporal_proof -- --ignored
       - name: Run Windows unit and non-dogfood integration tests
