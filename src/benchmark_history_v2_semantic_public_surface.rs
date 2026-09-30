@@ -119,8 +119,8 @@ pub(super) fn go_package_roots_for_variant(
                 .filter(|variant| variant.externally_reachable)
                 .filter(|variant| match semantic_variant {
                     SemanticIndexVariant::Unqualified => true,
-                    SemanticIndexVariant::Qualified { identity, .. } => {
-                        variant.execution_id == identity.0
+                    SemanticIndexVariant::Qualified { dimensions, .. } => {
+                        dimensions.get("project_model_execution_id") == Some(&variant.execution_id)
                     }
                 })
                 .collect::<Vec<_>>();
