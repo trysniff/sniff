@@ -1,0 +1,3996 @@
+{
+  "schema_version": 1,
+  "contract": "sniffbench-historical-v3-prior-v2-temporal-v1",
+  "prior_seal_sha256": "731ba5001526ac9473c4013fbd4778b903ea5734312e8a86d229b86d98eb5eb8",
+  "frame_file_sha256": "de8dca6b0248229171a3e82f61b3e59e324ebca47c902e315628d4335120719f",
+  "selection_file_sha256": "e6f06b0b887168205dcaa1d903ffcf54efe6199ea730ee118b28ad8e24925853",
+  "cutoff_utc": "2026-08-07T20:46:11Z",
+  "witnesses": [
+    {
+      "canonical_repository": "11ty/eleventy",
+      "global_row_index": 116599,
+      "pull_number": 1014,
+      "created_at_utc": "2020-03-10T13:39:39Z"
+    },
+    {
+      "canonical_repository": "3hren/msgpack-rust",
+      "global_row_index": 96097,
+      "pull_number": 286,
+      "created_at_utc": "2021-06-25T17:43:43Z"
+    },
+    {
+      "canonical_repository": "actions/toolkit",
+      "global_row_index": 55026,
+      "pull_number": 1593,
+      "created_at_utc": "2023-12-05T18:49:32Z"
+    },
+    {
+      "canonical_repository": "adeira/universe",
+      "global_row_index": 99767,
+      "pull_number": 1261,
+      "created_at_utc": "2020-11-03T16:20:52Z"
+    },
+    {
+      "canonical_repository": "aeon-toolkit/aeon",
+      "global_row_index": 81442,
+      "pull_number": 2115,
+      "created_at_utc": "2024-09-28T13:40:36Z"
+    },
+    {
+      "canonical_repository": "aeye-lab/pymovements",
+      "global_row_index": 56089,
+      "pull_number": 472,
+      "created_at_utc": "2023-08-10T18:23:43Z"
+    },
+    {
+      "canonical_repository": "aiscript-dev/aiscript",
+      "global_row_index": 68274,
+      "pull_number": 776,
+      "created_at_utc": "2024-09-01T02:32:26Z"
+    },
+    {
+      "canonical_repository": "ajalt/mordant",
+      "global_row_index": 95437,
+      "pull_number": 16,
+      "created_at_utc": "2021-05-10T16:41:13Z"
+    },
+    {
+      "canonical_repository": "alchemyplatform/alchemy-sdk-js",
+      "global_row_index": 112053,
+      "pull_number": 328,
+      "created_at_utc": "2023-05-18T00:55:50Z"
+    },
+    {
+      "canonical_repository": "aleph-alpha/ts-rs",
+      "global_row_index": 94109,
+      "pull_number": 416,
+      "created_at_utc": "2025-06-04T06:36:20Z"
+    },
+    {
+      "canonical_repository": "alexcrichton/futures-rs",
+      "global_row_index": 61259,
+      "pull_number": 410,
+      "created_at_utc": "2017-03-10T06:55:09Z"
+    },
+    {
+      "canonical_repository": "alexcrichton/toml-rs",
+      "global_row_index": 61184,
+      "pull_number": 187,
+      "created_at_utc": "2017-06-01T20:05:31Z"
+    },
+    {
+      "canonical_repository": "algesten/ureq",
+      "global_row_index": 61219,
+      "pull_number": 201,
+      "created_at_utc": "2020-10-25T10:36:06Z"
+    },
+    {
+      "canonical_repository": "algolia/algoliasearch-client-go",
+      "global_row_index": 65064,
+      "pull_number": 738,
+      "created_at_utc": "2023-07-04T14:55:44Z"
+    },
+    {
+      "canonical_repository": "alibaba/hooks",
+      "global_row_index": 75493,
+      "pull_number": 1048,
+      "created_at_utc": "2021-07-20T08:20:19Z"
+    },
+    {
+      "canonical_repository": "allegro/marathon-consul",
+      "global_row_index": 64375,
+      "pull_number": 129,
+      "created_at_utc": "2016-10-10T14:34:59Z"
+    },
+    {
+      "canonical_repository": "altair-viz/altair",
+      "global_row_index": 48729,
+      "pull_number": 239,
+      "created_at_utc": "2016-10-20T03:33:48Z"
+    },
+    {
+      "canonical_repository": "amaranth-lang/amaranth",
+      "global_row_index": 2037,
+      "pull_number": 1118,
+      "created_at_utc": "2024-02-13T04:47:43Z"
+    },
+    {
+      "canonical_repository": "amplify-education/serverless-domain-manager",
+      "global_row_index": 65425,
+      "pull_number": 472,
+      "created_at_utc": "2022-01-18T21:49:07Z"
+    },
+    {
+      "canonical_repository": "amzn/ion-go",
+      "global_row_index": 49296,
+      "pull_number": 160,
+      "created_at_utc": "2020-09-15T19:26:17Z"
+    },
+    {
+      "canonical_repository": "amzn/ion-js",
+      "global_row_index": 65447,
+      "pull_number": 726,
+      "created_at_utc": "2022-10-13T03:01:13Z"
+    },
+    {
+      "canonical_repository": "ant-design/ant-design-mobile",
+      "global_row_index": 53919,
+      "pull_number": 5933,
+      "created_at_utc": "2023-01-12T06:36:41Z"
+    },
+    {
+      "canonical_repository": "antrea-io/antrea",
+      "global_row_index": 122767,
+      "pull_number": 6515,
+      "created_at_utc": "2024-07-08T07:25:22Z"
+    },
+    {
+      "canonical_repository": "anuraghazra/github-readme-stats",
+      "global_row_index": 88230,
+      "pull_number": 2736,
+      "created_at_utc": "2023-05-19T08:26:18Z"
+    },
+    {
+      "canonical_repository": "apache/arrow-rs",
+      "global_row_index": 15512,
+      "pull_number": 6116,
+      "created_at_utc": "2024-07-25T17:34:08Z"
+    },
+    {
+      "canonical_repository": "apache/camel-k",
+      "global_row_index": 102259,
+      "pull_number": 760,
+      "created_at_utc": "2019-06-21T09:12:28Z"
+    },
+    {
+      "canonical_repository": "apache/rocketmq-client-go",
+      "global_row_index": 118982,
+      "pull_number": 732,
+      "created_at_utc": "2021-10-14T13:22:07Z"
+    },
+    {
+      "canonical_repository": "apache/streampipes",
+      "global_row_index": 69268,
+      "pull_number": 2443,
+      "created_at_utc": "2024-01-29T10:05:49Z"
+    },
+    {
+      "canonical_repository": "api-platform/admin",
+      "global_row_index": 90049,
+      "pull_number": 302,
+      "created_at_utc": "2020-05-30T14:09:59Z"
+    },
+    {
+      "canonical_repository": "apollographql/apollo-kotlin",
+      "global_row_index": 94876,
+      "pull_number": 4662,
+      "created_at_utc": "2023-02-01T22:28:17Z"
+    },
+    {
+      "canonical_repository": "apollographql/apollo-rs",
+      "global_row_index": 62260,
+      "pull_number": 671,
+      "created_at_utc": "2023-10-05T11:05:16Z"
+    },
+    {
+      "canonical_repository": "aquaproj/aqua",
+      "global_row_index": 6519,
+      "pull_number": 1708,
+      "created_at_utc": "2023-03-07T13:23:35Z"
+    },
+    {
+      "canonical_repository": "ariakit/ariakit",
+      "global_row_index": 68643,
+      "pull_number": 2582,
+      "created_at_utc": "2023-06-26T14:31:42Z"
+    },
+    {
+      "canonical_repository": "ariga/atlas",
+      "global_row_index": 101519,
+      "pull_number": 723,
+      "created_at_utc": "2022-04-18T20:29:19Z"
+    },
+    {
+      "canonical_repository": "arkivanov/decompose",
+      "global_row_index": 1337,
+      "pull_number": 182,
+      "created_at_utc": "2022-08-20T11:32:18Z"
+    },
+    {
+      "canonical_repository": "artusjs/core",
+      "global_row_index": 124298,
+      "pull_number": 145,
+      "created_at_utc": "2022-07-15T07:01:25Z"
+    },
+    {
+      "canonical_repository": "ashleygwilliams/wasm-pack",
+      "global_row_index": 56730,
+      "pull_number": 58,
+      "created_at_utc": "2018-03-14T15:59:07Z"
+    },
+    {
+      "canonical_repository": "asottile/add-trailing-comma",
+      "global_row_index": 101613,
+      "pull_number": 236,
+      "created_at_utc": "2023-07-01T17:36:10Z"
+    },
+    {
+      "canonical_repository": "asyncapi/modelina",
+      "global_row_index": 124215,
+      "pull_number": 797,
+      "created_at_utc": "2022-07-05T13:37:55Z"
+    },
+    {
+      "canonical_repository": "asyncapi/parser-js",
+      "global_row_index": 78684,
+      "pull_number": 999,
+      "created_at_utc": "2024-06-03T10:57:27Z"
+    },
+    {
+      "canonical_repository": "auth0/auth0.js",
+      "global_row_index": 74423,
+      "pull_number": 889,
+      "created_at_utc": "2019-01-08T21:45:41Z"
+    },
+    {
+      "canonical_repository": "auth0/nextjs-auth0",
+      "global_row_index": 64809,
+      "pull_number": 791,
+      "created_at_utc": "2022-08-25T17:13:40Z"
+    },
+    {
+      "canonical_repository": "automl/smac3",
+      "global_row_index": 31873,
+      "pull_number": 1207,
+      "created_at_utc": "2025-02-27T10:11:03Z"
+    },
+    {
+      "canonical_repository": "avajs/ava",
+      "global_row_index": 98609,
+      "pull_number": 3280,
+      "created_at_utc": "2023-12-30T19:42:21Z"
+    },
+    {
+      "canonical_repository": "avro-kotlin/avro4k",
+      "global_row_index": 80103,
+      "pull_number": 99,
+      "created_at_utc": "2021-04-07T08:22:43Z"
+    },
+    {
+      "canonical_repository": "aws-cloudformation/cfn-lint",
+      "global_row_index": 80237,
+      "pull_number": 2853,
+      "created_at_utc": "2023-08-18T17:25:51Z"
+    },
+    {
+      "canonical_repository": "aws-quickstart/taskcat",
+      "global_row_index": 111521,
+      "pull_number": 577,
+      "created_at_utc": "2020-05-21T23:41:29Z"
+    },
+    {
+      "canonical_repository": "aws/aws-sdk-js",
+      "global_row_index": 99460,
+      "pull_number": 4221,
+      "created_at_utc": "2022-09-28T19:31:14Z"
+    },
+    {
+      "canonical_repository": "aws/aws-xray-sdk-node",
+      "global_row_index": 99465,
+      "pull_number": 79,
+      "created_at_utc": "2018-12-04T22:44:50Z"
+    },
+    {
+      "canonical_repository": "awslabs/smithy-rs",
+      "global_row_index": 106454,
+      "pull_number": 794,
+      "created_at_utc": "2021-10-21T14:41:28Z"
+    },
+    {
+      "canonical_repository": "axelrod-python/axelrod",
+      "global_row_index": 112753,
+      "pull_number": 1239,
+      "created_at_utc": "2019-02-10T18:58:32Z"
+    },
+    {
+      "canonical_repository": "axodotdev/cargo-dist",
+      "global_row_index": 28446,
+      "pull_number": 443,
+      "created_at_utc": "2023-09-20T23:52:02Z"
+    },
+    {
+      "canonical_repository": "azat-io/eslint-plugin-perfectionist",
+      "global_row_index": 80474,
+      "pull_number": 495,
+      "created_at_utc": "2025-03-20T13:46:44Z"
+    },
+    {
+      "canonical_repository": "azure/aro-rp",
+      "global_row_index": 10268,
+      "pull_number": 2788,
+      "created_at_utc": "2023-03-21T17:13:41Z"
+    },
+    {
+      "canonical_repository": "azure/azure-functions-durable-js",
+      "global_row_index": 78350,
+      "pull_number": 497,
+      "created_at_utc": "2023-03-23T00:36:06Z"
+    },
+    {
+      "canonical_repository": "azure/walinuxagent",
+      "global_row_index": 112884,
+      "pull_number": 1690,
+      "created_at_utc": "2019-10-31T22:35:26Z"
+    },
+    {
+      "canonical_repository": "azuread/microsoft-authentication-library-for-go",
+      "global_row_index": 6298,
+      "pull_number": 195,
+      "created_at_utc": "2021-03-23T21:58:53Z"
+    },
+    {
+      "canonical_repository": "azuread/microsoft-authentication-library-for-python",
+      "global_row_index": 97979,
+      "pull_number": 320,
+      "created_at_utc": "2021-03-04T20:44:03Z"
+    },
+    {
+      "canonical_repository": "backblaze/b2_command_line_tool",
+      "global_row_index": 50008,
+      "pull_number": 185,
+      "created_at_utc": "2016-07-06T12:18:44Z"
+    },
+    {
+      "canonical_repository": "badges/shields",
+      "global_row_index": 104600,
+      "pull_number": 3131,
+      "created_at_utc": "2019-03-02T03:23:58Z"
+    },
+    {
+      "canonical_repository": "baidu/amis",
+      "global_row_index": 78357,
+      "pull_number": 7635,
+      "created_at_utc": "2023-07-31T05:09:41Z"
+    },
+    {
+      "canonical_repository": "berriai/litellm",
+      "global_row_index": 47909,
+      "pull_number": 9886,
+      "created_at_utc": "2025-04-10T15:31:59Z"
+    },
+    {
+      "canonical_repository": "bitburner-official/bitburner-src",
+      "global_row_index": 75480,
+      "pull_number": 1074,
+      "created_at_utc": "2024-01-31T17:27:52Z"
+    },
+    {
+      "canonical_repository": "bitcoinjs/bitcoinjs-lib",
+      "global_row_index": 94249,
+      "pull_number": 481,
+      "created_at_utc": "2015-09-29T09:03:33Z"
+    },
+    {
+      "canonical_repository": "bitshifter/glam-rs",
+      "global_row_index": 3587,
+      "pull_number": 206,
+      "created_at_utc": "2021-06-25T09:54:09Z"
+    },
+    {
+      "canonical_repository": "blevesearch/bleve",
+      "global_row_index": 45923,
+      "pull_number": 1393,
+      "created_at_utc": "2020-05-07T05:54:23Z"
+    },
+    {
+      "canonical_repository": "blitz-js/superjson",
+      "global_row_index": 108237,
+      "pull_number": 29,
+      "created_at_utc": "2020-07-23T15:39:42Z"
+    },
+    {
+      "canonical_repository": "bluekeyes/go-gitdiff",
+      "global_row_index": 92802,
+      "pull_number": 34,
+      "created_at_utc": "2022-10-01T05:26:14Z"
+    },
+    {
+      "canonical_repository": "bmatsuo/lmdb-go",
+      "global_row_index": 28306,
+      "pull_number": 73,
+      "created_at_utc": "2016-04-12T07:55:58Z"
+    },
+    {
+      "canonical_repository": "bmish/eslint-doc-generator",
+      "global_row_index": 99540,
+      "pull_number": 141,
+      "created_at_utc": "2022-10-17T17:16:17Z"
+    },
+    {
+      "canonical_repository": "boto/botocore",
+      "global_row_index": 89500,
+      "pull_number": 576,
+      "created_at_utc": "2015-06-18T02:08:15Z"
+    },
+    {
+      "canonical_repository": "braintree/braintree-web-drop-in",
+      "global_row_index": 114967,
+      "pull_number": 661,
+      "created_at_utc": "2020-09-14T21:14:33Z"
+    },
+    {
+      "canonical_repository": "brigand/babel-plugin-flow-react-proptypes",
+      "global_row_index": 117700,
+      "pull_number": 81,
+      "created_at_utc": "2017-04-26T12:43:15Z"
+    },
+    {
+      "canonical_repository": "buchgr/bazel-remote",
+      "global_row_index": 21274,
+      "pull_number": 129,
+      "created_at_utc": "2019-11-28T12:46:02Z"
+    },
+    {
+      "canonical_repository": "busyorg/busy",
+      "global_row_index": 9303,
+      "pull_number": 2187,
+      "created_at_utc": "2019-02-18T14:58:01Z"
+    },
+    {
+      "canonical_repository": "bwplotka/mdox",
+      "global_row_index": 53525,
+      "pull_number": 45,
+      "created_at_utc": "2021-06-15T04:55:45Z"
+    },
+    {
+      "canonical_repository": "bytecodealliance/rustix",
+      "global_row_index": 3007,
+      "pull_number": 742,
+      "created_at_utc": "2023-07-15T15:43:30Z"
+    },
+    {
+      "canonical_repository": "bytecodealliance/wasm-tools",
+      "global_row_index": 3105,
+      "pull_number": 1941,
+      "created_at_utc": "2024-12-06T22:39:29Z"
+    },
+    {
+      "canonical_repository": "bytecodealliance/wasmtime",
+      "global_row_index": 3827,
+      "pull_number": 7240,
+      "created_at_utc": "2023-10-13T21:00:45Z"
+    },
+    {
+      "canonical_repository": "callowayproject/bump-my-version",
+      "global_row_index": 90425,
+      "pull_number": 292,
+      "created_at_utc": "2025-02-02T15:03:20Z"
+    },
+    {
+      "canonical_repository": "callstack/react-native-paper",
+      "global_row_index": 9697,
+      "pull_number": 1001,
+      "created_at_utc": "2019-04-17T13:51:51Z"
+    },
+    {
+      "canonical_repository": "capricorn86/happy-dom",
+      "global_row_index": 11854,
+      "pull_number": 391,
+      "created_at_utc": "2022-03-07T09:16:04Z"
+    },
+    {
+      "canonical_repository": "cartodb/cartoframes",
+      "global_row_index": 76375,
+      "pull_number": 1660,
+      "created_at_utc": "2020-07-01T06:40:21Z"
+    },
+    {
+      "canonical_repository": "casey/just",
+      "global_row_index": 98125,
+      "pull_number": 1425,
+      "created_at_utc": "2022-11-25T20:58:15Z"
+    },
+    {
+      "canonical_repository": "cashapp/redwood",
+      "global_row_index": 80120,
+      "pull_number": 594,
+      "created_at_utc": "2022-12-06T00:42:46Z"
+    },
+    {
+      "canonical_repository": "cberner/redb",
+      "global_row_index": 44762,
+      "pull_number": 226,
+      "created_at_utc": "2022-03-19T03:56:42Z"
+    },
+    {
+      "canonical_repository": "cedar-policy/cedar",
+      "global_row_index": 107364,
+      "pull_number": 1415,
+      "created_at_utc": "2025-01-07T18:12:13Z"
+    },
+    {
+      "canonical_repository": "celery/celery",
+      "global_row_index": 111092,
+      "pull_number": 7943,
+      "created_at_utc": "2022-12-06T09:26:46Z"
+    },
+    {
+      "canonical_repository": "census-instrumentation/opencensus-python",
+      "global_row_index": 111187,
+      "pull_number": 253,
+      "created_at_utc": "2018-08-09T21:39:36Z"
+    },
+    {
+      "canonical_repository": "chipsalliance/caliptra-sw",
+      "global_row_index": 47102,
+      "pull_number": 442,
+      "created_at_utc": "2023-06-29T04:05:19Z"
+    },
+    {
+      "canonical_repository": "chronotope/chrono",
+      "global_row_index": 66710,
+      "pull_number": 1530,
+      "created_at_utc": "2024-03-20T14:29:16Z"
+    },
+    {
+      "canonical_repository": "cilium/cilium",
+      "global_row_index": 46301,
+      "pull_number": 13593,
+      "created_at_utc": "2020-10-15T17:48:39Z"
+    },
+    {
+      "canonical_repository": "cilium/ebpf",
+      "global_row_index": 83364,
+      "pull_number": 1785,
+      "created_at_utc": "2025-05-20T16:03:43Z"
+    },
+    {
+      "canonical_repository": "cjbooms/fabrikt",
+      "global_row_index": 84216,
+      "pull_number": 38,
+      "created_at_utc": "2021-04-30T10:34:48Z"
+    },
+    {
+      "canonical_repository": "clap-rs/clap",
+      "global_row_index": 66733,
+      "pull_number": 1509,
+      "created_at_utc": "2019-06-24T08:13:17Z"
+    },
+    {
+      "canonical_repository": "cli/cli",
+      "global_row_index": 54726,
+      "pull_number": 10890,
+      "created_at_utc": "2025-04-28T19:21:56Z"
+    },
+    {
+      "canonical_repository": "cloudflare/cloudflare-go",
+      "global_row_index": 119530,
+      "pull_number": 1490,
+      "created_at_utc": "2024-01-30T12:04:54Z"
+    },
+    {
+      "canonical_repository": "cloudflare/daphne",
+      "global_row_index": 2362,
+      "pull_number": 675,
+      "created_at_utc": "2024-09-10T09:47:41Z"
+    },
+    {
+      "canonical_repository": "cloudpipe/cloudpickle",
+      "global_row_index": 33364,
+      "pull_number": 156,
+      "created_at_utc": "2018-02-08T22:02:09Z"
+    },
+    {
+      "canonical_repository": "cloudspannerecosystem/harbourbridge",
+      "global_row_index": 92621,
+      "pull_number": 81,
+      "created_at_utc": "2020-09-08T05:48:25Z"
+    },
+    {
+      "canonical_repository": "clusterlabs/ha_cluster_exporter",
+      "global_row_index": 6634,
+      "pull_number": 133,
+      "created_at_utc": "2020-02-21T14:19:31Z"
+    },
+    {
+      "canonical_repository": "cockroachdb/pebble",
+      "global_row_index": 110728,
+      "pull_number": 3808,
+      "created_at_utc": "2024-07-30T15:43:32Z"
+    },
+    {
+      "canonical_repository": "code-ready/crc",
+      "global_row_index": 114833,
+      "pull_number": 1400,
+      "created_at_utc": "2020-07-17T16:18:05Z"
+    },
+    {
+      "canonical_repository": "codeception/codeceptjs",
+      "global_row_index": 6379,
+      "pull_number": 1951,
+      "created_at_utc": "2019-10-13T20:59:35Z"
+    },
+    {
+      "canonical_repository": "codecov/uploader",
+      "global_row_index": 59195,
+      "pull_number": 999,
+      "created_at_utc": "2023-03-28T22:55:13Z"
+    },
+    {
+      "canonical_repository": "codenotary/immudb",
+      "global_row_index": 8192,
+      "pull_number": 470,
+      "created_at_utc": "2020-08-14T15:17:23Z"
+    },
+    {
+      "canonical_repository": "codezonediitj/pydatastructs",
+      "global_row_index": 43658,
+      "pull_number": 225,
+      "created_at_utc": "2020-03-28T11:52:27Z"
+    },
+    {
+      "canonical_repository": "cogent3/cogent3",
+      "global_row_index": 111445,
+      "pull_number": 2062,
+      "created_at_utc": "2024-10-25T01:29:08Z"
+    },
+    {
+      "canonical_repository": "coinbase/rosetta-cli",
+      "global_row_index": 68459,
+      "pull_number": 110,
+      "created_at_utc": "2020-08-17T18:22:52Z"
+    },
+    {
+      "canonical_repository": "colinhacks/zod",
+      "global_row_index": 88746,
+      "pull_number": 4387,
+      "created_at_utc": "2025-05-17T04:06:12Z"
+    },
+    {
+      "canonical_repository": "compiler-explorer/compiler-explorer",
+      "global_row_index": 13358,
+      "pull_number": 7323,
+      "created_at_utc": "2025-01-29T00:22:45Z"
+    },
+    {
+      "canonical_repository": "compose-spec/compose-go",
+      "global_row_index": 97218,
+      "pull_number": 425,
+      "created_at_utc": "2023-06-28T21:39:28Z"
+    },
+    {
+      "canonical_repository": "conan-io/conan",
+      "global_row_index": 79514,
+      "pull_number": 18275,
+      "created_at_utc": "2025-05-09T08:54:29Z"
+    },
+    {
+      "canonical_repository": "conda/conda",
+      "global_row_index": 48555,
+      "pull_number": 1421,
+      "created_at_utc": "2015-07-08T20:38:20Z"
+    },
+    {
+      "canonical_repository": "coreos/go-oidc",
+      "global_row_index": 85416,
+      "pull_number": 259,
+      "created_at_utc": "2020-07-17T06:07:05Z"
+    },
+    {
+      "canonical_repository": "cornellius-gp/gpytorch",
+      "global_row_index": 105934,
+      "pull_number": 376,
+      "created_at_utc": "2018-11-14T23:09:13Z"
+    },
+    {
+      "canonical_repository": "cosmwasm/cosmwasm",
+      "global_row_index": 40898,
+      "pull_number": 1985,
+      "created_at_utc": "2024-01-09T00:37:26Z"
+    },
+    {
+      "canonical_repository": "cosmwasm/cw-multi-test",
+      "global_row_index": 4795,
+      "pull_number": 116,
+      "created_at_utc": "2023-12-18T17:03:52Z"
+    },
+    {
+      "canonical_repository": "cosmwasm/sylvia",
+      "global_row_index": 4950,
+      "pull_number": 403,
+      "created_at_utc": "2024-07-22T13:16:47Z"
+    },
+    {
+      "canonical_repository": "cqfn/diktat",
+      "global_row_index": 4821,
+      "pull_number": 353,
+      "created_at_utc": "2020-10-05T01:14:02Z"
+    },
+    {
+      "canonical_repository": "crate-ci/typos",
+      "global_row_index": 60382,
+      "pull_number": 374,
+      "created_at_utc": "2021-11-12T21:56:16Z"
+    },
+    {
+      "canonical_repository": "cross-rs/cross",
+      "global_row_index": 21545,
+      "pull_number": 1544,
+      "created_at_utc": "2024-08-17T09:23:20Z"
+    },
+    {
+      "canonical_repository": "crossplane/crossplane-runtime",
+      "global_row_index": 75520,
+      "pull_number": 230,
+      "created_at_utc": "2020-11-18T22:58:28Z"
+    },
+    {
+      "canonical_repository": "cta-observatory/ctapipe",
+      "global_row_index": 26518,
+      "pull_number": 1875,
+      "created_at_utc": "2022-04-12T08:50:15Z"
+    },
+    {
+      "canonical_repository": "cubed-dev/cubed",
+      "global_row_index": 59533,
+      "pull_number": 685,
+      "created_at_utc": "2025-01-30T09:08:57Z"
+    },
+    {
+      "canonical_repository": "cveproject/cve-services",
+      "global_row_index": 71022,
+      "pull_number": 388,
+      "created_at_utc": "2021-04-27T19:19:43Z"
+    },
+    {
+      "canonical_repository": "da0-da0/dao-contracts",
+      "global_row_index": 21429,
+      "pull_number": 362,
+      "created_at_utc": "2022-06-18T01:24:22Z"
+    },
+    {
+      "canonical_repository": "dadi/api",
+      "global_row_index": 85591,
+      "pull_number": 463,
+      "created_at_utc": "2018-07-25T11:39:52Z"
+    },
+    {
+      "canonical_repository": "dai-shi/waku",
+      "global_row_index": 2901,
+      "pull_number": 1039,
+      "created_at_utc": "2024-12-07T06:35:22Z"
+    },
+    {
+      "canonical_repository": "daixiang0/gci",
+      "global_row_index": 33819,
+      "pull_number": 192,
+      "created_at_utc": "2024-03-02T11:26:06Z"
+    },
+    {
+      "canonical_repository": "dandavison/delta",
+      "global_row_index": 40136,
+      "pull_number": 834,
+      "created_at_utc": "2021-12-07T04:35:01Z"
+    },
+    {
+      "canonical_repository": "darkskyapp/forecast-io-translations",
+      "global_row_index": 38961,
+      "pull_number": 134,
+      "created_at_utc": "2017-03-11T07:24:59Z"
+    },
+    {
+      "canonical_repository": "dask/dask",
+      "global_row_index": 99408,
+      "pull_number": 11377,
+      "created_at_utc": "2024-09-06T13:47:54Z"
+    },
+    {
+      "canonical_repository": "databricks/dbt-databricks",
+      "global_row_index": 106191,
+      "pull_number": 946,
+      "created_at_utc": "2025-02-26T18:26:36Z"
+    },
+    {
+      "canonical_repository": "datadog/datadogpy",
+      "global_row_index": 891,
+      "pull_number": 851,
+      "created_at_utc": "2024-08-21T18:10:37Z"
+    },
+    {
+      "canonical_repository": "datadog/dd-trace-js",
+      "global_row_index": 124805,
+      "pull_number": 2104,
+      "created_at_utc": "2022-06-02T15:46:07Z"
+    },
+    {
+      "canonical_repository": "dbus2/zbus",
+      "global_row_index": 62783,
+      "pull_number": 1035,
+      "created_at_utc": "2024-10-02T14:59:09Z"
+    },
+    {
+      "canonical_repository": "dcs4cop/xcube",
+      "global_row_index": 7977,
+      "pull_number": 261,
+      "created_at_utc": "2020-01-16T08:59:06Z"
+    },
+    {
+      "canonical_repository": "decred/dcrd",
+      "global_row_index": 75258,
+      "pull_number": 2380,
+      "created_at_utc": "2020-09-25T14:35:35Z"
+    },
+    {
+      "canonical_repository": "decred/dcrdex",
+      "global_row_index": 67328,
+      "pull_number": 962,
+      "created_at_utc": "2021-02-03T03:44:42Z"
+    },
+    {
+      "canonical_repository": "deepjavalibrary/djl",
+      "global_row_index": 69927,
+      "pull_number": 3279,
+      "created_at_utc": "2024-06-26T18:48:50Z"
+    },
+    {
+      "canonical_repository": "definitelytyped/dt-mergebot",
+      "global_row_index": 90655,
+      "pull_number": 348,
+      "created_at_utc": "2021-01-21T18:05:08Z"
+    },
+    {
+      "canonical_repository": "deislabs/ratify",
+      "global_row_index": 71864,
+      "pull_number": 433,
+      "created_at_utc": "2022-11-18T07:13:49Z"
+    },
+    {
+      "canonical_repository": "denoland/deno_core",
+      "global_row_index": 60721,
+      "pull_number": 696,
+      "created_at_utc": "2024-04-12T03:47:45Z"
+    },
+    {
+      "canonical_repository": "depcheck/depcheck",
+      "global_row_index": 62934,
+      "pull_number": 825,
+      "created_at_utc": "2023-08-22T09:36:42Z"
+    },
+    {
+      "canonical_repository": "designliquido/delegua",
+      "global_row_index": 54315,
+      "pull_number": 300,
+      "created_at_utc": "2023-03-26T02:35:38Z"
+    },
+    {
+      "canonical_repository": "devexpress/devextreme-react",
+      "global_row_index": 51355,
+      "pull_number": 274,
+      "created_at_utc": "2018-12-28T10:51:59Z"
+    },
+    {
+      "canonical_repository": "dexidp/dex",
+      "global_row_index": 455,
+      "pull_number": 1918,
+      "created_at_utc": "2021-01-14T12:24:14Z"
+    },
+    {
+      "canonical_repository": "dhi/mikeio",
+      "global_row_index": 60904,
+      "pull_number": 665,
+      "created_at_utc": "2024-03-12T14:40:46Z"
+    },
+    {
+      "canonical_repository": "djc/askama",
+      "global_row_index": 15067,
+      "pull_number": 173,
+      "created_at_utc": "2018-12-07T20:21:40Z"
+    },
+    {
+      "canonical_repository": "djc/quinn",
+      "global_row_index": 15170,
+      "pull_number": 553,
+      "created_at_utc": "2019-12-09T01:21:23Z"
+    },
+    {
+      "canonical_repository": "docker/compose-cli",
+      "global_row_index": 84391,
+      "pull_number": 1647,
+      "created_at_utc": "2021-05-06T07:45:07Z"
+    },
+    {
+      "canonical_repository": "draft-js-plugins/draft-js-plugins",
+      "global_row_index": 41122,
+      "pull_number": 1649,
+      "created_at_utc": "2020-12-18T10:01:53Z"
+    },
+    {
+      "canonical_repository": "dragonflyoss/dragonfly2",
+      "global_row_index": 63342,
+      "pull_number": 468,
+      "created_at_utc": "2021-07-16T15:54:24Z"
+    },
+    {
+      "canonical_repository": "dtolnay/cxx",
+      "global_row_index": 75366,
+      "pull_number": 653,
+      "created_at_utc": "2021-01-03T07:51:16Z"
+    },
+    {
+      "canonical_repository": "dtolnay/syn",
+      "global_row_index": 75386,
+      "pull_number": 1216,
+      "created_at_utc": "2022-09-18T23:10:15Z"
+    },
+    {
+      "canonical_repository": "dubzzz/fast-check",
+      "global_row_index": 6015,
+      "pull_number": 1702,
+      "created_at_utc": "2021-04-06T21:50:02Z"
+    },
+    {
+      "canonical_repository": "dushistov/rust_swig",
+      "global_row_index": 125228,
+      "pull_number": 224,
+      "created_at_utc": "2019-06-27T20:16:48Z"
+    },
+    {
+      "canonical_repository": "e2niee/pandapower",
+      "global_row_index": 50603,
+      "pull_number": 988,
+      "created_at_utc": "2020-11-17T15:56:35Z"
+    },
+    {
+      "canonical_repository": "ecadlabs/taquito",
+      "global_row_index": 53735,
+      "pull_number": 1039,
+      "created_at_utc": "2021-08-31T23:51:19Z"
+    },
+    {
+      "canonical_repository": "echobind/bisonapp",
+      "global_row_index": 53596,
+      "pull_number": 251,
+      "created_at_utc": "2022-03-17T19:31:03Z"
+    },
+    {
+      "canonical_repository": "eclipse-zenoh/zenoh",
+      "global_row_index": 21931,
+      "pull_number": 1353,
+      "created_at_utc": "2024-09-04T07:01:27Z"
+    },
+    {
+      "canonical_repository": "edgedb/edgedb-cli",
+      "global_row_index": 21990,
+      "pull_number": 721,
+      "created_at_utc": "2022-05-19T20:59:30Z"
+    },
+    {
+      "canonical_repository": "effector/effector",
+      "global_row_index": 80947,
+      "pull_number": 1092,
+      "created_at_utc": "2024-06-14T07:35:12Z"
+    },
+    {
+      "canonical_repository": "elastic/cloud-on-k8s",
+      "global_row_index": 104986,
+      "pull_number": 2707,
+      "created_at_utc": "2020-03-16T14:57:15Z"
+    },
+    {
+      "canonical_repository": "elastic/elastic-package",
+      "global_row_index": 46361,
+      "pull_number": 1140,
+      "created_at_utc": "2023-02-09T20:00:30Z"
+    },
+    {
+      "canonical_repository": "elastic/synthetics",
+      "global_row_index": 54831,
+      "pull_number": 406,
+      "created_at_utc": "2021-11-03T04:32:01Z"
+    },
+    {
+      "canonical_repository": "electrode-io/electrode-native",
+      "global_row_index": 24859,
+      "pull_number": 1235,
+      "created_at_utc": "2019-07-05T17:32:29Z"
+    },
+    {
+      "canonical_repository": "electron-userland/electron-forge",
+      "global_row_index": 24439,
+      "pull_number": 320,
+      "created_at_utc": "2017-09-12T01:05:41Z"
+    },
+    {
+      "canonical_repository": "electron/fiddle",
+      "global_row_index": 21359,
+      "pull_number": 655,
+      "created_at_utc": "2021-04-12T19:47:45Z"
+    },
+    {
+      "canonical_repository": "elm-tooling/elm-language-server",
+      "global_row_index": 88698,
+      "pull_number": 514,
+      "created_at_utc": "2021-02-11T16:48:03Z"
+    },
+    {
+      "canonical_repository": "embassy-rs/embassy",
+      "global_row_index": 118087,
+      "pull_number": 3656,
+      "created_at_utc": "2024-12-16T18:01:39Z"
+    },
+    {
+      "canonical_repository": "ember-cli/ember-cli",
+      "global_row_index": 94702,
+      "pull_number": 10189,
+      "created_at_utc": "2023-02-18T16:25:08Z"
+    },
+    {
+      "canonical_repository": "ember-cli/eslint-plugin-ember",
+      "global_row_index": 46981,
+      "pull_number": 746,
+      "created_at_utc": "2020-03-29T16:33:59Z"
+    },
+    {
+      "canonical_repository": "ember-template-lint/ember-template-lint",
+      "global_row_index": 46751,
+      "pull_number": 460,
+      "created_at_utc": "2018-07-25T15:54:57Z"
+    },
+    {
+      "canonical_repository": "encode/uvicorn",
+      "global_row_index": 113154,
+      "pull_number": 1661,
+      "created_at_utc": "2022-09-21T13:43:07Z"
+    },
+    {
+      "canonical_repository": "enthought/traits",
+      "global_row_index": 112807,
+      "pull_number": 626,
+      "created_at_utc": "2019-12-05T10:14:06Z"
+    },
+    {
+      "canonical_repository": "enzonotario/vitepress-openapi",
+      "global_row_index": 5885,
+      "pull_number": 146,
+      "created_at_utc": "2025-01-01T23:31:57Z"
+    },
+    {
+      "canonical_repository": "eslint-functional/eslint-plugin-functional",
+      "global_row_index": 68678,
+      "pull_number": 837,
+      "created_at_utc": "2024-06-19T06:22:32Z"
+    },
+    {
+      "canonical_repository": "eslint/eslint",
+      "global_row_index": 32988,
+      "pull_number": 12265,
+      "created_at_utc": "2019-09-12T21:58:57Z"
+    },
+    {
+      "canonical_repository": "evant/kotlin-inject",
+      "global_row_index": 1183,
+      "pull_number": 33,
+      "created_at_utc": "2020-08-07T01:29:44Z"
+    },
+    {
+      "canonical_repository": "exadel-inc/esl",
+      "global_row_index": 98235,
+      "pull_number": 1225,
+      "created_at_utc": "2022-09-17T21:34:10Z"
+    },
+    {
+      "canonical_repository": "executablebooks/myst-parser",
+      "global_row_index": 100363,
+      "pull_number": 488,
+      "created_at_utc": "2022-01-02T14:32:11Z"
+    },
+    {
+      "canonical_repository": "extendr/extendr",
+      "global_row_index": 3984,
+      "pull_number": 205,
+      "created_at_utc": "2021-04-10T13:08:32Z"
+    },
+    {
+      "canonical_repository": "fabien0102/ts-to-zod",
+      "global_row_index": 64248,
+      "pull_number": 139,
+      "created_at_utc": "2023-05-31T16:38:25Z"
+    },
+    {
+      "canonical_repository": "fabricjs/fabric.js",
+      "global_row_index": 78568,
+      "pull_number": 9427,
+      "created_at_utc": "2023-10-21T17:59:58Z"
+    },
+    {
+      "canonical_repository": "fairwindsops/polaris",
+      "global_row_index": 123733,
+      "pull_number": 235,
+      "created_at_utc": "2020-01-02T20:09:16Z"
+    },
+    {
+      "canonical_repository": "farcaster-project/farcaster-node",
+      "global_row_index": 39616,
+      "pull_number": 417,
+      "created_at_utc": "2022-04-16T11:56:49Z"
+    },
+    {
+      "canonical_repository": "fastify/fast-json-stringify",
+      "global_row_index": 94539,
+      "pull_number": 653,
+      "created_at_utc": "2023-10-20T21:00:17Z"
+    },
+    {
+      "canonical_repository": "fastify/fastify-cli",
+      "global_row_index": 75895,
+      "pull_number": 190,
+      "created_at_utc": "2019-07-29T12:17:43Z"
+    },
+    {
+      "canonical_repository": "feed-rs/feed-rs",
+      "global_row_index": 25664,
+      "pull_number": 116,
+      "created_at_utc": "2021-05-15T00:06:54Z"
+    },
+    {
+      "canonical_repository": "fhir/sushi",
+      "global_row_index": 67959,
+      "pull_number": 244,
+      "created_at_utc": "2020-02-20T13:38:16Z"
+    },
+    {
+      "canonical_repository": "firecracker-microvm/firecracker-containerd",
+      "global_row_index": 54257,
+      "pull_number": 604,
+      "created_at_utc": "2022-04-08T18:36:19Z"
+    },
+    {
+      "canonical_repository": "foolip/mdn-bcd-collector",
+      "global_row_index": 91215,
+      "pull_number": 1117,
+      "created_at_utc": "2021-04-20T08:23:16Z"
+    },
+    {
+      "canonical_repository": "formidablelabs/urql",
+      "global_row_index": 68166,
+      "pull_number": 399,
+      "created_at_utc": "2019-08-21T10:17:35Z"
+    },
+    {
+      "canonical_repository": "francescov1/mongoose-tsgen",
+      "global_row_index": 45235,
+      "pull_number": 118,
+      "created_at_utc": "2023-06-11T18:39:59Z"
+    },
+    {
+      "canonical_repository": "fuellabs/fuel-vm",
+      "global_row_index": 41202,
+      "pull_number": 158,
+      "created_at_utc": "2022-06-25T12:48:33Z"
+    },
+    {
+      "canonical_repository": "gakonst/ethers-rs",
+      "global_row_index": 121674,
+      "pull_number": 374,
+      "created_at_utc": "2021-08-12T14:47:19Z"
+    },
+    {
+      "canonical_repository": "gakonst/foundry",
+      "global_row_index": 106051,
+      "pull_number": 417,
+      "created_at_utc": "2022-01-11T04:24:15Z"
+    },
+    {
+      "canonical_repository": "gcanti/fp-ts",
+      "global_row_index": 23686,
+      "pull_number": 1260,
+      "created_at_utc": "2020-07-06T12:50:41Z"
+    },
+    {
+      "canonical_repository": "geal/nom",
+      "global_row_index": 47284,
+      "pull_number": 1349,
+      "created_at_utc": "2021-08-04T15:28:24Z"
+    },
+    {
+      "canonical_repository": "geopy/geopy",
+      "global_row_index": 72822,
+      "pull_number": 418,
+      "created_at_utc": "2020-06-21T18:12:21Z"
+    },
+    {
+      "canonical_repository": "getindiekit/indiekit",
+      "global_row_index": 111906,
+      "pull_number": 705,
+      "created_at_utc": "2024-03-04T19:20:19Z"
+    },
+    {
+      "canonical_repository": "getmoto/moto",
+      "global_row_index": 18721,
+      "pull_number": 7847,
+      "created_at_utc": "2024-07-13T10:54:11Z"
+    },
+    {
+      "canonical_repository": "getsentry/responses",
+      "global_row_index": 3898,
+      "pull_number": 745,
+      "created_at_utc": "2024-12-26T15:00:26Z"
+    },
+    {
+      "canonical_repository": "getsentry/sentry-cli",
+      "global_row_index": 15203,
+      "pull_number": 1277,
+      "created_at_utc": "2022-07-12T11:32:46Z"
+    },
+    {
+      "canonical_repository": "getslash/slash",
+      "global_row_index": 12574,
+      "pull_number": 1070,
+      "created_at_utc": "2023-05-09T18:12:15Z"
+    },
+    {
+      "canonical_repository": "gfx-rs/gfx",
+      "global_row_index": 97904,
+      "pull_number": 1700,
+      "created_at_utc": "2017-12-28T00:08:07Z"
+    },
+    {
+      "canonical_repository": "gfx-rs/naga",
+      "global_row_index": 98411,
+      "pull_number": 472,
+      "created_at_utc": "2021-02-14T22:27:34Z"
+    },
+    {
+      "canonical_repository": "gfx-rs/wgpu",
+      "global_row_index": 116232,
+      "pull_number": 6328,
+      "created_at_utc": "2024-09-26T05:06:10Z"
+    },
+    {
+      "canonical_repository": "ghiscoding/angular-slickgrid",
+      "global_row_index": 73586,
+      "pull_number": 761,
+      "created_at_utc": "2021-05-17T22:18:37Z"
+    },
+    {
+      "canonical_repository": "giampaolo/psutil",
+      "global_row_index": 33394,
+      "pull_number": 1535,
+      "created_at_utc": "2019-06-14T07:33:38Z"
+    },
+    {
+      "canonical_repository": "gilbsgilbs/babel-plugin-i18next-extract",
+      "global_row_index": 3767,
+      "pull_number": 11,
+      "created_at_utc": "2019-07-04T22:01:16Z"
+    },
+    {
+      "canonical_repository": "gimli-rs/addr2line",
+      "global_row_index": 12285,
+      "pull_number": 215,
+      "created_at_utc": "2021-05-02T03:27:08Z"
+    },
+    {
+      "canonical_repository": "gitify-app/gitify",
+      "global_row_index": 367,
+      "pull_number": 775,
+      "created_at_utc": "2024-02-15T22:36:09Z"
+    },
+    {
+      "canonical_repository": "gitpython-developers/gitpython",
+      "global_row_index": 101298,
+      "pull_number": 899,
+      "created_at_utc": "2019-07-23T10:54:31Z"
+    },
+    {
+      "canonical_repository": "gluon-lang/gluon",
+      "global_row_index": 52928,
+      "pull_number": 628,
+      "created_at_utc": "2018-09-14T21:39:00Z"
+    },
+    {
+      "canonical_repository": "go-delve/delve",
+      "global_row_index": 36830,
+      "pull_number": 2007,
+      "created_at_utc": "2020-04-13T18:15:16Z"
+    },
+    {
+      "canonical_repository": "go-kratos/kratos",
+      "global_row_index": 17413,
+      "pull_number": 3047,
+      "created_at_utc": "2023-10-23T12:54:27Z"
+    },
+    {
+      "canonical_repository": "go-playground/validator",
+      "global_row_index": 109788,
+      "pull_number": 1150,
+      "created_at_utc": "2023-08-22T04:06:00Z"
+    },
+    {
+      "canonical_repository": "goadesign/goa",
+      "global_row_index": 120777,
+      "pull_number": 3264,
+      "created_at_utc": "2023-03-20T05:01:21Z"
+    },
+    {
+      "canonical_repository": "gohugoio/hugo",
+      "global_row_index": 53418,
+      "pull_number": 13055,
+      "created_at_utc": "2024-11-16T17:21:05Z"
+    },
+    {
+      "canonical_repository": "goldibex/targaryen",
+      "global_row_index": 71723,
+      "pull_number": 118,
+      "created_at_utc": "2017-01-24T14:59:07Z"
+    },
+    {
+      "canonical_repository": "google/cel-go",
+      "global_row_index": 52350,
+      "pull_number": 745,
+      "created_at_utc": "2023-06-16T17:48:10Z"
+    },
+    {
+      "canonical_repository": "google/closure-compiler",
+      "global_row_index": 4422,
+      "pull_number": 1081,
+      "created_at_utc": "2015-08-14T23:12:34Z"
+    },
+    {
+      "canonical_repository": "google/exposure-notifications-server",
+      "global_row_index": 57248,
+      "pull_number": 347,
+      "created_at_utc": "2020-05-18T20:57:56Z"
+    },
+    {
+      "canonical_repository": "google/jax",
+      "global_row_index": 80883,
+      "pull_number": 22989,
+      "created_at_utc": "2024-08-11T15:11:42Z"
+    },
+    {
+      "canonical_repository": "google/yapf",
+      "global_row_index": 60449,
+      "pull_number": 986,
+      "created_at_utc": "2021-12-30T16:14:55Z"
+    },
+    {
+      "canonical_repository": "googleapis/api-linter",
+      "global_row_index": 66453,
+      "pull_number": 1263,
+      "created_at_utc": "2023-10-04T22:49:29Z"
+    },
+    {
+      "canonical_repository": "googleapis/python-api-core",
+      "global_row_index": 13460,
+      "pull_number": 561,
+      "created_at_utc": "2023-11-30T21:31:25Z"
+    },
+    {
+      "canonical_repository": "googlechrome/lighthouse",
+      "global_row_index": 28221,
+      "pull_number": 9591,
+      "created_at_utc": "2019-08-21T22:30:29Z"
+    },
+    {
+      "canonical_repository": "googlechromelabs/ps-analysis-tool",
+      "global_row_index": 26719,
+      "pull_number": 113,
+      "created_at_utc": "2023-08-18T12:16:22Z"
+    },
+    {
+      "canonical_repository": "googlecloudplatform/terraform-validator",
+      "global_row_index": 21604,
+      "pull_number": 724,
+      "created_at_utc": "2022-05-25T20:35:06Z"
+    },
+    {
+      "canonical_repository": "googlecontainertools/skaffold",
+      "global_row_index": 68692,
+      "pull_number": 7625,
+      "created_at_utc": "2022-07-06T20:40:54Z"
+    },
+    {
+      "canonical_repository": "goplus/gop",
+      "global_row_index": 54116,
+      "pull_number": 1404,
+      "created_at_utc": "2023-08-26T17:02:23Z"
+    },
+    {
+      "canonical_repository": "goreleaser/goreleaser",
+      "global_row_index": 104808,
+      "pull_number": 1785,
+      "created_at_utc": "2020-09-02T19:22:15Z"
+    },
+    {
+      "canonical_repository": "gpbl/react-day-picker",
+      "global_row_index": 89107,
+      "pull_number": 2644,
+      "created_at_utc": "2024-12-25T19:09:36Z"
+    },
+    {
+      "canonical_repository": "gradleup/shadow",
+      "global_row_index": 4660,
+      "pull_number": 1152,
+      "created_at_utc": "2025-01-13T02:17:20Z"
+    },
+    {
+      "canonical_repository": "graphprotocol/graph-tooling",
+      "global_row_index": 89219,
+      "pull_number": 1957,
+      "created_at_utc": "2025-02-07T16:03:18Z"
+    },
+    {
+      "canonical_repository": "graphql-java-kickstart/graphql-java-tools",
+      "global_row_index": 85517,
+      "pull_number": 358,
+      "created_at_utc": "2020-01-22T13:04:53Z"
+    },
+    {
+      "canonical_repository": "graphql-markdown/graphql-markdown",
+      "global_row_index": 65182,
+      "pull_number": 1884,
+      "created_at_utc": "2024-12-21T08:59:08Z"
+    },
+    {
+      "canonical_repository": "graphql/graphql-js",
+      "global_row_index": 41111,
+      "pull_number": 3742,
+      "created_at_utc": "2022-09-19T17:53:46Z"
+    },
+    {
+      "canonical_repository": "gravitee-io/graviteeio-access-management",
+      "global_row_index": 57731,
+      "pull_number": 756,
+      "created_at_utc": "2020-04-08T12:59:18Z"
+    },
+    {
+      "canonical_repository": "gravity-ui/uikit",
+      "global_row_index": 40241,
+      "pull_number": 659,
+      "created_at_utc": "2023-05-07T17:12:40Z"
+    },
+    {
+      "canonical_repository": "graylog2/graylog2-server",
+      "global_row_index": 4344,
+      "pull_number": 22356,
+      "created_at_utc": "2025-04-16T13:24:33Z"
+    },
+    {
+      "canonical_repository": "greyli/apiflask",
+      "global_row_index": 17551,
+      "pull_number": 235,
+      "created_at_utc": "2022-04-05T04:45:26Z"
+    },
+    {
+      "canonical_repository": "guillaumegomez/sysinfo",
+      "global_row_index": 125506,
+      "pull_number": 1066,
+      "created_at_utc": "2023-09-16T13:31:03Z"
+    },
+    {
+      "canonical_repository": "hacker0x01/react-datepicker",
+      "global_row_index": 78051,
+      "pull_number": 4693,
+      "created_at_utc": "2024-04-15T17:14:30Z"
+    },
+    {
+      "canonical_repository": "handshake-org/hsd",
+      "global_row_index": 63163,
+      "pull_number": 198,
+      "created_at_utc": "2019-06-17T21:42:14Z"
+    },
+    {
+      "canonical_repository": "hapijs/good",
+      "global_row_index": 17741,
+      "pull_number": 458,
+      "created_at_utc": "2016-03-17T03:23:02Z"
+    },
+    {
+      "canonical_repository": "hapijs/hoek",
+      "global_row_index": 18174,
+      "pull_number": 331,
+      "created_at_utc": "2019-09-17T07:22:18Z"
+    },
+    {
+      "canonical_repository": "hapijs/joi",
+      "global_row_index": 18230,
+      "pull_number": 1438,
+      "created_at_utc": "2018-02-15T21:32:32Z"
+    },
+    {
+      "canonical_repository": "hapijs/vision",
+      "global_row_index": 18250,
+      "pull_number": 140,
+      "created_at_utc": "2017-12-31T21:17:58Z"
+    },
+    {
+      "canonical_repository": "hapijs/wreck",
+      "global_row_index": 85342,
+      "pull_number": 197,
+      "created_at_utc": "2017-09-17T06:26:49Z"
+    },
+    {
+      "canonical_repository": "hashgraph/hedera-sdk-go",
+      "global_row_index": 100917,
+      "pull_number": 459,
+      "created_at_utc": "2022-04-07T07:07:24Z"
+    },
+    {
+      "canonical_repository": "hashicorp/consul",
+      "global_row_index": 96764,
+      "pull_number": 8566,
+      "created_at_utc": "2020-08-26T15:27:29Z"
+    },
+    {
+      "canonical_repository": "hashicorp/terraform",
+      "global_row_index": 19256,
+      "pull_number": 32781,
+      "created_at_utc": "2023-03-06T14:19:09Z"
+    },
+    {
+      "canonical_repository": "hikari-py/hikari",
+      "global_row_index": 81708,
+      "pull_number": 1125,
+      "created_at_utc": "2022-04-05T15:18:47Z"
+    },
+    {
+      "canonical_repository": "hngprojects/hng_boilerplate_expressjs",
+      "global_row_index": 93893,
+      "pull_number": 317,
+      "created_at_utc": "2024-07-25T16:52:32Z"
+    },
+    {
+      "canonical_repository": "honeycombio/beeline-nodejs",
+      "global_row_index": 58020,
+      "pull_number": 64,
+      "created_at_utc": "2018-07-17T23:05:44Z"
+    },
+    {
+      "canonical_repository": "horike37/serverless-step-functions",
+      "global_row_index": 70087,
+      "pull_number": 300,
+      "created_at_utc": "2020-01-14T13:55:44Z"
+    },
+    {
+      "canonical_repository": "horiuchi/dtsgenerator",
+      "global_row_index": 10558,
+      "pull_number": 504,
+      "created_at_utc": "2021-05-19T06:21:00Z"
+    },
+    {
+      "canonical_repository": "huff-language/huff-rs",
+      "global_row_index": 29667,
+      "pull_number": 190,
+      "created_at_utc": "2022-08-03T13:54:02Z"
+    },
+    {
+      "canonical_repository": "huggingface/huggingface_hub",
+      "global_row_index": 55440,
+      "pull_number": 1152,
+      "created_at_utc": "2022-11-03T14:03:53Z"
+    },
+    {
+      "canonical_repository": "huggingface/transformers",
+      "global_row_index": 45303,
+      "pull_number": 35593,
+      "created_at_utc": "2025-01-09T14:41:48Z"
+    },
+    {
+      "canonical_repository": "huozhi/bunchee",
+      "global_row_index": 73564,
+      "pull_number": 218,
+      "created_at_utc": "2023-06-25T22:55:42Z"
+    },
+    {
+      "canonical_repository": "hybridgroup/gobot",
+      "global_row_index": 2445,
+      "pull_number": 917,
+      "created_at_utc": "2023-05-18T13:55:05Z"
+    },
+    {
+      "canonical_repository": "hyperium/hyper",
+      "global_row_index": 28465,
+      "pull_number": 3805,
+      "created_at_utc": "2024-12-03T07:21:41Z"
+    },
+    {
+      "canonical_repository": "hyperium/tonic",
+      "global_row_index": 20332,
+      "pull_number": 49,
+      "created_at_utc": "2019-10-05T17:02:45Z"
+    },
+    {
+      "canonical_repository": "hyperjumptech/monika",
+      "global_row_index": 45183,
+      "pull_number": 1130,
+      "created_at_utc": "2023-10-03T08:10:34Z"
+    },
+    {
+      "canonical_repository": "hypothesisworks/hypothesis",
+      "global_row_index": 76995,
+      "pull_number": 4250,
+      "created_at_utc": "2025-01-24T21:00:59Z"
+    },
+    {
+      "canonical_repository": "i18next/i18next-parser",
+      "global_row_index": 18809,
+      "pull_number": 389,
+      "created_at_utc": "2021-08-04T11:54:20Z"
+    },
+    {
+      "canonical_repository": "iamconsortium/pyam",
+      "global_row_index": 80324,
+      "pull_number": 286,
+      "created_at_utc": "2019-11-09T03:54:42Z"
+    },
+    {
+      "canonical_repository": "iduxfe/components",
+      "global_row_index": 112098,
+      "pull_number": 111,
+      "created_at_utc": "2021-01-04T12:28:38Z"
+    },
+    {
+      "canonical_repository": "imflog/schema-registry-plugin",
+      "global_row_index": 30915,
+      "pull_number": 115,
+      "created_at_utc": "2023-01-30T09:54:51Z"
+    },
+    {
+      "canonical_repository": "imgix/react-imgix",
+      "global_row_index": 69731,
+      "pull_number": 462,
+      "created_at_utc": "2019-10-03T03:31:37Z"
+    },
+    {
+      "canonical_repository": "import-js/eslint-plugin-import",
+      "global_row_index": 31716,
+      "pull_number": 2299,
+      "created_at_utc": "2021-11-10T22:13:53Z"
+    },
+    {
+      "canonical_repository": "inbucket/inbucket",
+      "global_row_index": 122571,
+      "pull_number": 325,
+      "created_at_utc": "2023-02-08T20:38:28Z"
+    },
+    {
+      "canonical_repository": "intlify/vue-i18n-next",
+      "global_row_index": 78543,
+      "pull_number": 1832,
+      "created_at_utc": "2024-04-30T10:08:33Z"
+    },
+    {
+      "canonical_repository": "intuit/auto",
+      "global_row_index": 58972,
+      "pull_number": 746,
+      "created_at_utc": "2019-12-02T20:54:36Z"
+    },
+    {
+      "canonical_repository": "ioos/compliance-checker",
+      "global_row_index": 36147,
+      "pull_number": 944,
+      "created_at_utc": "2022-09-08T01:52:23Z"
+    },
+    {
+      "canonical_repository": "istanbuljs/nyc",
+      "global_row_index": 17721,
+      "pull_number": 1006,
+      "created_at_utc": "2019-02-28T04:15:49Z"
+    },
+    {
+      "canonical_repository": "jamesramsay/hercule",
+      "global_row_index": 65829,
+      "pull_number": 202,
+      "created_at_utc": "2016-03-16T02:35:58Z"
+    },
+    {
+      "canonical_repository": "jelmer/dulwich",
+      "global_row_index": 123427,
+      "pull_number": 1044,
+      "created_at_utc": "2022-09-16T16:07:24Z"
+    },
+    {
+      "canonical_repository": "jeremydaly/dynamodb-toolbox",
+      "global_row_index": 73748,
+      "pull_number": 677,
+      "created_at_utc": "2024-02-12T00:57:11Z"
+    },
+    {
+      "canonical_repository": "jeremymailen/kotlinter-gradle",
+      "global_row_index": 4659,
+      "pull_number": 352,
+      "created_at_utc": "2023-11-13T01:54:55Z"
+    },
+    {
+      "canonical_repository": "jhillyerd/enmime",
+      "global_row_index": 14790,
+      "pull_number": 316,
+      "created_at_utc": "2023-12-27T19:27:40Z"
+    },
+    {
+      "canonical_repository": "jhipster/generator-jhipster",
+      "global_row_index": 80570,
+      "pull_number": 9314,
+      "created_at_utc": "2019-02-21T11:30:54Z"
+    },
+    {
+      "canonical_repository": "jhipster/jhipster-lite",
+      "global_row_index": 62138,
+      "pull_number": 11606,
+      "created_at_utc": "2024-12-19T22:01:29Z"
+    },
+    {
+      "canonical_repository": "jhipster/jhipster-vuejs",
+      "global_row_index": 89138,
+      "pull_number": 607,
+      "created_at_utc": "2020-05-08T15:36:12Z"
+    },
+    {
+      "canonical_repository": "jlongster/prettier",
+      "global_row_index": 115124,
+      "pull_number": 225,
+      "created_at_utc": "2017-01-16T01:22:13Z"
+    },
+    {
+      "canonical_repository": "joblib/joblib",
+      "global_row_index": 105811,
+      "pull_number": 1566,
+      "created_at_utc": "2024-04-08T08:23:30Z"
+    },
+    {
+      "canonical_repository": "joke2k/faker",
+      "global_row_index": 28891,
+      "pull_number": 647,
+      "created_at_utc": "2017-11-07T21:02:04Z"
+    },
+    {
+      "canonical_repository": "jonasbb/serde_with",
+      "global_row_index": 70797,
+      "pull_number": 836,
+      "created_at_utc": "2025-05-03T01:42:01Z"
+    },
+    {
+      "canonical_repository": "jorgecarleitao/arrow2",
+      "global_row_index": 70914,
+      "pull_number": 355,
+      "created_at_utc": "2021-08-28T12:57:42Z"
+    },
+    {
+      "canonical_repository": "josdejong/mathjs",
+      "global_row_index": 24498,
+      "pull_number": 531,
+      "created_at_utc": "2016-01-04T18:31:26Z"
+    },
+    {
+      "canonical_repository": "jquense/yup",
+      "global_row_index": 97543,
+      "pull_number": 1541,
+      "created_at_utc": "2021-12-28T19:44:16Z"
+    },
+    {
+      "canonical_repository": "jshint/jshint",
+      "global_row_index": 17802,
+      "pull_number": 3287,
+      "created_at_utc": "2018-06-10T22:32:46Z"
+    },
+    {
+      "canonical_repository": "jsonata-js/jsonata",
+      "global_row_index": 65706,
+      "pull_number": 142,
+      "created_at_utc": "2018-02-03T13:56:58Z"
+    },
+    {
+      "canonical_repository": "jupyterhub/kubespawner",
+      "global_row_index": 31088,
+      "pull_number": 81,
+      "created_at_utc": "2017-09-15T09:12:42Z"
+    },
+    {
+      "canonical_repository": "karen-irc/option-t",
+      "global_row_index": 42260,
+      "pull_number": 1565,
+      "created_at_utc": "2023-02-06T19:10:04Z"
+    },
+    {
+      "canonical_repository": "kayak/pypika",
+      "global_row_index": 67489,
+      "pull_number": 65,
+      "created_at_utc": "2017-07-25T08:30:42Z"
+    },
+    {
+      "canonical_repository": "kbknapp/clap-rs",
+      "global_row_index": 104071,
+      "pull_number": 867,
+      "created_at_utc": "2017-02-21T02:16:36Z"
+    },
+    {
+      "canonical_repository": "kelektiv/node-cron",
+      "global_row_index": 54596,
+      "pull_number": 711,
+      "created_at_utc": "2023-10-02T16:22:38Z"
+    },
+    {
+      "canonical_repository": "keon/algorithms",
+      "global_row_index": 34430,
+      "pull_number": 306,
+      "created_at_utc": "2018-06-05T04:27:34Z"
+    },
+    {
+      "canonical_repository": "keras-team/keras-nlp",
+      "global_row_index": 29265,
+      "pull_number": 1316,
+      "created_at_utc": "2023-11-13T22:22:26Z"
+    },
+    {
+      "canonical_repository": "khan/katex",
+      "global_row_index": 38579,
+      "pull_number": 1551,
+      "created_at_utc": "2018-08-06T01:42:51Z"
+    },
+    {
+      "canonical_repository": "kibertoad/toad-scheduler",
+      "global_row_index": 10538,
+      "pull_number": 213,
+      "created_at_utc": "2024-02-01T20:40:51Z"
+    },
+    {
+      "canonical_repository": "kinvolk/lokomotive",
+      "global_row_index": 65867,
+      "pull_number": 889,
+      "created_at_utc": "2020-09-01T14:49:51Z"
+    },
+    {
+      "canonical_repository": "kivikakk/comrak",
+      "global_row_index": 49602,
+      "pull_number": 560,
+      "created_at_utc": "2025-04-05T03:14:18Z"
+    },
+    {
+      "canonical_repository": "kiwicom/mobile",
+      "global_row_index": 86155,
+      "pull_number": 1042,
+      "created_at_utc": "2018-08-29T13:49:37Z"
+    },
+    {
+      "canonical_repository": "kkawakam/rustyline",
+      "global_row_index": 49577,
+      "pull_number": 617,
+      "created_at_utc": "2022-04-11T08:06:30Z"
+    },
+    {
+      "canonical_repository": "kmyk/online-judge-tools",
+      "global_row_index": 16053,
+      "pull_number": 378,
+      "created_at_utc": "2019-03-09T13:02:11Z"
+    },
+    {
+      "canonical_repository": "knative-sandbox/eventing-kafka-broker",
+      "global_row_index": 39747,
+      "pull_number": 193,
+      "created_at_utc": "2020-09-18T09:48:23Z"
+    },
+    {
+      "canonical_repository": "knative/client",
+      "global_row_index": 42837,
+      "pull_number": 981,
+      "created_at_utc": "2020-08-18T07:50:44Z"
+    },
+    {
+      "canonical_repository": "knative/serving",
+      "global_row_index": 125319,
+      "pull_number": 9852,
+      "created_at_utc": "2020-10-18T05:48:21Z"
+    },
+    {
+      "canonical_repository": "knurling-rs/defmt",
+      "global_row_index": 18613,
+      "pull_number": 505,
+      "created_at_utc": "2021-06-11T12:56:37Z"
+    },
+    {
+      "canonical_repository": "kopia/kopia",
+      "global_row_index": 115463,
+      "pull_number": 3664,
+      "created_at_utc": "2024-02-20T22:50:38Z"
+    },
+    {
+      "canonical_repository": "kotlin/kotlinx-io",
+      "global_row_index": 80601,
+      "pull_number": 338,
+      "created_at_utc": "2024-06-07T14:10:38Z"
+    },
+    {
+      "canonical_repository": "kripken/emscripten",
+      "global_row_index": 5207,
+      "pull_number": 5761,
+      "created_at_utc": "2017-11-09T18:51:27Z"
+    },
+    {
+      "canonical_repository": "kubernetes-incubator/client-python",
+      "global_row_index": 78944,
+      "pull_number": 192,
+      "created_at_utc": "2017-04-24T19:30:23Z"
+    },
+    {
+      "canonical_repository": "kubernetes-sigs/cluster-api",
+      "global_row_index": 80688,
+      "pull_number": 7744,
+      "created_at_utc": "2022-12-13T15:05:04Z"
+    },
+    {
+      "canonical_repository": "kubernetes-sigs/descheduler",
+      "global_row_index": 44535,
+      "pull_number": 947,
+      "created_at_utc": "2022-09-08T21:24:41Z"
+    },
+    {
+      "canonical_repository": "kubernetes-sigs/external-dns",
+      "global_row_index": 116514,
+      "pull_number": 3560,
+      "created_at_utc": "2023-04-23T17:49:10Z"
+    },
+    {
+      "canonical_repository": "kubernetes-sigs/node-feature-discovery",
+      "global_row_index": 29860,
+      "pull_number": 1652,
+      "created_at_utc": "2024-04-03T19:32:06Z"
+    },
+    {
+      "canonical_repository": "kubernetes-sigs/security-profiles-operator",
+      "global_row_index": 79855,
+      "pull_number": 824,
+      "created_at_utc": "2022-03-08T14:55:41Z"
+    },
+    {
+      "canonical_repository": "kubernetes/ingress-nginx",
+      "global_row_index": 109700,
+      "pull_number": 4356,
+      "created_at_utc": "2019-07-25T18:46:46Z"
+    },
+    {
+      "canonical_repository": "kubernetes/klog",
+      "global_row_index": 53491,
+      "pull_number": 97,
+      "created_at_utc": "2019-09-19T12:36:11Z"
+    },
+    {
+      "canonical_repository": "kubernetes/minikube",
+      "global_row_index": 103666,
+      "pull_number": 13326,
+      "created_at_utc": "2022-01-11T18:36:52Z"
+    },
+    {
+      "canonical_repository": "kurtosis-tech/kurtosis",
+      "global_row_index": 13057,
+      "pull_number": 1003,
+      "created_at_utc": "2023-07-27T15:23:00Z"
+    },
+    {
+      "canonical_repository": "kythe/kythe",
+      "global_row_index": 111892,
+      "pull_number": 6033,
+      "created_at_utc": "2024-02-23T18:49:05Z"
+    },
+    {
+      "canonical_repository": "kyverno/chainsaw",
+      "global_row_index": 111815,
+      "pull_number": 372,
+      "created_at_utc": "2023-11-03T23:22:05Z"
+    },
+    {
+      "canonical_repository": "kyverno/kyverno",
+      "global_row_index": 83553,
+      "pull_number": 6240,
+      "created_at_utc": "2023-02-06T14:15:05Z"
+    },
+    {
+      "canonical_repository": "laboratoriobridge/bold",
+      "global_row_index": 90740,
+      "pull_number": 419,
+      "created_at_utc": "2019-06-17T19:42:40Z"
+    },
+    {
+      "canonical_repository": "labstack/echo",
+      "global_row_index": 74667,
+      "pull_number": 2483,
+      "created_at_utc": "2023-07-17T20:46:54Z"
+    },
+    {
+      "canonical_repository": "lark-parser/lark",
+      "global_row_index": 56578,
+      "pull_number": 759,
+      "created_at_utc": "2020-11-15T10:28:34Z"
+    },
+    {
+      "canonical_repository": "league-of-foundry-developers/foundry-vtt-types",
+      "global_row_index": 111800,
+      "pull_number": 3169,
+      "created_at_utc": "2025-02-15T22:37:21Z"
+    },
+    {
+      "canonical_repository": "lesshint/lesshint",
+      "global_row_index": 17867,
+      "pull_number": 180,
+      "created_at_utc": "2016-05-22T15:05:18Z"
+    },
+    {
+      "canonical_repository": "lf-edge/ekuiper",
+      "global_row_index": 96982,
+      "pull_number": 1253,
+      "created_at_utc": "2022-04-27T09:18:43Z"
+    },
+    {
+      "canonical_repository": "liampauling/flumine",
+      "global_row_index": 15724,
+      "pull_number": 497,
+      "created_at_utc": "2021-09-14T07:39:02Z"
+    },
+    {
+      "canonical_repository": "libp2p/go-libp2p",
+      "global_row_index": 97824,
+      "pull_number": 3080,
+      "created_at_utc": "2024-12-04T18:43:25Z"
+    },
+    {
+      "canonical_repository": "lightningnetwork/lnd",
+      "global_row_index": 105383,
+      "pull_number": 4175,
+      "created_at_utc": "2020-04-10T23:28:30Z"
+    },
+    {
+      "canonical_repository": "lima-vm/lima",
+      "global_row_index": 105250,
+      "pull_number": 2728,
+      "created_at_utc": "2024-10-13T10:43:15Z"
+    },
+    {
+      "canonical_repository": "lingui/js-lingui",
+      "global_row_index": 39716,
+      "pull_number": 1290,
+      "created_at_utc": "2022-10-18T08:15:59Z"
+    },
+    {
+      "canonical_repository": "linkerd/linkerd2",
+      "global_row_index": 124621,
+      "pull_number": 5067,
+      "created_at_utc": "2020-10-12T22:34:10Z"
+    },
+    {
+      "canonical_repository": "livebook-dev/kino",
+      "global_row_index": 75206,
+      "pull_number": 363,
+      "created_at_utc": "2023-11-08T14:32:37Z"
+    },
+    {
+      "canonical_repository": "lo1tuma/eslint-plugin-mocha",
+      "global_row_index": 91026,
+      "pull_number": 239,
+      "created_at_utc": "2020-02-18T19:38:39Z"
+    },
+    {
+      "canonical_repository": "log4js-node/log4js-node",
+      "global_row_index": 60962,
+      "pull_number": 1165,
+      "created_at_utc": "2022-01-23T13:37:01Z"
+    },
+    {
+      "canonical_repository": "lorenwest/node-config",
+      "global_row_index": 61003,
+      "pull_number": 323,
+      "created_at_utc": "2016-05-22T18:30:35Z"
+    },
+    {
+      "canonical_repository": "lukeautry/tsoa",
+      "global_row_index": 112128,
+      "pull_number": 674,
+      "created_at_utc": "2020-04-29T09:30:52Z"
+    },
+    {
+      "canonical_repository": "maciejhirsz/json-rust",
+      "global_row_index": 30836,
+      "pull_number": 10,
+      "created_at_utc": "2016-06-19T14:03:27Z"
+    },
+    {
+      "canonical_repository": "magefile/mage",
+      "global_row_index": 108988,
+      "pull_number": 153,
+      "created_at_utc": "2018-09-09T13:07:46Z"
+    },
+    {
+      "canonical_repository": "mainflux/mainflux",
+      "global_row_index": 13126,
+      "pull_number": 1256,
+      "created_at_utc": "2020-10-16T11:09:46Z"
+    },
+    {
+      "canonical_repository": "maizzle/framework",
+      "global_row_index": 94154,
+      "pull_number": 903,
+      "created_at_utc": "2023-02-16T11:41:22Z"
+    },
+    {
+      "canonical_repository": "maniacallabs/bibliopixel",
+      "global_row_index": 88554,
+      "pull_number": 924,
+      "created_at_utc": "2018-08-17T14:58:43Z"
+    },
+    {
+      "canonical_repository": "manusa/electronim",
+      "global_row_index": 22816,
+      "pull_number": 222,
+      "created_at_utc": "2022-11-22T03:52:18Z"
+    },
+    {
+      "canonical_repository": "mapbox/mapbox-sdk-js",
+      "global_row_index": 11597,
+      "pull_number": 222,
+      "created_at_utc": "2018-05-16T16:37:43Z"
+    },
+    {
+      "canonical_repository": "mapbox/mr-ui",
+      "global_row_index": 6756,
+      "pull_number": 47,
+      "created_at_utc": "2018-10-24T23:53:22Z"
+    },
+    {
+      "canonical_repository": "marigold-ui/marigold",
+      "global_row_index": 104914,
+      "pull_number": 1925,
+      "created_at_utc": "2022-03-28T10:30:26Z"
+    },
+    {
+      "canonical_repository": "marketsquare/robotframework-robocop",
+      "global_row_index": 124161,
+      "pull_number": 1328,
+      "created_at_utc": "2025-03-17T11:03:08Z"
+    },
+    {
+      "canonical_repository": "marpple/fxts",
+      "global_row_index": 15424,
+      "pull_number": 33,
+      "created_at_utc": "2021-12-02T02:09:38Z"
+    },
+    {
+      "canonical_repository": "martinohmann/hcl-rs",
+      "global_row_index": 30100,
+      "pull_number": 267,
+      "created_at_utc": "2023-07-13T17:43:49Z"
+    },
+    {
+      "canonical_repository": "matchms/matchms",
+      "global_row_index": 39536,
+      "pull_number": 479,
+      "created_at_utc": "2023-08-14T08:55:30Z"
+    },
+    {
+      "canonical_repository": "matrixorigin/matrixone",
+      "global_row_index": 115049,
+      "pull_number": 8909,
+      "created_at_utc": "2023-04-07T11:06:57Z"
+    },
+    {
+      "canonical_repository": "matthewwithanm/python-markdownify",
+      "global_row_index": 121477,
+      "pull_number": 24,
+      "created_at_utc": "2020-08-31T11:17:13Z"
+    },
+    {
+      "canonical_repository": "maxgraph/maxgraph",
+      "global_row_index": 23747,
+      "pull_number": 445,
+      "created_at_utc": "2024-06-06T07:40:30Z"
+    },
+    {
+      "canonical_repository": "maxnowack/signaldb",
+      "global_row_index": 10525,
+      "pull_number": 1425,
+      "created_at_utc": "2025-02-19T08:03:25Z"
+    },
+    {
+      "canonical_repository": "melt-ui/melt-ui",
+      "global_row_index": 23725,
+      "pull_number": 411,
+      "created_at_utc": "2023-08-18T22:03:12Z"
+    },
+    {
+      "canonical_repository": "meltano/sdk",
+      "global_row_index": 96529,
+      "pull_number": 1832,
+      "created_at_utc": "2023-07-11T06:29:14Z"
+    },
+    {
+      "canonical_repository": "memorysafety/sudo-rs",
+      "global_row_index": 55457,
+      "pull_number": 74,
+      "created_at_utc": "2023-03-13T11:04:51Z"
+    },
+    {
+      "canonical_repository": "meriyah/meriyah",
+      "global_row_index": 125720,
+      "pull_number": 170,
+      "created_at_utc": "2021-01-28T08:40:45Z"
+    },
+    {
+      "canonical_repository": "metal3-io/baremetal-operator",
+      "global_row_index": 13739,
+      "pull_number": 1394,
+      "created_at_utc": "2023-10-12T12:39:58Z"
+    },
+    {
+      "canonical_repository": "mholt/papaparse",
+      "global_row_index": 57886,
+      "pull_number": 1058,
+      "created_at_utc": "2024-06-12T17:11:54Z"
+    },
+    {
+      "canonical_repository": "microsoft/applicationinsights-node.js",
+      "global_row_index": 93961,
+      "pull_number": 1080,
+      "created_at_utc": "2023-02-18T00:12:57Z"
+    },
+    {
+      "canonical_repository": "microsoft/griffel",
+      "global_row_index": 108179,
+      "pull_number": 357,
+      "created_at_utc": "2023-03-29T09:30:17Z"
+    },
+    {
+      "canonical_repository": "microsoft/vscode-vsce",
+      "global_row_index": 111770,
+      "pull_number": 586,
+      "created_at_utc": "2021-06-22T16:51:53Z"
+    },
+    {
+      "canonical_repository": "migorithm/duva",
+      "global_row_index": 55774,
+      "pull_number": 98,
+      "created_at_utc": "2024-12-09T20:15:35Z"
+    },
+    {
+      "canonical_repository": "mikedh/trimesh",
+      "global_row_index": 58168,
+      "pull_number": 260,
+      "created_at_utc": "2018-11-24T21:12:50Z"
+    },
+    {
+      "canonical_repository": "mila-udem/fuel",
+      "global_row_index": 90582,
+      "pull_number": 174,
+      "created_at_utc": "2015-06-18T14:53:10Z"
+    },
+    {
+      "canonical_repository": "minio/minio-py",
+      "global_row_index": 18857,
+      "pull_number": 819,
+      "created_at_utc": "2019-10-31T19:08:10Z"
+    },
+    {
+      "canonical_repository": "mintlayer/mintlayer-core",
+      "global_row_index": 29801,
+      "pull_number": 637,
+      "created_at_utc": "2023-01-17T21:10:40Z"
+    },
+    {
+      "canonical_repository": "mitsuhiko/insta",
+      "global_row_index": 25712,
+      "pull_number": 541,
+      "created_at_utc": "2024-07-29T18:12:28Z"
+    },
+    {
+      "canonical_repository": "mitsuhiko/minijinja",
+      "global_row_index": 29318,
+      "pull_number": 550,
+      "created_at_utc": "2024-07-31T16:15:34Z"
+    },
+    {
+      "canonical_repository": "mitsuhiko/redis-rs",
+      "global_row_index": 29370,
+      "pull_number": 253,
+      "created_at_utc": "2019-10-31T14:12:28Z"
+    },
+    {
+      "canonical_repository": "modernizr/modernizr",
+      "global_row_index": 86514,
+      "pull_number": 2598,
+      "created_at_utc": "2020-09-03T17:18:36Z"
+    },
+    {
+      "canonical_repository": "mondeja/leptos-fluent",
+      "global_row_index": 39859,
+      "pull_number": 343,
+      "created_at_utc": "2025-06-10T19:03:18Z"
+    },
+    {
+      "canonical_repository": "moov-io/ach",
+      "global_row_index": 74753,
+      "pull_number": 221,
+      "created_at_utc": "2018-06-20T16:00:16Z"
+    },
+    {
+      "canonical_repository": "mostjs/core",
+      "global_row_index": 22932,
+      "pull_number": 39,
+      "created_at_utc": "2017-02-07T14:46:25Z"
+    },
+    {
+      "canonical_repository": "mozilla-services/cliquet",
+      "global_row_index": 104045,
+      "pull_number": 411,
+      "created_at_utc": "2015-07-30T15:57:24Z"
+    },
+    {
+      "canonical_repository": "mozilla/cargo-vet",
+      "global_row_index": 118692,
+      "pull_number": 210,
+      "created_at_utc": "2022-06-20T20:39:22Z"
+    },
+    {
+      "canonical_repository": "mrmans0n/compose-rules",
+      "global_row_index": 30904,
+      "pull_number": 395,
+      "created_at_utc": "2024-12-10T11:46:05Z"
+    },
+    {
+      "canonical_repository": "mswjs/msw",
+      "global_row_index": 99827,
+      "pull_number": 2527,
+      "created_at_utc": "2025-06-06T15:49:57Z"
+    },
+    {
+      "canonical_repository": "myremylar/pygame_gui",
+      "global_row_index": 101333,
+      "pull_number": 464,
+      "created_at_utc": "2023-06-08T19:22:27Z"
+    },
+    {
+      "canonical_repository": "napalm-automation/napalm",
+      "global_row_index": 47664,
+      "pull_number": 2116,
+      "created_at_utc": "2024-07-15T22:12:37Z"
+    },
+    {
+      "canonical_repository": "nasa-ammos/3dtilesrendererjs",
+      "global_row_index": 98895,
+      "pull_number": 1199,
+      "created_at_utc": "2025-06-29T01:44:39Z"
+    },
+    {
+      "canonical_repository": "nasa-gcn/gcn.nasa.gov",
+      "global_row_index": 77543,
+      "pull_number": 791,
+      "created_at_utc": "2023-04-12T16:47:18Z"
+    },
+    {
+      "canonical_repository": "nestjs/nest",
+      "global_row_index": 106770,
+      "pull_number": 11041,
+      "created_at_utc": "2023-02-03T22:23:48Z"
+    },
+    {
+      "canonical_repository": "nestjs/swagger",
+      "global_row_index": 109117,
+      "pull_number": 3362,
+      "created_at_utc": "2025-03-25T10:04:17Z"
+    },
+    {
+      "canonical_repository": "netapp/harvest",
+      "global_row_index": 117519,
+      "pull_number": 1553,
+      "created_at_utc": "2022-11-28T13:46:24Z"
+    },
+    {
+      "canonical_repository": "nethermindeth/cairo-vm-go",
+      "global_row_index": 37406,
+      "pull_number": 671,
+      "created_at_utc": "2024-10-11T09:28:04Z"
+    },
+    {
+      "canonical_repository": "netlify/build",
+      "global_row_index": 84968,
+      "pull_number": 1747,
+      "created_at_utc": "2020-08-10T13:23:04Z"
+    },
+    {
+      "canonical_repository": "netlify/gocommerce",
+      "global_row_index": 106800,
+      "pull_number": 156,
+      "created_at_utc": "2018-11-02T17:18:59Z"
+    },
+    {
+      "canonical_repository": "networkx/networkx",
+      "global_row_index": 29791,
+      "pull_number": 7537,
+      "created_at_utc": "2024-07-02T11:53:09Z"
+    },
+    {
+      "canonical_repository": "neurodatawithoutborders/pynwb",
+      "global_row_index": 7357,
+      "pull_number": 457,
+      "created_at_utc": "2018-04-12T04:00:12Z"
+    },
+    {
+      "canonical_repository": "newrelic/newrelic-node-apollo-server-plugin",
+      "global_row_index": 112359,
+      "pull_number": 47,
+      "created_at_utc": "2020-10-13T22:17:41Z"
+    },
+    {
+      "canonical_repository": "nightwatchjs/nightwatch",
+      "global_row_index": 111569,
+      "pull_number": 3048,
+      "created_at_utc": "2022-02-11T12:18:53Z"
+    },
+    {
+      "canonical_repository": "nipy/nipype",
+      "global_row_index": 36375,
+      "pull_number": 2376,
+      "created_at_utc": "2018-01-17T22:54:26Z"
+    },
+    {
+      "canonical_repository": "nix-community/nixpkgs-fmt",
+      "global_row_index": 23145,
+      "pull_number": 247,
+      "created_at_utc": "2021-05-15T13:30:28Z"
+    },
+    {
+      "canonical_repository": "node-fetch/node-fetch",
+      "global_row_index": 39010,
+      "pull_number": 843,
+      "created_at_utc": "2020-05-28T02:59:42Z"
+    },
+    {
+      "canonical_repository": "nodejs/nodejs.dev",
+      "global_row_index": 9657,
+      "pull_number": 3264,
+      "created_at_utc": "2023-03-09T21:18:34Z"
+    },
+    {
+      "canonical_repository": "novifinancial/opaque-ke",
+      "global_row_index": 63120,
+      "pull_number": 102,
+      "created_at_utc": "2020-12-16T02:39:21Z"
+    },
+    {
+      "canonical_repository": "nuveo/prest",
+      "global_row_index": 15525,
+      "pull_number": 139,
+      "created_at_utc": "2017-05-10T22:53:09Z"
+    },
+    {
+      "canonical_repository": "nuxt/create-nuxt-app",
+      "global_row_index": 81889,
+      "pull_number": 544,
+      "created_at_utc": "2020-06-08T18:44:21Z"
+    },
+    {
+      "canonical_repository": "nuxt/nuxt.js",
+      "global_row_index": 824,
+      "pull_number": 8038,
+      "created_at_utc": "2020-09-09T08:51:29Z"
+    },
+    {
+      "canonical_repository": "obsidian-tasks-group/obsidian-tasks",
+      "global_row_index": 107158,
+      "pull_number": 2607,
+      "created_at_utc": "2024-01-21T23:49:42Z"
+    },
+    {
+      "canonical_repository": "oceanprotocol/market",
+      "global_row_index": 124349,
+      "pull_number": 1883,
+      "created_at_utc": "2023-02-09T00:50:58Z"
+    },
+    {
+      "canonical_repository": "oclif/core",
+      "global_row_index": 124356,
+      "pull_number": 46,
+      "created_at_utc": "2020-09-16T20:09:00Z"
+    },
+    {
+      "canonical_repository": "ogen-go/ogen",
+      "global_row_index": 27914,
+      "pull_number": 514,
+      "created_at_utc": "2022-08-02T01:27:37Z"
+    },
+    {
+      "canonical_repository": "oliverschwendener/ueli",
+      "global_row_index": 26233,
+      "pull_number": 1227,
+      "created_at_utc": "2024-10-03T07:11:17Z"
+    },
+    {
+      "canonical_repository": "onflow/fcl-js",
+      "global_row_index": 72373,
+      "pull_number": 1176,
+      "created_at_utc": "2022-05-11T21:50:53Z"
+    },
+    {
+      "canonical_repository": "openaddresses/machine",
+      "global_row_index": 97663,
+      "pull_number": 775,
+      "created_at_utc": "2020-08-25T02:50:01Z"
+    },
+    {
+      "canonical_repository": "opencomponents/oc",
+      "global_row_index": 32479,
+      "pull_number": 941,
+      "created_at_utc": "2018-10-01T20:15:03Z"
+    },
+    {
+      "canonical_repository": "openmdao/dymos",
+      "global_row_index": 97105,
+      "pull_number": 565,
+      "created_at_utc": "2021-03-15T16:31:30Z"
+    },
+    {
+      "canonical_repository": "opennmt/opennmt-tf",
+      "global_row_index": 80217,
+      "pull_number": 850,
+      "created_at_utc": "2021-07-02T08:18:05Z"
+    },
+    {
+      "canonical_repository": "operator-framework/operator-sdk",
+      "global_row_index": 76312,
+      "pull_number": 4693,
+      "created_at_utc": "2021-03-24T02:01:24Z"
+    },
+    {
+      "canonical_repository": "opossum-tool/opossumui",
+      "global_row_index": 7098,
+      "pull_number": 2438,
+      "created_at_utc": "2023-12-20T13:55:08Z"
+    },
+    {
+      "canonical_repository": "osbuild/osbuild-composer",
+      "global_row_index": 100417,
+      "pull_number": 4145,
+      "created_at_utc": "2024-05-13T16:09:41Z"
+    },
+    {
+      "canonical_repository": "osmosis-labs/mesh-security",
+      "global_row_index": 62813,
+      "pull_number": 114,
+      "created_at_utc": "2023-08-29T14:47:39Z"
+    },
+    {
+      "canonical_repository": "ota-meshi/eslint-plugin-regexp",
+      "global_row_index": 90344,
+      "pull_number": 578,
+      "created_at_utc": "2023-09-06T20:09:17Z"
+    },
+    {
+      "canonical_repository": "owncloud/ocis",
+      "global_row_index": 117430,
+      "pull_number": 5721,
+      "created_at_utc": "2023-03-02T23:40:15Z"
+    },
+    {
+      "canonical_repository": "oxc-project/oxc-resolver",
+      "global_row_index": 29279,
+      "pull_number": 134,
+      "created_at_utc": "2024-04-22T17:58:59Z"
+    },
+    {
+      "canonical_repository": "oxidecomputer/typify",
+      "global_row_index": 29484,
+      "pull_number": 773,
+      "created_at_utc": "2025-02-15T19:38:44Z"
+    },
+    {
+      "canonical_repository": "pandas-dev/pandas",
+      "global_row_index": 9066,
+      "pull_number": 55704,
+      "created_at_utc": "2023-10-26T13:00:51Z"
+    },
+    {
+      "canonical_repository": "paritytech/ink",
+      "global_row_index": 55924,
+      "pull_number": 926,
+      "created_at_utc": "2021-09-19T08:22:56Z"
+    },
+    {
+      "canonical_repository": "parse-community/parse-sdk-js",
+      "global_row_index": 94406,
+      "pull_number": 1324,
+      "created_at_utc": "2021-03-19T01:23:55Z"
+    },
+    {
+      "canonical_repository": "payjoin/rust-payjoin",
+      "global_row_index": 67008,
+      "pull_number": 360,
+      "created_at_utc": "2024-09-26T20:01:52Z"
+    },
+    {
+      "canonical_repository": "pdfminer/pdfminer.six",
+      "global_row_index": 85441,
+      "pull_number": 388,
+      "created_at_utc": "2020-03-12T12:50:17Z"
+    },
+    {
+      "canonical_repository": "pennylaneai/pennylane",
+      "global_row_index": 119354,
+      "pull_number": 5199,
+      "created_at_utc": "2024-02-13T21:24:42Z"
+    },
+    {
+      "canonical_repository": "petermattis/pebble",
+      "global_row_index": 87405,
+      "pull_number": 142,
+      "created_at_utc": "2019-05-17T18:53:56Z"
+    },
+    {
+      "canonical_repository": "peternator7/strum",
+      "global_row_index": 41734,
+      "pull_number": 305,
+      "created_at_utc": "2023-10-12T14:43:52Z"
+    },
+    {
+      "canonical_repository": "phoenixframework/phoenix",
+      "global_row_index": 62502,
+      "pull_number": 6248,
+      "created_at_utc": "2025-05-13T19:56:53Z"
+    },
+    {
+      "canonical_repository": "pimutils/khal",
+      "global_row_index": 78852,
+      "pull_number": 717,
+      "created_at_utc": "2017-10-03T17:28:50Z"
+    },
+    {
+      "canonical_repository": "pingcap/tiflow",
+      "global_row_index": 39914,
+      "pull_number": 4632,
+      "created_at_utc": "2022-02-19T09:31:40Z"
+    },
+    {
+      "canonical_repository": "pinojs/hapi-pino",
+      "global_row_index": 70342,
+      "pull_number": 51,
+      "created_at_utc": "2018-03-26T20:09:47Z"
+    },
+    {
+      "canonical_repository": "plaid/sanctuary",
+      "global_row_index": 69666,
+      "pull_number": 121,
+      "created_at_utc": "2015-11-17T04:38:33Z"
+    },
+    {
+      "canonical_repository": "plasmapy/plasmapy",
+      "global_row_index": 56197,
+      "pull_number": 396,
+      "created_at_utc": "2018-04-23T20:54:01Z"
+    },
+    {
+      "canonical_repository": "platers/obsidian-linter",
+      "global_row_index": 78109,
+      "pull_number": 542,
+      "created_at_utc": "2022-12-08T22:54:44Z"
+    },
+    {
+      "canonical_repository": "playcanvas/engine",
+      "global_row_index": 73985,
+      "pull_number": 6355,
+      "created_at_utc": "2024-05-13T10:21:01Z"
+    },
+    {
+      "canonical_repository": "ploomber/jupysql",
+      "global_row_index": 73460,
+      "pull_number": 189,
+      "created_at_utc": "2023-03-01T23:20:34Z"
+    },
+    {
+      "canonical_repository": "pmeal/openpnm",
+      "global_row_index": 55150,
+      "pull_number": 1148,
+      "created_at_utc": "2018-11-14T23:52:37Z"
+    },
+    {
+      "canonical_repository": "polarsignals/frostdb",
+      "global_row_index": 119928,
+      "pull_number": 609,
+      "created_at_utc": "2023-12-04T19:46:56Z"
+    },
+    {
+      "canonical_repository": "ponder-sh/ponder",
+      "global_row_index": 68022,
+      "pull_number": 1404,
+      "created_at_utc": "2025-01-06T17:31:52Z"
+    },
+    {
+      "canonical_repository": "porscheinformatik/sonarqube-licensecheck",
+      "global_row_index": 68736,
+      "pull_number": 364,
+      "created_at_utc": "2023-03-12T16:37:30Z"
+    },
+    {
+      "canonical_repository": "postcss/autoprefixer",
+      "global_row_index": 58098,
+      "pull_number": 928,
+      "created_at_utc": "2017-10-20T13:54:03Z"
+    },
+    {
+      "canonical_repository": "preactjs/preact-devtools",
+      "global_row_index": 54235,
+      "pull_number": 373,
+      "created_at_utc": "2022-05-18T17:18:59Z"
+    },
+    {
+      "canonical_repository": "prettier/plugin-php",
+      "global_row_index": 20799,
+      "pull_number": 2228,
+      "created_at_utc": "2023-08-28T03:14:34Z"
+    },
+    {
+      "canonical_repository": "prettier/prettier-atom",
+      "global_row_index": 74469,
+      "pull_number": 123,
+      "created_at_utc": "2017-04-14T13:53:45Z"
+    },
+    {
+      "canonical_repository": "probe-rs/probe-rs",
+      "global_row_index": 28051,
+      "pull_number": 2511,
+      "created_at_utc": "2024-05-29T08:12:51Z"
+    },
+    {
+      "canonical_repository": "probot/settings",
+      "global_row_index": 120215,
+      "pull_number": 209,
+      "created_at_utc": "2020-03-05T07:27:49Z"
+    },
+    {
+      "canonical_repository": "projectmesa/mesa",
+      "global_row_index": 38346,
+      "pull_number": 1693,
+      "created_at_utc": "2023-05-12T06:35:02Z"
+    },
+    {
+      "canonical_repository": "prometheus/prometheus",
+      "global_row_index": 98900,
+      "pull_number": 12271,
+      "created_at_utc": "2023-04-18T09:18:55Z"
+    },
+    {
+      "canonical_repository": "prometheus/snmp_exporter",
+      "global_row_index": 1454,
+      "pull_number": 921,
+      "created_at_utc": "2023-07-18T20:41:55Z"
+    },
+    {
+      "canonical_repository": "protofire/solhint",
+      "global_row_index": 31243,
+      "pull_number": 480,
+      "created_at_utc": "2023-08-10T16:12:45Z"
+    },
+    {
+      "canonical_repository": "public-awesome/launchpad",
+      "global_row_index": 39736,
+      "pull_number": 351,
+      "created_at_utc": "2022-08-20T21:19:58Z"
+    },
+    {
+      "canonical_repository": "pulldown-cmark/pulldown-cmark",
+      "global_row_index": 39731,
+      "pull_number": 969,
+      "created_at_utc": "2024-10-08T21:22:35Z"
+    },
+    {
+      "canonical_repository": "pulumi/pulumi-terraform-bridge",
+      "global_row_index": 15819,
+      "pull_number": 1672,
+      "created_at_utc": "2024-02-03T01:34:18Z"
+    },
+    {
+      "canonical_repository": "puppetlabs/wash",
+      "global_row_index": 22397,
+      "pull_number": 508,
+      "created_at_utc": "2019-09-24T20:33:22Z"
+    },
+    {
+      "canonical_repository": "py-pdf/pypdf2",
+      "global_row_index": 25344,
+      "pull_number": 919,
+      "created_at_utc": "2022-05-28T09:38:59Z"
+    },
+    {
+      "canonical_repository": "pycqa/flake8",
+      "global_row_index": 98327,
+      "pull_number": 1540,
+      "created_at_utc": "2022-01-24T00:25:37Z"
+    },
+    {
+      "canonical_repository": "pydicom/pydicom",
+      "global_row_index": 84446,
+      "pull_number": 700,
+      "created_at_utc": "2018-08-07T19:48:32Z"
+    },
+    {
+      "canonical_repository": "pyfilesystem/pyfilesystem2",
+      "global_row_index": 97676,
+      "pull_number": 34,
+      "created_at_utc": "2017-03-29T19:45:53Z"
+    },
+    {
+      "canonical_repository": "pyfisch/cbor",
+      "global_row_index": 39852,
+      "pull_number": 116,
+      "created_at_utc": "2019-06-09T13:53:30Z"
+    },
+    {
+      "canonical_repository": "pyg-team/pytorch_geometric",
+      "global_row_index": 27829,
+      "pull_number": 7324,
+      "created_at_utc": "2023-05-08T13:48:52Z"
+    },
+    {
+      "canonical_repository": "pylons/pyramid",
+      "global_row_index": 119008,
+      "pull_number": 1972,
+      "created_at_utc": "2015-10-12T04:09:08Z"
+    },
+    {
+      "canonical_repository": "pymodbus-dev/pymodbus",
+      "global_row_index": 88612,
+      "pull_number": 1822,
+      "created_at_utc": "2023-10-16T18:37:19Z"
+    },
+    {
+      "canonical_repository": "pyomo/pyomo",
+      "global_row_index": 73416,
+      "pull_number": 2551,
+      "created_at_utc": "2022-09-28T20:21:18Z"
+    },
+    {
+      "canonical_repository": "pypa/pip",
+      "global_row_index": 34564,
+      "pull_number": 11696,
+      "created_at_utc": "2023-01-04T10:24:57Z"
+    },
+    {
+      "canonical_repository": "python-attrs/attrs",
+      "global_row_index": 87810,
+      "pull_number": 993,
+      "created_at_utc": "2022-08-06T04:51:18Z"
+    },
+    {
+      "canonical_repository": "python-cmd2/cmd2",
+      "global_row_index": 87887,
+      "pull_number": 783,
+      "created_at_utc": "2019-09-24T19:06:39Z"
+    },
+    {
+      "canonical_repository": "qlcchain/go-qlc",
+      "global_row_index": 55045,
+      "pull_number": 291,
+      "created_at_utc": "2019-04-23T09:16:33Z"
+    },
+    {
+      "canonical_repository": "qmuntal/gltf",
+      "global_row_index": 49192,
+      "pull_number": 84,
+      "created_at_utc": "2024-06-28T13:41:11Z"
+    },
+    {
+      "canonical_repository": "quic-go/quic-go",
+      "global_row_index": 103331,
+      "pull_number": 4424,
+      "created_at_utc": "2024-04-09T23:31:02Z"
+    },
+    {
+      "canonical_repository": "quramy/prisma-fabbrica",
+      "global_row_index": 90688,
+      "pull_number": 53,
+      "created_at_utc": "2022-11-28T15:33:04Z"
+    },
+    {
+      "canonical_repository": "railwayapp/nixpacks",
+      "global_row_index": 98781,
+      "pull_number": 161,
+      "created_at_utc": "2022-06-02T00:21:36Z"
+    },
+    {
+      "canonical_repository": "rancher/fleet",
+      "global_row_index": 2870,
+      "pull_number": 2490,
+      "created_at_utc": "2024-06-06T11:10:34Z"
+    },
+    {
+      "canonical_repository": "rclone/rclone",
+      "global_row_index": 69349,
+      "pull_number": 6228,
+      "created_at_utc": "2022-06-08T21:23:08Z"
+    },
+    {
+      "canonical_repository": "react-materialize/react-materialize",
+      "global_row_index": 51421,
+      "pull_number": 958,
+      "created_at_utc": "2019-11-26T20:31:26Z"
+    },
+    {
+      "canonical_repository": "reagento/dishka",
+      "global_row_index": 33177,
+      "pull_number": 391,
+      "created_at_utc": "2025-03-12T17:56:05Z"
+    },
+    {
+      "canonical_repository": "reakit/reakit",
+      "global_row_index": 53742,
+      "pull_number": 239,
+      "created_at_utc": "2018-09-18T10:46:08Z"
+    },
+    {
+      "canonical_repository": "redhat-developer/service-binding-operator",
+      "global_row_index": 107431,
+      "pull_number": 698,
+      "created_at_utc": "2020-10-01T09:08:09Z"
+    },
+    {
+      "canonical_repository": "redocly/redocly-cli",
+      "global_row_index": 115398,
+      "pull_number": 802,
+      "created_at_utc": "2022-08-09T14:19:18Z"
+    },
+    {
+      "canonical_repository": "reduxjs/react-redux",
+      "global_row_index": 40160,
+      "pull_number": 1000,
+      "created_at_utc": "2018-08-14T17:21:23Z"
+    },
+    {
+      "canonical_repository": "reduxjs/redux-toolkit",
+      "global_row_index": 105380,
+      "pull_number": 1035,
+      "created_at_utc": "2021-05-01T17:04:24Z"
+    },
+    {
+      "canonical_repository": "refined-github/refined-github",
+      "global_row_index": 39797,
+      "pull_number": 7715,
+      "created_at_utc": "2024-08-21T07:30:52Z"
+    },
+    {
+      "canonical_repository": "remix-run/react-router",
+      "global_row_index": 90110,
+      "pull_number": 11078,
+      "created_at_utc": "2023-12-01T18:51:56Z"
+    },
+    {
+      "canonical_repository": "researchobject/ro-crate-py",
+      "global_row_index": 7732,
+      "pull_number": 54,
+      "created_at_utc": "2021-03-30T14:41:55Z"
+    },
+    {
+      "canonical_repository": "rickbergfalk/sqlpad",
+      "global_row_index": 46249,
+      "pull_number": 543,
+      "created_at_utc": "2020-02-20T21:16:02Z"
+    },
+    {
+      "canonical_repository": "rigetticomputing/pyquil",
+      "global_row_index": 42403,
+      "pull_number": 174,
+      "created_at_utc": "2017-11-03T21:09:50Z"
+    },
+    {
+      "canonical_repository": "robintail/express-zod-api",
+      "global_row_index": 71336,
+      "pull_number": 340,
+      "created_at_utc": "2022-03-05T13:36:40Z"
+    },
+    {
+      "canonical_repository": "robotpy/cxxheaderparser",
+      "global_row_index": 79564,
+      "pull_number": 66,
+      "created_at_utc": "2023-09-24T01:48:26Z"
+    },
+    {
+      "canonical_repository": "rrd108/vue-mess-detector",
+      "global_row_index": 71882,
+      "pull_number": 147,
+      "created_at_utc": "2024-08-17T22:40:40Z"
+    },
+    {
+      "canonical_repository": "rsteube/carapace",
+      "global_row_index": 104779,
+      "pull_number": 761,
+      "created_at_utc": "2023-04-11T08:25:37Z"
+    },
+    {
+      "canonical_repository": "ruby/yarp",
+      "global_row_index": 10146,
+      "pull_number": 1415,
+      "created_at_utc": "2023-09-06T18:32:11Z"
+    },
+    {
+      "canonical_repository": "ruma/ruma",
+      "global_row_index": 95650,
+      "pull_number": 69,
+      "created_at_utc": "2020-06-19T12:07:43Z"
+    },
+    {
+      "canonical_repository": "runatlantis/atlantis",
+      "global_row_index": 27028,
+      "pull_number": 5613,
+      "created_at_utc": "2025-06-11T12:44:10Z"
+    },
+    {
+      "canonical_repository": "rust-analyzer/rust-analyzer",
+      "global_row_index": 22488,
+      "pull_number": 5100,
+      "created_at_utc": "2020-06-27T12:31:54Z"
+    },
+    {
+      "canonical_repository": "rust-bitcoin/rust-bitcoin",
+      "global_row_index": 96341,
+      "pull_number": 1870,
+      "created_at_utc": "2023-05-24T09:39:44Z"
+    },
+    {
+      "canonical_repository": "rust-diplomat/diplomat",
+      "global_row_index": 112420,
+      "pull_number": 805,
+      "created_at_utc": "2025-03-08T01:41:41Z"
+    },
+    {
+      "canonical_repository": "rust-itertools/itertools",
+      "global_row_index": 112156,
+      "pull_number": 911,
+      "created_at_utc": "2024-04-09T07:42:48Z"
+    },
+    {
+      "canonical_repository": "rust-lang-nursery/futures-rs",
+      "global_row_index": 48837,
+      "pull_number": 914,
+      "created_at_utc": "2018-03-27T13:12:34Z"
+    },
+    {
+      "canonical_repository": "rust-lang/annotate-snippets-rs",
+      "global_row_index": 43167,
+      "pull_number": 93,
+      "created_at_utc": "2024-03-11T19:40:27Z"
+    },
+    {
+      "canonical_repository": "rust-lang/cc-rs",
+      "global_row_index": 121534,
+      "pull_number": 981,
+      "created_at_utc": "2024-02-26T18:17:23Z"
+    },
+    {
+      "canonical_repository": "rust-lang/chalk",
+      "global_row_index": 121579,
+      "pull_number": 601,
+      "created_at_utc": "2020-09-04T17:52:24Z"
+    },
+    {
+      "canonical_repository": "rust-lang/regex",
+      "global_row_index": 51833,
+      "pull_number": 637,
+      "created_at_utc": "2020-01-09T18:35:20Z"
+    },
+    {
+      "canonical_repository": "rust-lang/rust-analyzer",
+      "global_row_index": 40300,
+      "pull_number": 16938,
+      "created_at_utc": "2024-03-24T14:41:17Z"
+    },
+    {
+      "canonical_repository": "rust-lang/rust-bindgen",
+      "global_row_index": 24241,
+      "pull_number": 3021,
+      "created_at_utc": "2024-12-01T06:45:35Z"
+    },
+    {
+      "canonical_repository": "rust-ndarray/ndarray",
+      "global_row_index": 21458,
+      "pull_number": 722,
+      "created_at_utc": "2019-09-20T15:44:06Z"
+    },
+    {
+      "canonical_repository": "rustcrypto/formats",
+      "global_row_index": 32330,
+      "pull_number": 1443,
+      "created_at_utc": "2024-07-09T18:08:36Z"
+    },
+    {
+      "canonical_repository": "rustcrypto/utils",
+      "global_row_index": 107777,
+      "pull_number": 338,
+      "created_at_utc": "2021-03-18T14:28:57Z"
+    },
+    {
+      "canonical_repository": "rustls/rustls",
+      "global_row_index": 52196,
+      "pull_number": 2274,
+      "created_at_utc": "2024-12-11T15:33:17Z"
+    },
+    {
+      "canonical_repository": "rustwasm/wasm-pack",
+      "global_row_index": 53438,
+      "pull_number": 263,
+      "created_at_utc": "2018-08-23T18:15:20Z"
+    },
+    {
+      "canonical_repository": "sanctuary-js/sanctuary",
+      "global_row_index": 32420,
+      "pull_number": 622,
+      "created_at_utc": "2019-04-05T15:57:51Z"
+    },
+    {
+      "canonical_repository": "sasstools/sass-lint",
+      "global_row_index": 32449,
+      "pull_number": 503,
+      "created_at_utc": "2016-02-05T07:14:33Z"
+    },
+    {
+      "canonical_repository": "scoutapp/scout_apm_python",
+      "global_row_index": 122073,
+      "pull_number": 449,
+      "created_at_utc": "2020-01-03T17:19:37Z"
+    },
+    {
+      "canonical_repository": "scylladb/scylla-operator",
+      "global_row_index": 109188,
+      "pull_number": 1401,
+      "created_at_utc": "2023-09-18T12:05:19Z"
+    },
+    {
+      "canonical_repository": "scylladb/scylla-rust-driver",
+      "global_row_index": 62409,
+      "pull_number": 792,
+      "created_at_utc": "2023-08-21T10:42:21Z"
+    },
+    {
+      "canonical_repository": "semantic-release/semantic-release",
+      "global_row_index": 31157,
+      "pull_number": 576,
+      "created_at_utc": "2017-12-27T21:21:36Z"
+    },
+    {
+      "canonical_repository": "senth/minecraft-mod-manager",
+      "global_row_index": 2722,
+      "pull_number": 28,
+      "created_at_utc": "2021-04-21T09:16:18Z"
+    },
+    {
+      "canonical_repository": "serverless-heaven/serverless-webpack",
+      "global_row_index": 83087,
+      "pull_number": 597,
+      "created_at_utc": "2020-07-15T21:12:43Z"
+    },
+    {
+      "canonical_repository": "serverless/serverless",
+      "global_row_index": 24604,
+      "pull_number": 6971,
+      "created_at_utc": "2019-11-18T16:58:17Z"
+    },
+    {
+      "canonical_repository": "servo/rust-url",
+      "global_row_index": 103108,
+      "pull_number": 751,
+      "created_at_utc": "2022-01-28T17:09:46Z"
+    },
+    {
+      "canonical_repository": "sfdo-tooling/cumulusci",
+      "global_row_index": 94614,
+      "pull_number": 3102,
+      "created_at_utc": "2022-03-01T20:04:34Z"
+    },
+    {
+      "canonical_repository": "sharkdp/fd",
+      "global_row_index": 50806,
+      "pull_number": 383,
+      "created_at_utc": "2019-01-05T20:21:24Z"
+    },
+    {
+      "canonical_repository": "sharksforarms/deku",
+      "global_row_index": 44594,
+      "pull_number": 166,
+      "created_at_utc": "2021-01-09T05:08:21Z"
+    },
+    {
+      "canonical_repository": "shikijs/shiki",
+      "global_row_index": 125454,
+      "pull_number": 890,
+      "created_at_utc": "2025-01-14T21:09:29Z"
+    },
+    {
+      "canonical_repository": "shipwright-io/build",
+      "global_row_index": 20626,
+      "pull_number": 879,
+      "created_at_utc": "2021-09-29T06:51:27Z"
+    },
+    {
+      "canonical_repository": "shssoichiro/oxipng",
+      "global_row_index": 21537,
+      "pull_number": 500,
+      "created_at_utc": "2023-04-20T06:09:58Z"
+    },
+    {
+      "canonical_repository": "sigoden/dufs",
+      "global_row_index": 21512,
+      "pull_number": 321,
+      "created_at_utc": "2023-12-16T02:56:58Z"
+    },
+    {
+      "canonical_repository": "simpeg/simpeg",
+      "global_row_index": 39032,
+      "pull_number": 1400,
+      "created_at_utc": "2024-03-28T17:43:05Z"
+    },
+    {
+      "canonical_repository": "sinonjs/fake-timers",
+      "global_row_index": 92560,
+      "pull_number": 293,
+      "created_at_utc": "2020-01-26T16:35:04Z"
+    },
+    {
+      "canonical_repository": "sinonjs/lolex",
+      "global_row_index": 92586,
+      "pull_number": 204,
+      "created_at_utc": "2018-09-05T17:25:59Z"
+    },
+    {
+      "canonical_repository": "sktime/sktime",
+      "global_row_index": 92144,
+      "pull_number": 7955,
+      "created_at_utc": "2025-03-09T17:56:54Z"
+    },
+    {
+      "canonical_repository": "slack-go/slack",
+      "global_row_index": 120541,
+      "pull_number": 772,
+      "created_at_utc": "2020-08-09T11:37:08Z"
+    },
+    {
+      "canonical_repository": "slackhq/nebula",
+      "global_row_index": 106253,
+      "pull_number": 1376,
+      "created_at_utc": "2025-04-02T20:29:02Z"
+    },
+    {
+      "canonical_repository": "snowflakedb/gosnowflake",
+      "global_row_index": 52828,
+      "pull_number": 818,
+      "created_at_utc": "2023-06-09T15:39:18Z"
+    },
+    {
+      "canonical_repository": "softlayer/softlayer-python",
+      "global_row_index": 90883,
+      "pull_number": 1614,
+      "created_at_utc": "2022-04-11T19:35:00Z"
+    },
+    {
+      "canonical_repository": "solana-labs/solana-program-library",
+      "global_row_index": 20248,
+      "pull_number": 6898,
+      "created_at_utc": "2024-06-24T09:30:30Z"
+    },
+    {
+      "canonical_repository": "solid/community-server",
+      "global_row_index": 47525,
+      "pull_number": 134,
+      "created_at_utc": "2020-09-04T12:46:25Z"
+    },
+    {
+      "canonical_repository": "sourcecred/sourcecred",
+      "global_row_index": 32159,
+      "pull_number": 1535,
+      "created_at_utc": "2020-01-07T23:13:41Z"
+    },
+    {
+      "canonical_repository": "sql-formatter-org/sql-formatter",
+      "global_row_index": 64003,
+      "pull_number": 351,
+      "created_at_utc": "2022-07-27T10:35:11Z"
+    },
+    {
+      "canonical_repository": "sqlc-dev/sqlc",
+      "global_row_index": 114798,
+      "pull_number": 2951,
+      "created_at_utc": "2023-11-06T23:07:38Z"
+    },
+    {
+      "canonical_repository": "square/anvil",
+      "global_row_index": 67548,
+      "pull_number": 53,
+      "created_at_utc": "2020-07-31T20:11:33Z"
+    },
+    {
+      "canonical_repository": "square/wire",
+      "global_row_index": 64836,
+      "pull_number": 1117,
+      "created_at_utc": "2019-08-01T13:53:51Z"
+    },
+    {
+      "canonical_repository": "stac-utils/pystac",
+      "global_row_index": 4303,
+      "pull_number": 1087,
+      "created_at_utc": "2023-04-07T19:11:13Z"
+    },
+    {
+      "canonical_repository": "stanfordnlp/dspy",
+      "global_row_index": 109642,
+      "pull_number": 7960,
+      "created_at_utc": "2025-03-14T18:06:13Z"
+    },
+    {
+      "canonical_repository": "statamic/cms",
+      "global_row_index": 59857,
+      "pull_number": 2781,
+      "created_at_utc": "2020-11-01T09:04:58Z"
+    },
+    {
+      "canonical_repository": "stateful/vscode-runme",
+      "global_row_index": 26203,
+      "pull_number": 953,
+      "created_at_utc": "2023-11-07T17:07:09Z"
+    },
+    {
+      "canonical_repository": "stebalien/tempfile",
+      "global_row_index": 102990,
+      "pull_number": 101,
+      "created_at_utc": "2019-07-01T03:16:14Z"
+    },
+    {
+      "canonical_repository": "stellar/rs-soroban-env",
+      "global_row_index": 96214,
+      "pull_number": 1291,
+      "created_at_utc": "2023-12-05T02:57:27Z"
+    },
+    {
+      "canonical_repository": "stephenh/ts-proto",
+      "global_row_index": 9557,
+      "pull_number": 1040,
+      "created_at_utc": "2024-05-13T20:59:54Z"
+    },
+    {
+      "canonical_repository": "steveukx/git-js",
+      "global_row_index": 9607,
+      "pull_number": 664,
+      "created_at_utc": "2021-08-12T17:38:37Z"
+    },
+    {
+      "canonical_repository": "stoplightio/spectral",
+      "global_row_index": 6172,
+      "pull_number": 182,
+      "created_at_utc": "2019-05-07T10:13:06Z"
+    },
+    {
+      "canonical_repository": "streamlink/streamlink",
+      "global_row_index": 48229,
+      "pull_number": 1925,
+      "created_at_utc": "2018-07-12T07:50:18Z"
+    },
+    {
+      "canonical_repository": "stripe/stripe-node",
+      "global_row_index": 24411,
+      "pull_number": 1073,
+      "created_at_utc": "2020-11-18T23:19:53Z"
+    },
+    {
+      "canonical_repository": "strongloop/loopback-datasource-juggler",
+      "global_row_index": 75829,
+      "pull_number": 1700,
+      "created_at_utc": "2019-03-07T11:21:24Z"
+    },
+    {
+      "canonical_repository": "supabase/cli",
+      "global_row_index": 73148,
+      "pull_number": 461,
+      "created_at_utc": "2022-09-16T08:57:15Z"
+    },
+    {
+      "canonical_repository": "supabase/gotrue",
+      "global_row_index": 62143,
+      "pull_number": 1446,
+      "created_at_utc": "2024-02-21T08:08:52Z"
+    },
+    {
+      "canonical_repository": "sveltejs/eslint-plugin-svelte",
+      "global_row_index": 85447,
+      "pull_number": 1135,
+      "created_at_utc": "2025-03-17T13:02:21Z"
+    },
+    {
+      "canonical_repository": "sveltejs/kit",
+      "global_row_index": 91670,
+      "pull_number": 7912,
+      "created_at_utc": "2022-12-02T09:22:25Z"
+    },
+    {
+      "canonical_repository": "sveltejs/prettier-plugin-svelte",
+      "global_row_index": 20695,
+      "pull_number": 77,
+      "created_at_utc": "2020-01-30T14:06:43Z"
+    },
+    {
+      "canonical_repository": "svenstaro/miniserve",
+      "global_row_index": 20348,
+      "pull_number": 728,
+      "created_at_utc": "2022-02-06T11:50:00Z"
+    },
+    {
+      "canonical_repository": "svg/svgo",
+      "global_row_index": 115282,
+      "pull_number": 1322,
+      "created_at_utc": "2021-02-14T08:39:12Z"
+    },
+    {
+      "canonical_repository": "swellaby/rusty-hook",
+      "global_row_index": 16230,
+      "pull_number": 115,
+      "created_at_utc": "2020-09-22T18:06:37Z"
+    },
+    {
+      "canonical_repository": "switchbacktech/compass",
+      "global_row_index": 55036,
+      "pull_number": 242,
+      "created_at_utc": "2025-01-31T14:23:45Z"
+    },
+    {
+      "canonical_repository": "swup/swup",
+      "global_row_index": 17335,
+      "pull_number": 923,
+      "created_at_utc": "2024-07-14T18:29:52Z"
+    },
+    {
+      "canonical_repository": "systemd/mkosi",
+      "global_row_index": 95588,
+      "pull_number": 3285,
+      "created_at_utc": "2024-12-19T09:58:15Z"
+    },
+    {
+      "canonical_repository": "syuilo/aiscript",
+      "global_row_index": 17344,
+      "pull_number": 152,
+      "created_at_utc": "2021-11-04T07:08:13Z"
+    },
+    {
+      "canonical_repository": "tafia/quick-xml",
+      "global_row_index": 55874,
+      "pull_number": 428,
+      "created_at_utc": "2022-07-18T19:16:20Z"
+    },
+    {
+      "canonical_repository": "tailwindlabs/headlessui",
+      "global_row_index": 98,
+      "pull_number": 2966,
+      "created_at_utc": "2024-02-03T16:18:36Z"
+    },
+    {
+      "canonical_repository": "tailwindlabs/tailwindcss",
+      "global_row_index": 316,
+      "pull_number": 2580,
+      "created_at_utc": "2020-10-16T16:15:32Z"
+    },
+    {
+      "canonical_repository": "takahirom/roborazzi",
+      "global_row_index": 30835,
+      "pull_number": 544,
+      "created_at_utc": "2024-11-06T02:41:42Z"
+    },
+    {
+      "canonical_repository": "tannerlinsley/react-query",
+      "global_row_index": 93501,
+      "pull_number": 914,
+      "created_at_utc": "2020-08-23T10:14:18Z"
+    },
+    {
+      "canonical_repository": "tanstack/router",
+      "global_row_index": 65506,
+      "pull_number": 1729,
+      "created_at_utc": "2024-06-09T22:38:22Z"
+    },
+    {
+      "canonical_repository": "tartiflette/tartiflette",
+      "global_row_index": 102309,
+      "pull_number": 259,
+      "created_at_utc": "2019-07-03T07:37:28Z"
+    },
+    {
+      "canonical_repository": "tatuylonen/wiktextract",
+      "global_row_index": 73003,
+      "pull_number": 568,
+      "created_at_utc": "2024-04-03T07:57:42Z"
+    },
+    {
+      "canonical_repository": "technologyadvice/obey",
+      "global_row_index": 116855,
+      "pull_number": 32,
+      "created_at_utc": "2016-03-09T21:59:45Z"
+    },
+    {
+      "canonical_repository": "tediousjs/node-mssql",
+      "global_row_index": 96720,
+      "pull_number": 990,
+      "created_at_utc": "2020-02-15T07:45:52Z"
+    },
+    {
+      "canonical_repository": "temporalio/ui",
+      "global_row_index": 40758,
+      "pull_number": 301,
+      "created_at_utc": "2022-03-11T02:14:22Z"
+    },
+    {
+      "canonical_repository": "tencent/tdesign-mobile-vue",
+      "global_row_index": 7139,
+      "pull_number": 1032,
+      "created_at_utc": "2023-08-16T11:40:22Z"
+    },
+    {
+      "canonical_repository": "terrapower/armi",
+      "global_row_index": 122005,
+      "pull_number": 1969,
+      "created_at_utc": "2024-10-22T20:47:13Z"
+    },
+    {
+      "canonical_repository": "tetratelabs/wazero",
+      "global_row_index": 50189,
+      "pull_number": 1370,
+      "created_at_utc": "2023-04-17T16:00:26Z"
+    },
+    {
+      "canonical_repository": "textualize/rich",
+      "global_row_index": 45374,
+      "pull_number": 3064,
+      "created_at_utc": "2023-07-29T09:07:48Z"
+    },
+    {
+      "canonical_repository": "thelounge/thelounge",
+      "global_row_index": 392,
+      "pull_number": 4235,
+      "created_at_utc": "2021-05-22T01:23:02Z"
+    },
+    {
+      "canonical_repository": "theodinproject/odin-bot-v2",
+      "global_row_index": 38776,
+      "pull_number": 450,
+      "created_at_utc": "2023-10-03T21:51:41Z"
+    },
+    {
+      "canonical_repository": "thomasdezeeuw/a10",
+      "global_row_index": 53447,
+      "pull_number": 154,
+      "created_at_utc": "2025-01-25T15:21:27Z"
+    },
+    {
+      "canonical_repository": "tikv/client-go",
+      "global_row_index": 46599,
+      "pull_number": 1607,
+      "created_at_utc": "2025-03-12T08:16:06Z"
+    },
+    {
+      "canonical_repository": "timothycrosley/isort",
+      "global_row_index": 66840,
+      "pull_number": 702,
+      "created_at_utc": "2018-05-03T01:06:28Z"
+    },
+    {
+      "canonical_repository": "tipsy/javalin",
+      "global_row_index": 95194,
+      "pull_number": 1295,
+      "created_at_utc": "2021-06-27T18:23:12Z"
+    },
+    {
+      "canonical_repository": "tkh44/emotion",
+      "global_row_index": 96112,
+      "pull_number": 155,
+      "created_at_utc": "2017-07-16T05:56:48Z"
+    },
+    {
+      "canonical_repository": "tokio-rs/tokio",
+      "global_row_index": 40519,
+      "pull_number": 5130,
+      "created_at_utc": "2022-10-27T03:56:12Z"
+    },
+    {
+      "canonical_repository": "toml-rs/toml",
+      "global_row_index": 15047,
+      "pull_number": 795,
+      "created_at_utc": "2024-09-27T18:29:30Z"
+    },
+    {
+      "canonical_repository": "topolvm/topolvm",
+      "global_row_index": 21398,
+      "pull_number": 641,
+      "created_at_utc": "2023-01-10T15:03:09Z"
+    },
+    {
+      "canonical_repository": "tornadoweb/tornado",
+      "global_row_index": 17179,
+      "pull_number": 1917,
+      "created_at_utc": "2016-12-20T20:12:14Z"
+    },
+    {
+      "canonical_repository": "tower-rs/tower",
+      "global_row_index": 21455,
+      "pull_number": 376,
+      "created_at_utc": "2019-12-04T22:55:06Z"
+    },
+    {
+      "canonical_repository": "tracemachina/nativelink",
+      "global_row_index": 103994,
+      "pull_number": 1239,
+      "created_at_utc": "2024-08-06T08:22:59Z"
+    },
+    {
+      "canonical_repository": "triggermesh/aws-event-sources",
+      "global_row_index": 19764,
+      "pull_number": 159,
+      "created_at_utc": "2020-06-15T13:07:28Z"
+    },
+    {
+      "canonical_repository": "tweag/nickel",
+      "global_row_index": 107062,
+      "pull_number": 509,
+      "created_at_utc": "2021-12-22T21:09:37Z"
+    },
+    {
+      "canonical_repository": "twisted/pydoctor",
+      "global_row_index": 7698,
+      "pull_number": 176,
+      "created_at_utc": "2019-12-18T16:34:09Z"
+    },
+    {
+      "canonical_repository": "twitter/compose-rules",
+      "global_row_index": 4798,
+      "pull_number": 29,
+      "created_at_utc": "2022-09-05T07:16:54Z"
+    },
+    {
+      "canonical_repository": "twpayne/chezmoi",
+      "global_row_index": 116707,
+      "pull_number": 1033,
+      "created_at_utc": "2021-02-14T19:38:49Z"
+    },
+    {
+      "canonical_repository": "typedorm/typedorm",
+      "global_row_index": 53668,
+      "pull_number": 50,
+      "created_at_utc": "2021-01-14T10:48:46Z"
+    },
+    {
+      "canonical_repository": "typesafegithub/github-workflows-kt",
+      "global_row_index": 4714,
+      "pull_number": 1024,
+      "created_at_utc": "2023-10-14T19:31:56Z"
+    },
+    {
+      "canonical_repository": "uber-web/baseui",
+      "global_row_index": 20184,
+      "pull_number": 236,
+      "created_at_utc": "2018-09-13T02:06:52Z"
+    },
+    {
+      "canonical_repository": "unexpectedjs/unexpected",
+      "global_row_index": 76002,
+      "pull_number": 782,
+      "created_at_utc": "2020-12-19T22:05:23Z"
+    },
+    {
+      "canonical_repository": "unidata/siphon",
+      "global_row_index": 2720,
+      "pull_number": 804,
+      "created_at_utc": "2024-10-31T20:20:13Z"
+    },
+    {
+      "canonical_repository": "unjs/h3",
+      "global_row_index": 49262,
+      "pull_number": 820,
+      "created_at_utc": "2024-07-09T15:05:29Z"
+    },
+    {
+      "canonical_repository": "urql-graphql/urql",
+      "global_row_index": 71934,
+      "pull_number": 3062,
+      "created_at_utc": "2023-03-16T02:30:40Z"
+    },
+    {
+      "canonical_repository": "vanniktech/gradle-dependency-graph-generator-plugin",
+      "global_row_index": 73980,
+      "pull_number": 134,
+      "created_at_utc": "2021-09-26T06:33:23Z"
+    },
+    {
+      "canonical_repository": "vanus-labs/vanus",
+      "global_row_index": 114735,
+      "pull_number": 471,
+      "created_at_utc": "2023-03-03T13:20:38Z"
+    },
+    {
+      "canonical_repository": "vega/vega-lite",
+      "global_row_index": 122543,
+      "pull_number": 590,
+      "created_at_utc": "2015-10-03T09:28:23Z"
+    },
+    {
+      "canonical_repository": "victoriametrics/victoriametrics",
+      "global_row_index": 110276,
+      "pull_number": 4698,
+      "created_at_utc": "2023-07-24T08:45:22Z"
+    },
+    {
+      "canonical_repository": "video-dev/hls.js",
+      "global_row_index": 25615,
+      "pull_number": 6102,
+      "created_at_utc": "2024-01-11T00:53:57Z"
+    },
+    {
+      "canonical_repository": "vigetlabs/microcosm",
+      "global_row_index": 91320,
+      "pull_number": 435,
+      "created_at_utc": "2017-10-12T14:11:26Z"
+    },
+    {
+      "canonical_repository": "virtuslab/git-machete",
+      "global_row_index": 91497,
+      "pull_number": 434,
+      "created_at_utc": "2022-02-14T11:15:53Z"
+    },
+    {
+      "canonical_repository": "vitessio/vitess",
+      "global_row_index": 26648,
+      "pull_number": 8504,
+      "created_at_utc": "2021-07-20T14:40:22Z"
+    },
+    {
+      "canonical_repository": "vlucas/frisby",
+      "global_row_index": 51367,
+      "pull_number": 501,
+      "created_at_utc": "2018-10-30T04:45:46Z"
+    },
+    {
+      "canonical_repository": "vmware-labs/reconciler-runtime",
+      "global_row_index": 74269,
+      "pull_number": 265,
+      "created_at_utc": "2022-06-24T16:45:41Z"
+    },
+    {
+      "canonical_repository": "vmware/govmomi",
+      "global_row_index": 78005,
+      "pull_number": 2336,
+      "created_at_utc": "2021-03-30T03:27:40Z"
+    },
+    {
+      "canonical_repository": "volta-cli/volta",
+      "global_row_index": 118301,
+      "pull_number": 1873,
+      "created_at_utc": "2024-08-24T08:35:26Z"
+    },
+    {
+      "canonical_repository": "vuejs/eslint-plugin-vue",
+      "global_row_index": 86081,
+      "pull_number": 632,
+      "created_at_utc": "2018-11-06T21:30:51Z"
+    },
+    {
+      "canonical_repository": "vyperlang/vyper",
+      "global_row_index": 42946,
+      "pull_number": 3809,
+      "created_at_utc": "2024-02-25T14:51:20Z"
+    },
+    {
+      "canonical_repository": "w3c/browser-specs",
+      "global_row_index": 62910,
+      "pull_number": 41,
+      "created_at_utc": "2020-04-20T16:40:31Z"
+    },
+    {
+      "canonical_repository": "w3c/webidl2.js",
+      "global_row_index": 111640,
+      "pull_number": 184,
+      "created_at_utc": "2018-06-02T08:35:01Z"
+    },
+    {
+      "canonical_repository": "washingtonpost/ans-schema",
+      "global_row_index": 111855,
+      "pull_number": 124,
+      "created_at_utc": "2017-04-07T20:43:05Z"
+    },
+    {
+      "canonical_repository": "weaveworks/eksctl",
+      "global_row_index": 103100,
+      "pull_number": 4724,
+      "created_at_utc": "2022-01-31T14:48:01Z"
+    },
+    {
+      "canonical_repository": "webpack-contrib/copy-webpack-plugin",
+      "global_row_index": 9103,
+      "pull_number": 472,
+      "created_at_utc": "2020-05-14T17:06:03Z"
+    },
+    {
+      "canonical_repository": "webpack-contrib/css-loader",
+      "global_row_index": 9253,
+      "pull_number": 1119,
+      "created_at_utc": "2020-07-21T17:38:27Z"
+    },
+    {
+      "canonical_repository": "webpack-contrib/source-map-loader",
+      "global_row_index": 8936,
+      "pull_number": 109,
+      "created_at_utc": "2020-05-25T17:04:25Z"
+    },
+    {
+      "canonical_repository": "wheresrhys/fetch-mock",
+      "global_row_index": 24333,
+      "pull_number": 740,
+      "created_at_utc": "2024-07-24T01:48:57Z"
+    },
+    {
+      "canonical_repository": "wikimedia-gadgets/twinkle",
+      "global_row_index": 24480,
+      "pull_number": 2118,
+      "created_at_utc": "2024-12-08T08:18:53Z"
+    },
+    {
+      "canonical_repository": "winnow-rs/winnow",
+      "global_row_index": 118275,
+      "pull_number": 243,
+      "created_at_utc": "2023-04-28T19:41:59Z"
+    },
+    {
+      "canonical_repository": "wizardsardine/liana",
+      "global_row_index": 118294,
+      "pull_number": 1198,
+      "created_at_utc": "2024-07-16T13:59:40Z"
+    },
+    {
+      "canonical_repository": "wntrblm/nox",
+      "global_row_index": 52139,
+      "pull_number": 653,
+      "created_at_utc": "2022-09-23T02:01:37Z"
+    },
+    {
+      "canonical_repository": "woodruffw/zizmor",
+      "global_row_index": 28276,
+      "pull_number": 425,
+      "created_at_utc": "2025-01-12T17:32:41Z"
+    },
+    {
+      "canonical_repository": "xampprocky/tokei",
+      "global_row_index": 103528,
+      "pull_number": 801,
+      "created_at_utc": "2021-07-17T04:08:08Z"
+    },
+    {
+      "canonical_repository": "xknx/xknx",
+      "global_row_index": 5719,
+      "pull_number": 919,
+      "created_at_utc": "2022-04-16T21:27:37Z"
+    },
+    {
+      "canonical_repository": "yamatoiizuka/palt-typesetting",
+      "global_row_index": 78690,
+      "pull_number": 149,
+      "created_at_utc": "2024-03-23T09:46:58Z"
+    },
+    {
+      "canonical_repository": "yannickcr/eslint-plugin-react",
+      "global_row_index": 117661,
+      "pull_number": 1485,
+      "created_at_utc": "2017-10-17T15:38:13Z"
+    },
+    {
+      "canonical_repository": "yargs/yargs",
+      "global_row_index": 64194,
+      "pull_number": 1208,
+      "created_at_utc": "2018-08-30T08:58:52Z"
+    },
+    {
+      "canonical_repository": "yargs/yargs-parser",
+      "global_row_index": 115367,
+      "pull_number": 184,
+      "created_at_utc": "2019-06-15T07:15:42Z"
+    },
+    {
+      "canonical_repository": "yelp/mrjob",
+      "global_row_index": 20832,
+      "pull_number": 1045,
+      "created_at_utc": "2015-06-18T22:30:31Z"
+    },
+    {
+      "canonical_repository": "ymrl/a11y-visualizer",
+      "global_row_index": 88315,
+      "pull_number": 124,
+      "created_at_utc": "2024-06-09T11:27:19Z"
+    },
+    {
+      "canonical_repository": "yoctol/bottender",
+      "global_row_index": 10365,
+      "pull_number": 496,
+      "created_at_utc": "2019-10-30T07:07:36Z"
+    },
+    {
+      "canonical_repository": "yshavit/mdq",
+      "global_row_index": 16335,
+      "pull_number": 36,
+      "created_at_utc": "2024-06-16T21:09:10Z"
+    },
+    {
+      "canonical_repository": "yt-dlp/yt-dlp",
+      "global_row_index": 104617,
+      "pull_number": 888,
+      "created_at_utc": "2021-09-03T12:51:52Z"
+    },
+    {
+      "canonical_repository": "zalando/patroni",
+      "global_row_index": 84066,
+      "pull_number": 2671,
+      "created_at_utc": "2023-05-11T19:00:52Z"
+    },
+    {
+      "canonical_repository": "zcashfoundation/zebra",
+      "global_row_index": 84765,
+      "pull_number": 1288,
+      "created_at_utc": "2020-11-12T22:01:24Z"
+    },
+    {
+      "canonical_repository": "zegl/kube-score",
+      "global_row_index": 19091,
+      "pull_number": 123,
+      "created_at_utc": "2019-04-28T12:39:16Z"
+    },
+    {
+      "canonical_repository": "zeit-ui/react",
+      "global_row_index": 70036,
+      "pull_number": 205,
+      "created_at_utc": "2020-05-13T15:48:44Z"
+    },
+    {
+      "canonical_repository": "zeit/swr",
+      "global_row_index": 70057,
+      "pull_number": 323,
+      "created_at_utc": "2020-03-30T23:34:30Z"
+    },
+    {
+      "canonical_repository": "zeromicro/go-zero",
+      "global_row_index": 88624,
+      "pull_number": 1224,
+      "created_at_utc": "2021-11-10T13:31:21Z"
+    },
+    {
+      "canonical_repository": "zestedesavoir/zmarkdown",
+      "global_row_index": 91878,
+      "pull_number": 367,
+      "created_at_utc": "2019-10-06T16:18:19Z"
+    },
+    {
+      "canonical_repository": "zhiburt/tabled",
+      "global_row_index": 25836,
+      "pull_number": 148,
+      "created_at_utc": "2022-05-23T21:10:52Z"
+    },
+    {
+      "canonical_repository": "zkat/miette",
+      "global_row_index": 81836,
+      "pull_number": 154,
+      "created_at_utc": "2022-04-18T05:36:55Z"
+    }
+  ],
+  "latest_witness_utc": "2025-06-29T01:44:39Z",
+  "proof_sha256": "8965cd16620ea4d5fe775c608b93a3bcf7944cef84e8b06b8b23305435444b00"
+}

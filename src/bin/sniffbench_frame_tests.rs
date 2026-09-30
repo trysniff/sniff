@@ -7,6 +7,27 @@ use sniff::benchmark::{
 };
 
 #[test]
+fn prior_v2_temporal_commands_require_all_six_paths() {
+    for command in [
+        "derive-prior-v2-temporal-proof",
+        "validate-prior-v2-temporal-proof",
+    ] {
+        let arguments = [
+            "sniffbench-frame",
+            command,
+            "artifact-root",
+            "dataset-root",
+            "frame.json",
+            "exclusions.json",
+            "selection.json",
+            "proof.json",
+        ];
+        assert!(Args::try_parse_from(arguments).is_ok(), "{command}");
+        assert!(Args::try_parse_from(&arguments[..7]).is_err(), "{command}");
+    }
+}
+
+#[test]
 fn durable_unit_progress_changes_the_hosted_progress_line_without_an_assembly() {
     let mut world = HistoricalV2SemanticWorldProgress {
         language: "go".to_string(),
