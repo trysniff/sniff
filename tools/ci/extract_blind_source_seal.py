@@ -11,7 +11,8 @@ def main() -> None:
     destination = pathlib.Path(sys.argv[2])
     with zipfile.ZipFile(sys.argv[1]) as archive:
         names = set()
-        for member in archive.infolist():
+        members = archive.infolist()
+        for member in members:
             # The release ZIP was made on Windows and stores backslash separators.
             name = member.filename.replace("\\", "/")
             relative = pathlib.PurePosixPath(name)
@@ -25,7 +26,7 @@ def main() -> None:
                 raise ValueError(f"unsafe or repeated source-seal ZIP path: {name!r}")
             names.add(name)
             member.filename = name
-        archive.extractall(destination)
+        archive.extractall(destination, members=members)
     audit = destination / "blind-source-seal.sources/selection/source-selection-audit.json"
     if not audit.is_file():
         raise FileNotFoundError(f"selection audit missing after extraction: {audit}")
