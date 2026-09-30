@@ -7,8 +7,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const PROGRESS_SCHEMA_VERSION: u32 = 4;
-const PROGRESS_CONTRACT: &str = "semantic-indexer-unit-progress-v4";
+const PROGRESS_SCHEMA_VERSION: u32 = 5;
+const PROGRESS_CONTRACT: &str = "semantic-indexer-unit-progress-source-snapshot-v5";
 const SCOPE_FILE: &str = "scope.json";
 const SCOPE_TEMP_FILE: &str = "scope.json.tmp";
 const UNITS_DIRECTORY: &str = "units";
