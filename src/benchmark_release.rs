@@ -464,6 +464,11 @@ mod history_v3_blind_temporal;
 
 pub use history_v3_blind_temporal::*;
 
+#[path = "benchmark_history_v3_small_prior_temporal.rs"]
+mod history_v3_small_prior_temporal;
+
+pub use history_v3_small_prior_temporal::*;
+
 #[path = "benchmark_history_v3_prior_name_audit.rs"]
 mod history_v3_prior_name_audit;
 
