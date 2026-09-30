@@ -1,0 +1,114 @@
+name: Release candidates
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/release-candidates.yml
+      - tools/release/**
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-candidates-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: candidate-${{ matrix.target }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            executable: sniff
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            executable: sniff
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+            executable: sniff
+          - runner: macos-15
+            target: aarch64-apple-darwin
+            executable: sniff
+          - runner: windows-2025
+            target: x86_64-pc-windows-msvc
+            executable: sniff.exe
+          - runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            executable: sniff.exe
+    runs-on: ${{ matrix.runner }}
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_BUILD_JOBS: '2'
+      CARGO_PROFILE_RELEASE_DEBUG: '0'
+      CARGO_PROFILE_RELEASE_STRIP: symbols
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: 1.96.0
+          targets: ${{ matrix.target }}
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+      - name: Test packaging failure boundaries
+        run: python -m unittest discover -s tools/release -p 'test_*.py' -v
+      - name: Build and bundle native executable
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          EXECUTABLE: ${{ matrix.executable }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          cargo build --release --locked --target "$TARGET" --bin sniff
+          cargo metadata --locked --format-version 1 --filter-platform "$TARGET" > "$RUNNER_TEMP/cargo-metadata.json"
+          rustc -vV > "$RUNNER_TEMP/rustc.txt"
+          python tools/release/bundle.py create \
+            --root . --binary "target/$TARGET/release/$EXECUTABLE" \
+            --metadata "$RUNNER_TEMP/cargo-metadata.json" --rustc "$RUNNER_TEMP/rustc.txt" \
+            --output "$RUNNER_TEMP/sniff-candidate" --target "$TARGET" \
+            --commit "$GITHUB_SHA" --epoch "$(git show -s --format=%ct HEAD)"
+      - name: Verify and smoke-test extracted archive
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          EXECUTABLE: ${{ matrix.executable }}
+        run: |
+          set -euo pipefail
+          archives=("$RUNNER_TEMP/sniff-candidate/"*.zip)
+          test "${#archives[@]}" = 1
+          python tools/release/bundle.py verify --archive "${archives[0]}" \
+            --target "$TARGET" --commit "$GITHUB_SHA" --extract "$RUNNER_TEMP/sniff-extracted"
+          python tools/release/smoke.py --executable "$RUNNER_TEMP/sniff-extracted/bin/$EXECUTABLE" \
+            --manifest "$RUNNER_TEMP/sniff-extracted/manifest.json"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: sniff-candidate-${{ matrix.target }}
+          path: ${{ runner.temp }}/sniff-candidate/*
+          if-no-files-found: error
+          retention-days: 14
+
+  attest:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: sniff-candidate-*
+          path: ${{ runner.temp }}/sniff-candidates
+      - name: Attest candidate archives and embedded manifests
+        uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661 # v3
+        with:
+          subject-path: |
+            ${{ runner.temp }}/sniff-candidates/**/*.zip
+            ${{ runner.temp }}/sniff-candidates/**/manifest.json
