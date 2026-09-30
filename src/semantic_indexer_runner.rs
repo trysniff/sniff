@@ -463,6 +463,14 @@ async fn run_required_indexers_exhaustive_typed_scoped_internal(
                 detail,
             )
         })?;
+    source_integrity_digest_at(&root, &root, files).map_err(|detail| {
+        failure(
+            SemanticIndexerRunFailureKind::InvalidInput,
+            SemanticIndexerRunPhase::IntegrityVerification,
+            None,
+            detail,
+        )
+    })?;
     let recovery = recovery::SemanticIndexerRecoveryGuard::begin(&root).map_err(|detail| {
         failure(
             SemanticIndexerRunFailureKind::InfrastructureFailed,

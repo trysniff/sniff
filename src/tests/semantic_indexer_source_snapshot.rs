@@ -56,13 +56,14 @@ fn compiler_source_snapshot_checks_staged_bytes_not_only_the_live_repository() {
     fs::write(&path, source).unwrap();
     fs::write(staged.path().join(name), source).unwrap();
     let file = crate::parser::parse_file_checked(path.to_str().unwrap()).unwrap();
-    let expected = source_integrity_digest_at(root.path(), root.path(), &[file.clone()]).unwrap();
+    let files = std::slice::from_ref(&file);
+    let expected = source_integrity_digest_at(root.path(), root.path(), files).unwrap();
     assert_eq!(
         expected,
-        source_integrity_digest_at(root.path(), staged.path(), &[file.clone()]).unwrap()
+        source_integrity_digest_at(root.path(), staged.path(), files).unwrap()
     );
     fs::write(staged.path().join(name), source.replace('1', "2")).unwrap();
-    assert!(source_integrity_digest_at(root.path(), staged.path(), &[file.clone()]).is_err());
+    assert!(source_integrity_digest_at(root.path(), staged.path(), files).is_err());
     fs::write(staged.path().join(name), source).unwrap();
     fs::write(&path, source.replace('1', "2")).unwrap();
     assert_eq!(

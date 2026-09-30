@@ -173,6 +173,66 @@ fn completed_unit_survives_repository_relocation() {
     );
 }
 
+#[test]
+fn source_snapshot_contract_rejects_legacy_completed_semantic_progress() {
+    let repository = tempfile::tempdir().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let unit = unit();
+    let current = scope(unit.clone());
+    let store = SemanticProgressStore::open(state.path(), current.clone()).unwrap();
+    store
+        .publish(&unit, repository.path(), &index(repository.path()))
+        .unwrap();
+
+    let mut legacy = current.clone();
+    legacy.schema_version = 4;
+    legacy.progress_contract = "semantic-indexer-unit-progress-v4".to_string();
+    legacy.scope_sha256.clear();
+    legacy.scope_sha256 = canonical_sha256(&legacy).unwrap();
+    let scope_path = state.path().join(SCOPE_FILE);
+    let scope_bytes = serde_json::to_vec_pretty(&legacy).unwrap();
+    fs::write(&scope_path, &scope_bytes).unwrap();
+    let checkpoint_path = store.unit_path(&unit);
+    let mut checkpoint: SemanticProgressCheckpoint =
+        serde_json::from_slice(&fs::read(&checkpoint_path).unwrap()).unwrap();
+    checkpoint.schema_version = 4;
+    checkpoint.progress_contract = legacy.progress_contract;
+    checkpoint.scope_sha256 = legacy.scope_sha256;
+    checkpoint.checkpoint_sha256.clear();
+    checkpoint.checkpoint_sha256 = canonical_sha256(&checkpoint).unwrap();
+    let checkpoint_bytes = serde_json::to_vec_pretty(&checkpoint).unwrap();
+    fs::write(&checkpoint_path, &checkpoint_bytes).unwrap();
+
+    assert!(SemanticProgressStore::open(state.path(), current).is_err());
+    assert!(SemanticProgressStore::recover_existing(state.path()).is_err());
+    assert_eq!(fs::read(scope_path).unwrap(), scope_bytes);
+    assert_eq!(fs::read(checkpoint_path).unwrap(), checkpoint_bytes);
+}
+
+#[test]
+fn source_snapshot_contract_rejects_legacy_checkpoint_in_current_scope() {
+    let repository = tempfile::tempdir().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let unit = unit();
+    let store = SemanticProgressStore::open(state.path(), scope(unit.clone())).unwrap();
+    store
+        .publish(&unit, repository.path(), &index(repository.path()))
+        .unwrap();
+    let checkpoint_path = store.unit_path(&unit);
+    let mut checkpoint: SemanticProgressCheckpoint =
+        serde_json::from_slice(&fs::read(&checkpoint_path).unwrap()).unwrap();
+    checkpoint.schema_version = 4;
+    checkpoint.progress_contract = "semantic-indexer-unit-progress-v4".to_string();
+    checkpoint.checkpoint_sha256.clear();
+    checkpoint.checkpoint_sha256 = canonical_sha256(&checkpoint).unwrap();
+    fs::write(
+        &checkpoint_path,
+        serde_json::to_vec_pretty(&checkpoint).unwrap(),
+    )
+    .unwrap();
+    assert!(store.load(&unit, repository.path()).is_err());
+}
+
 #[cfg(windows)]
 #[test]
 fn windows_verbatim_payload_root_normalizes_to_the_same_repository() {
