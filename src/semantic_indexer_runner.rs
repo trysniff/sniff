@@ -28,6 +28,10 @@ pub(crate) use outcome::*;
 #[path = "semantic_indexer_repository_snapshot.rs"]
 mod repository_snapshot;
 
+#[path = "semantic_indexer_source_snapshot.rs"]
+mod source_snapshot;
+use source_snapshot::source_integrity_digest_at;
+
 #[path = "semantic_indexer_recovery.rs"]
 mod recovery;
 
@@ -430,6 +434,14 @@ async fn run_required_indexers_exhaustive_typed_scoped_internal(
         failure(
             SemanticIndexerRunFailureKind::InvalidInput,
             SemanticIndexerRunPhase::RepositoryValidation,
+            None,
+            detail,
+        )
+    })?;
+    source_integrity_digest_at(&root, &root, files).map_err(|detail| {
+        failure(
+            SemanticIndexerRunFailureKind::InvalidInput,
+            SemanticIndexerRunPhase::IntegrityVerification,
             None,
             detail,
         )
@@ -2721,36 +2733,6 @@ fn sandbox_repository_argument(root: &Path, argument: &str) -> String {
 #[cfg(not(target_os = "linux"))]
 fn sandbox_repository_argument(_root: &Path, argument: &str) -> String {
     argument.to_string()
-}
-
-fn source_integrity_digest_at(
-    repository_root: &Path,
-    content_root: &Path,
-    files: &[FileRecord],
-) -> Result<String, String> {
-    let mut paths = files
-        .iter()
-        .map(|file| repository_relative_path(repository_root, Path::new(&file.file_path)))
-        .collect::<Result<Vec<_>, _>>()?;
-    paths.sort();
-    paths.dedup();
-
-    let mut digest = Sha256::new();
-    for relative in paths {
-        let path = content_root.join(Path::new(&relative.0));
-        let bytes = fs::read(&path).map_err(|error| {
-            format!(
-                "failed to hash eligible source file {} from semantic content root {}: {error}",
-                relative.0,
-                content_root.display()
-            )
-        })?;
-        digest.update((relative.0.len() as u64).to_le_bytes());
-        digest.update(relative.0.as_bytes());
-        digest.update((bytes.len() as u64).to_le_bytes());
-        digest.update(bytes);
-    }
-    Ok(format!("{:x}", digest.finalize()))
 }
 
 fn publish_isolated_index(
