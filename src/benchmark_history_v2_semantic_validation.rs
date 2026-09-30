@@ -295,7 +295,80 @@ fn validate_indexers<'a>(
             return Err("historical-v2 semantic indexer commitment is invalid".to_string());
         }
     }
+    if let Some(qualified) = modes.get(&IntentionalBoundaryIndexerKind::Go) {
+        if !qualified {
+            return Err(
+                "historical-v2 Go compiler world coverage cannot use an unqualified index"
+                    .to_string(),
+            );
+        }
+        validate_go_compiler_worlds(source, semantic)?;
+    }
     Ok(indexers)
+}
+
+fn validate_go_compiler_worlds(
+    source: &HistoricalV2SourceSnapshotCensus,
+    semantic: &HistoricalV2SemanticSnapshotCensus,
+) -> Result<(), String> {
+    let documents = source
+        .source_files
+        .iter()
+        .filter(|file| {
+            file.language == "go"
+                && file.semantic_coverage == HistoricalV2SourceSemanticCoverage::Required
+        })
+        .map(|file| crate::semantic_index::RepositoryPath(file.repository_path.clone()))
+        .collect();
+    let plans = super::variants::go_semantic_variant_plans(&source.go_project_model, &documents)?;
+    // The project model commits production selection. The typed Go runner separately
+    // validates compiler-selected tests; validate_indexers checks the full partition.
+    let expected = plans
+        .iter()
+        .map(|plan| {
+            (
+                plan.index_variant(),
+                plan.selected_documents
+                    .iter()
+                    .filter(|path| !path.0.ends_with("_test.go"))
+                    .map(|path| path.0.clone())
+                    .collect::<BTreeSet<_>>(),
+                plan.ignored_documents
+                    .iter()
+                    .filter(|path| !path.0.ends_with("_test.go"))
+                    .map(|path| path.0.clone())
+                    .collect::<BTreeSet<_>>(),
+            )
+        })
+        .collect::<BTreeSet<_>>();
+    let actual = semantic
+        .indexers
+        .iter()
+        .filter(|indexer| indexer.census.indexer == IntentionalBoundaryIndexerKind::Go)
+        .map(|indexer| {
+            (
+                indexer.variant.clone(),
+                indexer
+                    .indexed_document_paths
+                    .iter()
+                    .filter(|path| !path.ends_with("_test.go"))
+                    .cloned()
+                    .collect::<BTreeSet<_>>(),
+                indexer
+                    .ignored_document_paths
+                    .iter()
+                    .filter(|path| !path.ends_with("_test.go"))
+                    .cloned()
+                    .collect::<BTreeSet<_>>(),
+            )
+        })
+        .collect::<BTreeSet<_>>();
+    if actual != expected {
+        return Err(
+            "historical-v2 Go compiler world coverage or source partition changed".to_string(),
+        );
+    }
+    Ok(())
 }
 
 fn validate_variant(variant: &SemanticIndexVariant) -> Result<(), String> {
