@@ -6,7 +6,7 @@ import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
-from bundle import create, digest, verify
+from bundle import create, digest, encode, validate_portable_paths, verify
 from sbom import source_sbom
 
 
@@ -157,6 +157,111 @@ class BundleTests(unittest.TestCase):
         with self.assertRaises(FileExistsError):
             verify(self.archive, TARGET, COMMIT, target)
         self.assertEqual(sentinel.read_bytes(), b"keep")
+
+    def add_committed_file(self, name, manifest_name=None):
+        with zipfile.ZipFile(self.archive) as archive:
+            entries = [
+                (item, archive.read(item.filename)) for item in archive.infolist()
+            ]
+        data = b"unsafe path fixture"
+        manifest = json.loads(
+            next(
+                payload for item, payload in entries if item.filename == "manifest.json"
+            )
+        )
+        manifest["files"][manifest_name if manifest_name is not None else name] = {
+            "sha256": digest(data),
+            "size_bytes": len(data),
+        }
+        manifest_bytes = encode(manifest)
+        with zipfile.ZipFile(self.archive, "w") as archive:
+            for item, payload in entries:
+                archive.writestr(
+                    item,
+                    manifest_bytes if item.filename == "manifest.json" else payload,
+                )
+            item = zipfile.ZipInfo(name)
+            item.external_attr = (stat.S_IFREG | 0o644) << 16
+            archive.writestr(item, data)
+        (self.archive.parent / "manifest.json").write_bytes(manifest_bytes)
+        self.refresh_archive_checksum()
+
+    def refresh_archive_checksum(self):
+        (self.archive.parent / "SHA256SUMS").write_text(
+            f"{digest(self.archive.read_bytes())}  {self.archive.name}\n"
+        )
+
+    def test_portable_paths_rejected_before_any_extraction(self):
+        original = self.archive.read_bytes()
+        invalid = [
+            "bin/.. /escape",
+            "bin/sniff.",
+            "bin /extra",
+            "bin/NUL",
+            "bin/CON.txt",
+            "bin/con .txt",
+            "bin/COM1.log",
+            "bin/LPT9",
+            "bin/CONIN$",
+            "bin/a?b",
+            "bin/a\x01b",
+            "bin/COM\u00b9",
+            "BIN/SNIFF",
+            "BIN/extra",
+            "bin",
+            "doc/" + "x" * 256,
+        ]
+        for name in invalid:
+            with self.subTest(name=name):
+                self.archive.write_bytes(original)
+                self.add_committed_file(name)
+                with (
+                    patch(
+                        "bundle.Path.mkdir",
+                        side_effect=AssertionError("extraction must not begin"),
+                    ),
+                    self.assertRaisesRegex(ValueError, "Unsafe"),
+                ):
+                    verify(self.archive, TARGET, COMMIT, self.root / "extracted")
+                self.assertFalse((self.root / "extracted").exists())
+
+    def test_raw_zip_filenames_rejected_before_any_extraction(self):
+        original = self.archive.read_bytes()
+        for written, raw, normalized in [
+            ("doc/extraXevil", b"doc/extra\x00evil", "doc/extra"),
+            ("doc/extra", b"doc\\extra", "doc/extra"),
+        ]:
+            with self.subTest(raw=raw):
+                self.archive.write_bytes(original)
+                self.add_committed_file(written, manifest_name=normalized)
+                # Patch both ZIP headers after writing to bypass ZipInfo sanitization.
+                payload = self.archive.read_bytes()
+                encoded = written.encode("ascii")
+                self.assertEqual(len(encoded), len(raw))
+                self.assertEqual(payload.count(encoded), 2)
+                self.archive.write_bytes(payload.replace(encoded, raw))
+                self.refresh_archive_checksum()
+                with (
+                    patch(
+                        "bundle.Path.mkdir",
+                        side_effect=AssertionError("extraction must not begin"),
+                    ),
+                    self.assertRaisesRegex(ValueError, "Unsafe"),
+                ):
+                    verify(self.archive, TARGET, COMMIT, self.root / "extracted")
+                self.assertFalse((self.root / "extracted").exists())
+
+    def test_non_device_portable_names_remain_valid(self):
+        validate_portable_paths(
+            [
+                "bin/sniff",
+                "LICENSES/MIT.txt",
+                "doc/COM10.txt",
+                "doc/LPT0.txt",
+                "doc/auxiliary.txt",
+                "doc/" + "x" * 255,
+            ]
+        )
 
     def test_archive_and_extraction_size_limits_fail_before_writes(self):
         for constant, limit in [
