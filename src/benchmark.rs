@@ -548,6 +548,11 @@ pub use release::{
 };
 
 pub use release::{
+    SMALL_PRIOR_IDENTITIES_QUERY, SmallPriorRepositoryWitness, SmallPriorTemporalProof,
+    derive_small_prior_temporal_proof, validate_small_prior_temporal_proof,
+};
+
+pub use release::{
     HISTORICAL_V3_PRIOR_NAME_AUDIT_SCHEMA_VERSION, HistoricalV3PriorNameAudit,
     HistoricalV3PriorNameObservation, HistoricalV3PriorNameObservationStatus,
     audit_historical_v3_prior_names, verify_historical_v3_prior_name_audit,

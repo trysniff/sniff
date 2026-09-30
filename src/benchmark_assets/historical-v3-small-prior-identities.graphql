@@ -1,0 +1,44 @@
+query HistoricalV3SmallPriorIdentities {
+  problems: repository(owner: "gabeorlanski", name: "scb-problems") {
+    id
+    databaseId
+    createdAt
+    nameWithOwner
+    source: object(expression: "ef6a9dd13911566b6b01075ca121758c9f7b5c5f") {
+      __typename
+      ... on Commit {
+        oid
+      }
+    }
+  }
+  harness: repository(owner: "SprocketLab", name: "slop-code-bench") {
+    id
+    databaseId
+    createdAt
+    nameWithOwner
+    source: object(expression: "25bd2b9a216df93e85bb46f741c0e2d1f422b111") {
+      __typename
+      ... on Commit {
+        oid
+      }
+    }
+  }
+  synthetic: repository(owner: "trysniff", name: "sniff") {
+    id
+    databaseId
+    createdAt
+    nameWithOwner
+    source: object(expression: "d2db3d124c2ecf6534e6856fb65c2e57a98b052b") {
+      __typename
+      ... on Commit {
+        oid
+      }
+    }
+    gold: object(expression: "d2db3d124c2ecf6534e6856fb65c2e57a98b052b:gold_fixtures/repo") {
+      __typename
+      ... on Tree {
+        oid
+      }
+    }
+  }
+}
