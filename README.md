@@ -389,6 +389,15 @@ JavaScript, TypeScript, Go, and Kotlin/JVM. Android/KMP Gradle projects are
 detected explicitly and fail closed until an Android-capable SCIP provider is
 available; Sniff does not fall back to name-based graph guesses.
 
+Normal JavaScript/TypeScript scans discover compiler worlds from conventional
+`tsconfig`/`jsconfig` roots and follow compiler project references. Loose sources
+use explicitly identified compiler-inferred contexts. This does not prove every
+custom build-manifest configuration; the context records its discovery scope.
+Invalid discovery fails the scan instead of using unqualified indexing. After a
+pinned provider contract changes, refresh it with
+`sniff indexers install ./your-repo --force --yes`; old installations are not
+silently upgraded or reused.
+
 Sniff runs up to four independent review pipelines concurrently and batches up
 to eight same-file methods per request. Tune these with
 `SNIFF_LLM_MAX_CONCURRENCY` and `SNIFF_LLM_METHOD_BATCH_SIZE`, each from `1` to

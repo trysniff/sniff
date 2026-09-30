@@ -15,6 +15,16 @@ const PRIVATE_COMPONENTS: &[&str] = &[
 ];
 
 pub(super) fn repository_content_digest(root: &Path) -> Result<String, String> {
+    content_digest(root, false)
+}
+
+pub(super) fn repository_content_digest_with_generated_index(
+    root: &Path,
+) -> Result<String, String> {
+    content_digest(root, true)
+}
+
+fn content_digest(root: &Path, generated_index: bool) -> Result<String, String> {
     let metadata = fs::symlink_metadata(root).map_err(|error| {
         format!(
             "failed to inspect semantic repository snapshot root {}: {error}",
@@ -29,7 +39,7 @@ pub(super) fn repository_content_digest(root: &Path) -> Result<String, String> {
     }
 
     let mut digest = Sha256::new();
-    digest_directory(root, root, &mut digest)?;
+    digest_directory(root, root, &mut digest, generated_index)?;
     Ok(format!("{:x}", digest.finalize()))
 }
 
@@ -67,7 +77,12 @@ pub(super) fn stage_repository_snapshot(source: &Path, target: &Path) -> Result<
     Ok(())
 }
 
-fn digest_directory(root: &Path, directory: &Path, digest: &mut Sha256) -> Result<(), String> {
+fn digest_directory(
+    root: &Path,
+    directory: &Path,
+    digest: &mut Sha256,
+    generated_index: bool,
+) -> Result<(), String> {
     for entry in sorted_entries(directory)? {
         let path = entry.path();
         let relative = path.strip_prefix(root).map_err(|error| {
@@ -77,7 +92,7 @@ fn digest_directory(root: &Path, directory: &Path, digest: &mut Sha256) -> Resul
                 path.display()
             )
         })?;
-        if is_private_path(relative) {
+        if is_private_path(relative) || (generated_index && relative == Path::new("index.scip")) {
             continue;
         }
         let metadata = fs::symlink_metadata(&path).map_err(|error| {
@@ -98,7 +113,7 @@ fn digest_directory(root: &Path, directory: &Path, digest: &mut Sha256) -> Resul
             update_link_target(digest, &target);
         } else if metadata.is_dir() {
             digest.update(b"d");
-            digest_directory(root, &path, digest)?;
+            digest_directory(root, &path, digest, generated_index)?;
         } else if metadata.is_file() {
             digest.update(b"f");
             digest.update(metadata.len().to_le_bytes());
