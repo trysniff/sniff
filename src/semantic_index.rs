@@ -25,6 +25,24 @@ pub enum SemanticIndexVariant {
     },
 }
 
+impl SemanticIndexVariant {
+    pub fn validate(&self) -> Result<(), String> {
+        if let Self::Qualified {
+            identity,
+            dimensions,
+        } = self
+            && (identity.0.trim().is_empty()
+                || dimensions.is_empty()
+                || dimensions
+                    .iter()
+                    .any(|(name, value)| name.trim().is_empty() || value.trim().is_empty()))
+        {
+            return Err("semantic index has an incomplete qualified variant".to_string());
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SemanticIndexerVariantPlan {
@@ -156,7 +174,7 @@ impl SemanticIndexSet {
                     let index = &qualified.index;
                     let SemanticIndexVariant::Qualified {
                         identity: index_identity,
-                        dimensions,
+                        ..
                     } = &index.variant
                     else {
                         return Err(format!(
@@ -164,13 +182,7 @@ impl SemanticIndexSet {
                             identity.0
                         ));
                     };
-                    if identity != index_identity
-                        || identity.0.trim().is_empty()
-                        || dimensions.is_empty()
-                        || dimensions
-                            .iter()
-                            .any(|(name, value)| name.trim().is_empty() || value.trim().is_empty())
-                    {
+                    if identity != index_identity || index.variant.validate().is_err() {
                         return Err(format!(
                             "qualified semantic index set has an invalid variant {}",
                             identity.0
@@ -183,7 +195,26 @@ impl SemanticIndexSet {
                         || qualified
                             .ignored_documents
                             .iter()
-                            .any(|document| document.0.trim().is_empty())
+                            .any(|document| !is_canonical_repository_path(&document.0))
+                        || index.symbols.values().any(|symbol| {
+                            symbol.definitions.iter().any(|definition| {
+                                qualified.ignored_documents.contains(&definition.document)
+                            })
+                        })
+                        || index.calls.iter().any(|call| {
+                            qualified
+                                .ignored_documents
+                                .contains(&call.callsite.document)
+                        })
+                        || index
+                            .imports
+                            .iter()
+                            .any(|import| qualified.ignored_documents.contains(&import.document))
+                        || index.unresolved_edges.iter().any(|edge| {
+                            qualified
+                                .ignored_documents
+                                .contains(&edge.location.document)
+                        })
                     {
                         return Err(format!(
                             "qualified semantic index {} has conflicting document coverage",

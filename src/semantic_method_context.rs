@@ -17,7 +17,7 @@ pub fn render_compiler_method_contexts(
     index: &SemanticIndex,
     join: &SemanticMethodJoin,
 ) -> Result<CompilerMethodContexts, String> {
-    validate_variant(&index.variant)?;
+    index.variant.validate()?;
     let contracts = contracts::CompilerContracts::new(index);
     let canonical_root = fs::canonicalize(repository_root).map_err(|error| {
         format!(
@@ -184,22 +184,6 @@ fn format_call_edge(
         edge.callsite.range.start.line + 1,
         edge.dispatch
     )
-}
-
-fn validate_variant(variant: &SemanticIndexVariant) -> Result<(), String> {
-    if let SemanticIndexVariant::Qualified {
-        identity,
-        dimensions,
-    } = variant
-        && (identity.0.trim().is_empty()
-            || dimensions.is_empty()
-            || dimensions
-                .iter()
-                .any(|(name, value)| name.trim().is_empty() || value.trim().is_empty()))
-    {
-        return Err("compiler method context has an incomplete qualified variant".to_string());
-    }
-    Ok(())
 }
 
 #[cfg(test)]

@@ -158,7 +158,7 @@ fn qualified_identity_and_dimensions_survive_context_rendering() {
             ("GOARCH".to_string(), "amd64".to_string()),
         ]),
     };
-    validate_variant(&index.variant).unwrap();
+    index.variant.validate().unwrap();
     let text = context(&index, &binding);
     assert!(text.contains("compiler variant: qualified \"linux-amd64\""));
     assert!(text.contains("\"GOOS\": \"linux\""));

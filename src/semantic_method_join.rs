@@ -65,6 +65,10 @@ pub fn method_context_key(file_path: &str, method_name: &str, start_line: usize)
 mod context;
 pub use context::render_compiler_method_contexts;
 
+#[path = "semantic_method_evidence.rs"]
+mod evidence;
+pub(crate) use evidence::{CompilerMethodEvidence, build_compiler_method_evidence};
+
 impl SemanticMethodJoin {
     pub fn resolved_count(&self) -> usize {
         self.bindings
@@ -272,7 +276,12 @@ fn bind_method(
                 coverage: SemanticMethodCoverage::CompilerExcluded { reason },
             };
         }
-        if let Some(reason) = compiler_excluded {
+        if let Some(reason) = compiler_excluded.filter(|_| {
+            matches!(
+                index.variant,
+                crate::semantic_index::SemanticIndexVariant::Unqualified
+            )
+        }) {
             return SemanticMethodBinding {
                 method: key.clone(),
                 symbol: SemanticResolution::Unresolved {
@@ -593,7 +602,7 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
-    fn reference_fixture() -> (
+    pub(super) fn reference_fixture() -> (
         std::path::PathBuf,
         Vec<FileRecord>,
         SemanticIndex,
