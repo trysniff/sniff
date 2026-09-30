@@ -862,9 +862,6 @@ fn generated_files_are_committed_but_not_required_from_the_compiler_index() {
     generated.semantic_coverage = HistoricalV2SourceSemanticCoverage::GeneratedPath;
     generated.public_surface_coverage =
         super::super::HistoricalV2PublicSurfaceCoverage::UnsupportedLanguage;
-    fixture
-        .files
-        .retain(|file| !file.file_path.ends_with("zz_generated.deepcopy.go"));
     generated.public_declarations.clear();
     generated.methods[0].parser_unit_id = "h2m-v1:generated".to_string();
     fixture.source.source_files.push(generated);
@@ -5132,6 +5129,9 @@ fn go_package_root_excludes_nonrequired_generated_sources() {
     generated.semantic_coverage = HistoricalV2SourceSemanticCoverage::GeneratedHeader;
     generated.public_surface_coverage =
         super::super::HistoricalV2PublicSurfaceCoverage::UnsupportedLanguage;
+    fixture
+        .files
+        .retain(|file| !file.file_path.ends_with("zz_generated.deepcopy.go"));
     fixture
         .indexes
         .get_mut(&SemanticIndexerKind::Go)
