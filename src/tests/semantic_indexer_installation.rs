@@ -108,7 +108,7 @@ fn typescript_legacy_config_parser_installation_is_rejected() {
         kind: spec.kind,
         indexer_version: spec.version.to_string(),
         source_identity: super::source_identity(spec),
-        entrypoint: spec.entrypoint_relative_path().to_string(),
+        entrypoint: super::normalize_path(&spec.entrypoint_relative_path()),
         tree_sha256: "a".repeat(64),
     };
     super::validate_record(spec, &record).unwrap();
