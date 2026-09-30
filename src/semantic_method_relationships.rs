@@ -3,7 +3,8 @@ use super::{
     repository_relative_path,
 };
 use crate::semantic_index::{
-    RepositoryPath, SemanticIndex, SemanticOccurrenceRole, SemanticResolution, SemanticSymbolId,
+    RepositoryPath, SemanticIndex, SemanticIndexVariant, SemanticOccurrenceRole,
+    SemanticResolution, SemanticSymbolId,
 };
 use crate::types::FileRecord;
 use std::collections::{BTreeMap, BTreeSet};
@@ -19,6 +20,7 @@ pub enum CompilerRelationshipKind {
 /// A compiler-resolved relationship between two uniquely joined methods.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct CompilerMethodReference {
+    pub variant: SemanticIndexVariant,
     pub kind: CompilerRelationshipKind,
     pub source_method: String,
     pub target_method: String,
@@ -33,6 +35,7 @@ pub fn compiler_method_references(
     index: &SemanticIndex,
     join: &SemanticMethodJoin,
 ) -> Result<Vec<CompilerMethodReference>, String> {
+    index.variant.validate()?;
     let root = fs::canonicalize(repository_root).map_err(|error| {
         format!(
             "failed to resolve compiler relationship root {}: {error}",
@@ -132,6 +135,7 @@ pub fn compiler_method_references(
             );
             if source_method != target_key {
                 references.insert(CompilerMethodReference {
+                    variant: index.variant.clone(),
                     kind: CompilerRelationshipKind::Reference,
                     source_method,
                     target_method: target_key,
@@ -170,6 +174,7 @@ pub fn compiler_method_references(
                 format!("semantic target file disappeared: {}", target_method.file.0)
             })?;
             references.insert(CompilerMethodReference {
+                variant: index.variant.clone(),
                 kind: CompilerRelationshipKind::Call,
                 source_method: method_context_key(
                     source_path,
