@@ -41,6 +41,13 @@ mod progress;
 #[path = "semantic_indexer_typescript_runner.rs"]
 mod typescript_runner;
 
+#[path = "semantic_indexer_typescript_model.rs"]
+mod typescript_model;
+#[path = "semantic_indexer_typescript_model_output.rs"]
+pub(crate) mod typescript_model_output;
+#[path = "semantic_indexer_typescript_model_plans.rs"]
+mod typescript_model_plans;
+
 pub(crate) use recovery::recover_interrupted_semantic_indexing;
 use recovery::{INDEXER_CACHE_DIR, INDEXER_TEMP_DIR, SemanticIndexerRecoveryGuard};
 use typescript_runner::{
@@ -373,6 +380,7 @@ pub(crate) async fn run_required_indexers_exhaustive_typed_scoped(
         required_documents,
         None,
         &BTreeMap::new(),
+        false,
     )
     .await
     .and_then(into_unqualified_batch_outcome)
@@ -390,6 +398,23 @@ pub(crate) async fn run_required_indexers_exhaustive_typed_scoped_with_variants(
         required_documents,
         None,
         variant_plans,
+        false,
+    )
+    .await
+}
+
+pub(crate) async fn run_required_indexers_with_discovered_worlds(
+    repository_root: &Path,
+    files: &[FileRecord],
+    required_documents: &[FileRecord],
+) -> Result<SemanticVariantIndexerBatchOutcome, SemanticIndexerRunFailure> {
+    run_required_indexers_exhaustive_typed_scoped_internal(
+        repository_root,
+        files,
+        required_documents,
+        None,
+        &BTreeMap::new(),
+        true,
     )
     .await
 }
@@ -407,6 +432,7 @@ pub(crate) async fn run_required_indexers_exhaustive_typed_scoped_resumable_with
         required_documents,
         Some(progress_root),
         variant_plans,
+        false,
     )
     .await
 }
@@ -417,6 +443,7 @@ async fn run_required_indexers_exhaustive_typed_scoped_internal(
     required_documents: &[FileRecord],
     progress_root: Option<&Path>,
     variant_plans: &BTreeMap<SemanticIndexerKind, Vec<SemanticIndexerVariantPlan>>,
+    discover_typescript_worlds: bool,
 ) -> Result<SemanticVariantIndexerBatchOutcome, SemanticIndexerRunFailure> {
     let root =
         strip_windows_verbatim_prefix(fs::canonicalize(repository_root).map_err(|error| {
@@ -500,7 +527,16 @@ async fn run_required_indexers_exhaustive_typed_scoped_internal(
         ));
     }
     for kind in required {
-        match run_required_indexer_set_typed(&context, kind, variant_plans.get(&kind)).await {
+        let result =
+            if discover_typescript_worlds && kind == SemanticIndexerKind::TypeScriptJavaScript {
+                match typescript_model::discover(&context).await {
+                    Ok(plans) => run_required_indexer_set_typed(&context, kind, Some(&plans)).await,
+                    Err(error) => Err(error),
+                }
+            } else {
+                run_required_indexer_set_typed(&context, kind, variant_plans.get(&kind)).await
+            };
+        match result {
             Ok(index) => {
                 indexes.insert(kind, index);
             }
@@ -955,6 +991,24 @@ async fn run_one_in_recovery_scope(
             detail,
         )
     })?;
+    if let Some(expected) =
+        typescript_plan.and_then(|plan| plan.dimensions.get("source_snapshot_sha256"))
+        && repository_snapshot::repository_content_digest(execution_root).map_err(|detail| {
+            indexer_failure(
+                spec,
+                SemanticIndexerRunFailureKind::InfrastructureFailed,
+                SemanticIndexerRunPhase::IntegrityVerification,
+                detail,
+            )
+        })? != *expected
+    {
+        return Err(indexer_failure(
+            spec,
+            SemanticIndexerRunFailureKind::InvalidInput,
+            SemanticIndexerRunPhase::IntegrityVerification,
+            "TypeScript indexing snapshot differs from its compiler project census",
+        ));
+    }
     fs::create_dir(execution_root.join(INDEXER_TEMP_DIR)).map_err(|error| {
         indexer_failure(
             spec,
@@ -1213,6 +1267,26 @@ async fn run_one_in_recovery_scope(
                 ),
             )
         })?;
+    }
+    if let Some(expected) =
+        typescript_plan.and_then(|plan| plan.dimensions.get("source_snapshot_sha256"))
+        && repository_snapshot::repository_content_digest_with_generated_index(execution_root)
+            .map_err(|detail| {
+                indexer_failure(
+                    spec,
+                    SemanticIndexerRunFailureKind::InfrastructureFailed,
+                    SemanticIndexerRunPhase::IntegrityVerification,
+                    detail,
+                )
+            })?
+            != *expected
+    {
+        return Err(indexer_failure(
+            spec,
+            SemanticIndexerRunFailureKind::InfrastructureFailed,
+            SemanticIndexerRunPhase::IntegrityVerification,
+            "TypeScript indexing changed its compiler census snapshot; refusing its SCIP output",
+        ));
     }
     let source_digest_after =
         source_integrity_digest_at(root, execution_root, files).map_err(|detail| {
