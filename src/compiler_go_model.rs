@@ -20,6 +20,18 @@ pub enum GoCompilerArchitecture {
     },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct GoCompilerContext {
+    pub(crate) goos: String,
+    pub(crate) goarch: String,
+    pub(crate) cgo_enabled: bool,
+    pub(crate) build_tags: Vec<String>,
+    pub(crate) architecture: GoCompilerArchitecture,
+    pub(crate) query: GoCompilerQuery,
+}
+
+pub(crate) const GO_LIST_COMMAND_CONTRACT: &str = "go-mod-download-then-offline-list-module-identity-e-json-find-mod-readonly-buildvcs-off-valid-exact-equivalent-source-fact-variants-v8";
+
 #[derive(Debug, Deserialize, Serialize)]
 pub(crate) struct GoListPackage {
     #[serde(rename = "Dir")]

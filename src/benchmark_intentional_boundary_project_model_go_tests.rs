@@ -1748,4 +1748,53 @@ fn go_project_model_identity_commits_to_dependency_preparation() {
     let right = go_project_model_pipeline_identity(&runtime, &"c".repeat(64)).unwrap();
 
     assert_ne!(left, right);
+    let original = super::super::intentional_boundary_project_model::hash_json(&(
+        "sniff-go-project-model-pipeline-v4",
+        &runtime,
+        &"b".repeat(64),
+        GO_LIST_COMMAND_CONTRACT,
+        include_str!("../assets/go-tooling/sniff-source-facts.go"),
+    ))
+    .unwrap();
+    assert_eq!(left, original);
+}
+
+#[test]
+fn neutral_go_context_adapter_preserves_frozen_variant_serialization() {
+    let variants = parse_go_dist_variants(
+        r#"[{"GOOS":"linux","GOARCH":"amd64","CgoSupported":false,"FirstClass":true}]"#,
+        &GoConstraintTagDomain {
+            custom_build_tags: Vec::new(),
+            architecture_feature_tags: Vec::new(),
+            standalone_source_repository_paths: Vec::new(),
+        },
+    )
+    .unwrap();
+    let [variant] = variants.as_slice() else {
+        panic!("expected one compiler context")
+    };
+    assert_eq!(
+        serde_json::to_string(variant).unwrap(),
+        r#"{"kind":"go","goos":"linux","goarch":"amd64","cgo_enabled":false,"build_tags":[],"architecture":{"kind":"default"},"query":{"kind":"module_packages"}}"#
+    );
+
+    let variants = parse_go_dist_variants(
+        r#"[{"GOOS":"linux","GOARCH":"amd64","CgoSupported":true,"FirstClass":true}]"#,
+        &GoConstraintTagDomain {
+            custom_build_tags: vec!["enterprise".to_string()],
+            architecture_feature_tags: vec!["amd64.v3".to_string()],
+            standalone_source_repository_paths: Vec::new(),
+        },
+    )
+    .unwrap();
+    assert!(variants.windows(2).all(|pair| pair[0] < pair[1]));
+    let configured = variants.iter().find(|variant| {
+        matches!(variant, IntentionalBoundaryProjectModelVariant::Go {
+            cgo_enabled: true, build_tags, architecture: IntentionalBoundaryProjectModelGoArchitecture::Explicit { value, .. }, ..
+        } if build_tags == &["enterprise"] && value == "v3")
+    }).unwrap();
+    assert_eq!(
+        serde_json::to_string(configured).unwrap(),
+        r#"{"kind":"go","goos":"linux","goarch":"amd64","cgo_enabled":true,"build_tags":["enterprise"],"architecture":{"kind":"explicit","environment_variable":"GOAMD64","value":"v3"},"query":{"kind":"module_packages"}}"#
+    );
 }

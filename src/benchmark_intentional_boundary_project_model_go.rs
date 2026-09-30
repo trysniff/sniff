@@ -21,7 +21,7 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
-pub(super) const GO_LIST_COMMAND_CONTRACT: &str = "go-mod-download-then-offline-list-module-identity-e-json-find-mod-readonly-buildvcs-off-valid-exact-equivalent-source-fact-variants-v8";
+pub(super) use crate::compiler_go_model::GO_LIST_COMMAND_CONTRACT;
 
 #[path = "benchmark_intentional_boundary_project_model_go_variants.rs"]
 mod variants;
