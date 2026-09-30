@@ -389,6 +389,9 @@ JavaScript, TypeScript, Go, and Kotlin/JVM. Android/KMP Gradle projects are
 detected explicitly and fail closed until an Android-capable SCIP provider is
 available; Sniff does not fall back to name-based graph guesses.
 
+See [Language Capabilities](CAPABILITIES.md) for the normal-scan evidence matrix,
+supported source extensions, and explicit semantic coverage gaps.
+
 Sniff runs up to four independent review pipelines concurrently and batches up
 to eight same-file methods per request. Tune these with
 `SNIFF_LLM_MAX_CONCURRENCY` and `SNIFF_LLM_METHOD_BATCH_SIZE`, each from `1` to
