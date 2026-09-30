@@ -116,7 +116,7 @@ fn workspace_scope_is_inherited_by_modules_not_unrelated_siblings() {
     );
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, not(target_os = "macos")))]
 #[test]
 fn non_utf8_assets_are_irrelevant_but_non_utf8_go_sources_are_rejected() {
     use std::ffi::OsString;
@@ -138,6 +138,20 @@ fn non_utf8_assets_are_irrelevant_but_non_utf8_go_sources_are_rejected() {
         .unwrap();
     fs::write(directory.join("invalid.go"), "source").unwrap();
     assert!(discover(root.path()).unwrap_err().contains("not UTF-8"));
+}
+
+#[cfg(unix)]
+#[test]
+fn repository_path_rejects_non_utf8_go_source_components_without_filesystem_access() {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+    let root = Path::new("/repository");
+    let source = root.join(OsString::from_vec(vec![0xff])).join("source.go");
+    assert!(
+        repository_path(root, &source)
+            .unwrap_err()
+            .contains("not UTF-8")
+    );
 }
 
 #[cfg(unix)]
