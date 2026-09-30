@@ -891,14 +891,17 @@ fn source_integrity_digest_changes_when_an_eligible_file_changes() {
     std::fs::write(&source, "def main():\n    return 1\n").unwrap();
     let files = vec![FileRecord {
         file_path: source.to_string_lossy().to_string(),
-        source: String::new(),
+        source: "def main():\n    return 1\n".to_string(),
         language: "python".to_string(),
         methods: Vec::new(),
     }];
 
     let before = source_integrity_digest_at(&root, &root, &files).unwrap();
     std::fs::write(&source, "def main():\n    return 2\n").unwrap();
-    let after = source_integrity_digest_at(&root, &root, &files).unwrap();
+    assert!(source_integrity_digest_at(&root, &root, &files).is_err());
+    let mut reparsed = files;
+    reparsed[0].source = "def main():\n    return 2\n".to_string();
+    let after = source_integrity_digest_at(&root, &root, &reparsed).unwrap();
 
     assert_ne!(before, after);
     std::fs::remove_dir_all(root).unwrap();
@@ -927,7 +930,7 @@ fn source_integrity_digest_reads_the_isolated_content_at_the_same_repository_pat
     std::fs::write(&source, "package main\n").unwrap();
     let files = vec![FileRecord {
         file_path: source.to_string_lossy().to_string(),
-        source: String::new(),
+        source: "package main\n".to_string(),
         language: "go".to_string(),
         methods: Vec::new(),
     }];
@@ -942,8 +945,8 @@ fn source_integrity_digest_reads_the_isolated_content_at_the_same_repository_pat
     assert_eq!(canonical, staged);
 
     std::fs::write(isolated.join("src/main.go"), "package changed\n").unwrap();
-    let changed = source_integrity_digest_at(repository.path(), &isolated, &files).unwrap();
-    assert_ne!(canonical, changed);
+    let error = source_integrity_digest_at(repository.path(), &isolated, &files).unwrap_err();
+    assert!(error.contains("differs from parsed source snapshot"));
 }
 
 #[test]
