@@ -862,6 +862,9 @@ fn generated_files_are_committed_but_not_required_from_the_compiler_index() {
     generated.semantic_coverage = HistoricalV2SourceSemanticCoverage::GeneratedPath;
     generated.public_surface_coverage =
         super::super::HistoricalV2PublicSurfaceCoverage::UnsupportedLanguage;
+    fixture
+        .files
+        .retain(|file| !file.file_path.ends_with("zz_generated.deepcopy.go"));
     generated.public_declarations.clear();
     generated.methods[0].parser_unit_id = "h2m-v1:generated".to_string();
     fixture.source.source_files.push(generated);
@@ -5205,7 +5208,7 @@ fn go_package_root_validation_rejects_omitted_compiler_exposure() {
 }
 
 #[test]
-fn qualified_go_package_roots_ignore_uncommitted_redundant_worlds() {
+fn qualified_go_package_roots_preserve_all_committed_platform_worlds() {
     let mut fixture = compiler_surface_fixture(
         "go",
         SemanticIndexerKind::Go,
@@ -5233,24 +5236,7 @@ fn qualified_go_package_roots_ignore_uncommitted_redundant_worlds() {
     model.executions.push(redundant_execution);
     model.targets.push(redundant_target);
 
-    let identity = SemanticVariantId("linux-amd64".to_string());
-    let mut index = fixture.indexes.remove(&SemanticIndexerKind::Go).unwrap();
-    index.variant = SemanticIndexVariant::Qualified {
-        identity: identity.clone(),
-        dimensions: BTreeMap::from([("target".to_string(), "linux-amd64".to_string())]),
-    };
-    let sets = BTreeMap::from([(
-        SemanticIndexerKind::Go,
-        SemanticIndexSet::Qualified {
-            variants: BTreeMap::from([(
-                identity,
-                QualifiedSemanticIndex {
-                    index,
-                    ignored_documents: BTreeSet::new(),
-                },
-            )]),
-        },
-    )]);
+    let sets = qualified_go_fixture_sets(&fixture);
     let changed_indexers = BTreeSet::from([SemanticIndexerKind::Go]);
     let required_paths = fixture_required_paths(&fixture.source);
     let semantic = build_semantic_snapshot_from_sets(
@@ -5263,9 +5249,13 @@ fn qualified_go_package_roots_ignore_uncommitted_redundant_worlds() {
     )
     .unwrap();
 
-    assert_eq!(semantic.go_package_roots.len(), 1);
+    assert_eq!(semantic.go_package_roots.len(), 2);
     assert_eq!(
         semantic.go_package_roots[0].variant_target_ids,
+        ["freebsd-target"]
+    );
+    assert_eq!(
+        semantic.go_package_roots[1].variant_target_ids,
         ["linux-target"]
     );
     validation::validate_snapshot(
@@ -5289,6 +5279,237 @@ fn qualified_go_package_roots_ignore_uncommitted_redundant_worlds() {
     )
     .unwrap();
     assert_eq!(semantic.go_package_roots, reordered.go_package_roots);
+
+    let mut missing = semantic.clone();
+    missing
+        .indexers
+        .retain(|indexer| indexer.variant != semantic.indexers[0].variant);
+    missing.semantic_snapshot_sha256 = semantic_snapshot_sha256(&missing).unwrap();
+    let error = validation::validate_snapshot(
+        &fixture.source,
+        &missing,
+        &changed_indexers,
+        &required_paths,
+    )
+    .unwrap_err();
+    assert!(error.contains("Go compiler world coverage"), "{error}");
+}
+
+fn qualified_go_fixture_sets(fixture: &Fixture) -> BTreeMap<SemanticIndexerKind, SemanticIndexSet> {
+    BTreeMap::from([(
+        SemanticIndexerKind::Go,
+        qualified_go_fixture_index_set(&fixture.source, &fixture.indexes[&SemanticIndexerKind::Go])
+            .unwrap(),
+    )])
+}
+
+pub(super) fn qualified_go_fixture_index_set(
+    source: &HistoricalV2SourceSnapshotCensus,
+    original: &SemanticIndex,
+) -> Result<SemanticIndexSet, String> {
+    let documents = source
+        .source_files
+        .iter()
+        .filter(|file| {
+            file.language == "go"
+                && file.semantic_coverage == HistoricalV2SourceSemanticCoverage::Required
+        })
+        .map(|file| RepositoryPath(file.repository_path.clone()))
+        .collect();
+    let plans = variants::go_semantic_variant_plans(&source.go_project_model, &documents)?;
+    let variants = plans
+        .into_iter()
+        .map(|plan| {
+            let mut index = original.clone();
+            index.variant = plan.index_variant();
+            index
+                .documents
+                .retain(|path, _| plan.selected_documents.contains(path));
+            (
+                plan.identity,
+                QualifiedSemanticIndex {
+                    index,
+                    ignored_documents: plan.ignored_documents,
+                },
+            )
+        })
+        .collect();
+    Ok(SemanticIndexSet::Qualified { variants })
+}
+
+#[test]
+fn qualified_go_source_equivalent_worlds_bind_to_their_project_model_execution() {
+    let mut fixture = compiler_surface_fixture(
+        "go",
+        SemanticIndexerKind::Go,
+        SemanticPositionEncoding::Utf8,
+        &[("api.go", "package api\n")],
+        &[],
+    );
+    let mut alternate = fixture.source.go_project_model.executions[0]
+        .variant
+        .clone();
+    let super::super::IntentionalBoundaryProjectModelVariant::Go { goos, .. } = &mut alternate
+    else {
+        unreachable!()
+    };
+    *goos = "freebsd".to_string();
+    fixture.source.go_project_model.executions[0]
+        .equivalent_variants
+        .push(alternate);
+    let sets = qualified_go_fixture_sets(&fixture);
+    let changed_indexers = BTreeSet::from([SemanticIndexerKind::Go]);
+    let required_paths = fixture_required_paths(&fixture.source);
+    let semantic = build_semantic_snapshot_from_sets(
+        fixture.root.path(),
+        &fixture.source,
+        &fixture.files,
+        &changed_indexers,
+        &required_paths,
+        &sets,
+    )
+    .unwrap();
+    assert_eq!(semantic.indexers.len(), 2);
+    assert_eq!(semantic.go_package_roots.len(), 2);
+    assert_ne!(
+        semantic.go_package_roots[0].variant,
+        semantic.go_package_roots[1].variant
+    );
+    for root in &semantic.go_package_roots {
+        assert_eq!(root.variant_target_ids, ["fixture-go-target"]);
+    }
+    validation::validate_snapshot(
+        &fixture.source,
+        &semantic,
+        &changed_indexers,
+        &required_paths,
+    )
+    .unwrap();
+
+    let mut tampered = semantic.clone();
+    let SemanticIndexVariant::Qualified { dimensions, .. } = &mut tampered.indexers[0].variant
+    else {
+        unreachable!()
+    };
+    dimensions.insert(
+        "project_model_execution_id".to_string(),
+        "invented-execution".to_string(),
+    );
+    tampered.semantic_snapshot_sha256 = semantic_snapshot_sha256(&tampered).unwrap();
+    let error = validation::validate_snapshot(
+        &fixture.source,
+        &tampered,
+        &changed_indexers,
+        &required_paths,
+    )
+    .unwrap_err();
+    assert!(error.contains("Go compiler world coverage"), "{error}");
+}
+
+#[test]
+fn qualified_go_world_accepts_compiler_selected_tests_without_changing_production_selection() {
+    let mut fixture = compiler_surface_fixture(
+        "go",
+        SemanticIndexerKind::Go,
+        SemanticPositionEncoding::Utf8,
+        &[
+            ("api.go", "package api\n"),
+            ("api_test.go", "package api\n"),
+        ],
+        &[],
+    );
+    let target = &mut fixture.source.go_project_model.targets[0];
+    target.source_repository_paths = vec!["api.go".to_string()];
+    target.target_status = super::super::IntentionalBoundaryProjectModelTargetStatus::Boundary {
+        declaration_kind: super::super::IntentionalBoundaryManifestDeclarationKind::PublishedModule,
+        target: super::super::IntentionalBoundaryManifestTarget::RepositoryPaths {
+            repository_paths: target.source_repository_paths.clone(),
+        },
+    };
+    let mut sets = qualified_go_fixture_sets(&fixture);
+    let SemanticIndexSet::Qualified { variants } = sets.get_mut(&SemanticIndexerKind::Go).unwrap()
+    else {
+        unreachable!()
+    };
+    let world = variants.values_mut().next().unwrap();
+    let test_document = RepositoryPath("api_test.go".to_string());
+    assert!(world.ignored_documents.remove(&test_document));
+    world.index.documents.insert(
+        test_document.clone(),
+        fixture.indexes[&SemanticIndexerKind::Go].documents[&test_document].clone(),
+    );
+    let changed = BTreeSet::from([SemanticIndexerKind::Go]);
+    let required = fixture_required_paths(&fixture.source);
+    let snapshot = build_semantic_snapshot_from_sets(
+        fixture.root.path(),
+        &fixture.source,
+        &fixture.files,
+        &changed,
+        &required,
+        &sets,
+    )
+    .unwrap();
+    assert!(
+        snapshot.indexers[0]
+            .indexed_document_paths
+            .contains(&"api_test.go".to_string())
+    );
+    validation::validate_snapshot(&fixture.source, &snapshot, &changed, &required).unwrap();
+
+    let mut tampered = snapshot.clone();
+    tampered.indexers[0]
+        .indexed_document_paths
+        .retain(|path| path != "api.go");
+    tampered.indexers[0]
+        .ignored_document_paths
+        .push("api.go".to_string());
+    tampered.indexers[0].census.document_count -= 1;
+    tampered.semantic_snapshot_sha256 = semantic_snapshot_sha256(&tampered).unwrap();
+    let error =
+        validation::validate_snapshot(&fixture.source, &tampered, &changed, &required).unwrap_err();
+    assert!(error.contains("Go compiler world coverage"), "{error}");
+}
+
+#[test]
+fn unqualified_go_snapshot_cannot_bypass_committed_compiler_worlds() {
+    let mut fixture = compiler_surface_fixture(
+        "go",
+        SemanticIndexerKind::Go,
+        SemanticPositionEncoding::Utf8,
+        &[("api.go", "package api\n")],
+        &[],
+    );
+    let mut alternate = fixture.source.go_project_model.executions[0]
+        .variant
+        .clone();
+    let super::super::IntentionalBoundaryProjectModelVariant::Go { goos, .. } = &mut alternate
+    else {
+        unreachable!()
+    };
+    *goos = "freebsd".to_string();
+    fixture.source.go_project_model.executions[0]
+        .equivalent_variants
+        .push(alternate);
+    let sets = BTreeMap::from([(
+        SemanticIndexerKind::Go,
+        SemanticIndexSet::Unqualified {
+            index: Box::new(fixture.indexes[&SemanticIndexerKind::Go].clone()),
+        },
+    )]);
+    let changed = BTreeSet::from([SemanticIndexerKind::Go]);
+    let required = fixture_required_paths(&fixture.source);
+    let snapshot = build_semantic_snapshot_from_sets(
+        fixture.root.path(),
+        &fixture.source,
+        &fixture.files,
+        &changed,
+        &required,
+        &sets,
+    )
+    .unwrap();
+    let error =
+        validation::validate_snapshot(&fixture.source, &snapshot, &changed, &required).unwrap_err();
+    assert!(error.contains("cannot use an unqualified index"), "{error}");
 }
 
 #[test]
@@ -5303,24 +5524,7 @@ fn qualified_go_package_root_validation_rejects_rehashed_target_tampering() {
     fixture.source.go_project_model.executions[0].execution_id = "linux-amd64".to_string();
     fixture.source.go_project_model.targets[0].execution_id = "linux-amd64".to_string();
     fixture.source.go_project_model.targets[0].target_id = "linux-target".to_string();
-    let identity = SemanticVariantId("linux-amd64".to_string());
-    let mut index = fixture.indexes.remove(&SemanticIndexerKind::Go).unwrap();
-    index.variant = SemanticIndexVariant::Qualified {
-        identity: identity.clone(),
-        dimensions: BTreeMap::from([("target".to_string(), "linux-amd64".to_string())]),
-    };
-    let sets = BTreeMap::from([(
-        SemanticIndexerKind::Go,
-        SemanticIndexSet::Qualified {
-            variants: BTreeMap::from([(
-                identity,
-                QualifiedSemanticIndex {
-                    index,
-                    ignored_documents: BTreeSet::new(),
-                },
-            )]),
-        },
-    )]);
+    let sets = qualified_go_fixture_sets(&fixture);
     let changed_indexers = BTreeSet::from([SemanticIndexerKind::Go]);
     let required_paths = fixture_required_paths(&fixture.source);
     let mut semantic = build_semantic_snapshot_from_sets(
@@ -5421,7 +5625,7 @@ fn go_public_reachability_validation_rejects_missing_or_invented_package_exposur
         &fixture.indexes,
     )
     .unwrap_err();
-    assert!(error.contains("no compiler package exposure"), "{error}");
+    assert!(error.contains("changed its package count"), "{error}");
 }
 
 fn rust_surface_fixture(
