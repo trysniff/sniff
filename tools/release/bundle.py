@@ -43,8 +43,10 @@ def validate_portable_paths(names):
         ):
             raise ValueError("Unsafe archive entry")
         for index, part in enumerate(path.parts):
-            if part.endswith((".", " ")) or WINDOWS_DEVICE.fullmatch(
-                part.split(".", 1)[0].rstrip(" ")
+            if (
+                len(part) > 255
+                or part.endswith((".", " "))
+                or WINDOWS_DEVICE.fullmatch(part.split(".", 1)[0].rstrip(" "))
             ):
                 raise ValueError("Unsafe archive entry")
             prefix = "/".join(path.parts[: index + 1])
@@ -155,7 +157,9 @@ def verify(archive, target, commit, extract):
         names = [entry.filename for entry in entries]
         if len(names) != len(set(names)):
             raise ValueError("Duplicate archive entry")
-        validate_portable_paths(names)
+        validate_portable_paths([entry.orig_filename for entry in entries])
+        if any(entry.orig_filename != entry.filename for entry in entries):
+            raise ValueError("Unsafe archive filename normalization")
         for entry in entries:
             if stat.S_IFMT(entry.external_attr >> 16) != stat.S_IFREG:
                 raise ValueError("Archive contains a non-file entry")

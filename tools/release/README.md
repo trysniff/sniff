@@ -32,8 +32,9 @@ rejects changed files, mismatched sidecars, unexpected files, traversal paths,
 duplicate entries, unsafe permissions, oversized archives, and an existing
 extraction directory. Python 3.11 or newer is required for the verifier.
 Archive paths must be portable ASCII names: Windows device names, trailing
-dots/spaces, case aliases, and file/directory conflicts are rejected before
-extraction, on every host.
+dots/spaces, case aliases, file/directory conflicts, components exceeding 255
+characters, and ZIP filename normalization are rejected before extraction,
+on every host. Validation checks original ZIP names, including embedded NULs.
 
 The SPDX document describes the Cargo dependency graph filtered for the
 target, with normal, build, and development relationships and registry archive
