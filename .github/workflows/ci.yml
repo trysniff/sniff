@@ -105,6 +105,12 @@ jobs:
           cargo test --lib --locked \
             semantic_indexer_runner::typescript_model::tests::normal_scan_ \
             -- --ignored --test-threads=1 --nocapture
+      - name: Verify Go preparation failures at native executor boundaries
+        shell: bash
+        run: |
+          cargo test --lib --locked \
+            semantic_indexer_runner::go_model::preparation_tests:: \
+            -- --ignored --test-threads=1 --nocapture
       - name: Replay the pinned Scorecard publication witness
         if: runner.os == 'Linux'
         shell: bash

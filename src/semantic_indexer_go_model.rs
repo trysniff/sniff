@@ -323,3 +323,7 @@ fn require_snapshot(context: &RequiredIndexerRunContext<'_>, root: &Path) -> Res
 #[cfg(test)]
 #[path = "tests/semantic_indexer_go_model.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tests/semantic_indexer_go_preparation.rs"]
+mod preparation_tests;
