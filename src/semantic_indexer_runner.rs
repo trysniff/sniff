@@ -210,6 +210,8 @@ pub(crate) fn install_test_semantic_recovery_marker(root: &Path) -> Result<(), S
 mod go_calls;
 #[path = "semantic_indexer_go_commands.rs"]
 mod go_commands;
+#[path = "semantic_indexer_go_model_scope.rs"]
+mod go_model_scope;
 #[path = "semantic_indexer_go_project.rs"]
 mod go_project;
 #[path = "semantic_indexer_go_runner.rs"]
@@ -527,15 +529,23 @@ async fn run_required_indexers_exhaustive_typed_scoped_internal(
         ));
     }
     for kind in required {
-        let result =
-            if discover_typescript_worlds && kind == SemanticIndexerKind::TypeScriptJavaScript {
-                match typescript_model::discover(&context).await {
-                    Ok(plans) => run_required_indexer_set_typed(&context, kind, Some(&plans)).await,
-                    Err(error) => Err(error),
+        let result = if discover_typescript_worlds
+            && kind == SemanticIndexerKind::TypeScriptJavaScript
+        {
+            match typescript_model::discover(&context).await {
+                Ok(plans) => run_required_indexer_set_typed(&context, kind, Some(&plans)).await,
+                Err(error) => Err(error),
+            }
+        } else if discover_typescript_worlds && kind == SemanticIndexerKind::Go {
+            match go_model_scope::require_normal_source_scope(&root, files) {
+                Ok(_) => {
+                    run_required_indexer_set_typed(&context, kind, variant_plans.get(&kind)).await
                 }
-            } else {
-                run_required_indexer_set_typed(&context, kind, variant_plans.get(&kind)).await
-            };
+                Err(error) => Err(error),
+            }
+        } else {
+            run_required_indexer_set_typed(&context, kind, variant_plans.get(&kind)).await
+        };
         match result {
             Ok(index) => {
                 indexes.insert(kind, index);
