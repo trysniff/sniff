@@ -1,4 +1,5 @@
-use super::typescript_model_output::{OUTPUT_SCHEMA_VERSION, is_config_candidate};
+use super::census::{Inputs, Journal, ModelPart, Request, Role};
+use super::typescript_model_output::{OUTPUT_SCHEMA_VERSION, is_config_candidate, parse_output};
 use super::typescript_model_plans::plans_from_output;
 use super::*;
 use serde::Serialize;
@@ -31,16 +32,21 @@ pub(super) async fn discover(
             detail,
         )
     })?;
-    let execution_root = context
+    let journal = Journal::open(context, spec, &installed)?;
+    let execution_root = match context
         .recovery
         .prepare_indexer_run()
-        .map_err(|detail| model_failure(spec, SemanticIndexerRunPhase::Preparation, detail))?;
-    let result = discover_at(context, spec, &installed, &execution_root).await;
+        .map_err(|detail| model_failure(spec, SemanticIndexerRunPhase::Preparation, detail))
+    {
+        Ok(root) => root,
+        Err(failure) => return journal.finish(Err(failure)),
+    };
+    let result = discover_at(context, spec, &installed, &execution_root, &journal).await;
     let cleanup = context
         .recovery
         .finish_indexer_run()
         .map_err(|detail| model_failure(spec, SemanticIndexerRunPhase::Cleanup, detail));
-    finish_discovery(result, cleanup)
+    journal.finish(finish_discovery(result, cleanup))
 }
 
 async fn discover_at(
@@ -48,6 +54,7 @@ async fn discover_at(
     spec: PinnedIndexer,
     installed: &InstalledIndexer,
     root: &Path,
+    journal: &Journal,
 ) -> Result<
     (
         Vec<SemanticIndexerVariantPlan>,
@@ -159,7 +166,15 @@ async fn discover_at(
             ))?
         )
     );
-    let result = run_sandbox_command(prepared.command, "TypeScript compiler project model").await;
+    journal.bind_inputs(Inputs::TypeScript {
+        runtime_sha256: runtime_sha256.clone(),
+    })?;
+    let request = Request {
+        role: Role::TypeScriptProject,
+        arguments: prepared.command.args.clone(),
+        environment: prepared.command.env.iter().cloned().collect(),
+    };
+    let result = run_sandbox_command(prepared.command, Role::TypeScriptProject.operation()).await;
     let integrity = runtime_file_identities(&prepared.runtime_files).and_then(|after| {
         verify_runtime_identities_unchanged(
             "TypeScript compiler project model",
@@ -169,21 +184,27 @@ async fn discover_at(
     });
     let snapshot_integrity = require_snapshot(context, root);
     let installation_integrity = context.store.verify(spec).map(|_| ());
-    let output = validate_execution(
-        spec,
-        result,
-        [integrity, snapshot_integrity, installation_integrity],
+    let output = journal.record_command(
+        request,
+        validate_execution(
+            spec,
+            result,
+            [integrity, snapshot_integrity, installation_integrity],
+        ),
     )?;
-    validate_output(spec, output, |stdout| {
-        plans_from_output(
+    let ((plans, model), process) = validate_output(spec, output, |stdout| {
+        let plans = plans_from_output(
             stdout,
             &configs,
             &sources,
             context.repository_content_sha256,
             &runtime_sha256,
             |path| require_plain_file(root, path),
-        )
-    })
+        )?;
+        Ok((plans, parse_output(stdout)?))
+    })?;
+    journal.record_model(ModelPart::TypeScript(model))?;
+    Ok((plans, process))
 }
 
 fn validate_output<T>(

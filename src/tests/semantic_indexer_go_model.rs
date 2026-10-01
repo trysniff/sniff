@@ -134,6 +134,12 @@ async fn normal_scan_discovers_every_go_context_without_git_or_model_calls() {
         panic!("normal Go scan used an unqualified graph")
     };
     assert!(variants.len() > 2);
+    super::super::census::assert_native_terminal(
+        root.path(),
+        SemanticIndexerKind::Go,
+        true,
+        3 + 2 * variants.len(),
+    );
     let mut sdk_bindings = BTreeSet::new();
     let mut dependency_bindings = BTreeSet::new();
     let mut tags = BTreeSet::new();

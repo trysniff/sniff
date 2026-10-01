@@ -161,6 +161,7 @@ async fn normal_discovery_validation_keeps_real_constraint_output_and_cleans_sta
     );
     assert!(!execution_root.exists());
     assert!(!execution_root.parent().unwrap().exists());
+    super::super::census::assert_native_terminal(root.path(), SemanticIndexerKind::Go, false, 3);
     assert_eq!(
         repository_snapshot::repository_content_digest(root.path()).unwrap(),
         before

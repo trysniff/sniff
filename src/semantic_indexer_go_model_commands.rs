@@ -1,3 +1,4 @@
+use super::census::{Journal, ModelPart, Request, Role};
 use super::go_commands::run_go_tool_with_environment;
 use super::go_model_output::{ModuleIdentity, module_identity};
 use super::go_model_plans::{explicit_environment, offline_environment};
@@ -9,6 +10,7 @@ pub(super) struct ModelRuntime<'a> {
     pub(super) spec: PinnedIndexer,
     pub(super) root: &'a Path,
     pub(super) installed: &'a InstalledIndexer,
+    pub(super) journal: &'a Journal,
 }
 
 impl ModelRuntime<'_> {
@@ -16,17 +18,23 @@ impl ModelRuntime<'_> {
         &self,
         arguments: Vec<String>,
         environment: &BTreeMap<String, String>,
-        label: &str,
+        role: Role,
     ) -> Result<crate::sandbox::SandboxOutput, SemanticIndexerRunFailure> {
-        run_go_tool_with_environment(
+        let request = Request {
+            role,
+            arguments: arguments.clone(),
+            environment: environment.clone(),
+        };
+        let result = run_go_tool_with_environment(
             self.spec,
             self.root,
             self.installed,
             arguments,
-            label,
+            role.operation(),
             environment,
         )
-        .await
+        .await;
+        self.journal.record_command(request, result)
     }
 
     pub(super) async fn module(
@@ -44,13 +52,15 @@ impl ModelRuntime<'_> {
                     "-mod=readonly".to_string(),
                 ],
                 &offline_environment(),
-                "Go compiler module identity",
+                Role::GoModule,
             )
             .await?;
-        validate_model_output(self.spec, output, |stdout| {
+        let (module, _) = validate_model_output(self.spec, output, |stdout| {
             validate_module(stdout, self.root, project)
-        })
-        .map(|(module, _)| module)
+        })?;
+        self.journal
+            .record_model(ModelPart::GoModule(module.clone()))?;
+        Ok(module)
     }
 
     pub(super) async fn environment(
@@ -72,13 +82,13 @@ impl ModelRuntime<'_> {
         .into_iter()
         .chain(names.iter().cloned())
         .collect();
-        let output = self
-            .run(arguments, &explicit, "Go compiler context environment")
-            .await?;
-        validate_model_output(self.spec, output, |stdout| {
+        let output = self.run(arguments, &explicit, Role::GoEnvironment).await?;
+        let (environment, _) = validate_model_output(self.spec, output, |stdout| {
             validate_environment(stdout, &names, &explicit)
-        })
-        .map(|(environment, _)| environment)
+        })?;
+        self.journal
+            .record_model(ModelPart::GoEnvironment(environment.clone()))?;
+        Ok(environment)
     }
 }
 

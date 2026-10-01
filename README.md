@@ -398,6 +398,15 @@ pinned provider contract changes, refresh it with
 `sniff indexers install ./your-repo --force --yes`; old installations are not
 silently upgraded or reused.
 
+Normal Go and JavaScript/TypeScript project discovery records each project-model
+command's arguments, explicit environment, captured output and raw-output hashes,
+validated model results, and final discovery outcome under
+`.sniff/compiler-census/`. Records survive temporary compiler-stage cleanup;
+missing or corrupt records fail discovery. These are local diagnostic records,
+not replay authority: compiler input closure is still unproven, so Sniff does not
+skip project discovery from them. Protect these records like your repository;
+they may contain source paths and compiler diagnostics.
+
 Sniff runs up to four independent review pipelines concurrently and batches up
 to eight same-file methods per request. Tune these with
 `SNIFF_LLM_MAX_CONCURRENCY` and `SNIFF_LLM_METHOD_BATCH_SIZE`, each from `1` to

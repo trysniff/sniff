@@ -1,8 +1,10 @@
 use super::{PinnedIndexer, SemanticIndexerKind};
 use crate::semantic_index::{SemanticIndex, SemanticIndexSet};
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub(crate) enum SemanticIndexerRunFailureKind {
     UnsupportedProjectShape,
     RepositoryRejected,
@@ -12,7 +14,8 @@ pub(crate) enum SemanticIndexerRunFailureKind {
     InfrastructureFailed,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub(crate) enum SemanticIndexerRunPhase {
     RepositoryValidation,
     InstallationVerification,
@@ -24,7 +27,8 @@ pub(crate) enum SemanticIndexerRunPhase {
     IntegrityVerification,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct SemanticIndexerProcessEvidence {
     pub(crate) status_code: Option<i32>,
     pub(crate) stdout: String,
@@ -36,7 +40,8 @@ pub(crate) struct SemanticIndexerProcessEvidence {
     pub(crate) process_limit_exceeded: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct SemanticIndexerRunFailure {
     pub(crate) kind: SemanticIndexerRunFailureKind,
     pub(crate) phase: SemanticIndexerRunPhase,

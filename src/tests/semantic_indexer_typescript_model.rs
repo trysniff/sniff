@@ -147,6 +147,12 @@ async fn normal_scan_discovers_and_indexes_reference_world_without_git_or_model_
     )
     .unwrap();
     assert_eq!(evidence.contexts.len(), 2);
+    super::super::census::assert_native_terminal(
+        root.path(),
+        SemanticIndexerKind::TypeScriptJavaScript,
+        true,
+        1,
+    );
     assert!(!root.path().join(".git").exists());
     assert!(!root.path().join(".sniff-indexer-recovery.json").exists());
 }
@@ -213,5 +219,11 @@ async fn normal_scan_preserves_implicit_jsconfig_compiler_defaults() {
     )
     .unwrap();
     assert_eq!(evidence.contexts.len(), 1);
+    super::super::census::assert_native_terminal(
+        root.path(),
+        SemanticIndexerKind::TypeScriptJavaScript,
+        true,
+        1,
+    );
     assert!(!root.path().join(".sniff-indexer-recovery.json").exists());
 }

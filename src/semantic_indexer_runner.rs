@@ -23,6 +23,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 #[path = "semantic_indexer_runner_outcome.rs"]
 mod outcome;
 
+#[path = "semantic_indexer_census.rs"]
+mod census;
+
 pub(crate) use outcome::*;
 
 #[path = "semantic_indexer_repository_snapshot.rs"]

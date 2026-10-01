@@ -15,7 +15,8 @@ pub(super) const GO_SHARD_LIMITS: GoShardLimits = GoShardLimits {
     max_packages: 48,
 };
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(super) struct GoPackage {
     pub(super) package_identity: String,
     pub(super) compiler_pattern: String,
@@ -23,7 +24,8 @@ pub(super) struct GoPackage {
     pub(super) source_bytes: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(super) struct GoPackageInventory {
     pub(super) packages: Vec<GoPackage>,
     pub(super) test_documents: BTreeSet<RepositoryPath>,
