@@ -39,12 +39,142 @@ fn digest(character: char) -> String {
 }
 
 #[test]
+fn discovery_commitment_rejects_compiler_substitution_between_stages() {
+    require_discovery_commitment("compiler runtime", &digest('a'), &digest('a')).unwrap();
+    assert!(
+        require_discovery_commitment("compiler runtime", &digest('a'), &digest('b'))
+            .unwrap_err()
+            .contains("changed between project discovery")
+    );
+}
+
+#[test]
+fn qualified_normal_world_rejects_unparsed_neighbor_source_mutation() {
+    let root = tempfile::tempdir().unwrap();
+    fs::write(
+        root.path().join("go.mod"),
+        "module example.test/model\ngo 1.23\n",
+    )
+    .unwrap();
+    let file = write_go_file(
+        root.path(),
+        "main.go",
+        "package model\nfunc value() int { return 1 }\n",
+    );
+    write_go_file(
+        root.path(),
+        "neighbor.go",
+        "package model\nfunc neighbor() int { return 2 }\n",
+    );
+    let expected = repository_snapshot::repository_content_digest(root.path()).unwrap();
+    let stage = tempfile::tempdir().unwrap();
+    let execution = stage.path().join("snapshot");
+    repository_snapshot::stage_repository_snapshot(root.path(), &execution).unwrap();
+    let recovery = recovery::SemanticIndexerRecoveryGuard::begin(root.path()).unwrap();
+    let installed = InstalledIndexer {
+        root: root.path().to_path_buf(),
+        entrypoint: root.path().join("unused-indexer"),
+        tree_sha256: digest('a'),
+    };
+    let files = [file];
+    let inputs = GoIndexerRunInputs {
+        spec: pinned_indexer(SemanticIndexerKind::Go).unwrap(),
+        root: root.path(),
+        installed: &installed,
+        files: &files,
+        required_documents: &files,
+        recovery: &recovery,
+        repository_content_sha256: &expected,
+        progress_root: None,
+    };
+    let mut plan = variant_plan("normal", &["main.go"], &[]);
+    plan.dimensions
+        .insert("source_snapshot_sha256".to_string(), expected.clone());
+    verify_discovered_world_inputs(&inputs, &execution, &plan).unwrap();
+    fs::write(
+        execution.join("neighbor.go"),
+        "package model\nfunc neighbor() int { return 3 }\n",
+    )
+    .unwrap();
+    let compiler_failure = indexer_failure(
+        inputs.spec,
+        SemanticIndexerRunFailureKind::IncompleteOutput,
+        SemanticIndexerRunPhase::OutputValidation,
+        "injected failed compiler world".to_string(),
+    );
+    let failure =
+        verify_discovered_world_result::<()>(&inputs, &execution, &plan, Err(compiler_failure))
+            .unwrap_err();
+    assert_eq!(
+        failure.phase,
+        SemanticIndexerRunPhase::IntegrityVerification
+    );
+    assert!(failure.detail.contains("source snapshot"));
+    assert!(failure.detail.contains("injected failed compiler world"));
+    recovery.finish().unwrap();
+}
+
+#[test]
 fn go_assembly_checkpoints_only_at_document_and_world_boundaries() {
     let checkpoints = (1..=15)
         .filter(|completed| should_publish_go_assembly(*completed, 5, 15))
         .collect::<Vec<_>>();
     assert_eq!(checkpoints, vec![5, 15]);
     assert!(should_publish_go_assembly(5, 5, 5));
+}
+
+#[tokio::test]
+#[ignore = "requires Go and the installed pinned Go semantic indexer"]
+async fn qualified_world_observer_rejects_substituted_runtime_image() {
+    let root = tempfile::tempdir().unwrap();
+    let file = write_go_file(root.path(), "main.go", "package main\nfunc main() {}\n");
+    let files = [file];
+    let expected = repository_snapshot::repository_content_digest(root.path()).unwrap();
+    let spec = pinned_indexer(SemanticIndexerKind::Go).unwrap();
+    let verified = SemanticIndexerStore::for_user()
+        .unwrap()
+        .verify(spec)
+        .unwrap();
+    let runtime_copy = tempfile::tempdir().unwrap();
+    let bin = runtime_copy.path().join("bin");
+    fs::create_dir(&bin).unwrap();
+    let entrypoint = bin.join(verified.entrypoint.file_name().unwrap());
+    fs::copy(&verified.entrypoint, &entrypoint).unwrap();
+    #[cfg(windows)]
+    fs::copy(verified.root.join("bin/go.exe"), bin.join("go.exe")).unwrap();
+    let installed = InstalledIndexer {
+        root: runtime_copy.path().to_path_buf(),
+        entrypoint: entrypoint.clone(),
+        tree_sha256: verified.tree_sha256,
+    };
+    let recovery = recovery::SemanticIndexerRecoveryGuard::begin(root.path()).unwrap();
+    let inputs = GoIndexerRunInputs {
+        spec,
+        root: root.path(),
+        installed: &installed,
+        files: &files,
+        required_documents: &files,
+        recovery: &recovery,
+        repository_content_sha256: &expected,
+        progress_root: None,
+    };
+    let mut plan = variant_plan("runtime-substitution", &["main.go"], &[]);
+    plan.dimensions.insert(
+        "compiler_runtime_sha256".to_string(),
+        runtime_identity_sha256(spec, root.path(), &installed).unwrap(),
+    );
+    verify_discovered_world_inputs(&inputs, root.path(), &plan).unwrap();
+    // Only the disposable copy changes; no shared provider files are modified.
+    let mut bytes = fs::read(&entrypoint).unwrap();
+    bytes.push(0);
+    fs::write(&entrypoint, bytes).unwrap();
+    let failure = verify_discovered_world_result(&inputs, root.path(), &plan, Ok(())).unwrap_err();
+    assert_eq!(
+        failure.phase,
+        SemanticIndexerRunPhase::IntegrityVerification
+    );
+    assert!(failure.detail.contains("compiler runtime changed"));
+    recovery.finish().unwrap();
 }
 
 fn empty_index(root: &Path) -> SemanticIndex {

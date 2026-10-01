@@ -20,7 +20,7 @@ pub enum GoCompilerArchitecture {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub(crate) struct GoCompilerContext {
     pub(crate) goos: String,
     pub(crate) goarch: String,

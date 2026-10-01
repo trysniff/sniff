@@ -181,6 +181,7 @@ async fn run_required_go_indexer_variants_with_limits(
         let mut variants = BTreeMap::new();
         let mut selected_documents = BTreeSet::new();
         for (world_ordinal, plan) in execution_plans.into_iter().enumerate() {
+            verify_discovered_world_inputs(inputs, &execution_root, plan)?;
             let world = run_go_compiler_world(
                 inputs,
                 &execution_root,
@@ -189,7 +190,8 @@ async fn run_required_go_indexer_variants_with_limits(
                 Some(plan),
                 world_ordinal,
             )
-            .await?;
+            .await;
+            let world = verify_discovered_world_result(inputs, &execution_root, plan, world)?;
             selected_documents.extend(world.index.documents.keys().cloned());
             let identity = plan.identity.clone();
             if variants
@@ -216,6 +218,10 @@ async fn run_required_go_indexer_variants_with_limits(
         Ok(set)
     }
     .await;
+    let integrity_result = plans
+        .iter()
+        .try_for_each(|plan| verify_discovered_world_inputs(inputs, &execution_root, plan));
+    let run_result = combine_typed_run_and_integrity(run_result, integrity_result);
     let cleanup_result = inputs.recovery.finish_indexer_run().map_err(|detail| {
         indexer_failure(
             inputs.spec,
@@ -225,6 +231,67 @@ async fn run_required_go_indexer_variants_with_limits(
         )
     });
     combine_typed_run_and_integrity(run_result, cleanup_result)
+}
+
+fn verify_discovered_world_result<T>(
+    inputs: &GoIndexerRunInputs<'_>,
+    execution_root: &Path,
+    plan: &SemanticIndexerVariantPlan,
+    result: Result<T, SemanticIndexerRunFailure>,
+) -> Result<T, SemanticIndexerRunFailure> {
+    combine_typed_run_and_integrity(
+        result,
+        verify_discovered_world_inputs(inputs, execution_root, plan),
+    )
+}
+
+fn verify_discovered_world_inputs(
+    inputs: &GoIndexerRunInputs<'_>,
+    execution_root: &Path,
+    plan: &SemanticIndexerVariantPlan,
+) -> Result<(), SemanticIndexerRunFailure> {
+    if let Some(expected) = plan.dimensions.get("compiler_runtime_sha256") {
+        let actual = runtime_identity_sha256(inputs.spec, execution_root, inputs.installed)
+            .map_err(|detail| go_integrity_failure(inputs.spec, detail))?;
+        require_discovery_commitment("compiler runtime", expected, &actual)
+            .map_err(|detail| go_integrity_failure(inputs.spec, detail))?;
+    }
+    if let Some(expected) = plan.dimensions.get("source_snapshot_sha256") {
+        require_discovery_commitment(
+            "source snapshot",
+            expected,
+            inputs.repository_content_sha256,
+        )
+        .map_err(|detail| go_integrity_failure(inputs.spec, detail))?;
+        for root in [inputs.root, execution_root] {
+            let actual = repository_snapshot::repository_content_digest(root)
+                .map_err(|detail| go_integrity_failure(inputs.spec, detail))?;
+            require_discovery_commitment("source snapshot", expected, &actual)
+                .map_err(|detail| go_integrity_failure(inputs.spec, detail))?;
+        }
+    }
+    Ok(())
+}
+
+fn require_discovery_commitment(kind: &str, expected: &str, actual: &str) -> Result<(), String> {
+    if expected != actual {
+        return Err(format!(
+            "Go {kind} changed between project discovery and qualified execution"
+        ));
+    }
+    Ok(())
+}
+
+fn go_integrity_failure(
+    spec: PinnedIndexer,
+    detail: impl Into<String>,
+) -> SemanticIndexerRunFailure {
+    indexer_failure(
+        spec,
+        SemanticIndexerRunFailureKind::InfrastructureFailed,
+        SemanticIndexerRunPhase::IntegrityVerification,
+        detail,
+    )
 }
 
 fn go_variant_execution_order<'a>(
@@ -1168,7 +1235,7 @@ fn go_progress_failure(
     )
 }
 
-fn runtime_identity_sha256(
+pub(super) fn runtime_identity_sha256(
     spec: PinnedIndexer,
     execution_root: &Path,
     installed: &InstalledIndexer,
