@@ -8,20 +8,22 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(super) struct ModuleIdentity {
     pub(super) path: String,
     pub(super) project: RepositoryPath,
 }
 
-#[derive(Debug, Serialize)]
-#[serde(tag = "status", rename_all = "snake_case")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
 pub(super) enum ContextOutcome {
     Accepted { inventory: GoPackageInventory },
     Rejected { diagnostics: Vec<String> },
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(super) struct CompilerWorld {
     pub(super) module: ModuleIdentity,
     pub(super) context: GoCompilerContext,

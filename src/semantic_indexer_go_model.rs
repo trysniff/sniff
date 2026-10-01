@@ -1,3 +1,4 @@
+use super::census::{Inputs, Journal, ModelPart, Role};
 use super::go_model_commands::{
     ModelRuntime, inventory_arguments, model_failure, module_root, validate_model_output,
 };
@@ -32,16 +33,21 @@ pub(super) async fn discover(
             detail,
         )
     })?;
-    let root = context
+    let journal = Journal::open(context, spec, &installed)?;
+    let root = match context
         .recovery
         .prepare_indexer_run()
-        .map_err(|detail| model_failure(spec, SemanticIndexerRunPhase::Preparation, detail))?;
-    let result = discover_at(context, &scope, spec, &installed, &root).await;
+        .map_err(|detail| model_failure(spec, SemanticIndexerRunPhase::Preparation, detail))
+    {
+        Ok(root) => root,
+        Err(failure) => return journal.finish(Err(failure)),
+    };
+    let result = discover_at(context, &scope, spec, &installed, &root, &journal).await;
     let cleanup = context
         .recovery
         .finish_indexer_run()
         .map_err(|detail| model_failure(spec, SemanticIndexerRunPhase::Cleanup, detail));
-    combine_witnessed_run_and_integrity(result, cleanup).map(|(plans, _)| plans)
+    journal.finish(combine_witnessed_run_and_integrity(result, cleanup).map(|(plans, _)| plans))
 }
 
 async fn discover_at(
@@ -50,6 +56,7 @@ async fn discover_at(
     spec: PinnedIndexer,
     installed: &InstalledIndexer,
     root: &Path,
+    journal: &Journal,
 ) -> Result<
     (
         Vec<SemanticIndexerVariantPlan>,
@@ -73,8 +80,9 @@ async fn discover_at(
         spec,
         root,
         installed,
+        journal,
     };
-    let result = census(&runtime, scope).await;
+    let result = census(&runtime, scope, &runtime_before, &sdk_before).await;
     let integrity = (|| {
         require_snapshot(context, root)?;
         context.store.verify(spec)?;
@@ -130,6 +138,8 @@ async fn discover_at(
 async fn census(
     runtime: &ModelRuntime<'_>,
     scope: &GoRepositoryScope,
+    executable_sha256: &str,
+    sdk_sha256: &str,
 ) -> Result<((Vec<ModuleCensus>, String), SemanticIndexerProcessEvidence), SemanticIndexerRunFailure>
 {
     super::go_dependencies::prepare_root(runtime.root).map_err(|detail| {
@@ -150,6 +160,11 @@ async fn census(
             SemanticIndexerRunPhase::IntegrityVerification,
             detail,
         )
+    })?;
+    runtime.journal.bind_inputs(Inputs::Go {
+        executable_sha256: executable_sha256.to_string(),
+        sdk_sha256: sdk_sha256.to_string(),
+        dependencies_sha256: before.clone(),
     })?;
     let result = census_prepared(runtime, scope).await;
     let integrity = super::go_dependencies::identity_sha256(runtime.root)
@@ -181,10 +196,13 @@ async fn census_prepared(
                 "-json".to_string(),
             ],
             &offline_environment(),
-            "Go compiler platform domain",
+            Role::GoPlatforms,
         )
         .await?;
     let (platforms, mut process) = platform_domain(runtime.spec, platforms)?;
+    runtime
+        .journal
+        .record_model(ModelPart::GoPlatforms(platforms.clone()))?;
     for (index, (project, sources)) in scope.modules.iter().enumerate() {
         let module = runtime.module(project).await?;
         let directory = runtime
@@ -227,7 +245,7 @@ async fn census_prepared(
                     invocation.request_repository_path,
                 ],
                 &helper_environment,
-                "Go compiler source constraint facts",
+                Role::GoSourceContexts,
             )
             .await
             .and_then(|output| source_contexts(runtime.spec, output, &source_paths, &platforms));
@@ -248,6 +266,9 @@ async fn census_prepared(
             });
         let (expected_contexts, helper_process) =
             combine_witnessed_run_and_integrity(result, integrity)?;
+        runtime
+            .journal
+            .record_model(ModelPart::GoSourceContexts(expected_contexts.clone()))?;
         process = helper_process;
         let mut worlds = Vec::new();
         for context in &expected_contexts {
@@ -255,9 +276,7 @@ async fn census_prepared(
             let arguments = inventory_arguments(project, context).map_err(|detail| {
                 model_failure(runtime.spec, SemanticIndexerRunPhase::Preparation, detail)
             })?;
-            let output = runtime
-                .run(arguments, &environment, "Go compiler package selection")
-                .await?;
+            let output = runtime.run(arguments, &environment, Role::GoWorld).await?;
             let (world, world_process) = validate_model_output(runtime.spec, output, |stdout| {
                 parse_world(
                     runtime.root,
@@ -268,6 +287,9 @@ async fn census_prepared(
                     stdout,
                 )
             })?;
+            runtime
+                .journal
+                .record_model(ModelPart::GoWorld(Box::new(world.clone())))?;
             worlds.push(world);
             process = world_process;
         }
@@ -277,7 +299,7 @@ async fn census_prepared(
             worlds,
         });
     }
-    // Retain the last actual command for post-census guards, not a receipt for all commands.
+    // The journal retains every model command; guards retain the last actual process.
     Ok((census, process))
 }
 
