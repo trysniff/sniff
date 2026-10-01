@@ -37,6 +37,8 @@ jobs:
   blind-prior-archive-preflight:
     name: blind-prior-archive-preflight
     runs-on: ubuntu-latest
+    outputs:
+      dogfood_groups: ${{ steps.dogfood_scope.outputs.groups }}
     steps:
       - uses: actions/checkout@v6
       - name: Verify the released source-seal archive layout
@@ -53,68 +55,94 @@ jobs:
           python3 tools/ci/extract_blind_source_seal.py "$archive" "$RUNNER_TEMP/extracted"
       - name: Verify complete native test-target discovery and exit handling
         run: python3 tools/ci/test_run_native_unit_tests.py
+      - name: Verify exhaustive dogfood shard discovery and exit handling
+        run: python3 tools/ci/test_run_native_dogfood.py
+      - name: Assign every dogfood group to the native matrix
+        id: dogfood_scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          groups="$(python3 tools/ci/run_native_dogfood.py --groups)"
+          echo "groups=$groups" >> "$GITHUB_OUTPUT"
 
   test:
-    name: test-${{ matrix.os }}
+    name: test-${{ matrix.os }}-${{ matrix.suite }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
+        suite: [library, binaries, integrations]
     runs-on: ${{ matrix.os }}
-    # macOS can spend roughly 53 minutes compiling and completing the library
-    # suite before the cross-language dogfood fixtures run. Keep the whole
-    # exhaustive matrix bounded without truncating those final proofs.
+    # Each exhaustive suite owns its budget rather than consuming dogfood's.
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Configure the Rust toolchain for sandboxed Rust indexing
-        run: rustup default stable
-      - uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: "17"
-      - uses: actions/setup-go@v6
-        with:
-          go-version: "1.25"
-          cache: false
-      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
-        with:
-          version: "0.12.5"
-          enable-cache: false
-      - uses: gradle/actions/setup-gradle@v6
-        with:
-          gradle-version: "8.8"
-      - name: Install Linux proof sandbox
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y bubblewrap
-      - name: Enable Linux user namespaces for proof sandbox
-        if: runner.os == 'Linux'
-        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-      - name: Install pinned semantic indexers for dogfood
+      - uses: ./.github/actions/setup-native-proof
+      - name: Run the complete native suite
         shell: bash
         run: |
-          set -euo pipefail
-          for fixture in typescript javascript python go kotlin rust; do
-            cargo run --quiet -- indexers install "tests/semantic_gold_fixtures/${fixture}" --yes
-          done
-      - name: Run tests
-        if: runner.os != 'Windows'
-        run: cargo test --all-targets --locked
+          python tools/ci/run_native_unit_tests.py --suite '${{ matrix.suite }}'
+
+  native-dogfood:
+    name: dogfood-${{ matrix.os }}-${{ matrix.group }}
+    needs: blind-prior-archive-preflight
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        group: ${{ fromJSON(needs.blind-prior-archive-preflight.outputs.dogfood_groups) }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-native-proof
+      - name: Preserve the Windows dogfood compiler deadline
+        if: runner.os == 'Windows'
+        shell: bash
+        run: echo "SNIFF_INTERNAL_INDEXER_TIMEOUT_SECS=300" >> "$GITHUB_ENV"
+      - name: Run every test in the native dogfood shard
+        shell: bash
+        env:
+          SNIFF_DEBUG_INDEXERS: "1"
+        run: python tools/ci/run_native_dogfood.py '${{ matrix.group }}'
+
+  native-compiler-proofs:
+    name: compiler-${{ matrix.os }}-${{ matrix.fixture }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        fixture: [typescript, go]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-native-proof
+        with:
+          fixtures: ${{ matrix.fixture }}
       - name: Verify normal TypeScript compiler worlds in the native sandbox
+        if: matrix.fixture == 'typescript'
         shell: bash
         run: |
           cargo test --lib --locked \
             semantic_indexer_runner::typescript_model::tests::normal_scan_ \
             -- --ignored --test-threads=1 --nocapture
       - name: Verify Go preparation failures at native executor boundaries
+        if: matrix.fixture == 'go'
         shell: bash
         run: |
           cargo test --lib --locked \
             semantic_indexer_runner::go_model::preparation_tests:: \
             -- --ignored --test-threads=1 --nocapture
+
+  temporal-prior-replay:
+    name: temporal-prior-replay
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
       - name: Replay the pinned Scorecard publication witness
-        if: runner.os == 'Linux'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -130,7 +158,6 @@ jobs:
           echo "55b1de849d6d401bd6529a2806d587b53170cfbe7cdbc2ac5799ab65bf42807a  $frame" | sha256sum --check
           SNIFF_SCORECARD_FRAME_PATH="$frame" cargo test --lib --locked verifies_real_scorecard_publication_witness -- --ignored
       - name: Replay the blind prior repository identities
-        if: runner.os == 'Linux'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -155,7 +182,6 @@ jobs:
           SNIFF_BLIND_SEAL_PATH="$RUNNER_TEMP/blind-prior/extracted/blind-source-seal.json" \
             cargo test --lib --locked verifies_real_blind_prior_temporal_proof -- --ignored
       - name: Replay research and synthetic prior identities
-        if: runner.os == 'Linux'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -171,19 +197,6 @@ jobs:
           test "$(git rev-parse HEAD:gold_fixtures/repo)" = \
             ecb744731cbd00242f93a067632c390b0ddf344d
           cargo test --lib --locked benchmark::release::history_v3_small_prior_temporal::tests
-      - name: Run Windows unit and non-dogfood integration tests
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          python tools/ci/run_native_unit_tests.py
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Run cross-language Windows dogfood
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $env:SNIFF_DEBUG_INDEXERS = "1"
-          $env:SNIFF_INTERNAL_INDEXER_TIMEOUT_SECS = "300"
-          cargo test --test dogfood_suite brandset::default_scan_reviews_every_supported_language_end_to_end --locked -- --exact --test-threads=1 --nocapture
 
   msrv:
     name: msrv-1.88
@@ -360,6 +373,9 @@ jobs:
       - format
       - clippy
       - test
+      - native-dogfood
+      - native-compiler-proofs
+      - temporal-prior-replay
       - msrv
       - package
       - semantic-indexers
@@ -373,6 +389,9 @@ jobs:
           [[ "${{ needs.format.result }}" == "success" ]]
           [[ "${{ needs.clippy.result }}" == "success" ]]
           [[ "${{ needs.test.result }}" == "success" ]]
+          [[ "${{ needs.native-dogfood.result }}" == "success" ]]
+          [[ "${{ needs.native-compiler-proofs.result }}" == "success" ]]
+          [[ "${{ needs.temporal-prior-replay.result }}" == "success" ]]
           [[ "${{ needs.msrv.result }}" == "success" ]]
           [[ "${{ needs.package.result }}" == "success" ]]
           [[ "${{ needs.semantic-indexers.result }}" == "success" ]]
