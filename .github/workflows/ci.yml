@@ -198,6 +198,28 @@ jobs:
             ecb744731cbd00242f93a067632c390b0ddf344d
           cargo test --lib --locked benchmark::release::history_v3_small_prior_temporal::tests
 
+  native-go-worlds:
+    name: go-worlds-${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    # The full Windows world census already runs for hours locally. This
+    # dedicated bound does not borrow time from or truncate other proof suites.
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-native-proof
+        with:
+          fixtures: go
+      - name: Verify every normal Go compiler context without Git or model calls
+        shell: bash
+        run: |
+          cargo test --lib --locked \
+            semantic_indexer_runner::go_model::tests::normal_scan_discovers_every_go_context_without_git_or_model_calls \
+            -- --exact --ignored --test-threads=1 --nocapture
+
   msrv:
     name: msrv-1.88
     runs-on: ubuntu-latest
@@ -323,9 +345,6 @@ jobs:
             benchmark::release::history_v2_semantic::tests::pinned_python_provider_drives_signatures_and_recursive_public_surfaces \
             -- --exact --ignored --test-threads=1 --nocapture
           cargo test --lib --locked \
-            semantic_indexer_runner::go_model::tests::normal_scan_discovers_every_go_context_without_git_or_model_calls \
-            -- --exact --ignored --test-threads=1 --nocapture
-          cargo test --lib --locked \
             semantic_indexer_runner::go_runner::tests::qualified_world_observer_rejects_substituted_runtime_image \
             -- --exact --ignored --test-threads=1 --nocapture
           cargo test --lib --locked \
@@ -375,6 +394,7 @@ jobs:
       - test
       - native-dogfood
       - native-compiler-proofs
+      - native-go-worlds
       - temporal-prior-replay
       - msrv
       - package
@@ -391,6 +411,7 @@ jobs:
           [[ "${{ needs.test.result }}" == "success" ]]
           [[ "${{ needs.native-dogfood.result }}" == "success" ]]
           [[ "${{ needs.native-compiler-proofs.result }}" == "success" ]]
+          [[ "${{ needs.native-go-worlds.result }}" == "success" ]]
           [[ "${{ needs.temporal-prior-replay.result }}" == "success" ]]
           [[ "${{ needs.msrv.result }}" == "success" ]]
           [[ "${{ needs.package.result }}" == "success" ]]
