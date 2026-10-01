@@ -12,6 +12,8 @@ fn native_child(mode: &str) -> Command {
             "--nocapture",
         ])
         .env(CHILD_MODE, mode);
+    #[cfg(windows)]
+    command.creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW);
     command
 }
 
@@ -28,6 +30,17 @@ fn native_process_fixture() {
         "blocked" => {
             io::stderr().write_all(b"waiting-for-deadline").unwrap();
             thread::sleep(Duration::from_secs(60));
+        }
+        "descendant" => {
+            let mut child = native_child("blocked")
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap();
+            writeln!(io::stderr(), "{}", child.id()).unwrap();
+            io::stderr().flush().unwrap();
+            child.wait().unwrap();
         }
         "close" => {}
         _ => panic!("unknown bounded-process fixture mode"),
@@ -125,14 +138,7 @@ fn early_stdin_close_without_timeout_remains_an_error() {
 #[test]
 fn deadline_terminates_the_complete_child_tree() {
     #[cfg(windows)]
-    let mut command = {
-        let mut command = Command::new("powershell.exe");
-        command.args([
-            "-NoProfile", "-Command",
-            "$p=Start-Process powershell.exe -WindowStyle Hidden -ArgumentList '-NoProfile','-Command','Start-Sleep -Seconds 30' -PassThru; [Console]::Out.WriteLine($p.Id); Start-Sleep -Seconds 30",
-        ]);
-        command
-    };
+    let mut command = native_child("descendant");
     #[cfg(unix)]
     let (mut command, survivor_marker) = {
         let directory = tempfile::tempdir().unwrap();
@@ -147,7 +153,11 @@ fn deadline_terminates_the_complete_child_tree() {
     };
     let output = run(&mut command, Duration::from_secs(10)).unwrap();
     assert!(output.timed_out);
-    let descendant = String::from_utf8(output.stdout)
+    #[cfg(windows)]
+    let pid_output = output.stderr;
+    #[cfg(unix)]
+    let pid_output = output.stdout;
+    let descendant = String::from_utf8(pid_output)
         .unwrap()
         .trim()
         .parse::<u32>()
