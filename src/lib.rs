@@ -4,6 +4,7 @@ pub mod benchmark_import;
 pub(crate) mod bounded_process;
 pub mod callgraph;
 pub mod cli;
+pub mod compiler_go_model;
 pub mod completed_run;
 pub mod config;
 pub mod config_loader;

@@ -14,7 +14,9 @@ use super::{
     IntentionalBoundaryProjectModelVariant, IntentionalBoundaryRepositoryInventory,
     validate_intentional_boundary_repository_inventory,
 };
-use serde::{Deserialize, Serialize};
+use crate::compiler_go_model::{
+    GoListModule, GoListPackage, canonical_go_list_projection, parse_go_list_packages,
+};
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
@@ -51,48 +53,6 @@ use variants::{
 mod validation;
 pub use validation::validate_intentional_boundary_go_list;
 
-#[derive(Deserialize, Serialize)]
-struct GoListPackage {
-    #[serde(rename = "Dir")]
-    dir: String,
-    #[serde(rename = "ImportPath")]
-    import_path: String,
-    #[serde(rename = "Name")]
-    name: String,
-    #[serde(default, rename = "GoFiles")]
-    go_files: Vec<String>,
-    #[serde(default, rename = "CgoFiles")]
-    cgo_files: Vec<String>,
-    #[serde(default, rename = "IgnoredGoFiles")]
-    ignored_go_files: Vec<String>,
-    #[serde(rename = "Module")]
-    module: Option<GoListModule>,
-    #[serde(default, rename = "Incomplete")]
-    incomplete: bool,
-    #[serde(rename = "Error")]
-    error: Option<GoListError>,
-}
-
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
-struct GoListModule {
-    #[serde(rename = "Path")]
-    path: String,
-    #[serde(default, rename = "Version")]
-    version: String,
-    #[serde(rename = "Dir")]
-    dir: String,
-    #[serde(rename = "GoMod")]
-    go_mod: String,
-    #[serde(default, rename = "Main")]
-    main: bool,
-}
-
-#[derive(Deserialize, Serialize)]
-struct GoListError {
-    #[serde(rename = "Err")]
-    message: String,
-}
-
 struct GoPackageContext<'a> {
     root: &'a Path,
     inventory: &'a IntentionalBoundaryRepositoryInventory,
@@ -105,20 +65,6 @@ struct GoListVariantLedger<'a> {
     variant: IntentionalBoundaryProjectModelVariant,
     equivalent_variants: Vec<IntentionalBoundaryProjectModelVariant>,
     module_identity: Option<&'a GoListModule>,
-}
-
-fn canonical_go_list_projection(stdout: &str) -> Result<Vec<Vec<u8>>, String> {
-    let mut packages = serde_json::Deserializer::from_str(stdout)
-        .into_iter::<GoListPackage>()
-        .map(|package| {
-            let package = package
-                .map_err(|error| format!("failed to parse concatenated go list JSON: {error}"))?;
-            serde_json::to_vec(&package)
-                .map_err(|error| format!("failed to normalize go list JSON: {error}"))
-        })
-        .collect::<Result<Vec<_>, String>>()?;
-    packages.sort();
-    Ok(packages)
 }
 
 pub fn parse_intentional_boundary_go_list(
@@ -198,10 +144,8 @@ fn parse_intentional_boundary_go_list_with_equivalents(
     };
     let mut targets = Vec::new();
     let mut import_paths = BTreeSet::new();
-    let packages = serde_json::Deserializer::from_slice(stdout).into_iter::<GoListPackage>();
-    for package in packages {
-        let package = package
-            .map_err(|error| format!("failed to parse concatenated go list JSON: {error}"))?;
+    for package in parse_go_list_packages(stdout) {
+        let package = package?;
         if package.incomplete || package.error.is_some() {
             let detail = package.error.map_or_else(
                 || "package was marked incomplete".to_string(),

@@ -1349,6 +1349,21 @@ fn rejects_incomplete_or_malformed_go_project_models() {
     .unwrap_err();
     assert!(error.contains("incomplete"));
 
+    let rejected_with_tail = format!("{}{{", serde_json::to_string(&package).unwrap());
+    let error = parse_intentional_boundary_go_list(
+        root.path(),
+        &inventory,
+        "go.mod",
+        &"d".repeat(64),
+        go_variant(),
+        rejected_with_tail.as_bytes(),
+    )
+    .unwrap_err();
+    assert!(error.contains("incomplete"));
+    assert!(!error.contains("failed to parse"));
+    assert!(canonical_go_list_projection(&rejected_with_tail).is_err());
+    assert!(runtime::go_list_context_is_valid(&rejected_with_tail).is_err());
+
     let error = parse_intentional_boundary_go_list(
         root.path(),
         &inventory,

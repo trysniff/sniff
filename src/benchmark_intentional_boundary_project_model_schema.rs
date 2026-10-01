@@ -1,4 +1,8 @@
 use super::{IntentionalBoundaryManifestDeclarationKind, IntentionalBoundaryManifestTarget};
+pub use crate::compiler_go_model::{
+    GoCompilerArchitecture as IntentionalBoundaryProjectModelGoArchitecture,
+    GoCompilerQuery as IntentionalBoundaryProjectModelGoQuery,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -99,23 +103,6 @@ pub enum IntentionalBoundaryProjectModelVariant {
         projects: Vec<IntentionalBoundaryProjectModelTypeScriptProject>,
         selected_source_repository_paths: Vec<String>,
         ignored_source_repository_paths: Vec<String>,
-    },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum IntentionalBoundaryProjectModelGoQuery {
-    ModulePackages,
-    StandaloneSource { source_repository_path: String },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum IntentionalBoundaryProjectModelGoArchitecture {
-    Default,
-    Explicit {
-        environment_variable: String,
-        value: String,
     },
 }
 
