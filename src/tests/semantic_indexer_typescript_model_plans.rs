@@ -2,6 +2,14 @@ use super::super::typescript_model_output::pinned_compiler_version;
 use super::*;
 use serde_json::{Value, json};
 
+fn bindings(project_model: &str) -> CompilerInputBindings<'_> {
+    CompilerInputBindings {
+        project_model,
+        runtime: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        installation: "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    }
+}
+
 fn output() -> Value {
     json!({
         "schemaVersion": 2,
@@ -25,7 +33,7 @@ fn plans(value: &Value) -> Result<Vec<SemanticIndexerVariantPlan>, String> {
         &["tsconfig.json".to_string()],
         &["src/main.ts".to_string()],
         &"a".repeat(64),
-        &"b".repeat(64),
+        &bindings(&"b".repeat(64)),
         |_| Ok(()),
     )
 }
@@ -51,7 +59,7 @@ fn configured_world_is_qualified_and_bound_to_source_and_runtime() {
         &["tsconfig.json".to_string()],
         &["src/main.ts".to_string()],
         &"c".repeat(64),
-        &"b".repeat(64),
+        &bindings(&"b".repeat(64)),
         |_| Ok(()),
     )
     .unwrap();
@@ -62,6 +70,40 @@ fn configured_world_is_qualified_and_bound_to_source_and_runtime() {
         result[0].identity,
         plans(&options_changed).unwrap()[0].identity
     );
+}
+
+#[test]
+fn execution_runtime_and_installation_are_independently_bound_to_world_identity() {
+    let value = output();
+    let original = plans(&value).unwrap();
+    assert_eq!(
+        original[0].dimensions["compiler_runtime_sha256"],
+        "c".repeat(64)
+    );
+    assert_eq!(
+        original[0].dimensions["compiler_installation_sha256"],
+        "d".repeat(64)
+    );
+    for change_runtime in [false, true] {
+        let mut changed =
+            bindings("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+        if change_runtime {
+            changed.runtime = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+        } else {
+            changed.installation =
+                "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+        }
+        let generated = plans_from_output(
+            &serde_json::to_vec(&value).unwrap(),
+            &["tsconfig.json".into()],
+            &["src/main.ts".into()],
+            &"a".repeat(64),
+            &changed,
+            |_| Ok(()),
+        )
+        .unwrap();
+        assert_ne!(original[0].identity, generated[0].identity);
+    }
 }
 
 #[test]
@@ -130,7 +172,7 @@ fn config_reads_must_exist_and_cover_discovered_configurations() {
         ],
         &["src/main.ts".to_string()],
         &"a".repeat(64),
-        &"b".repeat(64),
+        &bindings(&"b".repeat(64)),
         |_| Ok(()),
     )
     .unwrap_err();
@@ -140,7 +182,7 @@ fn config_reads_must_exist_and_cover_discovered_configurations() {
         &["tsconfig.json".to_string()],
         &["src/main.ts".to_string()],
         &"a".repeat(64),
-        &"b".repeat(64),
+        &bindings(&"b".repeat(64)),
         |path| {
             if path == "tsconfig.json" {
                 Err("missing config".to_string())
@@ -167,7 +209,7 @@ fn compiler_inferred_project_is_exact_and_not_a_failed_config_replacement() {
         &[],
         &["src/main.ts".to_string()],
         &"a".repeat(64),
-        &"b".repeat(64),
+        &bindings(&"b".repeat(64)),
         |_| Ok(()),
     )
     .unwrap();
@@ -204,7 +246,7 @@ fn duplicate_worlds_and_unrelated_partial_scan_worlds_are_handled_explicitly() {
             ],
             &["src/main.ts".to_string()],
             &"a".repeat(64),
-            &"b".repeat(64),
+            &bindings(&"b".repeat(64)),
             |_| Ok(())
         )
         .unwrap()

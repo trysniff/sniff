@@ -393,8 +393,13 @@ Normal JavaScript/TypeScript scans discover compiler worlds from conventional
 `tsconfig`/`jsconfig` roots and follow compiler project references. Loose sources
 use explicitly identified compiler-inferred contexts. This does not prove every
 custom build-manifest configuration; the context records its discovery scope.
-Invalid discovery fails the scan instead of using unqualified indexing. After a
-pinned provider contract changes, refresh it with
+Invalid discovery fails the scan instead of using unqualified indexing.
+After a normal JavaScript/TypeScript census, indexing binds the prepared Node image and
+pinned provider installation to that census. Source or execution-input changes
+reject indexing or checkpoint reuse; input probes do not stage files in the
+source repository. Older census plans missing these commitments must be
+rediscovered. This binds the Node executable, not its full native-library closure.
+After a pinned provider contract changes, refresh it with
 `sniff indexers install ./your-repo --force --yes`; old installations are not
 silently upgraded or reused.
 

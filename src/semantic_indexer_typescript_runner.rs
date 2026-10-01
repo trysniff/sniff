@@ -1,6 +1,7 @@
 use super::progress::{
     SemanticProgressScope, SemanticProgressScopeInputs, SemanticProgressStore, SemanticProgressUnit,
 };
+use super::typescript_inputs;
 use super::*;
 use serde::Serialize;
 
@@ -27,6 +28,8 @@ pub(super) async fn run_typescript_variants(
         ));
     }
     validate_variant_progress_directories(spec, context.progress_root, plans)?;
+    let required_inputs = typescript_inputs::required(plans)
+        .map_err(|detail| typescript_inputs::input_failure(spec, detail))?;
     let progress_identity = context
         .progress_root
         .map(|_| prepare_progress_identity(context, spec, installed))
@@ -52,6 +55,18 @@ pub(super) async fn run_typescript_variants(
                 )
             })?;
         let unit = progress_unit(spec, plan)?;
+        let before = typescript_inputs::observe(context, spec, installed)?;
+        if progress_identity
+            .as_ref()
+            .is_some_and(|identity| identity.runtime_sha256 != before.runtime)
+        {
+            return Err(typescript_inputs::input_failure(
+                spec,
+                "TypeScript runtime changed since semantic progress scope was prepared",
+            ));
+        }
+        typescript_inputs::verify(required_inputs.as_ref(), &before)
+            .map_err(|detail| typescript_inputs::input_failure(spec, detail))?;
         let progress = match (context.progress_root, progress_identity.as_ref()) {
             (Some(root), Some(identity)) => Some(open_variant_progress(
                 root, spec, installed, plan, &unit, identity,
@@ -64,7 +79,7 @@ pub(super) async fn run_typescript_variants(
                 ));
             }
         };
-        let index = run_or_resume_variant(
+        let result = run_or_resume_variant(
             context,
             spec,
             installed,
@@ -73,7 +88,23 @@ pub(super) async fn run_typescript_variants(
             progress.as_ref(),
             &unit,
         )
-        .await?;
+        .await;
+        let integrity = typescript_inputs::observe(context, spec, installed).and_then(|after| {
+            typescript_inputs::verify(Some(&before), &after)
+                .map_err(|detail| typescript_inputs::input_failure(spec, detail))
+        });
+        let (index, process) = finish_variant(result, integrity)?;
+        if let Some(progress) = &progress
+            && let Some(process) = process
+        {
+            progress
+                .publish(&unit, context.root, &index)
+                .map_err(|detail| {
+                    let mut failure = typescript_progress_failure(spec, detail);
+                    failure.process = Some(Box::new(process));
+                    failure
+                })?;
+        }
         selected_union.extend(plan.selected_documents.iter().cloned());
         if variants
             .insert(
@@ -117,14 +148,15 @@ async fn run_or_resume_variant(
     selected_files: &[FileRecord],
     progress: Option<&SemanticProgressStore>,
     unit: &SemanticProgressUnit,
-) -> Result<SemanticIndex, SemanticIndexerRunFailure> {
+) -> Result<(SemanticIndex, Option<SemanticIndexerProcessEvidence>), SemanticIndexerRunFailure> {
     let expected_languages = expected_languages(context, spec, selected_files)?;
     if let Some(progress) = progress
         && let Some(index) = progress
             .load(unit, context.root)
             .map_err(|detail| typescript_progress_failure(spec, detail))?
     {
-        return validate_variant_index(context, spec, plan, selected_files, index, None);
+        return validate_variant_index(context, spec, plan, selected_files, index, None)
+            .map(|index| (index, None));
     }
     let process = match run_one(
         spec,
@@ -142,6 +174,7 @@ async fn run_or_resume_variant(
         }
     };
     let index_path = context.root.join("index.scip");
+    let witness = process.clone();
     let result = crate::semantic_index_scip::ingest_scip_file_with_expected_languages(
         context.root,
         &index_path,
@@ -167,14 +200,27 @@ async fn run_or_resume_variant(
             ),
         )
     });
-    let index = combine_typed_run_and_integrity(result, cleanup)?;
-    if let Some(progress) = progress {
-        progress
-            .publish(unit, context.root, &index)
-            .map_err(|detail| typescript_progress_failure(spec, detail))?;
-    }
-    Ok(index)
+    finish_variant(result.map(|index| (index, Some(witness))), cleanup)
 }
+
+fn finish_variant<T>(
+    result: Result<(T, Option<SemanticIndexerProcessEvidence>), SemanticIndexerRunFailure>,
+    integrity: Result<(), SemanticIndexerRunFailure>,
+) -> Result<(T, Option<SemanticIndexerProcessEvidence>), SemanticIndexerRunFailure> {
+    match (result, integrity) {
+        (Ok((_, process)), Err(mut failure)) => {
+            if failure.process.is_none() {
+                failure.process = process.map(Box::new);
+            }
+            Err(failure)
+        }
+        (result, integrity) => combine_typed_run_and_integrity(result, integrity),
+    }
+}
+
+#[cfg(test)]
+#[path = "tests/semantic_indexer_typescript_input_boundary.rs"]
+mod input_boundary_tests;
 
 fn validate_variant_index(
     context: &RequiredIndexerRunContext<'_>,
@@ -254,22 +300,7 @@ fn prepare_progress_identity(
     spec: PinnedIndexer,
     installed: &InstalledIndexer,
 ) -> Result<TypeScriptProgressIdentity, SemanticIndexerRunFailure> {
-    let node = resolve_runtime("node").map_err(|detail| {
-        indexer_failure(
-            spec,
-            SemanticIndexerRunFailureKind::InfrastructureUnavailable,
-            SemanticIndexerRunPhase::Preparation,
-            detail,
-        )
-    })?;
-    let runtime_files = runtime_file_identities(&[node])
-        .map_err(|detail| typescript_progress_failure(spec, detail))?;
-    let runtime_files = runtime_files
-        .into_iter()
-        .map(|identity| (identity.length, identity.sha256))
-        .collect::<Vec<_>>();
-    let runtime_sha256 = canonical_sha256(&(spec.version, &installed.tree_sha256, runtime_files))
-        .map_err(|detail| typescript_progress_failure(spec, detail))?;
+    let runtime_sha256 = typescript_inputs::observe(context, spec, installed)?.runtime;
     let file_scope_sha256 =
         file_scope_sha256(context.root, context.files, context.required_documents)
             .map_err(|detail| typescript_progress_failure(spec, detail))?;

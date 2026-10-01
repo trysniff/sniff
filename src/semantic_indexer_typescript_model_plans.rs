@@ -1,3 +1,4 @@
+use super::typescript_inputs::CompilerInputBindings;
 use super::typescript_model_output::{CompilerWorld, parse_output};
 use crate::semantic_index::{
     RepositoryPath, SemanticIndexerCompilerQuery, SemanticIndexerVariantPlan, SemanticVariantId,
@@ -10,10 +11,15 @@ pub(super) fn plans_from_output(
     configs: &[String],
     sources: &[String],
     repository_sha256: &str,
-    runtime_sha256: &str,
+    inputs: &CompilerInputBindings<'_>,
     mut require_file: impl FnMut(&str) -> Result<(), String>,
 ) -> Result<Vec<SemanticIndexerVariantPlan>, String> {
-    for digest in [repository_sha256, runtime_sha256] {
+    for digest in [
+        repository_sha256,
+        inputs.project_model,
+        inputs.runtime,
+        inputs.installation,
+    ] {
         if digest.len() != 64
             || !digest
                 .bytes()
@@ -57,9 +63,11 @@ pub(super) fn plans_from_output(
             "{:x}",
             Sha256::digest(
                 serde_json::to_vec(&(
-                    "sniff-normal-typescript-project-world-v1",
+                    "sniff-normal-typescript-project-world-v2",
                     repository_sha256,
-                    runtime_sha256,
+                    inputs.project_model,
+                    inputs.runtime,
+                    inputs.installation,
                     &output.typescript_version,
                     &world,
                 ))
@@ -90,7 +98,15 @@ pub(super) fn plans_from_output(
                 ),
                 (
                     "project_model_runtime_sha256".to_string(),
-                    runtime_sha256.to_string(),
+                    inputs.project_model.to_string(),
+                ),
+                (
+                    "compiler_runtime_sha256".to_string(),
+                    inputs.runtime.to_string(),
+                ),
+                (
+                    "compiler_installation_sha256".to_string(),
+                    inputs.installation.to_string(),
                 ),
             ]),
             environment: BTreeMap::new(),

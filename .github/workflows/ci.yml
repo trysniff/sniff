@@ -127,6 +127,9 @@ jobs:
           cargo test --lib --locked \
             semantic_indexer_runner::typescript_model::tests::normal_scan_ \
             -- --ignored --test-threads=1 --nocapture
+          cargo test --lib --locked \
+            semantic_indexer_runner::typescript_runner::input_boundary_tests::normal_scan_rejects_stale_or_removed_census_inputs_before_worker_or_progress_reuse \
+            -- --exact --ignored --test-threads=1 --nocapture
       - name: Verify Go preparation failures at native executor boundaries
         if: matrix.fixture == 'go'
         shell: bash

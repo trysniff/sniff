@@ -167,9 +167,18 @@ fn malformed_model_output_keeps_successful_process_evidence() {
         let expected = process_evidence(output.clone());
         let output = validate_execution(spec(), Ok(output), [Ok(()), Ok(()), Ok(())]).unwrap();
         let failure = validate_output(spec(), output, |stdout| {
-            plans_from_output(stdout, &[], &[], &"a".repeat(64), &"b".repeat(64), |_| {
-                panic!("empty configuration and source scopes must not request files")
-            })
+            plans_from_output(
+                stdout,
+                &[],
+                &[],
+                &"a".repeat(64),
+                &CompilerInputBindings {
+                    project_model: &"b".repeat(64),
+                    runtime: &"c".repeat(64),
+                    installation: &"d".repeat(64),
+                },
+                |_| panic!("empty configuration and source scopes must not request files"),
+            )
         })
         .unwrap_err();
         assert_eq!(failure.phase, SemanticIndexerRunPhase::OutputValidation);
