@@ -49,6 +49,41 @@ fn discovery_commitment_rejects_compiler_substitution_between_stages() {
 }
 
 #[test]
+fn sdk_binding_cannot_be_omitted_from_normal_or_mixed_worlds() {
+    let legacy = variant_plan("legacy", &["main.go"], &[]);
+    assert_eq!(
+        discovered_sdk_sha256(std::slice::from_ref(&legacy)).unwrap(),
+        None
+    );
+    let mut normal = legacy.clone();
+    normal
+        .dimensions
+        .insert("project_model_census_sha256".to_string(), digest('a'));
+    assert!(discovered_sdk_sha256(std::slice::from_ref(&normal)).is_err());
+    normal
+        .dimensions
+        .insert("compiler_sdk_sha256".to_string(), digest('b'));
+    assert_eq!(
+        discovered_sdk_sha256(std::slice::from_ref(&normal)).unwrap(),
+        Some(digest('b').as_str())
+    );
+    assert!(discovered_sdk_sha256(&[normal.clone(), legacy]).is_err());
+    let mut changed = normal.clone();
+    changed
+        .dimensions
+        .insert("compiler_sdk_sha256".to_string(), digest('c'));
+    assert!(discovered_sdk_sha256(&[normal.clone(), changed]).is_err());
+    normal
+        .dimensions
+        .insert("compiler_sdk_sha256".to_string(), "unknown".to_string());
+    assert!(
+        discovered_sdk_sha256(&[normal])
+            .unwrap_err()
+            .contains("invalid")
+    );
+}
+
+#[test]
 fn qualified_normal_world_rejects_unparsed_neighbor_source_mutation() {
     let root = tempfile::tempdir().unwrap();
     fs::write(

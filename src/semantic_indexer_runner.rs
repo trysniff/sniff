@@ -224,6 +224,8 @@ mod go_model_scope;
 mod go_project;
 #[path = "semantic_indexer_go_runner.rs"]
 mod go_runner;
+#[path = "semantic_indexer_go_sdk.rs"]
+mod go_sdk;
 #[path = "semantic_indexer_go_shards.rs"]
 mod go_shards;
 #[path = "semantic_indexer_gradle_preparation.rs"]

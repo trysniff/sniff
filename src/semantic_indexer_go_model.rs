@@ -56,6 +56,9 @@ async fn discover_at(
         super::go_runner::runtime_identity_sha256(spec, root, installed).map_err(|detail| {
             model_failure(spec, SemanticIndexerRunPhase::IntegrityVerification, detail)
         })?;
+    let sdk_before = super::go_sdk::identity_sha256(spec, root, installed).map_err(|detail| {
+        model_failure(spec, SemanticIndexerRunPhase::IntegrityVerification, detail)
+    })?;
     let runtime = ModelRuntime {
         spec,
         root,
@@ -67,6 +70,9 @@ async fn discover_at(
         context.store.verify(spec)?;
         if super::go_runner::runtime_identity_sha256(spec, root, installed)? != runtime_before {
             return Err("Go compiler runtime changed during project discovery".to_string());
+        }
+        if super::go_sdk::identity_sha256(spec, root, installed)? != sdk_before {
+            return Err("Go SDK inputs changed during project discovery".to_string());
         }
         Ok(())
     })()
@@ -91,6 +97,7 @@ async fn discover_at(
         context.repository_content_sha256,
         &runtime_sha256,
         &runtime_before,
+        &sdk_before,
     )
     .map_err(|detail| model_failure(spec, SemanticIndexerRunPhase::OutputValidation, detail))
 }

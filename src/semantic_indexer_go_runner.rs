@@ -176,6 +176,7 @@ async fn run_required_go_indexer_variants_with_limits(
     })?;
     let run_result = async {
         let prepared = prepare_go_recovery_scope(inputs, &execution_root)?;
+        verify_discovered_sdk_inputs(inputs, &execution_root, plans)?;
         prepare_go_variant_dependency_caches(inputs.spec, &execution_root, inputs.installed, plans)
             .await?;
         let mut variants = BTreeMap::new();
@@ -222,6 +223,10 @@ async fn run_required_go_indexer_variants_with_limits(
         .iter()
         .try_for_each(|plan| verify_discovered_world_inputs(inputs, &execution_root, plan));
     let run_result = combine_typed_run_and_integrity(run_result, integrity_result);
+    let run_result = combine_typed_run_and_integrity(
+        run_result,
+        verify_discovered_sdk_inputs(inputs, &execution_root, plans),
+    );
     let cleanup_result = inputs.recovery.finish_indexer_run().map_err(|detail| {
         indexer_failure(
             inputs.spec,
@@ -243,6 +248,58 @@ fn verify_discovered_world_result<T>(
         result,
         verify_discovered_world_inputs(inputs, execution_root, plan),
     )
+}
+
+fn verify_discovered_sdk_inputs(
+    inputs: &GoIndexerRunInputs<'_>,
+    execution_root: &Path,
+    plans: &[SemanticIndexerVariantPlan],
+) -> Result<(), SemanticIndexerRunFailure> {
+    let expected =
+        discovered_sdk_sha256(plans).map_err(|detail| go_integrity_failure(inputs.spec, detail))?;
+    let Some(expected) = expected else {
+        return Ok(());
+    };
+    let actual = super::go_sdk::identity_sha256(inputs.spec, execution_root, inputs.installed)
+        .map_err(|detail| go_integrity_failure(inputs.spec, detail))?;
+    require_discovery_commitment("SDK inputs", expected, &actual)
+        .map_err(|detail| go_integrity_failure(inputs.spec, detail))
+}
+
+fn discovered_sdk_sha256(plans: &[SemanticIndexerVariantPlan]) -> Result<Option<&str>, String> {
+    let identities = plans
+        .iter()
+        .filter_map(|plan| {
+            plan.dimensions
+                .get("compiler_sdk_sha256")
+                .map(String::as_str)
+        })
+        .collect::<BTreeSet<_>>();
+    let has_normal_census = plans
+        .iter()
+        .any(|plan| plan.dimensions.contains_key("project_model_census_sha256"));
+    if identities.is_empty() && !has_normal_census {
+        return Ok(None);
+    }
+    if identities.len() != 1
+        || plans
+            .iter()
+            .any(|plan| !plan.dimensions.contains_key("compiler_sdk_sha256"))
+    {
+        return Err("Go compiler worlds disagree on SDK input binding".to_string());
+    }
+    let expected = identities
+        .first()
+        .copied()
+        .ok_or_else(|| "Go SDK input commitment is missing".to_string())?;
+    if expected.len() != 64
+        || !expected
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+    {
+        return Err("Go SDK input commitment is invalid".to_string());
+    }
+    Ok(Some(expected))
 }
 
 fn verify_discovered_world_inputs(

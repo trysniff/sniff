@@ -92,6 +92,7 @@ fn plans(
         &"a".repeat(64),
         &"b".repeat(64),
         &"c".repeat(64),
+        &"d".repeat(64),
     )
 }
 
@@ -113,6 +114,35 @@ fn source_equivalent_architecture_contexts_remain_distinct_worlds() {
     assert_eq!(plans[0].selected_documents, plans[1].selected_documents);
     assert_eq!(plans[0].environment, plans[1].environment);
     assert_ne!(plans[0].identity, plans[1].identity);
+}
+
+#[test]
+fn normal_world_identity_binds_sdk_inputs_and_requires_a_valid_digest() {
+    let root = fixture();
+    let (scope, census) = census(
+        root.path(),
+        vec![context()],
+        vec![output(&["main.go"], &[], &[])],
+    );
+    let required = BTreeSet::from([RepositoryPath("main.go".to_string())]);
+    let resolve = |sdk: &str| {
+        plans_from_census(
+            &census,
+            &scope,
+            &required,
+            &"a".repeat(64),
+            &"b".repeat(64),
+            &"c".repeat(64),
+            sdk,
+        )
+    };
+    let first = resolve(&"d".repeat(64)).unwrap().remove(0);
+    let second = resolve(&"e".repeat(64)).unwrap().remove(0);
+    assert_eq!(first.dimensions["compiler_sdk_sha256"], "d".repeat(64));
+    assert_ne!(first.identity, second.identity);
+    for invalid in ["", "unknown", &"D".repeat(64), &"g".repeat(64)] {
+        assert!(resolve(invalid).unwrap_err().contains("provenance digest"));
+    }
 }
 
 #[test]
