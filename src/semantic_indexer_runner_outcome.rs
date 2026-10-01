@@ -120,6 +120,9 @@ pub(super) fn combine_typed_run_and_integrity<T>(
         (Ok(value), Ok(())) => Ok(value),
         (Err(error), Ok(())) | (Ok(_), Err(error)) => Err(error),
         (Err(run_error), Err(mut integrity_error)) => {
+            if integrity_error.process.is_none() {
+                integrity_error.process = run_error.process;
+            }
             integrity_error.detail = format!(
                 "{}; additionally, {}",
                 run_error.detail, integrity_error.detail
@@ -128,3 +131,7 @@ pub(super) fn combine_typed_run_and_integrity<T>(
         }
     }
 }
+
+#[cfg(test)]
+#[path = "tests/semantic_indexer_runner_outcome.rs"]
+mod tests;
