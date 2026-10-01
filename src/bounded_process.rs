@@ -116,9 +116,15 @@ fn run_with_optional_input(
     let (stderr, stderr_truncated, stderr_sha256, stderr_byte_count) =
         join_reader(stderr_reader, "stderr")?;
     if let Some(writer) = stdin_writer {
-        writer
+        let result = writer
             .join()
-            .map_err(|_| io::Error::other("bounded child stdin writer panicked"))??;
+            .map_err(|_| io::Error::other("bounded child stdin writer panicked"))?;
+        if let Err(error) = result {
+            // Killing a timed-out child closes its stdin; retain the deadline evidence.
+            if !timed_out || error.kind() != io::ErrorKind::BrokenPipe {
+                return Err(error);
+            }
+        }
     }
     Ok(BoundedOutput {
         status,
@@ -284,124 +290,5 @@ fn terminate_tree(child: &mut Child) -> io::Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn explicit_output_limit_reports_truncation() {
-        #[cfg(windows)]
-        let mut command = {
-            let mut command = Command::new("powershell.exe");
-            command.args([
-                "-NoProfile",
-                "-Command",
-                "[Console]::Out.Write('0123456789')",
-            ]);
-            command
-        };
-        #[cfg(not(windows))]
-        let mut command = {
-            let mut command = Command::new("sh");
-            command.args(["-c", "printf 0123456789"]);
-            command
-        };
-
-        let output = run_with_output_limit(&mut command, Duration::from_secs(5), 4).unwrap();
-
-        assert_eq!(output.stdout, b"0123");
-        assert_eq!(
-            output.stdout_sha256,
-            "84d89877f0d4041efb6bf91a16f0248f2fd573e6af05c19f96bedb9f882f7882"
-        );
-        assert_eq!(
-            output.stderr_sha256,
-            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-        );
-        assert!(output.stdout_truncated);
-        assert!(!output.stderr_truncated);
-    }
-
-    #[test]
-    fn bounded_input_is_written_without_deadlocking_large_output() {
-        let input = vec![b'x'; 2 * 1024 * 1024];
-        #[cfg(windows)]
-        let mut command = {
-            let mut command = Command::new("powershell.exe");
-            command.args([
-                "-NoProfile",
-                "-Command",
-                "[Console]::OpenStandardInput().CopyTo([Console]::OpenStandardOutput())",
-            ]);
-            command
-        };
-        #[cfg(not(windows))]
-        let mut command = Command::new("cat");
-
-        let output = run_with_input_and_output_limit(
-            &mut command,
-            &input,
-            Duration::from_secs(10),
-            input.len(),
-        )
-        .unwrap();
-
-        assert!(output.status.success());
-        assert_eq!(output.stdout, input);
-        assert!(!output.stdout_truncated);
-    }
-
-    #[test]
-    fn deadline_terminates_the_complete_child_tree() {
-        #[cfg(windows)]
-        let mut command = {
-            let mut command = Command::new("powershell.exe");
-            command.args([
-                "-NoProfile",
-                "-Command",
-                "$p=Start-Process powershell.exe -ArgumentList '-NoProfile','-Command','Start-Sleep -Seconds 30' -PassThru; [Console]::Out.WriteLine($p.Id); Start-Sleep -Seconds 30",
-            ]);
-            command
-        };
-        #[cfg(unix)]
-        let (mut command, survivor_marker) = {
-            let directory = tempfile::tempdir().unwrap();
-            let marker = directory.path().join("descendant-survived");
-            let mut command = Command::new("sh");
-            command
-                .arg("-c")
-                .arg("(sleep 30; printf survived > \"$1\") & echo $!; wait")
-                .arg("bounded-process-test")
-                .arg(&marker);
-            (command, (directory, marker))
-        };
-
-        // Process startup can exceed two seconds under the fully parallel suite.
-        let output = run(&mut command, Duration::from_secs(10)).unwrap();
-        assert!(output.timed_out);
-        let descendant = String::from_utf8(output.stdout)
-            .unwrap()
-            .trim()
-            .parse::<u32>()
-            .unwrap();
-        #[cfg(windows)]
-        {
-            let status = Command::new("powershell.exe")
-                .args([
-                    "-NoProfile",
-                    "-Command",
-                    &format!(
-                        "if(Get-Process -Id {descendant} -ErrorAction SilentlyContinue){{exit 1}}"
-                    ),
-                ])
-                .status()
-                .unwrap();
-            assert!(status.success());
-        }
-        #[cfg(unix)]
-        {
-            let _ = descendant;
-            thread::sleep(Duration::from_millis(1_200));
-            assert!(!survivor_marker.1.exists());
-        }
-    }
-}
+#[path = "tests/bounded_process.rs"]
+mod tests;
