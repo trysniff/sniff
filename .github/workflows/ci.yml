@@ -51,6 +51,8 @@ jobs:
           echo "9cfca885c88ce7f8d2c7cc01114b6bc129acd5e2dfa432ef3b255858a51b65a9  $archive" \
             | sha256sum --check
           python3 tools/ci/extract_blind_source_seal.py "$archive" "$RUNNER_TEMP/extracted"
+      - name: Verify complete native test-target discovery and exit handling
+        run: python3 tools/ci/test_run_native_unit_tests.py
 
   test:
     name: test-${{ matrix.os }}
@@ -173,22 +175,8 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          cargo test --lib --bins --locked
-          $tests = @(
-            'callee_context',
-            'durable_runtime',
-            'file_verdicts_merge',
-            'gold',
-            'llm_impl',
-            'preflight_cli',
-            'ref_count_flags',
-            'semantic_gold',
-            'sniff_graph_regressions'
-          )
-          foreach ($test in $tests) {
-            cargo test --test $test --locked -- --test-threads=1
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          }
+          python tools/ci/run_native_unit_tests.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Run cross-language Windows dogfood
         if: runner.os == 'Windows'
         shell: pwsh
@@ -368,7 +356,15 @@ jobs:
   verify:
     name: verify
     if: always()
-    needs: [format, clippy, test, msrv, package, semantic-indexers, historical-v2-command-recovery]
+    needs:
+      - format
+      - clippy
+      - test
+      - msrv
+      - package
+      - semantic-indexers
+      - historical-v2-command-recovery
+      - blind-prior-archive-preflight
     runs-on: ubuntu-latest
     steps:
       - name: Require every CI job to pass
@@ -381,3 +377,4 @@ jobs:
           [[ "${{ needs.package.result }}" == "success" ]]
           [[ "${{ needs.semantic-indexers.result }}" == "success" ]]
           [[ "${{ needs.historical-v2-command-recovery.result }}" == "success" ]]
+          [[ "${{ needs.blind-prior-archive-preflight.result }}" == "success" ]]
