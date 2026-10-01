@@ -9,6 +9,95 @@ const COMMITTED_V2_TEMPORAL_PROOF: &[u8] =
     include_bytes!("../sniffbench/historical-v3-prior-v2-temporal-proof.json");
 
 #[test]
+fn pinned_reader_accepts_exact_limit_and_empty_inputs() {
+    for body in [&b"frame"[..], &b""[..]] {
+        let bytes = read_pinned_bytes(body, body.len() as u64, &sha256(body), "fixture").unwrap();
+        assert_eq!(bytes, body);
+    }
+}
+
+#[test]
+fn pinned_reader_stops_after_one_byte_past_limit() {
+    let mut reader = std::io::Cursor::new(b"frame grew beyond checked metadata");
+    let error = read_pinned_bytes(&mut reader, 5, &sha256(b"frame"), "fixture").unwrap_err();
+    assert!(error.contains("exceeds its read limit"));
+    assert_eq!(reader.position(), 6);
+    assert!(
+        read_pinned_bytes(std::io::repeat(b'x'), 5, &sha256(b"xxxxx"), "fixture")
+            .unwrap_err()
+            .contains("exceeds its read limit")
+    );
+}
+
+#[test]
+fn pinned_reader_rejects_hash_mismatch_and_overflowing_limit() {
+    assert!(
+        read_pinned_bytes(&b"changed"[..], 7, &sha256(b"trusted"), "fixture")
+            .unwrap_err()
+            .contains("changed from the frozen frame run")
+    );
+    let mut reader = std::io::Cursor::new(b"unread");
+    assert!(
+        read_pinned_bytes(&mut reader, u64::MAX, &sha256(b"unread"), "fixture")
+            .unwrap_err()
+            .contains("read limit is invalid")
+    );
+    assert_eq!(reader.position(), 0);
+}
+
+#[test]
+fn pinned_reader_preserves_io_failure_as_error() {
+    struct BrokenReader;
+    impl std::io::Read for BrokenReader {
+        fn read(&mut self, _buffer: &mut [u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::other("fixture read failed"))
+        }
+    }
+    let error = read_pinned_bytes(BrokenReader, 5, &sha256(b"frame"), "fixture").unwrap_err();
+    assert!(error.contains("failed to read historical-v2 fixture"));
+    assert!(error.contains("fixture read failed"));
+}
+
+#[test]
+fn pinned_file_rejects_relative_directory_oversized_and_changed_inputs() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("frame.json");
+    fs::write(&path, b"frame").unwrap();
+    let hash = sha256(b"frame");
+    assert_eq!(
+        read_pinned_file(&path, 5, &hash, "fixture").unwrap(),
+        b"frame"
+    );
+    assert!(read_pinned_file(Path::new("relative.json"), 5, &hash, "fixture").is_err());
+    assert!(read_pinned_file(root.path(), 5, &hash, "fixture").is_err());
+    assert!(read_pinned_file(&path, 4, &hash, "fixture").is_err());
+    fs::write(&path, b"other").unwrap();
+    assert!(
+        read_pinned_file(&path, 5, &hash, "fixture")
+            .unwrap_err()
+            .contains("changed from the frozen frame run")
+    );
+}
+
+#[test]
+#[cfg(any(unix, windows))]
+fn pinned_file_rejects_symlink_even_with_matching_bytes() {
+    let root = tempfile::tempdir().unwrap();
+    let target = root.path().join("trusted.json");
+    let link = root.path().join("alias.json");
+    fs::write(&target, b"frame").unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&target, &link).unwrap();
+    #[cfg(windows)]
+    std::os::windows::fs::symlink_file(&target, &link).unwrap();
+    assert!(
+        read_pinned_file(&link, 5, &sha256(b"frame"), "fixture")
+            .unwrap_err()
+            .contains("not a plain bounded file")
+    );
+}
+
+#[test]
 fn committed_v2_temporal_proof_has_stable_bytes_and_commitments() {
     assert_eq!(
         sha256(COMMITTED_V2_TEMPORAL_PROOF),

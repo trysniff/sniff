@@ -15,6 +15,7 @@ use sha2::{Digest, Sha256};
 #[cfg(any(feature = "sniffbench-frame", test))]
 use std::collections::BTreeMap;
 use std::fs;
+use std::io::Read;
 use std::path::Path;
 
 const PROTOCOL_FILE_SHA256: &str =
@@ -319,9 +320,57 @@ fn read_pinned_file(
     if !metadata.is_file() || metadata.file_type().is_symlink() || metadata.len() > limit {
         return Err(format!("historical-v2 {label} is not a plain bounded file"));
     }
-    let bytes =
-        fs::read(path).map_err(|error| format!("failed to read historical-v2 {label}: {error}"))?;
-    if bytes.len() as u64 > limit || sha256(&bytes) != expected_sha256 {
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    let file = options
+        .open(path)
+        .map_err(|error| format!("failed to open historical-v2 {label}: {error}"))?;
+    let opened = file
+        .metadata()
+        .map_err(|error| format!("failed to inspect opened historical-v2 {label}: {error}"))?;
+    if !opened.is_file() || opened.file_type().is_symlink() || opened.len() > limit {
+        return Err(format!("historical-v2 {label} is not a plain bounded file"));
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
+        if opened.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return Err(format!("historical-v2 {label} is not a plain bounded file"));
+        }
+    }
+    read_pinned_bytes(file, limit, expected_sha256, label)
+}
+
+fn read_pinned_bytes(
+    reader: impl Read,
+    limit: u64,
+    expected_sha256: &str,
+    label: &str,
+) -> Result<Vec<u8>, String> {
+    let read_limit = limit
+        .checked_add(1)
+        .ok_or_else(|| format!("historical-v2 {label} read limit is invalid"))?;
+    let mut bytes = Vec::new();
+    reader
+        .take(read_limit)
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("failed to read historical-v2 {label}: {error}"))?;
+    if bytes.len() as u64 > limit {
+        return Err(format!("historical-v2 {label} exceeds its read limit"));
+    }
+    if sha256(&bytes) != expected_sha256 {
         return Err(format!(
             "historical-v2 {label} changed from the frozen frame run"
         ));
