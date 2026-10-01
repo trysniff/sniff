@@ -210,6 +210,10 @@ pub(crate) fn install_test_semantic_recovery_marker(root: &Path) -> Result<(), S
 mod go_calls;
 #[path = "semantic_indexer_go_commands.rs"]
 mod go_commands;
+#[path = "semantic_indexer_go_dependencies.rs"]
+mod go_dependencies;
+#[path = "semantic_indexer_go_input_tree.rs"]
+mod go_input_tree;
 #[path = "semantic_indexer_go_model.rs"]
 mod go_model;
 #[path = "semantic_indexer_go_model_commands.rs"]
@@ -3114,11 +3118,7 @@ fn go_sandbox_environment(root: &Path, go_root: &Path) -> Vec<(String, String)> 
         ("GOPATH".to_string(), private_go_root.clone()),
         (
             "GOMODCACHE".to_string(),
-            format!(
-                "{private_go_root}{}pkg{}mod",
-                std::path::MAIN_SEPARATOR,
-                std::path::MAIN_SEPARATOR
-            ),
+            sandbox_repository_argument(root, &go_module_cache_root(root).to_string_lossy()),
         ),
         (
             "GOCACHE".to_string(),
@@ -3138,6 +3138,13 @@ fn private_indexer_directory_argument(root: &Path, name: &str) -> String {
         root,
         &root.join(INDEXER_TEMP_DIR).join(name).to_string_lossy(),
     )
+}
+
+fn go_module_cache_root(root: &Path) -> PathBuf {
+    root.join(INDEXER_TEMP_DIR)
+        .join("go")
+        .join("pkg")
+        .join("mod")
 }
 
 fn private_indexer_jvm_arguments(root: &Path) -> [String; 2] {

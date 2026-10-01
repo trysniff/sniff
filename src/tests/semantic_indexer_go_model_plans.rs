@@ -90,9 +90,12 @@ fn plans(
             .map(|path| RepositoryPath((*path).to_string()))
             .collect(),
         &"a".repeat(64),
-        &"b".repeat(64),
-        &"c".repeat(64),
-        &"d".repeat(64),
+        &CompilerInputBindings {
+            project_model: &"b".repeat(64),
+            executable: &"c".repeat(64),
+            sdk: &"d".repeat(64),
+            dependencies: &"e".repeat(64),
+        },
     )
 }
 
@@ -131,9 +134,12 @@ fn normal_world_identity_binds_sdk_inputs_and_requires_a_valid_digest() {
             &scope,
             &required,
             &"a".repeat(64),
-            &"b".repeat(64),
-            &"c".repeat(64),
-            sdk,
+            &CompilerInputBindings {
+                project_model: &"b".repeat(64),
+                executable: &"c".repeat(64),
+                sdk,
+                dependencies: &"e".repeat(64),
+            },
         )
     };
     let first = resolve(&"d".repeat(64)).unwrap().remove(0);
@@ -169,6 +175,40 @@ fn compiler_tests_refine_production_plans_without_losing_required_coverage() {
         plan.ignored_documents
             .contains(&RepositoryPath("main_test.go".to_string()))
     );
+}
+
+#[test]
+fn normal_world_identity_binds_dependency_contents_and_validates_the_commitment() {
+    let root = fixture();
+    let (scope, census) = census(
+        root.path(),
+        vec![context()],
+        vec![output(&["main.go"], &[], &[])],
+    );
+    let required = BTreeSet::from([RepositoryPath("main.go".to_string())]);
+    let resolve = |dependencies: &str| {
+        plans_from_census(
+            &census,
+            &scope,
+            &required,
+            &"a".repeat(64),
+            &CompilerInputBindings {
+                project_model: &"b".repeat(64),
+                executable: &"c".repeat(64),
+                sdk: &"d".repeat(64),
+                dependencies,
+            },
+        )
+    };
+    let first = resolve(&"e".repeat(64)).unwrap().remove(0);
+    let second = resolve(&"f".repeat(64)).unwrap().remove(0);
+    assert_eq!(
+        first.dimensions["compiler_dependencies_sha256"],
+        "e".repeat(64)
+    );
+    assert_ne!(first.identity, second.identity);
+    assert_eq!(first.selected_documents, second.selected_documents);
+    assert!(resolve("unknown").is_err());
 }
 
 #[test]
@@ -254,6 +294,53 @@ fn malformed_tail_cannot_be_reclassified_as_a_rejected_context() {
         )
         .is_err()
     );
+}
+
+#[test]
+fn dependency_scope_retains_a_neighbor_rejected_in_every_context() {
+    let root = fixture();
+    let (_, mut ledger) = census(
+        root.path(),
+        vec![context()],
+        vec![output(&["main.go"], &[], &[])],
+    );
+    fs::create_dir(root.path().join("neighbor")).unwrap();
+    fs::write(
+        root.path().join("neighbor/go.mod"),
+        "module example.test/neighbor\ngo 1.23\n",
+    )
+    .unwrap();
+    fs::write(root.path().join("neighbor/main.go"), "package neighbor\n").unwrap();
+    let scope = super::super::go_model_scope::discover(root.path()).unwrap();
+    let module = ModuleIdentity {
+        path: "example.test/neighbor".to_string(),
+        project: RepositoryPath("neighbor/go.mod".to_string()),
+    };
+    let rejected = parse_world(root.path(), module.clone(), context(), environment(&context()), &scope.modules[&module.project],
+        &serde_json::json!({"Dir":"/workspace/neighbor", "ImportPath":"example.test/neighbor", "Incomplete":true, "Error":{"Err":"rejected neighbor"}}).to_string()).unwrap();
+    assert!(matches!(rejected.outcome, ContextOutcome::Rejected { .. }));
+    ledger.push(ModuleCensus {
+        module,
+        expected_contexts: vec![context()],
+        worlds: vec![rejected],
+    });
+    let plans = plans(&scope, &ledger, &["main.go"]).unwrap();
+    assert_eq!(plans.len(), 1);
+    assert_eq!(
+        plans[0].compiler_project,
+        Some(RepositoryPath("go.mod".to_string()))
+    );
+    assert_eq!(
+        plans[0].dimensions["compiler_dependency_projects"],
+        r#"["go.mod","neighbor/go.mod"]"#
+    );
+    let roots = super::super::go_runner::dependency_module_roots(
+        super::super::pinned_indexer(super::super::SemanticIndexerKind::Go).unwrap(),
+        root.path(),
+        &plans,
+    )
+    .unwrap();
+    assert_eq!(roots, vec![".", "neighbor"]);
 }
 
 #[test]
