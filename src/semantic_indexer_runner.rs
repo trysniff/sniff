@@ -51,6 +51,9 @@ pub(crate) mod typescript_model_output;
 #[path = "semantic_indexer_typescript_model_plans.rs"]
 mod typescript_model_plans;
 
+#[path = "semantic_indexer_typescript_inputs.rs"]
+mod typescript_inputs;
+
 pub(crate) use recovery::recover_interrupted_semantic_indexing;
 use recovery::{INDEXER_CACHE_DIR, INDEXER_TEMP_DIR, SemanticIndexerRecoveryGuard};
 use typescript_runner::{
@@ -1246,7 +1249,19 @@ async fn run_one_in_recovery_scope(
             spec.display_name
         );
     }
-    let output = run_with_runtime_identity(prepared_command, spec.display_name).await;
+    let output = match typescript_plan {
+        Some(plan) => typescript_inputs::run_worker(prepared_command, spec, installed, plan).await,
+        None => run_with_runtime_identity(prepared_command, spec.display_name)
+            .await
+            .map_err(|detail| {
+                indexer_failure(
+                    spec,
+                    SemanticIndexerRunFailureKind::InfrastructureFailed,
+                    SemanticIndexerRunPhase::Execution,
+                    detail,
+                )
+            }),
+    };
     if std::env::var_os("SNIFF_DEBUG_INDEXERS").is_some() {
         eprintln!(
             "[sniff] semantic indexer process returned: {}",
@@ -1332,14 +1347,7 @@ async fn run_one_in_recovery_scope(
             ),
         ));
     }
-    let output = output.map_err(|detail| {
-        indexer_failure(
-            spec,
-            SemanticIndexerRunFailureKind::InfrastructureFailed,
-            SemanticIndexerRunPhase::Execution,
-            detail,
-        )
-    })?;
+    let output = output?;
     if output.memory_limit_exceeded {
         return Err(indexer_process_failure(
             spec,

@@ -1,4 +1,5 @@
 use super::census::{Inputs, Journal, ModelPart, Request, Role};
+use super::typescript_inputs::{CompilerInputBindings, command_runtime_sha256};
 use super::typescript_model_output::{OUTPUT_SCHEMA_VERSION, is_config_candidate, parse_output};
 use super::typescript_model_plans::plans_from_output;
 use super::*;
@@ -148,6 +149,15 @@ async fn discover_at(
     let identities = runtime_file_identities(&prepared.runtime_files).map_err(|detail| {
         model_failure(spec, SemanticIndexerRunPhase::IntegrityVerification, detail)
     })?;
+    let execution_runtime_sha256 = command_runtime_sha256(
+        spec,
+        installed,
+        Path::new(&prepared.command.program),
+        &identities,
+    )
+    .map_err(|detail| {
+        model_failure(spec, SemanticIndexerRunPhase::IntegrityVerification, detail)
+    })?;
     let runtime_sha256 = format!(
         "{:x}",
         Sha256::digest(
@@ -198,7 +208,11 @@ async fn discover_at(
             &configs,
             &sources,
             context.repository_content_sha256,
-            &runtime_sha256,
+            &CompilerInputBindings {
+                project_model: &runtime_sha256,
+                runtime: &execution_runtime_sha256,
+                installation: &installed.tree_sha256,
+            },
             |path| require_plain_file(root, path),
         )?;
         Ok((plans, parse_output(stdout)?))
