@@ -47,16 +47,10 @@ impl ModelRuntime<'_> {
                 "Go compiler module identity",
             )
             .await?;
-        let module: GoListModule = serde_json::from_str(&output.stdout).map_err(|error| {
-            model_failure(
-                self.spec,
-                SemanticIndexerRunPhase::OutputValidation,
-                error.to_string(),
-            )
-        })?;
-        module_identity(self.root, project, &module).map_err(|detail| {
-            model_failure(self.spec, SemanticIndexerRunPhase::OutputValidation, detail)
+        validate_model_output(self.spec, output, |stdout| {
+            validate_module(stdout, self.root, project)
         })
+        .map(|(module, _)| module)
     }
 
     pub(super) async fn environment(
@@ -81,26 +75,53 @@ impl ModelRuntime<'_> {
         let output = self
             .run(arguments, &explicit, "Go compiler context environment")
             .await?;
-        let resolved: BTreeMap<String, String> =
-            serde_json::from_str(&output.stdout).map_err(|error| {
-                model_failure(
-                    self.spec,
-                    SemanticIndexerRunPhase::OutputValidation,
-                    error.to_string(),
-                )
-            })?;
-        if resolved.keys().cloned().collect::<BTreeSet<_>>() != names
-            || explicit
-                .iter()
-                .any(|(name, value)| resolved.get(name) != Some(value))
-        {
-            return Err(model_failure(
-                self.spec,
-                SemanticIndexerRunPhase::OutputValidation,
-                "Go compiler changed or omitted its requested context environment",
-            ));
-        }
-        Ok(resolved)
+        validate_model_output(self.spec, output, |stdout| {
+            validate_environment(stdout, &names, &explicit)
+        })
+        .map(|(environment, _)| environment)
+    }
+}
+
+fn validate_module(
+    stdout: &str,
+    root: &Path,
+    project: &RepositoryPath,
+) -> Result<ModuleIdentity, String> {
+    let module: GoListModule = serde_json::from_str(stdout).map_err(|error| error.to_string())?;
+    module_identity(root, project, &module)
+}
+
+fn validate_environment(
+    stdout: &str,
+    names: &BTreeSet<String>,
+    explicit: &BTreeMap<String, String>,
+) -> Result<BTreeMap<String, String>, String> {
+    let resolved: BTreeMap<String, String> =
+        serde_json::from_str(stdout).map_err(|error| error.to_string())?;
+    if resolved.keys().cloned().collect::<BTreeSet<_>>() != *names
+        || explicit
+            .iter()
+            .any(|(name, value)| resolved.get(name) != Some(value))
+    {
+        return Err("Go compiler changed or omitted its requested context environment".to_string());
+    }
+    Ok(resolved)
+}
+
+pub(super) fn validate_model_output<T>(
+    spec: PinnedIndexer,
+    output: crate::sandbox::SandboxOutput,
+    validate: impl FnOnce(&str) -> Result<T, String>,
+) -> Result<(T, SemanticIndexerProcessEvidence), SemanticIndexerRunFailure> {
+    match validate(&output.stdout) {
+        Ok(value) => Ok((value, process_evidence(output))),
+        Err(detail) => Err(indexer_process_failure(
+            spec,
+            SemanticIndexerRunFailureKind::IncompleteOutput,
+            SemanticIndexerRunPhase::OutputValidation,
+            detail,
+            output,
+        )),
     }
 }
 
@@ -152,3 +173,7 @@ pub(super) fn model_failure(
         detail,
     )
 }
+
+#[cfg(test)]
+#[path = "tests/semantic_indexer_go_model_commands.rs"]
+mod tests;

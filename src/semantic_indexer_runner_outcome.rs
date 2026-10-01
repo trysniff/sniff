@@ -132,6 +132,23 @@ pub(super) fn combine_typed_run_and_integrity<T>(
     }
 }
 
+pub(super) fn combine_witnessed_run_and_integrity<T>(
+    run_result: Result<(T, SemanticIndexerProcessEvidence), SemanticIndexerRunFailure>,
+    integrity_result: Result<(), SemanticIndexerRunFailure>,
+) -> Result<(T, SemanticIndexerProcessEvidence), SemanticIndexerRunFailure> {
+    match (run_result, integrity_result) {
+        (Ok((_, process)), Err(mut error)) => {
+            if error.process.is_none() {
+                error.process = Some(Box::new(process));
+            }
+            Err(error)
+        }
+        (run_result, integrity_result) => {
+            combine_typed_run_and_integrity(run_result, integrity_result)
+        }
+    }
+}
+
 #[cfg(test)]
 #[path = "tests/semantic_indexer_runner_outcome.rs"]
 mod tests;

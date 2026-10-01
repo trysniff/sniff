@@ -1,4 +1,6 @@
-use super::go_model_commands::{ModelRuntime, inventory_arguments, model_failure, module_root};
+use super::go_model_commands::{
+    ModelRuntime, inventory_arguments, model_failure, module_root, validate_model_output,
+};
 use super::go_model_output::parse_world;
 use super::go_model_plans::{
     CompilerInputBindings, ModuleCensus, offline_environment, plans_from_census,
@@ -39,7 +41,7 @@ pub(super) async fn discover(
         .recovery
         .finish_indexer_run()
         .map_err(|detail| model_failure(spec, SemanticIndexerRunPhase::Cleanup, detail));
-    combine_typed_run_and_integrity(result, cleanup)
+    combine_witnessed_run_and_integrity(result, cleanup).map(|(plans, _)| plans)
 }
 
 async fn discover_at(
@@ -48,7 +50,13 @@ async fn discover_at(
     spec: PinnedIndexer,
     installed: &InstalledIndexer,
     root: &Path,
-) -> Result<Vec<SemanticIndexerVariantPlan>, SemanticIndexerRunFailure> {
+) -> Result<
+    (
+        Vec<SemanticIndexerVariantPlan>,
+        SemanticIndexerProcessEvidence,
+    ),
+    SemanticIndexerRunFailure,
+> {
     repository_snapshot::stage_repository_snapshot(context.root, root)
         .map_err(|detail| model_failure(spec, SemanticIndexerRunPhase::Preparation, detail))?;
     require_snapshot(context, root).map_err(|detail| {
@@ -79,38 +87,51 @@ async fn discover_at(
         Ok(())
     })()
     .map_err(|detail| model_failure(spec, SemanticIndexerRunPhase::IntegrityVerification, detail));
-    let (census, dependencies_sha256) = combine_typed_run_and_integrity(result, integrity)?;
-    let runtime_sha256 = go_project_model_pipeline_identity(
-        &runtime_before,
-        "sniff-normal-go-all-owned-modules-dependency-preparation-v2",
-    )
-    .map_err(|detail| model_failure(spec, SemanticIndexerRunPhase::Preparation, detail))?;
-    let required = files_for_indexer(context.files, spec.kind)
-        .iter()
-        .map(|file| repository_relative_path(context.root, Path::new(&file.file_path)))
-        .collect::<Result<BTreeSet<_>, _>>()
-        .map_err(|detail| {
-            model_failure(spec, SemanticIndexerRunPhase::RepositoryValidation, detail)
-        })?;
-    plans_from_census(
-        &census,
-        scope,
-        &required,
-        context.repository_content_sha256,
-        &CompilerInputBindings {
-            project_model: &runtime_sha256,
-            executable: &runtime_before,
-            sdk: &sdk_before,
-            dependencies: &dependencies_sha256,
-        },
-    )
-    .map_err(|detail| model_failure(spec, SemanticIndexerRunPhase::OutputValidation, detail))
+    let ((census, dependencies_sha256), process) =
+        combine_witnessed_run_and_integrity(result, integrity)?;
+    let result = (|| {
+        let runtime_sha256 = go_project_model_pipeline_identity(
+            &runtime_before,
+            "sniff-normal-go-all-owned-modules-dependency-preparation-v2",
+        )
+        .map_err(|detail| model_failure(spec, SemanticIndexerRunPhase::Preparation, detail))?;
+        let required = files_for_indexer(context.files, spec.kind)
+            .iter()
+            .map(|file| repository_relative_path(context.root, Path::new(&file.file_path)))
+            .collect::<Result<BTreeSet<_>, _>>()
+            .map_err(|detail| {
+                model_failure(spec, SemanticIndexerRunPhase::RepositoryValidation, detail)
+            })?;
+        plans_from_census(
+            &census,
+            scope,
+            &required,
+            context.repository_content_sha256,
+            &CompilerInputBindings {
+                project_model: &runtime_sha256,
+                executable: &runtime_before,
+                sdk: &sdk_before,
+                dependencies: &dependencies_sha256,
+            },
+        )
+        .map_err(|detail| model_failure(spec, SemanticIndexerRunPhase::OutputValidation, detail))
+    })();
+    match result {
+        Ok(plans) => Ok((plans, process)),
+        Err(mut failure) => {
+            if failure.process.is_none() {
+                failure.process = Some(Box::new(process));
+            }
+            Err(failure)
+        }
+    }
 }
 
 async fn census(
     runtime: &ModelRuntime<'_>,
     scope: &GoRepositoryScope,
-) -> Result<(Vec<ModuleCensus>, String), SemanticIndexerRunFailure> {
+) -> Result<((Vec<ModuleCensus>, String), SemanticIndexerProcessEvidence), SemanticIndexerRunFailure>
+{
     super::go_dependencies::prepare_root(runtime.root).map_err(|detail| {
         model_failure(runtime.spec, SemanticIndexerRunPhase::Preparation, detail)
     })?;
@@ -142,13 +163,14 @@ async fn census(
                 detail,
             )
         });
-    combine_typed_run_and_integrity(result, integrity).map(|census| (census, before))
+    combine_witnessed_run_and_integrity(result, integrity)
+        .map(|(census, process)| ((census, before), process))
 }
 
 async fn census_prepared(
     runtime: &ModelRuntime<'_>,
     scope: &GoRepositoryScope,
-) -> Result<Vec<ModuleCensus>, SemanticIndexerRunFailure> {
+) -> Result<(Vec<ModuleCensus>, SemanticIndexerProcessEvidence), SemanticIndexerRunFailure> {
     let mut census = Vec::new();
     let platforms = runtime
         .run(
@@ -162,6 +184,7 @@ async fn census_prepared(
             "Go compiler platform domain",
         )
         .await?;
+    let (platforms, mut process) = platform_domain(runtime.spec, platforms)?;
     for (index, (project, sources)) in scope.modules.iter().enumerate() {
         let module = runtime.module(project).await?;
         let directory = runtime
@@ -206,7 +229,8 @@ async fn census_prepared(
                 &helper_environment,
                 "Go compiler source constraint facts",
             )
-            .await;
+            .await
+            .and_then(|output| source_contexts(runtime.spec, output, &source_paths, &platforms));
         let integrity = runtime_file_identities(&files)
             .and_then(|after| {
                 verify_runtime_identities_unchanged(
@@ -222,22 +246,9 @@ async fn census_prepared(
                     detail,
                 )
             });
-        let output = combine_typed_run_and_integrity(result, integrity)?;
-        let tags = parse_go_constraint_tags(&output.stdout, &source_paths, &platforms.stdout)
-            .map_err(|detail| {
-                model_failure(
-                    runtime.spec,
-                    SemanticIndexerRunPhase::OutputValidation,
-                    detail,
-                )
-            })?;
-        let expected_contexts = contexts(&platforms.stdout, &tags).map_err(|detail| {
-            model_failure(
-                runtime.spec,
-                SemanticIndexerRunPhase::OutputValidation,
-                detail,
-            )
-        })?;
+        let (expected_contexts, helper_process) =
+            combine_witnessed_run_and_integrity(result, integrity)?;
+        process = helper_process;
         let mut worlds = Vec::new();
         for context in &expected_contexts {
             let environment = runtime.environment(project, context).await?;
@@ -247,23 +258,18 @@ async fn census_prepared(
             let output = runtime
                 .run(arguments, &environment, "Go compiler package selection")
                 .await?;
-            worlds.push(
+            let (world, world_process) = validate_model_output(runtime.spec, output, |stdout| {
                 parse_world(
                     runtime.root,
                     module.clone(),
                     context.clone(),
                     environment,
                     sources,
-                    &output.stdout,
+                    stdout,
                 )
-                .map_err(|detail| {
-                    model_failure(
-                        runtime.spec,
-                        SemanticIndexerRunPhase::OutputValidation,
-                        detail,
-                    )
-                })?,
-            );
+            })?;
+            worlds.push(world);
+            process = world_process;
         }
         census.push(ModuleCensus {
             module,
@@ -271,7 +277,37 @@ async fn census_prepared(
             worlds,
         });
     }
-    Ok(census)
+    // Retain the last actual command for post-census guards, not a receipt for all commands.
+    Ok((census, process))
+}
+
+fn platform_domain(
+    spec: PinnedIndexer,
+    output: crate::sandbox::SandboxOutput,
+) -> Result<(String, SemanticIndexerProcessEvidence), SemanticIndexerRunFailure> {
+    validate_model_output(spec, output, |stdout| {
+        contexts(
+            stdout,
+            &GoConstraintTagDomain {
+                custom_build_tags: Vec::new(),
+                architecture_feature_tags: Vec::new(),
+                standalone_source_repository_paths: Vec::new(),
+            },
+        )?;
+        Ok(stdout.to_string())
+    })
+}
+
+fn source_contexts(
+    spec: PinnedIndexer,
+    output: crate::sandbox::SandboxOutput,
+    sources: &[String],
+    platforms: &str,
+) -> Result<(Vec<GoCompilerContext>, SemanticIndexerProcessEvidence), SemanticIndexerRunFailure> {
+    validate_model_output(spec, output, |stdout| {
+        let tags = parse_go_constraint_tags(stdout, sources, platforms)?;
+        contexts(platforms, &tags)
+    })
 }
 
 fn contexts(
@@ -327,3 +363,7 @@ mod tests;
 #[cfg(test)]
 #[path = "tests/semantic_indexer_go_preparation.rs"]
 mod preparation_tests;
+
+#[cfg(test)]
+#[path = "tests/semantic_indexer_go_model_evidence.rs"]
+mod evidence_tests;
