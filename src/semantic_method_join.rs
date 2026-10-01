@@ -63,6 +63,7 @@ pub fn method_context_key(file_path: &str, method_name: &str, start_line: usize)
 
 #[path = "semantic_method_context.rs"]
 mod context;
+#[cfg(test)]
 pub use context::render_compiler_method_contexts;
 
 #[path = "semantic_method_evidence.rs"]

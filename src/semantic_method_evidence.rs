@@ -1,6 +1,7 @@
+use super::context::{CompilerMethodWorld, compiler_method_worlds};
 use super::{
     CompilerMethodContexts, CompilerMethodReference, SemanticMethodCoverage,
-    compiler_method_references, join_methods, method_context_key, render_compiler_method_contexts,
+    compiler_method_references, join_methods, method_context_key,
 };
 use crate::semantic_index::{
     RepositoryPath, SemanticIndex, SemanticIndexSet, SemanticResolution, SemanticUnresolvedReason,
@@ -10,6 +11,9 @@ use crate::types::FileRecord;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
+
+#[path = "semantic_method_context_compaction.rs"]
+mod compaction;
 
 pub(crate) struct CompilerMethodEvidence {
     pub(crate) contexts: CompilerMethodContexts,
@@ -37,7 +41,7 @@ pub(crate) fn build_compiler_method_evidence(
             }
         }
     }
-    let mut contexts = BTreeMap::<String, Vec<String>>::new();
+    let mut contexts = BTreeMap::<String, Vec<CompilerMethodWorld>>::new();
     let mut references = BTreeSet::new();
     for (kind, set) in index_sets {
         set.validate()?;
@@ -77,8 +81,8 @@ pub(crate) fn build_compiler_method_evidence(
     Ok(CompilerMethodEvidence {
         contexts: contexts
             .into_iter()
-            .map(|(key, worlds)| (key, worlds.join("\n\n")))
-            .collect(),
+            .map(|(key, worlds)| compaction::render(&worlds).map(|context| (key, context)))
+            .collect::<Result<_, _>>()?,
         references: references.into_iter().collect(),
     })
 }
@@ -88,7 +92,7 @@ fn add_variant(
     files: &[FileRecord],
     index: &SemanticIndex,
     ignored: Option<&BTreeSet<RepositoryPath>>,
-    contexts: &mut BTreeMap<String, Vec<String>>,
+    contexts: &mut BTreeMap<String, Vec<CompilerMethodWorld>>,
     references: &mut BTreeSet<CompilerMethodReference>,
 ) -> Result<(), String> {
     let index_root = fs::canonicalize(&index.repository_root).map_err(|error| {
@@ -114,7 +118,7 @@ fn add_variant(
     }
     join.require_complete()?;
     references.extend(compiler_method_references(root, files, index, &join)?);
-    for (key, context) in render_compiler_method_contexts(root, files, index, &join)? {
+    for (key, context) in compiler_method_worlds(root, files, index, &join)? {
         contexts.entry(key).or_default().push(context);
     }
     Ok(())

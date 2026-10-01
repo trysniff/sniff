@@ -1,6 +1,8 @@
+#[cfg(test)]
+use super::CompilerMethodContexts;
 use super::{
-    CompilerMethodContexts, SemanticMethodBinding, SemanticMethodCoverage, SemanticMethodJoin,
-    method_context_key, repository_relative_path,
+    SemanticMethodBinding, SemanticMethodCoverage, SemanticMethodJoin, method_context_key,
+    repository_relative_path,
 };
 use crate::semantic_index::{SemanticIndex, SemanticIndexVariant, SemanticResolution};
 use crate::types::FileRecord;
@@ -11,12 +13,37 @@ use std::path::Path;
 #[path = "semantic_method_context_contracts.rs"]
 mod contracts;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct CompilerMethodWorld {
+    pub(super) variant: SemanticIndexVariant,
+    pub(super) lines: Vec<String>,
+}
+
+#[cfg(test)]
 pub fn render_compiler_method_contexts(
     repository_root: &Path,
     files: &[FileRecord],
     index: &SemanticIndex,
     join: &SemanticMethodJoin,
 ) -> Result<CompilerMethodContexts, String> {
+    Ok(compiler_method_worlds(repository_root, files, index, join)?
+        .into_iter()
+        .map(|(key, world)| (key, render_single_world(world)))
+        .collect())
+}
+
+#[cfg(test)]
+fn render_single_world(mut world: CompilerMethodWorld) -> String {
+    world.lines.insert(1, variant_header(&world.variant));
+    world.lines.join("\n")
+}
+
+pub(super) fn compiler_method_worlds(
+    repository_root: &Path,
+    files: &[FileRecord],
+    index: &SemanticIndex,
+    join: &SemanticMethodJoin,
+) -> Result<BTreeMap<String, CompilerMethodWorld>, String> {
     index.variant.validate()?;
     let contracts = contracts::CompilerContracts::new(index);
     let canonical_root = fs::canonicalize(repository_root).map_err(|error| {
@@ -46,7 +73,10 @@ pub fn render_compiler_method_contexts(
             &binding.method.name,
             binding.method.start_line as usize,
         );
-        let context = render_binding_context(index, binding, &contracts);
+        let context = CompilerMethodWorld {
+            variant: index.variant.clone(),
+            lines: render_binding_facts(index, binding, &contracts),
+        };
         if contexts.insert(key.clone(), context).is_some() {
             return Err(format!("duplicate compiler method context: {key}"));
         }
@@ -54,13 +84,9 @@ pub fn render_compiler_method_contexts(
     Ok(contexts)
 }
 
-fn render_binding_context(
-    index: &SemanticIndex,
-    binding: &SemanticMethodBinding,
-    contracts: &contracts::CompilerContracts<'_>,
-) -> String {
-    let mut lines = vec![format!("SCIP provider: {}", index.provenance.tool_name)];
-    lines.push(match &index.variant {
+#[cfg(test)]
+fn variant_header(variant: &SemanticIndexVariant) -> String {
+    match variant {
         SemanticIndexVariant::Unqualified => {
             "compiler variant: unqualified; not proof of all build configurations".to_string()
         }
@@ -73,7 +99,15 @@ fn render_binding_context(
                 identity.0
             )
         }
-    });
+    }
+}
+
+fn render_binding_facts(
+    index: &SemanticIndex,
+    binding: &SemanticMethodBinding,
+    contracts: &contracts::CompilerContracts<'_>,
+) -> Vec<String> {
+    let mut lines = vec![format!("SCIP provider: {}", index.provenance.tool_name)];
     match (&binding.coverage, &binding.symbol) {
         (SemanticMethodCoverage::CompilerExcluded { reason }, _) => {
             lines.push(format!("compiler coverage: excluded ({reason})"));
@@ -151,7 +185,7 @@ fn render_binding_context(
             }
         }
     }
-    lines.join("\n")
+    lines
 }
 
 fn format_call_edge(
