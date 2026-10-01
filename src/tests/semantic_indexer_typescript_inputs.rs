@@ -1,3 +1,4 @@
+use super::super::execution::finish_worker;
 use super::*;
 use crate::semantic_index::{SemanticIndexerCompilerQuery, SemanticVariantId};
 use tempfile::TempDir;

@@ -98,21 +98,11 @@ pub(super) async fn run_worker(
     installed: &InstalledIndexer,
     plan: &SemanticIndexerVariantPlan,
 ) -> Result<crate::sandbox::SandboxOutput, SemanticIndexerRunFailure> {
-    let before = runtime_file_identities(&prepared.runtime_files)
-        .map_err(|detail| input_failure(spec, detail))?;
-    verify_worker(
-        spec,
-        installed,
-        plan,
-        Path::new(&prepared.command.program),
-        &before,
-    )
-    .map_err(|detail| input_failure(spec, detail))?;
-    // Bind the same observed image used by the execution integrity guard.
-    let result = run_sandbox_command(prepared.command, spec.display_name).await;
-    let integrity = runtime_file_identities(&prepared.runtime_files)
-        .and_then(|after| verify_runtime_identities_unchanged(spec.display_name, &before, &after));
-    finish_worker(spec, result, integrity)
+    let program = PathBuf::from(&prepared.command.program);
+    super::execution::run_worker(prepared, spec, |before| {
+        verify_worker(spec, installed, plan, &program, before)
+    })
+    .await
 }
 
 fn verify_worker(
@@ -133,28 +123,6 @@ fn verify_worker(
             installation: installed.tree_sha256.clone(),
         },
     )
-}
-
-fn finish_worker(
-    spec: PinnedIndexer,
-    result: Result<crate::sandbox::SandboxOutput, String>,
-    integrity: Result<(), String>,
-) -> Result<crate::sandbox::SandboxOutput, SemanticIndexerRunFailure> {
-    let process = result.as_ref().ok().cloned().map(process_evidence);
-    let result = result.map_err(|detail| {
-        indexer_failure(
-            spec,
-            SemanticIndexerRunFailureKind::InfrastructureFailed,
-            SemanticIndexerRunPhase::Execution,
-            detail,
-        )
-    });
-    let integrity = integrity.map_err(|detail| {
-        let mut failure = input_failure(spec, detail);
-        failure.process = process.map(Box::new);
-        failure
-    });
-    combine_typed_run_and_integrity(result, integrity)
 }
 
 pub(super) fn required(
