@@ -21,8 +21,14 @@ pub(super) fn plans_from_census(
     repository_sha256: &str,
     runtime_sha256: &str,
     compiler_sha256: &str,
+    sdk_sha256: &str,
 ) -> Result<Vec<SemanticIndexerVariantPlan>, String> {
-    for digest in [repository_sha256, runtime_sha256, compiler_sha256] {
+    for digest in [
+        repository_sha256,
+        runtime_sha256,
+        compiler_sha256,
+        sdk_sha256,
+    ] {
         if digest.len() != 64
             || !digest
                 .bytes()
@@ -108,9 +114,11 @@ pub(super) fn plans_from_census(
                 .cloned()
                 .collect::<BTreeSet<_>>();
             let identity = hash(&(
-                "sniff-normal-go-compiler-world-v1",
+                "sniff-normal-go-compiler-world-v2",
                 repository_sha256,
                 runtime_sha256,
+                compiler_sha256,
+                sdk_sha256,
                 &census_sha256,
                 world,
             ))?;
@@ -138,6 +146,7 @@ pub(super) fn plans_from_census(
                         "compiler_runtime_sha256".to_string(),
                         compiler_sha256.to_string(),
                     ),
+                    ("compiler_sdk_sha256".to_string(), sdk_sha256.to_string()),
                     (
                         "project_model_census_sha256".to_string(),
                         census_sha256.clone(),
