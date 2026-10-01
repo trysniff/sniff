@@ -1,6 +1,8 @@
+#[cfg(test)]
+use super::CompilerMethodContexts;
 use super::{
-    CompilerMethodContexts, SemanticMethodBinding, SemanticMethodCoverage, SemanticMethodJoin,
-    method_context_key, repository_relative_path,
+    SemanticMethodBinding, SemanticMethodCoverage, SemanticMethodJoin, method_context_key,
+    repository_relative_path,
 };
 use crate::semantic_index::{SemanticIndex, SemanticIndexVariant, SemanticResolution};
 use crate::types::FileRecord;
@@ -17,6 +19,7 @@ pub(super) struct CompilerMethodWorld {
     pub(super) lines: Vec<String>,
 }
 
+#[cfg(test)]
 pub fn render_compiler_method_contexts(
     repository_root: &Path,
     files: &[FileRecord],
@@ -29,6 +32,7 @@ pub fn render_compiler_method_contexts(
         .collect())
 }
 
+#[cfg(test)]
 fn render_single_world(mut world: CompilerMethodWorld) -> String {
     world.lines.insert(1, variant_header(&world.variant));
     world.lines.join("\n")
@@ -80,6 +84,7 @@ pub(super) fn compiler_method_worlds(
     Ok(contexts)
 }
 
+#[cfg(test)]
 fn variant_header(variant: &SemanticIndexVariant) -> String {
     match variant {
         SemanticIndexVariant::Unqualified => {

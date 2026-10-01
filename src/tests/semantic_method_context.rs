@@ -49,7 +49,7 @@ fn relate(index: &mut SemanticIndex, source: &str, target: &str, kind: SemanticR
 }
 
 #[test]
-fn public_single_world_renderer_preserves_legacy_bytes_and_header_position() {
+fn single_world_reference_renderer_preserves_legacy_bytes_and_header_position() {
     let (root, files, mut index) = super::super::tests::fixture(Vec::new(), 0, false, false);
     let join = super::super::join_methods(&root, &files, &index).unwrap();
     let key = method_context_key(&files[0].file_path, "process", 1);
