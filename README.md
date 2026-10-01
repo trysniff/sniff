@@ -20,6 +20,15 @@ AI-authorship detector, security scanner, bug finder, linter, generic
 maintainability score, architecture-opinion engine, IDE, automatic refactoring
 tool, or PR reviewer.
 
+## Development Status
+
+This README describes the development branch. For a published crate, use the
+documentation at its matching release tag; unreleased changes may differ.
+The current development version has not completed its blind comparative
+benchmark or final public-release qualification. Earlier case studies are
+not validation of the current runtime, and Sniff does not claim to be the
+number-one slop finder yet.
+
 > [!WARNING]
 > **A normal Sniff scan sends source code to the LLM endpoint you configure.**
 > Check that provider's retention, training, region, and privacy policy before
@@ -35,18 +44,37 @@ Install [Rust](https://rustup.rs), then install the published crate:
 cargo install sniff-cli --locked
 ```
 
+To try the current development source instead:
+
+```console
+git clone https://github.com/trysniff/sniff.git
+cd sniff
+cargo install --path . --locked
+```
+
+Native development bundles for Linux, macOS, and Windows are also built by
+trusted manual runs of the [Release candidates workflow](https://github.com/trysniff/sniff/actions/workflows/release-candidates.yml).
+Follow the [candidate verification instructions](tools/release/README.md)
+before installation. These are development candidates, not stable releases.
+
 The first install compiles native dependencies and can take several minutes.
 Semantic indexing requires same-directory hard links on the scanned
 repository's filesystem and directory syncing on the repository and temp
 filesystems. Sniff stops before indexing if it cannot durably publish its
 recovery marker; it does not fall back to an in-place marker write.
-After installation, this setup takes about a minute:
+Pinned semantic indexers and the repository's host toolchains are required
+before a normal scan. Setup time depends on the required downloads. Run the
+following setup in the repository you want to inspect:
 
 ```console
 # In the repository you want to inspect, create .env with the three values below.
 SNIFF_API_KEY=your-deepseek-key
 SNIFF_ENDPOINT=https://api.deepseek.com
 SNIFF_MODEL=deepseek-v4-flash
+
+# Download and verify the pinned semantic indexers for this repository.
+# This needs network access, but makes no model request.
+sniff indexers install
 
 # Validate configuration and source discovery without contacting the model.
 sniff doctor
@@ -347,9 +375,9 @@ sniff doctor [PATH]
 ```
 
 `doctor` checks the target, `.env` loading, API key presence, endpoint syntax,
-model, supported source discovery, and report permissions without contacting
-the provider. To explicitly test authentication and response compatibility with
-one small paid request:
+model, supported source discovery, required pinned indexers, and report
+permissions without contacting the provider. To explicitly test authentication
+and response compatibility with one small paid request:
 
 ```console
 sniff doctor --probe [PATH]
@@ -375,14 +403,17 @@ counterfactual earn test or differential proof, declare argv explicitly in
 [proof]
 test_command = ["python", "-m", "pytest", "tests"]
 # Optional: a deterministic probe whose bounded output must match exactly.
-differential_command = ["python", "scripts", "behavior_probe.py"]
+differential_command = ["python", "scripts/behavior_probe.py"]
 ```
 
 The original and edited snapshots run through an isolated worker. Missing
 commands, failing baselines, output differences, or unavailable platform
 isolation remain unresolved; Sniff never falls back to executing repository
-code on the host. Windows requires a hardened runner configured through
-`SNIFF_SANDBOX_RUNNER`.
+code on the host. The built-in backends are Linux `bubblewrap`, macOS
+`sandbox-exec`, and native Windows AppContainer. A trusted operator can
+explicitly select an external hardened runner through `SNIFF_SANDBOX_RUNNER`;
+it is not required for the built-in Windows backend. An unavailable or failed
+backend never falls back to unrestricted execution.
 
 Every eligible method is reviewed. Supported source languages are Rust, Python,
 JavaScript, TypeScript, Go, and Kotlin/JVM. Android/KMP Gradle projects are
@@ -440,6 +471,7 @@ Exit codes:
 - `0`: complete report with no findings
 - `1`: complete report containing `Slop` or `Kinda Slop`
 - `2`: failed scan; no valid new report was produced
+- `3`: estimated-spend budget pause; completed work is retained for resume
 
 ## Development
 

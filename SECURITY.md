@@ -32,12 +32,28 @@ template.
 Repository tests and differential probes are opt-in through explicit argv in
 `sniff.config.toml`. Sniff runs them only from temporary snapshots through the
 platform sandbox worker; it does not invoke a shell or guess a test command.
-If the platform sandbox is unavailable, proof is left unresolved rather than
-executed on the host. Windows users must provide a hardened executable through
-`SNIFF_SANDBOX_RUNNER`. Sniff invokes it without a shell as:
-`runner --root <snapshot> --workdir <relative-dir> --timeout-ms <limit> -- <program> <args...>`.
-The runner is responsible for enforcing filesystem, network, process, CPU, and
-memory isolation before launching the final command.
+The built-in backends are Linux `bubblewrap`, macOS `sandbox-exec`, and native
+Windows AppContainer. If the platform sandbox is unavailable, proof is left
+unresolved rather than executed on the host; indexing cannot silently use an
+unrestricted host process either. Sandbox failure never selects a weaker
+backend automatically.
+
+A trusted operator may explicitly set `SNIFF_SANDBOX_RUNNER` to an existing
+absolute hardened executable instead of the built-in backend. Sniff invokes
+it without a shell as:
+
+```text
+runner --root <snapshot> --workdir <relative-dir> --timeout-ms <limit>
+       --memory-limit-bytes <limit> --process-limit <limit>
+       [--read-only-path <path>] [--env <key=value>]
+       <--deny-network|--allow-network> -- <program> <args...>
+```
+
+Read-only paths and environment arguments may repeat. The runner is part of
+the operator's trusted computing base and is responsible for enforcing
+filesystem, network, process, CPU, and memory isolation before launching the
+final command. An invalid configured runner is an error, not permission to
+fall back to the built-in backend or unrestricted host execution.
 
 Target-repository `.env` files cannot configure `SNIFF_SANDBOX_RUNNER`, internal
 Gradle launcher variables, process paths, cache locations, language-tool homes,
