@@ -177,8 +177,16 @@ async fn run_required_go_indexer_variants_with_limits(
     let run_result = async {
         let prepared = prepare_go_recovery_scope(inputs, &execution_root)?;
         verify_discovered_sdk_inputs(inputs, &execution_root, plans)?;
+        if discovered_bound_input_sha256(plans, "compiler_dependencies_sha256")
+            .map_err(|detail| go_integrity_failure(inputs.spec, detail))?
+            .is_some()
+        {
+            super::go_dependencies::prepare_root(&execution_root)
+                .map_err(|detail| go_integrity_failure(inputs.spec, detail))?;
+        }
         prepare_go_variant_dependency_caches(inputs.spec, &execution_root, inputs.installed, plans)
             .await?;
+        verify_discovered_dependency_inputs(inputs, &execution_root, plans)?;
         let mut variants = BTreeMap::new();
         let mut selected_documents = BTreeSet::new();
         for (world_ordinal, plan) in execution_plans.into_iter().enumerate() {
@@ -227,6 +235,10 @@ async fn run_required_go_indexer_variants_with_limits(
         run_result,
         verify_discovered_sdk_inputs(inputs, &execution_root, plans),
     );
+    let run_result = combine_typed_run_and_integrity(
+        run_result,
+        verify_discovered_dependency_inputs(inputs, &execution_root, plans),
+    );
     let cleanup_result = inputs.recovery.finish_indexer_run().map_err(|detail| {
         indexer_failure(
             inputs.spec,
@@ -267,13 +279,16 @@ fn verify_discovered_sdk_inputs(
 }
 
 fn discovered_sdk_sha256(plans: &[SemanticIndexerVariantPlan]) -> Result<Option<&str>, String> {
+    discovered_bound_input_sha256(plans, "compiler_sdk_sha256")
+}
+
+fn discovered_bound_input_sha256<'a>(
+    plans: &'a [SemanticIndexerVariantPlan],
+    key: &str,
+) -> Result<Option<&'a str>, String> {
     let identities = plans
         .iter()
-        .filter_map(|plan| {
-            plan.dimensions
-                .get("compiler_sdk_sha256")
-                .map(String::as_str)
-        })
+        .filter_map(|plan| plan.dimensions.get(key).map(String::as_str))
         .collect::<BTreeSet<_>>();
     let has_normal_census = plans
         .iter()
@@ -281,23 +296,21 @@ fn discovered_sdk_sha256(plans: &[SemanticIndexerVariantPlan]) -> Result<Option<
     if identities.is_empty() && !has_normal_census {
         return Ok(None);
     }
-    if identities.len() != 1
-        || plans
-            .iter()
-            .any(|plan| !plan.dimensions.contains_key("compiler_sdk_sha256"))
-    {
-        return Err("Go compiler worlds disagree on SDK input binding".to_string());
+    if identities.len() != 1 || plans.iter().any(|plan| !plan.dimensions.contains_key(key)) {
+        return Err(format!(
+            "Go compiler worlds disagree on {key} input binding"
+        ));
     }
     let expected = identities
         .first()
         .copied()
-        .ok_or_else(|| "Go SDK input commitment is missing".to_string())?;
+        .ok_or_else(|| format!("Go {key} input commitment is missing"))?;
     if expected.len() != 64
         || !expected
             .bytes()
             .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
     {
-        return Err("Go SDK input commitment is invalid".to_string());
+        return Err(format!("Go {key} input commitment is invalid"));
     }
     Ok(Some(expected))
 }
@@ -330,7 +343,27 @@ fn verify_discovered_world_inputs(
     Ok(())
 }
 
-fn require_discovery_commitment(kind: &str, expected: &str, actual: &str) -> Result<(), String> {
+fn verify_discovered_dependency_inputs(
+    inputs: &GoIndexerRunInputs<'_>,
+    execution_root: &Path,
+    plans: &[SemanticIndexerVariantPlan],
+) -> Result<(), SemanticIndexerRunFailure> {
+    let expected = discovered_bound_input_sha256(plans, "compiler_dependencies_sha256")
+        .map_err(|detail| go_integrity_failure(inputs.spec, detail))?;
+    let Some(expected) = expected else {
+        return Ok(());
+    };
+    let actual = super::go_dependencies::identity_sha256(execution_root)
+        .map_err(|detail| go_integrity_failure(inputs.spec, detail))?;
+    require_discovery_commitment("dependency inputs", expected, &actual)
+        .map_err(|detail| go_integrity_failure(inputs.spec, detail))
+}
+
+pub(super) fn require_discovery_commitment(
+    kind: &str,
+    expected: &str,
+    actual: &str,
+) -> Result<(), String> {
     if expected != actual {
         return Err(format!(
             "Go {kind} changed between project discovery and qualified execution"
@@ -484,14 +517,69 @@ async fn prepare_go_variant_dependency_caches(
     installed: &InstalledIndexer,
     plans: &[SemanticIndexerVariantPlan],
 ) -> Result<(), SemanticIndexerRunFailure> {
-    let module_roots = plans
-        .iter()
-        .map(|plan| go_module_root(spec, execution_root, Some(plan)))
-        .collect::<Result<BTreeSet<_>, _>>()?;
+    let module_roots = dependency_module_roots(spec, execution_root, plans)?;
     for module_root in module_roots {
         prepare_go_dependency_cache(spec, execution_root, installed, &module_root).await?;
     }
     Ok(())
+}
+
+pub(super) fn dependency_module_roots(
+    spec: PinnedIndexer,
+    execution_root: &Path,
+    plans: &[SemanticIndexerVariantPlan],
+) -> Result<Vec<String>, SemanticIndexerRunFailure> {
+    if discovered_bound_input_sha256(plans, "compiler_dependencies_sha256")
+        .map_err(|detail| go_integrity_failure(spec, detail))?
+        .is_none()
+    {
+        return plans
+            .iter()
+            .map(|plan| go_module_root(spec, execution_root, Some(plan)))
+            .collect::<Result<BTreeSet<_>, _>>()
+            .map(|roots| roots.into_iter().collect());
+    }
+    let expected = super::go_model_scope::discover(execution_root)
+        .map_err(|detail| go_integrity_failure(spec, detail))?
+        .modules
+        .into_keys()
+        .collect::<Vec<_>>();
+    if expected.is_empty() {
+        return Err(go_integrity_failure(
+            spec,
+            "Go dependency project scope is empty".to_string(),
+        ));
+    }
+    for plan in plans {
+        let encoded = plan
+            .dimensions
+            .get("compiler_dependency_projects")
+            .ok_or_else(|| {
+                go_integrity_failure(spec, "Go dependency project scope is missing".to_string())
+            })?;
+        let projects: Vec<RepositoryPath> = serde_json::from_str(encoded).map_err(|error| {
+            go_integrity_failure(
+                spec,
+                format!("invalid Go dependency project scope: {error}"),
+            )
+        })?;
+        if projects != expected
+            || !plan
+                .compiler_project
+                .as_ref()
+                .is_some_and(|project| expected.contains(project))
+        {
+            return Err(go_integrity_failure(
+                spec,
+                "Go dependency project scope differs from its complete repository snapshot"
+                    .to_string(),
+            ));
+        }
+    }
+    Ok(expected
+        .iter()
+        .map(super::go_model_commands::module_root)
+        .collect())
 }
 
 fn go_module_root(

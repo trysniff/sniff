@@ -135,6 +135,7 @@ async fn normal_scan_discovers_every_go_context_without_git_or_model_calls() {
     };
     assert!(variants.len() > 2);
     let mut sdk_bindings = BTreeSet::new();
+    let mut dependency_bindings = BTreeSet::new();
     let mut tags = BTreeSet::new();
     for qualified in variants.values() {
         let crate::semantic_index::SemanticIndexVariant::Qualified { dimensions, .. } =
@@ -143,6 +144,7 @@ async fn normal_scan_discovers_every_go_context_without_git_or_model_calls() {
             panic!("Go compiler world lost qualification")
         };
         sdk_bindings.insert(dimensions["compiler_sdk_sha256"].clone());
+        dependency_bindings.insert(dimensions["compiler_dependencies_sha256"].clone());
         let context: serde_json::Value =
             serde_json::from_str(&dimensions["compiler_context"]).unwrap();
         tags.insert(context["build_tags"].to_string());
@@ -168,6 +170,8 @@ async fn normal_scan_discovers_every_go_context_without_git_or_model_calls() {
     }
     assert_eq!(sdk_bindings.len(), 1);
     assert_eq!(sdk_bindings.first().unwrap().len(), 64);
+    assert_eq!(dependency_bindings.len(), 1);
+    assert_eq!(dependency_bindings.first().unwrap().len(), 64);
     assert_eq!(
         tags,
         BTreeSet::from(["[]".to_string(), "[\"feature\"]".to_string()])

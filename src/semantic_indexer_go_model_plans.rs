@@ -14,20 +14,26 @@ pub(super) struct ModuleCensus {
     pub(super) worlds: Vec<CompilerWorld>,
 }
 
+pub(super) struct CompilerInputBindings<'a> {
+    pub(super) project_model: &'a str,
+    pub(super) executable: &'a str,
+    pub(super) sdk: &'a str,
+    pub(super) dependencies: &'a str,
+}
+
 pub(super) fn plans_from_census(
     census: &[ModuleCensus],
     scope: &GoRepositoryScope,
     required: &BTreeSet<RepositoryPath>,
     repository_sha256: &str,
-    runtime_sha256: &str,
-    compiler_sha256: &str,
-    sdk_sha256: &str,
+    inputs: &CompilerInputBindings<'_>,
 ) -> Result<Vec<SemanticIndexerVariantPlan>, String> {
     for digest in [
         repository_sha256,
-        runtime_sha256,
-        compiler_sha256,
-        sdk_sha256,
+        inputs.project_model,
+        inputs.executable,
+        inputs.sdk,
+        inputs.dependencies,
     ] {
         if digest.len() != 64
             || !digest
@@ -51,6 +57,9 @@ pub(super) fn plans_from_census(
         return Err("Go project census omitted or repeated a module/source scope".to_string());
     }
     let census_sha256 = hash(census)?;
+    let dependency_projects = scope.modules.keys().cloned().collect::<Vec<_>>();
+    let dependency_projects_json =
+        serde_json::to_string(&dependency_projects).map_err(|error| error.to_string())?;
     let mut covered = BTreeSet::new();
     let mut plans = Vec::new();
     for module in census {
@@ -114,11 +123,13 @@ pub(super) fn plans_from_census(
                 .cloned()
                 .collect::<BTreeSet<_>>();
             let identity = hash(&(
-                "sniff-normal-go-compiler-world-v2",
+                "sniff-normal-go-compiler-world-v3",
                 repository_sha256,
-                runtime_sha256,
-                compiler_sha256,
-                sdk_sha256,
+                inputs.project_model,
+                inputs.executable,
+                inputs.sdk,
+                inputs.dependencies,
+                &dependency_projects,
                 &census_sha256,
                 world,
             ))?;
@@ -140,13 +151,21 @@ pub(super) fn plans_from_census(
                     ),
                     (
                         "project_model_runtime_sha256".to_string(),
-                        runtime_sha256.to_string(),
+                        inputs.project_model.to_string(),
                     ),
                     (
                         "compiler_runtime_sha256".to_string(),
-                        compiler_sha256.to_string(),
+                        inputs.executable.to_string(),
                     ),
-                    ("compiler_sdk_sha256".to_string(), sdk_sha256.to_string()),
+                    ("compiler_sdk_sha256".to_string(), inputs.sdk.to_string()),
+                    (
+                        "compiler_dependencies_sha256".to_string(),
+                        inputs.dependencies.to_string(),
+                    ),
+                    (
+                        "compiler_dependency_projects".to_string(),
+                        dependency_projects_json.clone(),
+                    ),
                     (
                         "project_model_census_sha256".to_string(),
                         census_sha256.clone(),

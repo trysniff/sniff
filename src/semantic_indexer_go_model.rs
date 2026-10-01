@@ -1,6 +1,8 @@
 use super::go_model_commands::{ModelRuntime, inventory_arguments, model_failure, module_root};
 use super::go_model_output::parse_world;
-use super::go_model_plans::{ModuleCensus, offline_environment, plans_from_census};
+use super::go_model_plans::{
+    CompilerInputBindings, ModuleCensus, offline_environment, plans_from_census,
+};
 use super::go_model_scope::GoRepositoryScope;
 use super::*;
 use crate::compiler_go_model::{GoCompilerContext, GoCompilerQuery};
@@ -77,10 +79,10 @@ async fn discover_at(
         Ok(())
     })()
     .map_err(|detail| model_failure(spec, SemanticIndexerRunPhase::IntegrityVerification, detail));
-    let census = combine_typed_run_and_integrity(result, integrity)?;
+    let (census, dependencies_sha256) = combine_typed_run_and_integrity(result, integrity)?;
     let runtime_sha256 = go_project_model_pipeline_identity(
         &runtime_before,
-        "sniff-normal-go-dependency-preparation-v1",
+        "sniff-normal-go-all-owned-modules-dependency-preparation-v2",
     )
     .map_err(|detail| model_failure(spec, SemanticIndexerRunPhase::Preparation, detail))?;
     let required = files_for_indexer(context.files, spec.kind)
@@ -95,14 +97,55 @@ async fn discover_at(
         scope,
         &required,
         context.repository_content_sha256,
-        &runtime_sha256,
-        &runtime_before,
-        &sdk_before,
+        &CompilerInputBindings {
+            project_model: &runtime_sha256,
+            executable: &runtime_before,
+            sdk: &sdk_before,
+            dependencies: &dependencies_sha256,
+        },
     )
     .map_err(|detail| model_failure(spec, SemanticIndexerRunPhase::OutputValidation, detail))
 }
 
 async fn census(
+    runtime: &ModelRuntime<'_>,
+    scope: &GoRepositoryScope,
+) -> Result<(Vec<ModuleCensus>, String), SemanticIndexerRunFailure> {
+    super::go_dependencies::prepare_root(runtime.root).map_err(|detail| {
+        model_failure(runtime.spec, SemanticIndexerRunPhase::Preparation, detail)
+    })?;
+    for project in scope.modules.keys() {
+        prepare_go_dependency_cache(
+            runtime.spec,
+            runtime.root,
+            runtime.installed,
+            &module_root(project),
+        )
+        .await?;
+    }
+    let before = super::go_dependencies::identity_sha256(runtime.root).map_err(|detail| {
+        model_failure(
+            runtime.spec,
+            SemanticIndexerRunPhase::IntegrityVerification,
+            detail,
+        )
+    })?;
+    let result = census_prepared(runtime, scope).await;
+    let integrity = super::go_dependencies::identity_sha256(runtime.root)
+        .and_then(|after| {
+            super::go_runner::require_discovery_commitment("dependency inputs", &before, &after)
+        })
+        .map_err(|detail| {
+            model_failure(
+                runtime.spec,
+                SemanticIndexerRunPhase::IntegrityVerification,
+                detail,
+            )
+        });
+    combine_typed_run_and_integrity(result, integrity).map(|census| (census, before))
+}
+
+async fn census_prepared(
     runtime: &ModelRuntime<'_>,
     scope: &GoRepositoryScope,
 ) -> Result<Vec<ModuleCensus>, SemanticIndexerRunFailure> {
@@ -120,13 +163,6 @@ async fn census(
         )
         .await?;
     for (index, (project, sources)) in scope.modules.iter().enumerate() {
-        prepare_go_dependency_cache(
-            runtime.spec,
-            runtime.root,
-            runtime.installed,
-            &module_root(project),
-        )
-        .await?;
         let module = runtime.module(project).await?;
         let directory = runtime
             .root

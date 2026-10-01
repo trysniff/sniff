@@ -158,6 +158,141 @@ fn go_assembly_checkpoints_only_at_document_and_world_boundaries() {
     assert!(should_publish_go_assembly(5, 5, 5));
 }
 
+#[test]
+fn normal_dependency_binding_cannot_be_missing_mixed_or_inconsistent() {
+    let mut normal = variant_plan("normal", &["main.go"], &[]);
+    normal
+        .dimensions
+        .insert("project_model_census_sha256".to_string(), digest('a'));
+    assert!(
+        discovered_bound_input_sha256(
+            std::slice::from_ref(&normal),
+            "compiler_dependencies_sha256"
+        )
+        .is_err()
+    );
+    normal
+        .dimensions
+        .insert("compiler_dependencies_sha256".to_string(), digest('b'));
+    assert_eq!(
+        discovered_bound_input_sha256(
+            std::slice::from_ref(&normal),
+            "compiler_dependencies_sha256"
+        )
+        .unwrap(),
+        Some(digest('b').as_str())
+    );
+    let legacy = variant_plan("legacy", &["main.go"], &[]);
+    assert!(
+        discovered_bound_input_sha256(&[normal.clone(), legacy], "compiler_dependencies_sha256")
+            .is_err()
+    );
+    let mut changed = normal.clone();
+    changed
+        .dimensions
+        .insert("compiler_dependencies_sha256".to_string(), digest('c'));
+    assert!(
+        discovered_bound_input_sha256(&[normal, changed], "compiler_dependencies_sha256").is_err()
+    );
+}
+
+#[test]
+fn batch_dependency_observer_rejects_drift_even_with_a_compiler_failure() {
+    let root = tempfile::tempdir().unwrap();
+    let stage = tempfile::tempdir().unwrap();
+    super::super::go_dependencies::prepare_root(stage.path()).unwrap();
+    let path = go_module_cache_root(stage.path()).join("dependency.go");
+    fs::write(&path, "package original").unwrap();
+    let expected = super::super::go_dependencies::identity_sha256(stage.path()).unwrap();
+    let spec = pinned_indexer(SemanticIndexerKind::Go).unwrap();
+    let installed = InstalledIndexer {
+        root: root.path().to_path_buf(),
+        entrypoint: root.path().join("unused"),
+        tree_sha256: digest('a'),
+    };
+    let recovery = recovery::SemanticIndexerRecoveryGuard::begin(root.path()).unwrap();
+    let inputs = GoIndexerRunInputs {
+        spec,
+        root: root.path(),
+        installed: &installed,
+        files: &[],
+        required_documents: &[],
+        recovery: &recovery,
+        repository_content_sha256: &digest('b'),
+        progress_root: None,
+    };
+    let mut plan = variant_plan("dependency-drift", &["main.go"], &[]);
+    plan.dimensions
+        .insert("compiler_dependencies_sha256".to_string(), expected);
+    verify_discovered_dependency_inputs(&inputs, stage.path(), std::slice::from_ref(&plan))
+        .unwrap();
+    fs::write(path, "package mutation").unwrap();
+    let compiler_failure = indexer_failure(
+        spec,
+        SemanticIndexerRunFailureKind::IncompleteOutput,
+        SemanticIndexerRunPhase::OutputValidation,
+        "injected compiler failure",
+    );
+    let failure = combine_typed_run_and_integrity::<()>(
+        Err(compiler_failure),
+        verify_discovered_dependency_inputs(&inputs, stage.path(), &[plan]),
+    )
+    .unwrap_err();
+    assert_eq!(
+        failure.phase,
+        SemanticIndexerRunPhase::IntegrityVerification
+    );
+    assert!(failure.detail.contains("dependency inputs"));
+    assert!(failure.detail.contains("injected compiler failure"));
+    recovery.finish().unwrap();
+}
+
+#[test]
+fn normal_dependency_scope_requires_every_owned_manifest_in_discovery_order() {
+    let root = tempfile::tempdir().unwrap();
+    fs::write(
+        root.path().join("go.mod"),
+        "module example.test/main\ngo 1.23\n",
+    )
+    .unwrap();
+    fs::create_dir(root.path().join("a")).unwrap();
+    fs::write(
+        root.path().join("a/go.mod"),
+        "module example.test/a\ngo 1.23\n",
+    )
+    .unwrap();
+    let spec = pinned_indexer(SemanticIndexerKind::Go).unwrap();
+    let mut plan = variant_plan("scope", &["main.go"], &[]);
+    plan.dimensions
+        .insert("compiler_dependencies_sha256".to_string(), digest('a'));
+    assert!(dependency_module_roots(spec, root.path(), std::slice::from_ref(&plan)).is_err());
+    plan.dimensions.insert(
+        "compiler_dependency_projects".to_string(),
+        r#"["a/go.mod","go.mod"]"#.to_string(),
+    );
+    assert_eq!(
+        dependency_module_roots(spec, root.path(), std::slice::from_ref(&plan)).unwrap(),
+        vec!["a", "."]
+    );
+    for invalid in [
+        r#"["go.mod"]"#,
+        r#"["go.mod","a/go.mod"]"#,
+        r#"["../go.mod","go.mod"]"#,
+        r#"["a/go.mod","go.mod","go.mod"]"#,
+        "{",
+        "null",
+    ] {
+        plan.dimensions.insert(
+            "compiler_dependency_projects".to_string(),
+            invalid.to_string(),
+        );
+        assert!(
+            dependency_module_roots(spec, root.path(), std::slice::from_ref(&plan)).is_err(),
+            "{invalid}"
+        );
+    }
+}
+
 #[tokio::test]
 #[ignore = "requires Go and the installed pinned Go semantic indexer"]
 async fn qualified_world_observer_rejects_substituted_runtime_image() {
