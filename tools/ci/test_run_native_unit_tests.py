@@ -83,6 +83,11 @@ class NativeTargetTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             runner.integration_targets({"packages": []})
 
+    def test_new_examples_and_benchmarks_cannot_be_silently_omitted(self):
+        for kind in ["example", "bench"]:
+            with self.subTest(kind=kind), self.assertRaises(ValueError):
+                runner.integration_targets(fixture({"name": "added", "kind": [kind]}))
+
     @patch.object(runner.subprocess, "run")
     def test_execution_includes_every_target_as_a_separate_cargo_argument(self, run):
         runner.run_tests(["added", "existing"])
@@ -124,6 +129,46 @@ class NativeTargetTests(unittest.TestCase):
         with self.assertRaises(subprocess.CalledProcessError):
             runner.run_tests(["existing"])
         run.assert_called_once()
+
+    @patch.object(runner.subprocess, "run")
+    def test_independent_suites_partition_the_original_commands(self, run):
+        for suite, flag in [("library", "--lib"), ("binaries", "--bins")]:
+            with self.subTest(suite=suite):
+                run.reset_mock()
+                runner.run_tests(["existing"], suite)
+                run.assert_called_once_with(
+                    ["cargo", "test", flag, "--locked"],
+                    check=True,
+                    cwd=runner.REPOSITORY_ROOT,
+                )
+        run.reset_mock()
+        runner.run_tests(["added", "existing"], "integrations")
+        run.assert_called_once_with(
+            [
+                "cargo",
+                "test",
+                "--locked",
+                "--test",
+                "added",
+                "--test",
+                "existing",
+                "--",
+                "--test-threads=1",
+            ],
+            check=True,
+            cwd=runner.REPOSITORY_ROOT,
+        )
+
+    @patch.object(runner.subprocess, "run")
+    def test_main_selects_only_the_requested_suite(self, run):
+        run.side_effect = [
+            subprocess.CompletedProcess([], 0, json.dumps(fixture()), ""),
+            subprocess.CompletedProcess([], 0),
+        ]
+        with redirect_stdout(io.StringIO()):
+            self.assertEqual(runner.main(["--suite", "binaries"]), 0)
+        self.assertEqual(run.call_count, 2)
+        self.assertEqual(run.call_args.args[0], ["cargo", "test", "--bins", "--locked"])
 
     @patch.object(runner.subprocess, "run")
     def test_list_only_never_runs_a_build_or_test(self, run):

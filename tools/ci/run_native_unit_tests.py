@@ -27,6 +27,10 @@ def integration_targets(metadata):
     seen = set()
     selected = []
     for target in package["targets"]:
+        if any(kind in {"example", "bench"} for kind in target["kind"]):
+            raise ValueError(
+                "auxiliary Cargo targets need an explicit native test suite"
+            )
         if "test" not in target["kind"]:
             continue
         name = target["name"]
@@ -53,23 +57,37 @@ def integration_targets(metadata):
     return sorted(selected)
 
 
-def run_tests(targets):
-    subprocess.run(
-        ["cargo", "test", "--lib", "--bins", "--locked"],
-        check=True,
-        cwd=REPOSITORY_ROOT,
-    )
-    arguments = ["cargo", "test", "--locked"]
-    for name in targets:
-        arguments.extend(["--test", name])
-    subprocess.run(
-        [*arguments, "--", "--test-threads=1"], check=True, cwd=REPOSITORY_ROOT
-    )
+def run_tests(targets, suite="all"):
+    unit_scopes = {
+        "all": ["--lib", "--bins"],
+        "library": ["--lib"],
+        "binaries": ["--bins"],
+        "integrations": [],
+    }
+    flags = unit_scopes[suite]
+    if flags:
+        subprocess.run(
+            ["cargo", "test", *flags, "--locked"],
+            check=True,
+            cwd=REPOSITORY_ROOT,
+        )
+    if suite in {"all", "integrations"}:
+        arguments = ["cargo", "test", "--locked"]
+        for name in targets:
+            arguments.extend(["--test", name])
+        subprocess.run(
+            [*arguments, "--", "--test-threads=1"], check=True, cwd=REPOSITORY_ROOT
+        )
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--list-only", action="store_true")
+    parser.add_argument(
+        "--suite",
+        choices=["all", "library", "binaries", "integrations"],
+        default="all",
+    )
     args = parser.parse_args(argv)
     try:
         output = subprocess.run(
@@ -92,7 +110,7 @@ def main(argv=None):
         for name in targets:
             print(name, flush=True)
         if not args.list_only:
-            run_tests(targets)
+            run_tests(targets, args.suite)
     except subprocess.CalledProcessError as error:
         if error.stderr:
             print(error.stderr, file=sys.stderr)
