@@ -138,3 +138,57 @@ fn single_failure_is_unchanged_and_successful_work_does_not_invent_processes() {
     );
     assert_eq!(combine_typed_run_and_integrity(Ok(17), Ok(())).unwrap(), 17);
 }
+
+#[test]
+fn successful_witness_survives_integrity_and_cleanup_failure_without_replacing_primary() {
+    for phase in [
+        SemanticIndexerRunPhase::IntegrityVerification,
+        SemanticIndexerRunPhase::Cleanup,
+    ] {
+        for primary in [None, Some(process("guard"))] {
+            let expected = primary.clone().unwrap_or_else(|| process("compiler"));
+            let guard = error(phase, primary, "post-execution guard failed");
+            let failure =
+                combine_witnessed_run_and_integrity(Ok((17, *process("compiler"))), Err(guard))
+                    .unwrap_err();
+            assert_eq!(failure.phase, phase);
+            assert_eq!(failure.process, Some(expected));
+            assert_eq!(failure.detail, "post-execution guard failed");
+        }
+    }
+}
+
+#[test]
+fn witnessed_failures_preserve_rejection_and_all_guards_without_inventing_output() {
+    for recorded in [None, Some(process("compiler"))] {
+        let execution = error(
+            SemanticIndexerRunPhase::Execution,
+            recorded.clone(),
+            "compiler failed",
+        );
+        let integrity = error(
+            SemanticIndexerRunPhase::IntegrityVerification,
+            None,
+            "SDK changed",
+        );
+        let result = combine_witnessed_run_and_integrity::<()>(Err(execution), Err(integrity));
+        let cleanup = error(SemanticIndexerRunPhase::Cleanup, None, "cleanup failed");
+        let failure = combine_witnessed_run_and_integrity(result, Err(cleanup)).unwrap_err();
+        assert_eq!(failure.phase, SemanticIndexerRunPhase::Cleanup);
+        assert_eq!(failure.process, recorded);
+        assert_eq!(
+            failure.detail,
+            "compiler failed; additionally, SDK changed; additionally, cleanup failed"
+        );
+    }
+}
+
+#[test]
+fn witnessed_success_keeps_value_and_evidence_until_guards_complete() {
+    let witness = *process("compiler");
+    let result = combine_witnessed_run_and_integrity(Ok((17, witness.clone())), Ok(()));
+    assert_eq!(
+        combine_witnessed_run_and_integrity(result, Ok(())).unwrap(),
+        (17, witness)
+    );
+}
