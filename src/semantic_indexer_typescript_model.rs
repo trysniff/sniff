@@ -40,7 +40,7 @@ pub(super) async fn discover(
         .recovery
         .finish_indexer_run()
         .map_err(|detail| model_failure(spec, SemanticIndexerRunPhase::Cleanup, detail));
-    combine_typed_run_and_integrity(result, cleanup)
+    finish_discovery(result, cleanup)
 }
 
 async fn discover_at(
@@ -48,7 +48,13 @@ async fn discover_at(
     spec: PinnedIndexer,
     installed: &InstalledIndexer,
     root: &Path,
-) -> Result<Vec<SemanticIndexerVariantPlan>, SemanticIndexerRunFailure> {
+) -> Result<
+    (
+        Vec<SemanticIndexerVariantPlan>,
+        SemanticIndexerProcessEvidence,
+    ),
+    SemanticIndexerRunFailure,
+> {
     repository_snapshot::stage_repository_snapshot(context.root, root)
         .map_err(|detail| model_failure(spec, SemanticIndexerRunPhase::Preparation, detail))?;
     require_snapshot(context, root).map_err(|detail| {
@@ -161,37 +167,99 @@ async fn discover_at(
             &after,
         )
     });
-    let result = combine_run_and_integrity(result, integrity);
-    require_snapshot(context, root).map_err(|detail| {
-        model_failure(spec, SemanticIndexerRunPhase::IntegrityVerification, detail)
-    })?;
-    context.store.verify(spec).map_err(|detail| {
-        model_failure(spec, SemanticIndexerRunPhase::IntegrityVerification, detail)
-    })?;
-    let output =
-        result.map_err(|detail| model_failure(spec, SemanticIndexerRunPhase::Execution, detail))?;
-    if output.timed_out
-        || output.memory_limit_exceeded
-        || output.process_limit_exceeded
-        || output.status_code != Some(0)
-    {
-        return Err(indexer_process_failure(
+    let snapshot_integrity = require_snapshot(context, root);
+    let installation_integrity = context.store.verify(spec).map(|_| ());
+    let output = validate_execution(
+        spec,
+        result,
+        [integrity, snapshot_integrity, installation_integrity],
+    )?;
+    validate_output(spec, output, |stdout| {
+        plans_from_output(
+            stdout,
+            &configs,
+            &sources,
+            context.repository_content_sha256,
+            &runtime_sha256,
+            |path| require_plain_file(root, path),
+        )
+    })
+}
+
+fn validate_output<T>(
+    spec: PinnedIndexer,
+    output: crate::sandbox::SandboxOutput,
+    validate: impl FnOnce(&[u8]) -> Result<T, String>,
+) -> Result<(T, SemanticIndexerProcessEvidence), SemanticIndexerRunFailure> {
+    match validate(output.stdout.as_bytes()) {
+        Ok(value) => Ok((value, process_evidence(output))),
+        Err(detail) => Err(indexer_process_failure(
             spec,
-            SemanticIndexerRunFailureKind::RepositoryRejected,
-            SemanticIndexerRunPhase::Execution,
-            "TypeScript compiler project census failed; no unqualified indexing fallback was used",
+            SemanticIndexerRunFailureKind::InfrastructureFailed,
+            SemanticIndexerRunPhase::OutputValidation,
+            detail,
             output,
-        ));
+        )),
     }
-    plans_from_output(
-        output.stdout.as_bytes(),
-        &configs,
-        &sources,
-        context.repository_content_sha256,
-        &runtime_sha256,
-        |path| require_plain_file(root, path),
-    )
-    .map_err(|detail| model_failure(spec, SemanticIndexerRunPhase::OutputValidation, detail))
+}
+
+fn finish_discovery<T>(
+    result: Result<(T, SemanticIndexerProcessEvidence), SemanticIndexerRunFailure>,
+    cleanup: Result<(), SemanticIndexerRunFailure>,
+) -> Result<T, SemanticIndexerRunFailure> {
+    match (result, cleanup) {
+        (Ok((_, process)), Err(mut failure)) => {
+            if failure.process.is_none() {
+                failure.process = Some(Box::new(process));
+            }
+            Err(failure)
+        }
+        (result, cleanup) => {
+            combine_typed_run_and_integrity(result, cleanup).map(|(value, _)| value)
+        }
+    }
+}
+
+fn validate_execution(
+    spec: PinnedIndexer,
+    result: Result<crate::sandbox::SandboxOutput, String>,
+    integrity_checks: [Result<(), String>; 3],
+) -> Result<crate::sandbox::SandboxOutput, SemanticIndexerRunFailure> {
+    let mut result = match result {
+        Err(detail) => Err(model_failure(
+            spec,
+            SemanticIndexerRunPhase::Execution,
+            detail,
+        )),
+        Ok(output)
+            if output.timed_out
+                || output.memory_limit_exceeded
+                || output.process_limit_exceeded
+                || output.status_code != Some(0) =>
+        {
+            Err(indexer_process_failure(
+                spec,
+                SemanticIndexerRunFailureKind::RepositoryRejected,
+                SemanticIndexerRunPhase::Execution,
+                "TypeScript compiler project census failed; no unqualified indexing fallback was used",
+                output,
+            ))
+        }
+        Ok(output) => Ok(output),
+    };
+    for integrity in integrity_checks {
+        let integrity = integrity.map_err(|detail| {
+            model_failure(spec, SemanticIndexerRunPhase::IntegrityVerification, detail)
+        });
+        result = match (result, integrity) {
+            (Ok(output), Err(mut failure)) => {
+                failure.process = Some(Box::new(process_evidence(output)));
+                Err(failure)
+            }
+            (result, integrity) => combine_typed_run_and_integrity(result, integrity),
+        };
+    }
+    result
 }
 
 fn require_snapshot(context: &RequiredIndexerRunContext<'_>, staged: &Path) -> Result<(), String> {
@@ -305,3 +373,7 @@ fn model_failure(
 #[cfg(test)]
 #[path = "tests/semantic_indexer_typescript_model.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tests/semantic_indexer_typescript_model_execution.rs"]
+mod execution_tests;
