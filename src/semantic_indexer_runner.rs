@@ -23,6 +23,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 #[path = "semantic_indexer_runner_outcome.rs"]
 mod outcome;
 
+#[path = "semantic_indexer_execution.rs"]
+mod execution;
+
 #[path = "semantic_indexer_census.rs"]
 mod census;
 
@@ -998,7 +1001,8 @@ async fn run_one(
             detail,
         )
     });
-    combine_typed_run_and_integrity(run_result, cleanup_result)
+    combine_witnessed_run_and_integrity(run_result.map(|process| ((), process)), cleanup_result)
+        .map(|(_, process)| process)
 }
 
 async fn run_one_in_recovery_scope(
@@ -1251,16 +1255,7 @@ async fn run_one_in_recovery_scope(
     }
     let output = match typescript_plan {
         Some(plan) => typescript_inputs::run_worker(prepared_command, spec, installed, plan).await,
-        None => run_with_runtime_identity(prepared_command, spec.display_name)
-            .await
-            .map_err(|detail| {
-                indexer_failure(
-                    spec,
-                    SemanticIndexerRunFailureKind::InfrastructureFailed,
-                    SemanticIndexerRunPhase::Execution,
-                    detail,
-                )
-            }),
+        None => execution::run_worker(prepared_command, spec, |_| Ok(())).await,
     };
     if std::env::var_os("SNIFF_DEBUG_INDEXERS").is_some() {
         eprintln!(
@@ -1268,178 +1263,16 @@ async fn run_one_in_recovery_scope(
             spec.display_name
         );
     }
-    let temporary_project_cleanup = cleanup_temporary_project(temporary_project, spec.display_name);
-    let workspace_cleanup = workspace
-        .map(|workspace| workspace.cleanup(spec.display_name))
-        .transpose();
-    match (temporary_project_cleanup, workspace_cleanup) {
-        (Ok(()), Ok(_)) => {}
-        (Err(error), Ok(_)) | (Ok(()), Err(error)) => {
-            return Err(indexer_failure(
-                spec,
-                SemanticIndexerRunFailureKind::InfrastructureFailed,
-                SemanticIndexerRunPhase::Cleanup,
-                error,
-            ));
-        }
-        (Err(project_error), Err(workspace_error)) => {
-            return Err(indexer_failure(
-                spec,
-                SemanticIndexerRunFailureKind::InfrastructureFailed,
-                SemanticIndexerRunPhase::Cleanup,
-                format!("{project_error}; additionally, {workspace_error}"),
-            ));
-        }
-    }
-    if let Some(cache_root) = cache_root
-        && cache_root.exists()
-    {
-        fs::remove_dir_all(&cache_root).map_err(|error| {
-            indexer_failure(
-                spec,
-                SemanticIndexerRunFailureKind::InfrastructureFailed,
-                SemanticIndexerRunPhase::Cleanup,
-                format!(
-                    "{} indexing completed but private cache cleanup failed for {}: {error}",
-                    spec.display_name,
-                    cache_root.display()
-                ),
-            )
-        })?;
-    }
-    if let Some(expected) =
-        typescript_plan.and_then(|plan| plan.dimensions.get("source_snapshot_sha256"))
-        && repository_snapshot::repository_content_digest_with_generated_index(execution_root)
-            .map_err(|detail| {
-                indexer_failure(
-                    spec,
-                    SemanticIndexerRunFailureKind::InfrastructureFailed,
-                    SemanticIndexerRunPhase::IntegrityVerification,
-                    detail,
-                )
-            })?
-            != *expected
-    {
-        return Err(indexer_failure(
-            spec,
-            SemanticIndexerRunFailureKind::InfrastructureFailed,
-            SemanticIndexerRunPhase::IntegrityVerification,
-            "TypeScript indexing changed its compiler census snapshot; refusing its SCIP output",
-        ));
-    }
-    let source_digest_after =
-        source_integrity_digest_at(root, execution_root, files).map_err(|detail| {
-            indexer_failure(
-                spec,
-                SemanticIndexerRunFailureKind::InfrastructureFailed,
-                SemanticIndexerRunPhase::IntegrityVerification,
-                detail,
-            )
-        })?;
-    if source_digest_before != source_digest_after {
-        return Err(indexer_failure(
-            spec,
-            SemanticIndexerRunFailureKind::InfrastructureFailed,
-            SemanticIndexerRunPhase::IntegrityVerification,
-            format!(
-                "{} indexing changed an eligible source file; refusing to trust its SCIP output",
-                spec.display_name
-            ),
-        ));
-    }
-    let output = output?;
-    if output.memory_limit_exceeded {
-        return Err(indexer_process_failure(
-            spec,
-            SemanticIndexerRunFailureKind::RepositoryRejected,
-            SemanticIndexerRunPhase::Execution,
-            format!(
-                "{} exceeded Sniff's {} byte aggregate process-tree memory limit; no weaker semantic provider was used",
-                spec.display_name, INDEXER_MEMORY_LIMIT
-            ),
-            output,
-        ));
-    }
-    if output.process_limit_exceeded {
-        return Err(indexer_process_failure(
-            spec,
-            SemanticIndexerRunFailureKind::RepositoryRejected,
-            SemanticIndexerRunPhase::Execution,
-            format!(
-                "{} exceeded Sniff's {} process limit; no weaker semantic provider was used",
-                spec.display_name, INDEXER_PROCESS_LIMIT
-            ),
-            output,
-        ));
-    }
-    if !output.timed_out && output.status_code == Some(0) {
-        publish_isolated_index(execution_root, root, recovery).map_err(|detail| {
-            indexer_failure(
-                spec,
-                SemanticIndexerRunFailureKind::InfrastructureFailed,
-                SemanticIndexerRunPhase::OutputValidation,
-                detail,
-            )
-        })?;
-    }
-    if output.timed_out {
-        return Err(indexer_process_failure(
-            spec,
-            SemanticIndexerRunFailureKind::InfrastructureUnavailable,
-            SemanticIndexerRunPhase::Execution,
-            format!(
-                "{} indexing timed out after {}",
-                spec.display_name,
-                format_timeout(index_timeout())
-            ),
-            output,
-        ));
-    }
-    if output.status_code == Some(0) {
-        let index_path = root.join("index.scip");
-        if !index_path.is_file() {
-            return Err(indexer_process_failure(
-                spec,
-                SemanticIndexerRunFailureKind::IncompleteOutput,
-                SemanticIndexerRunPhase::OutputValidation,
-                format!(
-                    "{} exited successfully but did not emit SCIP index {}; output: {}",
-                    spec.display_name,
-                    index_path.display(),
-                    compact_process_output(output.stdout.as_bytes(), output.stderr.as_bytes())
-                ),
-                output,
-            ));
-        }
-        return Ok(process_evidence(output));
-    }
-    if output.status_code.is_none() {
-        return Err(indexer_process_failure(
-            spec,
-            SemanticIndexerRunFailureKind::InfrastructureFailed,
-            SemanticIndexerRunPhase::Execution,
-            format!(
-                "{} indexing terminated without an exit status; output: {}",
-                spec.display_name,
-                compact_process_output(output.stdout.as_bytes(), output.stderr.as_bytes())
-            ),
-            output,
-        ));
-    }
-    Err(indexer_process_failure(
+    execution::Completion {
         spec,
-        SemanticIndexerRunFailureKind::RepositoryRejected,
-        SemanticIndexerRunPhase::Execution,
-        format!(
-            "{} indexing failed with {}; output: {}",
-            spec.display_name,
-            output
-                .status_code
-                .map_or_else(|| "signal".to_string(), |status| status.to_string()),
-            compact_process_output(output.stdout.as_bytes(), output.stderr.as_bytes())
-        ),
-        output,
-    ))
+        root,
+        execution_root,
+        files,
+        recovery,
+        typescript_plan,
+        source_digest_before: &source_digest_before,
+    }
+    .finish(output, temporary_project, workspace, cache_root)
 }
 
 async fn prepare_go_dependency_cache(
