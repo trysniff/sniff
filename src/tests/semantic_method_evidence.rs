@@ -92,6 +92,52 @@ fn identical_edges_in_two_worlds_remain_distinct_and_both_dossiers_survive() {
 }
 
 #[test]
+fn hundred_world_evidence_compacts_dossiers_but_keeps_all_relationship_worlds() {
+    let fixture = Fixture::new();
+    let worlds = (0..100)
+        .map(|ordinal| {
+            let mut world = world(&fixture.index, &format!("world-{ordinal:03}"));
+            let SemanticIndexVariant::Qualified { dimensions, .. } = &mut world.index.variant
+            else {
+                unreachable!()
+            };
+            dimensions.insert("source_snapshot_sha256".to_string(), "a".repeat(64));
+            dimensions.insert("compiler_runtime_sha256".to_string(), "b".repeat(64));
+            world
+        })
+        .collect::<Vec<_>>();
+    let sets = sets(worlds);
+    let evidence = build_compiler_method_evidence(&fixture.root, &fixture.files, &sets).unwrap();
+    assert_eq!(evidence.contexts.len(), 2);
+    assert_eq!(evidence.references.len(), 100);
+    let SemanticIndexSet::Qualified { variants } = &sets[&SemanticIndexerKind::Rust] else {
+        unreachable!()
+    };
+    assert_eq!(variants.len(), 100);
+    let mut original = BTreeMap::<String, Vec<String>>::new();
+    for world in variants.values() {
+        let join = join_methods(&fixture.root, &fixture.files, &world.index).unwrap();
+        for (key, context) in super::super::render_compiler_method_contexts(
+            &fixture.root,
+            &fixture.files,
+            &world.index,
+            &join,
+        )
+        .unwrap()
+        {
+            original.entry(key).or_default().push(context);
+        }
+    }
+    for (key, context) in &evidence.contexts {
+        assert_eq!(context.matches("compiler variant: qualified").count(), 100);
+        assert_eq!(context.matches("SCIP provider: test").count(), 1);
+        assert_eq!(context.matches(&"a".repeat(64)).count(), 1);
+        assert!(context.contains("facts in observed worlds W1-W100:"));
+        assert!(context.len() * 3 < original[key].join("\n\n").len());
+    }
+}
+
+#[test]
 fn explicit_ignored_document_is_not_resolved_from_another_world() {
     let fixture = Fixture::new();
     let mut windows = world(&fixture.index, "windows");

@@ -15,7 +15,10 @@ fn fixture() -> (SemanticIndex, SemanticMethodBinding) {
 }
 
 fn context(index: &SemanticIndex, binding: &SemanticMethodBinding) -> String {
-    render_binding_context(index, binding, &contracts::CompilerContracts::new(index))
+    render_single_world(CompilerMethodWorld {
+        variant: index.variant.clone(),
+        lines: render_binding_facts(index, binding, &contracts::CompilerContracts::new(index)),
+    })
 }
 
 fn id(value: &str) -> SemanticSymbolId {
@@ -43,6 +46,46 @@ fn relate(index: &mut SemanticIndex, source: &str, target: &str, kind: SemanticR
         target: id(target),
         kind,
     });
+}
+
+#[test]
+fn public_single_world_renderer_preserves_legacy_bytes_and_header_position() {
+    let (root, files, mut index) = super::super::tests::fixture(Vec::new(), 0, false, false);
+    let join = super::super::join_methods(&root, &files, &index).unwrap();
+    let key = method_context_key(&files[0].file_path, "process", 1);
+    let facts = concat!(
+        "compiler symbol: resolved rust test process\n",
+        "compiler kind: Callable; visibility: Private; origin: Repository\n",
+        "compiler public/entrypoint surfaces: not established by this index\n",
+        "compiler signature: fn process(value: i32) -> i32\n",
+        "compiler contract links: not established by this index\n",
+        "compiler enclosing symbol: not reported\n",
+        "compiler test linkage: not established by this index; not proof that tests are absent",
+    );
+    for (variant, header) in [
+        (
+            SemanticIndexVariant::Unqualified,
+            "compiler variant: unqualified; not proof of all build configurations",
+        ),
+        (
+            SemanticIndexVariant::Qualified {
+                identity: SemanticVariantId("linux-amd64".to_string()),
+                dimensions: BTreeMap::from([
+                    ("GOARCH".to_string(), "amd64".to_string()),
+                    ("GOOS".to_string(), "linux".to_string()),
+                ]),
+            },
+            "compiler variant: qualified \"linux-amd64\"; dimensions: {\"GOARCH\": \"amd64\", \"GOOS\": \"linux\"}",
+        ),
+    ] {
+        index.variant = variant;
+        let actual = render_compiler_method_contexts(&root, &files, &index, &join).unwrap();
+        assert_eq!(
+            actual[&key],
+            format!("SCIP provider: test\n{header}\n{facts}")
+        );
+    }
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
