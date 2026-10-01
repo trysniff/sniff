@@ -661,24 +661,17 @@ fn standalone_compiler_check(file_path: &str, source: &str) -> Result<bool, Stri
     let result = (|| {
         std::fs::write(&candidate, source)
             .map_err(|error| format!("failed to write compiler candidate: {error}"))?;
+        if extension.eq_ignore_ascii_case("ts") || extension.eq_ignore_ascii_case("tsx") {
+            return crate::semantic_indexer_runner::run_standalone_typescript_proof(
+                &root, &candidate,
+            );
+        }
         let output_path = root.join("compiled-output");
         std::fs::create_dir_all(&output_path)
             .map_err(|error| format!("failed to create compiler output directory: {error}"))?;
         let (program, args) = match extension.to_ascii_lowercase().as_str() {
             "py" => ("python", vec!["-m", "py_compile", "candidate.py"]),
             "js" | "jsx" | "mjs" | "cjs" => ("node", vec!["--check", "candidate.js"]),
-            "ts" | "tsx" => (
-                "tsc",
-                vec![
-                    "--noEmit",
-                    "--pretty",
-                    "false",
-                    "--skipLibCheck",
-                    "--target",
-                    "ES2022",
-                    "candidate.ts",
-                ],
-            ),
             "go" => (
                 "go",
                 vec![
