@@ -134,6 +134,13 @@ jobs:
           cargo test --lib --locked \
             semantic_indexer_runner::go_model::preparation_tests:: \
             -- --ignored --test-threads=1 --nocapture
+      - name: Reject stale Go inputs at the native qualified executor boundary
+        if: matrix.fixture == 'go'
+        shell: bash
+        run: |
+          cargo test --lib --locked \
+            semantic_indexer_runner::go_runner::input_binding_tests:: \
+            -- --ignored --test-threads=1 --nocapture
 
   temporal-prior-replay:
     name: temporal-prior-replay

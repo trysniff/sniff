@@ -1441,3 +1441,7 @@ fn go_snapshot_assembly_failure(
 #[cfg(test)]
 #[path = "semantic_indexer_go_runner_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tests/semantic_indexer_go_input_bindings.rs"]
+mod input_binding_tests;
