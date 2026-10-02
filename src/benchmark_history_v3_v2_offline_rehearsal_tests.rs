@@ -274,5 +274,8 @@ async fn rehearse_v2_source_to_review(real_semantic_indexer: bool) {
         &[],
     )
     .unwrap_err();
-    assert!(stop_error.contains("requires proven prior-cohort repository IDs"));
+    assert_eq!(
+        stop_error,
+        "historical-v3 v9 stop publication is disabled: complete authenticated prior-cohort temporal proof admission is not implemented"
+    );
 }
