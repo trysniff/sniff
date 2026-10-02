@@ -9,6 +9,7 @@ const MAX_SOURCE_BYTES: u64 = 1024 * 1024;
 const BUILD_ID_SOURCE: &str = "src/cmd/go/internal/work/buildid.go";
 const SHELL_SOURCE: &str = "src/cmd/go/internal/work/shell.go";
 const GENERATE_SOURCE: &str = "src/cmd/go/internal/generate/generate.go";
+const CHILD_ENV_SOURCE: &str = "src/cmd/go/internal/base/env.go";
 const BUILD_ID_BEFORE: &str = concat!(
     "\t\tcmd := exec.Command(cmdline[0], cmdline[1:]...)\n",
     "\t\tvar stdout, stderr strings.Builder\n"
@@ -49,6 +50,27 @@ const GENERATE_DRIVER_AFTER: &str = concat!(
     "\t\t}\n",
     "\t\tpath = self\n",
     "\t} else if path != \"\" && !strings.Contains(path, string(os.PathSeparator)) {\n"
+);
+const CHILD_PATH_BEFORE: &str = concat!(
+    "\tpath := os.Getenv(pathVar)\n",
+    "\tif path == \"\" {\n",
+    "\t\treturn append(base, pathVar+\"=\"+cfg.GOROOTbin)\n",
+    "\t}\n",
+    "\treturn append(base, pathVar+\"=\"+cfg.GOROOTbin+string(os.PathListSeparator)+path)\n"
+);
+const CHILD_PATH_AFTER: &str = concat!(
+    "\tself, err := os.Executable()\n",
+    "\tif err != nil {\n",
+    "\t\tFatalf(\"resolve current SDK-bound go driver: %v\", err)\n",
+    "\t}\n",
+    "\tpath := filepath.Dir(self)\n",
+    "\tif path != cfg.GOROOTbin {\n",
+    "\t\tpath += string(os.PathListSeparator) + cfg.GOROOTbin\n",
+    "\t}\n",
+    "\tif inherited := os.Getenv(pathVar); inherited != \"\" {\n",
+    "\t\tpath += string(os.PathListSeparator) + inherited\n",
+    "\t}\n",
+    "\treturn append(base, pathVar+\"=\"+path)\n"
 );
 
 #[derive(Serialize)]
@@ -94,7 +116,7 @@ type Recipe = (
     &'static [(&'static str, &'static str)],
 );
 
-fn recipes() -> [Recipe; 3] {
+fn recipes() -> [Recipe; 4] {
     [
         (
             BUILD_ID_SOURCE,
@@ -109,6 +131,11 @@ fn recipes() -> [Recipe; 3] {
                 (GENERATE_STDIN_BEFORE, GENERATE_STDIN_AFTER),
                 (GENERATE_DRIVER_BEFORE, GENERATE_DRIVER_AFTER),
             ],
+        ),
+        (
+            CHILD_ENV_SOURCE,
+            "env.go",
+            &[(CHILD_PATH_BEFORE, CHILD_PATH_AFTER)],
         ),
     ]
 }

@@ -17,6 +17,8 @@ pub(super) struct Launch {
     pub(super) repository_target: bool,
     #[cfg(windows)]
     pub(super) collect_runtime_images: bool,
+    #[cfg(windows)]
+    pub(super) runtime_guard: Vec<fs::File>,
 }
 
 pub(super) fn cargo_launch(args: &[String]) -> Result<Launch, HistoricalRuntimePlanError> {
@@ -57,21 +59,52 @@ pub(super) fn cargo_launch(args: &[String]) -> Result<Launch, HistoricalRuntimeP
         repository_target: false,
         #[cfg(windows)]
         collect_runtime_images: true,
+        #[cfg(windows)]
+        runtime_guard: Vec::new(),
     })
 }
 
-pub(super) fn go_launch(args: &[String]) -> Result<Launch, HistoricalRuntimePlanError> {
+pub(super) fn go_launch(
+    args: &[String],
+    repository: &Path,
+) -> Result<Launch, HistoricalRuntimePlanError> {
     let go = resolve_on_path("go")?;
+    if go.starts_with(repository) {
+        return Err(HistoricalRuntimePlanError::Invalid(
+            "selected Go driver must be outside the repository before SDK discovery".to_string(),
+        ));
+    }
+    #[cfg(not(windows))]
     let go_root = query_path(&go, &["env", "GOROOT"], "Go GOROOT")?;
+    #[cfg(windows)]
+    let go_root = crate::go_runtime_adapter::discover_goroot(&go, repository)
+        .map_err(HistoricalRuntimePlanError::Unavailable)?;
+    reject_broad_user_root(&go_root)?;
+    #[cfg(windows)]
+    let adapted = crate::go_runtime_adapter::prepare(&go, &go_root, repository)
+        .map_err(HistoricalRuntimePlanError::Invalid)?;
+    #[cfg(not(windows))]
+    let _ = repository;
     Ok(Launch {
+        #[cfg(not(windows))]
         target: go.clone(),
+        #[cfg(windows)]
+        target: adapted.executable.clone(),
         args: args.to_vec(),
+        #[cfg(not(windows))]
         runtime_files: vec![go],
+        #[cfg(windows)]
+        runtime_files: vec![go, adapted.executable, adapted.record],
+        #[cfg(not(windows))]
         runtime_roots: vec![go_root.clone()],
+        #[cfg(windows)]
+        runtime_roots: vec![go_root.clone(), adapted.root],
         env: vec![("GOROOT".to_string(), path_value(&go_root))],
         repository_target: false,
         #[cfg(windows)]
         collect_runtime_images: true,
+        #[cfg(windows)]
+        runtime_guard: adapted.guard,
     })
 }
 
@@ -101,6 +134,8 @@ pub(super) fn python_launch(
         repository_target: false,
         #[cfg(windows)]
         collect_runtime_images: false,
+        #[cfg(windows)]
+        runtime_guard: Vec::new(),
     })
 }
 
@@ -135,6 +170,8 @@ pub(super) fn uv_launch(args: &[String]) -> Result<Launch, HistoricalRuntimePlan
         repository_target: false,
         #[cfg(windows)]
         collect_runtime_images: false,
+        #[cfg(windows)]
+        runtime_guard: Vec::new(),
     })
 }
 
@@ -188,6 +225,8 @@ fn private_environment_python_launch(
         repository_target: true,
         #[cfg(windows)]
         collect_runtime_images: false,
+        #[cfg(windows)]
+        runtime_guard: Vec::new(),
     })
 }
 
@@ -204,6 +243,8 @@ pub(super) fn node_launch(args: &[String]) -> Result<Launch, HistoricalRuntimePl
         repository_target: false,
         #[cfg(windows)]
         collect_runtime_images: true,
+        #[cfg(windows)]
+        runtime_guard: Vec::new(),
     })
 }
 
@@ -227,6 +268,8 @@ pub(super) fn node_manager_launch(
         repository_target: false,
         #[cfg(windows)]
         collect_runtime_images: true,
+        #[cfg(windows)]
+        runtime_guard: Vec::new(),
     })
 }
 
@@ -241,6 +284,8 @@ pub(super) fn bun_launch(args: &[String]) -> Result<Launch, HistoricalRuntimePla
         repository_target: false,
         #[cfg(windows)]
         collect_runtime_images: true,
+        #[cfg(windows)]
+        runtime_guard: Vec::new(),
     })
 }
 
@@ -265,6 +310,8 @@ pub(super) fn gradle_launch(
         repository_target: true,
         #[cfg(windows)]
         collect_runtime_images: true,
+        #[cfg(windows)]
+        runtime_guard: Vec::new(),
     })
 }
 
@@ -298,6 +345,8 @@ pub(super) fn gradle_installation_launch(
         repository_target: false,
         #[cfg(windows)]
         collect_runtime_images: true,
+        #[cfg(windows)]
+        runtime_guard: Vec::new(),
     })
 }
 
@@ -361,6 +410,8 @@ pub(super) fn gradle_tooling_launch(args: &[String]) -> Result<Launch, Historica
         repository_target: false,
         #[cfg(windows)]
         collect_runtime_images: true,
+        #[cfg(windows)]
+        runtime_guard: Vec::new(),
     })
 }
 
@@ -396,6 +447,8 @@ pub(super) fn generic_launch(
             repository_target: true,
             #[cfg(windows)]
             collect_runtime_images: true,
+            #[cfg(windows)]
+            runtime_guard: Vec::new(),
         });
     }
     let target = resolve_on_path(program)?;
@@ -413,6 +466,8 @@ pub(super) fn generic_launch(
         repository_target: false,
         #[cfg(windows)]
         collect_runtime_images: true,
+        #[cfg(windows)]
+        runtime_guard: Vec::new(),
     })
 }
 

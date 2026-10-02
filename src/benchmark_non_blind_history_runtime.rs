@@ -53,6 +53,8 @@ pub(crate) struct HistoricalRuntimePlan {
     pub(crate) command: SandboxCommand,
     pub(crate) runtime_identity: String,
     pub(crate) launcher_kind: &'static str,
+    #[cfg(windows)]
+    _runtime_guard: Vec<fs::File>,
 }
 
 pub(crate) fn persist_historical_runtime_directories(plan: &mut HistoricalRuntimePlan) {
@@ -115,7 +117,7 @@ pub(crate) fn prepare_historical_runtime(
 
     let mut launch = match program.as_str() {
         "cargo" => cargo_launch(&expanded_args)?,
-        "go" => go_launch(&expanded_args)?,
+        "go" => go_launch(&expanded_args, &root)?,
         "python" | "python3" => python_launch(program, &expanded_args)?,
         "uv" => uv_launch(&expanded_args)?,
         "{sniff_private_python}" => private_python_launch(&cache_root, &expanded_args)?,
@@ -219,6 +221,14 @@ pub(crate) fn prepare_historical_runtime(
     path_prefixes.extend(std::env::split_paths(std::ffi::OsStr::new(sandbox_path())));
     path_prefixes.sort();
     path_prefixes.dedup();
+    #[cfg(windows)]
+    if program == "go" {
+        // Nested Go commands must resolve the same SDK-bound adapted driver first.
+        if let Some(parent) = launch.target.parent() {
+            path_prefixes.retain(|path| path != parent);
+            path_prefixes.insert(0, parent.to_path_buf());
+        }
+    }
     let path = std::env::join_paths(path_prefixes).map_err(|error| {
         HistoricalRuntimePlanError::Invalid(format!(
             "failed to construct historical runtime PATH: {error}"
@@ -257,6 +267,8 @@ pub(crate) fn prepare_historical_runtime(
         },
         runtime_identity,
         launcher_kind,
+        #[cfg(windows)]
+        _runtime_guard: launch.runtime_guard,
     })
 }
 

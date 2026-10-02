@@ -147,12 +147,12 @@ fn windows_go_legacy_generator_transport_installation_is_rejected() {
     assert!(
         record
             .source_identity
-            .ends_with("go-tool-explicit-stdin-v5")
+            .ends_with("go-tool-explicit-stdin-v6")
     );
     super::validate_record(spec, &record).unwrap();
     record.source_identity = record
         .source_identity
-        .replace("go-tool-explicit-stdin-v5", "go-tool-explicit-stdin-v4");
+        .replace("go-tool-explicit-stdin-v6", "go-tool-explicit-stdin-v5");
     assert!(super::validate_record(spec, &record).is_err());
 }
 

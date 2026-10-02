@@ -10,7 +10,7 @@ pub(crate) const SCIP_PYTHON_PUBLIC_API_PATCH_ID: &str = "compiler-public-api-v1
 pub(crate) const SCIP_JAVA_KOTLIN_ANNOTATION_PATCH_ID: &str =
     "compiler-resolved-annotation-use-sites-v1";
 #[cfg(windows)]
-pub(crate) const WINDOWS_SCIP_GO_PATCH_ID: &str = "x-tools-v0.45.0-and-go-tool-explicit-stdin-v5";
+pub(crate) const WINDOWS_SCIP_GO_PATCH_ID: &str = "x-tools-v0.45.0-and-go-tool-explicit-stdin-v6";
 #[cfg(windows)]
 pub(crate) const WINDOWS_SCIP_JAVA_PATCH_ID: &str = "isolated-gradle-file-temp-overlay-v19";
 #[cfg(windows)]
