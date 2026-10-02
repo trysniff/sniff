@@ -13,6 +13,9 @@ use std::process::Command;
 #[path = "benchmark_source_seal_validation.rs"]
 mod validation;
 
+#[path = "benchmark_source_seal_io.rs"]
+pub(super) mod artifact_io;
+
 pub use validation::validate_source_seal;
 
 pub const SOURCE_SEAL_SCHEMA_VERSION: u32 = 3;
@@ -929,46 +932,24 @@ fn reject_symlink(path: &Path, label: &str) -> Result<(), String> {
 }
 
 fn validate_artifact(root: &Path, path: &str, expected: &str, label: &str) -> Result<(), String> {
+    read_verified_artifact(root, path, expected, label).map(|_| ())
+}
+
+pub(super) fn read_verified_artifact(
+    root: &Path,
+    path: &str,
+    expected: &str,
+    label: &str,
+) -> Result<Vec<u8>, String> {
     require_sha256(&format!("{label} sha256"), expected)?;
-    let relative = safe_relative_path(path)?;
-    let canonical_root = fs::canonicalize(root).map_err(|error| {
-        format!(
-            "failed to resolve source-seal root {}: {error}",
-            root.display()
-        )
-    })?;
-    let artifact = fs::canonicalize(root.join(relative))
-        .map_err(|error| format!("failed to resolve {label} {path}: {error}"))?;
-    if !artifact.starts_with(&canonical_root) {
-        return Err(format!("{label} escapes the source-seal bundle: {path}"));
-    }
-    reject_symlink(&artifact, label)?;
-    let bytes = fs::read(&artifact)
-        .map_err(|error| format!("failed to read {label} {}: {error}", artifact.display()))?;
+    let bytes = artifact_io::read_artifact(root, path)?;
     let actual = sha256(&bytes);
     if !actual.eq_ignore_ascii_case(expected) {
         return Err(format!(
             "{label} hash mismatch for {path}; expected {expected}, got {actual}"
         ));
     }
-    Ok(())
-}
-
-fn read_artifact(root: &Path, path: &str) -> Result<Vec<u8>, String> {
-    let relative = safe_relative_path(path)?;
-    let canonical_root = fs::canonicalize(root).map_err(|error| {
-        format!(
-            "failed to resolve source-seal root {}: {error}",
-            root.display()
-        )
-    })?;
-    let artifact = fs::canonicalize(root.join(relative))
-        .map_err(|error| format!("failed to resolve source-seal artifact {path}: {error}"))?;
-    if !artifact.starts_with(&canonical_root) {
-        return Err(format!("source-seal artifact escapes its bundle: {path}"));
-    }
-    reject_symlink(&artifact, "source-seal artifact")?;
-    fs::read(&artifact).map_err(|error| format!("failed to read {path}: {error}"))
+    Ok(bytes)
 }
 
 fn write_new_artifact(destination: &Path, bytes: &[u8], label: &str) -> Result<(), String> {
