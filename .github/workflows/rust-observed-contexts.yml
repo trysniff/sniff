@@ -1,0 +1,86 @@
+name: Rust backend observations
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/rust-observed-contexts.yml"
+      - "tools/indexers/patches/rust-analyzer-observed-contexts.patch"
+      - "tools/indexers/rust-observed-contexts.md"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rust-observed-contexts-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  qualify:
+    name: rust-observations-${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    env:
+      CARGO_BUILD_JOBS: "2"
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@1.96.0
+        with:
+          components: clippy, rustfmt
+      - name: Apply the patch to the exact pristine upstream source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $source = Join-Path $env:RUNNER_TEMP 'rust-analyzer-observed-contexts'
+          git clone --depth 1 --single-branch --branch 2026-08-03 --config core.autocrlf=false https://github.com/rust-lang/rust-analyzer.git $source
+          if ($LASTEXITCODE -ne 0) { throw 'Upstream checkout failed' }
+          $head = (git -C $source rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $head -ne 'b54a82b321c9617c5cf0b07ac0f12c08f7bc5902') { throw 'Upstream pin mismatch' }
+          $patch = Join-Path $env:GITHUB_WORKSPACE 'tools/indexers/patches/rust-analyzer-observed-contexts.patch'
+          git -C $source apply --check $patch
+          if ($LASTEXITCODE -ne 0) { throw 'Patch does not apply exactly' }
+          git -C $source apply $patch
+          if ($LASTEXITCODE -ne 0) { throw 'Patch application failed' }
+          "OBSERVED_SOURCE=$source" >> $env:GITHUB_ENV
+          "CARGO_TARGET_DIR=$(Join-Path $env:RUNNER_TEMP 'rust-observed-contexts-target')" >> $env:GITHUB_ENV
+      - name: Compile and verify exact focused test inventories
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Set-Location $env:OBSERVED_SOURCE
+          cargo +1.96.0 test --locked -p rust-analyzer -p project-model --lib --no-run --message-format=json > compile.jsonl
+          if ($LASTEXITCODE -ne 0) { throw 'Backend test compilation failed' }
+          $items = Get-Content compile.jsonl | ForEach-Object { $_ | ConvertFrom-Json }
+          foreach ($proof in @(
+            @{ Path='crates/rust-analyzer/src/lib.rs'; Scope='cli::sniff_project_model::tests::'; Count=10 },
+            @{ Path='crates/project-model/src/lib.rs'; Scope='sysroot::sniff_context_tests::'; Count=1 }
+          )) {
+            $expected = [IO.Path]::GetFullPath((Join-Path $env:OBSERVED_SOURCE $proof.Path)).Replace('\', '/')
+            $artifacts = @($items | Where-Object {
+              $_.reason -eq 'compiler-artifact' -and $_.profile.test -and $_.executable -and
+              $_.target.src_path.Replace('\', '/') -eq $expected
+            })
+            if ($artifacts.Count -ne 1 -or $artifacts[0].fresh) { throw "Expected fresh test binary: $expected" }
+            $inventory = & $artifacts[0].executable $proof.Scope --list
+            if ($LASTEXITCODE -ne 0 -or @($inventory | Where-Object { $_ -match ': test$' }).Count -ne $proof.Count) {
+              throw "Wrong test inventory: $($proof.Scope)"
+            }
+            $inventory
+            & $artifacts[0].executable $proof.Scope --test-threads=1 --nocapture
+            if ($LASTEXITCODE -ne 0) { throw "Backend proof failed: $($proof.Scope)" }
+          }
+      - name: Check patch formatting and deny compiler warnings
+        shell: pwsh
+        run: |
+          Set-Location $env:OBSERVED_SOURCE
+          rustfmt +1.96.0 --edition 2024 --config skip_children=true --check crates/project-model/src/sysroot.rs crates/rust-analyzer/src/cli.rs crates/rust-analyzer/src/cli/flags.rs crates/rust-analyzer/src/cli/scip.rs crates/rust-analyzer/src/cli/sniff_project_model.rs
+          if ($LASTEXITCODE -ne 0) { throw 'Patch formatting failed' }
+          cargo +1.96.0 clippy --locked -p rust-analyzer -p project-model --lib --tests -- -D warnings
+          if ($LASTEXITCODE -ne 0) { throw 'Strict backend Clippy failed' }

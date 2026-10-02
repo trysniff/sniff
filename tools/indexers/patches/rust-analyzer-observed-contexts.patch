@@ -1,0 +1,752 @@
+diff --git a/Cargo.lock b/Cargo.lock
+index 1a480d6..b1f6353 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -2344,6 +2344,7 @@ dependencies = [
+  "process-wrap",
+  "profile",
+  "project-model",
++ "protobuf",
+  "ra-ap-rustc_type_ir",
+  "rayon",
+  "rustc-hash 2.1.2",
+@@ -2356,6 +2357,7 @@ dependencies = [
+  "stdx",
+  "syntax",
+  "syntax-bridge",
++ "tempfile",
+  "tenthash",
+  "test-fixture",
+  "test-utils",
+diff --git a/crates/project-model/src/sysroot.rs b/crates/project-model/src/sysroot.rs
+index 546a1e0..dc21fd5 100644
+--- a/crates/project-model/src/sysroot.rs
++++ b/crates/project-model/src/sysroot.rs
+@@ -95,6 +95,12 @@ impl Sysroot {
+         }
+     }
+ 
++    /// Whether sysroot dependencies came from non-degraded Cargo metadata.
++    /// A stitched or JSON sysroot is not equivalent to compiler metadata.
++    pub fn has_full_cargo_metadata(&self) -> bool {
++        matches!(self.workspace, RustLibSrcWorkspace::Workspace { metadata_err: None, .. })
++    }
++
+     pub fn num_packages(&self) -> usize {
+         match &self.workspace {
+             RustLibSrcWorkspace::Workspace { ws, .. } => ws.packages().count(),
+@@ -590,3 +596,32 @@ test";
+ std
+ core";
+ }
++
++#[cfg(test)]
++mod sniff_context_tests {
++    use super::*;
++
++    #[test]
++    fn nonempty_stitched_sysroot_is_not_full_cargo_metadata() {
++        let mut stitched =
++            stitched::Stitched { crates: Default::default(), edition: span::Edition::Edition2024 };
++        stitched.crates.alloc(stitched::RustLibSrcCrateData {
++            name: "core".to_owned(),
++            root: ManifestPath::try_from(AbsPathBuf::assert_utf8(
++                std::env::temp_dir().join("sniff-sysroot-fixture/core/src/lib.rs"),
++            ))
++            .unwrap(),
++            deps: Vec::new(),
++        });
++        let sysroot = Sysroot {
++            root: None,
++            rust_lib_src_root: None,
++            workspace: RustLibSrcWorkspace::Stitched(stitched),
++            error: None,
++        };
++        assert!(!sysroot.is_rust_lib_src_empty());
++        assert!(sysroot.error().is_none());
++        assert!(sysroot.metadata_error().is_none());
++        assert!(!sysroot.has_full_cargo_metadata());
++    }
++}
+diff --git a/crates/rust-analyzer/Cargo.toml b/crates/rust-analyzer/Cargo.toml
+index ae0c957..9bc0099 100644
+--- a/crates/rust-analyzer/Cargo.toml
++++ b/crates/rust-analyzer/Cargo.toml
+@@ -39,6 +39,7 @@ serde_json = { workspace = true, features = ["preserve_order"] }
+ serde.workspace = true
+ serde_derive.workspace = true
+ tenthash = "1.1.0"
++tempfile = "=3.27.0"
+ num_cpus = "1.17.0"
+ mimalloc = { version = "0.1.46", default-features = false, optional = true }
+ lsp-server.workspace = true
+@@ -53,6 +54,7 @@ semver.workspace = true
+ memchr = "2.7.5"
+ cargo_metadata.workspace = true
+ process-wrap.workspace = true
++protobuf = "=3.7.2"
+ dhat = { version = "0.3.3", optional = true }
+ 
+ cfg.workspace = true
+diff --git a/crates/rust-analyzer/src/cli.rs b/crates/rust-analyzer/src/cli.rs
+index cc0efe9..e346d16 100644
+--- a/crates/rust-analyzer/src/cli.rs
++++ b/crates/rust-analyzer/src/cli.rs
+@@ -12,6 +12,7 @@ mod prime_caches;
+ mod run_tests;
+ mod rustc_tests;
+ mod scip;
++mod sniff_project_model;
+ mod ssr;
+ mod symbols;
+ mod unresolved_references;
+diff --git a/crates/rust-analyzer/src/cli/flags.rs b/crates/rust-analyzer/src/cli/flags.rs
+index 0384993..85ed753 100644
+--- a/crates/rust-analyzer/src/cli/flags.rs
++++ b/crates/rust-analyzer/src/cli/flags.rs
+@@ -189,6 +189,9 @@ xflags::xflags! {
+             /// A path to an json configuration file that can be used to customize cargo behavior.
+             optional --config-path config_path: PathBuf
+ 
++            /// Export observed Sniff crate contexts alongside SCIP. This is not a complete world census.
++            optional --sniff-project-model-output path: PathBuf
++
+             /// Exclude code from vendored libraries from the resulting index.
+             optional --exclude-vendored-libraries
+ 
+@@ -340,6 +343,7 @@ pub struct Scip {
+ 
+     pub output: Option<PathBuf>,
+     pub config_path: Option<PathBuf>,
++    pub sniff_project_model_output: Option<PathBuf>,
+     pub exclude_vendored_libraries: bool,
+     pub num_threads: Option<usize>,
+ }
+diff --git a/crates/rust-analyzer/src/cli/scip.rs b/crates/rust-analyzer/src/cli/scip.rs
+index 3d904e7..e0d9943 100644
+--- a/crates/rust-analyzer/src/cli/scip.rs
++++ b/crates/rust-analyzer/src/cli/scip.rs
+@@ -11,7 +11,6 @@ use ide_db::line_index;
+ use load_cargo::{LoadCargoConfig, ProcMacroServerChoice, load_workspace_at};
+ use rustc_hash::{FxHashMap, FxHashSet};
+ use scip::types::{self as scip_types, SymbolInformation};
+-use tracing::error;
+ use vfs::FileId;
+ 
+ use crate::{
+@@ -28,6 +27,12 @@ impl flags::Scip {
+         let no_progress = &|s| eprintln!("rust-analyzer: Loading {s}");
+         let root =
+             vfs::AbsPathBuf::assert_utf8(std::env::current_dir()?.join(&self.path)).normalize();
++        let out_path = self.output.unwrap_or_else(|| PathBuf::from(r"index.scip"));
++        let observed_outputs = self
++            .sniff_project_model_output
++            .as_ref()
++            .map(|path| super::sniff_project_model::ObservedOutputs::prepare(&out_path, path))
++            .transpose()?;
+ 
+         let mut config = crate::config::Config::new(
+             root.clone(),
+@@ -45,8 +50,7 @@ impl flags::Scip {
+             let error_sink;
+             (config, error_sink, _) = config.apply_change(change);
+ 
+-            // FIXME @alibektas : What happens to errors without logging?
+-            error!(?error_sink, "Config Error(s)");
++            anyhow::ensure!(error_sink.is_empty(), "invalid SCIP configuration: {error_sink}");
+         }
+         let load_cargo_config = LoadCargoConfig {
+             load_out_dirs_from_check: true,
+@@ -56,12 +60,21 @@ impl flags::Scip {
+             proc_macro_processes: config.proc_macro_num_processes(),
+         };
+         let cargo_config = config.cargo(None);
+-        let (db, vfs, _) = load_workspace_at(
+-            root.as_path().as_ref(),
+-            &cargo_config,
+-            &load_cargo_config,
+-            &no_progress,
+-        )?;
++        let (db, vfs, _) = if self.sniff_project_model_output.is_some() {
++            super::sniff_project_model::load_observed_workspace(
++                &root,
++                &cargo_config,
++                &load_cargo_config,
++                &no_progress,
++            )?
++        } else {
++            load_workspace_at(
++                root.as_path().as_ref(),
++                &cargo_config,
++                &load_cargo_config,
++                &no_progress,
++            )?
++        };
+         let host = AnalysisHost::with_database(db);
+         let db = host.raw_database();
+         let analysis = host.analysis();
+@@ -282,9 +295,12 @@ impl flags::Scip {
+             }
+         }
+ 
+-        let out_path = self.output.unwrap_or_else(|| PathBuf::from(r"index.scip"));
+-        scip::write_message_to_file(out_path, index)
+-            .map_err(|err| anyhow::format_err!("Failed to write scip to file: {}", err))?;
++        if let Some(outputs) = observed_outputs {
++            outputs.publish(index, db, &vfs, &root)?;
++        } else {
++            scip::write_message_to_file(out_path, index)
++                .map_err(|err| anyhow::format_err!("Failed to write scip to file: {}", err))?;
++        }
+ 
+         eprintln!("Generating SCIP finished {:?}", now.elapsed());
+         Ok(())
+diff --git a/crates/rust-analyzer/src/cli/sniff_project_model.rs b/crates/rust-analyzer/src/cli/sniff_project_model.rs
+new file mode 100644
+index 0000000..2ac4db6
+--- /dev/null
++++ b/crates/rust-analyzer/src/cli/sniff_project_model.rs
+@@ -0,0 +1,543 @@
++//! Observed rust-analyzer contexts. This export does not claim an exhaustive Cargo world domain.
++
++use anyhow::{Context, Result, ensure};
++use cfg::{CfgAtom, CfgOptions};
++use hir::{AnyDiagnostic, Crate};
++use ide::RootDatabase;
++use load_cargo::{LoadCargoConfig, load_workspace};
++use proc_macro_api::ProcMacroClient;
++use project_model::{CargoConfig, ProjectManifest, ProjectWorkspace, ProjectWorkspaceKind};
++use serde_derive::Serialize;
++use std::{
++    collections::{BTreeMap, BTreeSet},
++    io::Write,
++    path::{Path, PathBuf},
++};
++use vfs::{AbsPathBuf, Vfs};
++
++#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
++#[serde(tag = "kind", rename_all = "snake_case")]
++enum CfgFact {
++    Flag { name: String },
++    KeyValue { key: String, value: String },
++}
++
++fn cfg_facts(options: &CfgOptions) -> Vec<CfgFact> {
++    let mut facts = options
++        .into_iter()
++        .map(|atom| match atom {
++            CfgAtom::Flag(name) => CfgFact::Flag { name: name.to_string() },
++            CfgAtom::KeyValue { key, value } => {
++                CfgFact::KeyValue { key: key.to_string(), value: value.to_string() }
++            }
++        })
++        .collect::<Vec<_>>();
++    facts.sort();
++    facts
++}
++
++#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
++struct CrateIdentity {
++    root: String,
++    name: Option<String>,
++    edition: String,
++    analysis_cfg: Vec<CfgFact>,
++    environment: BTreeMap<String, String>,
++}
++
++#[derive(Serialize)]
++struct Dependency {
++    name: String,
++    context: CrateIdentity,
++}
++
++#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
++struct InactiveRange {
++    file: String,
++    start_byte: u32,
++    end_byte: u32,
++    analysis_cfg: Vec<CfgFact>,
++}
++
++#[derive(Serialize)]
++struct CrateContext {
++    identity: CrateIdentity,
++    dependencies: Vec<Dependency>,
++    in_repository: bool,
++    repository_diagnostics_queried: bool,
++    block_local_module_file_coverage_complete: bool,
++    module_files: Vec<String>,
++    parser_errors: Vec<ParserError>,
++    inactive_ranges: Vec<InactiveRange>,
++    unmapped_module_sources: usize,
++    unmapped_inactive_ranges: usize,
++    other_diagnostics: usize,
++}
++
++#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
++struct ParserError {
++    file: String,
++    start_byte: u32,
++    end_byte: u32,
++    message: String,
++}
++
++#[derive(Serialize)]
++struct ScipBinding {
++    byte_length: usize,
++    tenthash_hex: String,
++    cryptographic_seal: bool,
++    occurrence_context_selection: &'static str,
++}
++
++#[derive(Serialize)]
++struct ObservedModel {
++    schema_version: u32,
++    contract: &'static str,
++    provider_version: String,
++    declared_world_domain_complete: bool,
++    input_closure_proven: bool,
++    scip_binding: Option<ScipBinding>,
++    crates: Vec<CrateContext>,
++}
++
++pub(super) fn load_observed_workspace(
++    root: &AbsPathBuf,
++    cargo: &CargoConfig,
++    load: &LoadCargoConfig,
++    progress: &(dyn Fn(String) + Sync),
++) -> Result<(RootDatabase, Vfs, Option<ProcMacroClient>)> {
++    let manifest = ProjectManifest::discover_single(root)?;
++    ensure!(
++        matches!(manifest, ProjectManifest::CargoToml(_)),
++        "Sniff crate-context export requires a Cargo workspace"
++    );
++    ensure!(!cargo.no_deps, "Sniff crate-context export requires full dependency metadata");
++    let mut workspace = ProjectWorkspace::load(manifest, cargo, progress)?;
++    match &workspace.kind {
++        ProjectWorkspaceKind::Cargo { error, .. } => ensure!(
++            error.is_none(),
++            "degraded Cargo metadata cannot be exported as observed compiler context: {error:?}"
++        ),
++        _ => anyhow::bail!("Sniff crate-context export requires a Cargo workspace"),
++    }
++    ensure!(
++        workspace.sysroot.metadata_error().is_none(),
++        "degraded sysroot metadata cannot be exported: {:?}",
++        workspace.sysroot.metadata_error()
++    );
++    ensure!(
++        workspace.sysroot.has_full_cargo_metadata(),
++        "sysroot dependency metadata is not compiler-produced Cargo metadata"
++    );
++    ensure!(
++        workspace.sysroot.error().is_none(),
++        "failed sysroot context cannot be exported: {:?}",
++        workspace.sysroot.error()
++    );
++    ensure!(!workspace.sysroot.is_rust_lib_src_empty(), "sysroot source context is unavailable");
++    ensure!(workspace.toolchain.is_some(), "Rust toolchain identity is unavailable");
++    ensure!(
++        workspace.target.is_ok(),
++        "Rust target data layout is unavailable: {:?}",
++        workspace.target
++    );
++    ensure!(!workspace.rustc_cfg.is_empty(), "Rust compiler cfg query is unavailable");
++    ensure!(load.load_out_dirs_from_check, "build-script context must be loaded");
++    let scripts = workspace.run_build_scripts(cargo, progress)?;
++    ensure!(
++        scripts.error().is_none(),
++        "failed build-script context cannot be exported: {:?}",
++        scripts.error()
++    );
++    workspace.set_build_scripts(scripts);
++    load_workspace(workspace, &cargo.extra_env, load)
++}
++
++fn identity(krate: Crate, db: &RootDatabase, vfs: &Vfs) -> Result<CrateIdentity> {
++    let root = vfs.file_path(krate.root_file(db));
++    let root = root.as_path().context("crate root is not a real file")?.to_string();
++    Ok(CrateIdentity {
++        root,
++        name: krate.display_name(db).map(|name| name.to_string()),
++        edition: krate.edition(db).to_string(),
++        analysis_cfg: cfg_facts(krate.cfg(db)),
++        environment: krate
++            .base()
++            .env(db)
++            .into_iter()
++            .map(|(key, value)| (key.clone(), value.clone()))
++            .collect(),
++    })
++}
++
++fn observed_model(db: &RootDatabase, vfs: &Vfs, root: &AbsPathBuf) -> Result<ObservedModel> {
++    hir::attach_db(db, || observed_model_attached(db, vfs, root))
++}
++
++fn observed_model_attached(
++    db: &RootDatabase,
++    vfs: &Vfs,
++    root: &AbsPathBuf,
++) -> Result<ObservedModel> {
++    let mut crates = Vec::new();
++    for krate in Crate::all(db) {
++        let identity = identity(krate, db, vfs)?;
++        let in_repository =
++            vfs.file_path(krate.root_file(db)).as_path().is_some_and(|path| path.starts_with(root));
++        let mut dependencies = krate
++            .dependencies(db)
++            .into_iter()
++            .map(|dep| {
++                Ok(Dependency {
++                    name: dep.name.display(db, krate.edition(db)).to_string(),
++                    context: self::identity(dep.krate, db, vfs)?,
++                })
++            })
++            .collect::<Result<Vec<_>>>()?;
++        dependencies
++            .sort_by(|left, right| (&left.name, &left.context).cmp(&(&right.name, &right.context)));
++        let mut module_files = BTreeSet::new();
++        let mut parser_errors = BTreeSet::new();
++        let mut inactive_ranges = BTreeSet::new();
++        let mut unmapped_module_sources = 0;
++        let mut unmapped_inactive_ranges = 0;
++        let mut other_diagnostics = 0;
++        if in_repository {
++            for module in krate.modules(db) {
++                match module.definition_source_file_id(db).file_id() {
++                    Some(file) => {
++                        if let Some(path) = vfs.file_path(file.file_id(db)).as_path() {
++                            if module_files.insert(path.to_string()) {
++                                for error in file.parse_errors(db).into_iter().flatten() {
++                                    parser_errors.insert(ParserError {
++                                        file: path.to_string(),
++                                        start_byte: error.range().start().into(),
++                                        end_byte: error.range().end().into(),
++                                        message: error.to_string(),
++                                    });
++                                }
++                            }
++                        } else {
++                            unmapped_module_sources += 1;
++                        }
++                    }
++                    None => unmapped_module_sources += 1,
++                }
++                // Module::diagnostics already traverses inline descendants.
++                if module.is_inline(db) {
++                    continue;
++                }
++                let mut diagnostics = Vec::new();
++                module.diagnostics(db, &mut diagnostics, false);
++                for diagnostic in diagnostics {
++                    match diagnostic {
++                        AnyDiagnostic::InactiveCode(code) => {
++                            let Some(file) = code.node.file_id.file_id() else {
++                                // Macro expansion locations are not original-source exclusion proof.
++                                unmapped_inactive_ranges += 1;
++                                continue;
++                            };
++                            let path = vfs.file_path(file.file_id(db));
++                            let Some(path) = path.as_path() else {
++                                unmapped_inactive_ranges += 1;
++                                continue;
++                            };
++                            let range = code.node.value.text_range();
++                            inactive_ranges.insert(InactiveRange {
++                                file: path.to_string(),
++                                start_byte: range.start().into(),
++                                end_byte: range.end().into(),
++                                analysis_cfg: cfg_facts(&code.opts),
++                            });
++                        }
++                        _ => other_diagnostics += 1,
++                    }
++                }
++            }
++        }
++        crates.push(CrateContext {
++            identity,
++            dependencies,
++            in_repository,
++            repository_diagnostics_queried: in_repository,
++            // Crate::modules does not enumerate body/block definition maps.
++            block_local_module_file_coverage_complete: false,
++            module_files: module_files.into_iter().collect(),
++            parser_errors: parser_errors.into_iter().collect(),
++            inactive_ranges: inactive_ranges.into_iter().collect(),
++            unmapped_module_sources,
++            unmapped_inactive_ranges,
++            other_diagnostics,
++        });
++    }
++    ensure!(
++        crates.iter().any(|context| context.in_repository),
++        "no observed repository crate context"
++    );
++    crates.sort_by(|left, right| left.identity.cmp(&right.identity));
++    ensure!(
++        crates.windows(2).all(|pair| pair[0].identity != pair[1].identity),
++        "ambiguous backend crate context identity"
++    );
++    Ok(ObservedModel {
++        schema_version: 1,
++        contract: "sniff-rust-observed-crate-contexts-v1-not-world-admission",
++        provider_version: crate::version::version().to_string(),
++        declared_world_domain_complete: false,
++        input_closure_proven: false,
++        scip_binding: None,
++        crates,
++    })
++}
++
++pub(super) struct ObservedOutputs {
++    scip_path: PathBuf,
++    model_path: PathBuf,
++}
++
++fn destination(path: &Path) -> Result<PathBuf> {
++    let path = std::path::absolute(path)?;
++    ensure!(
++        path.symlink_metadata().is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound),
++        "observed output destination must not exist: {}",
++        path.display()
++    );
++    let name = path.file_name().context("output destination has no filename")?;
++    let parent = path.parent().context("output destination has no parent")?.canonicalize()?;
++    Ok(parent.join(name))
++}
++
++impl ObservedOutputs {
++    pub(super) fn prepare(scip: &Path, model: &Path) -> Result<Self> {
++        let scip_path = destination(scip)?;
++        let model_path = destination(model)?;
++        let same = if cfg!(windows) {
++            scip_path
++                .as_os_str()
++                .as_encoded_bytes()
++                .eq_ignore_ascii_case(model_path.as_os_str().as_encoded_bytes())
++        } else {
++            scip_path == model_path
++        };
++        ensure!(!same, "SCIP and observed-context outputs must be distinct");
++        Ok(Self { scip_path, model_path })
++    }
++
++    pub(super) fn publish(
++        self,
++        index: scip::types::Index,
++        db: &RootDatabase,
++        vfs: &Vfs,
++        root: &AbsPathBuf,
++    ) -> Result<()> {
++        let mut model = observed_model(db, vfs, root)?;
++        let scip_bytes = protobuf::Message::write_to_bytes(&index)?;
++        let mut staged_scip = tempfile::NamedTempFile::new_in(self.scip_path.parent().unwrap())?;
++        staged_scip.write_all(&scip_bytes)?;
++        staged_scip.as_file().sync_all()?;
++        model.scip_binding = Some(ScipBinding {
++            byte_length: scip_bytes.len(),
++            tenthash_hex: tenthash::hash(&scip_bytes)
++                .iter()
++                .map(|byte| format!("{byte:02x}"))
++                .collect(),
++            // This checksum pairs observations, not a security or admission seal.
++            cryptographic_seal: false,
++            occurrence_context_selection: "unavailable",
++        });
++        let mut staged_model = tempfile::NamedTempFile::new_in(self.model_path.parent().unwrap())?;
++        staged_model.write_all(&serde_json::to_vec(&model)?)?;
++        staged_model.as_file().sync_all()?;
++        staged_scip.persist_noclobber(&self.scip_path)?;
++        // A failure here leaves only a complete SCIP, never a successful sidecar.
++        staged_model.persist_noclobber(&self.model_path)?;
++        Ok(())
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use ide_db::base_db::SourceDatabase;
++    use test_fixture::WithFixture;
++    use vfs::VfsPath;
++
++    #[test]
++    fn scip_cli_parses_the_explicit_observation_output() {
++        let args = ["scip", ".", "--sniff-project-model-output", "model.json"];
++        let flags =
++            crate::cli::flags::RustAnalyzer::from_vec(args.into_iter().map(Into::into).collect())
++                .unwrap();
++        let crate::cli::flags::RustAnalyzerCmd::Scip(scip) = flags.subcommand else {
++            panic!("SCIP subcommand was not parsed");
++        };
++        assert_eq!(scip.sniff_project_model_output, Some(PathBuf::from("model.json")));
++    }
++
++    fn model(fixture: &str, paths: &[&str]) -> ObservedModel {
++        let (db, files) = RootDatabase::with_many_files(fixture);
++        let root =
++            AbsPathBuf::assert_utf8(std::env::temp_dir().join("sniff-compiler-context-unit"));
++        let mut vfs = Vfs::default();
++        assert_eq!(files.len(), paths.len());
++        for (file, path) in files.iter().zip(paths) {
++            let path = VfsPath::from(root.join(path));
++            vfs.set_file_contents(
++                path.clone(),
++                Some(db.file_text(file.file_id(&db)).text(&db).as_bytes().to_vec()),
++            );
++            assert_eq!(vfs.file_id(&path).unwrap().0, file.file_id(&db));
++        }
++        observed_model(&db, &vfs, &root).unwrap()
++    }
++
++    #[test]
++    fn backend_cfg_selects_modules_without_claiming_complete_world_domain() {
++        let model = model(
++            "//- /default/lib.rs crate:default\n#[cfg(feature = \"on\")] mod extra;\nfn active() {}\n//- /default/extra.rs\npub fn optional() {}\n//- /selected/lib.rs crate:selected cfg:feature=on\n#[cfg(feature = \"on\")] mod extra;\nfn active() {}\n//- /selected/extra.rs\npub fn optional() {}\n",
++            &["default/lib.rs", "default/extra.rs", "selected/lib.rs", "selected/extra.rs"],
++        );
++        let default = model
++            .crates
++            .iter()
++            .find(|context| context.identity.name.as_deref() == Some("default"))
++            .unwrap();
++        let selected = model
++            .crates
++            .iter()
++            .find(|context| context.identity.name.as_deref() == Some("selected"))
++            .unwrap();
++        assert_eq!(default.module_files.len(), 1);
++        assert_eq!(selected.module_files.len(), 2);
++        assert!(!default.inactive_ranges.is_empty());
++        assert!(selected.inactive_ranges.is_empty());
++        assert!(!model.declared_world_domain_complete);
++        assert!(!model.input_closure_proven);
++        let bytes = serde_json::to_vec(&model).unwrap();
++        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
++        assert_eq!(value["declared_world_domain_complete"], false);
++        assert_eq!(value["input_closure_proven"], false);
++    }
++
++    #[test]
++    fn test_cfg_comes_from_each_backend_crate_not_the_sniff_executable() {
++        let model = model(
++            "//- /normal.rs crate:normal\n#[cfg(test)] fn only_test() {}\n//- /tests.rs crate:tests cfg:test\n#[cfg(test)] fn only_test() {}\n",
++            &["normal.rs", "tests.rs"],
++        );
++        let normal = model
++            .crates
++            .iter()
++            .find(|context| context.identity.name.as_deref() == Some("normal"))
++            .unwrap();
++        let tests = model
++            .crates
++            .iter()
++            .find(|context| context.identity.name.as_deref() == Some("tests"))
++            .unwrap();
++        assert_eq!(normal.inactive_ranges.len(), 1);
++        assert_eq!(tests.inactive_ranges.len(), 0);
++        let inactive = &normal.inactive_ranges[0];
++        assert_eq!(inactive.start_byte, 0);
++        assert_eq!(inactive.end_byte, "#[cfg(test)] fn only_test() {}".len() as u32);
++    }
++
++    #[test]
++    fn macro_inactive_nodes_are_not_original_source_exclusion_proof() {
++        let model = model(
++            "//- /lib.rs crate:main\nmacro_rules! define { () => { #[cfg(any())] fn hidden() {} }; }\ndefine!();\nfn active() {}\n",
++            &["lib.rs"],
++        );
++        let context = &model.crates[0];
++        assert!(context.inactive_ranges.is_empty());
++        assert!(context.unmapped_inactive_ranges > 0);
++    }
++
++    #[test]
++    fn cfg_key_values_are_structured_and_deterministically_sorted() {
++        let model =
++            model("//- /lib.rs crate:main cfg:test,feature=on\nfn active() {}\n", &["lib.rs"]);
++        let facts = &model.crates[0].identity.analysis_cfg;
++        assert!(facts.contains(&CfgFact::Flag { name: "test".to_owned() }));
++        assert!(
++            facts
++                .contains(&CfgFact::KeyValue { key: "feature".to_owned(), value: "on".to_owned() })
++        );
++        assert!(facts.windows(2).all(|pair| pair[0] < pair[1]));
++    }
++
++    #[test]
++    fn inline_modules_do_not_duplicate_unmapped_macro_diagnostics() {
++        let model = model(
++            "//- /lib.rs crate:main\nmod outer { mod inner { macro_rules! define { () => { #[cfg(any())] fn hidden() {} }; } define!(); } }\n",
++            &["lib.rs"],
++        );
++        assert_eq!(model.crates[0].unmapped_inactive_ranges, 1);
++    }
++
++    #[test]
++    fn parser_failures_are_recorded_separately() {
++        let model = model("//- /lib.rs crate:main\nfn broken( {\n", &["lib.rs"]);
++        assert!(!model.crates[0].parser_errors.is_empty());
++        assert!(model.crates[0].repository_diagnostics_queried);
++        assert!(!model.crates[0].block_local_module_file_coverage_complete);
++    }
++
++    #[test]
++    fn colliding_relative_and_absolute_outputs_are_rejected() {
++        let dir = tempfile::tempdir().unwrap();
++        let path = dir.path().join("index.scip");
++        assert!(ObservedOutputs::prepare(&path, &dir.path().join(".").join("index.scip")).is_err());
++        assert!(!path.exists());
++    }
++
++    #[test]
++    fn successful_output_pair_is_bound_and_never_overwrites() {
++        let dir = tempfile::tempdir().unwrap();
++        let scip_path = dir.path().join("index.scip");
++        let model_path = dir.path().join("model.json");
++        let (db, files) = RootDatabase::with_many_files("//- /lib.rs crate:main\nfn active() {}\n");
++        let root = AbsPathBuf::assert_utf8(dir.path().to_path_buf());
++        let mut vfs = Vfs::default();
++        vfs.set_file_contents(
++            VfsPath::from(root.join("lib.rs")),
++            Some(db.file_text(files[0].file_id(&db)).text(&db).as_bytes().to_vec()),
++        );
++        ObservedOutputs::prepare(&scip_path, &model_path)
++            .unwrap()
++            .publish(scip::types::Index::default(), &db, &vfs, &root)
++            .unwrap();
++        let bytes = std::fs::read(&scip_path).unwrap();
++        let value: serde_json::Value =
++            serde_json::from_slice(&std::fs::read(&model_path).unwrap()).unwrap();
++        assert_eq!(value["scip_binding"]["byte_length"], bytes.len());
++        let checksum: String =
++            tenthash::hash(&bytes).iter().map(|byte| format!("{byte:02x}")).collect();
++        assert_eq!(value["scip_binding"]["tenthash_hex"], checksum);
++        assert_eq!(value["scip_binding"]["cryptographic_seal"], false);
++        assert_eq!(value["scip_binding"]["occurrence_context_selection"], "unavailable");
++        assert!(ObservedOutputs::prepare(&scip_path, &dir.path().join("new.json")).is_err());
++        assert_eq!(std::fs::read(&scip_path).unwrap(), bytes);
++    }
++
++    #[test]
++    fn raced_sidecar_destination_is_preserved_and_stages_are_cleaned() {
++        let dir = tempfile::tempdir().unwrap();
++        let scip_path = dir.path().join("index.scip");
++        let model_path = dir.path().join("model.json");
++        let outputs = ObservedOutputs::prepare(&scip_path, &model_path).unwrap();
++        std::fs::write(&model_path, b"existing").unwrap();
++        let (db, files) = RootDatabase::with_many_files("//- /lib.rs crate:main\nfn active() {}\n");
++        let root = AbsPathBuf::assert_utf8(dir.path().to_path_buf());
++        let mut vfs = Vfs::default();
++        vfs.set_file_contents(
++            VfsPath::from(root.join("lib.rs")),
++            Some(db.file_text(files[0].file_id(&db)).text(&db).as_bytes().to_vec()),
++        );
++        assert!(outputs.publish(scip::types::Index::default(), &db, &vfs, &root).is_err());
++        assert_eq!(std::fs::read(&model_path).unwrap(), b"existing");
++        assert!(scip_path.is_file());
++        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 2);
++    }
++}
