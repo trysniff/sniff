@@ -1840,10 +1840,31 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn windows_backend_executes_only_explicit_external_toolchains() {
+        assert_explicit_external_toolchain_access(false);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_backend_executes_explicit_external_toolchains_through_path_aliases() {
+        assert_explicit_external_toolchain_access(true);
+    }
+
+    #[cfg(windows)]
+    fn assert_explicit_external_toolchain_access(aliased: bool) {
         let root = windows_test_root("persistent-execute");
         let external = windows_test_root("external-executable");
-        let child = external.join("trusted-child.exe");
-        let sibling = external.join("private-sibling.txt");
+        let tools = external.join("tools");
+        std::fs::create_dir(&tools).expect("stage external tool directory");
+        let tools = if aliased {
+            let alias = external.join("alias");
+            std::os::windows::fs::symlink_dir(&tools, &alias)
+                .expect("stage private tool path alias");
+            alias
+        } else {
+            tools
+        };
+        let child = tools.join("trusted-child.exe");
+        let sibling = tools.join("private-sibling.txt");
         std::fs::write(&sibling, "must-not-leak").expect("stage private sibling");
         let system_root = std::env::var_os("SystemRoot").expect("SystemRoot should be defined");
         std::fs::copy(
@@ -1860,6 +1881,10 @@ mod tests {
 
         let mut allowed = denied;
         allowed.executable_paths = vec![child.clone()];
+        if aliased {
+            allowed.read_only_paths = vec![child.clone()];
+            allowed.windows_virtualized_paths = vec![std::fs::canonicalize(&tools).unwrap()];
+        }
         let allowed_output =
             super::run(&allowed).expect("transient toolchain execution grant should work");
         assert_eq!(
