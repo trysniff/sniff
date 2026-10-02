@@ -52,7 +52,8 @@ const SANDBOX_PROCESS_OVERHEAD: u64 = 2;
 #[cfg(target_os = "macos")]
 const SANDBOX_PROCESS_OVERHEAD: u64 = 0;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct SandboxCommand {
     pub(crate) root: PathBuf,
     pub(crate) workdir: PathBuf,

@@ -82,7 +82,7 @@ async fn discover_at(
         installed,
         journal,
     };
-    let result = census(&runtime, scope, &runtime_before, &sdk_before).await;
+    let result = census(&runtime, scope, &runtime_before, &sdk_before, context).await;
     let integrity = (|| {
         require_snapshot(context, root)?;
         context.store.verify(spec)?;
@@ -140,32 +140,69 @@ async fn census(
     scope: &GoRepositoryScope,
     executable_sha256: &str,
     sdk_sha256: &str,
+    context: &RequiredIndexerRunContext<'_>,
 ) -> Result<((Vec<ModuleCensus>, String), SemanticIndexerProcessEvidence), SemanticIndexerRunFailure>
 {
     super::go_dependencies::prepare_root(runtime.root).map_err(|detail| {
         model_failure(runtime.spec, SemanticIndexerRunPhase::Preparation, detail)
     })?;
+    let preparation_inputs = Inputs::Go {
+        executable_sha256: executable_sha256.to_string(),
+        sdk_sha256: sdk_sha256.to_string(),
+        dependencies_sha256: super::go_dependencies::identity_sha256(runtime.root).map_err(
+            |detail| {
+                model_failure(
+                    runtime.spec,
+                    SemanticIndexerRunPhase::IntegrityVerification,
+                    detail,
+                )
+            },
+        )?,
+    };
+    runtime.journal.begin_go_preparation(
+        runtime.root,
+        scope.modules.keys().cloned().collect(),
+        preparation_inputs,
+    )?;
+    let verify = || {
+        require_snapshot(context, runtime.root)?;
+        context.store.verify(runtime.spec)?;
+        super::go_runner::require_discovery_commitment(
+            "compiler runtime",
+            executable_sha256,
+            &super::go_runner::runtime_identity_sha256(
+                runtime.spec,
+                runtime.root,
+                runtime.installed,
+            )?,
+        )?;
+        super::go_runner::require_discovery_commitment(
+            "SDK inputs",
+            sdk_sha256,
+            &super::go_sdk::identity_sha256(runtime.spec, runtime.root, runtime.installed)?,
+        )
+    };
     for project in scope.modules.keys() {
-        prepare_go_dependency_cache(
+        prepare_go_dependency_cache_observed(
             runtime.spec,
             runtime.root,
             runtime.installed,
             &module_root(project),
+            runtime.journal,
+            &verify,
         )
         .await?;
     }
-    let before = super::go_dependencies::identity_sha256(runtime.root).map_err(|detail| {
-        model_failure(
-            runtime.spec,
-            SemanticIndexerRunPhase::IntegrityVerification,
-            detail,
-        )
-    })?;
-    runtime.journal.bind_inputs(Inputs::Go {
+    let before = runtime
+        .journal
+        .check_go_preparation_integrity(super::go_dependencies::identity_sha256(runtime.root))?;
+    let inputs = Inputs::Go {
         executable_sha256: executable_sha256.to_string(),
         sdk_sha256: sdk_sha256.to_string(),
         dependencies_sha256: before.clone(),
-    })?;
+    };
+    runtime.journal.finish_go_preparation(&inputs)?;
+    runtime.journal.bind_inputs(inputs)?;
     let result = census_prepared(runtime, scope).await;
     let integrity = super::go_dependencies::identity_sha256(runtime.root)
         .and_then(|after| {

@@ -1,6 +1,10 @@
 use super::*;
 use std::sync::Mutex;
 
+#[path = "semantic_indexer_census_preparation.rs"]
+mod preparation;
+#[path = "semantic_indexer_census_preparation_journal.rs"]
+mod preparation_journal;
 #[path = "semantic_indexer_census_io.rs"]
 mod receipt_io;
 #[path = "semantic_indexer_census_schema.rs"]
@@ -12,6 +16,7 @@ pub(super) use schema::{Inputs, ModelPart, Request, Role};
 
 struct State {
     inputs: Option<Inputs>,
+    preparation: Option<preparation::Ledger>,
     commands: Vec<String>,
     models: Vec<Option<String>>,
     last_role: Option<Role>,
@@ -58,6 +63,7 @@ impl Journal {
             scope_sha256,
             state: Mutex::new(State {
                 inputs: None,
+                preparation: None,
                 commands: Vec::new(),
                 models: Vec::new(),
                 last_role: None,
@@ -77,6 +83,14 @@ impl Journal {
             inputs.validate(self.spec.kind)?;
             if state.inputs.is_some() || !state.commands.is_empty() || state.finished {
                 return Err("compiler census input scope was already bound or executed".to_string());
+            }
+            if self.spec.kind == SemanticIndexerKind::Go
+                && !state
+                    .preparation
+                    .as_ref()
+                    .is_some_and(|ledger| ledger.binds(&inputs))
+            {
+                return Err("Go census inputs lack completed preparation receipts".to_string());
             }
             receipt_io::write(&self.root, "inputs.json", &inputs)?;
             Ok(())
@@ -222,6 +236,7 @@ impl Journal {
             inputs: state.inputs.clone(),
             commands: state.commands.clone(),
             models: state.models.clone(),
+            go_preparation: state.preparation.as_ref().map(preparation::Ledger::summary),
             input_closure_proven: false,
             result: terminal_result,
         };
@@ -250,6 +265,20 @@ impl Journal {
         plans: Option<&[SemanticIndexerVariantPlan]>,
     ) -> Result<(), String> {
         let accepted = plans.is_some();
+        if let Some(preparation) = &state.preparation {
+            preparation.verify(&self.root, accepted)?;
+        }
+        if accepted
+            && self.spec.kind == SemanticIndexerKind::Go
+            && !state.inputs.as_ref().is_some_and(|inputs| {
+                state
+                    .preparation
+                    .as_ref()
+                    .is_some_and(|ledger| ledger.binds(inputs))
+            })
+        {
+            return Err("accepted Go census omitted its complete preparation input binding".into());
+        }
         receipt_io::ensure_plain_directory(&self.root)?;
         let scope: Scope = receipt_io::read(&self.root.join("scope.json"), &self.scope_sha256)?;
         scope.validate()?;
@@ -366,4 +395,4 @@ fn model_name(sequence: usize) -> String {
 mod tests;
 
 #[cfg(test)]
-pub(super) use tests::assert_native_terminal;
+pub(super) use tests::{assert_native_preparation_failure_terminal, assert_native_terminal};

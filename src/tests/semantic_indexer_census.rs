@@ -28,13 +28,68 @@ fn journal(root: &Path, kind: SemanticIndexerKind) -> Journal {
 }
 
 fn bind(journal: &Journal) {
+    let inputs = go_inputs();
+    start_preparation(journal, &["go.mod"]);
+    prepare_command(journal, ".", 1, Ok(output("prepared"))).unwrap();
+    journal.finish_go_preparation(&inputs).unwrap();
+    journal.bind_inputs(inputs).unwrap();
+}
+
+fn go_inputs() -> Inputs {
+    Inputs::Go {
+        executable_sha256: "c".repeat(64),
+        sdk_sha256: "d".repeat(64),
+        dependencies_sha256: "e".repeat(64),
+    }
+}
+
+fn start_preparation(journal: &Journal, projects: &[&str]) {
+    // These are synthetic journal events, not compiler/runtime qualification.
     journal
-        .bind_inputs(Inputs::Go {
-            executable_sha256: "c".repeat(64),
-            sdk_sha256: "d".repeat(64),
-            dependencies_sha256: "e".repeat(64),
-        })
+        .begin_go_preparation(
+            &journal.root,
+            projects
+                .iter()
+                .map(|path| RepositoryPath((*path).into()))
+                .collect(),
+            go_inputs(),
+        )
         .unwrap();
+}
+
+fn preparation_command(journal: &Journal, module: &str) -> SandboxCommand {
+    SandboxCommand {
+        root: journal.root.clone(),
+        workdir: journal.root.clone(),
+        program: "synthetic-go-not-executed".into(),
+        args: go_dependency_arguments(module),
+        read_only_paths: Vec::new(),
+        writable_paths: Vec::new(),
+        persistent_read_only_paths: Vec::new(),
+        persistent_executable_paths: Vec::new(),
+        executable_paths: Vec::new(),
+        #[cfg(windows)]
+        windows_virtualized_paths: Vec::new(),
+        env: vec![("GOTOOLCHAIN".into(), "local".into())],
+        allow_network: true,
+        #[cfg(target_os = "macos")]
+        allow_local_network: false,
+        timeout: Duration::from_secs(10),
+        output_limit: 1024,
+        memory_limit: 1024,
+        process_limit: 1,
+    }
+}
+
+fn prepare_command(
+    journal: &Journal,
+    module: &str,
+    attempt: usize,
+    result: Result<SandboxOutput, SemanticIndexerRunFailure>,
+) -> Result<SandboxOutput, SemanticIndexerRunFailure> {
+    let sequence = journal.begin_go_command(module, attempt)?;
+    journal.record_go_launch(sequence, &preparation_command(journal, module))?;
+    journal.record_go_outcome(sequence, result)
 }
 
 fn request(role: Role) -> Request {
@@ -58,6 +113,9 @@ fn output(stdout: &str) -> SandboxOutput {
         process_limit_exceeded: false,
     }
 }
+
+#[path = "semantic_indexer_census_preparation.rs"]
+mod preparation_tests;
 
 fn plan() -> SemanticIndexerVariantPlan {
     SemanticIndexerVariantPlan {
@@ -451,4 +509,37 @@ pub(in super::super) fn assert_native_terminal(
             assert_eq!(model.model.role(), command.request.role);
         }
     }
+}
+
+pub(in super::super) fn assert_native_preparation_failure_terminal(root: &Path) {
+    let digest = repository_snapshot::repository_content_digest(root).unwrap();
+    let attempts = fs::read_dir(root.join(".sniff/compiler-census").join(digest).join("go"))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(attempts.len(), 1);
+    let attempt = attempts[0].path();
+    let path = attempt.join("terminal.json");
+    let value: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    let saved: TerminalReceipt =
+        receipt_io::read(&path, value["sha256"].as_str().unwrap()).unwrap();
+    assert!(!saved.input_closure_proven);
+    assert!(saved.inputs.is_none() && saved.commands.is_empty() && saved.models.is_empty());
+    let TerminalOutcome::Failed { failure } = &saved.result else {
+        panic!("accepted failed preparation")
+    };
+    assert_eq!(failure.phase, SemanticIndexerRunPhase::Preparation);
+    assert!(
+        failure
+            .process
+            .as_ref()
+            .unwrap()
+            .stderr
+            .contains("invalid go version")
+    );
+    preparation::assert_native_failure_receipts(
+        &attempt,
+        saved.go_preparation.as_ref().unwrap(),
+        &saved.scope_sha256,
+    );
 }
