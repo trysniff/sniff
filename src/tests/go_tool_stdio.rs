@@ -43,14 +43,14 @@ fn fixture_sdk(root: &Path) {
 }
 
 #[test]
-fn overlay_covers_all_three_transports_without_modifying_the_sdk() {
+fn overlay_covers_child_stdio_and_driver_environment_without_modifying_sdk() {
     let root = tempfile::tempdir().unwrap();
     fixture_sdk(root.path());
     let original = recipes().map(|(relative, _, _)| fs::read(root.path().join(relative)).unwrap());
     let output = root.path().join("overlay");
     let manifest = prepare_overlay(root.path(), &output).unwrap();
     let value: serde_json::Value = serde_json::from_slice(&fs::read(manifest).unwrap()).unwrap();
-    assert_eq!(value["Replace"].as_object().unwrap().len(), 3);
+    assert_eq!(value["Replace"].as_object().unwrap().len(), 4);
     for ((relative, file, replacements), bytes) in recipes().into_iter().zip(original) {
         assert_eq!(fs::read(root.path().join(relative)).unwrap(), bytes);
         let patched = fs::read_to_string(output.join(file)).unwrap();
@@ -62,6 +62,11 @@ fn overlay_covers_all_three_transports_without_modifying_the_sdk() {
         fs::read_to_string(output.join("generate.go"))
             .unwrap()
             .contains("self, err := os.Executable()")
+    );
+    assert!(
+        fs::read_to_string(output.join("env.go"))
+            .unwrap()
+            .contains(CHILD_PATH_AFTER)
     );
     assert!(
         prepare_overlay(root.path(), &output).is_err(),
@@ -202,9 +207,14 @@ fn same_sdk_go_driver_compiles_and_generates_with_eof_in_appcontainer() {
     fs::write(
         work.path().join("cmd/generate/main.go"),
         concat!(
-            "package main\nimport (\"fmt\"; \"io\"; \"os\")\n",
+            "package main\nimport (\"fmt\"; \"io\"; \"os\"; \"os/exec\"; \"strings\")\n",
             "func main() { data, err := io.ReadAll(os.Stdin); ",
             "if err != nil || len(data) != 0 { panic(\"stdin is not EOF\") }; ",
+            "cmd := exec.Command(\"go\", \"list\", \"-export\", \".\"); ",
+            "var nested strings.Builder; ",
+            "cmd.Stdin = os.Stdin; cmd.Stdout = &nested; cmd.Stderr = os.Stderr; ",
+            "if err := cmd.Run(); err != nil { panic(err) }; ",
+            "if strings.TrimSpace(nested.String()) != \"example.com/stdio\" { panic(\"nested compiler query failed\") }; ",
             "fmt.Println(\"generator-eof\") }\n"
         ),
     )

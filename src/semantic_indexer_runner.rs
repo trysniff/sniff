@@ -226,6 +226,11 @@ mod go_commands;
 mod go_dependencies;
 #[path = "semantic_indexer_go_input_tree.rs"]
 mod go_input_tree;
+
+#[cfg(windows)]
+pub(crate) fn go_sdk_input_tree_sha256(root: &Path) -> Result<String, String> {
+    go_input_tree::sha256(root, b"sniff-go-sdk-input-tree-v1")
+}
 #[path = "semantic_indexer_go_model.rs"]
 mod go_model;
 #[path = "semantic_indexer_go_model_commands.rs"]

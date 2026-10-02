@@ -388,7 +388,7 @@ fn real_go_generator_reproduces_compiler_owned_output_twice_offline() {
     let census = match census {
         Ok(census) => census,
         Err(error)
-            if (!go_available || cfg!(windows))
+            if !go_available
                 && error.kind
                     == super::super::super::intentional_boundary_generator_outcome::GeneratorDerivationErrorKind::InfrastructureUnavailable =>
         {
@@ -420,11 +420,6 @@ fn real_go_generator_reproduces_compiler_owned_output_twice_offline() {
                 crate::benchmark::release::IntentionalBoundaryGeneratorUnresolvedReason::RuntimeUnavailable,
             ..
         } if !go_available => {}
-        crate::benchmark::release::IntentionalBoundaryGeneratorReplayOutcome::Unresolved {
-            reason:
-                crate::benchmark::release::IntentionalBoundaryGeneratorUnresolvedReason::SandboxUnavailable,
-            ..
-        } if cfg!(windows) => {}
         _ => panic!("real Go generator did not reproduce its committed output: {outcome:#?}"),
     }
 }
@@ -483,7 +478,15 @@ fn real_fixture() -> RealFixture {
     fs::write(
         root.path().join("tools/cmd/generate/main.go"),
         format!(
-            "package main\n\nimport \"os\"\n\nfunc main() {{\n\tif err := os.WriteFile(\"generated.go\", []byte({generated:?}), 0o644); err != nil {{\n\t\tpanic(err)\n\t}}\n}}\n"
+            concat!(
+                "package main\n\nimport (\"os\"; \"os/exec\")\n\nfunc main() {{\n",
+                "\tcmd := exec.Command(\"go\", \"list\", \"-export\", \"-mod=readonly\", \"-buildvcs=false\", \".\")\n",
+                "\tcmd.Stdin = os.Stdin\n\tcmd.Stdout = os.Stdout\n\tcmd.Stderr = os.Stderr\n",
+                "\tif err := cmd.Run(); err != nil {{ panic(err) }}\n",
+                "\tif err := os.WriteFile(\"generated.go\", []byte({generated:?}), 0o644); err != nil {{\n",
+                "\t\tpanic(err)\n\t}}\n}}\n"
+            ),
+            generated = generated,
         ),
     )
     .unwrap();

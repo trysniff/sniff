@@ -169,6 +169,30 @@ jobs:
           cargo test --lib --locked \
             semantic_indexer_runner::go_model::preparation_tests:: \
             -- --ignored --test-threads=1 --nocapture
+      - name: Verify normal Windows Go adapter production and verified reuse
+        if: matrix.fixture == 'go' && runner.os == 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          probe='go_runtime_adapter::tests::real_selected_sdk_adapter_is_produced_once_and_reused_verified'
+          inventory="$(cargo test --lib --locked "$probe" -- --exact --list --ignored)"
+          test "$(printf '%s\n' "$inventory" | grep -c ': test$')" -eq 1
+          printf '%s\n' "$inventory" | grep -Fx "$probe: test"
+          cargo test --lib --locked "$probe" -- --exact --ignored --test-threads=1 --nocapture
+      - name: Verify normal Go model and generator runtime
+        if: matrix.fixture == 'go'
+        shell: bash
+        run: |
+          set -euo pipefail
+          for probe in \
+            benchmark::release::intentional_boundary_project_model_go::tests::real_go_list_is_sandboxed_or_fails_as_typed_unavailable \
+            benchmark::release::intentional_boundary_generator::go::tests::real_go_generator_reproduces_compiler_owned_output_twice_offline
+          do
+            inventory="$(cargo test --lib --locked "$probe" -- --exact --list)"
+            test "$(printf '%s\n' "$inventory" | grep -c ': test$')" -eq 1
+            printf '%s\n' "$inventory" | grep -Fx "$probe: test"
+            cargo test --lib --locked "$probe" -- --exact --test-threads=1 --nocapture
+          done
       - name: Reject stale Go inputs at the native qualified executor boundary
         if: matrix.fixture == 'go'
         shell: bash
