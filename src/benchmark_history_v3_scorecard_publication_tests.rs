@@ -65,6 +65,14 @@ fn rejects_changed_event_head_blob_and_late_timestamp() {
             .unwrap_err()
             .contains("not before")
     );
+    let mut signed = original;
+    *signed.pointer_mut("/data/node/createdAt").unwrap() =
+        serde_json::json!("2026-+8-07T18:26:23Z");
+    assert!(
+        validate_publication_response(&signed, FRAME_BLOB)
+            .unwrap_err()
+            .contains("invalid historical-v3 UTC month")
+    );
 }
 
 #[test]

@@ -81,7 +81,12 @@ pub(super) fn split_inclusive_utc_range(
 }
 
 fn parse_component(value: &str, start: usize, end: usize, label: &str) -> Result<u32, String> {
-    value[start..end]
+    let component = &value[start..end];
+    // Integer parsing accepts a leading '+', but UTC fields must contain only digits.
+    if !component.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(format!("invalid historical-v3 UTC {label}: {value}"));
+    }
+    component
         .parse::<u32>()
         .map_err(|_| format!("invalid historical-v3 UTC {label}: {value}"))
 }
@@ -134,6 +139,53 @@ mod tests {
         assert!(parse_utc_second("2025-02-29T00:00:00Z").is_err());
         assert!(parse_utc_second("2026-09-21T00:00:00+00:00").is_err());
         assert!(parse_utc_second("000\u{e9}09-21T00:00:00Z").is_err());
+    }
+
+    #[test]
+    fn utc_seconds_reject_signed_numeric_fields() {
+        for value in [
+            "2026-+8-07T20:46:11Z",
+            "2026-08-+7T20:46:11Z",
+            "2026-08-07T+0:46:11Z",
+            "2026-08-07T20:+6:11Z",
+            "2026-08-07T20:46:+1Z",
+        ] {
+            assert!(parse_utc_second(value).is_err(), "accepted {value}");
+        }
+    }
+
+    #[test]
+    fn utc_seconds_reject_noncanonical_spellings() {
+        for value in [
+            "2026- 8-07T20:46:11Z",
+            "2026-08-07T20:46:-1Z",
+            "2026-08-07T20:46:1\0Z",
+            "2026-08-07t20:46:11Z",
+            "2026-08-07T20:46:11z",
+            "2026-08-07T20:46:11.0Z",
+            "2026-08-07T20:46:11+00:00",
+            "2026-08-07T20:46:11Z ",
+        ] {
+            assert!(parse_utc_second(value).is_err(), "accepted {value:?}");
+        }
+    }
+
+    #[test]
+    fn utc_seconds_preserve_the_strict_cutoff_boundary() {
+        let cutoff = parse_utc_second("2026-08-07T20:46:11Z").unwrap();
+        assert_eq!(
+            parse_utc_second("2026-08-07T20:46:10Z").unwrap(),
+            cutoff - 1
+        );
+        assert_eq!(
+            parse_utc_second("2026-08-07T20:46:12Z").unwrap(),
+            cutoff + 1
+        );
+        for offset in -1..=1 {
+            let value = format_utc_second(cutoff + offset).unwrap();
+            assert_eq!(parse_utc_second(&value).unwrap(), cutoff + offset);
+            assert_eq!(value.as_str().cmp("2026-08-07T20:46:11Z"), offset.cmp(&0));
+        }
     }
 
     #[test]
