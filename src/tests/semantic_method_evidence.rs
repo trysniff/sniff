@@ -304,6 +304,44 @@ fn qualified_rust_world_never_inherits_host_cfg_or_default_test_exclusions() {
 }
 
 #[test]
+fn unqualified_rust_index_cannot_prove_cfg_exclusion_from_sniff_build_flags() {
+    let inactive_host = if cfg!(windows) { "unix" } else { "windows" };
+    for predicate in [
+        inactive_host,
+        "test",
+        "not(debug_assertions)",
+        "feature = \"optional-provider\"",
+        "any(test, windows)",
+    ] {
+        let mut fixture = Fixture::new();
+        let source = format!("#[cfg({predicate})]\nfn process(value: i32) -> i32 {{ value }}\n");
+        fs::write(&fixture.files[0].file_path, &source).unwrap();
+        fixture.files[0].source = source.clone();
+        fixture.files[0].methods[0].source = source;
+        fixture.files[0].methods[0].start_line = 2;
+        fixture.files[0].methods[0].end_line = 2;
+        fixture
+            .index
+            .symbols
+            .remove(&crate::semantic_index::SemanticSymbolId(
+                "rust test process".to_string(),
+            ));
+        let indexes = BTreeMap::from([(
+            SemanticIndexerKind::Rust,
+            SemanticIndexSet::Unqualified {
+                index: Box::new(fixture.index.clone()),
+            },
+        )]);
+        let result = build_compiler_method_evidence(&fixture.root, &fixture.files, &indexes);
+        assert!(
+            result.is_err(),
+            "cfg({predicate}) was accepted without compiler evidence"
+        );
+        assert!(result.err().unwrap().contains("join is incomplete"));
+    }
+}
+
+#[test]
 fn ignored_definition_cannot_leak_into_callee_contract_or_test_context() {
     let fixture = Fixture::new();
     let mut inconsistent = world(&fixture.index, "windows");
