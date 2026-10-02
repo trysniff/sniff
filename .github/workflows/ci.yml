@@ -106,6 +106,19 @@ jobs:
       - uses: ./.github/actions/setup-native-proof
         with:
           fixtures: ${{ matrix.proof == 'go-project-model' && 'go' || 'kotlin' }}
+      - name: Verify selected Windows JVM and Gradle startup before model derivation
+        if: runner.os == 'Windows' && matrix.proof == 'gradle-project-model'
+        shell: bash
+        run: |
+          set -euo pipefail
+          scope='benchmark::release::non_blind_history_runtime::gradle_windows_tests::'
+          inventory="$(cargo test --lib --locked "$scope" -- --list --ignored)"
+          test "$(printf '%s\n' "$inventory" | grep -c ': test$')" -eq 2
+          printf '%s\n' "$inventory" | grep -Fx \
+            "${scope}selected_jvm_starts_in_the_gradle_runtime_sandbox: test"
+          printf '%s\n' "$inventory" | grep -Fx \
+            "${scope}selected_gradle_reports_its_version_in_the_runtime_sandbox: test"
+          cargo test --lib --locked "$scope" -- --ignored --test-threads=1 --nocapture
       - name: Require the exact native proof with immediate diagnostics
         shell: bash
         run: python tools/ci/run_native_unit_tests.py --library-proof '${{ matrix.proof }}'

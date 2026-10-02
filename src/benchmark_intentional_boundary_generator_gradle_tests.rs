@@ -5,8 +5,7 @@ use crate::benchmark::release::{
     IntentionalBoundaryManifestProvider, IntentionalBoundaryManifestTarget,
     IntentionalBoundaryProjectModelExecution, IntentionalBoundaryProjectModelTargetStatus,
     IntentionalBoundaryProjectModelVariant, IntentionalBoundarySemanticRange,
-    census_intentional_boundary_gradle_project_models, census_intentional_boundary_repository,
-    inventory_intentional_boundary_repository,
+    census_intentional_boundary_repository, inventory_intentional_boundary_repository,
 };
 use std::collections::BTreeMap;
 use std::fs;
@@ -398,6 +397,11 @@ fn runtime_fixture() -> (TempDir, IntentionalBoundaryRepositoryInventory) {
 
 #[test]
 fn real_gradle_generator_reproduces_the_compiler_owned_output_twice_offline() {
+    use crate::benchmark::release::intentional_boundary_project_model_gradle::census_intentional_boundary_gradle_project_models_typed;
+    use crate::benchmark::release::intentional_boundary_project_model_outcome::ProjectModelDerivationErrorKind;
+    use crate::benchmark::release::non_blind_history_runtime::HistoricalRuntimePlanError;
+    use crate::benchmark::release::non_blind_history_runtime_support::resolve_on_path;
+
     let (root, inventory) = runtime_fixture();
     let source = census_intentional_boundary_repository(
         &inventory.repository,
@@ -409,21 +413,28 @@ fn real_gradle_generator_reproduces_the_compiler_owned_output_twice_offline() {
     assert!(source.source_files.iter().any(|file| {
         file.repository_path == "src/main/kotlin/example/Generated.kt" && file.language == "kotlin"
     }));
-    let gradle_available = Command::new("gradle")
-        .arg("--version")
-        .output()
-        .is_ok_and(|output| output.status.success());
-    let models = census_intentional_boundary_gradle_project_models(
+    let gradle_available = match resolve_on_path("gradle") {
+        Ok(_) => true,
+        Err(HistoricalRuntimePlanError::Unavailable(_)) => false,
+        Err(error) => panic!("Gradle runtime selection failed: {error:?}"),
+    };
+    let models = census_intentional_boundary_gradle_project_models_typed(
         &inventory.repository,
         &inventory.revision,
         root.path(),
         &inventory,
     );
     if !gradle_available {
-        assert!(models.unwrap_err().contains("runtime is unavailable"));
+        let error = models.unwrap_err();
+        assert_eq!(
+            error.kind,
+            ProjectModelDerivationErrorKind::InfrastructureUnavailable,
+            "unexpected missing-Gradle outcome: {error:?}",
+        );
+        assert!(error.process.is_none());
         return;
     }
-    let models = models.unwrap();
+    let models = models.unwrap_or_else(|error| panic!("selected Gradle model failed: {error:?}"));
     let target = models
         .targets
         .iter()
@@ -468,12 +479,6 @@ fn real_gradle_generator_reproduces_the_compiler_owned_output_twice_offline() {
                 success.outputs[0].committed_sha256
             );
         }
-        Err(failure) if cfg!(windows) => assert_eq!(
-            failure.reason,
-            IntentionalBoundaryGeneratorUnresolvedReason::SandboxUnavailable,
-            "unexpected Windows Gradle replay failure: {}",
-            failure.detail
-        ),
         Err(failure) => panic!("Gradle replay failed: {}", failure.detail),
     }
 }

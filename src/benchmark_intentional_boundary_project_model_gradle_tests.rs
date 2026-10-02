@@ -1064,18 +1064,26 @@ fn collector_rejects_repository_mutation_by_gradle_boundary() {
 #[test]
 fn real_gradle_tooling_model_is_sandboxed_or_typed_unavailable() {
     let (root, inventory) = runtime_repository();
-    let gradle_available = Command::new("gradle")
-        .arg("--version")
-        .output()
-        .is_ok_and(|output| output.status.success());
-    let result = census_intentional_boundary_gradle_project_models(
+    use super::super::intentional_boundary_project_model_outcome::ProjectModelDerivationErrorKind;
+    use super::super::non_blind_history_runtime::HistoricalRuntimePlanError;
+    use super::super::non_blind_history_runtime_support::resolve_on_path;
+
+    // Resolve the same selected launcher as production; Command does not search
+    // Windows PATH for the .bat entrypoint that the runtime resolver supports.
+    let gradle_available = match resolve_on_path("gradle") {
+        Ok(_) => true,
+        Err(HistoricalRuntimePlanError::Unavailable(_)) => false,
+        Err(error) => panic!("Gradle runtime selection failed: {error:?}"),
+    };
+    let result = census_intentional_boundary_gradle_project_models_typed(
         &inventory.repository,
         &inventory.revision,
         root.path(),
         &inventory,
     );
     if gradle_available {
-        let census = result.unwrap();
+        let census = result
+            .unwrap_or_else(|error| panic!("selected Gradle model derivation failed: {error:?}"));
         assert_eq!(census.executions.len(), 1);
         assert_eq!(census.targets.len(), 1);
         assert!(matches!(
@@ -1088,10 +1096,12 @@ fn real_gradle_tooling_model_is_sandboxed_or_typed_unavailable() {
         validate_intentional_boundary_project_model_census_commitment(&inventory, &census).unwrap();
     } else {
         let error = result.unwrap_err();
-        assert!(
-            error.contains("runtime is unavailable"),
-            "unexpected missing-Gradle error: {error}"
+        assert_eq!(
+            error.kind,
+            ProjectModelDerivationErrorKind::InfrastructureUnavailable,
+            "unexpected missing-Gradle outcome: {error:?}"
         );
+        assert!(error.process.is_none());
     }
 }
 

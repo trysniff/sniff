@@ -27,7 +27,7 @@ use std::path::Path;
 const GRADLE_MODEL_CONTRACT: &str = "sniff-gradle-tooling-project-model-v6";
 const GRADLE_TOOLING_API_VERSION: &str = "8.8";
 pub(super) const GRADLE_TOOLING_COMMAND_CONTRACT: &str =
-    "gradle-tooling-api-8.8-custom-model-prepared-offline-v7";
+    "gradle-tooling-api-8.8-custom-model-prepared-offline-v8";
 
 #[path = "benchmark_intentional_boundary_project_model_gradle_runtime.rs"]
 mod runtime;
