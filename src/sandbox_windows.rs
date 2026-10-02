@@ -49,6 +49,8 @@ use windows_sys::Win32::System::Threading::{
 #[path = "sandbox_windows_drive.rs"]
 mod drive;
 use drive::SandboxDriveMapping;
+#[path = "sandbox_windows_executable_aliases.rs"]
+mod executable_aliases;
 #[path = "sandbox_windows_recovery.rs"]
 mod recovery;
 use recovery::RecoveryLedger;
@@ -91,6 +93,7 @@ pub(super) fn run(spec: &SandboxCommand) -> Result<SandboxOutput, SandboxError> 
         .read_only_paths
         .extend(effective_spec.executable_paths.iter().cloned());
     extend_executable_mapping_roots(&mut effective_spec)?;
+    executable_aliases::canonicalize_file_aliases(&mut effective_spec)?;
     let profile_name = unique_profile_name();
     prepare_private_app_container_directories(&effective_spec, &profile_name)?;
     let recovery_ledger = RecoveryLedger::recover_and_begin(&profile_name)?;
@@ -1074,7 +1077,12 @@ fn grant_acl_with_inheritance(
     permission: &str,
     inherit: bool,
 ) -> Result<(), SandboxError> {
-    let path = normalize_windows_path(path.to_path_buf());
+    let path = normalize_windows_path(std::fs::canonicalize(path).map_err(|error| {
+        SandboxError::Invalid(format!(
+            "resolve Windows ACL grant path {} failed: {error}",
+            path.display()
+        ))
+    })?);
     let inheritance = if inherit { "(OI)(CI)" } else { "" };
     let rule = format!("*{sid}:{inheritance}{permission}");
     let mut command = Command::new("icacls");
@@ -1208,7 +1216,12 @@ fn persistent_acl_exists(
 }
 
 fn revoke_acl(path: &Path, sid: &str) -> Result<(), String> {
-    let path = normalize_windows_path(path.to_path_buf());
+    let path = normalize_windows_path(std::fs::canonicalize(path).map_err(|error| {
+        format!(
+            "resolve Windows ACL revoke path {} failed: {error}",
+            path.display()
+        )
+    })?);
     update_acl_entry(&path, sid, 0, REVOKE_ACCESS)
         .map_err(|error| format!("native ACL revoke failed for {}: {error}", path.display()))
 }
@@ -1433,7 +1446,19 @@ impl AclGuard {
         sid: &str,
         recovery: &RecoveryLedger,
     ) -> Result<Self, SandboxError> {
-        let paths = explicit_acl_paths(root, read_only_paths, writable_paths);
+        let paths = explicit_acl_paths(root, read_only_paths, writable_paths)
+            .into_iter()
+            .map(|(path, permission)| {
+                std::fs::canonicalize(&path)
+                    .map(|path| (normalize_windows_path(path), permission))
+                    .map_err(|error| {
+                        SandboxError::Invalid(format!(
+                            "resolve Windows ACL target {} failed: {error}",
+                            path.display()
+                        ))
+                    })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         let mut grants: Vec<AclGrant> = Vec::with_capacity(paths.len());
         for (path, permission) in paths {
             if permission == "R" && persistent_access.can_read(&path)? {

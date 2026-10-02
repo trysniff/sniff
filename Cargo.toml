@@ -74,6 +74,8 @@ required-features = ["sniffbench-frame"]
 
 [dependencies]
 base64 = "0.22"
+cap-fs-ext = "=4.0.3"
+cap-std = "=4.0.3"
 chrono = "0.4"
 clap = { version = "4", features = ["derive"] }
 colored = "2"

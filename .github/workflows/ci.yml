@@ -124,6 +124,15 @@ jobs:
         if: matrix.fixture == 'typescript'
         shell: bash
         run: |
+          set -euo pipefail
+          inventory="$(cargo test --lib --locked \
+            semantic_indexer_runner::typescript_model::tests::normal_scan_ \
+            -- --list --ignored)"
+          test "$(printf '%s\n' "$inventory" | grep -c ': test$')" -eq 2
+          printf '%s\n' "$inventory" | grep -Fx \
+            'semantic_indexer_runner::typescript_model::tests::normal_scan_discovers_and_indexes_reference_world_without_git_or_model_calls: test'
+          printf '%s\n' "$inventory" | grep -Fx \
+            'semantic_indexer_runner::typescript_model::tests::normal_scan_preserves_implicit_jsconfig_compiler_defaults: test'
           cargo test --lib --locked \
             semantic_indexer_runner::typescript_model::tests::normal_scan_ \
             -- --ignored --test-threads=1 --nocapture
@@ -236,6 +245,13 @@ jobs:
       - name: Verify every normal Go compiler context without Git or model calls
         shell: bash
         run: |
+          set -euo pipefail
+          inventory="$(cargo test --lib --locked \
+            semantic_indexer_runner::go_model::tests::normal_scan_discovers_every_go_context_without_git_or_model_calls \
+            -- --exact --list --ignored)"
+          test "$(printf '%s\n' "$inventory" | grep -c ': test$')" -eq 1
+          printf '%s\n' "$inventory" | grep -Fx \
+            'semantic_indexer_runner::go_model::tests::normal_scan_discovers_every_go_context_without_git_or_model_calls: test'
           cargo test --lib --locked \
             semantic_indexer_runner::go_model::tests::normal_scan_discovers_every_go_context_without_git_or_model_calls \
             -- --exact --ignored --test-threads=1 --nocapture

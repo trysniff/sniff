@@ -1,5 +1,6 @@
 use super::HISTORICAL_V3_REPOSITORY_CREATED_AFTER_UTC;
 use super::history_v3_time::parse_utc_second;
+use super::source_seal::{artifact_io, read_verified_artifact};
 use super::{
     BenchmarkSourceSeal, SourceAssessmentEvidenceKind, SourceCandidateAssessment,
     SourceSelectionCompositeAudit, SourceSelectionDisposition, validate_source_seal,
@@ -7,7 +8,6 @@ use super::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
 use std::path::Path;
 
 const BLIND_SEAL_FILE_SHA256: &str =
@@ -87,14 +87,8 @@ pub fn derive_blind_prior_temporal_proof(
         .parent()
         .filter(|_| seal_path.is_absolute())
         .ok_or("blind prior source-seal path must be absolute")?;
-    let metadata = fs::symlink_metadata(seal_path)
-        .map_err(|error| format!("failed to inspect blind prior source seal: {error}"))?;
-    if !metadata.is_file() || metadata.file_type().is_symlink() || metadata.len() > 4 * 1024 * 1024
-    {
-        return Err("blind prior source seal is not a plain bounded file".to_string());
-    }
-    let seal_bytes = fs::read(seal_path)
-        .map_err(|error| format!("failed to read blind prior source seal: {error}"))?;
+    let seal_bytes =
+        artifact_io::read_plain_file(seal_path, 4 * 1024 * 1024, "blind prior source seal")?;
     if sha256(&seal_bytes) != BLIND_SEAL_FILE_SHA256 {
         return Err("blind prior source seal differs from its frozen artifact".to_string());
     }
@@ -111,11 +105,12 @@ pub fn derive_blind_prior_temporal_proof(
         return Err("blind prior source-seal identity changed".to_string());
     }
     validate_source_seal(&seal, seal_root)?;
-    let audit_bytes = fs::read(seal_root.join(BLIND_AUDIT_PATH))
-        .map_err(|error| format!("failed to read blind prior selection audit: {error}"))?;
-    if sha256(&audit_bytes) != BLIND_AUDIT_FILE_SHA256 {
-        return Err("blind prior selection audit differs from its frozen artifact".to_string());
-    }
+    let audit_bytes = read_verified_artifact(
+        seal_root,
+        BLIND_AUDIT_PATH,
+        BLIND_AUDIT_FILE_SHA256,
+        "blind prior selection audit",
+    )?;
     let audit: SourceSelectionCompositeAudit = serde_json::from_slice(&audit_bytes)
         .map_err(|error| format!("invalid blind prior selection audit: {error}"))?;
     let nodes = parse_graphql_nodes(graphql_response_bytes)?;

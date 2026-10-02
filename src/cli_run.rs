@@ -797,19 +797,29 @@ pub async fn run(args: CliArgs) -> Result<i32, Box<dyn std::error::Error>> {
         return Err("--budget-usd is only valid for a normal scan or `sniff resume`".into());
     }
 
+    // Command-specific futures can contain large compiler and benchmark state.
+    // Keep that state out of the dispatcher, including its early validation paths.
     match args.command {
         Some(CliCommand::Doctor { path, probe }) => {
-            pipeline::doctor(&path, args.skip_dotenv, probe).await
+            Box::pin(pipeline::doctor(&path, args.skip_dotenv, probe)).await
         }
         Some(CliCommand::Indexers { command }) => match command {
             IndexerCommand::Install { path, force } => {
-                pipeline::install_indexers(&path, force).await
+                Box::pin(pipeline::install_indexers(&path, force)).await
             }
-            IndexerCommand::Index { path } => pipeline::index_semantic_sources(&path).await,
+            IndexerCommand::Index { path } => {
+                Box::pin(pipeline::index_semantic_sources(&path)).await
+            }
         },
-        Some(CliCommand::Status { path }) => pipeline::status(&path).await,
+        Some(CliCommand::Status { path }) => Box::pin(pipeline::status(&path)).await,
         Some(CliCommand::Resume { path }) => {
-            pipeline::resume(&path, args.skip_dotenv, args.yes, args.budget_usd).await
+            Box::pin(pipeline::resume(
+                &path,
+                args.skip_dotenv,
+                args.yes,
+                args.budget_usd,
+            ))
+            .await
         }
         Some(CliCommand::Benchmark { command }) => match command {
             BenchmarkCommand::HistoricalV3 { command } => match command {
@@ -823,18 +833,20 @@ pub async fn run(args: CliArgs) -> Result<i32, Box<dyn std::error::Error>> {
                     pipeline::init_historical_v3(&config).map_err(Into::into)
                 }
                 HistoricalV3Command::Preflight { config } => {
-                    pipeline::preflight_historical_v3(&config)
+                    Box::pin(pipeline::preflight_historical_v3(&config))
                         .await
                         .map_err(Into::into)
                 }
-                HistoricalV3Command::Collect { config } => pipeline::collect_historical_v3(&config)
-                    .await
-                    .map_err(Into::into),
+                HistoricalV3Command::Collect { config } => {
+                    Box::pin(pipeline::collect_historical_v3(&config))
+                        .await
+                        .map_err(Into::into)
+                }
                 HistoricalV3Command::Status { config, language } => {
                     pipeline::historical_v3_status(&config, language).map_err(Into::into)
                 }
                 HistoricalV3Command::Advance { config, language } => {
-                    pipeline::advance_historical_v3(&config, language)
+                    Box::pin(pipeline::advance_historical_v3(&config, language))
                         .await
                         .map_err(Into::into)
                 }
@@ -842,11 +854,13 @@ pub async fn run(args: CliArgs) -> Result<i32, Box<dyn std::error::Error>> {
                     config,
                     language,
                     max_steps,
-                } => {
-                    pipeline::run_historical_v3(&config, language, max_steps.map(NonZeroUsize::get))
-                        .await
-                        .map_err(Into::into)
-                }
+                } => Box::pin(pipeline::run_historical_v3(
+                    &config,
+                    language,
+                    max_steps.map(NonZeroUsize::get),
+                ))
+                .await
+                .map_err(Into::into),
                 HistoricalV3Command::PrepareReview { config, language } => {
                     pipeline::prepare_historical_v3_review(&config, language).map_err(Into::into)
                 }
@@ -891,13 +905,13 @@ pub async fn run(args: CliArgs) -> Result<i32, Box<dyn std::error::Error>> {
                 manifest_output,
                 transport,
             } => {
-                pipeline::collect_benchmark_source_frame(
+                Box::pin(pipeline::collect_benchmark_source_frame(
                     &policy,
                     &state_directory,
                     &frame_output,
                     &manifest_output,
                     transport,
-                )
+                ))
                 .await
             }
             BenchmarkCommand::ValidateFrame {
@@ -940,14 +954,14 @@ pub async fn run(args: CliArgs) -> Result<i32, Box<dyn std::error::Error>> {
                 checkout_root,
                 output,
             } => {
-                pipeline::assess_benchmark_source_selection(
+                Box::pin(pipeline::assess_benchmark_source_selection(
                     &policy,
                     &frame,
                     &worksheet,
                     &state_directory,
                     &checkout_root,
                     &output,
-                )
+                ))
                 .await
             }
             BenchmarkCommand::AuditSelection {
@@ -1236,7 +1250,7 @@ pub async fn run(args: CliArgs) -> Result<i32, Box<dyn std::error::Error>> {
                 output,
                 max_new_ranks,
             } => {
-                pipeline::collect_intentional_boundary_benchmark_frame(
+                Box::pin(pipeline::collect_intentional_boundary_benchmark_frame(
                     pipeline::IntentionalBoundaryCollectionInputs {
                         policy_path: &policy,
                         population_path: &population,
@@ -1249,7 +1263,7 @@ pub async fn run(args: CliArgs) -> Result<i32, Box<dyn std::error::Error>> {
                         output_path: &output,
                         maximum_new_ranks: max_new_ranks,
                     },
-                )
+                ))
                 .await
             }
             BenchmarkCommand::PrepareIntentionalBoundarySourceBundle {
@@ -1362,7 +1376,7 @@ pub async fn run(args: CliArgs) -> Result<i32, Box<dyn std::error::Error>> {
                 output,
                 max_new_ranks,
             } => {
-                pipeline::assess_non_blind_benchmark_history(
+                Box::pin(pipeline::assess_non_blind_benchmark_history(
                     &policy,
                     &worksheet,
                     &protocol,
@@ -1370,7 +1384,7 @@ pub async fn run(args: CliArgs) -> Result<i32, Box<dyn std::error::Error>> {
                     &state_directory,
                     &output,
                     max_new_ranks,
-                )
+                ))
                 .await
             }
             BenchmarkCommand::Freeze { draft, output } => {
@@ -1390,8 +1404,16 @@ pub async fn run(args: CliArgs) -> Result<i32, Box<dyn std::error::Error>> {
                 pipeline::benchmark(&corpus, &submission)
             }
         },
-        None if args.estimate => pipeline::estimate(&args.path, args.skip_dotenv).await,
-        None => pipeline::run(&args.path, args.skip_dotenv, args.yes, args.budget_usd).await,
+        None if args.estimate => Box::pin(pipeline::estimate(&args.path, args.skip_dotenv)).await,
+        None => {
+            Box::pin(pipeline::run(
+                &args.path,
+                args.skip_dotenv,
+                args.yes,
+                args.budget_usd,
+            ))
+            .await
+        }
     }
 }
 
@@ -2547,6 +2569,79 @@ mod tests {
         assert_eq!(
             error.to_string(),
             "--estimate cannot be combined with a subcommand"
+        );
+    }
+
+    #[test]
+    fn dispatcher_future_has_bounded_inline_state() {
+        let args = CliArgs::try_parse_from(["sniff", "--estimate", "doctor"])
+            .expect("arguments should parse before mode validation");
+        let future = super::run(args);
+        let bytes = std::mem::size_of_val(&future);
+        assert!(bytes <= 32 * 1024, "CLI dispatcher future is {bytes} bytes");
+    }
+
+    #[test]
+    fn mode_validation_runs_on_a_one_megabyte_stack() {
+        let invalid_modes = [
+            (
+                vec!["sniff", "--estimate", "doctor"],
+                "--estimate cannot be combined with a subcommand",
+            ),
+            (
+                vec!["sniff", "--budget-usd", "0.75", "status"],
+                "--budget-usd is only valid for a normal scan or `sniff resume`",
+            ),
+        ];
+        for (arguments, expected) in invalid_modes {
+            let args = CliArgs::try_parse_from(arguments).expect("parse modes");
+            std::thread::Builder::new()
+                .name("sniff-small-stack-validation".to_string())
+                .stack_size(1024 * 1024)
+                .spawn(move || {
+                    let runtime = tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                        .expect("validation runtime");
+                    let error = runtime
+                        .block_on(super::run(args))
+                        .expect_err("invalid mode");
+                    assert_eq!(error.to_string(), expected);
+                })
+                .expect("spawn validation thread")
+                .join()
+                .expect("validation thread must not panic");
+        }
+    }
+
+    #[test]
+    fn offline_status_dispatch_runs_on_a_one_megabyte_stack() {
+        let root = tempfile::TempDir::new().expect("status target");
+        let args = CliArgs::try_parse_from([
+            "sniff",
+            "status",
+            root.path().to_str().expect("status path"),
+        ])
+        .expect("parse offline status");
+        let code = std::thread::Builder::new()
+            .name("sniff-small-stack-status".to_string())
+            .stack_size(1024 * 1024)
+            .spawn(move || {
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("status runtime");
+                runtime.block_on(super::run(args)).expect("offline status")
+            })
+            .expect("spawn status thread")
+            .join()
+            .expect("status thread must not panic");
+        assert_eq!(code, 0);
+        assert_eq!(
+            std::fs::read_dir(root.path())
+                .expect("target inventory")
+                .count(),
+            0
         );
     }
 }
