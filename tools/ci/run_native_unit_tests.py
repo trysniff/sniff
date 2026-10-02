@@ -1,4 +1,4 @@
-"""Run every enabled native integration target except the separate dogfood suite."""
+"""Run exhaustive native partitions, with expensive library proofs in required jobs."""
 
 import argparse
 import json
@@ -6,6 +6,8 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+
+import native_library_scope as library_scope
 
 
 # This target is required by the separate all-feature command-recovery job.
@@ -66,8 +68,13 @@ def run_tests(targets, suite="all"):
     }
     flags = unit_scopes[suite]
     if flags:
+        if suite == "library":
+            library_scope.partition_inventory(REPOSITORY_ROOT)
+            arguments = library_scope.library_arguments()
+        else:
+            arguments = ["--nocapture"]
         subprocess.run(
-            ["cargo", "test", *flags, "--locked"],
+            ["cargo", "test", *flags, "--locked", "--", *arguments],
             check=True,
             cwd=REPOSITORY_ROOT,
         )
@@ -76,19 +83,26 @@ def run_tests(targets, suite="all"):
         for name in targets:
             arguments.extend(["--test", name])
         subprocess.run(
-            [*arguments, "--", "--test-threads=1"], check=True, cwd=REPOSITORY_ROOT
+            [*arguments, "--", "--test-threads=1", "--nocapture"],
+            check=True, cwd=REPOSITORY_ROOT
         )
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--list-only", action="store_true")
-    parser.add_argument(
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument(
         "--suite",
         choices=["all", "library", "binaries", "integrations"],
         default="all",
     )
+    modes.add_argument("--library-proof", choices=sorted(library_scope.LIBRARY_PROOFS))
+    modes.add_argument("--library-proofs", action="store_true")
     args = parser.parse_args(argv)
+    if args.library_proofs:
+        print(json.dumps(sorted(library_scope.LIBRARY_PROOFS)))
+        return 0
     try:
         output = subprocess.run(
             [
@@ -107,10 +121,17 @@ def main(argv=None):
             cwd=REPOSITORY_ROOT,
         )
         targets = integration_targets(json.loads(output.stdout))
-        for name in targets:
+        selected = (
+            [library_scope.LIBRARY_PROOFS[args.library_proof]]
+            if args.library_proof else targets
+        )
+        for name in selected:
             print(name, flush=True)
         if not args.list_only:
-            run_tests(targets, args.suite)
+            if args.library_proof:
+                library_scope.run_proof(REPOSITORY_ROOT, args.library_proof)
+            else:
+                run_tests(targets, args.suite)
     except subprocess.CalledProcessError as error:
         if error.stderr:
             print(error.stderr, file=sys.stderr)

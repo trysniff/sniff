@@ -39,6 +39,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       dogfood_groups: ${{ steps.dogfood_scope.outputs.groups }}
+      library_proofs: ${{ steps.library_scope.outputs.proofs }}
     steps:
       - uses: actions/checkout@v6
       - name: Verify the released source-seal archive layout
@@ -55,6 +56,13 @@ jobs:
           python3 tools/ci/extract_blind_source_seal.py "$archive" "$RUNNER_TEMP/extracted"
       - name: Verify complete native test-target discovery and exit handling
         run: python3 tools/ci/test_run_native_unit_tests.py
+      - name: Assign every isolated native library proof to the required matrix
+        id: library_scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          proofs="$(python3 tools/ci/run_native_unit_tests.py --library-proofs)"
+          echo "proofs=$proofs" >> "$GITHUB_OUTPUT"
       - name: Verify exhaustive dogfood shard discovery and exit handling
         run: python3 tools/ci/test_run_native_dogfood.py
       - name: Assign every dogfood group to the native matrix
@@ -78,10 +86,29 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/setup-native-proof
-      - name: Run the complete native suite
+      - name: Run the native suite partition
         shell: bash
         run: |
           python tools/ci/run_native_unit_tests.py --suite '${{ matrix.suite }}'
+
+  native-library-proofs:
+    name: library-proof-${{ matrix.os }}-${{ matrix.proof }}
+    needs: blind-prior-archive-preflight
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        proof: ${{ fromJSON(needs.blind-prior-archive-preflight.outputs.library_proofs) }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: ${{ matrix.proof == 'go-project-model' && 360 || 90 }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-native-proof
+        with:
+          fixtures: ${{ matrix.proof == 'go-project-model' && 'go' || 'kotlin' }}
+      - name: Require the exact native proof with immediate diagnostics
+        shell: bash
+        run: python tools/ci/run_native_unit_tests.py --library-proof '${{ matrix.proof }}'
 
   native-dogfood:
     name: dogfood-${{ matrix.os }}-${{ matrix.group }}
@@ -475,6 +502,7 @@ jobs:
       - native-dogfood
       - native-compiler-proofs
       - native-go-worlds
+      - native-library-proofs
       - temporal-prior-replay
       - msrv
       - package
@@ -492,6 +520,7 @@ jobs:
           [[ "${{ needs.native-dogfood.result }}" == "success" ]]
           [[ "${{ needs.native-compiler-proofs.result }}" == "success" ]]
           [[ "${{ needs.native-go-worlds.result }}" == "success" ]]
+          [[ "${{ needs.native-library-proofs.result }}" == "success" ]]
           [[ "${{ needs.temporal-prior-replay.result }}" == "success" ]]
           [[ "${{ needs.msrv.result }}" == "success" ]]
           [[ "${{ needs.package.result }}" == "success" ]]
