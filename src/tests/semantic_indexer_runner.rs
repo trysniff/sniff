@@ -1046,18 +1046,23 @@ fn compiler_snapshot_has_no_repository_ancestor() {
 #[test]
 fn runtime_identity_detects_same_length_replacement() {
     let root = tempfile::tempdir().unwrap();
-    let runtime = root.path().join("runtime.bin");
+    std::fs::create_dir(root.path().join("alias")).unwrap();
+    let runtime = root.path().join("alias").join("..").join("runtime.bin");
     std::fs::write(&runtime, b"trusted").unwrap();
     let paths = vec![runtime.clone()];
 
     let before = runtime_file_identities(&paths).unwrap();
+    let canonical_runtime = std::fs::canonicalize(&runtime).unwrap();
     std::fs::write(&runtime, b"changed").unwrap();
     let after = runtime_file_identities(&paths).unwrap();
 
     let error =
         verify_runtime_identities_unchanged("fixture indexer", &before, &after).unwrap_err();
     assert!(error.contains("executable runtime changed while indexing"));
-    assert!(error.contains(&runtime.to_string_lossy().to_string()));
+    assert!(error.contains(canonical_runtime.to_str().unwrap()));
+    assert_eq!(before[0].path, after[0].path);
+    assert_eq!(before[0].length, after[0].length);
+    assert_ne!(before[0].sha256, after[0].sha256);
 }
 
 #[test]
