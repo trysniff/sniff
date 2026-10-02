@@ -152,6 +152,16 @@ jobs:
           test "$(printf '%s\n' "$inventory" | grep -c ': test$')" -eq 1
           printf '%s\n' "$inventory" | grep -Fx "$probe: test"
           cargo test --lib --locked "$probe" -- --exact --ignored --test-threads=1 --nocapture
+      - name: Verify same-SDK Go driver generates with EOF in AppContainer
+        if: matrix.fixture == 'go' && runner.os == 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          probe='go_tool_stdio::tests::same_sdk_go_driver_compiles_and_generates_with_eof_in_appcontainer'
+          inventory="$(cargo test --lib --locked "$probe" -- --exact --list --ignored)"
+          test "$(printf '%s\n' "$inventory" | grep -c ': test$')" -eq 1
+          printf '%s\n' "$inventory" | grep -Fx "$probe: test"
+          cargo test --lib --locked "$probe" -- --exact --ignored --test-threads=1 --nocapture
       - name: Verify Go preparation failures at native executor boundaries
         if: matrix.fixture == 'go'
         shell: bash

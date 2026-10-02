@@ -12,6 +12,8 @@ pub mod config_loader;
 pub(crate) mod counterfactual;
 pub mod env_value;
 pub mod file_verdicts;
+#[cfg(windows)]
+pub(crate) mod go_tool_stdio;
 pub mod language_adapter;
 pub mod languages;
 pub mod llm;
