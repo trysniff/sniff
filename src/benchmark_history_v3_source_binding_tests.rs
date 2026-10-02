@@ -522,3 +522,55 @@ fn source_frame_parser_requires_creation_timestamp() {
             .contains("omits repository creation time")
     );
 }
+
+#[test]
+fn source_frame_parser_rejects_noncanonical_and_impossible_creation_times() {
+    for timestamp in [
+        "2026x08x08x00x01x00Z",
+        "2026-08-08t00:01:00Z",
+        "2026-08-08T00:01:00z",
+        "2026-+8-08T00:01:00Z",
+        "2026-00-08T00:01:00Z",
+        "2026-13-08T00:01:00Z",
+        "2026-02-29T00:01:00Z",
+        "1900-02-29T00:01:00Z",
+        "2026-04-31T00:01:00Z",
+        "2026-08-00T00:01:00Z",
+        "2026-08-32T00:01:00Z",
+        "2026-08-08T24:01:00Z",
+        "2026-08-08T00:60:00Z",
+        "2026-08-08T00:01:60Z",
+        "2026-08-08T00:01:00+00:00",
+    ] {
+        let frame = format!(
+            "repo,metadata\ngithub.com/example/repo,github_repository_id=1;created_at={timestamp}\n"
+        );
+        assert!(
+            parse_historical_v3_source_frame(frame.as_bytes())
+                .unwrap_err()
+                .contains("invalid repository creation time"),
+            "accepted {timestamp}"
+        );
+    }
+}
+
+#[test]
+fn source_frame_parser_preserves_valid_creation_times() {
+    for timestamp in [
+        "1970-01-01T00:00:00Z",
+        "2000-02-29T23:59:59Z",
+        "2024-02-29T00:01:00Z",
+        "2026-08-07T20:46:11Z",
+        "2026-08-07T20:46:12Z",
+        "9999-12-31T23:59:59Z",
+    ] {
+        let frame = format!(
+            "repo,metadata\ngithub.com/example/repo,github_repository_id=1;created_at={timestamp}\n"
+        );
+        let repositories = parse_historical_v3_source_frame(frame.as_bytes()).unwrap();
+        assert_eq!(repositories.len(), 1);
+        assert_eq!(repositories[0].repository_id, 1);
+        assert_eq!(repositories[0].name_with_owner, "example/repo");
+        assert_eq!(repositories[0].created_at, timestamp);
+    }
+}
