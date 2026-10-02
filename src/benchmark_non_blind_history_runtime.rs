@@ -361,6 +361,11 @@ fn expand_reserved_argument(root: &Path, cache: &Path, argument: &str) -> String
 }
 
 #[cfg(test)]
+#[cfg(windows)]
+#[path = "tests/benchmark_gradle_runtime_windows.rs"]
+mod gradle_windows_tests;
+
+#[cfg(test)]
 mod tests {
     use super::super::non_blind_history_runtime_support::runtime_identity;
     use super::*;

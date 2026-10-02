@@ -8,6 +8,10 @@ use std::path::{Path, PathBuf};
 #[cfg(windows)]
 use std::{fs, io::Read};
 
+#[cfg(windows)]
+#[path = "benchmark_non_blind_history_runtime_gradle_windows.rs"]
+mod gradle_windows;
+
 pub(super) struct Launch {
     pub(super) target: PathBuf,
     pub(super) args: Vec<String>,
@@ -336,10 +340,19 @@ pub(super) fn gradle_installation_launch(
         &gradle_home.join("lib").join("gradle-tooling-api-8.8.jar"),
         "pinned Gradle 8.8 Tooling API",
     )?;
+    #[cfg(windows)]
+    let (target, arguments, extra_images) = {
+        let (arguments, images) = gradle_windows::installation(&java, &gradle_home, args)?;
+        (java.clone(), arguments, images)
+    };
+    #[cfg(not(windows))]
+    let (target, arguments, extra_images) = (gradle.clone(), args.to_vec(), Vec::new());
+    let mut runtime_files = vec![java, gradle, tooling_api];
+    runtime_files.extend(extra_images);
     Ok(Launch {
-        target: gradle.clone(),
-        args: args.to_vec(),
-        runtime_files: vec![java, gradle, tooling_api],
+        target,
+        args: arguments,
+        runtime_files,
         runtime_roots: vec![java_home.clone(), gradle_home],
         env: vec![("JAVA_HOME".to_string(), path_value(&java_home))],
         repository_target: false,
