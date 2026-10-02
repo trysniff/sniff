@@ -166,6 +166,42 @@ fn source_seal_copies_a_clean_revision_and_derives_its_method_census() {
 }
 
 #[test]
+fn source_seal_rejects_global_edits_that_leave_method_census_unchanged() {
+    let repository = repository();
+    let repository_path = repository_path(&repository);
+    let bundle = tempfile::tempdir().unwrap();
+    let output = bundle.path().join("seal.json");
+    let (draft, audit, frame) = selection(&repository_path);
+    let seal = create_source_seal(draft, &audit, &frame, repository.path(), &output).unwrap();
+    let path = bundle.path().join(&seal.sources[0].artifact_path);
+    fs::write(
+        &path,
+        "pub fn selected() -> i32 { 1 }\nconst UNSEALED: u8 = 1;\n",
+    )
+    .unwrap();
+    let error = validate_source_seal(&seal, bundle.path()).unwrap_err();
+    assert!(
+        error.contains("source seal source hash mismatch"),
+        "{error}"
+    );
+}
+
+#[test]
+fn verified_source_bytes_remain_the_parse_input_after_path_changes() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("source.rs");
+    let source = b"pub fn trusted() -> i32 { 1 }\n";
+    fs::write(&path, source).unwrap();
+    let bytes =
+        super::read_verified_artifact(root.path(), "source.rs", &super::sha256(source), "fixture")
+            .unwrap();
+    fs::write(&path, "pub fn changed() -> i32 { 2 }\n").unwrap();
+    let record = crate::parser::parse_source_checked(&path.to_string_lossy(), &bytes).unwrap();
+    assert_eq!(record.methods.len(), 1);
+    assert_eq!(record.methods[0].name, "trusted");
+}
+
+#[test]
 fn composite_source_seal_embeds_and_revalidates_every_component_frame() {
     let repository = repository();
     let repository_path = repository_path(&repository);
