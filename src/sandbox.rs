@@ -18,6 +18,10 @@ use std::time::{Duration, Instant};
 #[path = "sandbox_windows.rs"]
 mod sandbox_windows;
 
+#[cfg(all(test, windows))]
+#[path = "tests/sandbox_windows_stdin.rs"]
+mod windows_stdin_tests;
+
 pub(crate) const DEFAULT_OUTPUT_LIMIT: usize = 256 * 1024;
 #[cfg(windows)]
 pub(crate) const DEFAULT_MEMORY_LIMIT: u64 = 1024 * 1024 * 1024;

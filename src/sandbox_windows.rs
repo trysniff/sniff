@@ -4,7 +4,7 @@ use super::{
 };
 use std::collections::BTreeMap;
 use std::ffi::c_void;
-use std::os::windows::io::FromRawHandle;
+use std::os::windows::io::{AsRawHandle, FromRawHandle};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Mutex;
@@ -57,6 +57,8 @@ use recovery::RecoveryLedger;
 #[path = "sandbox_windows_global_access.rs"]
 mod global_access;
 use global_access::{all_application_packages_access, all_application_packages_tree_access};
+#[path = "sandbox_windows_input.rs"]
+mod input;
 
 const INTERNET_CLIENT_SID: &str = "S-1-15-3-1";
 const PERSISTENT_READ_CAPABILITY: &str = "trysniff.semantic-indexer-read.v1";
@@ -599,6 +601,7 @@ fn run_process(
     app_container_sid: *mut c_void,
     capabilities: &mut [SID_AND_ATTRIBUTES],
 ) -> Result<SandboxOutput, SandboxError> {
+    let stdin = input::eof_pipe()?;
     let (stdout_read, stdout_write) = create_pipe()?;
     let (stderr_read, stderr_write) = create_pipe()?;
     let mut attributes_size = 0usize;
@@ -659,7 +662,7 @@ fn run_process(
         close_handles([stdout_read, stdout_write, stderr_read, stderr_write]);
         return Err(last_error("allow Windows sandbox compiler child processes"));
     }
-    let inherited_handles = [stdout_write, stderr_write];
+    let inherited_handles = [stdin.as_raw_handle(), stdout_write, stderr_write];
     if unsafe {
         UpdateProcThreadAttribute(
             attributes as _,
@@ -673,12 +676,15 @@ fn run_process(
     } {
         unsafe { DeleteProcThreadAttributeList(attributes as _) };
         close_handles([stdout_read, stdout_write, stderr_read, stderr_write]);
-        return Err(last_error("configure Windows AppContainer output handles"));
+        return Err(last_error(
+            "configure Windows AppContainer standard handles",
+        ));
     }
 
     let mut startup = STARTUPINFOEXW::default();
     startup.StartupInfo.cb = std::mem::size_of::<STARTUPINFOEXW>() as u32;
     startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+    startup.StartupInfo.hStdInput = stdin.as_raw_handle();
     startup.StartupInfo.hStdOutput = stdout_write;
     startup.StartupInfo.hStdError = stderr_write;
     startup.lpAttributeList = attributes as _;
@@ -702,14 +708,16 @@ fn run_process(
             &mut process_info,
         )
     };
+    let create_error = (created == 0).then(|| last_error("start Windows AppContainer process"));
     unsafe { DeleteProcThreadAttributeList(attributes as _) };
+    drop(stdin);
     unsafe {
         CloseHandle(stdout_write);
         CloseHandle(stderr_write);
     }
-    if created == 0 {
+    if let Some(error) = create_error {
         close_handles([stdout_read, stderr_read]);
-        return Err(last_error("start Windows AppContainer process"));
+        return Err(error);
     }
     if let Err(error) = configure_process_default_dacl(process_info.hProcess, app_container_sid) {
         terminate_process_and_close(process_info.hProcess);
