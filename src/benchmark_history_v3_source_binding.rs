@@ -3,6 +3,7 @@ mod schema;
 
 pub use schema::*;
 
+use super::history_v3_time::parse_utc_second;
 use super::{
     HISTORICAL_V3_REPOSITORY_CREATED_AFTER_UTC, HistoricalV3Language, HistoricalV3Protocol,
     HistoricalV3SourceKind, SourceFrameCollectionManifest, validate_historical_v3_protocol,
@@ -314,16 +315,9 @@ pub(super) fn parse_historical_v3_source_frame(
             .ok_or_else(|| {
                 "historical-v3 source frame omits repository creation time".to_string()
             })?;
-        if created_at.len() != 20
-            || !created_at.ends_with('Z')
-            || !created_at.bytes().enumerate().all(|(index, byte)| {
-                matches!(index, 4 | 7 | 10 | 13 | 16 | 19) || byte.is_ascii_digit()
-            })
-        {
-            return Err(
-                "historical-v3 source frame has an invalid repository creation time".to_string(),
-            );
-        }
+        parse_utc_second(created_at).map_err(|error| {
+            format!("historical-v3 source frame has an invalid repository creation time: {error}")
+        })?;
         repository_ids.push(repository_id);
         repositories.push(HistoricalV3SourceRepositoryIdentity {
             name_with_owner: repository,

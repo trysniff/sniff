@@ -274,6 +274,65 @@ fn request_binds_repository_lookup_to_the_search_name() {
     );
 }
 
+#[test]
+fn request_rejects_signed_utc_bounds_before_committing() {
+    for start in [true, false] {
+        let mut request = request();
+        if start {
+            request.partition.merged_at_or_after_utc = "2025-+1-01T00:00:00Z".to_string();
+        } else {
+            request.partition.merged_at_or_before_utc = "2025-12-31T23:59:+9Z".to_string();
+        }
+        request.request_sha256.clear();
+        assert!(
+            seal_page_request(request)
+                .unwrap_err()
+                .contains("invalid historical-v3 UTC")
+        );
+    }
+}
+
+#[tokio::test]
+async fn signed_response_timestamps_never_commit_and_canonical_pages_resume() {
+    let request = request();
+    let canonical = response(1, false, None);
+    for field in ["createdAt", "updatedAt", "closedAt", "mergedAt"] {
+        let mut invalid: serde_json::Value = serde_json::from_slice(&canonical).unwrap();
+        invalid["data"]["search"]["nodes"][0][field] = "2025-+4-02T00:00:00Z".into();
+        let root = tempfile::tempdir().unwrap();
+        let mut transport = FakeTransport {
+            responses: VecDeque::from([serde_json::to_vec(&invalid).unwrap(), canonical.clone()]),
+            calls: 0,
+        };
+        assert!(
+            load_or_fetch_page(root.path(), &request, &mut transport)
+                .await
+                .unwrap_err()
+                .contains("invalid historical-v3 UTC"),
+            "{field}"
+        );
+        assert_eq!(transport.calls, 1);
+        assert!(!root.path().join("pages").exists());
+        let (checkpoint, page) = load_or_fetch_page(root.path(), &request, &mut transport)
+            .await
+            .unwrap();
+        assert_eq!(transport.calls, 2);
+        assert_eq!(checkpoint.response_sha256, sha256(&canonical));
+        assert_eq!(page.candidates.len(), 1);
+        let mut resumed = FakeTransport {
+            responses: VecDeque::new(),
+            calls: 0,
+        };
+        let (replayed_checkpoint, replayed_page) =
+            load_or_fetch_page(root.path(), &request, &mut resumed)
+                .await
+                .unwrap();
+        assert_eq!(resumed.calls, 0);
+        assert_eq!(replayed_checkpoint, checkpoint);
+        assert_eq!(replayed_page, page);
+    }
+}
+
 #[tokio::test]
 async fn unresolved_empty_pages_never_commit_a_checkpoint() {
     let request = request();
