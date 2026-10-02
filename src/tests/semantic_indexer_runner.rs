@@ -64,6 +64,68 @@ fn qualified_typescript_progress_rejects_uncommitted_variant_directories() {
     assert!(error.contains("invalid entry"), "{error}");
 }
 
+#[tokio::test]
+#[ignore = "requires the installed pinned Rust indexer and its supported sandbox/toolchain"]
+async fn pinned_rust_index_keeps_cfg_omissions_unresolved_and_attribute_ranges_exact() {
+    let repository = tempfile::tempdir().unwrap();
+    let source_dir = repository.path().join("src");
+    std::fs::create_dir(&source_dir).unwrap();
+    std::fs::write(
+        repository.path().join("Cargo.toml"),
+        "[package]\nname = \"sniff-rust-cfg-probe\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+    )
+    .unwrap();
+    let source_path = source_dir.join("lib.rs");
+    std::fs::write(
+        &source_path,
+        "#[inline]\npub fn answer() -> u32 { 42 }\n#[cfg(any())] pub fn omitted() -> u32 { 0 } pub fn included() -> u32 { 1 }\n",
+    )
+    .unwrap();
+    let file = crate::parser::parse_file_checked(&source_path.to_string_lossy()).unwrap();
+    assert_eq!(
+        file.methods.len(),
+        3,
+        "all source methods must be in the AST census"
+    );
+    let files = vec![file];
+    let store = crate::semantic_indexer_installation::SemanticIndexerStore::for_user().unwrap();
+    let index = super::run_required_indexer_with_store_for_test(
+        repository.path(),
+        &files,
+        &store,
+        SemanticIndexerKind::Rust,
+    )
+    .await
+    .expect("the verified pinned Rust provider must succeed, not skip or fall back");
+    let join =
+        crate::semantic_method_join::join_methods(repository.path(), &files, &index).unwrap();
+    assert_eq!(join.resolved_count(), 2);
+    assert_eq!(join.unresolved_count(), 1);
+    assert_eq!(join.compiler_excluded_count(), 0);
+    assert!(join.require_complete().unwrap_err().contains("omitted"));
+    let answer = join
+        .bindings
+        .iter()
+        .find(|(key, _)| key.name == "answer")
+        .unwrap()
+        .1;
+    assert_eq!(answer.definition.as_ref().unwrap().range.start.line, 1);
+    let indexes = BTreeMap::from([(
+        SemanticIndexerKind::Rust,
+        crate::semantic_index::SemanticIndexSet::Unqualified {
+            index: Box::new(index),
+        },
+    )]);
+    let error = crate::semantic_method_join::build_compiler_method_evidence(
+        repository.path(),
+        &files,
+        &indexes,
+    )
+    .err()
+    .expect("a real cfg omission cannot yield complete compiler evidence");
+    assert!(error.contains("join is incomplete"));
+}
+
 #[cfg(windows)]
 #[tokio::test]
 #[ignore = "requires a prebuilt AppContainer-compatible rust-analyzer"]

@@ -8,8 +8,8 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
-#[path = "semantic_method_join_rust_cfg.rs"]
-mod rust_cfg;
+#[path = "semantic_method_join_rust_ranges.rs"]
+mod rust_ranges;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct SemanticMethodKey {
@@ -220,8 +220,15 @@ fn bind_method(
             format!("{} has no SCIP document", key.file.0),
         );
     };
-    let (definition_line, compiler_excluded) =
-        rust_cfg::method_info(file, method).unwrap_or((key.start_line.saturating_sub(1), None));
+    let rust_range = match rust_ranges::definition_range(file, method, document.position_encoding) {
+        Ok(range) => range,
+        Err((reason, detail)) => {
+            return unresolved(reason, format!("{}::{}: {detail}", key.file.0, key.name));
+        }
+    };
+    let definition_line = rust_range
+        .as_ref()
+        .map_or(key.start_line.saturating_sub(1), |range| range.start.line);
     let js_like = file.language.eq_ignore_ascii_case("javascript")
         || file.language.eq_ignore_ascii_case("typescript");
     let source_name_range = js_like.then(|| method_name_range(file, method));
@@ -232,6 +239,12 @@ fn bind_method(
         .into_iter()
         .flatten()
     {
+        if rust_range
+            .as_ref()
+            .is_some_and(|range| &definition.range != range)
+        {
+            continue;
+        }
         let symbol = index
             .symbols
             .get(symbol_id)
@@ -263,26 +276,6 @@ fn bind_method(
 
     if candidates.is_empty() {
         if let Some(reason) = compiler_excluded_reason(file, method) {
-            return SemanticMethodBinding {
-                method: key.clone(),
-                symbol: SemanticResolution::Unresolved {
-                    reason: SemanticUnresolvedReason::MissingIndexerFact,
-                    raw_target: Some(method.name.clone()),
-                    detail: format!(
-                        "{}::{} is compiler-excluded: {reason}",
-                        key.file.0, key.name
-                    ),
-                },
-                definition: None,
-                coverage: SemanticMethodCoverage::CompilerExcluded { reason },
-            };
-        }
-        if let Some(reason) = compiler_excluded.filter(|_| {
-            matches!(
-                index.variant,
-                crate::semantic_index::SemanticIndexVariant::Unqualified
-            )
-        }) {
             return SemanticMethodBinding {
                 method: key.clone(),
                 symbol: SemanticResolution::Unresolved {
@@ -592,6 +585,111 @@ mod tests {
     }
 
     #[test]
+    fn rust_attribute_start_joins_the_compiler_identifier_line() {
+        let (root, mut files, index) = fixture(Vec::new(), 1, false, false);
+        let source = "#[inline]\nfn process(value: i32) -> i32 { value }\n";
+        fs::write(&files[0].file_path, source).unwrap();
+        files[0] = crate::parser::parse_file_checked(&files[0].file_path).unwrap();
+        assert_eq!(files[0].methods[0].start_line, 1);
+        let join = join_methods(&root, &files, &index).unwrap();
+        join.require_complete().unwrap();
+        let (key, binding) = join.bindings.iter().next().unwrap();
+        assert_eq!(key.start_line, 1);
+        assert_eq!(binding.definition.as_ref().unwrap().range.start.line, 1);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn nested_multiline_rust_callables_keep_distinct_compiler_bindings() {
+        let (root, mut files, mut index) = fixture(Vec::new(), 0, false, false);
+        fs::write(&files[0].file_path, "fn outer() { fn\ninner() {} }\n").unwrap();
+        files[0] = crate::parser::parse_file_checked(&files[0].file_path).unwrap();
+        assert_eq!(files[0].methods.len(), 2);
+        let template = index.symbols.values().next().unwrap().clone();
+        index.symbols.clear();
+        for (name, line) in [("outer", 0), ("inner", 1)] {
+            let mut symbol = template.clone();
+            symbol.id = SemanticSymbolId(format!("rust test {name}"));
+            symbol.provider_identity = symbol.id.0.clone();
+            symbol.display_name = Some(name.to_string());
+            let mut definition = symbol.definitions.iter().next().unwrap().clone();
+            definition.range.start.line = line;
+            definition.range.end.line = line;
+            definition.range.start.character = if name == "outer" { 3 } else { 0 };
+            definition.range.end.character = definition.range.start.character + name.len() as u32;
+            symbol.definitions = BTreeSet::from([definition]);
+            index.symbols.insert(symbol.id.clone(), symbol);
+        }
+        let join = join_methods(&root, &files, &index).unwrap();
+        assert_eq!(join.resolved_count(), 2);
+        join.require_complete().unwrap();
+        for (key, binding) in join.bindings {
+            assert_eq!(key.start_line, 1);
+            assert!(
+                matches!(binding.symbol, SemanticResolution::Resolved { value }
+                if value.0 == format!("rust test {}", key.name))
+            );
+            let expected_line = if key.name == "outer" { 0 } else { 1 };
+            assert_eq!(binding.definition.unwrap().range.start.line, expected_line);
+        }
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn duplicate_rust_callable_identity_does_not_choose_the_last_visit() {
+        let (root, mut files, index) = fixture(Vec::new(), 0, false, false);
+        files[0].source = "fn process() { fn\nprocess() {} }\n".to_string();
+        fs::write(&files[0].file_path, &files[0].source).unwrap();
+        let join = join_methods(&root, &files, &index).unwrap();
+        let binding = join.bindings.values().next().unwrap();
+        assert!(matches!(
+            binding.symbol,
+            SemanticResolution::Unresolved {
+                reason: SemanticUnresolvedReason::Ambiguous,
+                ..
+            }
+        ));
+        assert!(join.require_complete().is_err());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn same_line_cfg_omission_cannot_borrow_another_callable_definition() {
+        let (root, mut files, mut index) = fixture(Vec::new(), 0, false, false);
+        let source = "#[cfg(any())] fn omitted() {} fn included() {}\n";
+        fs::write(&files[0].file_path, source).unwrap();
+        files[0] = crate::parser::parse_file_checked(&files[0].file_path).unwrap();
+        let mut symbol = index.symbols.values().next().unwrap().clone();
+        index.symbols.clear();
+        symbol.id = SemanticSymbolId("rust test included".to_string());
+        symbol.provider_identity = symbol.id.0.clone();
+        symbol.display_name = Some("included".to_string());
+        let mut definition = symbol.definitions.iter().next().unwrap().clone();
+        definition.range.start.character = source.find("included").unwrap() as u32;
+        definition.range.end.character = definition.range.start.character + 8;
+        symbol.definitions = BTreeSet::from([definition]);
+        index.symbols.insert(symbol.id.clone(), symbol);
+        let join = join_methods(&root, &files, &index).unwrap();
+        assert_eq!(join.resolved_count(), 1);
+        assert_eq!(join.unresolved_count(), 1);
+        assert_eq!(join.compiler_excluded_count(), 0);
+        assert!(join.require_complete().unwrap_err().contains("omitted"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn malformed_rust_source_does_not_fall_back_to_the_ast_start_line() {
+        let (root, mut files, index) = fixture(Vec::new(), 0, false, false);
+        files[0].source = "fn process(".to_string();
+        fs::write(&files[0].file_path, &files[0].source).unwrap();
+        let join = join_methods(&root, &files, &index).unwrap();
+        assert_eq!(join.resolved_count(), 0);
+        assert_eq!(join.unresolved_count(), 1);
+        assert!(join.require_complete().is_err());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn renders_compiler_facts_for_the_exact_joined_method() {
         let (root, files, index) = fixture(Vec::new(), 0, false, false);
         let join = join_methods(&root, &files, &index).unwrap();
@@ -796,18 +894,18 @@ mod tests {
     }
 
     #[test]
-    fn records_cfg_test_methods_as_explicitly_compiler_excluded() {
+    fn cfg_test_does_not_prove_compiler_exclusion_without_a_world_receipt() {
         let (root, files, index) = fixture(Vec::new(), 1, false, true);
         let join = join_methods(&root, &files, &index).unwrap();
         assert_eq!(join.resolved_count(), 0);
-        assert_eq!(join.compiler_excluded_count(), 1);
-        assert_eq!(join.unresolved_count(), 0);
-        join.require_complete().unwrap();
+        assert_eq!(join.compiler_excluded_count(), 0);
+        assert_eq!(join.unresolved_count(), 1);
+        assert!(join.require_complete().is_err());
         let _ = fs::remove_dir_all(root);
     }
 
     #[test]
-    fn recognizes_inactive_builtin_target_cfg_as_compiler_excluded() {
+    fn locates_identifier_under_target_cfg_without_evaluating_it() {
         let inactive_os = if cfg!(windows) { "linux" } else { "windows" };
         let source = format!("#[cfg(target_os = \"{inactive_os}\")]\nfn process() {{}}\n");
         let file = FileRecord {
@@ -831,17 +929,14 @@ mod tests {
             real_ref_count: 0,
         };
 
-        let (_, exclusion) = rust_cfg::method_info(&file, &method).unwrap();
-
-        assert!(
-            exclusion
-                .as_deref()
-                .is_some_and(|reason| reason.contains("target_os"))
+        assert_eq!(
+            rust_ranges::definition_line(&file, &method).unwrap(),
+            Some(1)
         );
     }
 
     #[test]
-    fn unknown_feature_cfg_does_not_excuse_missing_compiler_facts() {
+    fn locates_identifier_under_unknown_feature_cfg() {
         let source = "#[cfg(feature = \"optional-provider\")]\nfn process() {}\n";
         let file = FileRecord {
             file_path: "src/lib.rs".to_string(),
@@ -864,13 +959,14 @@ mod tests {
             real_ref_count: 0,
         };
 
-        let (_, exclusion) = rust_cfg::method_info(&file, &method).unwrap();
-
-        assert_eq!(exclusion, None);
+        assert_eq!(
+            rust_ranges::definition_line(&file, &method).unwrap(),
+            Some(1)
+        );
     }
 
     #[test]
-    fn nested_foreign_declarations_inherit_inactive_target_cfg() {
+    fn locates_nested_foreign_declarations_under_target_cfg() {
         let inactive_os = if cfg!(windows) { "macos" } else { "windows" };
         let source = format!(
             "#[cfg(target_os = \"{inactive_os}\")]\nfn inspect() {{\n    unsafe extern \"C\" {{\n        fn platform_call(value: i32) -> i32;\n    }}\n}}\n"
@@ -896,13 +992,14 @@ mod tests {
             real_ref_count: 0,
         };
 
-        let (_, exclusion) = rust_cfg::method_info(&file, &method).unwrap();
-
-        assert!(exclusion.is_some());
+        assert_eq!(
+            rust_ranges::definition_line(&file, &method).unwrap(),
+            Some(3)
+        );
     }
 
     #[test]
-    fn foreign_module_declarations_inherit_inactive_target_cfg() {
+    fn locates_foreign_module_declarations_under_target_cfg() {
         let inactive_os = if cfg!(windows) { "macos" } else { "windows" };
         let source = format!(
             "#[cfg(target_os = \"{inactive_os}\")]\nunsafe extern \"C\" {{\n    fn platform_call(value: i32) -> i32;\n}}\n"
@@ -928,9 +1025,10 @@ mod tests {
             real_ref_count: 0,
         };
 
-        let (_, exclusion) = rust_cfg::method_info(&file, &method).unwrap();
-
-        assert!(exclusion.is_some());
+        assert_eq!(
+            rust_ranges::definition_line(&file, &method).unwrap(),
+            Some(2)
+        );
     }
 
     #[test]

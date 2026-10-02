@@ -389,6 +389,13 @@ JavaScript, TypeScript, Go, and Kotlin/JVM. Android/KMP Gradle projects are
 detected explicitly and fail closed until an Android-capable SCIP provider is
 available; Sniff does not fall back to name-based graph guesses.
 
+Normal Rust indexing currently uses an unqualified compiler index, not a census
+of Cargo feature/target worlds. Missing Rust method definitions remain unresolved
+and abort completion; Sniff does not infer compiler exclusions from its own
+host, test, or profile flags. Bindings require exact source identifier ranges in
+the compiler's position encoding. Normal Rust compiler-world discovery remains
+an implementation requirement, not a completed capability.
+
 Normal JavaScript/TypeScript scans discover compiler worlds from conventional
 `tsconfig`/`jsconfig` roots and follow compiler project references. Loose sources
 use explicitly identified compiler-inferred contexts. This does not prove every
