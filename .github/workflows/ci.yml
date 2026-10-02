@@ -142,6 +142,16 @@ jobs:
           cargo test --lib --locked \
             semantic_indexer_runner::execution::tests::native_typescript_completion_rejects_cleanup_source_and_publication_faults_with_actual_worker_evidence \
             -- --exact --ignored --test-threads=1 --nocapture
+      - name: Verify native Windows Go stdin reaches EOF in children
+        if: matrix.fixture == 'go' && runner.os == 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          probe='sandbox::windows_stdin_tests::native_go_child_and_grandchild_receive_eof_input'
+          inventory="$(cargo test --lib --locked "$probe" -- --exact --list --ignored)"
+          test "$(printf '%s\n' "$inventory" | grep -c ': test$')" -eq 1
+          printf '%s\n' "$inventory" | grep -Fx "$probe: test"
+          cargo test --lib --locked "$probe" -- --exact --ignored --test-threads=1 --nocapture
       - name: Verify Go preparation failures at native executor boundaries
         if: matrix.fixture == 'go'
         shell: bash
