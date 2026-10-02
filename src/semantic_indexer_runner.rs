@@ -56,6 +56,9 @@ mod typescript_model_plans;
 
 #[path = "semantic_indexer_typescript_inputs.rs"]
 mod typescript_inputs;
+#[path = "semantic_indexer_typescript_proof.rs"]
+mod typescript_proof;
+pub(crate) use typescript_proof::run_standalone_typescript_proof;
 
 pub(crate) use recovery::recover_interrupted_semantic_indexing;
 use recovery::{INDEXER_CACHE_DIR, INDEXER_TEMP_DIR, SemanticIndexerRecoveryGuard};
