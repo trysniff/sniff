@@ -17,20 +17,18 @@ pub fn validate_source_seal(seal: &BenchmarkSourceSeal, seal_root: &Path) -> Res
         "source seal selection audit SHA-256",
         &seal.selection_audit_sha256,
     )?;
-    validate_artifact(
+    let audit_bytes = read_verified_artifact(
         seal_root,
         &seal.selection_audit_artifact_path,
         &seal.selection_audit_artifact_sha256,
         "source selection audit",
     )?;
-    validate_artifact(
+    let frame_bytes = read_verified_artifact(
         seal_root,
         &seal.selection_frame_artifact_path,
         &seal.selection_frame_sha256,
         "source selection frame",
     )?;
-    let audit_bytes = read_artifact(seal_root, &seal.selection_audit_artifact_path)?;
-    let frame_bytes = read_artifact(seal_root, &seal.selection_frame_artifact_path)?;
     let selected_repositories = if seal.selection_components.is_empty() {
         let audit: SourceSelectionAudit = serde_json::from_slice(&audit_bytes)
             .map_err(|error| format!("failed to parse sealed source-selection audit: {error}"))?;
@@ -64,12 +62,6 @@ pub fn validate_source_seal(seal: &BenchmarkSourceSeal, seal_root: &Path) -> Res
     let mut source_identities = HashSet::new();
     for source in &seal.sources {
         validate_source_identity(source, "source seal source")?;
-        validate_artifact(
-            seal_root,
-            &source.artifact_path,
-            &source.sha256,
-            "source seal source",
-        )?;
         if !source_keys.insert((
             source.repository.as_str(),
             source.revision.as_str(),
@@ -151,7 +143,13 @@ pub fn validate_source_seal(seal: &BenchmarkSourceSeal, seal_root: &Path) -> Res
     let mut parsed_methods = Vec::new();
     for source in &seal.sources {
         let artifact = seal_root.join(safe_relative_path(&source.artifact_path)?);
-        let record = crate::parser::parse_file_checked(&artifact.to_string_lossy())?;
+        let bytes = read_verified_artifact(
+            seal_root,
+            &source.artifact_path,
+            &source.sha256,
+            "source seal source",
+        )?;
+        let record = crate::parser::parse_source_checked(&artifact.to_string_lossy(), &bytes)?;
         if record.language.is_empty() {
             return Err(format!(
                 "sealed source is no longer supported by the census contract: {}",
@@ -260,13 +258,12 @@ fn validate_composite_selection_artifacts(
                 "source seal composite component ledger does not match its audit".to_string(),
             );
         }
-        validate_artifact(
+        let frame = read_verified_artifact(
             seal_root,
             &sealed.frame_artifact_path,
             &sealed.frame_sha256,
             "source selection component frame",
         )?;
-        let frame = read_artifact(seal_root, &sealed.frame_artifact_path)?;
         validate_source_selection_component_against_frame(component, &frame)?;
     }
     if audit.composite_audit_sha256 != seal.selection_audit_sha256
