@@ -310,6 +310,18 @@ fn temporal_proof_rejects_missing_wrong_and_late_rows() {
     let mut malformed = frame.clone();
     malformed.records[0].created_at = "2026-01-01\u{e9}00:00:0".to_string();
     assert!(prove(&malformed, &selection).contains("invalid historical-v3 UTC timestamp"));
+
+    for signed in ["2026-+1-01T00:00:00Z", "2026-+1-01 00:00:00"] {
+        malformed.records[0].created_at = signed.to_string();
+        assert!(prove(&malformed, &selection).contains("invalid historical-v3 UTC month"));
+    }
+
+    let mut legacy = frame;
+    legacy.records[0].created_at = "2026-01-01 00:00:00".to_string();
+    let proof =
+        derive_prior_v2_temporal_proof(&seal, &legacy, &selection, &frame_bytes, &selection_bytes)
+            .unwrap();
+    assert_eq!(proof.witnesses[0].created_at_utc, "2026-01-01T00:00:00Z");
 }
 
 #[test]

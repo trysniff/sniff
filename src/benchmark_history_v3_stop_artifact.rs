@@ -69,7 +69,7 @@ pub fn prepare_historical_v3_stop_artifact(
 ) -> Result<HistoricalV3StopArtifact, String> {
     if protocol.schema_version == HISTORICAL_V3_PUBLIC_ID_CENSUS_V2_PROTOCOL_SCHEMA_VERSION {
         return Err(
-            "historical-v3 v9 stop publication requires proven prior-cohort repository IDs"
+            "historical-v3 v9 stop publication is disabled: complete authenticated prior-cohort temporal proof admission is not implemented"
                 .to_string(),
         );
     }
@@ -187,15 +187,16 @@ mod tests {
         let git = super::super::history_v3_semantic_census::tests::fixture();
         let collection =
             super::super::history_v3_semantic_census::tests::collection(&protocol, &git);
-        assert!(
-            prepare_historical_v3_stop_artifact(
-                &protocol,
-                &collection,
-                HistoricalV3Language::Rust,
-                &[],
-            )
-            .unwrap_err()
-            .contains("requires proven prior-cohort repository IDs")
+        let error = prepare_historical_v3_stop_artifact(
+            &protocol,
+            &collection,
+            HistoricalV3Language::Rust,
+            &[],
+        )
+        .unwrap_err();
+        assert_eq!(
+            error,
+            "historical-v3 v9 stop publication is disabled: complete authenticated prior-cohort temporal proof admission is not implemented"
         );
     }
 }
