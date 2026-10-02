@@ -54,12 +54,14 @@ fn native_process_fixture() {
 fn explicit_output_limit_reports_truncation() {
     #[cfg(windows)]
     let mut command = {
-        let mut command = Command::new("powershell.exe");
-        command.args([
-            "-NoProfile",
-            "-Command",
-            "[Console]::Out.Write('0123456789')",
-        ]);
+        let system_root = std::env::var_os("SystemRoot").expect("SystemRoot should be defined");
+        let mut command = Command::new(
+            std::path::PathBuf::from(system_root)
+                .join("System32")
+                .join("cmd.exe"),
+        );
+        // Emit without a newline or PowerShell startup; EOF makes set /p fail.
+        command.args(["/d", "/c", "<nul set /p =0123456789&exit /b 0"]);
         command
     };
     #[cfg(not(windows))]
@@ -70,7 +72,20 @@ fn explicit_output_limit_reports_truncation() {
     };
 
     let output = run_with_output_limit(&mut command, Duration::from_secs(5), 4).unwrap();
+    assert!(
+        !output.timed_out,
+        "output fixture timed out: status={}, stderr={:?}",
+        output.status, output.stderr
+    );
+    assert!(
+        output.status.success(),
+        "output fixture failed: status={}, stderr={:?}",
+        output.status,
+        output.stderr
+    );
     assert_eq!(output.stdout, b"0123");
+    assert_eq!(output.stdout_byte_count, 10);
+    assert_eq!(output.stderr_byte_count, 0);
     assert_eq!(
         output.stdout_sha256,
         "84d89877f0d4041efb6bf91a16f0248f2fd573e6af05c19f96bedb9f882f7882"
