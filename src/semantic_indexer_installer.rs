@@ -38,6 +38,9 @@ mod scip_java_repacker_source;
 #[path = "semantic_indexer_scip_java_windows.rs"]
 mod scip_java_windows;
 
+#[cfg(windows)]
+pub(crate) use scip_java_windows::WINDOWS_GRADLE_TEMP_FILES;
+
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(20 * 60);
 const MAX_DOWNLOAD_BYTES: u64 = 256 * 1024 * 1024;
 

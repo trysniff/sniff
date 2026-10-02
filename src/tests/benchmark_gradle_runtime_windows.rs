@@ -12,7 +12,10 @@ fn version_probe(direct_java: bool) {
             .unwrap()
             .to_string_lossy()
             .into_owned();
-        plan.command.args = vec!["-version".to_string()];
+        plan.command.args = vec![
+            "-XshowSettings:properties".to_string(),
+            "-version".to_string(),
+        ];
     }
     plan.command.timeout = Duration::from_secs(30);
     plan.command.output_limit = 64 * 1024;
@@ -32,6 +35,22 @@ fn version_probe(direct_java: bool) {
         output.stdout.contains(expected) || output.stderr.contains(expected),
         "selected runtime output did not identify {expected}: {output:?}",
     );
+    if direct_java {
+        let home = output
+            .stderr
+            .lines()
+            .find_map(|line| line.trim().strip_prefix("java.home = "))
+            .expect("selected JVM must report its named home");
+        let selected = resolve_on_path("java").unwrap();
+        assert_eq!(
+            Path::new(home).file_name(),
+            selected
+                .parent()
+                .and_then(Path::parent)
+                .and_then(Path::file_name),
+            "sandbox JVM lost the selected installation's directory name: {home}"
+        );
+    }
 }
 
 #[test]

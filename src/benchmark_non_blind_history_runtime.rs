@@ -55,6 +55,8 @@ pub(crate) struct HistoricalRuntimePlan {
     pub(crate) launcher_kind: &'static str,
     #[cfg(windows)]
     _runtime_guard: Vec<fs::File>,
+    #[cfg(windows)]
+    _owned_gradle: Option<crate::gradle_runtime_adapter::AdaptedGradle>,
 }
 
 pub(crate) fn persist_historical_runtime_directories(plan: &mut HistoricalRuntimePlan) {
@@ -115,6 +117,27 @@ pub(crate) fn prepare_historical_runtime(
         .map(|argument| expand_reserved_argument(&root, &cache_root, argument))
         .collect::<Vec<_>>();
 
+    #[cfg(windows)]
+    let owned_gradle = if matches!(
+        program.as_str(),
+        "{sniff_gradle}" | "{sniff_gradle_tooling}"
+    ) {
+        Some(
+            crate::gradle_runtime_adapter::prepare(
+                &resolve_on_path("java")?,
+                &resolve_on_path("gradle")?,
+                &root,
+            )
+            .map_err(HistoricalRuntimePlanError::Invalid)?,
+        )
+    } else {
+        None
+    };
+    #[cfg(windows)]
+    let gradle_home = owned_gradle.as_ref().map(|owned| owned.home.as_path());
+    #[cfg(not(windows))]
+    let gradle_home = None;
+
     let mut launch = match program.as_str() {
         "cargo" => cargo_launch(&expanded_args)?,
         "go" => go_launch(&expanded_args, &root)?,
@@ -126,10 +149,17 @@ pub(crate) fn prepare_historical_runtime(
         "npm" | "pnpm" | "yarn" => node_manager_launch(program, &expanded_args)?,
         "bun" => bun_launch(&expanded_args)?,
         "gradlew.bat" | "./gradlew" => gradle_launch(&root, program, &expanded_args)?,
-        "{sniff_gradle}" => gradle_installation_launch(&expanded_args)?,
-        "{sniff_gradle_tooling}" => gradle_tooling_launch(&expanded_args)?,
+        "{sniff_gradle}" => gradle_installation_launch(&expanded_args, gradle_home)?,
+        "{sniff_gradle_tooling}" => gradle_tooling_launch(&expanded_args, gradle_home)?,
         _ => generic_launch(&root, program, &expanded_args)?,
     };
+
+    #[cfg(windows)]
+    if let Some(owned) = &owned_gradle {
+        launch
+            .runtime_files
+            .extend(owned.identity_files.iter().cloned());
+    }
 
     #[cfg(windows)]
     let mut launcher_kind = "direct";
@@ -239,7 +269,27 @@ pub(crate) fn prepare_historical_runtime(
     #[cfg(windows)]
     let windows_virtualized_paths = {
         let mut paths = vec![root.clone()];
-        paths.extend(runtime_roots);
+        for path in runtime_roots {
+            if owned_gradle
+                .as_ref()
+                .is_some_and(|owned| owned.java_home == path)
+            {
+                // Preserve a named java.home below the mapped drive. Only the JDK
+                // retains its read grant; mapping its direct parent grants no access
+                // to siblings, as enforced by sandbox namespace validation.
+                let parent = path
+                    .parent()
+                    .filter(|parent| parent.parent().is_some())
+                    .ok_or_else(|| {
+                        HistoricalRuntimePlanError::Invalid(
+                            "Gradle JDK requires a dedicated named namespace".to_string(),
+                        )
+                    })?;
+                paths.push(parent.to_path_buf());
+            } else {
+                paths.push(path);
+            }
+        }
         collapse_non_overlapping_roots(paths)?
     };
 
@@ -269,6 +319,8 @@ pub(crate) fn prepare_historical_runtime(
         launcher_kind,
         #[cfg(windows)]
         _runtime_guard: launch.runtime_guard,
+        #[cfg(windows)]
+        _owned_gradle: owned_gradle,
     })
 }
 

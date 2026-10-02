@@ -18,7 +18,7 @@ const GRADLE_TOOLING_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 const GRADLE_TOOLING_OUTPUT_LIMIT: usize = 64 * 1024 * 1024;
 const GRADLE_MACOS_JAVA_TOOL_OPTIONS: &str = "-Djava.net.preferIPv4Stack=true";
 const GRADLE_DEPENDENCY_PREPARATION_CONTRACT: &str =
-    "source-minimized-secret-scrubbed-gradle-help-v3-direct-windows-jvm";
+    "source-minimized-secret-scrubbed-gradle-help-v4-owned-windows-overlay";
 const GRADLE_CLIENT_SOURCE: &str =
     include_str!("../assets/gradle-tooling/sniff-project-model-client.groovy");
 const GRADLE_INIT_SOURCE: &str =
@@ -356,7 +356,7 @@ fn run_gradle_tooling_model(
     plan.command.timeout = GRADLE_TOOLING_TIMEOUT;
     plan.command.output_limit = GRADLE_TOOLING_OUTPUT_LIMIT;
     let toolchain_identity_sha256 = hash_json(&(
-        "sniffbench-gradle-tooling-runtime-v7",
+        "sniffbench-gradle-tooling-runtime-v8-owned-windows-overlay",
         &plan.runtime_identity,
         GRADLE_DEPENDENCY_PREPARATION_CONTRACT,
         dependency_preparation_identity,

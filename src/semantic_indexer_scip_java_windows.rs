@@ -8,8 +8,9 @@ use zip::ZipArchive;
 #[path = "semantic_indexer_scip_java_windows_sources.rs"]
 mod sources;
 
+pub(crate) use sources::WINDOWS_GRADLE_TEMP_FILES;
+pub(super) use sources::WINDOWS_SCIP_JAVA_PROCESS_RUNNER;
 use sources::WINDOWS_SCIP_JAVA_WRITER;
-pub(super) use sources::{WINDOWS_GRADLE_TEMP_FILES, WINDOWS_SCIP_JAVA_PROCESS_RUNNER};
 
 pub(super) fn patch_scip_java_windows(root: &Path, spec: PinnedIndexer) -> Result<(), String> {
     let entrypoint = root.join(spec.entrypoint_relative_path());

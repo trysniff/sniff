@@ -23,7 +23,7 @@ use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken}
 // Includes generic write/all, maximum-allowed and every file/security mutation right.
 const MUTATION_RIGHTS: u32 = 0x520d_0156;
 
-pub(super) fn lock_base(path: &Path, create: bool) -> Result<Vec<File>, String> {
+pub(crate) fn lock_base(path: &Path, create: bool) -> Result<Vec<File>, String> {
     let mut paths = path.ancestors().collect::<Vec<_>>();
     paths.reverse();
     let mut held = Vec::new();
@@ -42,7 +42,7 @@ pub(super) fn lock_base(path: &Path, create: bool) -> Result<Vec<File>, String> 
     Ok(held)
 }
 
-pub(super) fn create_namespace(path: &Path) -> Result<(), String> {
+pub(crate) fn create_namespace(path: &Path) -> Result<(), String> {
     let user = CurrentUser::read()?;
     let descriptor = descriptor(&format!(
         "O:{}D:P(A;OICI;FA;;;{})(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)",
@@ -66,7 +66,7 @@ pub(super) fn create_namespace(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-pub(super) fn hold_trusted(path: &Path, directory: bool, protected: bool) -> Result<File, String> {
+pub(crate) fn hold_trusted(path: &Path, directory: bool, protected: bool) -> Result<File, String> {
     // Protected cache directories need write sharing for owned atomic publication.
     // Unlike shared ancestors, their DACL must reject every untrusted writer.
     let file = open_plain(
