@@ -321,6 +321,7 @@ pub(super) fn gradle_launch(
 
 pub(super) fn gradle_installation_launch(
     args: &[String],
+    owned_home: Option<&Path>,
 ) -> Result<Launch, HistoricalRuntimePlanError> {
     let java = resolve_on_path("java")?;
     let java_home = java
@@ -336,6 +337,21 @@ pub(super) fn gradle_installation_launch(
         .to_path_buf();
     reject_broad_user_root(&java_home)?;
     reject_broad_user_root(&gradle_home)?;
+    #[cfg(windows)]
+    let gradle_home = owned_home
+        .ok_or_else(|| {
+            HistoricalRuntimePlanError::Invalid(
+                "Windows Gradle requires a verified owned runtime overlay".to_string(),
+            )
+        })?
+        .to_path_buf();
+    #[cfg(not(windows))]
+    let _ = owned_home;
+    #[cfg(windows)]
+    let gradle = canonical_file(
+        &gradle_home.join("bin/gradle.bat"),
+        "owned Gradle entrypoint",
+    )?;
     let tooling_api = canonical_file(
         &gradle_home.join("lib").join("gradle-tooling-api-8.8.jar"),
         "pinned Gradle 8.8 Tooling API",
@@ -363,7 +379,10 @@ pub(super) fn gradle_installation_launch(
     })
 }
 
-pub(super) fn gradle_tooling_launch(args: &[String]) -> Result<Launch, HistoricalRuntimePlanError> {
+pub(super) fn gradle_tooling_launch(
+    args: &[String],
+    owned_home: Option<&Path>,
+) -> Result<Launch, HistoricalRuntimePlanError> {
     if args.len() != 4 {
         return Err(HistoricalRuntimePlanError::Invalid(
             "Gradle Tooling API launch requires client, project, cache, and init-script arguments"
@@ -384,6 +403,21 @@ pub(super) fn gradle_tooling_launch(args: &[String]) -> Result<Launch, Historica
         .to_path_buf();
     reject_broad_user_root(&java_home)?;
     reject_broad_user_root(&gradle_home)?;
+    #[cfg(windows)]
+    let gradle_home = owned_home
+        .ok_or_else(|| {
+            HistoricalRuntimePlanError::Invalid(
+                "Windows Gradle Tooling API requires a verified owned runtime overlay".to_string(),
+            )
+        })?
+        .to_path_buf();
+    #[cfg(not(windows))]
+    let _ = owned_home;
+    #[cfg(windows)]
+    let gradle = canonical_file(
+        &gradle_home.join("bin/gradle.bat"),
+        "owned Gradle entrypoint",
+    )?;
     let tooling_api = canonical_file(
         &gradle_home.join("lib").join("gradle-tooling-api-8.8.jar"),
         "pinned Gradle 8.8 Tooling API",

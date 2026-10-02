@@ -274,6 +274,9 @@ use go_project::require_go_project_root;
 #[cfg(windows)]
 #[path = "semantic_indexer_gradle_windows.rs"]
 mod gradle_windows;
+
+#[cfg(windows)]
+pub(crate) use gradle_windows::rebuild_file_temp_jar as rebuild_gradle_temp_runtime;
 #[path = "semantic_indexer_java_runtime.rs"]
 mod java_runtime;
 #[cfg(test)]

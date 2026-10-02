@@ -204,7 +204,7 @@ fn versioned_jar(path: &Path, prefix: &str) -> Result<String, String> {
     Ok(version.to_string())
 }
 
-fn rebuild_file_temp_jar(
+pub(crate) fn rebuild_file_temp_jar(
     source: &Path,
     destination: &Path,
     replacement_class: &Path,

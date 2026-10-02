@@ -16,6 +16,8 @@ pub mod file_verdicts;
 pub(crate) mod go_runtime_adapter;
 #[cfg(windows)]
 pub(crate) mod go_tool_stdio;
+#[cfg(windows)]
+pub(crate) mod gradle_runtime_adapter;
 pub mod language_adapter;
 pub mod languages;
 pub mod llm;
@@ -50,3 +52,6 @@ pub mod symbol_graph;
 pub mod synthesis;
 pub mod types;
 pub mod walker;
+#[cfg(windows)]
+#[path = "go_runtime_adapter_security.rs"]
+pub(crate) mod windows_runtime_lease;

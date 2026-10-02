@@ -10,8 +10,7 @@ use std::time::Duration;
 mod build;
 #[path = "go_runtime_adapter_cache.rs"]
 mod cache;
-#[path = "go_runtime_adapter_security.rs"]
-mod security;
+use crate::windows_runtime_lease as security;
 
 const CONTRACT: &str = "sniff-windows-go-sdk-adapter-v1";
 
