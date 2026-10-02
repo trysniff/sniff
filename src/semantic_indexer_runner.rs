@@ -1289,9 +1289,63 @@ async fn prepare_go_dependency_cache(
     installed: &InstalledIndexer,
     module_root: &str,
 ) -> Result<(), SemanticIndexerRunFailure> {
+    prepare_go_dependency_cache_inner(spec, root, installed, module_root, None).await
+}
+
+async fn prepare_go_dependency_cache_observed(
+    spec: PinnedIndexer,
+    root: &Path,
+    installed: &InstalledIndexer,
+    module_root: &str,
+    journal: &census::Journal,
+    verify: &(dyn Fn() -> Result<(), String> + Sync),
+) -> Result<(), SemanticIndexerRunFailure> {
+    prepare_go_dependency_cache_inner(spec, root, installed, module_root, Some((journal, verify)))
+        .await
+}
+
+type GoPreparationObserver<'a> = (
+    &'a census::Journal,
+    &'a (dyn Fn() -> Result<(), String> + Sync),
+);
+
+async fn prepare_go_dependency_cache_inner(
+    spec: PinnedIndexer,
+    root: &Path,
+    installed: &InstalledIndexer,
+    module_root: &str,
+    journal: Option<GoPreparationObserver<'_>>,
+) -> Result<(), SemanticIndexerRunFailure> {
     for attempt in 1..=GO_DEPENDENCY_PREPARATION_ATTEMPTS {
-        let output = run_go_dependency_preparation(spec, root, installed, module_root).await?;
-        if output.status_code == Some(0) && !output.timed_out {
+        let observer = journal
+            .map(|(journal, verify)| {
+                journal.check_go_preparation_integrity(verify())?;
+                journal
+                    .begin_go_command(module_root, attempt)
+                    .map(|sequence| (journal, sequence))
+            })
+            .transpose()?;
+        let result =
+            run_go_dependency_preparation(spec, root, installed, module_root, observer).await;
+        let result = match observer {
+            Some((journal, sequence)) => journal.record_go_outcome(sequence, result),
+            None => result,
+        };
+        let integrity = journal
+            .map(|(journal, verify)| journal.check_go_preparation_integrity(verify()))
+            .unwrap_or(Ok(()));
+        let (output, _) = combine_witnessed_run_and_integrity(
+            result.map(|output| {
+                let process = process_evidence(output.clone());
+                (output, process)
+            }),
+            integrity,
+        )?;
+        if output.status_code == Some(0)
+            && !output.timed_out
+            && !output.memory_limit_exceeded
+            && !output.process_limit_exceeded
+        {
             return Ok(());
         }
         if let Some(delay) = go_dependency_preparation_retry_delay(&output, attempt) {
@@ -1312,6 +1366,7 @@ async fn run_go_dependency_preparation(
     root: &Path,
     installed: &InstalledIndexer,
     module_root: &str,
+    observer: Option<(&census::Journal, usize)>,
 ) -> Result<crate::sandbox::SandboxOutput, SemanticIndexerRunFailure> {
     let mut prepared = build_indexer_sandbox_command(spec, root, installed, Vec::new(), None)
         .map_err(|detail| {
@@ -1335,17 +1390,43 @@ async fn run_go_dependency_preparation(
         .into_owned();
     prepared.command.args = go_dependency_arguments(module_root);
     prepared.command.allow_network = true;
-    let output = run_with_runtime_identity(prepared, "Go dependency preparation")
+    if let Some((journal, sequence)) = observer {
+        journal.record_go_launch(sequence, &prepared.command)?;
+    }
+    run_go_preparation_with_integrity(spec, prepared).await
+}
+
+async fn run_go_preparation_with_integrity(
+    spec: PinnedIndexer,
+    prepared: PreparedIndexerCommand,
+) -> Result<crate::sandbox::SandboxOutput, SemanticIndexerRunFailure> {
+    let PreparedIndexerCommand {
+        command,
+        runtime_files,
+    } = prepared;
+    let failure = |phase, detail| {
+        indexer_failure(
+            spec,
+            SemanticIndexerRunFailureKind::InfrastructureFailed,
+            phase,
+            detail,
+        )
+    };
+    let before = runtime_file_identities(&runtime_files)
+        .map_err(|detail| failure(SemanticIndexerRunPhase::IntegrityVerification, detail))?;
+    let result = run_sandbox_command(command, "Go dependency preparation")
         .await
-        .map_err(|detail| {
-            indexer_failure(
-                spec,
-                SemanticIndexerRunFailureKind::InfrastructureFailed,
-                SemanticIndexerRunPhase::Preparation,
-                detail,
-            )
-        })?;
-    Ok(output)
+        .map(|output| {
+            let process = process_evidence(output.clone());
+            (output, process)
+        })
+        .map_err(|detail| failure(SemanticIndexerRunPhase::Preparation, detail));
+    let integrity = runtime_file_identities(&runtime_files)
+        .and_then(|after| {
+            verify_runtime_identities_unchanged("Go dependency preparation", &before, &after)
+        })
+        .map_err(|detail| failure(SemanticIndexerRunPhase::IntegrityVerification, detail));
+    combine_witnessed_run_and_integrity(result, integrity).map(|(output, _)| output)
 }
 
 fn go_dependency_arguments(module_root: &str) -> Vec<String> {

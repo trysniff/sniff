@@ -1,7 +1,7 @@
 use super::super::*;
 use serde::{Deserialize, Serialize};
 
-pub(super) const CONTRACT: &str = "project-model-command-receipts-v1-input-closure-unproven";
+pub(super) const CONTRACT: &str = "project-model-command-receipts-v2-input-closure-unproven";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -193,6 +193,7 @@ pub(super) struct TerminalReceipt {
     pub(super) inputs: Option<Inputs>,
     pub(super) commands: Vec<String>,
     pub(super) models: Vec<Option<String>>,
+    pub(super) go_preparation: Option<super::preparation::Summary>,
     // This schema preserves observations. It never authorizes skipping compiler work.
     pub(super) input_closure_proven: bool,
     pub(super) result: TerminalOutcome,

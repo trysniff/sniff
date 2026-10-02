@@ -31,7 +31,11 @@ fn invalid_neighbor_fixture() -> (TempDir, Vec<FileRecord>) {
 }
 
 fn assert_preparation_failure(failure: &SemanticIndexerRunFailure) {
-    assert_eq!(failure.phase, SemanticIndexerRunPhase::Preparation);
+    assert_eq!(
+        failure.phase,
+        SemanticIndexerRunPhase::Preparation,
+        "{failure:?}"
+    );
     assert_eq!(failure.indexer, Some(SemanticIndexerKind::Go));
     let process = failure
         .process
@@ -64,6 +68,10 @@ fn assert_owned_stage_removed(root: &Path, execution_root: &Path, before: &str) 
 async fn discovery_failure_preserves_source_and_removes_owned_stage() {
     let (root, files) = invalid_neighbor_fixture();
     let before = repository_snapshot::repository_content_digest(root.path()).unwrap();
+    // Explicit fixture installation rejects stale caches; it does not repair them.
+    crate::semantic_indexer_installer::install_required_indexers(&files, false)
+        .await
+        .expect("explicit pinned Go fixture installation failed");
     let store = SemanticIndexerStore::for_user().unwrap();
     let recovery = recovery::SemanticIndexerRecoveryGuard::begin(root.path()).unwrap();
     let execution_root = recovery.prepare_indexer_run().unwrap();
@@ -81,6 +89,7 @@ async fn discovery_failure_preserves_source_and_removes_owned_stage() {
 
     assert_preparation_failure(&failure);
     assert_owned_stage_removed(root.path(), &execution_root, &before);
+    super::super::census::assert_native_preparation_failure_terminal(root.path());
     recovery.finish().unwrap();
     assert!(!root.path().join(".sniff-indexer-recovery.json").exists());
 }
