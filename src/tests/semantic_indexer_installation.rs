@@ -133,6 +133,31 @@ fn python_installation_identity_commits_the_public_api_patch() {
 
 #[cfg(windows)]
 #[test]
+fn windows_go_legacy_generator_transport_installation_is_rejected() {
+    let spec = pinned_indexer(SemanticIndexerKind::Go).unwrap();
+    let mut record = super::IndexerInstallationRecord {
+        version: super::INSTALL_RECORD_VERSION,
+        install_contract: super::INDEXER_INSTALL_CONTRACT.to_string(),
+        kind: spec.kind,
+        indexer_version: spec.version.to_string(),
+        source_identity: super::source_identity(spec),
+        entrypoint: super::normalize_path(&spec.entrypoint_relative_path()),
+        tree_sha256: "a".repeat(64),
+    };
+    assert!(
+        record
+            .source_identity
+            .ends_with("go-tool-explicit-stdin-v5")
+    );
+    super::validate_record(spec, &record).unwrap();
+    record.source_identity = record
+        .source_identity
+        .replace("go-tool-explicit-stdin-v5", "go-tool-explicit-stdin-v4");
+    assert!(super::validate_record(spec, &record).is_err());
+}
+
+#[cfg(windows)]
+#[test]
 fn windows_rust_installation_requires_the_pinned_cargo_companion() {
     let temp = temp_dir();
     let store = SemanticIndexerStore::at(temp.0.join("indexers"));
