@@ -56,6 +56,8 @@ jobs:
           python3 tools/ci/extract_blind_source_seal.py "$archive" "$RUNNER_TEMP/extracted"
       - name: Verify complete native test-target discovery and exit handling
         run: python3 tools/ci/test_run_native_unit_tests.py
+      - name: Verify offline historical source-record inventory fails closed
+        run: python3 tools/ci/test_audit_historical_source_records.py
       - name: Assign every isolated native library proof to the required matrix
         id: library_scope
         shell: bash
