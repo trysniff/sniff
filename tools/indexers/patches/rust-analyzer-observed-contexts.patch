@@ -1,8 +1,91 @@
 diff --git a/Cargo.lock b/Cargo.lock
-index 1a480d6..2aaed46 100644
+index 1a480d6..7c2edd6 100644
 --- a/Cargo.lock
 +++ b/Cargo.lock
-@@ -1960,7 +1960,10 @@ dependencies = [
+@@ -133,6 +133,15 @@ version = "2.12.1"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "84d7ced0ae9557296835c32bf1b1e02b44c746701f898460fb000d7eaa84f00a"
+ 
++[[package]]
++name = "block-buffer"
++version = "0.10.4"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "3078c7629b62d3f0439517fa394996acacc5cbc91c5a20d8c658e77abd503a71"
++dependencies = [
++ "generic-array",
++]
++
+ [[package]]
+ name = "block2"
+ version = "0.6.2"
+@@ -320,6 +329,15 @@ version = "2.2.0"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "90863d8442510cddf7f46618c4f92413774635771a3e80830c8b30d183420b14"
+ 
++[[package]]
++name = "cpufeatures"
++version = "0.2.17"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "59ed5838eebb26a2bb2e58f6d5b5316989ae9d08bab10e0e6d103e656d1b0280"
++dependencies = [
++ "libc",
++]
++
+ [[package]]
+ name = "crc32fast"
+ version = "1.5.0"
+@@ -411,6 +429,16 @@ version = "0.2.4"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "460fbee9c2c2f33933d720630a6a0bac33ba7053db5344fac858d4b8952d77d5"
+ 
++[[package]]
++name = "crypto-common"
++version = "0.1.7"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "78c8292055d1c1df0cce5d180393dc8cce0abec0a7102adb6c7b1eef6016d60a"
++dependencies = [
++ "generic-array",
++ "typenum",
++]
++
+ [[package]]
+ name = "ctrlc"
+ version = "3.5.2"
+@@ -483,6 +511,16 @@ dependencies = [
+  "thousands",
+ ]
+ 
++[[package]]
++name = "digest"
++version = "0.10.7"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "9ed9a281f7bc9b7576e61468ba615a66a5c8cfdff42420a70aa82701a3b1e292"
++dependencies = [
++ "block-buffer",
++ "crypto-common",
++]
++
+ [[package]]
+ name = "dirs"
+ version = "6.0.0"
+@@ -707,6 +745,16 @@ dependencies = [
+  "url",
+ ]
+ 
++[[package]]
++name = "generic-array"
++version = "0.14.7"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "85649ca51fd72272d7821adaf274ad91c288277713d9c18820d8499a7ff69e9a"
++dependencies = [
++ "typenum",
++ "version_check",
++]
++
+ [[package]]
+ name = "getrandom"
+ version = "0.2.17"
+@@ -1960,7 +2008,10 @@ dependencies = [
   "itertools 0.15.0",
   "la-arena 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
   "paths",
@@ -13,7 +96,7 @@ index 1a480d6..2aaed46 100644
   "semver",
   "serde",
   "serde_derive",
-@@ -2323,6 +2326,7 @@ dependencies = [
+@@ -2323,6 +2374,7 @@ dependencies = [
   "gen-lsp-types",
   "hir",
   "hir-def",
@@ -21,7 +104,7 @@ index 1a480d6..2aaed46 100644
   "hir-ty",
   "ide",
   "ide-completion",
-@@ -2344,6 +2348,7 @@ dependencies = [
+@@ -2344,6 +2396,7 @@ dependencies = [
   "process-wrap",
   "profile",
   "project-model",
@@ -29,7 +112,12 @@ index 1a480d6..2aaed46 100644
   "ra-ap-rustc_type_ir",
   "rayon",
   "rustc-hash 2.1.2",
-@@ -2356,6 +2361,7 @@ dependencies = [
+@@ -2352,10 +2405,12 @@ dependencies = [
+  "serde",
+  "serde_derive",
+  "serde_json",
++ "sha2",
+  "smallvec",
   "stdx",
   "syntax",
   "syntax-bridge",
@@ -37,6 +125,50 @@ index 1a480d6..2aaed46 100644
   "tenthash",
   "test-fixture",
   "test-utils",
+@@ -2586,6 +2641,17 @@ dependencies = [
+  "serde",
+ ]
+ 
++[[package]]
++name = "sha2"
++version = "0.10.9"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "a7507d819769d01a365ab707794a4084392c824f54a7a6a7862f8c3d0892b283"
++dependencies = [
++ "cfg-if",
++ "cpufeatures",
++ "digest",
++]
++
+ [[package]]
+ name = "sharded-slab"
+ version = "0.1.7"
+@@ -3106,6 +3172,12 @@ version = "1.0.3"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "bc7d623258602320d5c55d1bc22793b57daff0ec7efc270ea7d55ce1d5f5471c"
+ 
++[[package]]
++name = "typenum"
++version = "1.20.1"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "b6f5e870be6c3b371b77fe0ee0bafb859fa4964b4404c27de1d380043c4dda20"
++
+ [[package]]
+ name = "unarray"
+ version = "0.1.4"
+@@ -3179,6 +3251,12 @@ version = "0.1.1"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "ba73ea9cf16a25df0c8caa16c51acb937d5712a8429db78a3ee29d5dcacd3a65"
+ 
++[[package]]
++name = "version_check"
++version = "0.9.5"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
++
+ [[package]]
+ name = "vfs"
+ version = "0.0.0"
 diff --git a/crates/ide/src/static_index.rs b/crates/ide/src/static_index.rs
 index 9e8d772..57cff08 100644
 --- a/crates/ide/src/static_index.rs
@@ -2160,18 +2292,20 @@ index 9002b0c..4c4049e 100644
          targets,
          // NOTE: Not passing extra_args / metadata_extra_args / config_path here is very
 diff --git a/crates/rust-analyzer/Cargo.toml b/crates/rust-analyzer/Cargo.toml
-index ae0c957..75cd6ea 100644
+index ae0c957..9dd0aea 100644
 --- a/crates/rust-analyzer/Cargo.toml
 +++ b/crates/rust-analyzer/Cargo.toml
-@@ -39,6 +39,7 @@ serde_json = { workspace = true, features = ["preserve_order"] }
+@@ -38,7 +38,9 @@ rustc-hash.workspace = true
+ serde_json = { workspace = true, features = ["preserve_order"] }
  serde.workspace = true
  serde_derive.workspace = true
++sha2 = "=0.10.9"
  tenthash = "1.1.0"
 +tempfile = "=3.27.0"
  num_cpus = "1.17.0"
  mimalloc = { version = "0.1.46", default-features = false, optional = true }
  lsp-server.workspace = true
-@@ -53,10 +54,12 @@ semver.workspace = true
+@@ -53,10 +55,12 @@ semver.workspace = true
  memchr = "2.7.5"
  cargo_metadata.workspace = true
  process-wrap.workspace = true
@@ -2185,15 +2319,16 @@ index ae0c957..75cd6ea 100644
  hir.workspace = true
  ide-db.workspace = true
 diff --git a/crates/rust-analyzer/src/cli.rs b/crates/rust-analyzer/src/cli.rs
-index cc0efe9..cff3508 100644
+index cc0efe9..6b814c3 100644
 --- a/crates/rust-analyzer/src/cli.rs
 +++ b/crates/rust-analyzer/src/cli.rs
-@@ -12,6 +12,9 @@ mod prime_caches;
+@@ -12,6 +12,10 @@ mod prime_caches;
  mod run_tests;
  mod rustc_tests;
  mod scip;
 +mod sniff_crate_context;
 +mod sniff_project_model;
++mod sniff_source_binding;
 +mod sniff_source_context;
  mod ssr;
  mod symbols;
@@ -2227,7 +2362,7 @@ index 0384993..27cbe87 100644
      pub num_threads: Option<usize>,
  }
 diff --git a/crates/rust-analyzer/src/cli/scip.rs b/crates/rust-analyzer/src/cli/scip.rs
-index 3d904e7..960878c 100644
+index 3d904e7..1474bfb 100644
 --- a/crates/rust-analyzer/src/cli/scip.rs
 +++ b/crates/rust-analyzer/src/cli/scip.rs
 @@ -11,7 +11,6 @@ use ide_db::line_index;
@@ -2451,10 +2586,46 @@ index 3d904e7..960878c 100644
                                  .map(scip::symbol::format_symbol),
                              is_inherent_impl: false,
                          }
-@@ -522,6 +633,127 @@ mod test {
+@@ -522,6 +633,163 @@ mod test {
      use test_fixture::ChangeFixture;
      use vfs::VfsPath;
  
++    #[test]
++    fn nested_document_paths_are_canonical_in_observed_output() {
++        use ide_db::base_db::SourceDatabase;
++        use test_fixture::WithFixture;
++
++        let dir = tempfile::tempdir().unwrap();
++        let root = vfs::AbsPathBuf::assert_utf8(dir.path().to_path_buf());
++        let (db, files) =
++            RootDatabase::with_many_files("//- /src/lib.rs crate:main\nfn nested() {}\n");
++        let file = files[0].file_id(&db);
++        let mut vfs = vfs::Vfs::with_source_snapshots();
++        vfs.set_file_contents(
++            VfsPath::from(root.join("src/lib.rs")),
++            Some(db.file_text(file).text(&db).as_bytes().to_vec()),
++        );
++        let index = scip_types::Index {
++            documents: vec![scip_types::Document {
++                relative_path: get_relative_filepath(&vfs, &root, file).unwrap(),
++                ..Default::default()
++            }],
++            ..Default::default()
++        };
++        let scip_path = dir.path().join("index.scip");
++        super::super::sniff_project_model::ObservedOutputs::prepare(
++            &scip_path,
++            &dir.path().join("model.json"),
++        )
++        .unwrap()
++        .publish(index, &db, &vfs, &root)
++        .unwrap();
++        use protobuf::Message;
++        let index =
++            scip_types::Index::parse_from_bytes(&std::fs::read(scip_path).unwrap()).unwrap();
++        assert_eq!(index.documents[0].relative_path, "src/lib.rs");
++    }
++
 +    #[test]
 +    fn same_package_targets_preserve_definition_context_in_references_and_sidecar() {
 +        use ide_db::base_db::{CrateOrigin, SourceDatabase, salsa::Setter};
@@ -2465,7 +2636,7 @@ index 3d904e7..960878c 100644
 +            "//- /library.rs crate:library@1.0.0,https://example.invalid/shared.git\npub fn api() {{}}\n//- /binary.rs crate:binary@1.0.0,https://example.invalid/shared.git deps:library\n{source}"
 +        ));
 +        let root = vfs::AbsPathBuf::assert_utf8(std::env::temp_dir().join("sniff-shared-package"));
-+        let mut vfs = vfs::Vfs::default();
++        let mut vfs = vfs::Vfs::with_source_snapshots();
 +        for (file, path) in files.iter().zip(["library.rs", "binary.rs"]) {
 +            let path = VfsPath::from(root.join(path));
 +            vfs.set_file_contents(
@@ -2581,7 +2752,7 @@ index 3d904e7..960878c 100644
          let change_fixture = ChangeFixture::parse(ra_fixture);
 diff --git a/crates/rust-analyzer/src/cli/sniff_crate_context.rs b/crates/rust-analyzer/src/cli/sniff_crate_context.rs
 new file mode 100644
-index 0000000..1e254cd
+index 0000000..92cbaf4
 --- /dev/null
 +++ b/crates/rust-analyzer/src/cli/sniff_crate_context.rs
 @@ -0,0 +1,315 @@
@@ -2690,7 +2861,7 @@ index 0000000..1e254cd
 +    fn fixture(text: &str, paths: &[&str]) -> (RootDatabase, Vfs, AbsPathBuf) {
 +        let (db, files) = RootDatabase::with_many_files(text);
 +        let root = AbsPathBuf::assert_utf8(std::env::temp_dir().join("sniff-crate-context-unit"));
-+        let mut vfs = Vfs::default();
++        let mut vfs = Vfs::with_source_snapshots();
 +        assert_eq!(files.len(), paths.len());
 +        for (file, path) in files.iter().zip(paths) {
 +            let path = VfsPath::from(root.join(path));
@@ -2902,10 +3073,10 @@ index 0000000..1e254cd
 +}
 diff --git a/crates/rust-analyzer/src/cli/sniff_project_model.rs b/crates/rust-analyzer/src/cli/sniff_project_model.rs
 new file mode 100644
-index 0000000..35e311f
+index 0000000..a7bc8cf
 --- /dev/null
 +++ b/crates/rust-analyzer/src/cli/sniff_project_model.rs
-@@ -0,0 +1,855 @@
+@@ -0,0 +1,891 @@
 +//! Observed rust-analyzer contexts. This export does not claim an exhaustive Cargo world domain.
 +
 +use anyhow::{Context, Result, ensure};
@@ -2997,6 +3168,7 @@ index 0000000..35e311f
 +struct ScipBinding {
 +    byte_length: usize,
 +    tenthash_hex: String,
++    sha256_hex: String,
 +    cryptographic_seal: bool,
 +    occurrence_context_selection: &'static str,
 +    document_contexts: Option<Vec<DocumentContext>>,
@@ -3024,6 +3196,7 @@ index 0000000..35e311f
 +    input_closure_proven: bool,
 +    scip_binding: Option<ScipBinding>,
 +    selected_root_context: Option<CrateIdentity>,
++    source_bindings: Vec<super::sniff_source_binding::SourceBinding>,
 +    crates: Vec<CrateContext>,
 +}
 +
@@ -3111,8 +3284,7 @@ index 0000000..35e311f
 +    let mut seen = BTreeSet::new();
 +    for krate in Crate::all(db) {
 +        let bytes = serde_json::to_vec(&identity(krate, db, vfs)?)?;
-+        let digest: String =
-+            tenthash::hash(bytes).iter().map(|byte| format!("{byte:02x}")).collect();
++        let digest = super::sniff_source_binding::sha256_hex(&bytes);
 +        let name = format!("sniff-context-{digest}");
 +        ensure!(seen.insert(name.clone()), "ambiguous compiler-context namespace");
 +        namespaces.insert(krate, name);
@@ -3125,6 +3297,7 @@ index 0000000..35e311f
 +    vfs: &Vfs,
 +    root: &AbsPathBuf,
 +) -> Result<ObservedModel> {
++    let source_bindings = super::sniff_source_binding::source_bindings(db, vfs)?;
 +    let mut crates = Vec::new();
 +    let associations = super::sniff_source_context::source_associations(db);
 +    for krate in Crate::all(db) {
@@ -3279,13 +3452,14 @@ index 0000000..35e311f
 +        "ambiguous backend crate context identity"
 +    );
 +    Ok(ObservedModel {
-+        schema_version: 2,
-+        contract: "sniff-rust-observed-crate-contexts-v2-not-world-admission",
++        schema_version: 3,
++        contract: "sniff-rust-observed-crate-contexts-v3-not-world-admission",
 +        provider_version: crate::version::version().to_string(),
 +        declared_world_domain_complete: false,
 +        input_closure_proven: false,
 +        scip_binding: None,
 +        selected_root_context: None,
++        source_bindings,
 +        crates,
 +    })
 +}
@@ -3331,12 +3505,22 @@ index 0000000..35e311f
 +
 +    pub(super) fn publish(
 +        self,
-+        index: scip::types::Index,
++        mut index: scip::types::Index,
 +        db: &RootDatabase,
 +        vfs: &Vfs,
 +        root: &AbsPathBuf,
 +    ) -> Result<()> {
++        if cfg!(windows) {
++            for document in &mut index.documents {
++                document.relative_path = document.relative_path.replace('\\', "/");
++            }
++        }
 +        let mut model = observed_model(db, vfs, root)?;
++        super::sniff_source_binding::validate_document_sources(
++            &index,
++            &model.source_bindings,
++            root,
++        )?;
 +        let symbol_context_namespaces = if self.selected_context.is_some() {
 +            let mut namespaces = context_namespaces(db, vfs)?
 +                .into_iter()
@@ -3392,7 +3576,8 @@ index 0000000..35e311f
 +                .iter()
 +                .map(|byte| format!("{byte:02x}"))
 +                .collect(),
-+            // This checksum pairs observations, not a security or admission seal.
++            sha256_hex: super::sniff_source_binding::sha256_hex(&scip_bytes),
++            // Byte commitments are not signed provenance or world admission.
 +            cryptographic_seal: false,
 +            occurrence_context_selection: if self.selected_context.is_some() {
 +                "selected-crate-closure-unique-source-associations"
@@ -3457,7 +3642,7 @@ index 0000000..35e311f
 +        let (db, files) = RootDatabase::with_many_files(fixture);
 +        let root =
 +            AbsPathBuf::assert_utf8(std::env::temp_dir().join("sniff-compiler-context-unit"));
-+        let mut vfs = Vfs::default();
++        let mut vfs = Vfs::with_source_snapshots();
 +        assert_eq!(files.len(), paths.len());
 +        for (file, path) in files.iter().zip(paths) {
 +            let path = VfsPath::from(root.join(path));
@@ -3496,6 +3681,25 @@ index 0000000..35e311f
 +        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
 +        assert_eq!(value["declared_world_domain_complete"], false);
 +        assert_eq!(value["input_closure_proven"], false);
++    }
++
++    #[test]
++    fn source_commitments_cover_active_inactive_and_included_buffers() {
++        let model = model(
++            "//- /lib.rs crate:main\n#[rustc_builtin_macro] macro_rules! include { () => {} }\ninclude!(\"included.rs\");\n#[cfg(any())] mod inactive;\n//- /included.rs\nfn included() {}\n//- /inactive.rs\nfn inactive() {}\n",
++            &["lib.rs", "included.rs", "inactive.rs"],
++        );
++        let value = serde_json::to_value(&model).unwrap();
++        let bindings = value["source_bindings"].as_array().expect("missing source commitments");
++        assert_eq!(bindings.len(), 3);
++        assert_eq!(value["schema_version"], 3);
++        for binding in bindings {
++            assert_eq!(binding["raw_sha256_hex"].as_str().unwrap().len(), 64);
++            assert_eq!(binding["raw_sha256_hex"], binding["analysis_sha256_hex"]);
++            assert_eq!(binding["raw_byte_length"], binding["analysis_byte_length"]);
++        }
++        assert!(!model.input_closure_proven);
++        assert!(!model.declared_world_domain_complete);
 +    }
 +
 +    #[test]
@@ -3719,7 +3923,7 @@ index 0000000..35e311f
 +        let model_path = dir.path().join("model.json");
 +        let (db, files) = RootDatabase::with_many_files("//- /lib.rs crate:main\nfn active() {}\n");
 +        let root = AbsPathBuf::assert_utf8(dir.path().to_path_buf());
-+        let mut vfs = Vfs::default();
++        let mut vfs = Vfs::with_source_snapshots();
 +        vfs.set_file_contents(
 +            VfsPath::from(root.join("lib.rs")),
 +            Some(db.file_text(files[0].file_id(&db)).text(&db).as_bytes().to_vec()),
@@ -3735,6 +3939,9 @@ index 0000000..35e311f
 +        let checksum: String =
 +            tenthash::hash(&bytes).iter().map(|byte| format!("{byte:02x}")).collect();
 +        assert_eq!(value["scip_binding"]["tenthash_hex"], checksum);
++        use sha2::Digest;
++        let sha256 = format!("{:x}", sha2::Sha256::digest(&bytes));
++        assert_eq!(value["scip_binding"]["sha256_hex"], sha256);
 +        assert_eq!(value["scip_binding"]["cryptographic_seal"], false);
 +        assert_eq!(value["scip_binding"]["occurrence_context_selection"], "unavailable");
 +        assert!(ObservedOutputs::prepare(&scip_path, &dir.path().join("new.json")).is_err());
@@ -3750,7 +3957,7 @@ index 0000000..35e311f
 +        std::fs::write(&model_path, b"existing").unwrap();
 +        let (db, files) = RootDatabase::with_many_files("//- /lib.rs crate:main\nfn active() {}\n");
 +        let root = AbsPathBuf::assert_utf8(dir.path().to_path_buf());
-+        let mut vfs = Vfs::default();
++        let mut vfs = Vfs::with_source_snapshots();
 +        vfs.set_file_contents(
 +            VfsPath::from(root.join("lib.rs")),
 +            Some(db.file_text(files[0].file_id(&db)).text(&db).as_bytes().to_vec()),
@@ -3759,6 +3966,276 @@ index 0000000..35e311f
 +        assert_eq!(std::fs::read(&model_path).unwrap(), b"existing");
 +        assert!(scip_path.is_file());
 +        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 2);
++    }
++}
+diff --git a/crates/rust-analyzer/src/cli/sniff_source_binding.rs b/crates/rust-analyzer/src/cli/sniff_source_binding.rs
+new file mode 100644
+index 0000000..fafd194
+--- /dev/null
++++ b/crates/rust-analyzer/src/cli/sniff_source_binding.rs
+@@ -0,0 +1,264 @@
++//! Commit actual loaded source buffers, not reread files or an inferred input closure.
++
++use anyhow::{Context, Result, ensure};
++use ide::RootDatabase;
++use ide_db::{
++    FxHashSet,
++    base_db::{LibraryRoots, LocalRoots, SourceDatabase},
++};
++use serde_derive::Serialize;
++use sha2::{Digest, Sha256};
++use std::collections::BTreeSet;
++use vfs::{AbsPathBuf, Vfs};
++
++#[derive(Debug, PartialEq, Eq, Serialize)]
++pub(super) struct SourceBinding {
++    pub(super) file: String,
++    raw_byte_length: usize,
++    raw_sha256_hex: String,
++    analysis_byte_length: usize,
++    analysis_sha256_hex: String,
++}
++
++pub(super) fn sha256_hex(bytes: &[u8]) -> String {
++    format!("{:x}", Sha256::digest(bytes))
++}
++
++pub(super) fn source_bindings(db: &RootDatabase, vfs: &Vfs) -> Result<Vec<SourceBinding>> {
++    let mut analysis_files = FxHashSet::default();
++    for root in LocalRoots::get(db).roots(db).iter().chain(LibraryRoots::get(db).roots(db)) {
++        analysis_files.extend(db.source_root(*root).source_root(db).iter());
++    }
++    let mut loaded_files = FxHashSet::default();
++    let mut bindings = Vec::new();
++    for (file, path) in vfs.iter() {
++        let raw = vfs.source_snapshot(file).context("source bytes were not retained")?;
++        ensure!(analysis_files.contains(&file), "loaded source has no analysis input: {path}");
++        let analysis = db.file_text(file).text(db);
++        ensure!(raw == analysis.as_bytes(), "loaded source and analysis bytes differ: {path}");
++        let path = path.as_path().context("source binding requires a real file path")?;
++        loaded_files.insert(file);
++        bindings.push(SourceBinding {
++            file: path.to_string(),
++            raw_byte_length: raw.len(),
++            raw_sha256_hex: sha256_hex(raw),
++            analysis_byte_length: analysis.len(),
++            analysis_sha256_hex: sha256_hex(analysis.as_bytes()),
++        });
++    }
++    ensure!(loaded_files == analysis_files, "analysis source has no retained loaded buffer");
++    bindings.sort_by(|left, right| left.file.cmp(&right.file));
++    ensure!(
++        bindings.windows(2).all(|pair| pair[0].file != pair[1].file),
++        "duplicate source binding path"
++    );
++    Ok(bindings)
++}
++
++pub(super) fn validate_document_sources(
++    index: &scip::types::Index,
++    bindings: &[SourceBinding],
++    root: &AbsPathBuf,
++) -> Result<()> {
++    let files: BTreeSet<_> = bindings.iter().map(|binding| binding.file.as_str()).collect();
++    let mut documents = BTreeSet::new();
++    for document in &index.documents {
++        let relative = &document.relative_path;
++        ensure!(
++            !relative.contains('\\')
++                && !relative.split('/').next().unwrap_or_default().contains(':')
++                && relative.split('/').all(|part| !matches!(part, "" | "." | "..")),
++            "SCIP document path is not canonical repository-relative: {relative}"
++        );
++        ensure!(documents.insert(relative), "duplicate source-bound SCIP document: {relative}");
++        let path = root.join(relative).normalize();
++        ensure!(files.contains(path.as_str()), "SCIP document has no source binding: {relative}");
++    }
++    Ok(())
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use test_fixture::WithFixture;
++    use vfs::VfsPath;
++
++    fn fixture(capture: bool) -> (RootDatabase, Vfs, AbsPathBuf) {
++        let (db, files) = RootDatabase::with_many_files(
++            "//- /one.rs crate:main\nfn one() {}\n//- /two.rs\nfn two() {}\n",
++        );
++        let root = AbsPathBuf::assert_utf8(std::env::temp_dir().join("sniff-source-binding-unit"));
++        let mut vfs = if capture { Vfs::with_source_snapshots() } else { Vfs::default() };
++        for (file, path) in files.iter().zip(["one.rs", "two.rs"]) {
++            let path = VfsPath::from(root.join(path));
++            vfs.set_file_contents(
++                path.clone(),
++                Some(db.file_text(file.file_id(&db)).text(&db).as_bytes().to_vec()),
++            );
++            assert_eq!(vfs.file_id(&path).unwrap().0, file.file_id(&db));
++        }
++        (db, vfs, root)
++    }
++
++    #[test]
++    fn sha256_matches_known_vectors() {
++        assert_eq!(
++            sha256_hex(b""),
++            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
++        );
++        assert_eq!(
++            sha256_hex(b"abc"),
++            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
++        );
++        assert_eq!(
++            sha256_hex(b"abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"),
++            "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1"
++        );
++    }
++
++    #[test]
++    fn captured_bytes_are_bound_without_reading_source_paths() {
++        let (db, mut vfs, _) = fixture(true);
++        vfs.take_changes();
++        let bindings = source_bindings(&db, &vfs).unwrap();
++        assert_eq!(bindings.len(), 2);
++        assert!(bindings.windows(2).all(|pair| pair[0].file < pair[1].file));
++        for binding in &bindings {
++            assert_eq!(binding.raw_sha256_hex, binding.analysis_sha256_hex);
++            assert_eq!(binding.raw_byte_length, binding.analysis_byte_length);
++        }
++        assert_eq!(source_bindings(&db, &vfs).unwrap(), bindings);
++    }
++
++    #[test]
++    fn unretained_bytes_are_not_reconstructed_from_analysis() {
++        let (db, vfs, _) = fixture(false);
++        assert!(source_bindings(&db, &vfs).unwrap_err().to_string().contains("not retained"));
++    }
++
++    #[test]
++    fn changed_loaded_bytes_cannot_commit_stale_analysis() {
++        let (db, mut vfs, root) = fixture(true);
++        vfs.set_file_contents(
++            VfsPath::from(root.join("one.rs")),
++            Some(b"fn changed() {}".to_vec()),
++        );
++        assert!(source_bindings(&db, &vfs).unwrap_err().to_string().contains("bytes differ"));
++    }
++
++    #[test]
++    fn loaded_file_without_analysis_input_is_an_error_not_a_panic() {
++        let (db, mut vfs, root) = fixture(true);
++        vfs.set_file_contents(
++            VfsPath::from(root.join("extra.rs")),
++            Some(b"fn extra() {}".to_vec()),
++        );
++        assert!(source_bindings(&db, &vfs).unwrap_err().to_string().contains("no analysis input"));
++    }
++
++    #[test]
++    fn deleted_or_excluded_analysis_inputs_cannot_disappear_from_binding() {
++        for excluded in [false, true] {
++            let (db, mut vfs, root) = fixture(true);
++            let path = VfsPath::from(root.join("two.rs"));
++            if excluded {
++                vfs.insert_excluded_file(path);
++            } else {
++                vfs.set_file_contents(path, None);
++            }
++            assert!(source_bindings(&db, &vfs).unwrap_err().to_string().contains("no retained"));
++        }
++    }
++
++    fn index(paths: &[&str]) -> scip::types::Index {
++        scip::types::Index {
++            documents: paths
++                .iter()
++                .map(|path| scip::types::Document {
++                    relative_path: (*path).to_owned(),
++                    ..Default::default()
++                })
++                .collect(),
++            ..Default::default()
++        }
++    }
++
++    #[test]
++    fn scip_documents_require_canonical_bound_paths() {
++        let (db, vfs, root) = fixture(true);
++        let bindings = source_bindings(&db, &vfs).unwrap();
++        validate_document_sources(&index(&["one.rs", "two.rs"]), &bindings, &root).unwrap();
++        for path in [
++            "",
++            "/one.rs",
++            "../one.rs",
++            "a/../one.rs",
++            "./one.rs",
++            "a//b.rs",
++            "one.rs/",
++            "C:/one.rs",
++            "a\\b.rs",
++        ] {
++            assert!(
++                validate_document_sources(&index(&[path]), &bindings, &root)
++                    .unwrap_err()
++                    .to_string()
++                    .contains("canonical"),
++                "{path}"
++            );
++        }
++        assert!(
++            validate_document_sources(&index(&["missing.rs"]), &bindings, &root)
++                .unwrap_err()
++                .to_string()
++                .contains("no source binding")
++        );
++        assert!(
++            validate_document_sources(&index(&["one.rs", "one.rs"]), &bindings, &root)
++                .unwrap_err()
++                .to_string()
++                .contains("duplicate")
++        );
++    }
++
++    #[test]
++    fn canonical_nested_document_matches_native_vfs_path() {
++        let (db, files) =
++            RootDatabase::with_many_files("//- /src/lib.rs crate:main\nfn nested() {}\n");
++        let root =
++            AbsPathBuf::assert_utf8(std::env::temp_dir().join("sniff-nested-source-binding"));
++        let mut vfs = Vfs::with_source_snapshots();
++        vfs.set_file_contents(
++            VfsPath::from(root.join("src/lib.rs")),
++            Some(db.file_text(files[0].file_id(&db)).text(&db).as_bytes().to_vec()),
++        );
++        let bindings = source_bindings(&db, &vfs).unwrap();
++        validate_document_sources(&index(&["src/lib.rs"]), &bindings, &root).unwrap();
++    }
++
++    #[test]
++    fn invalid_source_or_document_binding_publishes_neither_output() {
++        for failure in 0..3 {
++            let dir = tempfile::tempdir().unwrap();
++            let (db, mut vfs, root) = fixture(failure != 0);
++            if failure == 1 {
++                vfs.set_file_contents(
++                    VfsPath::from(root.join("one.rs")),
++                    Some(b"fn changed() {}".to_vec()),
++                );
++            }
++            let scip_path = dir.path().join("index.scip");
++            let model_path = dir.path().join("model.json");
++            let outputs = super::super::sniff_project_model::ObservedOutputs::prepare(
++                &scip_path,
++                &model_path,
++            )
++            .unwrap();
++            let documents = if failure == 2 { index(&["missing.rs"]) } else { index(&[]) };
++            assert!(outputs.publish(documents, &db, &vfs, &root).is_err());
++            assert!(!scip_path.exists());
++            assert!(!model_path.exists());
++            assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
++        }
 +    }
 +}
 diff --git a/crates/rust-analyzer/src/cli/sniff_source_context.rs b/crates/rust-analyzer/src/cli/sniff_source_context.rs
