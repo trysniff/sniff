@@ -435,6 +435,90 @@ fn prior_identity_seal_canonicalizes_and_rejects_tampering() {
 }
 
 #[test]
+fn prior_identity_seal_rejects_recommitted_union_omissions_additions_and_substitutions() {
+    let original = prior_identity_seal();
+    for repositories in [
+        vec!["other/prior".to_string()],
+        vec![
+            "extra/repository".to_string(),
+            "other/prior".to_string(),
+            "zed/used".to_string(),
+        ],
+        vec!["different/repository".to_string(), "zed/used".to_string()],
+    ] {
+        let mut forged = original.clone();
+        forged.repositories = repositories;
+        forged.seal_sha256 = compute_prior_identity_seal_sha256(&forged).unwrap();
+        assert!(
+            validate_historical_v3_prior_identity_seal(&forged)
+                .unwrap_err()
+                .contains("exact input union")
+        );
+    }
+}
+
+#[test]
+fn prior_identity_seal_rejects_recommitted_input_membership_drift() {
+    for add_membership in [false, true] {
+        let mut forged = prior_identity_seal();
+        if add_membership {
+            forged.inputs[0]
+                .repositories
+                .insert(0, "additional/prior".to_string());
+        } else {
+            forged.inputs.remove(0);
+        }
+        forged.seal_sha256 = compute_prior_identity_seal_sha256(&forged).unwrap();
+        assert!(
+            validate_historical_v3_prior_identity_seal(&forged)
+                .unwrap_err()
+                .contains("exact input union")
+        );
+    }
+}
+
+#[test]
+fn prior_identity_seal_preserves_overlapping_partition_memberships() {
+    let seal = prepare_historical_v3_prior_identity_seal(vec![
+        HistoricalV3PriorArtifactBinding {
+            artifact_id: "first-partition".to_string(),
+            artifact_sha256: "1".repeat(64),
+            repositories: vec!["owner/shared".to_string(), "owner/one".to_string()],
+        },
+        HistoricalV3PriorArtifactBinding {
+            artifact_id: "second-partition".to_string(),
+            artifact_sha256: "2".repeat(64),
+            repositories: vec![
+                "owner/two".to_string(),
+                "https://github.com/Owner/Shared".to_string(),
+            ],
+        },
+    ])
+    .unwrap();
+    assert_eq!(
+        seal.repositories,
+        ["owner/one", "owner/shared", "owner/two"]
+    );
+    assert_eq!(seal.inputs[0].repositories, ["owner/one", "owner/shared"]);
+    assert_eq!(seal.inputs[1].repositories, ["owner/shared", "owner/two"]);
+    validate_historical_v3_prior_identity_seal(&seal).unwrap();
+}
+
+#[test]
+fn source_binding_rejects_resealed_union_omission_even_with_matching_protocol() {
+    let fixtures = fixtures();
+    let mut seal = prior_identity_seal();
+    seal.repositories.pop();
+    seal.seal_sha256 = compute_prior_identity_seal_sha256(&seal).unwrap();
+    let protocol = protocol(&seal, &fixtures);
+    assert!(
+        bind_historical_v3_source_frames(&protocol, &seal, &artifacts(&fixtures))
+            .unwrap_err()
+            .contains("exact input union")
+    );
+}
+
+#[test]
 fn replay_binds_every_frame_and_excludes_prior_repositories() {
     let fixtures = fixtures();
     let seal = prior_identity_seal();
