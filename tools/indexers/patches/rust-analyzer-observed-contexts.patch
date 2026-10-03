@@ -155,6 +155,261 @@ index 9e8d772..57cff08 100644
              };
              let mut visited_files = FxHashSet::default();
              for module in work {
+diff --git a/crates/load-cargo/src/lib.rs b/crates/load-cargo/src/lib.rs
+index bf2331a..0d48921 100644
+--- a/crates/load-cargo/src/lib.rs
++++ b/crates/load-cargo/src/lib.rs
+@@ -8,6 +8,10 @@
+ #[cfg(feature = "in-rust-tree")]
+ extern crate rustc_driver as _;
+ 
++mod source_snapshots;
++
++pub use source_snapshots::load_workspace_with_source_snapshots;
++
+ use std::{any::Any, collections::hash_map::Entry, mem, path::Path, sync};
+ 
+ use crossbeam_channel::{Receiver, unbounded};
+@@ -99,9 +103,20 @@ pub fn load_workspace_into_db(
+     extra_env: &FxHashMap<String, Option<String>>,
+     load_config: &LoadCargoConfig,
+     db: &mut RootDatabase,
++) -> anyhow::Result<(vfs::Vfs, Option<ProcMacroClient>)> {
++    load_workspace_into_db_with_source_policy(ws, extra_env, load_config, db, false)
++}
++
++fn load_workspace_into_db_with_source_policy(
++    ws: ProjectWorkspace,
++    extra_env: &FxHashMap<String, Option<String>>,
++    load_config: &LoadCargoConfig,
++    db: &mut RootDatabase,
++    retain_sources: bool,
+ ) -> anyhow::Result<(vfs::Vfs, Option<ProcMacroClient>)> {
+     let (sender, receiver) = unbounded();
+-    let mut vfs = vfs::Vfs::default();
++    let mut vfs =
++        if retain_sources { vfs::Vfs::with_source_snapshots() } else { vfs::Vfs::default() };
+     let mut loader = {
+         let loader = vfs_notify::NotifyHandle::spawn(sender);
+         Box::new(loader)
+@@ -194,7 +209,8 @@ pub fn load_workspace_into_db(
+         &mut vfs,
+         &receiver,
+         db,
+-    );
++        retain_sources,
++    )?;
+ 
+     if load_config.prefill_caches {
+         let all = ide_db::base_db::all_crates(db);
+@@ -518,16 +534,21 @@ fn load_crate_graph_into_db(
+     vfs: &mut vfs::Vfs,
+     receiver: &Receiver<vfs::loader::Message>,
+     db: &mut RootDatabase,
+-) {
++    retain_sources: bool,
++) -> anyhow::Result<()> {
+     let mut analysis_change = ChangeWithProcMacros::default();
+ 
+-    db.enable_proc_attr_macros();
++    if !retain_sources {
++        db.enable_proc_attr_macros();
++    }
+ 
+     // wait until Vfs has loaded all roots
++    let mut finished = false;
+     for task in receiver {
+         match task {
+             vfs::loader::Message::Progress { n_done, .. } => {
+                 if n_done == LoadingProgress::Finished {
++                    finished = true;
+                     break;
+                 }
+             }
+@@ -540,21 +561,19 @@ fn load_crate_graph_into_db(
+             }
+         }
+     }
+-    let changes = vfs.take_changes();
+-    for (_, file) in changes {
+-        if let vfs::Change::Create(v, _) | vfs::Change::Modify(v, _) = file.change
+-            && let Ok(text) = String::from_utf8(v)
+-        {
+-            analysis_change.change_file(file.file_id, Some(text))
+-        }
+-    }
++    anyhow::ensure!(!retain_sources || finished, "source loader did not report finished");
++    source_snapshots::apply_source_changes(vfs, &mut analysis_change, retain_sources)?;
+     let source_roots = source_root_config.partition(vfs);
+     analysis_change.set_roots(source_roots);
+ 
+     analysis_change.set_crate_graph(crate_graph);
+     analysis_change.set_proc_macros(proc_macros);
+ 
++    if retain_sources {
++        db.enable_proc_attr_macros();
++    }
+     db.apply_change(analysis_change);
++    Ok(())
+ }
+ 
+ fn expander_to_proc_macro(
+diff --git a/crates/load-cargo/src/source_snapshots.rs b/crates/load-cargo/src/source_snapshots.rs
+new file mode 100644
+index 0000000..8cd2f35
+--- /dev/null
++++ b/crates/load-cargo/src/source_snapshots.rs
+@@ -0,0 +1,150 @@
++use super::*;
++
++/// Load analysis and retain the exact source buffers supplied by the loader.
++/// Invalid UTF-8 or an unfinished loader must fail, not silently omit input.
++/// This does not establish completeness of the compiler's input closure.
++pub fn load_workspace_with_source_snapshots(
++    ws: ProjectWorkspace,
++    extra_env: &FxHashMap<String, Option<String>>,
++    load_config: &LoadCargoConfig,
++) -> anyhow::Result<(RootDatabase, vfs::Vfs, Option<ProcMacroClient>)> {
++    let lru_cap = std::env::var("RA_LRU_CAP").ok().and_then(|it| it.parse::<u16>().ok());
++    let mut db = RootDatabase::new(lru_cap);
++    let (vfs, server) =
++        load_workspace_into_db_with_source_policy(ws, extra_env, load_config, &mut db, true)?;
++    Ok((db, vfs, server))
++}
++
++pub(super) fn apply_source_changes(
++    vfs: &mut vfs::Vfs,
++    change: &mut ChangeWithProcMacros,
++    retain_sources: bool,
++) -> anyhow::Result<()> {
++    for (_, file) in vfs.take_changes() {
++        match file.change {
++            vfs::Change::Create(bytes, _) | vfs::Change::Modify(bytes, _) => {
++                if retain_sources {
++                    anyhow::ensure!(
++                        vfs.source_snapshot(file.file_id) == Some(bytes.as_slice()),
++                        "source snapshot does not match loaded bytes for {}",
++                        vfs.file_path(file.file_id)
++                    );
++                }
++                match String::from_utf8(bytes) {
++                    Ok(text) => change.change_file(file.file_id, Some(text)),
++                    Err(error) if retain_sources => anyhow::bail!(
++                        "invalid UTF-8 source {}: {error}",
++                        vfs.file_path(file.file_id)
++                    ),
++                    Err(_) => {}
++                }
++            }
++            vfs::Change::Delete if retain_sources => change.change_file(file.file_id, None),
++            vfs::Change::Delete => {}
++        }
++    }
++    Ok(())
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    fn load_sources(
++        sources: Vec<(&str, Vec<u8>)>,
++        retain_sources: bool,
++        finished: bool,
++    ) -> (anyhow::Result<()>, RootDatabase, vfs::Vfs) {
++        let mut vfs =
++            if retain_sources { vfs::Vfs::with_source_snapshots() } else { vfs::Vfs::default() };
++        for (path, contents) in sources {
++            vfs.set_file_contents(VfsPath::new_virtual_path(path.to_owned()), Some(contents));
++        }
++        let (sender, receiver) = unbounded();
++        if finished {
++            sender
++                .send(vfs::loader::Message::Progress {
++                    n_total: 0,
++                    n_done: LoadingProgress::Finished,
++                    dir: None,
++                    config_version: 0,
++                })
++                .unwrap();
++        }
++        drop(sender);
++        let mut db = RootDatabase::new(None);
++        for (id, _) in vfs.iter() {
++            db.set_file_text(id, "unchanged");
++        }
++        let result = load_crate_graph_into_db(
++            CrateGraphBuilder::default(),
++            ProcMacrosBuilder::default(),
++            SourceRootConfig::default(),
++            &mut vfs,
++            &receiver,
++            &mut db,
++            retain_sources,
++        );
++        (result, db, vfs)
++    }
++
++    #[test]
++    fn invalid_utf8_fails_before_analysis_changes_are_applied() {
++        let (result, db, vfs) = load_sources(
++            vec![("/first.rs", b"fn valid() {}".to_vec()), ("/invalid.rs", vec![0xff])],
++            true,
++            true,
++        );
++        let error = result.unwrap_err().to_string();
++        assert!(error.contains("invalid.rs"), "{error}");
++        assert!(error.contains("UTF-8"), "{error}");
++        let (first, _) = vfs.file_id(&VfsPath::new_virtual_path("/first.rs".to_owned())).unwrap();
++        assert_eq!(db.file_text(first).text(&db).as_ref(), "unchanged");
++        let (id, _) = vfs.file_id(&VfsPath::new_virtual_path("/invalid.rs".to_owned())).unwrap();
++        assert_eq!(vfs.source_snapshot(id), Some([0xff].as_slice()));
++    }
++
++    #[test]
++    fn unfinished_loader_is_not_a_complete_snapshot() {
++        let (result, db, vfs) =
++            load_sources(vec![("/valid.rs", b"fn valid() {}".to_vec())], true, false);
++        assert!(result.unwrap_err().to_string().contains("finished"));
++        let (id, _) = vfs.file_id(&VfsPath::new_virtual_path("/valid.rs".to_owned())).unwrap();
++        assert_eq!(db.file_text(id).text(&db).as_ref(), "unchanged");
++    }
++
++    #[test]
++    fn ordinary_loader_keeps_existing_invalid_utf8_behavior() {
++        let (result, _, vfs) = load_sources(vec![("/invalid.rs", vec![0xff])], false, true);
++        assert!(result.is_ok());
++        let (id, _) = vfs.file_id(&VfsPath::new_virtual_path("/invalid.rs".to_owned())).unwrap();
++        assert!(vfs.source_snapshot(id).is_none());
++    }
++
++    #[test]
++    fn valid_utf8_snapshot_preserves_bom_crlf_and_unicode() {
++        let bytes = "\u{feff}// \u{03bb}\r\nfn main() {}\r\n".as_bytes().to_vec();
++        let (result, db, vfs) = load_sources(vec![("/valid.rs", bytes.clone())], true, true);
++        result.unwrap();
++        let (id, _) = vfs.file_id(&VfsPath::new_virtual_path("/valid.rs".to_owned())).unwrap();
++        assert_eq!(vfs.source_snapshot(id), Some(bytes.as_slice()));
++        assert_eq!(db.file_text(id).text(&db).as_bytes(), bytes);
++    }
++
++    #[test]
++    fn unretained_or_excluded_pending_input_cannot_be_applied() {
++        for excluded in [false, true] {
++            let mut vfs =
++                if excluded { vfs::Vfs::with_source_snapshots() } else { vfs::Vfs::default() };
++            let path = VfsPath::new_virtual_path("/source.rs".to_owned());
++            vfs.set_file_contents(path.clone(), Some(b"fn main() {}".to_vec()));
++            if excluded {
++                vfs.insert_excluded_file(path);
++            }
++            let error = apply_source_changes(&mut vfs, &mut ChangeWithProcMacros::default(), true)
++                .unwrap_err()
++                .to_string();
++            assert!(error.contains("snapshot does not match"), "{error}");
++        }
++    }
++}
 diff --git a/crates/project-model/Cargo.toml b/crates/project-model/Cargo.toml
 index f825a45..192f0cb 100644
 --- a/crates/project-model/Cargo.toml
@@ -2647,7 +2902,7 @@ index 0000000..1e254cd
 +}
 diff --git a/crates/rust-analyzer/src/cli/sniff_project_model.rs b/crates/rust-analyzer/src/cli/sniff_project_model.rs
 new file mode 100644
-index 0000000..76a957c
+index 0000000..35e311f
 --- /dev/null
 +++ b/crates/rust-analyzer/src/cli/sniff_project_model.rs
 @@ -0,0 +1,855 @@
@@ -2657,7 +2912,7 @@ index 0000000..76a957c
 +use cfg::{CfgAtom, CfgOptions};
 +use hir::{AnyDiagnostic, Crate};
 +use ide::RootDatabase;
-+use load_cargo::{LoadCargoConfig, load_workspace};
++use load_cargo::{LoadCargoConfig, load_workspace_with_source_snapshots};
 +use proc_macro_api::ProcMacroClient;
 +use project_model::{CargoConfig, ProjectManifest, ProjectWorkspace, ProjectWorkspaceKind};
 +use serde_derive::Serialize;
@@ -2824,7 +3079,7 @@ index 0000000..76a957c
 +        scripts.error()
 +    );
 +    workspace.set_build_scripts(scripts);
-+    load_workspace(workspace, &cargo.extra_env, load)
++    load_workspace_with_source_snapshots(workspace, &cargo.extra_env, load)
 +}
 +
 +fn identity(krate: Crate, db: &RootDatabase, vfs: &Vfs) -> Result<CrateIdentity> {
@@ -3745,3 +4000,188 @@ index 3ba0e47..cc6fcdb 100644
              all_targets: *self.cargo_allTargets(source_root),
              features: match &self.cargo_features(source_root) {
                  CargoFeaturesDef::All => CargoFeatures::All,
+diff --git a/crates/vfs/src/lib.rs b/crates/vfs/src/lib.rs
+index 8d2c65f..0f31c48 100644
+--- a/crates/vfs/src/lib.rs
++++ b/crates/vfs/src/lib.rs
+@@ -1,7 +1,8 @@
+ //! # Virtual File System
+ //!
+ //! VFS records all file changes pushed to it via [`set_file_contents`].
+-//! As such it only ever stores changes, not the actual content of a file at any given moment.
++//! By default it only stores changes, not the content of a file at any given moment.
++//! [`Vfs::with_source_snapshots`] also retains the exact bytes of existing files.
+ //! All file changes are logged, and can be retrieved via
+ //! [`take_changes`] method. The pack of changes is then pushed to `salsa` and
+ //! triggers incremental recomputation.
+@@ -55,7 +56,7 @@ pub use crate::{
+ use indexmap::{IndexMap, map::Entry};
+ pub use paths::{AbsPath, AbsPathBuf};
+ 
+-use rustc_hash::FxHasher;
++use rustc_hash::{FxHashMap, FxHasher};
+ use stdx::hash_once;
+ use tracing::{Level, span};
+ 
+@@ -92,6 +93,7 @@ pub struct Vfs {
+     interner: PathInterner,
+     data: Vec<FileState>,
+     changes: IndexMap<FileId, ChangedFile, BuildHasherDefault<FxHasher>>,
++    source_snapshots: Option<FxHashMap<FileId, Vec<u8>>>,
+ }
+ 
+ #[derive(Copy, Clone, Debug, PartialEq, PartialOrd)]
+@@ -174,6 +176,18 @@ pub enum FileExcluded {
+ }
+ 
+ impl Vfs {
++    /// Retain exact file bytes even after changes have been drained.
++    /// Ordinary IDE instances should use [`Vfs::default`] instead.
++    pub fn with_source_snapshots() -> Self {
++        Self { source_snapshots: Some(FxHashMap::default()), ..Self::default() }
++    }
++
++    /// The last supplied bytes of an existing file, without reading the filesystem.
++    /// Returns `None` for disabled capture, unknown, deleted, or excluded files.
++    pub fn source_snapshot(&self, file_id: FileId) -> Option<&[u8]> {
++        self.source_snapshots.as_ref()?.get(&file_id).map(Vec::as_slice)
++    }
++
+     /// Id of the given path if it exists in the `Vfs` and is not deleted.
+     pub fn file_id(&self, path: &VfsPath) -> Option<(FileId, FileExcluded)> {
+         let file_id = self.interner.get(path)?;
+@@ -226,7 +240,10 @@ impl Vfs {
+             (FileState::Exists(_), None) => Change::Delete,
+             (FileState::Exists(hash), Some(v)) => {
+                 let new_hash = hash_once::<FxHasher>(&*v);
+-                if new_hash == hash {
++                if new_hash == hash
++                    && (self.source_snapshots.is_none()
++                        || self.source_snapshot(file_id) == Some(v.as_slice()))
++                {
+                     return false;
+                 }
+                 Change::Modify(v, new_hash)
+@@ -234,6 +251,17 @@ impl Vfs {
+             (FileState::Excluded, _) => return false,
+         };
+ 
++        if let Some(snapshots) = &mut self.source_snapshots {
++            match &change {
++                Change::Create(bytes, _) | Change::Modify(bytes, _) => {
++                    snapshots.insert(file_id, bytes.clone());
++                }
++                Change::Delete => {
++                    snapshots.remove(&file_id);
++                }
++            }
++        }
++
+         let mut set_data = |change_kind| {
+             self.data[file_id.0 as usize] = match change_kind {
+                 &Change::Create(_, hash) | &Change::Modify(_, hash) => FileState::Exists(hash),
+@@ -319,9 +347,15 @@ impl Vfs {
+     pub fn insert_excluded_file(&mut self, path: VfsPath) {
+         let file_id = self.alloc_file_id(path);
+         self.data[file_id.0 as usize] = FileState::Excluded;
++        if let Some(snapshots) = &mut self.source_snapshots {
++            snapshots.remove(&file_id);
++        }
+     }
+ }
+ 
++#[cfg(test)]
++mod source_snapshot_tests;
++
+ impl fmt::Debug for Vfs {
+     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+         f.debug_struct("Vfs").field("n_files", &self.data.len()).finish()
+diff --git a/crates/vfs/src/source_snapshot_tests.rs b/crates/vfs/src/source_snapshot_tests.rs
+new file mode 100644
+index 0000000..32fee4b
+--- /dev/null
++++ b/crates/vfs/src/source_snapshot_tests.rs
+@@ -0,0 +1,83 @@
++use super::*;
++
++fn path() -> VfsPath {
++    VfsPath::new_virtual_path("/source.rs".to_owned())
++}
++
++#[test]
++fn exact_bytes_survive_draining_and_updates() {
++    let mut vfs = Vfs::with_source_snapshots();
++    let first = b"\xef\xbb\xbf// source\r\n\0\xff".to_vec();
++    assert!(vfs.set_file_contents(path(), Some(first.clone())));
++    let (id, _) = vfs.file_id(&path()).unwrap();
++    assert_eq!(vfs.source_snapshot(id), Some(first.as_slice()));
++    assert_eq!(vfs.take_changes().len(), 1);
++    assert_eq!(vfs.source_snapshot(id), Some(first.as_slice()));
++    assert!(!vfs.set_file_contents(path(), Some(first)));
++    assert!(vfs.take_changes().is_empty());
++    let second = b"fn next() {}".to_vec();
++    assert!(vfs.set_file_contents(path(), Some(second.clone())));
++    assert_eq!(vfs.source_snapshot(id), Some(second.as_slice()));
++    assert!(vfs.take_changes()[&id].is_modified());
++    assert_eq!(vfs.source_snapshot(id), Some(second.as_slice()));
++}
++
++#[test]
++fn create_modify_delete_and_recreate_merge_without_stale_snapshots() {
++    let mut vfs = Vfs::with_source_snapshots();
++    vfs.set_file_contents(path(), Some(b"one".to_vec()));
++    let (id, _) = vfs.file_id(&path()).unwrap();
++    vfs.set_file_contents(path(), Some(b"two".to_vec()));
++    assert_eq!(vfs.source_snapshot(id), Some(b"two".as_slice()));
++    assert_eq!(
++        vfs.take_changes()[&id].change,
++        Change::Create(b"two".to_vec(), hash_once::<FxHasher>(b"two"))
++    );
++    assert!(vfs.set_file_contents(path(), None));
++    assert!(vfs.file_id(&path()).is_none());
++    assert!(vfs.source_snapshot(id).is_none());
++    assert!(!vfs.set_file_contents(path(), None));
++    assert!(vfs.set_file_contents(path(), Some(b"three".to_vec())));
++    assert_eq!(vfs.file_id(&path()).unwrap().0, id);
++    assert_eq!(vfs.source_snapshot(id), Some(b"three".as_slice()));
++    assert!(vfs.take_changes()[&id].is_modified());
++}
++
++#[test]
++fn excluded_and_unknown_files_have_no_snapshot() {
++    let mut vfs = Vfs::with_source_snapshots();
++    assert!(vfs.source_snapshot(FileId::from_raw(42)).is_none());
++    vfs.set_file_contents(path(), Some(b"one".to_vec()));
++    let (id, _) = vfs.file_id(&path()).unwrap();
++    vfs.take_changes();
++    vfs.insert_excluded_file(path());
++    assert_eq!(vfs.file_id(&path()), Some((id, FileExcluded::Yes)));
++    assert!(vfs.source_snapshot(id).is_none());
++    assert!(!vfs.set_file_contents(path(), Some(b"two".to_vec())));
++    assert!(vfs.source_snapshot(id).is_none());
++    assert!(vfs.take_changes().is_empty());
++}
++
++#[test]
++fn capture_compares_bytes_even_when_cached_hash_matches() {
++    let mut vfs = Vfs::with_source_snapshots();
++    vfs.set_file_contents(path(), Some(b"old".to_vec()));
++    let (id, _) = vfs.file_id(&path()).unwrap();
++    vfs.take_changes();
++    // Simulate a hash collision without depending on FxHasher's implementation.
++    vfs.data[id.index() as usize] = FileState::Exists(hash_once::<FxHasher>(b"new"));
++    assert!(vfs.set_file_contents(path(), Some(b"new".to_vec())));
++    assert_eq!(vfs.source_snapshot(id), Some(b"new".as_slice()));
++    assert!(vfs.take_changes()[&id].is_modified());
++}
++
++#[test]
++fn default_mode_keeps_no_source_snapshots() {
++    let mut vfs = Vfs::default();
++    assert!(vfs.set_file_contents(path(), Some(b"ordinary".to_vec())));
++    let (id, _) = vfs.file_id(&path()).unwrap();
++    assert!(vfs.source_snapshot(id).is_none());
++    assert!(!vfs.set_file_contents(path(), Some(b"ordinary".to_vec())));
++    vfs.take_changes();
++    assert!(vfs.source_snapshot(id).is_none());
++}
