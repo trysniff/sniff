@@ -110,6 +110,9 @@ class TemporalReplayTests(unittest.TestCase):
                 if not ignored:
                     self.assertEqual(run.call_args_list[1].args[0][-2:], ["--ignored", "--list"])
                 self.assertEqual(inventory[0], "selected-cargo")
+                self.assertEqual("--features" in inventory, proof == "prior-v2")
+                if proof == "prior-v2":
+                    self.assertEqual(inventory[inventory.index("--features") + 1], "sniffbench-frame")
                 self.assertEqual(inventory[:-1], execution[:-2])
                 self.assertEqual(inventory[-1], "--list")
                 self.assertEqual(execution[-2:], ["--test-threads=1", "--nocapture"])

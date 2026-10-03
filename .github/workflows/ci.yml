@@ -252,12 +252,20 @@ jobs:
 
   temporal-prior-replay:
     name: temporal-prior-replay-${{ matrix.os }}
+    permissions:
+      contents: read
+      actions: read
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
+    env:
+      CARGO_BUILD_JOBS: "1"
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
@@ -267,7 +275,11 @@ jobs:
         with:
           python-version: "3.13"
       - name: Verify temporal capture and proof-inventory guards
-        run: python tools/ci/test_temporal_prior_replay.py
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tools/ci/test_temporal_prior_replay.py
+          python tools/ci/test_prepare_temporal_prior_v2.py
       - name: Replay the pinned Scorecard publication witness
         shell: bash
         env:
@@ -318,6 +330,35 @@ jobs:
           test "$(git rev-parse HEAD:gold_fixtures/repo)" = \
             ecb744731cbd00242f93a067632c390b0ddf344d
           python tools/ci/temporal_prior_replay.py test small
+
+      - name: Authenticate and prepare the original frozen v2 frame
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api repos/trysniff/sniff/actions/artifacts/9547888605 > "$RUNNER_TEMP/v2-artifact.json"
+          gh api repos/trysniff/sniff/actions/runs/32804623556 > "$RUNNER_TEMP/v2-run.json"
+          python tools/ci/prepare_temporal_prior_v2.py metadata \
+            "$RUNNER_TEMP/v2-artifact.json" "$RUNNER_TEMP/v2-run.json"
+          gh api repos/trysniff/sniff/actions/artifacts/9547888605/zip \
+            | python tools/ci/prepare_temporal_prior_v2.py capture "$RUNNER_TEMP/v2-frame.zip"
+          python tools/ci/prepare_temporal_prior_v2.py extract \
+            "$RUNNER_TEMP/v2-frame.zip" "$RUNNER_TEMP/v2-frame"
+          python tools/ci/prepare_temporal_prior_v2.py export "$GITHUB_WORKSPACE" "$RUNNER_TEMP/v2-source"
+
+      - name: Verify the full frozen union and Parquet-backed temporal proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          dataset="$RUNNER_TEMP/v2-dataset"
+          python tools/ci/prepare_temporal_prior_v2.py download \
+            "$RUNNER_TEMP/v2-source/sniffbench/historical-v2-protocol.json" "$dataset"
+          export SNIFF_HISTORICAL_V2_FRAME_DIR="$RUNNER_TEMP/v2-frame"
+          export SNIFF_HISTORICAL_V2_SOURCE_ROOT="$RUNNER_TEMP/v2-source"
+          export SNIFF_HISTORICAL_V2_DATASET_ROOT="$dataset"
+          python tools/ci/temporal_prior_replay.py test prior-union
+          python tools/ci/temporal_prior_replay.py test prior-v2
 
   native-go-worlds:
     name: go-worlds-${{ matrix.os }}

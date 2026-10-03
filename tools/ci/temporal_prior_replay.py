@@ -13,6 +13,14 @@ MAX_ARTIFACT_BYTES = 128 * 1024 * 1024
 HASH_CHUNK_BYTES = 1024 * 1024
 PREFIX = "benchmark::release::"
 PROOFS = {
+    "prior-union": (
+        PREFIX + "history_v3_prior_artifacts::tests::",
+        ("verifies_the_real_frozen_prior_repository_union",), True,
+    ),
+    "prior-v2": (
+        PREFIX + "history_v3_prior_artifacts::tests::",
+        ("verifies_real_frozen_v2_temporal_proof",), True,
+    ),
     "scorecard": (
         PREFIX + "history_v3_scorecard_publication::tests::",
         ("verifies_real_scorecard_publication_witness",), True,
@@ -103,7 +111,10 @@ def run_proof(proof, cargo="cargo"):
     scope, names, ignored = PROOFS[proof]
     expected = {scope + name for name in names}
     selection = [scope + names[0], "--exact"] if len(names) == 1 else [scope]
-    command = [cargo, "test", "--lib", "--locked", selection[0], "--"]
+    command = [cargo, "test", "--lib", "--locked"]
+    if proof == "prior-v2":
+        command += ["--features", "sniffbench-frame"]
+    command += [selection[0], "--"]
     harness = selection[1:] + (["--ignored"] if ignored else [])
     inventory = subprocess.run(
         command + harness + ["--list"], check=True, capture_output=True, text=True,
