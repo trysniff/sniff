@@ -69,6 +69,19 @@ pub fn validate_historical_v3_prior_identity_seal(
     if seal.seal_sha256 != compute_prior_identity_seal_sha256(seal)? {
         return Err("historical-v3 prior identity seal commitment changed".to_string());
     }
+    let mut expected_repositories = seal
+        .inputs
+        .iter()
+        .flat_map(|input| input.repositories.iter().cloned())
+        .collect::<Vec<_>>();
+    expected_repositories.sort();
+    expected_repositories.dedup();
+    if seal.repositories != expected_repositories {
+        return Err(
+            "historical-v3 prior identity seal repositories differ from the exact input union"
+                .to_string(),
+        );
+    }
     Ok(())
 }
 
