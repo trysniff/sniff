@@ -136,8 +136,407 @@ index 9e8d772..57cff08 100644
              };
              let mut visited_files = FxHashSet::default();
              for module in work {
+diff --git a/crates/project-model/src/cargo_workspace.rs b/crates/project-model/src/cargo_workspace.rs
+index 97375fe..abc30bf 100644
+--- a/crates/project-model/src/cargo_workspace.rs
++++ b/crates/project-model/src/cargo_workspace.rs
+@@ -111,6 +111,8 @@ impl TargetDirectoryConfig {
+ 
+ #[derive(Default, Clone, Debug, PartialEq, Eq)]
+ pub struct CargoConfig {
++    /// Reject metadata recovery and require the original lockfile without copying it.
++    pub strict_metadata: bool,
+     /// Whether to pass `--all-targets` to cargo invocations.
+     pub all_targets: bool,
+     /// List of features to activate.
+@@ -318,6 +320,7 @@ impl TargetKind {
+ 
+ #[derive(Default, Clone, Debug, PartialEq, Eq)]
+ pub struct CargoMetadataConfig {
++    pub strict_metadata: bool,
+     /// List of features to activate.
+     pub features: CargoFeatures,
+     /// rustc targets
+@@ -625,6 +628,7 @@ impl CargoWorkspace {
+ }
+ 
+ pub(crate) struct FetchMetadata {
++    strict_metadata: bool,
+     command: cargo_metadata::MetadataCommand,
+     #[expect(dead_code)]
+     manifest_path: ManifestPath,
+@@ -639,7 +643,7 @@ pub(crate) struct FetchMetadata {
+ impl FetchMetadata {
+     /// Builds a command to fetch metadata for the given `cargo_toml` manifest.
+     ///
+-    /// Performs a lightweight pre-fetch using the `--no-deps` option,
++    /// Outside strict metadata mode, performs a lightweight pre-fetch using the `--no-deps` option,
+     /// available via `FetchMetadata::no_deps_metadata`, to gather basic
+     /// information such as the `target-dir`.
+     ///
+@@ -696,7 +700,9 @@ impl FetchMetadata {
+         let mut lockfile_copy = None;
+         if cargo_toml.is_rust_manifest() {
+             other_options.push("-Zscript".to_owned());
+-        } else if let Some(v) = config.toolchain_version.as_ref() {
++        } else if !config.strict_metadata
++            && let Some(v) = config.toolchain_version.as_ref()
++        {
+             lockfile_copy = make_lockfile_copy(
+                 v,
+                 &<_ as AsRef<Utf8Path>>::as_ref(cargo_toml).with_extension("lock"),
+@@ -717,20 +723,25 @@ impl FetchMetadata {
+         // - and thus doesn't require progress reporting or copying lockfiles.
+         //
+         // Useful as a fast fallback to extract info like `target-dir`.
+-        let cargo_command;
+-        let no_deps_result = if no_deps {
+-            command.no_deps();
+-            cargo_command = command.cargo_command();
+-            command.exec()
++        let no_deps_result = if config.strict_metadata {
++            Err(anyhow::anyhow!("no-deps prefetch is disabled for strict metadata"))
+         } else {
+-            let mut no_deps_command = command.clone();
+-            no_deps_command.no_deps();
+-            cargo_command = no_deps_command.cargo_command();
+-            no_deps_command.exec()
+-        }
+-        .with_context(|| format!("Failed to run `{cargo_command:?}`"));
++            let cargo_command;
++            let result = if no_deps {
++                command.no_deps();
++                cargo_command = command.cargo_command();
++                command.exec()
++            } else {
++                let mut no_deps_command = command.clone();
++                no_deps_command.no_deps();
++                cargo_command = no_deps_command.cargo_command();
++                no_deps_command.exec()
++            };
++            result.with_context(|| format!("Failed to run `{cargo_command:?}`"))
++        };
+ 
+         Self {
++            strict_metadata: config.strict_metadata,
+             manifest_path: cargo_toml.clone(),
+             command,
+             lockfile_copy,
+@@ -743,7 +754,7 @@ impl FetchMetadata {
+ 
+     /// Executes the metadata-fetching command.
+     ///
+-    /// A successful result may still contain a metadata error if the full fetch failed,
++    /// Outside strict metadata mode, a successful result may still contain a metadata error if the full fetch failed,
+     /// but the fallback `--no-deps` pre-fetch succeeded during command construction.
+     pub(crate) fn exec(
+         self,
+@@ -751,6 +762,7 @@ impl FetchMetadata {
+         progress: &dyn Fn(String),
+     ) -> anyhow::Result<(cargo_metadata::Metadata, Option<anyhow::Error>)> {
+         let Self {
++            strict_metadata,
+             mut command,
+             manifest_path: _,
+             lockfile_copy,
+@@ -760,6 +772,20 @@ impl FetchMetadata {
+             mut other_options,
+         } = self;
+ 
++        anyhow::ensure!(!strict_metadata || !no_deps, "strict metadata forbids explicit no-deps");
++        if strict_metadata {
++            let invocation = command.cargo_command();
++            let args = invocation
++                .get_args()
++                .map(|arg| arg.to_string_lossy().into_owned())
++                .collect::<Vec<_>>();
++            let redirected_lockfile = std::env::var_os("CARGO_RESOLVER_LOCKFILE_PATH").is_some()
++                || invocation
++                    .get_envs()
++                    .any(|(key, value)| key == "CARGO_RESOLVER_LOCKFILE_PATH" && value.is_some());
++            validate_strict_metadata_options(&args, redirected_lockfile)?;
++            validate_strict_metadata_config(&invocation, &args)?;
++        }
+         if no_deps {
+             return no_deps_result.map(|m| (m, None));
+         }
+@@ -787,7 +813,7 @@ impl FetchMetadata {
+         }
+         // No need to lock it if we copied the lockfile, we won't modify the original after all/
+         // This way cargo cannot error out on us if the lockfile requires updating.
+-        if !using_lockfile_copy && locked {
++        if !using_lockfile_copy && (locked || strict_metadata) {
+             other_options.push("--locked".to_owned());
+         }
+         command.other_options(other_options);
+@@ -812,7 +838,7 @@ impl FetchMetadata {
+                     stderr: String::from_utf8(output.stderr)?,
+                 }
+                 .into();
+-                if !no_deps {
++                if !strict_metadata && !no_deps {
+                     // If we failed to fetch metadata with deps, return pre-fetched result without them.
+                     // This makes r-a still work partially when offline.
+                     if let Ok(metadata) = no_deps_result {
+@@ -836,3 +862,89 @@ impl FetchMetadata {
+         res
+     }
+ }
++
++fn validate_strict_metadata_options(
++    args: &[String],
++    redirected_lockfile: bool,
++) -> anyhow::Result<()> {
++    anyhow::ensure!(
++        !redirected_lockfile,
++        "strict metadata forbids lockfile redirection via environment"
++    );
++    for (index, arg) in args.iter().enumerate() {
++        anyhow::ensure!(
++            arg != "--no-deps" && !arg.starts_with("--no-deps="),
++            "strict metadata forbids no-deps arguments"
++        );
++        let unstable = if arg == "-Z" {
++            args.get(index + 1).map(String::as_str)
++        } else {
++            arg.strip_prefix("-Z")
++        };
++        anyhow::ensure!(
++            arg != "--lockfile-path"
++                && !arg.starts_with("--lockfile-path=")
++                && !unstable.is_some_and(|value| value
++                    .split(',')
++                    .any(|flag| flag.split('=').next() == Some("lockfile-path"))),
++            "strict metadata forbids lockfile redirection arguments"
++        );
++    }
++    Ok(())
++}
++
++fn validate_strict_metadata_config(
++    invocation: &std::process::Command,
++    args: &[String],
++) -> anyhow::Result<()> {
++    let dir = invocation
++        .get_current_dir()
++        .ok_or_else(|| anyhow::anyhow!("strict metadata requires an explicit working directory"))?;
++    anyhow::ensure!(dir.is_absolute(), "strict metadata working directory must be absolute");
++    let mut query = toolchain::command(invocation.get_program(), dir, &FxHashMap::default());
++    for (key, value) in invocation.get_envs() {
++        if let Some(value) = value {
++            query.env(key, value);
++        } else {
++            query.env_remove(key);
++        }
++    }
++    // Cargo's effective-config query is unstable even on the pinned stable toolchain.
++    query.env("RUSTC_BOOTSTRAP", "1").args([
++        "-Z",
++        "unstable-options",
++        "config",
++        "get",
++        "--format",
++        "json",
++    ]);
++    let mut args = args.iter();
++    while let Some(arg) = args.next() {
++        if arg == "--config" || arg == "-Z" {
++            let value = args
++                .next()
++                .ok_or_else(|| anyhow::anyhow!("missing Cargo configuration argument"))?;
++            query.arg(arg).arg(value);
++        } else if arg.starts_with("--config=") || arg.starts_with("-Z") {
++            query.arg(arg);
++        }
++    }
++    let output =
++        crate::utf8_stdout(&mut query).context("strict metadata effective-config query failed")?;
++    let config: serde_json::Value =
++        serde_json::from_str(&output).context("invalid strict metadata effective config")?;
++    anyhow::ensure!(config.is_object(), "strict metadata effective config must be an object");
++    anyhow::ensure!(
++        config.get("resolver").and_then(|resolver| resolver.get("lockfile-path")).is_none(),
++        "strict metadata forbids lockfile redirection via Cargo resolver config"
++    );
++    anyhow::ensure!(
++        config.get("env").and_then(|env| env.get("CARGO_RESOLVER_LOCKFILE_PATH")).is_none(),
++        "strict metadata forbids lockfile redirection via Cargo env config"
++    );
++    Ok(())
++}
++
++#[cfg(test)]
++#[path = "cargo_workspace/sniff_metadata_tests.rs"]
++mod sniff_metadata_tests;
+diff --git a/crates/project-model/src/cargo_workspace/sniff_metadata_tests.rs b/crates/project-model/src/cargo_workspace/sniff_metadata_tests.rs
+new file mode 100644
+index 0000000..38a690e
+--- /dev/null
++++ b/crates/project-model/src/cargo_workspace/sniff_metadata_tests.rs
+@@ -0,0 +1,161 @@
++use super::*;
++
++fn fixture(dependency: bool) -> (temp_dir::TempDir, AbsPathBuf, ManifestPath) {
++    let dir = temp_dir::TempDir::with_prefix("sniff-strict-metadata").unwrap();
++    let root = AbsPathBuf::assert_utf8(dir.path().to_path_buf());
++    std::fs::create_dir_all(root.join("src")).unwrap();
++    std::fs::write(root.join("src/lib.rs"), "pub fn probe() {}\n").unwrap();
++    let dependencies = if dependency {
++        "\n[dependencies]\nsniff_nonexistent_metadata_dependency_6fc5ba1c = \"=0.0.1\"\n"
++    } else {
++        ""
++    };
++    std::fs::write(root.join("Cargo.toml"), format!(
++        "[workspace]\n[package]\nname = \"sniff_metadata_probe\"\nversion = \"0.0.0\"\nedition = \"2024\"\n{dependencies}"
++    )).unwrap();
++    let manifest = ManifestPath::try_from(root.join("Cargo.toml")).unwrap();
++    (dir, root, manifest)
++}
++
++fn config(strict_metadata: bool) -> CargoMetadataConfig {
++    let mut config = CargoMetadataConfig { strict_metadata, ..Default::default() };
++    config.extra_env.insert("CARGO_NET_OFFLINE".to_owned(), Some("true".to_owned()));
++    config.toolchain_version = Some(semver::Version::new(1, 96, 0));
++    config
++}
++
++#[test]
++fn strict_factory_disables_prefetch_and_lockfile_copy() {
++    let (_dir, root, manifest) = fixture(false);
++    let fetch = FetchMetadata::new(&manifest, &root, &config(true), &Sysroot::empty(), false);
++    assert!(fetch.no_deps_result.unwrap_err().to_string().contains("prefetch is disabled"));
++    assert!(fetch.lockfile_copy.is_none());
++    assert!(std::fs::metadata(root.join("Cargo.lock")).is_err());
++}
++
++#[test]
++fn strict_explicit_no_deps_is_rejected_before_execution() {
++    let (_dir, root, manifest) = fixture(false);
++    let fetch = FetchMetadata::new(&manifest, &root, &config(true), &Sysroot::empty(), true);
++    let error = fetch.exec(false, &|_| panic!("invalid invocation must not start")).unwrap_err();
++    assert!(error.to_string().contains("forbids explicit no-deps"));
++    assert!(std::fs::metadata(root.join("Cargo.lock")).is_err());
++}
++
++#[test]
++fn strict_options_reject_metadata_and_lockfile_escape_hatches() {
++    for args in [
++        vec!["--no-deps"],
++        vec!["--no-deps=true"],
++        vec!["--lockfile-path", "other.lock"],
++        vec!["--lockfile-path=other.lock"],
++        vec!["-Zlockfile-path"],
++        vec!["-Z", "lockfile-path"],
++        vec!["-Zunstable-options,lockfile-path=other.lock"],
++    ] {
++        let args = args.into_iter().map(str::to_owned).collect::<Vec<_>>();
++        assert!(validate_strict_metadata_options(&args, false).is_err());
++    }
++    assert!(validate_strict_metadata_options(&[], true).is_err());
++    assert!(
++        validate_strict_metadata_options(&["--offline".to_owned(), "--locked".to_owned()], false)
++            .is_ok()
++    );
++    let (_dir, root, manifest) = fixture(false);
++    let mut config = config(true);
++    config.metadata_extra_args.push("--no-deps".to_owned());
++    let fetch = FetchMetadata::new(&manifest, &root, &config, &Sysroot::empty(), false);
++    assert!(
++        fetch
++            .exec(false, &|_| panic!("invalid invocation must not start"))
++            .unwrap_err()
++            .to_string()
++            .contains("forbids no-deps arguments")
++    );
++}
++
++#[test]
++fn strict_failed_full_metadata_cannot_return_prefetched_graph() {
++    let (_dir, root, manifest) = fixture(true);
++    let legacy = FetchMetadata::new(&manifest, &root, &config(false), &Sysroot::empty(), false);
++    assert!(
++        legacy.no_deps_result.is_ok(),
++        "owned fixture must demonstrate successful no-deps prefetch"
++    );
++    let (partial, error) = legacy.exec(false, &|_| {}).unwrap();
++    assert!(error.is_some());
++    assert!(partial.resolve.is_none());
++    let strict = FetchMetadata::new(&manifest, &root, &config(true), &Sysroot::empty(), false);
++    assert!(strict.no_deps_result.is_err());
++    assert!(strict.exec(false, &|_| {}).is_err());
++    assert!(std::fs::metadata(root.join("Cargo.lock")).is_err());
++}
++
++#[test]
++fn strict_effective_config_rejects_lockfile_redirection() {
++    let (_dir, root, manifest) = fixture(false);
++    for setting in [
++        "resolver.lockfile-path=\"other/Cargo.lock\"",
++        "env.CARGO_RESOLVER_LOCKFILE_PATH=\"other/Cargo.lock\"",
++    ] {
++        let mut config = config(true);
++        config.metadata_extra_args.extend(["--config".to_owned(), setting.to_owned()]);
++        let fetch = FetchMetadata::new(&manifest, &root, &config, &Sysroot::empty(), false);
++        let error = fetch
++            .exec(false, &|_| panic!("invalid effective config must not start metadata"))
++            .unwrap_err();
++        assert!(format!("{error:#}").contains("redirection via Cargo"), "{error:#}");
++    }
++    std::fs::write(
++        root.join("explicit-config.toml"),
++        "[resolver]\nlockfile-path = \"other/Cargo.lock\"\n",
++    )
++    .unwrap();
++    let mut explicit_config = config(true);
++    explicit_config.config_path = Some(root.join("explicit-config.toml"));
++    let fetch = FetchMetadata::new(&manifest, &root, &explicit_config, &Sysroot::empty(), false);
++    let error = fetch.exec(false, &|_| panic!("config file must not start metadata")).unwrap_err();
++    assert!(format!("{error:#}").contains("redirection via Cargo resolver config"), "{error:#}");
++    let fetch = FetchMetadata::new(&manifest, &root, &config(true), &Sysroot::empty(), false);
++    std::fs::create_dir_all(root.join(".cargo")).unwrap();
++    std::fs::write(
++        root.join(".cargo/config.toml"),
++        "[resolver]\nlockfile-path = \"other/Cargo.lock\"\n",
++    )
++    .unwrap();
++    let error =
++        fetch.exec(false, &|_| panic!("inherited config must not start metadata")).unwrap_err();
++    assert!(format!("{error:#}").contains("redirection via Cargo resolver config"), "{error:#}");
++    assert!(std::fs::metadata(root.join("Cargo.lock")).is_err());
++}
++
++#[test]
++fn strict_failed_effective_config_query_cannot_assume_no_redirection() {
++    let (_dir, root, manifest) = fixture(false);
++    std::fs::create_dir_all(root.join(".cargo")).unwrap();
++    std::fs::write(root.join(".cargo/config.toml"), "[invalid\n").unwrap();
++    let fetch = FetchMetadata::new(&manifest, &root, &config(true), &Sysroot::empty(), false);
++    let error =
++        fetch.exec(false, &|_| panic!("failed config query must not start metadata")).unwrap_err();
++    assert!(format!("{error:#}").contains("effective-config query failed"), "{error:#}");
++    assert!(std::fs::metadata(root.join("Cargo.lock")).is_err());
++}
++
++#[test]
++fn strict_requires_original_lockfile_and_accepts_full_locked_graph() {
++    let (_dir, root, manifest) = fixture(false);
++    let strict = FetchMetadata::new(&manifest, &root, &config(true), &Sysroot::empty(), false);
++    let error = strict.exec(false, &|_| {}).unwrap_err();
++    assert!(format!("{error:#}").contains("lock file"));
++    assert!(std::fs::metadata(root.join("Cargo.lock")).is_err());
++    let mut legacy_config = config(false);
++    legacy_config.toolchain_version = None;
++    let legacy = FetchMetadata::new(&manifest, &root, &legacy_config, &Sysroot::empty(), false);
++    assert!(legacy.exec(false, &|_| {}).unwrap().1.is_none());
++    let lockfile = std::fs::read(root.join("Cargo.lock")).unwrap();
++    let strict = FetchMetadata::new(&manifest, &root, &config(true), &Sysroot::empty(), false);
++    let (full, error) = strict.exec(false, &|_| {}).unwrap();
++    assert!(error.is_none());
++    assert!(full.resolve.is_some());
++    assert_eq!(std::fs::read(root.join("Cargo.lock")).unwrap(), lockfile);
++}
 diff --git a/crates/project-model/src/sysroot.rs b/crates/project-model/src/sysroot.rs
-index 546a1e0..dc21fd5 100644
+index 546a1e0..83f7e6a 100644
 --- a/crates/project-model/src/sysroot.rs
 +++ b/crates/project-model/src/sysroot.rs
 @@ -95,6 +95,12 @@ impl Sysroot {
@@ -153,7 +552,17 @@ index 546a1e0..dc21fd5 100644
      pub fn num_packages(&self) -> usize {
          match &self.workspace {
              RustLibSrcWorkspace::Workspace { ws, .. } => ws.packages().count(),
-@@ -590,3 +596,32 @@ test";
+@@ -273,6 +279,9 @@ impl Sysroot {
+                     }
+                 }
+             }
++            if cargo_config.strict_metadata {
++                return None;
++            }
+             tracing::debug!("Stitching sysroot library: {src_root}");
+ 
+             let mut stitched = stitched::Stitched {
+@@ -590,3 +599,91 @@ test";
  std
  core";
  }
@@ -161,6 +570,65 @@ index 546a1e0..dc21fd5 100644
 +#[cfg(test)]
 +mod sniff_context_tests {
 +    use super::*;
++
++    #[test]
++    fn strict_failed_sysroot_cargo_does_not_stitch_available_core() {
++        let dir = temp_dir::TempDir::with_prefix("sniff-failed-sysroot").unwrap();
++        let root = AbsPathBuf::assert_utf8(dir.path().to_path_buf());
++        fs::create_dir_all(root.join("core/src")).unwrap();
++        fs::write(root.join("core/src/lib.rs"), "").unwrap();
++        fs::write(root.join("Cargo.toml"), "[invalid\n").unwrap();
++        let sysroot = Sysroot::new(None, Some(root));
++        let mut config = CargoMetadataConfig { strict_metadata: true, ..Default::default() };
++        config.extra_env.insert("CARGO_NET_OFFLINE".to_owned(), Some("true".to_owned()));
++        assert!(
++            sysroot
++                .load_workspace(
++                    &RustSourceWorkspaceConfig::CargoMetadata(config.clone()),
++                    false,
++                    &|_| {}
++                )
++                .is_none()
++        );
++        config.strict_metadata = false;
++        let legacy = sysroot
++            .load_workspace(&RustSourceWorkspaceConfig::CargoMetadata(config), false, &|_| {})
++            .unwrap();
++        let RustLibSrcWorkspace::Stitched(stitched) = legacy else {
++            panic!("fixture must demonstrate legacy stitching after Cargo failure")
++        };
++        assert!(stitched.by_name("core").is_some());
++    }
++
++    #[test]
++    fn strict_missing_sysroot_metadata_does_not_stitch_available_core() {
++        let dir = temp_dir::TempDir::with_prefix("sniff-strict-sysroot").unwrap();
++        let root = AbsPathBuf::assert_utf8(dir.path().to_path_buf());
++        fs::create_dir_all(root.join("core/src")).unwrap();
++        fs::write(root.join("core/src/lib.rs"), "").unwrap();
++        let sysroot = Sysroot::new(None, Some(root));
++        let strict = CargoMetadataConfig { strict_metadata: true, ..Default::default() };
++        assert!(
++            sysroot
++                .load_workspace(
++                    &RustSourceWorkspaceConfig::CargoMetadata(strict),
++                    false,
++                    &|_| panic!("missing manifest must not run Cargo")
++                )
++                .is_none()
++        );
++        let legacy = sysroot
++            .load_workspace(
++                &RustSourceWorkspaceConfig::CargoMetadata(CargoMetadataConfig::default()),
++                false,
++                &|_| panic!("missing manifest must not run Cargo"),
++            )
++            .unwrap();
++        let RustLibSrcWorkspace::Stitched(stitched) = legacy else {
++            panic!("fixture must demonstrate legacy stitching")
++        };
++        assert!(stitched.by_name("core").is_some());
++    }
 +
 +    #[test]
 +    fn nonempty_stitched_sysroot_is_not_full_cargo_metadata() {
@@ -186,6 +654,42 @@ index 546a1e0..dc21fd5 100644
 +        assert!(!sysroot.has_full_cargo_metadata());
 +    }
 +}
+diff --git a/crates/project-model/src/workspace.rs b/crates/project-model/src/workspace.rs
+index 9002b0c..e2b189b 100644
+--- a/crates/project-model/src/workspace.rs
++++ b/crates/project-model/src/workspace.rs
+@@ -289,6 +289,7 @@ impl ProjectWorkspace {
+             cargo_toml,
+             workspace_dir,
+             &CargoMetadataConfig {
++                strict_metadata: config.strict_metadata,
+                 features: features.clone(),
+                 targets: targets.clone(),
+                 extra_args: extra_args.clone(),
+@@ -345,6 +346,7 @@ impl ProjectWorkspace {
+                         &rustc_dir,
+                         workspace_dir,
+                         &CargoMetadataConfig {
++                            strict_metadata: config.strict_metadata,
+                             features: crate::CargoFeatures::default(),
+                             targets: targets.clone(),
+                             extra_args: extra_args.clone(),
+@@ -584,6 +586,7 @@ impl ProjectWorkspace {
+             detached_file,
+             dir,
+             &CargoMetadataConfig {
++                strict_metadata: config.strict_metadata,
+                 features: config.features.clone(),
+                 targets,
+                 extra_args: config.extra_args.clone(),
+@@ -1960,6 +1963,7 @@ fn sysroot_metadata_config(
+         .collect();
+ 
+     CargoMetadataConfig {
++        strict_metadata: config.strict_metadata,
+         features: Default::default(),
+         targets,
+         // NOTE: Not passing extra_args / metadata_extra_args / config_path here is very
 diff --git a/crates/rust-analyzer/Cargo.toml b/crates/rust-analyzer/Cargo.toml
 index ae0c957..9bc0099 100644
 --- a/crates/rust-analyzer/Cargo.toml
@@ -924,10 +1428,10 @@ index 0000000..1e254cd
 +}
 diff --git a/crates/rust-analyzer/src/cli/sniff_project_model.rs b/crates/rust-analyzer/src/cli/sniff_project_model.rs
 new file mode 100644
-index 0000000..fc70cdc
+index 0000000..1373144
 --- /dev/null
 +++ b/crates/rust-analyzer/src/cli/sniff_project_model.rs
-@@ -0,0 +1,655 @@
+@@ -0,0 +1,657 @@
 +//! Observed rust-analyzer contexts. This export does not claim an exhaustive Cargo world domain.
 +
 +use anyhow::{Context, Result, ensure};
@@ -1058,7 +1562,9 @@ index 0000000..fc70cdc
 +        "Sniff crate-context export requires a Cargo workspace"
 +    );
 +    ensure!(!cargo.no_deps, "Sniff crate-context export requires full dependency metadata");
-+    let mut workspace = ProjectWorkspace::load(manifest, cargo, progress)?;
++    let mut cargo = cargo.clone();
++    cargo.strict_metadata = true;
++    let mut workspace = ProjectWorkspace::load(manifest, &cargo, progress)?;
 +    match &workspace.kind {
 +        ProjectWorkspaceKind::Cargo { error, .. } => ensure!(
 +            error.is_none(),
@@ -1089,7 +1595,7 @@ index 0000000..fc70cdc
 +    );
 +    ensure!(!workspace.rustc_cfg.is_empty(), "Rust compiler cfg query is unavailable");
 +    ensure!(load.load_out_dirs_from_check, "build-script context must be loaded");
-+    let scripts = workspace.run_build_scripts(cargo, progress)?;
++    let scripts = workspace.run_build_scripts(&cargo, progress)?;
 +    ensure!(
 +        scripts.error().is_none(),
 +        "failed build-script context cannot be exported: {:?}",
@@ -1715,3 +2221,15 @@ index 0000000..26ff3ca
 +        counts
 +    })
 +}
+diff --git a/crates/rust-analyzer/src/config.rs b/crates/rust-analyzer/src/config.rs
+index 3ba0e47..2c2ea03 100644
+--- a/crates/rust-analyzer/src/config.rs
++++ b/crates/rust-analyzer/src/config.rs
+@@ -2438,6 +2438,7 @@ impl Config {
+             .collect();
+ 
+         CargoConfig {
++            strict_metadata: false,
+             all_targets: *self.cargo_allTargets(source_root),
+             features: match &self.cargo_features(source_root) {
+                 CargoFeaturesDef::All => CargoFeatures::All,

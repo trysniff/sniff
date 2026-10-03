@@ -27,6 +27,19 @@ refuses degraded primary/sysroot Cargo metadata, stitched sysroots, unavailable
 toolchain/target information, and failed build-script context. Invalid SCIP
 configuration is an error rather than a logged configuration default.
 
+Observation mode enables strict primary, rustc-source and sysroot Cargo metadata:
+there is no `--no-deps` prefetch or failed-full-query substitution, no copied
+lockfile, and each full metadata command requires `--locked`. Missing or failed
+sysroot metadata cannot be replaced by a stitched graph. Explicit no-deps and
+lockfile-redirection arguments or environment settings are rejected. Before
+metadata execution, an effective Cargo configuration query using the same
+program, working directory, invocation environment and config selectors must succeed;
+resolver or config-env lockfile redirection is rejected too.
+The query alone sets `RUSTC_BOOTSTRAP=1` to enable Cargo's unstable `config get`;
+it does not add that override to the metadata invocation. Ordinary upstream
+mode keeps its previous behavior. This is not a guarantee of complete discovery
+without recovery: the remaining toolchain-query paths below are not qualified.
+
 The sidecar records the backend's crate roots, editions, effective analysis cfg,
 crate environments, dependency contexts, crate-level module files, parser errors,
 and inactive source ranges. Macro-expansion ranges are counted as unmapped, not
@@ -78,8 +91,9 @@ checksums are changed by adding this patch.
 - Diagnostics are queried only for crates rooted beneath the selected repository
   root, including any local or vendored dependencies there. Crates outside that
   root are explicitly marked as not queried.
-- Upstream can attempt internal recovery during discovery; the loader rejects
-  the degraded result. This does not prove absence of every recovery attempt.
+- Upstream toolchain/config/target discovery still contains recovery paths.
+  Removing metadata recovery does not prove absence of every discovery recovery
+  attempt, or seal effective configuration against concurrent input changes.
 - The sidecar can contain crate environment values. Keep it private unless
   independently checked for secrets. It is not a public benchmark artifact.
 
@@ -93,7 +107,10 @@ and sandboxed native qualification remain necessary before production admission.
 The `Rust backend observations` workflow applies the patch to the exact pristine
 upstream pin and compiles it with Rust 1.96.0 on Windows, macOS, and Linux. It
 requires all eleven exporter tests, ten selected-context tests, the same-package
-symbol-target regression and the stitched-sysroot rejection test, checks
+symbol-target regression, three sysroot tests and seven strict metadata tests, checks
 that the binaries came from fresh compilation of that checkout, and runs
-warning-denying Clippy. These are backend library tests, not Cargo workspace,
-sandbox, release-bundle, or exhaustive-world proofs. They make no model calls.
+warning-denying Clippy. The owned metadata fixtures execute offline Cargo queries
+and cover failed full queries, argument/config redirection, failed config queries,
+missing lockfiles, unchanged locked inputs and missing/failed sysroot metadata.
+These backend library tests are not third-party workspace, sandbox, release-bundle,
+or exhaustive-world proofs. They make no model calls.

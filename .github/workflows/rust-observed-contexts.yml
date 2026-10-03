@@ -55,6 +55,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           Set-Location $env:OBSERVED_SOURCE
+          $env:RUSTUP_TOOLCHAIN = '1.96.0'
           cargo +1.96.0 test --locked -p rust-analyzer -p project-model --lib --no-run --message-format=json > compile.jsonl
           if ($LASTEXITCODE -ne 0) { throw 'Backend test compilation failed' }
           $items = Get-Content compile.jsonl | ForEach-Object { $_ | ConvertFrom-Json }
@@ -62,7 +63,8 @@ jobs:
             @{ Path='crates/rust-analyzer/src/lib.rs'; Scope='cli::sniff_project_model::tests::'; Count=11 },
             @{ Path='crates/rust-analyzer/src/lib.rs'; Scope='cli::sniff_crate_context::tests::'; Count=10 },
             @{ Path='crates/rust-analyzer/src/lib.rs'; Scope='cli::scip::test::same_package_targets_preserve_definition_context_in_references_and_sidecar'; Count=1 },
-            @{ Path='crates/project-model/src/lib.rs'; Scope='sysroot::sniff_context_tests::'; Count=1 }
+            @{ Path='crates/project-model/src/lib.rs'; Scope='sysroot::sniff_context_tests::'; Count=3 },
+            @{ Path='crates/project-model/src/lib.rs'; Scope='cargo_workspace::sniff_metadata_tests::'; Count=7 }
           )) {
             $expected = [IO.Path]::GetFullPath((Join-Path $env:OBSERVED_SOURCE $proof.Path)).Replace('\', '/')
             $artifacts = @($items | Where-Object {
@@ -82,7 +84,7 @@ jobs:
         shell: pwsh
         run: |
           Set-Location $env:OBSERVED_SOURCE
-          rustfmt +1.96.0 --edition 2024 --config skip_children=true --check crates/ide/src/static_index.rs crates/project-model/src/sysroot.rs crates/rust-analyzer/src/cli.rs crates/rust-analyzer/src/cli/flags.rs crates/rust-analyzer/src/cli/scip.rs crates/rust-analyzer/src/cli/sniff_project_model.rs crates/rust-analyzer/src/cli/sniff_crate_context.rs crates/rust-analyzer/src/cli/sniff_source_context.rs
+          rustfmt +1.96.0 --edition 2024 --config skip_children=true --check crates/ide/src/static_index.rs crates/project-model/src/cargo_workspace.rs crates/project-model/src/cargo_workspace/sniff_metadata_tests.rs crates/project-model/src/sysroot.rs crates/project-model/src/workspace.rs crates/rust-analyzer/src/config.rs crates/rust-analyzer/src/cli.rs crates/rust-analyzer/src/cli/flags.rs crates/rust-analyzer/src/cli/scip.rs crates/rust-analyzer/src/cli/sniff_project_model.rs crates/rust-analyzer/src/cli/sniff_crate_context.rs crates/rust-analyzer/src/cli/sniff_source_context.rs
           if ($LASTEXITCODE -ne 0) { throw 'Patch formatting failed' }
           cargo +1.96.0 clippy --locked -p rust-analyzer -p project-model --lib --tests -- -D warnings
           if ($LASTEXITCODE -ne 0) { throw 'Strict backend Clippy failed' }
