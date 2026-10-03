@@ -63,8 +63,15 @@ The cfg parser preserves those identifiers, but an actual Cargo query failure
 still fails the observation without a direct-rustc workaround.
 
 The sidecar records the backend's crate roots, editions, effective analysis cfg,
-crate environments, dependency contexts, crate-level module files, parser errors,
-and inactive source ranges. Macro-expansion ranges are counted as unmapped, not
+crate environments, dependency contexts, observed module files (including body
+and block maps), included files, parser errors, and inactive source ranges.
+The source inventory reuses the ownership traversal rather than enumerating only
+crate-level modules. Include-call identities retain the backend's item, statement,
+expression, type or pattern grammar. Raw included-source lexer/parser errors keep
+original byte ranges; shebang prefixes are excluded with offsets preserved.
+Expansion parser errors use the backend span mapping. Unmappable include parser
+errors and failed include expansions have separate counters, not guessed source
+ranges or silent absence. Macro-expansion inactive ranges are counted as unmapped, not
 promoted to original-source exclusions. Inline diagnostic traversal is not
 repeated. Duplicate context identities fail rather than merging ambiguously.
 
@@ -108,8 +115,9 @@ checksums are changed by adding this patch.
   literal rustc flags, every Cargo target, or every declared feature/target world.
 - Context selection covers one uniquely selectable loaded backend crate and its
   dependencies, not an exhaustive declared Cargo target/feature/world domain.
-- Block-local module-file coverage is explicitly incomplete. Module inventories
-  and parser-error inventories cover observed crate-level module sources only.
+- File/parser inventories now cover observed body/block maps and include calls.
+  `block_local_module_file_coverage_complete` remains false: this traversal does
+  not prove exhaustive macro/source associations or declared-world coverage.
 - Diagnostics are queried only for crates rooted beneath the selected repository
   root, including any local or vendored dependencies there. Crates outside that
   root are explicitly marked as not queried.
@@ -131,7 +139,7 @@ and sandboxed native qualification remain necessary before production admission.
 
 The `Rust backend observations` workflow applies the patch to the exact pristine
 upstream pin and compiles it with Rust 1.96.0 on Windows, macOS, and Linux. It
-requires all eleven exporter tests, ten selected-context tests, the same-package
+requires all eighteen exporter tests, ten selected-context tests, the same-package
 symbol-target regression, three sysroot tests, seven strict metadata tests and
 twenty strict discovery tests, checks
 that the binaries came from fresh compilation of that checkout, and runs
@@ -146,5 +154,8 @@ passthrough with selected Cargo features/targets. Built-in layout queries
 cover Windows/macOS/Linux x86_64 and aarch64 without compiling those targets.
 The owned sysroot fixture uses minimal generated core sources with the real
 compiler; it is not qualification of the installed standard library.
+Source-inventory regressions cover block modules in bodies, signatures, fields
+and discriminants, per-crate ownership, included-source syntax errors, all five
+include fragment grammars, and lexer error ranges with and without shebangs.
 These backend library tests are not third-party workspace, sandbox, release-bundle,
 or exhaustive-world proofs. They make no model calls.
