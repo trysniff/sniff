@@ -91,9 +91,12 @@ reconstruct those buffers. Captured bytes follow file updates and are removed
 for deleted or excluded files. Capture mode compares bytes as well as the
 ordinary fast hash, so a hash collision cannot suppress a changed buffer.
 
-The loader refuses invalid UTF-8, missing or mismatched snapshots, and channel
-closure without a finished notification before applying source changes or
-enabling attribute-macro expansion. Ordinary upstream loading keeps its existing
+The loader refuses unreadable crate roots rather than silently dropping those
+targets from the graph. It reports all unavailable root paths in sorted,
+deduplicated order before applying the graph to analysis. It also refuses invalid
+UTF-8, missing or mismatched snapshots, and channel closure without a finished
+notification before applying source changes or enabling attribute-macro expansion.
+Ordinary upstream loading keeps its existing
 behavior and does not retain buffers. Retention adds memory overhead only in
 observation mode; source bytes are not dumped into the sidecar.
 
@@ -177,7 +180,8 @@ The `Rust backend observations` workflow applies the patch to the exact pristine
 upstream pin and compiles it with Rust 1.96.0 on Windows, macOS, and Linux. It
 requires all nineteen exporter tests, ten selected-context tests, the same-package
 symbol-target regression, three sysroot tests, seven strict metadata tests,
-twenty strict discovery tests, five retained-loader tests and five VFS snapshot
+twenty strict discovery tests, five retained-loader tests, three native loader
+tests and five VFS snapshot
 tests, nine source-binding tests and the nested native-path publication regression,
 checks
 that the binaries came from fresh compilation of that checkout, and runs
@@ -199,6 +203,14 @@ Source-buffer regressions cover byte-preserving BOM/CRLF/Unicode loading,
 rejection of invalid UTF-8 and interrupted loading before source application,
 missing or excluded snapshots, collision detection, update/change merging,
 deletion/recreation, and ordinary-mode preservation.
+Native loader fixtures exercise actual offline Cargo metadata and the filesystem
+worker: two metadata-declared missing target roots fail without database mutation,
+valid workspace/inactive/owned-core files preserve captured bytes, and invalid
+worker UTF-8 fails instead of being silently omitted. The launcher uses upstream's
+working-directory and no-rustup-auto-install guard. Fixtures reuse the existing
+temporary-directory dependency and the local toolchain crate; no new external
+package version is required. They use generated minimal core sources with the
+real compiler identity, not the installed standard library or build-script proof.
 Source-commitment regressions cover SHA-256 vectors, actual retained-byte binding,
 stale analysis, missing/extra/deleted/excluded inputs, publication refusal,
 inactive/include buffers, sorted output and canonical nested native document paths.
