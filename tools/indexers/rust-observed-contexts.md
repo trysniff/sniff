@@ -81,6 +81,25 @@ TentHash checksum pair it with that SCIP output; **this is not a cryptographic
 security seal**. A sidecar-publication failure can leave a complete SCIP file
 and returns an error. It must not be treated as a completed observation pair.
 
+## Source Buffers
+
+The opt-in observed loader retains the exact bytes supplied to its VFS, even
+after the changes are applied to analysis. It does not reread source paths to
+reconstruct those buffers. Captured bytes follow file updates and are removed
+for deleted or excluded files. Capture mode compares bytes as well as the
+ordinary fast hash, so a hash collision cannot suppress a changed buffer.
+
+The loader refuses invalid UTF-8, missing or mismatched snapshots, and channel
+closure without a finished notification before applying source changes or
+enabling attribute-macro expansion. Ordinary upstream loading keeps its existing
+behavior and does not retain buffers. Retention adds memory overhead only in
+observation mode; source bytes are not dumped into the sidecar.
+
+This is a prerequisite for source commitments, **not an implemented
+cryptographic commitment or input-closure proof**. Files, configuration and
+build-script inputs can still change during loading; there is no immutable
+workspace snapshot or complete compiler input census here.
+
 ## Selected Contexts
 
 The sidecar uses schema 2 and contract
@@ -140,8 +159,9 @@ and sandboxed native qualification remain necessary before production admission.
 The `Rust backend observations` workflow applies the patch to the exact pristine
 upstream pin and compiles it with Rust 1.96.0 on Windows, macOS, and Linux. It
 requires all eighteen exporter tests, ten selected-context tests, the same-package
-symbol-target regression, three sysroot tests, seven strict metadata tests and
-twenty strict discovery tests, checks
+symbol-target regression, three sysroot tests, seven strict metadata tests,
+twenty strict discovery tests, five retained-loader tests and five VFS snapshot
+tests, checks
 that the binaries came from fresh compilation of that checkout, and runs
 warning-denying Clippy. The owned metadata fixtures execute offline Cargo queries
 and cover failed full queries, argument/config redirection, failed config queries,
@@ -157,5 +177,9 @@ compiler; it is not qualification of the installed standard library.
 Source-inventory regressions cover block modules in bodies, signatures, fields
 and discriminants, per-crate ownership, included-source syntax errors, all five
 include fragment grammars, and lexer error ranges with and without shebangs.
+Source-buffer regressions cover byte-preserving BOM/CRLF/Unicode loading,
+rejection of invalid UTF-8 and interrupted loading before source application,
+missing or excluded snapshots, collision detection, update/change merging,
+deletion/recreation, and ordinary-mode preservation.
 These backend library tests are not third-party workspace, sandbox, release-bundle,
 or exhaustive-world proofs. They make no model calls.
