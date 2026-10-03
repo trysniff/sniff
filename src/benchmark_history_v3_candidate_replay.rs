@@ -195,8 +195,12 @@ fn replay_complete_partition(
     request_sha256s: &[String],
     checkpoint_sha256s: &mut Vec<String>,
 ) -> Result<Vec<HistoricalV3CandidateIdentity>, String> {
+    if request_sha256s.len() > MAX_SEARCH_RESULTS.div_ceil(PAGE_SIZE) {
+        return Err("historical-v3 candidate partition exceeded 1,000 results".to_string());
+    }
     let mut candidates = Vec::new();
     let mut previous_cursor = None;
+    let mut cursors = HashSet::new();
     for (offset, request_sha256) in request_sha256s.iter().enumerate() {
         let checkpoint = read_committed_page_checkpoint(context.state_root, request_sha256)?;
         validate_page_checkpoint(&checkpoint.request, &checkpoint)?;
@@ -213,6 +217,12 @@ fn replay_complete_partition(
         })?;
         if checkpoint.request != expected || &expected.request_sha256 != request_sha256 {
             return Err("historical-v3 candidate page chain changed".to_string());
+        }
+        // Only consumed continuation cursors matter, not the terminal end cursor.
+        if let Some(cursor) = &previous_cursor
+            && !cursors.insert(cursor.clone())
+        {
+            return Err("historical-v3 candidate cursor repeated".to_string());
         }
         let page = decode_page(&checkpoint)?;
         if page.issue_count != issue_count
