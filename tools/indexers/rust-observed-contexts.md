@@ -35,10 +35,32 @@ lockfile-redirection arguments or environment settings are rejected. Before
 metadata execution, an effective Cargo configuration query using the same
 program, working directory, invocation environment and config selectors must succeed;
 resolver or config-env lockfile redirection is rejected too.
-The query alone sets `RUSTC_BOOTSTRAP=1` to enable Cargo's unstable `config get`;
-it does not add that override to the metadata invocation. Ordinary upstream
-mode keeps its previous behavior. This is not a guarantee of complete discovery
-without recovery: the remaining toolchain-query paths below are not qualified.
+Strict observations also use Cargo for workspace-root, sysroot, target, cfg,
+target-layout and required rustc-source library-directory queries. Query failures
+are errors, not triggers for direct-rustc retries, host-target substitution or
+an empty cfg/layout. Config selectors have consistent precedence; exactly one
+target is required. A host target is used only after a successful effective-config
+query establishes that no target was configured. The selected sysroot must match
+the same target's Cargo compiler. Rust sources must already exist; no rustup
+component installation or alternate source search is attempted.
+Cargo feature and target options remain before the single rustc passthrough
+delimiter, including when callers already supply compiler arguments.
+
+Config/compiler-print queries set `RUSTC_BOOTSTRAP=1` for their unstable Cargo
+interfaces; metadata does not receive that additional override. Ordinary upstream
+mode retains its recovery branches. Strict mode is opt-in and does not bypass an
+unsupported or failing selected Cargo toolchain.
+
+Compiler cfg identifiers and string values use the pinned Rust lexer and literal
+escaper. Target layouts use the pinned Rust ABI parser plus explicit validation
+of the supported [LLVM layout components](https://llvm.org/docs/LangRef.html#data-layout)
+that parser otherwise ignores. Unknown or unsupported layout extensions fail;
+this is not a replacement for LLVM or a guarantee of every target extension.
+Non-byte pointer sizes and index widths fail because the pinned ABI backend
+rounds them to bytes; they are unsupported here, not necessarily invalid LLVM.
+Cargo 1.96 rejects Unicode cfg keys internally even though rustc accepts them.
+The cfg parser preserves those identifiers, but an actual Cargo query failure
+still fails the observation without a direct-rustc workaround.
 
 The sidecar records the backend's crate roots, editions, effective analysis cfg,
 crate environments, dependency contexts, crate-level module files, parser errors,
@@ -91,9 +113,12 @@ checksums are changed by adding this patch.
 - Diagnostics are queried only for crates rooted beneath the selected repository
   root, including any local or vendored dependencies there. Crates outside that
   root are explicitly marked as not queried.
-- Upstream toolchain/config/target discovery still contains recovery paths.
-  Removing metadata recovery does not prove absence of every discovery recovery
-  attempt, or seal effective configuration against concurrent input changes.
+- The strict observed Cargo loader bypasses its legacy query-recovery branches;
+  other upstream loaders still contain recovery. This does not seal effective
+  configuration, compiler inputs or workspace files against concurrent changes.
+- Some valid target-layout extensions are unsupported by the pinned backend and
+  fail explicitly. Six built-in release-platform layout queries are tested, not
+  native execution or exhaustive qualification of every Rust target.
 - The sidecar can contain crate environment values. Keep it private unless
   independently checked for secrets. It is not a public benchmark artifact.
 
@@ -107,10 +132,19 @@ and sandboxed native qualification remain necessary before production admission.
 The `Rust backend observations` workflow applies the patch to the exact pristine
 upstream pin and compiles it with Rust 1.96.0 on Windows, macOS, and Linux. It
 requires all eleven exporter tests, ten selected-context tests, the same-package
-symbol-target regression, three sysroot tests and seven strict metadata tests, checks
+symbol-target regression, three sysroot tests, seven strict metadata tests and
+twenty strict discovery tests, checks
 that the binaries came from fresh compilation of that checkout, and runs
 warning-denying Clippy. The owned metadata fixtures execute offline Cargo queries
 and cover failed full queries, argument/config redirection, failed config queries,
 missing lockfiles, unchanged locked inputs and missing/failed sysroot metadata.
+The strict discovery fixtures cover actual Cargo queries without executing the
+owned panic-on-build build script, selector precedence, selected-target sysroot
+mismatch, failed workspace/config/compiler queries, rustc-source query failure,
+escaped/Unicode cfg parsing, invalid or unsupported target layouts, and compiler
+passthrough with selected Cargo features/targets. Built-in layout queries
+cover Windows/macOS/Linux x86_64 and aarch64 without compiling those targets.
+The owned sysroot fixture uses minimal generated core sources with the real
+compiler; it is not qualification of the installed standard library.
 These backend library tests are not third-party workspace, sandbox, release-bundle,
 or exhaustive-world proofs. They make no model calls.

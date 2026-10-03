@@ -1,8 +1,19 @@
 diff --git a/Cargo.lock b/Cargo.lock
-index 1a480d6..b1f6353 100644
+index 1a480d6..5025633 100644
 --- a/Cargo.lock
 +++ b/Cargo.lock
-@@ -2344,6 +2344,7 @@ dependencies = [
+@@ -1960,7 +1960,10 @@ dependencies = [
+  "itertools 0.15.0",
+  "la-arena 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
+  "paths",
++ "ra-ap-rustc_abi",
++ "ra-ap-rustc_lexer",
+  "rustc-hash 2.1.2",
++ "rustc-literal-escaper",
+  "semver",
+  "serde",
+  "serde_derive",
+@@ -2344,6 +2347,7 @@ dependencies = [
   "process-wrap",
   "profile",
   "project-model",
@@ -10,7 +21,7 @@ index 1a480d6..b1f6353 100644
   "ra-ap-rustc_type_ir",
   "rayon",
   "rustc-hash 2.1.2",
-@@ -2356,6 +2357,7 @@ dependencies = [
+@@ -2356,6 +2360,7 @@ dependencies = [
   "stdx",
   "syntax",
   "syntax-bridge",
@@ -136,16 +147,71 @@ index 9e8d772..57cff08 100644
              };
              let mut visited_files = FxHashSet::default();
              for module in work {
+diff --git a/crates/project-model/Cargo.toml b/crates/project-model/Cargo.toml
+index f825a45..192f0cb 100644
+--- a/crates/project-model/Cargo.toml
++++ b/crates/project-model/Cargo.toml
+@@ -16,6 +16,9 @@ doctest = false
+ anyhow.workspace = true
+ cargo_metadata.workspace = true
+ rustc-hash.workspace = true
++rustc-literal-escaper.workspace = true
++ra-ap-rustc_abi.workspace = true
++ra-ap-rustc_lexer.workspace = true
+ semver.workspace = true
+ serde_json.workspace = true
+ serde.workspace = true
+diff --git a/crates/project-model/src/build_dependencies.rs b/crates/project-model/src/build_dependencies.rs
+index 9f84f63..23881d8 100644
+--- a/crates/project-model/src/build_dependencies.rs
++++ b/crates/project-model/src/build_dependencies.rs
+@@ -185,6 +185,7 @@ impl WorkspaceBuildScripts {
+         current_dir: &AbsPath,
+         extra_env: &FxHashMap<String, Option<String>>,
+         sysroot: &Sysroot,
++        strict_query: Option<(&ManifestPath, &CargoConfig, &str)>,
+     ) -> Self {
+         let mut bs = WorkspaceBuildScripts::default();
+         for p in rustc.packages() {
+@@ -192,6 +193,11 @@ impl WorkspaceBuildScripts {
+         }
+         let res = (|| {
+             let target_libdir = (|| {
++                if let Some((manifest, config, target)) = strict_query {
++                    return crate::sniff_discovery::rustc_target_libdir(
++                        manifest, config, sysroot, target,
++                    );
++                }
+                 let mut cargo_config = sysroot.tool(Tool::Cargo, current_dir, extra_env);
+                 cargo_config
+                     .args(["rustc", "-Z", "unstable-options", "--print", "target-libdir"])
+diff --git a/crates/project-model/src/cargo_config_file.rs b/crates/project-model/src/cargo_config_file.rs
+index defd9f9..3d642e3 100644
+--- a/crates/project-model/src/cargo_config_file.rs
++++ b/crates/project-model/src/cargo_config_file.rs
+@@ -13,6 +13,12 @@ use crate::{ManifestPath, Sysroot, utf8_stdout};
+ pub struct CargoConfigFile(String);
+ 
+ impl CargoConfigFile {
++    pub(crate) fn from_strict_query(output: String) -> anyhow::Result<Self> {
++        let config = Self(output);
++        anyhow::ensure!(config.read().is_some(), "invalid effective Cargo configuration");
++        Ok(config)
++    }
++
+     pub(crate) fn load(
+         manifest: &ManifestPath,
+         extra_env: &FxHashMap<String, Option<String>>,
 diff --git a/crates/project-model/src/cargo_workspace.rs b/crates/project-model/src/cargo_workspace.rs
-index 97375fe..abc30bf 100644
+index 97375fe..c6c5dfd 100644
 --- a/crates/project-model/src/cargo_workspace.rs
 +++ b/crates/project-model/src/cargo_workspace.rs
 @@ -111,6 +111,8 @@ impl TargetDirectoryConfig {
  
  #[derive(Default, Clone, Debug, PartialEq, Eq)]
  pub struct CargoConfig {
-+    /// Reject metadata recovery and require the original lockfile without copying it.
-+    pub strict_metadata: bool,
++    /// Reject observed Cargo metadata and toolchain discovery recovery.
++    pub strict_discovery: bool,
      /// Whether to pass `--all-targets` to cargo invocations.
      pub all_targets: bool,
      /// List of features to activate.
@@ -174,7 +240,28 @@ index 97375fe..abc30bf 100644
      /// available via `FetchMetadata::no_deps_metadata`, to gather basic
      /// information such as the `target-dir`.
      ///
-@@ -696,7 +700,9 @@ impl FetchMetadata {
+@@ -680,10 +684,17 @@ impl FetchMetadata {
+         // but nothing else
+         let mut extra_args = config.extra_args.iter();
+         while let Some(arg) = extra_args.next() {
+-            if arg == "-Z"
+-                && let Some(arg) = extra_args.next()
++            if arg == "--" {
++                break;
++            }
++            if arg == "-Z" || config.strict_metadata && arg == "--config" {
++                other_options.push(arg.to_owned());
++                if let Some(value) = extra_args.next() {
++                    other_options.push(value.to_owned());
++                }
++            } else if config.strict_metadata
++                && (arg.starts_with("-Z") || arg.starts_with("--config="))
+             {
+-                other_options.push("-Z".to_owned());
+                 other_options.push(arg.to_owned());
+             }
+         }
+@@ -696,7 +707,9 @@ impl FetchMetadata {
          let mut lockfile_copy = None;
          if cargo_toml.is_rust_manifest() {
              other_options.push("-Zscript".to_owned());
@@ -185,7 +272,7 @@ index 97375fe..abc30bf 100644
              lockfile_copy = make_lockfile_copy(
                  v,
                  &<_ as AsRef<Utf8Path>>::as_ref(cargo_toml).with_extension("lock"),
-@@ -717,20 +723,25 @@ impl FetchMetadata {
+@@ -717,20 +730,25 @@ impl FetchMetadata {
          // - and thus doesn't require progress reporting or copying lockfiles.
          //
          // Useful as a fast fallback to extract info like `target-dir`.
@@ -222,7 +309,7 @@ index 97375fe..abc30bf 100644
              manifest_path: cargo_toml.clone(),
              command,
              lockfile_copy,
-@@ -743,7 +754,7 @@ impl FetchMetadata {
+@@ -743,7 +761,7 @@ impl FetchMetadata {
  
      /// Executes the metadata-fetching command.
      ///
@@ -231,7 +318,7 @@ index 97375fe..abc30bf 100644
      /// but the fallback `--no-deps` pre-fetch succeeded during command construction.
      pub(crate) fn exec(
          self,
-@@ -751,6 +762,7 @@ impl FetchMetadata {
+@@ -751,6 +769,7 @@ impl FetchMetadata {
          progress: &dyn Fn(String),
      ) -> anyhow::Result<(cargo_metadata::Metadata, Option<anyhow::Error>)> {
          let Self {
@@ -239,7 +326,7 @@ index 97375fe..abc30bf 100644
              mut command,
              manifest_path: _,
              lockfile_copy,
-@@ -760,6 +772,20 @@ impl FetchMetadata {
+@@ -760,6 +779,20 @@ impl FetchMetadata {
              mut other_options,
          } = self;
  
@@ -260,7 +347,7 @@ index 97375fe..abc30bf 100644
          if no_deps {
              return no_deps_result.map(|m| (m, None));
          }
-@@ -787,7 +813,7 @@ impl FetchMetadata {
+@@ -787,7 +820,7 @@ impl FetchMetadata {
          }
          // No need to lock it if we copied the lockfile, we won't modify the original after all/
          // This way cargo cannot error out on us if the lockfile requires updating.
@@ -269,7 +356,7 @@ index 97375fe..abc30bf 100644
              other_options.push("--locked".to_owned());
          }
          command.other_options(other_options);
-@@ -812,7 +838,7 @@ impl FetchMetadata {
+@@ -812,7 +845,7 @@ impl FetchMetadata {
                      stderr: String::from_utf8(output.stderr)?,
                  }
                  .into();
@@ -278,7 +365,7 @@ index 97375fe..abc30bf 100644
                      // If we failed to fetch metadata with deps, return pre-fetched result without them.
                      // This makes r-a still work partially when offline.
                      if let Ok(metadata) = no_deps_result {
-@@ -836,3 +862,89 @@ impl FetchMetadata {
+@@ -836,3 +869,89 @@ impl FetchMetadata {
          res
      }
  }
@@ -535,6 +622,915 @@ index 0000000..38a690e
 +    assert!(full.resolve.is_some());
 +    assert_eq!(std::fs::read(root.join("Cargo.lock")).unwrap(), lockfile);
 +}
+diff --git a/crates/project-model/src/lib.rs b/crates/project-model/src/lib.rs
+index 3414b52..2966cd5 100644
+--- a/crates/project-model/src/lib.rs
++++ b/crates/project-model/src/lib.rs
+@@ -48,6 +48,7 @@ mod cargo_config_file;
+ mod cargo_workspace;
+ mod env;
+ mod manifest_path;
++mod sniff_discovery;
+ mod sysroot;
+ mod workspace;
+ 
+diff --git a/crates/project-model/src/sniff_discovery.rs b/crates/project-model/src/sniff_discovery.rs
+new file mode 100644
+index 0000000..dc51ce8
+--- /dev/null
++++ b/crates/project-model/src/sniff_discovery.rs
+@@ -0,0 +1,332 @@
++//! Strict Cargo queries for Sniff observations, not a compiler-world closure proof.
++
++use std::{fs, process::Command};
++
++use anyhow::{Context, ensure};
++use base_db::target;
++use cfg::CfgAtom;
++use paths::{AbsPathBuf, Utf8PathBuf};
++use semver::Version;
++use toolchain::Tool;
++
++use crate::{
++    CargoConfig, CargoFeatures, ManifestPath, Sysroot,
++    cargo_config_file::CargoConfigFile,
++    cargo_workspace::RustLibSource,
++    toolchain_info::{target_data::TargetSpec, target_tuple},
++    utf8_stdout,
++};
++
++#[path = "sniff_discovery/layout.rs"]
++mod layout;
++
++pub(crate) struct Queries {
++    pub config: CargoConfigFile,
++    pub targets: Vec<String>,
++    pub version: Version,
++    pub cfg: Vec<CfgAtom>,
++    pub target: target::TargetData,
++}
++
++pub(crate) fn locate_workspace(
++    manifest: &ManifestPath,
++    config: &CargoConfig,
++    sysroot: &Sysroot,
++) -> anyhow::Result<ManifestPath> {
++    #[derive(serde::Deserialize)]
++    struct Root {
++        root: Utf8PathBuf,
++    }
++    let mut command = sysroot.tool(Tool::Cargo, manifest.parent(), &config.extra_env);
++    command.args(["locate-project", "--workspace", "--manifest-path", manifest.as_str()]);
++    append_config_args(&mut command, config)?;
++    let root: Root = serde_json::from_str(
++        &utf8_stdout(&mut command).context("strict Cargo workspace-root query failed")?,
++    )
++    .context("invalid strict Cargo workspace-root response")?;
++    let root = AbsPathBuf::try_from(root.root)
++        .map_err(|_| anyhow::anyhow!("Cargo workspace root must be absolute"))?;
++    ManifestPath::try_from(root)
++        .map_err(|_| anyhow::anyhow!("invalid strict Cargo workspace manifest"))
++}
++
++pub(crate) fn sysroot(manifest: &ManifestPath, config: &CargoConfig) -> anyhow::Result<Sysroot> {
++    let root = match &config.sysroot {
++        Some(RustLibSource::Discover) => {
++            let empty = Sysroot::empty();
++            let effective = effective_config(manifest, config, &empty)?;
++            let targets = targets(manifest, config, &empty, &effective)?;
++            AbsPathBuf::try_from(Utf8PathBuf::from(cargo_print(
++                manifest,
++                config,
++                &empty,
++                Some(&targets[0]),
++                "sysroot",
++            )?))
++            .map_err(|_| anyhow::anyhow!("strict sysroot query returned a nonabsolute path"))?
++        }
++        Some(RustLibSource::Path(path)) => path.clone(),
++        None => anyhow::bail!("strict discovery requires a sysroot"),
++    };
++    ensure!(
++        toolchain::probe_for_binary(root.join("bin/rustc").into()).is_some(),
++        "strict discovery requires rustc inside the selected sysroot"
++    );
++    let source_override = match config.extra_env.get("RUST_SRC_PATH") {
++        Some(value) => value.clone(),
++        None => std::env::var_os("RUST_SRC_PATH")
++            .map(|value| {
++                value.into_string().map_err(|_| anyhow::anyhow!("RUST_SRC_PATH must be UTF-8"))
++            })
++            .transpose()?,
++    };
++    let source = if let Some(source) = &config.sysroot_src {
++        source.clone()
++    } else if let Some(source) = source_override {
++        AbsPathBuf::try_from(source.as_str())
++            .map_err(|_| anyhow::anyhow!("RUST_SRC_PATH must be absolute"))?
++    } else {
++        root.join("lib/rustlib/src/rust/library")
++    };
++    ensure!(
++        fs::metadata(source.join("core/src/lib.rs")).is_ok(),
++        "strict discovery requires installed rust-src; no component installation or source-path recovery is attempted"
++    );
++    Ok(Sysroot::new(Some(root), Some(source)))
++}
++
++pub(crate) fn queries(
++    manifest: &ManifestPath,
++    config: &CargoConfig,
++    sysroot: &Sysroot,
++) -> anyhow::Result<Queries> {
++    let effective = effective_config(manifest, config, sysroot)?;
++    let targets = targets(manifest, config, sysroot, &effective)?;
++    if let Some(expected) = sysroot.root() {
++        let actual = cargo_print(manifest, config, sysroot, Some(&targets[0]), "sysroot")?;
++        let actual = AbsPathBuf::try_from(Utf8PathBuf::from(actual))
++            .map_err(|_| anyhow::anyhow!("Cargo compiler sysroot must be absolute"))?;
++        ensure!(
++            fs::canonicalize(&actual)? == fs::canonicalize(expected)?,
++            "selected sysroot differs from Cargo compiler sysroot"
++        );
++    }
++    let mut version_command = sysroot.tool(Tool::Cargo, manifest.parent(), &config.extra_env);
++    version_command.arg("--version");
++    let version = parse_version(&utf8_stdout(&mut version_command)?)?;
++    let cfg = parse_cfg(&cargo_print(manifest, config, sysroot, Some(&targets[0]), "cfg")?)?;
++    let target = parse_target(&cargo_print(
++        manifest,
++        config,
++        sysroot,
++        Some(&targets[0]),
++        "target-spec-json",
++    )?)?;
++    Ok(Queries { config: effective, targets, version, cfg, target })
++}
++
++fn effective_config(
++    manifest: &ManifestPath,
++    config: &CargoConfig,
++    sysroot: &Sysroot,
++) -> anyhow::Result<CargoConfigFile> {
++    let mut command = sysroot.tool(Tool::Cargo, manifest.parent(), &config.extra_env);
++    command.env("RUSTC_BOOTSTRAP", "1").args([
++        "-Z",
++        "unstable-options",
++        "config",
++        "get",
++        "--format",
++        "toml",
++        "--show-origin",
++    ]);
++    append_config_args(&mut command, config)?;
++    CargoConfigFile::from_strict_query(
++        utf8_stdout(&mut command).context("strict effective Cargo configuration query failed")?,
++    )
++}
++
++fn targets(
++    manifest: &ManifestPath,
++    config: &CargoConfig,
++    sysroot: &Sysroot,
++    effective: &CargoConfigFile,
++) -> anyhow::Result<Vec<String>> {
++    let targets = if let Some(target) = &config.target {
++        vec![target.clone()]
++    } else if let Some(targets) = target_tuple::parse_toml_cargo_config_build_target(effective)? {
++        targets
++    } else {
++        // Confirmed absence of build.target means Cargo's host default, not query failure.
++        vec![cargo_print(manifest, config, sysroot, None, "host-tuple")?]
++    };
++    ensure!(
++        targets.len() == 1,
++        "strict observations require exactly one target; select a target explicitly"
++    );
++    let target = &targets[0];
++    ensure!(
++        !target.is_empty()
++            && (target.ends_with(".json") || !target.chars().any(char::is_whitespace)),
++        "invalid strict Cargo target"
++    );
++    if target.ends_with(".json") && !std::path::Path::new(target).is_absolute() {
++        return Ok(vec![manifest.parent().join(target).to_string()]);
++    }
++    Ok(targets)
++}
++
++fn append_config_args(command: &mut Command, config: &CargoConfig) -> anyhow::Result<()> {
++    for source in [&config.extra_args, &config.metadata_extra_args] {
++        command.args(partition_args(source)?.0);
++    }
++    if let Some(path) = &config.config_path {
++        command.arg("--config").arg(path);
++    }
++    Ok(())
++}
++
++fn partition_args(source: &[String]) -> anyhow::Result<(Vec<String>, Vec<String>)> {
++    let mut selectors = Vec::new();
++    let mut remaining = Vec::new();
++    let mut args = source.iter();
++    while let Some(arg) = args.next() {
++        if arg == "--" {
++            remaining.push(arg.clone());
++            remaining.extend(args.cloned());
++            break;
++        }
++        if arg == "--config" || arg == "-Z" {
++            selectors.extend([
++                arg.clone(),
++                args.next().context("missing Cargo configuration argument")?.clone(),
++            ]);
++        } else if arg.starts_with("--config=") || arg.starts_with("-Z") {
++            selectors.push(arg.clone());
++        } else {
++            remaining.push(arg.clone());
++        }
++    }
++    Ok((selectors, remaining))
++}
++
++fn cargo_print(
++    manifest: &ManifestPath,
++    config: &CargoConfig,
++    sysroot: &Sysroot,
++    target: Option<&str>,
++    key: &str,
++) -> anyhow::Result<String> {
++    let mut command = sysroot.tool(Tool::Cargo, manifest.parent(), &config.extra_env);
++    command.env("RUSTC_BOOTSTRAP", "1").args([
++        "rustc",
++        "-Z",
++        "unstable-options",
++        "--locked",
++        "--manifest-path",
++        manifest.as_str(),
++        "--print",
++        key,
++    ]);
++    append_config_args(&mut command, config)?;
++    let remaining = partition_args(&config.extra_args)?.1;
++    let delimiter = remaining.iter().position(|arg| arg == "--");
++    command.args(&remaining[..delimiter.unwrap_or(remaining.len())]);
++    match &config.features {
++        CargoFeatures::All => {
++            command.arg("--all-features");
++        }
++        CargoFeatures::Selected { features, no_default_features } => {
++            if *no_default_features {
++                command.arg("--no-default-features");
++            }
++            if !features.is_empty() {
++                command.arg("--features").arg(features.join(","));
++            }
++        }
++    }
++    if let Some(target) = target {
++        command.arg("--target").arg(target);
++    }
++    if delimiter.is_some() || key == "target-spec-json" {
++        command.arg("--");
++        if let Some(delimiter) = delimiter {
++            command.args(&remaining[delimiter + 1..]);
++        }
++        if key == "target-spec-json" {
++            command.args(["-Z", "unstable-options"]);
++        }
++    }
++    utf8_stdout(&mut command)
++        .with_context(|| format!("strict Cargo {key} query failed; no rustc recovery"))
++}
++
++pub(crate) fn rustc_target_libdir(
++    manifest: &ManifestPath,
++    config: &CargoConfig,
++    sysroot: &Sysroot,
++    target: &str,
++) -> anyhow::Result<String> {
++    cargo_print(manifest, config, sysroot, Some(target), "target-libdir")
++}
++
++fn parse_version(output: &str) -> anyhow::Result<Version> {
++    let version = output
++        .strip_prefix("cargo ")
++        .and_then(|value| value.split_whitespace().next())
++        .context("strict Cargo version output is invalid")?;
++    Version::parse(version).context("strict Cargo version is not semver")
++}
++
++fn parse_cfg(output: &str) -> anyhow::Result<Vec<CfgAtom>> {
++    let cfg = output
++        .lines()
++        .map(|line| {
++            let key = line.split('=').next().unwrap_or_default();
++            ensure!(ra_ap_rustc_lexer::is_ident(key), "invalid strict compiler cfg key");
++            if let Some((_, value)) = line.split_once('=') {
++                let value = value
++                    .strip_prefix('"')
++                    .and_then(|value| value.strip_suffix('"'))
++                    .context("invalid strict compiler cfg value")?;
++                let mut decoded = String::new();
++                let mut error = None;
++                rustc_literal_escaper::unescape_str(value, |_, result| match result {
++                    Ok(ch) => decoded.push(ch),
++                    Err(err) => error = Some(err),
++                });
++                ensure!(error.is_none(), "invalid strict compiler cfg escape: {error:?}");
++                Ok(CfgAtom::KeyValue {
++                    key: intern::Symbol::intern(key),
++                    value: intern::Symbol::intern(&decoded),
++                })
++            } else {
++                Ok(CfgAtom::Flag(intern::Symbol::intern(key)))
++            }
++        })
++        .collect::<anyhow::Result<Vec<_>>>()?;
++    ensure!(!cfg.is_empty(), "strict compiler cfg query returned no cfgs");
++    Ok(cfg)
++}
++
++fn parse_target(output: &str) -> anyhow::Result<target::TargetData> {
++    let spec: TargetSpec =
++        serde_json::from_str(output).context("invalid strict compiler target specification")?;
++    ensure!(!spec.data_layout.is_empty(), "strict compiler target data layout is empty");
++    layout::validate(&spec.data_layout)?;
++    ra_ap_rustc_abi::TargetDataLayout::parse_from_llvm_datalayout_string(
++        &spec.data_layout,
++        ra_ap_rustc_abi::AddressSpace::ZERO,
++    )
++    .map_err(|_| {
++        anyhow::anyhow!("invalid strict compiler target layout: {:?}", spec.data_layout)
++    })?;
++    Ok(target::TargetData {
++        arch: spec.arch.into(),
++        data_layout: spec.data_layout.into_boxed_str(),
++    })
++}
++
++#[cfg(test)]
++#[path = "sniff_discovery/tests.rs"]
++mod tests;
+diff --git a/crates/project-model/src/sniff_discovery/layout.rs b/crates/project-model/src/sniff_discovery/layout.rs
+new file mode 100644
+index 0000000..03a993a
+--- /dev/null
++++ b/crates/project-model/src/sniff_discovery/layout.rs
+@@ -0,0 +1,94 @@
++//! Check components the borrowed ABI parser ignores rather than accepting unknown defaults.
++
++use anyhow::{Context, ensure};
++
++pub(super) fn validate(layout: &str) -> anyhow::Result<()> {
++    for component in layout.split('-') {
++        let fields = component.split(':').collect::<Vec<_>>();
++        let first = fields[0];
++        match fields.as_slice() {
++            ["e" | "E"] => {}
++            ["m", mode] => ensure!(
++                matches!(*mode, "e" | "l" | "m" | "o" | "x" | "w" | "a"),
++                "invalid compiler layout mangling"
++            ),
++            ["ni", spaces @ ..] => {
++                ensure!(!spaces.is_empty(), "empty non-integral address-space list");
++                for space in spaces {
++                    number(space, 24, false)?;
++                }
++            }
++            [value] if value.starts_with(['P', 'G', 'A']) => {
++                number(&value[1..], 24, true)?;
++            }
++            [value] if value.starts_with('S') => {
++                alignment(&value[1..], false)?;
++            }
++            [value] if value.starts_with("Fi") || value.starts_with("Fn") => {
++                alignment(&value[2..], false)?;
++            }
++            ["a", alignments @ ..] => {
++                alignments_valid(alignments, true)?;
++            }
++            [value, alignments @ ..] if value.starts_with(['i', 'f', 'v']) => {
++                let size = number(&value[1..], 24, false)?;
++                let abi = alignments_valid(alignments, false)?;
++                ensure!(!value.starts_with('i') || size != 8 || abi == 8, "invalid i8 alignment");
++            }
++            [value, widths @ ..] if value.starts_with('n') => {
++                number(&value[1..], 24, false)?;
++                for width in widths {
++                    number(width, 24, false)?;
++                }
++            }
++            [value, values @ ..] if value.starts_with('p') => {
++                let space = &value[1..];
++                if !space.is_empty() {
++                    number(space, 24, true)?;
++                }
++                ensure!((2..=4).contains(&values.len()), "invalid pointer layout field count");
++                let size = number(values[0], 24, false)?;
++                ensure!(size % 8 == 0, "non-byte pointer size is unsupported by the ABI backend");
++                alignments_valid(&values[1..values.len().min(3)], false)?;
++                if values.len() == 4 {
++                    let index = number(values[3], 24, false)?;
++                    ensure!(
++                        index % 8 == 0,
++                        "non-byte pointer index is unsupported by the ABI backend"
++                    );
++                    ensure!(index <= size, "pointer index exceeds size");
++                }
++            }
++            _ => anyhow::bail!("unknown or unsupported compiler layout component: {first:?}"),
++        }
++    }
++    Ok(())
++}
++
++fn number(value: &str, bits: u32, zero: bool) -> anyhow::Result<u32> {
++    ensure!(
++        !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit()),
++        "invalid compiler layout number"
++    );
++    let value = value.parse::<u32>().context("compiler layout number overflow")?;
++    ensure!(value < (1 << bits) && (zero || value != 0), "compiler layout number out of range");
++    Ok(value)
++}
++
++fn alignment(value: &str, zero: bool) -> anyhow::Result<u32> {
++    let value = number(value, 16, zero)?;
++    ensure!(
++        value == 0 || value >= 8 && value.is_power_of_two(),
++        "invalid compiler layout alignment"
++    );
++    Ok(value)
++}
++
++fn alignments_valid(values: &[&str], aggregate: bool) -> anyhow::Result<u32> {
++    ensure!((1..=2).contains(&values.len()), "invalid compiler layout alignment field count");
++    let abi = alignment(values[0], aggregate)?;
++    if values.len() == 2 {
++        ensure!(alignment(values[1], false)? >= abi.max(8), "preferred alignment is below ABI");
++    }
++    Ok(abi)
++}
+diff --git a/crates/project-model/src/sniff_discovery/tests.rs b/crates/project-model/src/sniff_discovery/tests.rs
+new file mode 100644
+index 0000000..9fb74d8
+--- /dev/null
++++ b/crates/project-model/src/sniff_discovery/tests.rs
+@@ -0,0 +1,453 @@
++use super::*;
++use crate::{
++    ProjectManifest, ProjectWorkspace, ProjectWorkspaceKind,
++    toolchain_info::{QueryConfig, rustc_cfg, target_data},
++};
++use rustc_hash::FxHashMap;
++
++fn config() -> CargoConfig {
++    let mut config = CargoConfig { strict_discovery: true, ..Default::default() };
++    config.extra_env.insert("CARGO_NET_OFFLINE".to_owned(), Some("true".to_owned()));
++    config
++}
++
++fn fixture() -> (temp_dir::TempDir, AbsPathBuf, ManifestPath) {
++    let dir = temp_dir::TempDir::with_prefix("sniff-strict-queries").unwrap();
++    let root = AbsPathBuf::assert_utf8(dir.path().to_path_buf());
++    fs::create_dir_all(root.join("src")).unwrap();
++    fs::write(root.join("src/lib.rs"), "pub fn probe() {}\n").unwrap();
++    fs::write(
++        root.join("build.rs"),
++        "fn main() { panic!(\"discovery must not execute build.rs\"); }\n",
++    )
++    .unwrap();
++    fs::write(
++        root.join("Cargo.toml"),
++        r#"[workspace]
++[package]
++name = "sniff_query_probe"
++version = "0.0.0"
++edition = "2024"
++"#,
++    )
++    .unwrap();
++    let manifest = ManifestPath::try_from(root.join("Cargo.toml")).unwrap();
++    let mut cargo = Sysroot::empty().tool(Tool::Cargo, &root, &config().extra_env);
++    cargo.args(["generate-lockfile", "--offline", "--manifest-path", manifest.as_str()]);
++    utf8_stdout(&mut cargo).unwrap();
++    (dir, root, manifest)
++}
++
++fn native_sysroot(root: &AbsPathBuf, config: &mut CargoConfig) {
++    let mut rustc = toolchain::command(Tool::Rustc.path(), root, &config.extra_env);
++    rustc.args(["--print", "sysroot"]);
++    let sysroot =
++        AbsPathBuf::try_from(Utf8PathBuf::from(utf8_stdout(&mut rustc).unwrap())).unwrap();
++    let library = root.join("owned-sysroot");
++    fs::create_dir_all(library.join("core/src")).unwrap();
++    fs::write(library.join("Cargo.toml"), "[workspace]\nmembers = [\"core\"]\nresolver = \"3\"\n")
++        .unwrap();
++    fs::write(
++        library.join("core/Cargo.toml"),
++        "[package]\nname = \"core\"\nversion = \"0.0.0\"\nedition = \"2024\"\n",
++    )
++    .unwrap();
++    fs::write(library.join("core/src/lib.rs"), "#![no_std]\n").unwrap();
++    let mut cargo = Sysroot::empty().tool(Tool::Cargo, &library, &config.extra_env);
++    cargo.args(["generate-lockfile", "--offline"]);
++    utf8_stdout(&mut cargo).unwrap();
++    config.sysroot = Some(RustLibSource::Path(sysroot));
++    config.sysroot_src = Some(library);
++}
++
++#[test]
++fn actual_print_queries_honor_explicit_cfg_without_building() {
++    let (_dir, root, manifest) = fixture();
++    fs::write(
++        root.join("explicit.toml"),
++        "[build]\nrustflags = [\"--cfg\", \"sniff_query_cfg\"]\n",
++    )
++    .unwrap();
++    let mut config = config();
++    config.config_path = Some(root.join("explicit.toml"));
++    let sysroot = Sysroot::empty();
++    let observed = queries(&manifest, &config, &sysroot).unwrap();
++    assert_eq!(observed.targets.len(), 1);
++    assert!(observed.cfg.contains(&CfgAtom::Flag(intern::Symbol::intern("sniff_query_cfg"))));
++    assert_eq!(
++        observed.cfg,
++        parse_cfg(
++            &cargo_print(&manifest, &config, &sysroot, Some(&observed.targets[0]), "cfg").unwrap()
++        )
++        .unwrap()
++    );
++    assert!(!observed.target.data_layout.is_empty());
++    assert!(fs::metadata(root.join("target/debug/build")).is_err());
++}
++
++#[test]
++fn failed_cargo_print_queries_do_not_recover_with_rustc() {
++    let (_dir, root, manifest) = fixture();
++    fs::write(root.join("Cargo.toml"), "[invalid\n").unwrap();
++    let sysroot = Sysroot::empty();
++    let missing_config = None;
++    let legacy = QueryConfig::Cargo(&sysroot, &manifest, &missing_config);
++    assert!(!rustc_cfg::get(legacy, None, &FxHashMap::default()).is_empty());
++    assert!(target_data::get(legacy, None, &FxHashMap::default()).is_ok());
++    for key in ["cfg", "target-spec-json", "host-tuple"] {
++        let error = cargo_print(&manifest, &config(), &sysroot, None, key).unwrap_err();
++        assert!(format!("{error:#}").contains("no rustc recovery"));
++    }
++}
++
++#[test]
++fn failed_config_and_workspace_queries_are_errors() {
++    let (_dir, root, manifest) = fixture();
++    fs::create_dir_all(root.join(".cargo")).unwrap();
++    fs::write(root.join(".cargo/config.toml"), "[invalid\n").unwrap();
++    let error = queries(&manifest, &config(), &Sysroot::empty()).err().unwrap();
++    assert!(format!("{error:#}").contains("configuration query failed"));
++    fs::write(root.join("Cargo.toml"), "[invalid\n").unwrap();
++    assert!(locate_workspace(&manifest, &config(), &Sysroot::empty()).is_err());
++}
++
++#[test]
++fn selected_sysroot_must_match_cargo_compiler() {
++    let (_dir, root, manifest) = fixture();
++    let wrong = Sysroot::new(Some(root), None);
++    let error = queries(&manifest, &config(), &wrong).err().unwrap();
++    assert!(format!("{error:#}").contains("differs from Cargo compiler sysroot"), "{error:#}");
++}
++
++#[test]
++fn invalid_or_multitarget_config_is_not_a_host_default() {
++    let (_dir, _root, manifest) = fixture();
++    for output in [
++        "build.target = 7",
++        "build.target = []",
++        "build.target = [\"x86_64-unknown-linux-gnu\", \"wasm32-unknown-unknown\"]",
++    ] {
++        let effective = CargoConfigFile::from_strict_query(output.to_owned()).unwrap();
++        assert!(targets(&manifest, &config(), &Sysroot::empty(), &effective).is_err());
++    }
++    assert!(CargoConfigFile::from_strict_query("[invalid".to_owned()).is_err());
++}
++
++#[test]
++fn bad_query_outputs_are_errors_not_empty_defaults() {
++    for output in ["", "cargo malformed", "rustc 1.96.0"] {
++        assert!(parse_version(output).is_err());
++    }
++    assert_eq!(parse_version("cargo 1.96.0 (fixture)").unwrap(), Version::new(1, 96, 0));
++    for output in ["", "not cfg", "flag=7", "flag=\"bad\" trailing\""] {
++        assert!(parse_cfg(output).is_err());
++    }
++    for output in ["", "{}", r#"{"arch":"x86_64","data-layout":""}"#] {
++        assert!(parse_target(output).is_err());
++    }
++    assert!(parse_target(r#"{"arch":"x86_64","data-layout":"e-p:bad:64"}"#).is_err());
++}
++
++#[test]
++fn decoded_cfg_values_match_compiler_string_semantics() {
++    let parsed = parse_cfg(r#"probe="slash\\quote\"newline\ncontrol\u{7}""#).unwrap();
++    assert_eq!(
++        parsed,
++        vec![CfgAtom::KeyValue {
++            key: intern::Symbol::intern("probe"),
++            value: intern::Symbol::intern("slash\\quote\"newline\ncontrol\u{7}"),
++        }]
++    );
++}
++
++#[test]
++fn unicode_cfg_keys_preserve_compiler_identifiers() {
++    let key = "caf\u{e9}";
++    assert_eq!(
++        parse_cfg(&format!("{key}\n{key}=\"yes\"\n")).unwrap(),
++        vec![
++            CfgAtom::Flag(intern::Symbol::intern(key)),
++            CfgAtom::KeyValue {
++                key: intern::Symbol::intern(key),
++                value: intern::Symbol::intern("yes"),
++            },
++        ]
++    );
++    for key in ["7bad", "a b", "bad\u{1f415}"] {
++        assert!(parse_cfg(key).is_err());
++    }
++}
++
++#[test]
++fn invalid_or_unsupported_layout_fields_are_not_defaults() {
++    for layout in [
++        "garbage",
++        " ",
++        "e-unknown",
++        "e-n8:word",
++        "e-m:q",
++        "e-S7",
++        "e-p:64:64:bad",
++        "e-i64:64:bad",
++        "e-a:0:garbage",
++        "e-p:64:64:64:128",
++        "e-i8:16",
++        "e-n0",
++        "e-ni:0",
++        "e--S128",
++        "e-p:7:8",
++        "e-p:64:64:64:7",
++    ] {
++        let output = serde_json::json!({"arch": "x86_64", "data-layout": layout}).to_string();
++        assert!(parse_target(&output).is_err(), "accepted invalid or unsupported layout: {layout}");
++    }
++}
++
++#[test]
++fn supported_layout_components_remain_valid() {
++    for layout in [
++        "e",
++        "E",
++        "e-m:e-p:64:64-i64:64-f80:128-n8:16:32:64-S128",
++        "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-S128",
++        "e-a:0:8-P1-G2-A3-Fn32-ni:7:8",
++        "e-p1:128:128:128:64-v256:256:512",
++    ] {
++        let output = serde_json::json!({"arch": "probe", "data-layout": layout}).to_string();
++        assert!(parse_target(&output).is_ok(), "rejected valid supported layout: {layout}");
++    }
++}
++
++#[test]
++fn compiler_unicode_cfg_is_preserved_and_cargo_failure_is_not_recovered() {
++    let (_dir, root, manifest) = fixture();
++    let key = "caf\u{e9}";
++    fs::write(
++        root.join("unicode.toml"),
++        format!("[build]\nrustflags = ['--cfg', '{key}', '--cfg', '{key}=\"yes\"']\n"),
++    )
++    .unwrap();
++    let mut config = config();
++    config.config_path = Some(root.join("unicode.toml"));
++    let value = format!("{key}=\"yes\"");
++    let mut rustc = toolchain::command(Tool::Rustc.path(), &root, &config.extra_env);
++    rustc.args(["--print", "cfg", "--cfg", key, "--cfg", &value]);
++    let cfg = parse_cfg(&utf8_stdout(&mut rustc).unwrap()).unwrap();
++    assert!(cfg.contains(&CfgAtom::Flag(intern::Symbol::intern(key))));
++    assert!(cfg.contains(&CfgAtom::KeyValue {
++        key: intern::Symbol::intern(key),
++        value: intern::Symbol::intern("yes"),
++    }));
++    let error = queries(&manifest, &config, &Sysroot::empty()).err().unwrap();
++    let error = format!("{error:#}");
++    assert!(error.contains("no rustc recovery") && error.contains("failed to parse"), "{error}");
++    assert!(fs::metadata(root.join("target/debug/build")).is_err());
++}
++
++#[test]
++fn actual_compiler_layouts_for_all_release_platforms_parse() {
++    let (_dir, root, _manifest) = fixture();
++    for target in [
++        "x86_64-unknown-linux-gnu",
++        "aarch64-unknown-linux-gnu",
++        "x86_64-pc-windows-msvc",
++        "aarch64-pc-windows-msvc",
++        "x86_64-apple-darwin",
++        "aarch64-apple-darwin",
++    ] {
++        let mut rustc = toolchain::command(Tool::Rustc.path(), &root, &config().extra_env);
++        rustc.env("RUSTC_BOOTSTRAP", "1").args([
++            "--target",
++            target,
++            "-Z",
++            "unstable-options",
++            "--print",
++            "target-spec-json",
++        ]);
++        let spec = utf8_stdout(&mut rustc).unwrap();
++        parse_target(&spec).unwrap_or_else(|error| panic!("{target}: {error:#}"));
++    }
++}
++
++#[test]
++fn rustc_passthrough_keeps_target_and_features_as_cargo_options() {
++    let (_dir, root, manifest) = fixture();
++    let toml = root.join("Cargo.toml");
++    fs::write(&toml, fs::read_to_string(&toml).unwrap() + "\n[features]\nselected = []\n").unwrap();
++    let sysroot = Sysroot::empty();
++    let host = cargo_print(&manifest, &config(), &sysroot, None, "host-tuple").unwrap();
++    let mut config = config();
++    config.target = Some(host.clone());
++    config.features = CargoFeatures::Selected {
++        features: vec!["selected".to_owned()],
++        no_default_features: true,
++    };
++    config.extra_args = vec!["--".to_owned(), "-C".to_owned(), "opt-level=3".to_owned()];
++    let observed = queries(&manifest, &config, &sysroot).unwrap();
++    assert_eq!(observed.targets, [host]);
++    assert!(!observed.cfg.is_empty());
++    assert!(fs::metadata(root.join("target/debug/build")).is_err());
++}
++
++#[test]
++fn config_selector_precedence_is_shared_with_metadata() {
++    let (_dir, root, manifest) = fixture();
++    let sysroot = Sysroot::empty();
++    let mut config = config();
++    let host = cargo_print(&manifest, &config, &sysroot, None, "host-tuple").unwrap();
++    config
++        .extra_args
++        .extend(["--config".to_owned(), "build.target=\"invalid-extra-target\"".to_owned()]);
++    config.metadata_extra_args.push("--config=build.target=\"invalid-metadata-target\"".to_owned());
++    fs::write(root.join("final.toml"), format!("build.target = {host:?}\n")).unwrap();
++    config.config_path = Some(root.join("final.toml"));
++    let observed = queries(&manifest, &config, &sysroot).unwrap();
++    assert_eq!(observed.targets, std::slice::from_ref(&host));
++    let metadata = crate::CargoMetadataConfig {
++        strict_metadata: true,
++        extra_args: config.extra_args.clone(),
++        metadata_extra_args: config.metadata_extra_args.clone(),
++        config_path: config.config_path.clone(),
++        extra_env: config.extra_env.clone(),
++        targets: vec![host],
++        ..Default::default()
++    };
++    let fetch =
++        crate::cargo_workspace::FetchMetadata::new(&manifest, &root, &metadata, &sysroot, false);
++    let (metadata, error) = fetch.exec(false, &|_| {}).unwrap();
++    assert!(error.is_none() && metadata.resolve.is_some());
++    let (selectors, remaining) = partition_args(&config.extra_args).unwrap();
++    assert_eq!(selectors, config.extra_args);
++    assert!(remaining.is_empty());
++}
++
++#[test]
++fn selected_target_sysroot_flags_cannot_escape_matching() {
++    let (_dir, root, manifest) = fixture();
++    let mut config = config();
++    let empty = Sysroot::empty();
++    let host = cargo_print(&manifest, &config, &empty, None, "host-tuple").unwrap();
++    let native = AbsPathBuf::try_from(Utf8PathBuf::from(
++        cargo_print(&manifest, &config, &empty, None, "sysroot").unwrap(),
++    ))
++    .unwrap();
++    let alternate = root.join("alternate-sysroot");
++    fs::create_dir_all(&alternate).unwrap();
++    config.target = Some(host.clone());
++    let setting = format!(
++        "target.{host}.rustflags=[\"--sysroot\",{}]",
++        serde_json::to_string(alternate.as_str()).unwrap()
++    );
++    config.metadata_extra_args.extend(["--config".to_owned(), setting]);
++    let error = queries(&manifest, &config, &Sysroot::new(Some(native), None)).err().unwrap();
++    assert!(format!("{error:#}").contains("differs from Cargo compiler sysroot"), "{error:#}");
++}
++
++#[test]
++fn rustc_source_libdir_query_cannot_recover_with_direct_rustc() {
++    let (_dir, root, manifest) = fixture();
++    let config = config();
++    let sysroot = Sysroot::empty();
++    let target = cargo_print(&manifest, &config, &sysroot, None, "host-tuple").unwrap();
++    let metadata_config =
++        crate::CargoMetadataConfig { extra_env: config.extra_env.clone(), ..Default::default() };
++    let (metadata, error) = crate::cargo_workspace::FetchMetadata::new(
++        &manifest,
++        &root,
++        &metadata_config,
++        &sysroot,
++        false,
++    )
++    .exec(false, &|_| {})
++    .unwrap();
++    assert!(error.is_none());
++    let workspace =
++        crate::CargoWorkspace::new(metadata, manifest.clone(), Default::default(), false);
++    fs::write(root.join("Cargo.toml"), "[invalid\n").unwrap();
++    let legacy = crate::WorkspaceBuildScripts::rustc_crates(
++        &workspace,
++        &root,
++        &config.extra_env,
++        &sysroot,
++        None,
++    );
++    assert!(legacy.error().is_none(), "owned fixture must demonstrate direct rustc recovery");
++    let strict = crate::WorkspaceBuildScripts::rustc_crates(
++        &workspace,
++        &root,
++        &config.extra_env,
++        &sysroot,
++        Some((&manifest, &config, &target)),
++    );
++    assert!(strict.error().is_some_and(|error| error.contains("no rustc recovery")));
++}
++
++#[test]
++fn target_selector_preserves_json_path_spaces() {
++    let (_dir, root, manifest) = fixture();
++    let mut config = config();
++    config.target = Some("custom target.json".to_owned());
++    let effective = CargoConfigFile::from_strict_query(String::new()).unwrap();
++    assert_eq!(
++        targets(&manifest, &config, &Sysroot::empty(), &effective).unwrap(),
++        [root.join("custom target.json").to_string()]
++    );
++}
++
++#[test]
++fn missing_sysroot_source_does_not_install_or_ignore_override() {
++    let dir = temp_dir::TempDir::with_prefix("sniff-sysroot-query-rejection").unwrap();
++    let root = AbsPathBuf::assert_utf8(dir.path().to_path_buf());
++    fs::create_dir_all(root.join("bin")).unwrap();
++    fs::write(root.join("bin/rustc"), "").unwrap();
++    let manifest = ManifestPath::try_from(root.join("Cargo.toml")).unwrap();
++    let mut config = config();
++    config.sysroot = Some(RustLibSource::Path(root.clone()));
++    assert!(
++        format!("{:#}", sysroot(&manifest, &config).unwrap_err())
++            .contains("no component installation")
++    );
++    fs::create_dir_all(root.join("lib/rustlib/src/rust/library/core/src")).unwrap();
++    fs::write(root.join("lib/rustlib/src/rust/library/core/src/lib.rs"), "").unwrap();
++    config.extra_env.insert("RUST_SRC_PATH".to_owned(), Some(root.join("missing").to_string()));
++    assert!(sysroot(&manifest, &config).is_err());
++    config.extra_env.insert("RUST_SRC_PATH".to_owned(), Some("relative".to_owned()));
++    assert!(format!("{:#}", sysroot(&manifest, &config).unwrap_err()).contains("must be absolute"));
++}
++
++#[test]
++fn strict_backend_workspace_loads_owned_sysroot_metadata_and_cfg() {
++    let (_dir, root, manifest) = fixture();
++    let mut config = config();
++    native_sysroot(&root, &mut config);
++    fs::write(
++        root.join("explicit.toml"),
++        "[build]\nrustflags = [\"--cfg\", \"sniff_workspace_cfg\"]\n",
++    )
++    .unwrap();
++    config.config_path = Some(root.join("explicit.toml"));
++    let workspace =
++        ProjectWorkspace::load(ProjectManifest::CargoToml(manifest), &config, &|_| {}).unwrap();
++    let ProjectWorkspaceKind::Cargo { error, .. } = &workspace.kind else {
++        panic!("Cargo fixture")
++    };
++    assert!(error.is_none());
++    assert!(workspace.sysroot.has_full_cargo_metadata());
++    assert!(
++        workspace.rustc_cfg.contains(&CfgAtom::Flag(intern::Symbol::intern("sniff_workspace_cfg")))
++    );
++    assert!(workspace.target.is_ok());
++    assert!(fs::metadata(root.join("target/debug/build")).is_err());
++}
++
++#[test]
++fn strict_backend_workspace_rejects_failed_config_discovery() {
++    let (_dir, root, manifest) = fixture();
++    let mut config = config();
++    native_sysroot(&root, &mut config);
++    fs::write(root.join("explicit.toml"), "[invalid\n").unwrap();
++    config.config_path = Some(root.join("explicit.toml"));
++    assert!(
++        ProjectWorkspace::load(ProjectManifest::CargoToml(manifest), &config, &|_| {}).is_err()
++    );
++}
 diff --git a/crates/project-model/src/sysroot.rs b/crates/project-model/src/sysroot.rs
 index 546a1e0..83f7e6a 100644
 --- a/crates/project-model/src/sysroot.rs
@@ -654,39 +1650,249 @@ index 546a1e0..83f7e6a 100644
 +        assert!(!sysroot.has_full_cargo_metadata());
 +    }
 +}
+diff --git a/crates/project-model/src/toolchain_info/target_tuple.rs b/crates/project-model/src/toolchain_info/target_tuple.rs
+index 12c64b5..56c76c1 100644
+--- a/crates/project-model/src/toolchain_info/target_tuple.rs
++++ b/crates/project-model/src/toolchain_info/target_tuple.rs
+@@ -63,12 +63,10 @@ fn cargo_config_build_target(config: &CargoConfigFile) -> Option<Vec<String>> {
+ }
+ 
+ // Parses `"build.target = [target-tuple, target-tuple, ...]"` or `"build.target = "target-tuple"`
+-fn parse_toml_cargo_config_build_target(
++pub(crate) fn parse_toml_cargo_config_build_target(
+     config: &CargoConfigFile,
+ ) -> anyhow::Result<Option<Vec<String>>> {
+-    let Some(config_reader) = config.read() else {
+-        return Ok(None);
+-    };
++    let config_reader = config.read().context("invalid Cargo target configuration")?;
+     let Some(target) = config_reader.get_spanned(["build", "target"]) else {
+         return Ok(None);
+     };
 diff --git a/crates/project-model/src/workspace.rs b/crates/project-model/src/workspace.rs
-index 9002b0c..e2b189b 100644
+index 9002b0c..4c4049e 100644
 --- a/crates/project-model/src/workspace.rs
 +++ b/crates/project-model/src/workspace.rs
-@@ -289,6 +289,7 @@ impl ProjectWorkspace {
+@@ -229,66 +229,96 @@ impl ProjectWorkspace {
+             ..
+         } = config;
+         let workspace_dir = cargo_toml.parent();
+-        let mut sysroot = match (sysroot, sysroot_src) {
+-            (Some(RustLibSource::Discover), None) => Sysroot::discover(workspace_dir, extra_env),
+-            (Some(RustLibSource::Discover), Some(sysroot_src)) => {
+-                Sysroot::discover_with_src_override(workspace_dir, extra_env, sysroot_src.clone())
+-            }
+-            (Some(RustLibSource::Path(path)), None) => {
+-                Sysroot::discover_rust_lib_src_dir(path.clone())
+-            }
+-            (Some(RustLibSource::Path(sysroot)), Some(sysroot_src)) => {
+-                Sysroot::new(Some(sysroot.clone()), Some(sysroot_src.clone()))
++        let mut sysroot = if config.strict_discovery {
++            crate::sniff_discovery::sysroot(cargo_toml, config)?
++        } else {
++            match (sysroot, sysroot_src) {
++                (Some(RustLibSource::Discover), None) => {
++                    Sysroot::discover(workspace_dir, extra_env)
++                }
++                (Some(RustLibSource::Discover), Some(sysroot_src)) => {
++                    Sysroot::discover_with_src_override(
++                        workspace_dir,
++                        extra_env,
++                        sysroot_src.clone(),
++                    )
++                }
++                (Some(RustLibSource::Path(path)), None) => {
++                    Sysroot::discover_rust_lib_src_dir(path.clone())
++                }
++                (Some(RustLibSource::Path(sysroot)), Some(sysroot_src)) => {
++                    Sysroot::new(Some(sysroot.clone()), Some(sysroot_src.clone()))
++                }
++                (None, _) => Sysroot::empty(),
+             }
+-            (None, _) => Sysroot::empty(),
+         };
+ 
+         // Resolve the Cargo.toml to the workspace root as we base the `target` dir off of it.
+         let mut cmd = sysroot.tool(Tool::Cargo, workspace_dir, extra_env);
+         cmd.args(["locate-project", "--workspace", "--manifest-path", cargo_toml.as_str()]);
+-        let cargo_toml = &match utf8_stdout(&mut cmd) {
+-            Ok(output) => {
+-                #[derive(serde_derive::Deserialize)]
+-                struct Root {
+-                    root: Utf8PathBuf,
+-                }
+-                match serde_json::from_str::<Root>(&output) {
+-                    Ok(object) => ManifestPath::try_from(AbsPathBuf::assert(object.root))
+-                        .expect("manifest path should be absolute"),
+-                    Err(e) => {
+-                        tracing::error!(%e, %cargo_toml, "failed fetching cargo workspace root");
+-                        cargo_toml.clone()
++        let cargo_toml = &if config.strict_discovery {
++            crate::sniff_discovery::locate_workspace(cargo_toml, config, &sysroot)?
++        } else {
++            match utf8_stdout(&mut cmd) {
++                Ok(output) => {
++                    #[derive(serde_derive::Deserialize)]
++                    struct Root {
++                        root: Utf8PathBuf,
++                    }
++                    match serde_json::from_str::<Root>(&output) {
++                        Ok(object) => ManifestPath::try_from(AbsPathBuf::assert(object.root))
++                            .expect("manifest path should be absolute"),
++                        Err(e) => {
++                            tracing::error!(%e, %cargo_toml, "failed fetching cargo workspace root");
++                            cargo_toml.clone()
++                        }
+                     }
+                 }
+-            }
+-            Err(e) => {
+-                tracing::error!(%e, %cargo_toml, "failed fetching cargo workspace root");
+-                cargo_toml.clone()
++                Err(e) => {
++                    tracing::error!(%e, %cargo_toml, "failed fetching cargo workspace root");
++                    cargo_toml.clone()
++                }
+             }
+         };
+         let workspace_dir = cargo_toml.parent();
+ 
+         tracing::info!(workspace = %cargo_toml, src_root = ?sysroot.rust_lib_src_root(), root = ?sysroot.root(), "Using sysroot");
+         progress("querying project metadata".to_owned());
+-        let config_file =
+-            CargoConfigFile::load(cargo_toml, extra_env, &sysroot, config_path.as_deref());
++        let observed = if config.strict_discovery {
++            Some(crate::sniff_discovery::queries(cargo_toml, config, &sysroot)?)
++        } else {
++            None
++        };
++        let config_file = if let Some(observed) = &observed {
++            Some(observed.config.clone())
++        } else {
++            CargoConfigFile::load(cargo_toml, extra_env, &sysroot, config_path.as_deref())
++        };
+         let config_file_ = config_file.clone();
+         let toolchain_config = QueryConfig::Cargo(&sysroot, cargo_toml, &config_file_);
+-        let targets =
+-            target_tuple::get(toolchain_config, target.as_deref(), extra_env).unwrap_or_default();
+-        let toolchain = version::get(toolchain_config, extra_env)
+-            .inspect_err(|e| {
+-                tracing::error!(%e,
+-                    "failed fetching toolchain version for {cargo_toml:?} workspace"
+-                )
+-            })
+-            .ok()
+-            .flatten();
++        let targets = if let Some(observed) = &observed {
++            observed.targets.clone()
++        } else {
++            target_tuple::get(toolchain_config, target.as_deref(), extra_env).unwrap_or_default()
++        };
++        let toolchain = if let Some(observed) = &observed {
++            Some(observed.version.clone())
++        } else {
++            version::get(toolchain_config, extra_env)
++                .inspect_err(|e| {
++                    tracing::error!(%e,
++                        "failed fetching toolchain version for {cargo_toml:?} workspace"
++                    )
++                })
++                .ok()
++                .flatten()
++        };
+ 
+         let fetch_metadata = FetchMetadata::new(
              cargo_toml,
              workspace_dir,
              &CargoMetadataConfig {
-+                strict_metadata: config.strict_metadata,
++                strict_metadata: config.strict_discovery,
                  features: features.clone(),
                  targets: targets.clone(),
                  extra_args: extra_args.clone(),
-@@ -345,6 +346,7 @@ impl ProjectWorkspace {
+@@ -310,19 +340,35 @@ impl ProjectWorkspace {
+             let rustc_cfg = Builder::new()
+                 .name("ProjectWorkspace::rustc_cfg".to_owned())
+                 .spawn_scoped(s, || {
+-                    rustc_cfg::get(toolchain_config, targets.first().map(Deref::deref), extra_env)
++                    if let Some(observed) = &observed {
++                        observed.cfg.clone()
++                    } else {
++                        rustc_cfg::get(
++                            toolchain_config,
++                            targets.first().map(Deref::deref),
++                            extra_env,
++                        )
++                    }
+                 })
+                 .expect("failed to spawn thread");
+             let target_data = Builder::new()
+                 .name("ProjectWorkspace::target_data".to_owned())
+                 .spawn_scoped(s, || {
+-                    target_data::get(toolchain_config, targets.first().map(Deref::deref), extra_env)
++                    if let Some(observed) = &observed {
++                        Ok(observed.target.clone())
++                    } else {
++                        target_data::get(
++                            toolchain_config,
++                            targets.first().map(Deref::deref),
++                            extra_env,
++                        )
+                         .inspect_err(|e| {
+                             tracing::error!(%e,
+                                 "failed fetching data layout for \
+                                 {cargo_toml:?} workspace"
+                             )
+                         })
++                    }
+                 })
+                 .expect("failed to spawn thread");
+ 
+@@ -345,6 +391,7 @@ impl ProjectWorkspace {
                          &rustc_dir,
                          workspace_dir,
                          &CargoMetadataConfig {
-+                            strict_metadata: config.strict_metadata,
++                            strict_metadata: config.strict_discovery,
                              features: crate::CargoFeatures::default(),
                              targets: targets.clone(),
                              extra_args: extra_args.clone(),
-@@ -584,6 +586,7 @@ impl ProjectWorkspace {
+@@ -369,7 +416,11 @@ impl ProjectWorkspace {
+                                 workspace_dir,
+                                 extra_env,
+                                 &sysroot,
++                                config.strict_discovery.then(|| (cargo_toml, config, targets[0].as_str())),
+                             );
++                            if config.strict_discovery && let Some(error) = build_scripts.error() {
++                                return Err(Some(format!("strict rustc-source compiler query failed: {error}")));
++                            }
+                             Ok(Box::new((workspace, build_scripts)))
+                         }
+                         Err(e) => {
+@@ -439,6 +490,12 @@ impl ProjectWorkspace {
+             )
+         })?;
+         let cargo = CargoWorkspace::new(meta, cargo_toml.clone(), cargo_env, false);
++        if config.strict_discovery {
++            anyhow::ensure!(loaded_sysroot.is_some(), "strict sysroot metadata is unavailable");
++            if (cargo.requires_rustc_private() || config.rustc_source.is_some()) && rustc.is_err() {
++                anyhow::bail!("strict rustc-source discovery failed: {:?}", rustc.as_ref().err());
++            }
++        }
+         if let Some(loaded_sysroot) = loaded_sysroot {
+             tracing::info!(src_root = ?sysroot.rust_lib_src_root(), root = %loaded_sysroot, "Loaded sysroot");
+             sysroot.set_workspace(loaded_sysroot);
+@@ -584,6 +641,7 @@ impl ProjectWorkspace {
              detached_file,
              dir,
              &CargoMetadataConfig {
-+                strict_metadata: config.strict_metadata,
++                strict_metadata: config.strict_discovery,
                  features: config.features.clone(),
                  targets,
                  extra_args: config.extra_args.clone(),
-@@ -1960,6 +1963,7 @@ fn sysroot_metadata_config(
+@@ -1960,6 +2018,7 @@ fn sysroot_metadata_config(
          .collect();
  
      CargoMetadataConfig {
-+        strict_metadata: config.strict_metadata,
++        strict_metadata: config.strict_discovery,
          features: Default::default(),
          targets,
          // NOTE: Not passing extra_args / metadata_extra_args / config_path here is very
@@ -1428,7 +2634,7 @@ index 0000000..1e254cd
 +}
 diff --git a/crates/rust-analyzer/src/cli/sniff_project_model.rs b/crates/rust-analyzer/src/cli/sniff_project_model.rs
 new file mode 100644
-index 0000000..1373144
+index 0000000..e79d130
 --- /dev/null
 +++ b/crates/rust-analyzer/src/cli/sniff_project_model.rs
 @@ -0,0 +1,657 @@
@@ -1563,7 +2769,7 @@ index 0000000..1373144
 +    );
 +    ensure!(!cargo.no_deps, "Sniff crate-context export requires full dependency metadata");
 +    let mut cargo = cargo.clone();
-+    cargo.strict_metadata = true;
++    cargo.strict_discovery = true;
 +    let mut workspace = ProjectWorkspace::load(manifest, &cargo, progress)?;
 +    match &workspace.kind {
 +        ProjectWorkspaceKind::Cargo { error, .. } => ensure!(
@@ -2222,14 +3428,14 @@ index 0000000..26ff3ca
 +    })
 +}
 diff --git a/crates/rust-analyzer/src/config.rs b/crates/rust-analyzer/src/config.rs
-index 3ba0e47..2c2ea03 100644
+index 3ba0e47..cc6fcdb 100644
 --- a/crates/rust-analyzer/src/config.rs
 +++ b/crates/rust-analyzer/src/config.rs
 @@ -2438,6 +2438,7 @@ impl Config {
              .collect();
  
          CargoConfig {
-+            strict_metadata: false,
++            strict_discovery: false,
              all_targets: *self.cargo_allTargets(source_root),
              features: match &self.cargo_features(source_root) {
                  CargoFeaturesDef::All => CargoFeatures::All,
