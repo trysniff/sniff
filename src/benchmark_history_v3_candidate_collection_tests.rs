@@ -4,6 +4,9 @@ use std::collections::VecDeque;
 use std::future::Future;
 use std::pin::Pin;
 
+#[path = "benchmark_history_v3_candidate_pagination_tests.rs"]
+mod pagination;
+
 fn request() -> HistoricalV3CandidatePageRequest {
     seal_page_request(HistoricalV3CandidatePageRequest {
         schema_version: HISTORICAL_V3_CANDIDATE_REQUEST_SCHEMA_VERSION,
