@@ -533,8 +533,17 @@ pub use release::{
 
 #[cfg(feature = "sniffbench-frame")]
 pub use release::{
+    HistoricalV3PriorTemporalCoverageInputs, derive_frozen_historical_v3_prior_temporal_coverage,
     derive_frozen_historical_v3_prior_v2_temporal_proof,
+    read_historical_v3_prior_temporal_coverage,
+    validate_frozen_historical_v3_prior_temporal_coverage,
     validate_frozen_historical_v3_prior_v2_temporal_proof,
+    write_historical_v3_prior_temporal_coverage_new,
+};
+
+pub use release::{
+    HistoricalV3PriorTemporalCoverage, HistoricalV3PriorTemporalObligation,
+    HistoricalV3PriorTemporalObligationStatus, HistoricalV3PriorTemporalWitness,
 };
 
 pub use release::{

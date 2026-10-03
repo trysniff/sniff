@@ -469,6 +469,18 @@ mod history_v3_small_prior_temporal;
 
 pub use history_v3_small_prior_temporal::*;
 
+#[path = "benchmark_history_v3_temporal_coverage_schema.rs"]
+mod history_v3_temporal_coverage_schema;
+
+pub use history_v3_temporal_coverage_schema::*;
+
+#[cfg(feature = "sniffbench-frame")]
+#[path = "benchmark_history_v3_temporal_coverage.rs"]
+mod history_v3_temporal_coverage;
+
+#[cfg(feature = "sniffbench-frame")]
+pub use history_v3_temporal_coverage::*;
+
 #[path = "benchmark_history_v3_prior_name_audit.rs"]
 mod history_v3_prior_name_audit;
 

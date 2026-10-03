@@ -7,6 +7,34 @@ use sniff::benchmark::{
 };
 
 #[test]
+fn prior_temporal_coverage_commands_require_all_eight_paths() {
+    for command in [
+        "derive-prior-temporal-coverage",
+        "validate-prior-temporal-coverage",
+    ] {
+        let arguments = [
+            "sniffbench-frame",
+            command,
+            "artifact-root",
+            "dataset-root",
+            "frame.json",
+            "exclusions.json",
+            "selection.json",
+            "blind-source-seal.json",
+            "source-repository",
+            "coverage.json",
+        ];
+        assert!(Args::try_parse_from(arguments).is_ok(), "{command}");
+        for end in 2..arguments.len() {
+            assert!(
+                Args::try_parse_from(&arguments[..end]).is_err(),
+                "{command}"
+            );
+        }
+    }
+}
+
+#[test]
 fn prior_v2_temporal_commands_require_all_six_paths() {
     for command in [
         "derive-prior-v2-temporal-proof",

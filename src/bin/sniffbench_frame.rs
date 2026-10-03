@@ -12,6 +12,7 @@ use std::path::PathBuf;
 
 mod sniffbench_frame_run;
 mod sniffbench_frame_temporal;
+mod sniffbench_frame_temporal_coverage;
 
 #[derive(Debug, Parser)]
 #[command(name = "sniffbench-frame", version)]
@@ -88,6 +89,16 @@ enum Command {
     ValidatePriorV2TemporalProof {
         #[command(flatten)]
         args: sniffbench_frame_temporal::PriorV2TemporalArgs,
+    },
+    /// Replay available original temporal witnesses and retain unresolved obligations.
+    DerivePriorTemporalCoverage {
+        #[command(flatten)]
+        args: sniffbench_frame_temporal_coverage::PriorTemporalCoverageArgs,
+    },
+    /// Replay every coverage row from original sources; this does not admit publication.
+    ValidatePriorTemporalCoverage {
+        #[command(flatten)]
+        args: sniffbench_frame_temporal_coverage::PriorTemporalCoverageArgs,
     },
     /// Run or resume every fixed selected slot through its exact next stage.
     RunSlots {
@@ -296,6 +307,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Command::DerivePriorV2TemporalProof { args } => sniffbench_frame_temporal::issue(args)?,
         Command::ValidatePriorV2TemporalProof { args } => {
             sniffbench_frame_temporal::validate(args)?
+        }
+        Command::DerivePriorTemporalCoverage { args } => {
+            sniffbench_frame_temporal_coverage::issue(args)?
+        }
+        Command::ValidatePriorTemporalCoverage { args } => {
+            sniffbench_frame_temporal_coverage::validate(args)?
         }
         Command::RunSlots { args } => sniffbench_frame_run::run(args).await?,
         Command::StateStatus { args } => sniffbench_frame_run::state_status(args)?,
