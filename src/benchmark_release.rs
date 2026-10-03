@@ -472,6 +472,9 @@ pub use history_v3_small_prior_temporal::*;
 #[path = "benchmark_history_v3_prior_name_audit.rs"]
 mod history_v3_prior_name_audit;
 
+#[path = "benchmark_unique_json.rs"]
+mod unique_json;
+
 pub use history_v3_prior_name_audit::*;
 
 #[path = "benchmark_history_v3_time.rs"]

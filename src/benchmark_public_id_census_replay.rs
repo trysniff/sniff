@@ -533,7 +533,7 @@ pub(crate) fn parse_graphql_observations(
     received_at_utc: &str,
     require_public: bool,
 ) -> Result<Vec<GraphqlNodeObservation>, String> {
-    let raw: serde_json::Value = serde_json::from_str(response_body)
+    let raw = super::super::unique_json::parse(response_body.as_bytes())
         .map_err(|error| format!("invalid public-ID census GraphQL response: {error}"))?;
     let raw_nodes = raw
         .pointer("/data/nodes")
