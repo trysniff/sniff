@@ -1,6 +1,9 @@
 use super::*;
 use crate::benchmark::committed_public_id_census_v2_policy;
 
+#[path = "benchmark_public_id_census_unique_json_tests.rs"]
+mod unique_json;
+
 #[derive(Clone)]
 struct FixtureRepository {
     id: u64,
