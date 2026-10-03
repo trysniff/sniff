@@ -100,6 +100,21 @@ Ordinary upstream loading keeps its existing
 behavior and does not retain buffers. Retention adds memory overhead only in
 observation mode; source bytes are not dumped into the sidecar.
 
+Initial filesystem loading reports read and traversal failures, omitted cyclic
+directory links, unrepresentable paths and unsupported source objects through an
+opt-in `LoadError` message. Strict consumers reject those messages or unavailable
+worker bytes before applying changes to analysis. Explicit files and synchronous
+crate-root reads require regular files; configured directory roots must actually
+be directories, independent of filename extension. Ordinary upstream loading
+does not enable error reporting and preserves its existing omission behavior.
+
+Only the project model's declared optional rust-analyzer config inputs may be
+absent. Strict construction omits them only on a `symlink_metadata` NotFound;
+present objects, dangling links and other inspection failures still enter strict
+loading. This is not a failed-read fallback. Explicit exclusions remain exclusions.
+These checks cover initial loading, not runtime watching or race-proof input
+sealing: source paths can still change between inspection, opening and loading.
+
 Schema 3 adds `source_bindings`: deterministically sorted absolute VFS paths,
 raw-buffer and analysis-text byte lengths, and separate `raw_sha256_hex` and
 `analysis_sha256_hex` commitments. Existing VFS files and analysis source-root
@@ -180,8 +195,8 @@ The `Rust backend observations` workflow applies the patch to the exact pristine
 upstream pin and compiles it with Rust 1.96.0 on Windows, macOS, and Linux. It
 requires all nineteen exporter tests, ten selected-context tests, the same-package
 symbol-target regression, three sysroot tests, seven strict metadata tests,
-twenty strict discovery tests, five retained-loader tests, three native loader
-tests and five VFS snapshot
+twenty strict discovery tests, eight retained-loader tests, five native loader
+tests, nine common filesystem-worker tests (plus three Unix tests) and five VFS snapshot
 tests, nine source-binding tests and the nested native-path publication regression,
 checks
 that the binaries came from fresh compilation of that checkout, and runs
@@ -206,7 +221,17 @@ deletion/recreation, and ordinary-mode preservation.
 Native loader fixtures exercise actual offline Cargo metadata and the filesystem
 worker: two metadata-declared missing target roots fail without database mutation,
 valid workspace/inactive/owned-core files preserve captured bytes, and invalid
-worker UTF-8 fails instead of being silently omitted. The launcher uses upstream's
+worker UTF-8 fails instead of being silently omitted. A virtual workspace without
+the optional config loads successfully. Unavailable non-root inputs fail before
+database application: an owned exclusive file lock on Windows and an owned Unix
+socket on Unix, without assuming permission denial under privileged execution.
+Filesystem-worker fixtures cover actual missing-directory and explicit-read
+errors, exclusions, extensionless non-directory roots, unsupported native path
+representations and ordinary-mode preservation. Unix additionally requires
+owned FIFO rejection for explicit, directory-root and synchronous loads, plus
+cyclic-link reporting and explicitly excluded cyclic links. Those platform tests
+are required by the native matrix, not inferred from a Windows-only execution.
+The launcher uses upstream's
 working-directory and no-rustup-auto-install guard. Fixtures reuse the existing
 temporary-directory dependency and the local toolchain crate; no new external
 package version is required. They use generated minimal core sources with the
