@@ -21,6 +21,10 @@ PROOFS = {
         PREFIX + "history_v3_prior_artifacts::tests::",
         ("verifies_real_frozen_v2_temporal_proof",), True,
     ),
+    "prior-coverage": (
+        PREFIX + "history_v3_temporal_coverage::tests::",
+        ("verifies_real_source_replayed_temporal_coverage",), True,
+    ),
     "scorecard": (
         PREFIX + "history_v3_scorecard_publication::tests::",
         ("verifies_real_scorecard_publication_witness",), True,
@@ -112,7 +116,7 @@ def run_proof(proof, cargo="cargo"):
     expected = {scope + name for name in names}
     selection = [scope + names[0], "--exact"] if len(names) == 1 else [scope]
     command = [cargo, "test", "--lib", "--locked"]
-    if proof == "prior-v2":
+    if proof in {"prior-v2", "prior-coverage"}:
         command += ["--features", "sniffbench-frame"]
     command += [selection[0], "--"]
     harness = selection[1:] + (["--ignored"] if ignored else [])

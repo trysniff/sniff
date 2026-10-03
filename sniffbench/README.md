@@ -223,6 +223,39 @@ cargo run --locked --features sniffbench-frame --bin sniffbench-frame -- \
   frame.json exclusions.json selection.json prior-v2-temporal-proof.json
 ```
 
+The maintainer can also derive and validate a **coverage report**, not an
+aggregate admission proof. These commands replay all available original source
+proofs: the frozen Parquet-backed v2 selection, the extracted original blind
+source seal and its pinned identities, and the policy-bound research/synthetic
+sources. `SOURCE_REPOSITORY` is the Sniff Git root containing the pinned gold
+tree. Use absolute paths for every input and an explicit existing parent
+directory for the create-new output path. Missing or changed inputs fail, without a saved-
+name lookup or alternative source fallback. The output must not already exist.
+
+```console
+cargo run --locked --features sniffbench-frame --bin sniffbench-frame -- \
+  derive-prior-temporal-coverage ARTIFACT_ROOT DATASET_ROOT \
+  FRAME_JSON EXCLUSIONS_JSON SELECTION_JSON \
+  BLIND_SOURCE_SEAL SOURCE_REPOSITORY OUTPUT_DIRECTORY/prior-temporal-coverage.json
+
+cargo run --locked --features sniffbench-frame --bin sniffbench-frame -- \
+  validate-prior-temporal-coverage ARTIFACT_ROOT DATASET_ROOT \
+  FRAME_JSON EXCLUSIONS_JSON SELECTION_JSON \
+  BLIND_SOURCE_SEAL SOURCE_REPOSITORY OUTPUT_DIRECTORY/prior-temporal-coverage.json
+```
+
+Every row preserves its original partition, artifact commitment, canonical
+`seal_entry_index` and prior name, with either an exact source-replayed witness or an explicit
+unresolved original-entity obligation. Witnesses in one partition do not close
+unresolved obligations in another. Historical-v1 and intentional-boundary still
+lack their original-source/entity proof path; successful clones or current-name
+observations do not qualify them. Counts distinguish original obligations from
+unique names. `publication_qualified` remains false: this report cannot open the
+v9 stop gate and is not the complete aggregate admission implementation.
+The seal index identifies sorted sealed membership, not an original selection
+position. Actual source coordinates remain in the witness: PR row/number,
+blind component/payload commitment, or research/synthetic revision/tree.
+
 Only after the fixed selection is committed may the maintainer tool open each
 selected row's patch, install configuration, and test patch. Extraction and
 validation both replay the pinned dataset and frozen selection:

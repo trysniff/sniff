@@ -359,6 +359,8 @@ jobs:
           export SNIFF_HISTORICAL_V2_DATASET_ROOT="$dataset"
           python tools/ci/temporal_prior_replay.py test prior-union
           python tools/ci/temporal_prior_replay.py test prior-v2
+          export SNIFF_BLIND_SEAL_PATH="$RUNNER_TEMP/blind-prior/extracted/blind-source-seal.json"
+          python tools/ci/temporal_prior_replay.py test prior-coverage
 
   native-go-worlds:
     name: go-worlds-${{ matrix.os }}
