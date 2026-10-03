@@ -1,5 +1,5 @@
 diff --git a/Cargo.lock b/Cargo.lock
-index 1a480d6..5025633 100644
+index 1a480d6..2aaed46 100644
 --- a/Cargo.lock
 +++ b/Cargo.lock
 @@ -1960,7 +1960,10 @@ dependencies = [
@@ -13,7 +13,15 @@ index 1a480d6..5025633 100644
   "semver",
   "serde",
   "serde_derive",
-@@ -2344,6 +2347,7 @@ dependencies = [
+@@ -2323,6 +2326,7 @@ dependencies = [
+  "gen-lsp-types",
+  "hir",
+  "hir-def",
++ "hir-expand",
+  "hir-ty",
+  "ide",
+  "ide-completion",
+@@ -2344,6 +2348,7 @@ dependencies = [
   "process-wrap",
   "profile",
   "project-model",
@@ -21,7 +29,7 @@ index 1a480d6..5025633 100644
   "ra-ap-rustc_type_ir",
   "rayon",
   "rustc-hash 2.1.2",
-@@ -2356,6 +2360,7 @@ dependencies = [
+@@ -2356,6 +2361,7 @@ dependencies = [
   "stdx",
   "syntax",
   "syntax-bridge",
@@ -1897,7 +1905,7 @@ index 9002b0c..4c4049e 100644
          targets,
          // NOTE: Not passing extra_args / metadata_extra_args / config_path here is very
 diff --git a/crates/rust-analyzer/Cargo.toml b/crates/rust-analyzer/Cargo.toml
-index ae0c957..9bc0099 100644
+index ae0c957..75cd6ea 100644
 --- a/crates/rust-analyzer/Cargo.toml
 +++ b/crates/rust-analyzer/Cargo.toml
 @@ -39,6 +39,7 @@ serde_json = { workspace = true, features = ["preserve_order"] }
@@ -1908,7 +1916,7 @@ index ae0c957..9bc0099 100644
  num_cpus = "1.17.0"
  mimalloc = { version = "0.1.46", default-features = false, optional = true }
  lsp-server.workspace = true
-@@ -53,6 +54,7 @@ semver.workspace = true
+@@ -53,10 +54,12 @@ semver.workspace = true
  memchr = "2.7.5"
  cargo_metadata.workspace = true
  process-wrap.workspace = true
@@ -1916,6 +1924,11 @@ index ae0c957..9bc0099 100644
  dhat = { version = "0.3.3", optional = true }
  
  cfg.workspace = true
+ hir-def.workspace = true
++hir-expand.workspace = true
+ hir-ty.workspace = true
+ hir.workspace = true
+ ide-db.workspace = true
 diff --git a/crates/rust-analyzer/src/cli.rs b/crates/rust-analyzer/src/cli.rs
 index cc0efe9..cff3508 100644
 --- a/crates/rust-analyzer/src/cli.rs
@@ -2634,10 +2647,10 @@ index 0000000..1e254cd
 +}
 diff --git a/crates/rust-analyzer/src/cli/sniff_project_model.rs b/crates/rust-analyzer/src/cli/sniff_project_model.rs
 new file mode 100644
-index 0000000..e79d130
+index 0000000..76a957c
 --- /dev/null
 +++ b/crates/rust-analyzer/src/cli/sniff_project_model.rs
-@@ -0,0 +1,657 @@
+@@ -0,0 +1,855 @@
 +//! Observed rust-analyzer contexts. This export does not claim an exhaustive Cargo world domain.
 +
 +use anyhow::{Context, Result, ensure};
@@ -2707,9 +2720,12 @@ index 0000000..e79d130
 +    repository_diagnostics_queried: bool,
 +    block_local_module_file_coverage_complete: bool,
 +    module_files: Vec<String>,
++    included_files: Vec<String>,
 +    parser_errors: Vec<ParserError>,
 +    inactive_ranges: Vec<InactiveRange>,
 +    unmapped_module_sources: usize,
++    unmapped_include_parser_errors: usize,
++    include_expansion_errors: usize,
 +    unmapped_inactive_ranges: usize,
 +    other_diagnostics: usize,
 +}
@@ -2855,6 +2871,7 @@ index 0000000..e79d130
 +    root: &AbsPathBuf,
 +) -> Result<ObservedModel> {
 +    let mut crates = Vec::new();
++    let associations = super::sniff_source_context::source_associations(db);
 +    for krate in Crate::all(db) {
 +        let identity = identity(krate, db, vfs)?;
 +        let in_repository =
@@ -2872,32 +2889,81 @@ index 0000000..e79d130
 +        dependencies
 +            .sort_by(|left, right| (&left.name, &left.context).cmp(&(&right.name, &right.context)));
 +        let mut module_files = BTreeSet::new();
++        let mut included_files = BTreeSet::new();
 +        let mut parser_errors = BTreeSet::new();
 +        let mut inactive_ranges = BTreeSet::new();
 +        let mut unmapped_module_sources = 0;
++        let mut unmapped_include_parser_errors = 0;
++        let mut include_expansion_errors = 0;
 +        let mut unmapped_inactive_ranges = 0;
 +        let mut other_diagnostics = 0;
 +        if in_repository {
-+            for module in krate.modules(db) {
++            let sources =
++                associations.crates.get(&krate).context("missing observed crate sources")?;
++            let mut parsed_files = ide_db::FxHashSet::default();
++            let mut observe_file = |file: ide_db::base_db::EditionedFileId| {
++                let path = vfs.file_path(file.file_id(db));
++                let path = path.as_path()?.to_string();
++                if parsed_files.insert(file) {
++                    for error in file.parse_errors(db).into_iter().flatten() {
++                        parser_errors.insert(ParserError {
++                            file: path.clone(),
++                            start_byte: error.range().start().into(),
++                            end_byte: error.range().end().into(),
++                            message: error.to_string(),
++                        });
++                    }
++                }
++                Some(path)
++            };
++            for module in &sources.modules {
 +                match module.definition_source_file_id(db).file_id() {
 +                    Some(file) => {
-+                        if let Some(path) = vfs.file_path(file.file_id(db)).as_path() {
-+                            if module_files.insert(path.to_string()) {
-+                                for error in file.parse_errors(db).into_iter().flatten() {
-+                                    parser_errors.insert(ParserError {
-+                                        file: path.to_string(),
-+                                        start_byte: error.range().start().into(),
-+                                        end_byte: error.range().end().into(),
-+                                        message: error.to_string(),
-+                                    });
-+                                }
-+                            }
++                        if let Some(path) = observe_file(file) {
++                            module_files.insert(path);
 +                        } else {
 +                            unmapped_module_sources += 1;
 +                        }
 +                    }
 +                    None => unmapped_module_sources += 1,
 +                }
++            }
++            for (&file, calls) in &sources.included_files {
++                let path = vfs.file_path(file.file_id(db));
++                let Some(path) = path.as_path() else {
++                    unmapped_module_sources += 1;
++                    continue;
++                };
++                included_files.insert(path.to_string());
++                for &call in calls {
++                    for error in super::sniff_source_context::included_parse_errors(db, file, call)?
++                    {
++                        parser_errors.insert(ParserError {
++                            file: path.to_string(),
++                            start_byte: error.range().start().into(),
++                            end_byte: error.range().end().into(),
++                            message: error.to_string(),
++                        });
++                    }
++                    let expansion = call.parse_macro_expansion(db);
++                    include_expansion_errors += usize::from(expansion.err.is_some());
++                    for error in expansion.value.0.errors() {
++                        let range =
++                            hir_expand::map_node_range_up(db, &expansion.value.1, error.range());
++                        if let Some((range, _)) = range.filter(|(range, _)| range.file_id == file) {
++                            parser_errors.insert(ParserError {
++                                file: path.to_string(),
++                                start_byte: range.range.start().into(),
++                                end_byte: range.range.end().into(),
++                                message: error.to_string(),
++                            });
++                        } else {
++                            unmapped_include_parser_errors += 1;
++                        }
++                    }
++                }
++            }
++            for module in krate.modules(db) {
 +                // Module::diagnostics already traverses inline descendants.
 +                if module.is_inline(db) {
 +                    continue;
@@ -2935,12 +3001,15 @@ index 0000000..e79d130
 +            dependencies,
 +            in_repository,
 +            repository_diagnostics_queried: in_repository,
-+            // Crate::modules does not enumerate body/block definition maps.
++            // Observed block maps do not prove exhaustive macro/source coverage.
 +            block_local_module_file_coverage_complete: false,
 +            module_files: module_files.into_iter().collect(),
++            included_files: included_files.into_iter().collect(),
 +            parser_errors: parser_errors.into_iter().collect(),
 +            inactive_ranges: inactive_ranges.into_iter().collect(),
 +            unmapped_module_sources,
++            unmapped_include_parser_errors,
++            include_expansion_errors,
 +            unmapped_inactive_ranges,
 +            other_diagnostics,
 +        });
@@ -3239,6 +3308,148 @@ index 0000000..e79d130
 +    }
 +
 +    #[test]
++    fn block_module_sources_and_parser_errors_are_not_omitted() {
++        for declaration in [
++            "fn work() { #[path = \"nested.rs\"] mod nested; }",
++            "trait Api { fn work() { #[path = \"nested.rs\"] mod nested; } }",
++            "const _: () = { #[path = \"nested.rs\"] mod nested; };",
++            "type Alias = [u8; { #[path = \"nested.rs\"] mod nested; 0 }];",
++            "struct Holder { value: [u8; { #[path = \"nested.rs\"] mod nested; 0 }] }",
++            "enum Choice { A = { #[path = \"nested.rs\"] mod nested; 0 } }",
++        ] {
++            let model = model(
++                &format!("//- /lib.rs crate:main\n{declaration}\n//- /nested.rs\nfn broken( {{\n"),
++                &["lib.rs", "nested.rs"],
++            );
++            let context = &model.crates[0];
++            assert!(
++                context.module_files.iter().any(|file| Path::new(file).ends_with("nested.rs")),
++                "omitted block module: {declaration}"
++            );
++            assert!(
++                context
++                    .parser_errors
++                    .iter()
++                    .any(|error| Path::new(&error.file).ends_with("nested.rs")),
++                "omitted block parser errors: {declaration}"
++            );
++            assert!(!model.declared_world_domain_complete);
++            assert!(!model.input_closure_proven);
++        }
++    }
++
++    #[test]
++    fn included_source_parser_errors_are_not_omitted() {
++        let model = model(
++            "//- /lib.rs crate:main\n#[rustc_builtin_macro] macro_rules! include { () => {} }\ninclude!(\"included.rs\");\n//- /included.rs\nfn broken( {\n",
++            &["lib.rs", "included.rs"],
++        );
++        let context = &model.crates[0];
++        assert!(context.included_files.iter().any(|file| Path::new(file).ends_with("included.rs")));
++        assert!(
++            context
++                .parser_errors
++                .iter()
++                .any(|error| Path::new(&error.file).ends_with("included.rs"))
++        );
++        assert!(!model.declared_world_domain_complete);
++        assert!(!model.input_closure_proven);
++    }
++
++    #[test]
++    fn expression_include_is_not_parsed_as_a_standalone_module() {
++        let model = model(
++            "//- /lib.rs crate:main\n#[rustc_builtin_macro] macro_rules! include { () => {} }\nfn work() { let value = include!(\"value.rs\"); }\n//- /value.rs\n0\n",
++            &["lib.rs", "value.rs"],
++        );
++        let context = &model.crates[0];
++        assert!(context.included_files.iter().any(|file| Path::new(file).ends_with("value.rs")));
++        assert!(
++            !context.parser_errors.iter().any(|error| Path::new(&error.file).ends_with("value.rs"))
++        );
++    }
++
++    #[test]
++    fn include_fragment_grammar_follows_the_backend_call_site() {
++        for (declaration, fragment) in [
++            ("include!(\"fragment.rs\");", "fn work() {}"),
++            ("fn work() { include!(\"fragment.rs\"); }", "let value = 0;"),
++            ("fn work() { let value = include!(\"fragment.rs\"); }", "0"),
++            ("type Value = include!(\"fragment.rs\");", "u8"),
++            ("fn work() { match 0 { include!(\"fragment.rs\") => {} } }", "0"),
++        ] {
++            let model = model(
++                &format!(
++                    "//- /lib.rs crate:main\n#[rustc_builtin_macro] macro_rules! include {{ () => {{}} }}\n{declaration}\n//- /fragment.rs\n{fragment}\n"
++                ),
++                &["lib.rs", "fragment.rs"],
++            );
++            let context = &model.crates[0];
++            assert_eq!(context.included_files.len(), 1, "missing include: {declaration}");
++            assert!(context.parser_errors.is_empty(), "wrong grammar: {declaration}");
++            assert_eq!(context.include_expansion_errors, 0, "{declaration}");
++            assert_eq!(context.unmapped_include_parser_errors, 0, "{declaration}");
++        }
++    }
++
++    #[test]
++    fn included_lexer_errors_keep_original_byte_ranges() {
++        for prefix in ["", "#!/usr/bin/env rust-script\n"] {
++            let fragment = format!("{prefix}\"unterminated");
++            let model = model(
++                &format!(
++                    "//- /lib.rs crate:main\n#[rustc_builtin_macro] macro_rules! include {{ () => {{}} }}\nfn work() {{ let value = include!(\"value.rs\"); }}\n//- /value.rs\n{fragment}"
++                ),
++                &["lib.rs", "value.rs"],
++            );
++            let errors = model.crates[0]
++                .parser_errors
++                .iter()
++                .filter(|error| Path::new(&error.file).ends_with("value.rs"))
++                .collect::<Vec<_>>();
++            assert!(errors.iter().any(|error| error.start_byte == prefix.len() as u32
++                && error.end_byte == fragment.len() as u32));
++            assert!(errors.iter().all(|error| error.start_byte >= prefix.len() as u32
++                && error.start_byte <= error.end_byte
++                && error.end_byte <= fragment.len() as u32));
++        }
++    }
++
++    #[test]
++    fn shebang_include_prefix_does_not_become_a_fragment_error() {
++        let model = model(
++            "//- /lib.rs crate:main\n#[rustc_builtin_macro] macro_rules! include { () => {} }\ninclude!(\"included.rs\");\n//- /included.rs\n#!/usr/bin/env rust-script\nfn included() {}\n",
++            &["lib.rs", "included.rs"],
++        );
++        assert_eq!(model.crates[0].included_files.len(), 1);
++        assert!(model.crates[0].parser_errors.is_empty());
++    }
++
++    #[test]
++    fn observed_block_sources_remain_bound_to_their_own_crate() {
++        let model = model(
++            "//- /one.rs crate:one\nfn work() { #[path = \"first.rs\"] mod nested; }\n//- /first.rs\nfn first() {}\n//- /two.rs crate:two\nfn work() { #[path = \"second.rs\"] mod nested; }\n//- /second.rs\nfn second() {}\n",
++            &["one.rs", "first.rs", "two.rs", "second.rs"],
++        );
++        let one = model
++            .crates
++            .iter()
++            .find(|context| context.identity.name.as_deref() == Some("one"))
++            .unwrap();
++        let two = model
++            .crates
++            .iter()
++            .find(|context| context.identity.name.as_deref() == Some("two"))
++            .unwrap();
++        assert_eq!(one.module_files.len(), 2);
++        assert_eq!(two.module_files.len(), 2);
++        assert!(one.module_files.iter().any(|file| Path::new(file).ends_with("first.rs")));
++        assert!(two.module_files.iter().any(|file| Path::new(file).ends_with("second.rs")));
++        assert!(!one.module_files.iter().any(|file| Path::new(file).ends_with("second.rs")));
++        assert!(!two.module_files.iter().any(|file| Path::new(file).ends_with("first.rs")));
++    }
++
++    #[test]
 +    fn colliding_relative_and_absolute_outputs_are_rejected() {
 +        let dir = tempfile::tempdir().unwrap();
 +        let path = dir.path().join("index.scip");
@@ -3297,13 +3508,13 @@ index 0000000..e79d130
 +}
 diff --git a/crates/rust-analyzer/src/cli/sniff_source_context.rs b/crates/rust-analyzer/src/cli/sniff_source_context.rs
 new file mode 100644
-index 0000000..26ff3ca
+index 0000000..b8d04c9
 --- /dev/null
 +++ b/crates/rust-analyzer/src/cli/sniff_source_context.rs
-@@ -0,0 +1,126 @@
+@@ -0,0 +1,221 @@
 +//! Compiler-owned source associations, including body/block maps and include expansions.
 +
-+use hir::{Crate, MacroCallId};
++use hir::{Crate, MacroCallId, Module};
 +use hir_def::{
 +    AdtId, DefWithBodyId, ExpressionStoreOwnerId, GenericDefId, ModuleDefId,
 +    expr_store::ExpressionStore,
@@ -3313,8 +3524,87 @@ index 0000000..26ff3ca
 +    },
 +};
 +use ide::RootDatabase;
-+use ide_db::{FxHashMap, FxHashSet};
++use ide_db::{
++    FxHashMap, FxHashSet,
++    base_db::{EditionedFileId, SourceDatabase},
++};
 +use vfs::FileId;
++
++#[derive(Default)]
++pub(super) struct CrateSources {
++    pub(super) modules: FxHashSet<Module>,
++    pub(super) included_files: FxHashMap<EditionedFileId, FxHashSet<MacroCallId>>,
++}
++
++pub(super) struct SourceAssociations {
++    pub(super) counts: FxHashMap<FileId, usize>,
++    pub(super) crates: FxHashMap<Crate, CrateSources>,
++}
++
++pub(super) fn included_parse_errors(
++    db: &RootDatabase,
++    file: EditionedFileId,
++    call: MacroCallId,
++) -> anyhow::Result<Vec<syntax::SyntaxError>> {
++    use hir_expand::{ExpandTo, MacroCallKind};
++    let MacroCallKind::FnLike { expand_to, .. } = call.loc(db).kind else {
++        anyhow::bail!("included source has no compiler fragment context");
++    };
++    let entry = match expand_to {
++        ExpandTo::Statements => parser::TopEntryPoint::MacroStmts,
++        ExpandTo::Items => parser::TopEntryPoint::MacroItems,
++        ExpandTo::Pattern => parser::TopEntryPoint::Pattern,
++        ExpandTo::Type => parser::TopEntryPoint::Type,
++        ExpandTo::Expr => parser::TopEntryPoint::Expr,
++    };
++    let edition = file.edition(db);
++    let text = db.file_text(file.file_id(db)).text(db);
++    anyhow::ensure!(
++        text.len() <= u32::MAX as usize,
++        "included source exceeds parser range capacity"
++    );
++    let mut lexed = parser::LexedStr::new(edition, text);
++    let prefix = if !lexed.is_empty() && lexed.kind(0) == syntax::SyntaxKind::SHEBANG {
++        lexed.text_range(0).end
++    } else {
++        0
++    };
++    if prefix != 0 {
++        lexed = parser::LexedStr::new(edition, &text[prefix..]);
++    }
++    let output = entry.parse(&lexed.to_input(edition));
++    let mut builder = syntax::SyntaxTreeBuilder::default();
++    let eof = lexed.intersperse_trivia(&output, &mut |step| match step {
++        parser::StrStep::Token { kind, text } => builder.token(kind, text),
++        parser::StrStep::Enter { kind } => builder.start_node(kind),
++        parser::StrStep::Exit => builder.finish_node(),
++        parser::StrStep::Error { msg, pos } => builder.error(msg.to_owned(), (pos as u32).into()),
++    });
++    anyhow::ensure!(eof, "compiler fragment parser did not consume included source");
++    let mut errors = builder
++        .finish()
++        .errors()
++        .into_iter()
++        .map(|error| {
++            let range = error.range();
++            syntax::SyntaxError::new(
++                error.to_string(),
++                range + syntax::TextSize::from(prefix as u32),
++            )
++        })
++        .collect::<Vec<_>>();
++    for (index, message) in lexed.errors() {
++        let range = lexed.text_range(index);
++        errors.push(syntax::SyntaxError::new(
++            message,
++            syntax::TextRange::new(
++                ((range.start + prefix) as u32).into(),
++                ((range.end + prefix) as u32).into(),
++            ),
++        ));
++    }
++    Ok(errors)
++}
 +
 +fn queue_item(item: ModuleDefId, stores: &mut Vec<ExpressionStoreOwnerId>) {
 +    let generic: GenericDefId = match item {
@@ -3341,16 +3631,30 @@ index 0000000..26ff3ca
 +    db: &RootDatabase,
 +    call: MacroCallId,
 +    includes: &mut FxHashMap<FileId, FxHashSet<MacroCallId>>,
++    crates: &mut FxHashMap<Crate, CrateSources>,
 +) {
-+    if let Some(file) = call.loc(db).include_file_id(db, call) {
++    let location = call.loc(db);
++    if let Some(file) = location.include_file_id(db, call) {
 +        includes.entry(file.file_id(db)).or_default().insert(call);
++        crates
++            .entry(location.krate.into())
++            .or_default()
++            .included_files
++            .entry(file)
++            .or_default()
++            .insert(call);
 +    }
 +}
 +
 +pub(super) fn association_counts(db: &RootDatabase) -> FxHashMap<FileId, usize> {
++    source_associations(db).counts
++}
++
++pub(super) fn source_associations(db: &RootDatabase) -> SourceAssociations {
 +    hir::attach_db(db, || {
 +        let mut direct = FxHashMap::<_, FxHashSet<_>>::default();
 +        let mut includes = FxHashMap::<_, FxHashSet<_>>::default();
++        let mut crates = FxHashMap::<_, CrateSources>::default();
 +        let mut maps = Crate::all(db)
 +            .into_iter()
 +            .map(|krate| crate_def_map(db, krate.base()))
@@ -3364,11 +3668,13 @@ index 0000000..26ff3ca
 +                    continue;
 +                }
 +                for (module_id, module) in map.modules() {
++                    let observed = Module::from(module_id);
++                    crates.entry(observed.krate(db)).or_default().modules.insert(observed);
 +                    if let Some(file) = module.origin.file_id() {
 +                        direct.entry(file.file_id(db)).or_default().insert(module_id);
 +                    }
 +                    for call in module.scope.all_macro_calls() {
-+                        record_include(db, call, &mut includes);
++                        record_include(db, call, &mut includes, &mut crates);
 +                    }
 +                    for id in module.scope.unnamed_consts() {
 +                        queue_item(id.into(), &mut stores);
@@ -3382,7 +3688,7 @@ index 0000000..26ff3ca
 +                                    queue_item((*item).into(), &mut stores);
 +                                }
 +                                for (_, call) in items.macro_calls() {
-+                                    record_include(db, call, &mut includes);
++                                    record_include(db, call, &mut includes, &mut crates);
 +                                }
 +                            }
 +                            ModuleDefId::AdtId(AdtId::EnumId(id)) => {
@@ -3401,7 +3707,7 @@ index 0000000..26ff3ca
 +                            queue_item((*item).into(), &mut stores);
 +                        }
 +                        for (_, call) in items.macro_calls() {
-+                            record_include(db, call, &mut includes);
++                            record_include(db, call, &mut includes, &mut crates);
 +                        }
 +                    }
 +                }
@@ -3413,7 +3719,7 @@ index 0000000..26ff3ca
 +                let (store, sources) = ExpressionStore::with_source_map(db, owner);
 +                maps.extend(store.blocks(db).map(|(_, map)| map));
 +                for (_, call) in sources.macro_calls() {
-+                    record_include(db, call, &mut includes);
++                    record_include(db, call, &mut includes, &mut crates);
 +                }
 +            }
 +        }
@@ -3424,7 +3730,7 @@ index 0000000..26ff3ca
 +        for (file, calls) in includes {
 +            *counts.entry(file).or_default() += calls.len();
 +        }
-+        counts
++        SourceAssociations { counts, crates }
 +    })
 +}
 diff --git a/crates/rust-analyzer/src/config.rs b/crates/rust-analyzer/src/config.rs

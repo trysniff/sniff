@@ -60,7 +60,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Backend test compilation failed' }
           $items = Get-Content compile.jsonl | ForEach-Object { $_ | ConvertFrom-Json }
           foreach ($proof in @(
-            @{ Path='crates/rust-analyzer/src/lib.rs'; Scope='cli::sniff_project_model::tests::'; Count=11 },
+            @{ Path='crates/rust-analyzer/src/lib.rs'; Scope='cli::sniff_project_model::tests::'; Count=18 },
             @{ Path='crates/rust-analyzer/src/lib.rs'; Scope='cli::sniff_crate_context::tests::'; Count=10 },
             @{ Path='crates/rust-analyzer/src/lib.rs'; Scope='cli::scip::test::same_package_targets_preserve_definition_context_in_references_and_sidecar'; Count=1 },
             @{ Path='crates/project-model/src/lib.rs'; Scope='sysroot::sniff_context_tests::'; Count=3 },
