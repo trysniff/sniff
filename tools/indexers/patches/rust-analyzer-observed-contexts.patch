@@ -1,5 +1,5 @@
 diff --git a/Cargo.lock b/Cargo.lock
-index 1a480d6..7c2edd6 100644
+index 1a480d6..81ddc9b 100644
 --- a/Cargo.lock
 +++ b/Cargo.lock
 @@ -133,6 +133,15 @@ version = "2.12.1"
@@ -85,7 +85,16 @@ index 1a480d6..7c2edd6 100644
  [[package]]
  name = "getrandom"
  version = "0.2.17"
-@@ -1960,7 +2008,10 @@ dependencies = [
+@@ -1415,6 +1463,8 @@ dependencies = [
+  "proc-macro-api",
+  "project-model",
+  "span",
++ "temp-dir",
++ "toolchain",
+  "tracing",
+  "tt",
+  "vfs",
+@@ -1960,7 +2010,10 @@ dependencies = [
   "itertools 0.15.0",
   "la-arena 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
   "paths",
@@ -96,7 +105,7 @@ index 1a480d6..7c2edd6 100644
   "semver",
   "serde",
   "serde_derive",
-@@ -2323,6 +2374,7 @@ dependencies = [
+@@ -2323,6 +2376,7 @@ dependencies = [
   "gen-lsp-types",
   "hir",
   "hir-def",
@@ -104,7 +113,7 @@ index 1a480d6..7c2edd6 100644
   "hir-ty",
   "ide",
   "ide-completion",
-@@ -2344,6 +2396,7 @@ dependencies = [
+@@ -2344,6 +2398,7 @@ dependencies = [
   "process-wrap",
   "profile",
   "project-model",
@@ -112,7 +121,7 @@ index 1a480d6..7c2edd6 100644
   "ra-ap-rustc_type_ir",
   "rayon",
   "rustc-hash 2.1.2",
-@@ -2352,10 +2405,12 @@ dependencies = [
+@@ -2352,10 +2407,12 @@ dependencies = [
   "serde",
   "serde_derive",
   "serde_json",
@@ -125,7 +134,7 @@ index 1a480d6..7c2edd6 100644
   "tenthash",
   "test-fixture",
   "test-utils",
-@@ -2586,6 +2641,17 @@ dependencies = [
+@@ -2586,6 +2643,17 @@ dependencies = [
   "serde",
  ]
  
@@ -143,7 +152,7 @@ index 1a480d6..7c2edd6 100644
  [[package]]
  name = "sharded-slab"
  version = "0.1.7"
-@@ -3106,6 +3172,12 @@ version = "1.0.3"
+@@ -3106,6 +3174,12 @@ version = "1.0.3"
  source = "registry+https://github.com/rust-lang/crates.io-index"
  checksum = "bc7d623258602320d5c55d1bc22793b57daff0ec7efc270ea7d55ce1d5f5471c"
  
@@ -156,7 +165,7 @@ index 1a480d6..7c2edd6 100644
  [[package]]
  name = "unarray"
  version = "0.1.4"
-@@ -3179,6 +3251,12 @@ version = "0.1.1"
+@@ -3179,6 +3253,12 @@ version = "0.1.1"
  source = "registry+https://github.com/rust-lang/crates.io-index"
  checksum = "ba73ea9cf16a25df0c8caa16c51acb937d5712a8429db78a3ee29d5dcacd3a65"
  
@@ -287,8 +296,23 @@ index 9e8d772..57cff08 100644
              };
              let mut visited_files = FxHashSet::default();
              for module in work {
+diff --git a/crates/load-cargo/Cargo.toml b/crates/load-cargo/Cargo.toml
+index 7b5e51f..c3796fa 100644
+--- a/crates/load-cargo/Cargo.toml
++++ b/crates/load-cargo/Cargo.toml
+@@ -29,6 +29,10 @@ vfs-notify.workspace = true
+ vfs.workspace = true
+ intern.workspace = true
+ 
++[dev-dependencies]
++temp-dir.workspace = true
++toolchain.workspace = true
++
+ [features]
+ in-rust-tree = ["hir-expand/in-rust-tree", "proc-macro-api/in-rust-tree"]
+ 
 diff --git a/crates/load-cargo/src/lib.rs b/crates/load-cargo/src/lib.rs
-index bf2331a..0d48921 100644
+index bf2331a..7400333 100644
 --- a/crates/load-cargo/src/lib.rs
 +++ b/crates/load-cargo/src/lib.rs
 @@ -8,6 +8,10 @@
@@ -324,7 +348,41 @@ index bf2331a..0d48921 100644
      let mut loader = {
          let loader = vfs_notify::NotifyHandle::spawn(sender);
          Box::new(loader)
-@@ -194,7 +209,8 @@ pub fn load_workspace_into_db(
+@@ -144,17 +159,29 @@ pub fn load_workspace_into_db(
+         }
+     }
+ 
++    let mut unavailable_roots = Vec::new();
+     let (crate_graph, proc_macros) = ws.to_crate_graph(
+         &mut |path: &AbsPath| {
+             let contents = loader.load_sync(path);
+-            let path = vfs::VfsPath::from(path.to_path_buf());
+-            vfs.set_file_contents(path.clone(), contents);
+-            vfs.file_id(&path).and_then(|(file_id, excluded)| {
++            let vfs_path = vfs::VfsPath::from(path.to_path_buf());
++            vfs.set_file_contents(vfs_path.clone(), contents);
++            let file_id = vfs.file_id(&vfs_path).and_then(|(file_id, excluded)| {
+                 (excluded == vfs::FileExcluded::No).then_some(file_id)
+-            })
++            });
++            if retain_sources && file_id.is_none() {
++                unavailable_roots.push(path.to_path_buf());
++            }
++            file_id
+         },
+         extra_env,
+     );
++    unavailable_roots.sort();
++    unavailable_roots.dedup();
++    anyhow::ensure!(
++        unavailable_roots.is_empty(),
++        "could not load crate root sources; refusing a partial graph:\n{}",
++        unavailable_roots.iter().join("\n")
++    );
+     let proc_macros = {
+         let proc_macro_server = match &proc_macro_server {
+             Some(Ok(it)) => Ok(it),
+@@ -194,7 +221,8 @@ pub fn load_workspace_into_db(
          &mut vfs,
          &receiver,
          db,
@@ -334,7 +392,7 @@ index bf2331a..0d48921 100644
  
      if load_config.prefill_caches {
          let all = ide_db::base_db::all_crates(db);
-@@ -518,16 +534,21 @@ fn load_crate_graph_into_db(
+@@ -518,16 +546,21 @@ fn load_crate_graph_into_db(
      vfs: &mut vfs::Vfs,
      receiver: &Receiver<vfs::loader::Message>,
      db: &mut RootDatabase,
@@ -358,7 +416,7 @@ index bf2331a..0d48921 100644
                      break;
                  }
              }
-@@ -540,21 +561,19 @@ fn load_crate_graph_into_db(
+@@ -540,21 +573,19 @@ fn load_crate_graph_into_db(
              }
          }
      }
@@ -388,11 +446,14 @@ index bf2331a..0d48921 100644
  fn expander_to_proc_macro(
 diff --git a/crates/load-cargo/src/source_snapshots.rs b/crates/load-cargo/src/source_snapshots.rs
 new file mode 100644
-index 0000000..8cd2f35
+index 0000000..cc1ad2c
 --- /dev/null
 +++ b/crates/load-cargo/src/source_snapshots.rs
-@@ -0,0 +1,150 @@
+@@ -0,0 +1,153 @@
 +use super::*;
++
++#[cfg(test)]
++mod native_tests;
 +
 +/// Load analysis and retain the exact source buffers supplied by the loader.
 +/// Invalid UTF-8 or an unfinished loader must fail, not silently omit input.
@@ -541,6 +602,168 @@ index 0000000..8cd2f35
 +            assert!(error.contains("snapshot does not match"), "{error}");
 +        }
 +    }
++}
+diff --git a/crates/load-cargo/src/source_snapshots/native_tests.rs b/crates/load-cargo/src/source_snapshots/native_tests.rs
+new file mode 100644
+index 0000000..c6e0452
+--- /dev/null
++++ b/crates/load-cargo/src/source_snapshots/native_tests.rs
+@@ -0,0 +1,156 @@
++use std::{fs, path::PathBuf};
++
++use project_model::{ManifestPath, ProjectWorkspaceKind, RustLibSource};
++
++use super::*;
++
++fn command(root: &AbsPath, program: &str, args: &[&str]) -> String {
++    let output = toolchain::command(program, root, &FxHashMap::default())
++        .env("CARGO_NET_OFFLINE", "true")
++        .env("CARGO_TARGET_DIR", root.join("target"))
++        .args(args)
++        .output()
++        .unwrap();
++    assert!(output.status.success(), "{program}: {}", String::from_utf8_lossy(&output.stderr));
++    String::from_utf8(output.stdout).unwrap().trim().to_owned()
++}
++
++fn fixture(extra_targets: &str) -> (temp_dir::TempDir, AbsPathBuf, CargoConfig) {
++    let dir = temp_dir::TempDir::with_prefix("sniff-native-source-roots").unwrap();
++    let root = AbsPathBuf::assert_utf8(dir.path().to_path_buf());
++    fs::create_dir_all(root.join("src")).unwrap();
++    fs::write(root.join("src/lib.rs"), "pub fn probe() {}\n").unwrap();
++    fs::write(
++        root.join("Cargo.toml"),
++        format!(
++            "[workspace]\n[package]\nname = \"sniff_source_probe\"\nversion = \"0.0.0\"\nedition = \"2024\"\n{extra_targets}"
++        ),
++    )
++    .unwrap();
++    command(&root, "cargo", &["generate-lockfile", "--offline"]);
++
++    // Use the real compiler identity with owned minimal sources, not installed stdlib proof.
++    let sysroot =
++        AbsPathBuf::assert_utf8(PathBuf::from(command(&root, "rustc", &["--print", "sysroot"])));
++    let library = root.join("owned-sysroot");
++    fs::create_dir_all(library.join("core/src")).unwrap();
++    fs::write(library.join("Cargo.toml"), "[workspace]\nmembers = [\"core\"]\nresolver = \"3\"\n")
++        .unwrap();
++    fs::write(
++        library.join("core/Cargo.toml"),
++        "[package]\nname = \"core\"\nversion = \"0.0.0\"\nedition = \"2024\"\n",
++    )
++    .unwrap();
++    fs::write(library.join("core/src/lib.rs"), "#![no_std]\n").unwrap();
++    command(&library, "cargo", &["generate-lockfile", "--offline"]);
++
++    let mut config = CargoConfig {
++        strict_discovery: true,
++        sysroot: Some(RustLibSource::Path(sysroot)),
++        sysroot_src: Some(library),
++        ..Default::default()
++    };
++    config.extra_env.insert("CARGO_NET_OFFLINE".to_owned(), Some("true".to_owned()));
++    config.extra_env.insert("CARGO_TARGET_DIR".to_owned(), Some(root.join("target").to_string()));
++    (dir, root, config)
++}
++
++fn workspace(root: &AbsPath, config: &CargoConfig) -> ProjectWorkspace {
++    let manifest = ManifestPath::try_from(root.join("Cargo.toml")).unwrap();
++    ProjectWorkspace::load(ProjectManifest::CargoToml(manifest), config, &|_| {}).unwrap()
++}
++
++fn load_config() -> LoadCargoConfig {
++    LoadCargoConfig {
++        load_out_dirs_from_check: false,
++        with_proc_macro_server: ProcMacroServerChoice::None,
++        prefill_caches: false,
++        num_worker_threads: 1,
++        proc_macro_processes: 1,
++    }
++}
++
++#[test]
++fn missing_metadata_target_roots_fail_before_database_application() {
++    let (_dir, root, config) = fixture(
++        r#"
++[[example]]
++name = "missing_first"
++path = "examples/missing_first.rs"
++[[example]]
++name = "missing_second"
++path = "examples/missing_second.rs"
++"#,
++    );
++    let ws = workspace(&root, &config);
++    let ProjectWorkspaceKind::Cargo { cargo, .. } = &ws.kind else {
++        panic!("expected Cargo metadata")
++    };
++    for name in ["missing_first", "missing_second"] {
++        assert!(cargo.target_by_root(&root.join(format!("examples/{name}.rs"))).is_some());
++    }
++    let (_, ordinary, _) = load_workspace(ws.clone(), &config.extra_env, &load_config()).unwrap();
++    assert!(ordinary.file_id(&VfsPath::from(root.join("src/lib.rs"))).is_some());
++
++    let mut db = RootDatabase::new(None);
++    let sentinel = FileId::from_raw(9000);
++    db.set_file_text(sentinel, "unchanged");
++    let Err(error) = load_workspace_into_db_with_source_policy(
++        ws,
++        &config.extra_env,
++        &load_config(),
++        &mut db,
++        true,
++    ) else {
++        panic!("strict loader must reject a partial target graph");
++    };
++    assert_eq!(
++        error.to_string(),
++        format!(
++            "could not load crate root sources; refusing a partial graph:\n{}\n{}",
++            root.join("examples/missing_first.rs").normalize(),
++            root.join("examples/missing_second.rs").normalize(),
++        )
++    );
++    assert_eq!(db.file_text(sentinel).text(&db).as_ref(), "unchanged");
++    assert!(ide_db::base_db::all_crates(&db).is_empty());
++}
++
++#[test]
++fn actual_loader_retains_workspace_and_owned_sysroot_bytes() {
++    let (_dir, root, config) = fixture("");
++    let bytes = "\u{feff}// \u{03bb}\r\npub fn probe() {}\r\n".as_bytes();
++    fs::write(root.join("src/lib.rs"), bytes).unwrap();
++    fs::write(root.join("src/inactive.rs"), "fn inactive() {}\n").unwrap();
++    let (db, vfs, _) = load_workspace_with_source_snapshots(
++        workspace(&root, &config),
++        &config.extra_env,
++        &load_config(),
++    )
++    .unwrap();
++    for (file, path) in vfs.iter() {
++        let captured = vfs.source_snapshot(file).unwrap();
++        assert_eq!(db.file_text(file).text(&db).as_bytes(), captured, "{path}");
++    }
++    for relative in ["src/lib.rs", "src/inactive.rs", "owned-sysroot/core/src/lib.rs"] {
++        let (file, excluded) = vfs.file_id(&VfsPath::from(root.join(relative))).unwrap();
++        assert_eq!(excluded, vfs::FileExcluded::No);
++        assert_eq!(vfs.source_snapshot(file).unwrap(), fs::read(root.join(relative)).unwrap());
++    }
++    let (file, _) = vfs.file_id(&VfsPath::from(root.join("src/lib.rs"))).unwrap();
++    assert_eq!(vfs.source_snapshot(file), Some(bytes));
++}
++
++#[test]
++fn actual_worker_invalid_utf8_is_not_silently_omitted() {
++    let (_dir, root, config) = fixture("");
++    fs::write(root.join("src/invalid.rs"), [0xff]).unwrap();
++    let ws = workspace(&root, &config);
++    load_workspace(ws.clone(), &config.extra_env, &load_config()).unwrap();
++    let Err(error) = load_workspace_with_source_snapshots(ws, &config.extra_env, &load_config())
++    else {
++        panic!("strict loader must reject invalid worker input");
++    };
++    let error = error.to_string();
++    assert!(error.contains("invalid.rs") && error.contains("UTF-8"), "{error}");
 +}
 diff --git a/crates/project-model/Cargo.toml b/crates/project-model/Cargo.toml
 index f825a45..192f0cb 100644
