@@ -77,8 +77,10 @@ repeated. Duplicate context identities fail rather than merging ambiguously.
 
 Output files are staged and synced before no-clobber publication. The sidecar
 is published last, only after SCIP publication succeeds. Its byte length and
-TentHash checksum pair it with that SCIP output; **this is not a cryptographic
-security seal**. A sidecar-publication failure can leave a complete SCIP file
+SHA-256 digest pair it with the exact serialized SCIP output. The legacy TentHash
+checksum is retained too. **Neither digest is a signature, authenticated compiler
+provenance, or complete input-closure seal.** `cryptographic_seal` therefore remains
+false. A sidecar-publication failure can leave a complete SCIP file
 and returns an error. It must not be treated as a completed observation pair.
 
 ## Source Buffers
@@ -95,15 +97,29 @@ enabling attribute-macro expansion. Ordinary upstream loading keeps its existing
 behavior and does not retain buffers. Retention adds memory overhead only in
 observation mode; source bytes are not dumped into the sidecar.
 
-This is a prerequisite for source commitments, **not an implemented
-cryptographic commitment or input-closure proof**. Files, configuration and
-build-script inputs can still change during loading; there is no immutable
-workspace snapshot or complete compiler input census here.
+Schema 3 adds `source_bindings`: deterministically sorted absolute VFS paths,
+raw-buffer and analysis-text byte lengths, and separate `raw_sha256_hex` and
+`analysis_sha256_hex` commitments. Existing VFS files and analysis source-root
+files must match exactly. Raw bytes must equal the actual analysis text bytes;
+missing capture, changed buffers, unbound inputs and unsupported virtual paths
+fail rather than reconstructing bytes from analysis or disk. This includes
+loaded inactive and unused files, not just files with emitted symbols.
+
+Every emitted SCIP document must have a canonical repository-relative path and
+a source binding. Duplicate, escaped or unbound document paths fail before
+either output is published. Observed mode converts native Windows document
+separators to `/` and resolves binding paths with the VFS's lexical normalization;
+ordinary upstream SCIP emission is unchanged.
+
+These are **byte commitments, not complete input-closure proof**. They are not
+authenticated independently of the backend that supplies them. Files,
+configuration and build-script inputs can still change during loading; there is
+no immutable workspace snapshot or complete compiler input census here.
 
 ## Selected Contexts
 
-The sidecar uses schema 2 and contract
-`sniff-rust-observed-crate-contexts-v2-not-world-admission`.
+The sidecar uses schema 3 and contract
+`sniff-rust-observed-crate-contexts-v3-not-world-admission`.
 Selected mode independently traverses compiler-owned module/block maps,
 body/signature/field expression stores, associated items and include calls.
 Competing source associations fail rather than letting a first-module lookup
@@ -116,8 +132,9 @@ are qualified by each **definition's** retained backend crate context, including
 referenced dependencies outside emitted documents. Remaining distinct-definition
 symbol aliases fail. Local symbols retain SCIP's document-local semantics.
 The sidecar records the selected root, each emitted document's owner and the
-namespace-to-context mapping for global symbols. Namespace hashes distinguish
-observed identities; they are not security seals or compiler-input closure proof.
+namespace-to-context mapping for global symbols. SHA-256 namespace hashes
+distinguish observed identities; they are not signatures or compiler-input
+closure proof.
 
 Without both selectors, the exporter retains the unselected observation behavior
 and marks occurrence-context selection unavailable. It does not claim coherent
@@ -158,10 +175,11 @@ and sandboxed native qualification remain necessary before production admission.
 
 The `Rust backend observations` workflow applies the patch to the exact pristine
 upstream pin and compiles it with Rust 1.96.0 on Windows, macOS, and Linux. It
-requires all eighteen exporter tests, ten selected-context tests, the same-package
+requires all nineteen exporter tests, ten selected-context tests, the same-package
 symbol-target regression, three sysroot tests, seven strict metadata tests,
 twenty strict discovery tests, five retained-loader tests and five VFS snapshot
-tests, checks
+tests, nine source-binding tests and the nested native-path publication regression,
+checks
 that the binaries came from fresh compilation of that checkout, and runs
 warning-denying Clippy. The owned metadata fixtures execute offline Cargo queries
 and cover failed full queries, argument/config redirection, failed config queries,
@@ -181,5 +199,8 @@ Source-buffer regressions cover byte-preserving BOM/CRLF/Unicode loading,
 rejection of invalid UTF-8 and interrupted loading before source application,
 missing or excluded snapshots, collision detection, update/change merging,
 deletion/recreation, and ordinary-mode preservation.
+Source-commitment regressions cover SHA-256 vectors, actual retained-byte binding,
+stale analysis, missing/extra/deleted/excluded inputs, publication refusal,
+inactive/include buffers, sorted output and canonical nested native document paths.
 These backend library tests are not third-party workspace, sandbox, release-bundle,
 or exhaustive-world proofs. They make no model calls.
