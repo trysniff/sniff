@@ -251,12 +251,23 @@ jobs:
             -- --ignored --test-threads=1 --nocapture
 
   temporal-prior-replay:
-    name: temporal-prior-replay
-    runs-on: ubuntu-latest
+    name: temporal-prior-replay-${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.96.0"
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Verify temporal capture and proof-inventory guards
+        run: python tools/ci/test_temporal_prior_replay.py
       - name: Replay the pinned Scorecard publication witness
         shell: bash
         env:
@@ -264,14 +275,15 @@ jobs:
         run: |
           set -euo pipefail
           query="$(cat src/benchmark_assets/historical-v3-scorecard-publication.graphql)"
-          gh api graphql -f "query=$query" | jq -S . > "$RUNNER_TEMP/scorecard-live.json"
-          jq -S . sniffbench/historical-v3-scorecard-publication-response.json > "$RUNNER_TEMP/scorecard-pinned.json"
-          cmp "$RUNNER_TEMP/scorecard-live.json" "$RUNNER_TEMP/scorecard-pinned.json"
+          gh api graphql -f "query=$query" > "$RUNNER_TEMP/scorecard-live.json"
+          python tools/ci/temporal_prior_replay.py compare "$RUNNER_TEMP/scorecard-live.json" \
+            sniffbench/historical-v3-scorecard-publication-response.json
           frame="$RUNNER_TEMP/scorecard-projects.csv"
           curl --fail --location --silent --show-error --retry 3 --output "$frame" \
             https://raw.githubusercontent.com/ossf/scorecard/40c1e35996730d4fdcbdb2e6a23917a2467e29b7/cron/internal/data/projects.csv
-          echo "55b1de849d6d401bd6529a2806d587b53170cfbe7cdbc2ac5799ab65bf42807a  $frame" | sha256sum --check
-          SNIFF_SCORECARD_FRAME_PATH="$frame" cargo test --lib --locked verifies_real_scorecard_publication_witness -- --ignored
+          python tools/ci/temporal_prior_replay.py sha256 "$frame" \
+            55b1de849d6d401bd6529a2806d587b53170cfbe7cdbc2ac5799ab65bf42807a
+          SNIFF_SCORECARD_FRAME_PATH="$frame" python tools/ci/temporal_prior_replay.py test scorecard
       - name: Replay the blind prior repository identities
         shell: bash
         env:
@@ -279,23 +291,20 @@ jobs:
         run: |
           set -euo pipefail
           query="$(cat src/benchmark_assets/historical-v3-blind-prior-identities.graphql)"
-          gh api graphql -f "query=$query" \
-            | jq -e 'if has("errors") then error("GitHub GraphQL returned errors") else .data end' \
-            | jq -S . > "$RUNNER_TEMP/blind-identities-live.json"
-          jq -S . sniffbench/historical-v3-blind-prior-identities-response.json \
-            > "$RUNNER_TEMP/blind-identities-pinned.json"
-          cmp "$RUNNER_TEMP/blind-identities-live.json" "$RUNNER_TEMP/blind-identities-pinned.json"
+          gh api graphql -f "query=$query" > "$RUNNER_TEMP/blind-identities-live.json"
+          python tools/ci/temporal_prior_replay.py compare "$RUNNER_TEMP/blind-identities-live.json" \
+            sniffbench/historical-v3-blind-prior-identities-response.json --data-only
           mkdir -p "$RUNNER_TEMP/blind-prior"
           gh release download sniffbench-blind-oss-v1-source-seal --repo trysniff/sniff \
             --pattern sniffbench-blind-oss-v1-source-seal.zip --dir "$RUNNER_TEMP/blind-prior"
           archive="$RUNNER_TEMP/blind-prior/sniffbench-blind-oss-v1-source-seal.zip"
-          echo "9cfca885c88ce7f8d2c7cc01114b6bc129acd5e2dfa432ef3b255858a51b65a9  $archive" \
-            | sha256sum --check
+          python tools/ci/temporal_prior_replay.py sha256 "$archive" \
+            9cfca885c88ce7f8d2c7cc01114b6bc129acd5e2dfa432ef3b255858a51b65a9
           mkdir -p "$RUNNER_TEMP/blind-prior/extracted"
-          python3 tools/ci/extract_blind_source_seal.py \
+          python tools/ci/extract_blind_source_seal.py \
             "$archive" "$RUNNER_TEMP/blind-prior/extracted"
           SNIFF_BLIND_SEAL_PATH="$RUNNER_TEMP/blind-prior/extracted/blind-source-seal.json" \
-            cargo test --lib --locked verifies_real_blind_prior_temporal_proof -- --ignored
+            python tools/ci/temporal_prior_replay.py test blind
       - name: Replay research and synthetic prior identities
         shell: bash
         env:
@@ -303,15 +312,12 @@ jobs:
         run: |
           set -euo pipefail
           query="$(cat src/benchmark_assets/historical-v3-small-prior-identities.graphql)"
-          gh api graphql -f "query=$query" \
-            | jq -e 'if has("errors") then error("GitHub GraphQL returned errors") else .data end' \
-            | jq -S . > "$RUNNER_TEMP/small-prior-live.json"
-          jq -S . sniffbench/historical-v3-small-prior-identities-response.json \
-            > "$RUNNER_TEMP/small-prior-pinned.json"
-          cmp "$RUNNER_TEMP/small-prior-live.json" "$RUNNER_TEMP/small-prior-pinned.json"
+          gh api graphql -f "query=$query" > "$RUNNER_TEMP/small-prior-live.json"
+          python tools/ci/temporal_prior_replay.py compare "$RUNNER_TEMP/small-prior-live.json" \
+            sniffbench/historical-v3-small-prior-identities-response.json --data-only
           test "$(git rev-parse HEAD:gold_fixtures/repo)" = \
             ecb744731cbd00242f93a067632c390b0ddf344d
-          cargo test --lib --locked benchmark::release::history_v3_small_prior_temporal::tests
+          python tools/ci/temporal_prior_replay.py test small
 
   native-go-worlds:
     name: go-worlds-${{ matrix.os }}
