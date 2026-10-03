@@ -405,16 +405,22 @@ fn verifies_real_frozen_v2_temporal_proof() {
     .unwrap();
     assert_eq!(proof.witnesses.len(), 664);
     assert!(proof.latest_witness_utc < proof.cutoff_utc);
+    let committed: HistoricalV3PriorV2TemporalProof =
+        serde_json::from_slice(COMMITTED_V2_TEMPORAL_PROOF).unwrap();
+    assert_eq!(
+        proof, committed,
+        "committed historical-v2 temporal proof differs from the pinned source replay"
+    );
     validate_frozen_historical_v3_prior_v2_temporal_proof(
         source_root,
         dataset_root,
         &frame,
         &exclusions,
         &selection,
-        &proof,
+        &committed,
     )
     .unwrap();
-    let mut tampered = proof.clone();
+    let mut tampered = committed;
     tampered.latest_witness_utc = "2026-01-01T00:00:00Z".to_string();
     assert!(
         validate_frozen_historical_v3_prior_v2_temporal_proof(
