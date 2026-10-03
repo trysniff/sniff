@@ -18,6 +18,124 @@ index 1a480d6..b1f6353 100644
   "tenthash",
   "test-fixture",
   "test-utils",
+diff --git a/crates/ide/src/static_index.rs b/crates/ide/src/static_index.rs
+index 9e8d772..57cff08 100644
+--- a/crates/ide/src/static_index.rs
++++ b/crates/ide/src/static_index.rs
+@@ -32,6 +32,7 @@ pub struct StaticIndex<'a> {
+     analysis: &'a Analysis,
+     db: &'a RootDatabase,
+     def_map: FxHashMap<Definition<'a>, TokenId>,
++    all_macro_associations: bool,
+ }
+ 
+ #[derive(Debug)]
+@@ -42,6 +43,7 @@ pub struct ReferenceData {
+ 
+ #[derive(Debug)]
+ pub struct TokenStaticData {
++    pub definition_crate: Option<Crate>,
+     // FIXME: Make this have the lifetime of the database.
+     pub documentation: Option<Documentation<'static>>,
+     pub hover: Option<HoverResult>,
+@@ -107,6 +109,10 @@ impl TokenStore {
+     pub fn iter(self) -> impl Iterator<Item = (TokenId, TokenStaticData)> {
+         self.0.into_iter().enumerate().map(|(id, data)| (TokenId(id), data))
+     }
++
++    pub fn iter_ref(&self) -> impl Iterator<Item = (TokenId, &TokenStaticData)> {
++        self.0.iter().enumerate().map(|(id, data)| (TokenId(id), data))
++    }
+ }
+ 
+ #[derive(Debug)]
+@@ -164,12 +170,34 @@ pub enum VendoredLibrariesConfig<'a> {
+     Excluded,
+ }
+ 
++fn get_all_definitions<'db>(
++    sema: &Semantics<'db, RootDatabase>,
++    token: SyntaxToken,
++) -> Vec<Definition<'db>> {
++    let mut seen = FxHashSet::default();
++    let mut definitions = Vec::new();
++    for token in sema.descend_into_macros_exact(token) {
++        if let Some(class) = IdentClass::classify_token(sema, &token) {
++            for (definition, _) in class.definitions() {
++                if seen.insert(definition) {
++                    definitions.push(definition);
++                }
++            }
++        }
++    }
++    definitions
++}
++
+ impl<'a> StaticIndex<'a> {
+     fn add_file(&mut self, file_id: FileId) {
+-        let current_crate = crates_for(self.db, file_id).pop().map(Into::into);
+         let folds = self.analysis.folding_ranges(file_id, true).unwrap();
+         // hovers
+         let sema = hir::Semantics::new(self.db);
++        let current_crate = if self.all_macro_associations {
++            sema.file_to_module_def(file_id).map(|module| module.krate(self.db))
++        } else {
++            crates_for(self.db, file_id).pop().map(Into::into)
++        };
+         let root = sema.parse_guess_edition(file_id).syntax().clone();
+         let edition = sema.attach_first_edition(file_id).edition(sema.db);
+         let display_target = match sema.first_crate(file_id) {
+@@ -201,6 +229,7 @@ impl<'a> StaticIndex<'a> {
+             } else {
+                 let nav = def.try_to_nav(&sema).map(UpmappingResult::call_site);
+                 let it = self.tokens.insert(TokenStaticData {
++                    definition_crate: def.krate(self.db),
+                     documentation: documentation_for_definition(&sema, def, scope_node),
+                     hover: Some(hover_for_definition(
+                         &sema,
+@@ -253,6 +282,12 @@ impl<'a> StaticIndex<'a> {
+         for token in tokens {
+             let range = token.text_range();
+             let node = token.parent().unwrap();
++            if self.all_macro_associations {
++                for def in hir::attach_db(self.db, || get_all_definitions(&sema, token.clone())) {
++                    add_token(def, range, &node);
++                }
++                continue;
++            }
+             match hir::attach_db(self.db, || get_definitions(&sema, token.clone())) {
+                 Some(defs) => {
+                     for (def, _) in defs {
+@@ -268,6 +303,21 @@ impl<'a> StaticIndex<'a> {
+     pub fn compute(
+         analysis: &'a Analysis,
+         vendored_libs_config: VendoredLibrariesConfig<'_>,
++    ) -> StaticIndex<'a> {
++        Self::compute_inner(analysis, vendored_libs_config, false)
++    }
++
++    pub fn compute_with_all_macro_associations(
++        analysis: &'a Analysis,
++        vendored_libs_config: VendoredLibrariesConfig<'_>,
++    ) -> StaticIndex<'a> {
++        Self::compute_inner(analysis, vendored_libs_config, true)
++    }
++
++    fn compute_inner(
++        analysis: &'a Analysis,
++        vendored_libs_config: VendoredLibrariesConfig<'_>,
++        all_macro_associations: bool,
+     ) -> StaticIndex<'a> {
+         let db = &analysis.db;
+         hir::attach_db(db, || {
+@@ -291,6 +341,7 @@ impl<'a> StaticIndex<'a> {
+                 analysis,
+                 db,
+                 def_map: Default::default(),
++                all_macro_associations,
+             };
+             let mut visited_files = FxHashSet::default();
+             for module in work {
 diff --git a/crates/project-model/src/sysroot.rs b/crates/project-model/src/sysroot.rs
 index 546a1e0..dc21fd5 100644
 --- a/crates/project-model/src/sysroot.rs
@@ -89,41 +207,49 @@ index ae0c957..9bc0099 100644
  
  cfg.workspace = true
 diff --git a/crates/rust-analyzer/src/cli.rs b/crates/rust-analyzer/src/cli.rs
-index cc0efe9..e346d16 100644
+index cc0efe9..cff3508 100644
 --- a/crates/rust-analyzer/src/cli.rs
 +++ b/crates/rust-analyzer/src/cli.rs
-@@ -12,6 +12,7 @@ mod prime_caches;
+@@ -12,6 +12,9 @@ mod prime_caches;
  mod run_tests;
  mod rustc_tests;
  mod scip;
++mod sniff_crate_context;
 +mod sniff_project_model;
++mod sniff_source_context;
  mod ssr;
  mod symbols;
  mod unresolved_references;
 diff --git a/crates/rust-analyzer/src/cli/flags.rs b/crates/rust-analyzer/src/cli/flags.rs
-index 0384993..85ed753 100644
+index 0384993..27cbe87 100644
 --- a/crates/rust-analyzer/src/cli/flags.rs
 +++ b/crates/rust-analyzer/src/cli/flags.rs
-@@ -189,6 +189,9 @@ xflags::xflags! {
+@@ -189,6 +189,13 @@ xflags::xflags! {
              /// A path to an json configuration file that can be used to customize cargo behavior.
              optional --config-path config_path: PathBuf
  
 +            /// Export observed Sniff crate contexts alongside SCIP. This is not a complete world census.
 +            optional --sniff-project-model-output path: PathBuf
 +
++            /// Select exactly one backend crate and its compiler dependency closure.
++            optional --sniff-crate-root path: PathBuf
++            optional --sniff-crate-name name: String
++
              /// Exclude code from vendored libraries from the resulting index.
              optional --exclude-vendored-libraries
  
-@@ -340,6 +343,7 @@ pub struct Scip {
+@@ -340,6 +347,9 @@ pub struct Scip {
  
      pub output: Option<PathBuf>,
      pub config_path: Option<PathBuf>,
 +    pub sniff_project_model_output: Option<PathBuf>,
++    pub sniff_crate_root: Option<PathBuf>,
++    pub sniff_crate_name: Option<String>,
      pub exclude_vendored_libraries: bool,
      pub num_threads: Option<usize>,
  }
 diff --git a/crates/rust-analyzer/src/cli/scip.rs b/crates/rust-analyzer/src/cli/scip.rs
-index 3d904e7..e0d9943 100644
+index 3d904e7..960878c 100644
 --- a/crates/rust-analyzer/src/cli/scip.rs
 +++ b/crates/rust-analyzer/src/cli/scip.rs
 @@ -11,7 +11,6 @@ use ide_db::line_index;
@@ -134,10 +260,16 @@ index 3d904e7..e0d9943 100644
  use vfs::FileId;
  
  use crate::{
-@@ -28,6 +27,12 @@ impl flags::Scip {
+@@ -28,6 +27,18 @@ impl flags::Scip {
          let no_progress = &|s| eprintln!("rust-analyzer: Loading {s}");
          let root =
              vfs::AbsPathBuf::assert_utf8(std::env::current_dir()?.join(&self.path)).normalize();
++        let requested_context = super::sniff_crate_context::requested_context(
++            &root,
++            self.sniff_crate_root.as_deref(),
++            self.sniff_crate_name.as_deref(),
++            self.sniff_project_model_output.is_some(),
++        )?;
 +        let out_path = self.output.unwrap_or_else(|| PathBuf::from(r"index.scip"));
 +        let observed_outputs = self
 +            .sniff_project_model_output
@@ -147,7 +279,7 @@ index 3d904e7..e0d9943 100644
  
          let mut config = crate::config::Config::new(
              root.clone(),
-@@ -45,8 +50,7 @@ impl flags::Scip {
+@@ -45,8 +56,7 @@ impl flags::Scip {
              let error_sink;
              (config, error_sink, _) = config.apply_change(change);
  
@@ -157,7 +289,7 @@ index 3d904e7..e0d9943 100644
          }
          let load_cargo_config = LoadCargoConfig {
              load_out_dirs_from_check: true,
-@@ -56,12 +60,21 @@ impl flags::Scip {
+@@ -56,12 +66,25 @@ impl flags::Scip {
              proc_macro_processes: config.proc_macro_num_processes(),
          };
          let cargo_config = config.cargo(None);
@@ -167,7 +299,7 @@ index 3d904e7..e0d9943 100644
 -            &load_cargo_config,
 -            &no_progress,
 -        )?;
-+        let (db, vfs, _) = if self.sniff_project_model_output.is_some() {
++        let (mut db, vfs, _) = if self.sniff_project_model_output.is_some() {
 +            super::sniff_project_model::load_observed_workspace(
 +                &root,
 +                &cargo_config,
@@ -182,10 +314,49 @@ index 3d904e7..e0d9943 100644
 +                &no_progress,
 +            )?
 +        };
++        let selected_context = requested_context
++            .as_ref()
++            .map(|(path, name)| super::sniff_crate_context::select_crate(&mut db, &vfs, path, name))
++            .transpose()?;
          let host = AnalysisHost::with_database(db);
          let db = host.raw_database();
          let analysis = host.analysis();
-@@ -282,9 +295,12 @@ impl flags::Scip {
+@@ -72,7 +95,17 @@ impl flags::Scip {
+             VendoredLibrariesConfig::Included { workspace_root: &root.clone().into() }
+         };
+ 
+-        let si = StaticIndex::compute(&analysis, vendored_libs_config);
++        let si = if selected_context.is_some() {
++            StaticIndex::compute_with_all_macro_associations(&analysis, vendored_libs_config)
++        } else {
++            StaticIndex::compute(&analysis, vendored_libs_config)
++        };
++        if selected_context.is_some() {
++            let counts = super::sniff_source_context::association_counts(db);
++            for file in &si.files {
++                super::sniff_crate_context::document_owner_with_counts(db, file.file_id, &counts)?;
++            }
++        }
+ 
+         let metadata = scip_types::Metadata {
+             version: scip_types::ProtocolVersion::UnspecifiedProtocolVersion.into(),
+@@ -130,7 +163,14 @@ impl flags::Scip {
+             };
+ 
+         // Generates symbols from token monikers.
+-        let mut symbol_generator = SymbolGenerator::default();
++        let mut symbol_generator = if selected_context.is_some() {
++            SymbolGenerator::with_contexts(
++                &si,
++                super::sniff_project_model::context_namespaces(db, &vfs)?,
++            )?
++        } else {
++            SymbolGenerator::default()
++        };
+ 
+         for StaticIndexedFile { file_id, tokens, .. } in si.files {
+             symbol_generator.clear_document_local_state();
+@@ -282,9 +322,12 @@ impl flags::Scip {
              }
          }
  
@@ -193,7 +364,7 @@ index 3d904e7..e0d9943 100644
 -        scip::write_message_to_file(out_path, index)
 -            .map_err(|err| anyhow::format_err!("Failed to write scip to file: {}", err))?;
 +        if let Some(outputs) = observed_outputs {
-+            outputs.publish(index, db, &vfs, &root)?;
++            outputs.bind_context(selected_context).publish(index, db, &vfs, &root)?;
 +        } else {
 +            scip::write_message_to_file(out_path, index)
 +                .map_err(|err| anyhow::format_err!("Failed to write scip to file: {}", err))?;
@@ -201,12 +372,562 @@ index 3d904e7..e0d9943 100644
  
          eprintln!("Generating SCIP finished {:?}", now.elapsed());
          Ok(())
+@@ -430,22 +473,90 @@ struct TokenSymbols {
+ struct SymbolGenerator {
+     token_to_symbols: FxHashMap<TokenId, Option<TokenSymbols>>,
+     local_count: usize,
++    context_namespaces: Option<FxHashMap<hir::Crate, String>>,
+ }
+ 
+ impl SymbolGenerator {
++    fn with_contexts(
++        index: &StaticIndex<'_>,
++        contexts: FxHashMap<hir::Crate, String>,
++    ) -> anyhow::Result<Self> {
++        let generator = Self { context_namespaces: Some(contexts), ..Self::default() };
++        let mut targets = FxHashMap::default();
++        for (id, token) in index.tokens.iter_ref() {
++            if let Some(moniker) = &token.moniker {
++                generator.validate_context(moniker, token)?;
++                if let MonikerResult::Moniker(moniker) = moniker {
++                    let symbol = scip::symbol::format_symbol(Self::context_symbol(
++                        moniker,
++                        token,
++                        &generator.context_namespaces,
++                    ));
++                    anyhow::ensure!(
++                        targets.insert(symbol, id).is_none(),
++                        "distinct backend definitions alias one qualified SCIP target"
++                    );
++                }
++            }
++        }
++        Ok(generator)
++    }
++
++    fn validate_context(
++        &self,
++        moniker: &MonikerResult,
++        token: &TokenStaticData,
++    ) -> anyhow::Result<()> {
++        if matches!(
++            moniker,
++            MonikerResult::Moniker(_) | MonikerResult::Local { enclosing_moniker: Some(_) }
++        ) {
++            let krate = token
++                .definition_crate
++                .ok_or_else(|| anyhow::anyhow!("SCIP target has no backend definition context"))?;
++            anyhow::ensure!(
++                self.context_namespaces
++                    .as_ref()
++                    .is_some_and(|contexts| contexts.contains_key(&krate)),
++                "SCIP target is outside the selected compiler closure"
++            );
++        }
++        Ok(())
++    }
++
++    fn context_symbol(
++        moniker: &Moniker,
++        token: &TokenStaticData,
++        contexts: &Option<FxHashMap<hir::Crate, String>>,
++    ) -> scip_types::Symbol {
++        let mut symbol = moniker_to_symbol(moniker);
++        if let Some(contexts) = contexts {
++            let namespace = contexts
++                .get(&token.definition_crate.expect("validated backend definition context"))
++                .expect("validated compiler closure");
++            symbol.descriptors.insert(
++                0,
++                new_descriptor_str(namespace, scip_types::descriptor::Suffix::Namespace),
++            );
++        }
++        symbol
++    }
+     fn clear_document_local_state(&mut self) {
+         self.local_count = 0;
+     }
+ 
+     fn token_symbols(&mut self, id: TokenId, token: &TokenStaticData) -> Option<TokenSymbols> {
+         let mut local_count = self.local_count;
++        let contexts = &self.context_namespaces;
+         let token_symbols = self
+             .token_to_symbols
+             .entry(id)
+             .or_insert_with(|| {
+                 Some(match token.moniker.as_ref()? {
+                     MonikerResult::Moniker(moniker) => TokenSymbols {
+-                        symbol: scip::symbol::format_symbol(moniker_to_symbol(moniker)),
++                        symbol: scip::symbol::format_symbol(Self::context_symbol(
++                            moniker, token, contexts,
++                        )),
+                         enclosing_symbol: None,
+                         is_inherent_impl: match &moniker.identifier.description[..] {
+                             // inherent impls are represented as impl#[SelfType]
+@@ -463,7 +574,7 @@ impl SymbolGenerator {
+                             symbol: scip::symbol::format_symbol(local_symbol),
+                             enclosing_symbol: enclosing_moniker
+                                 .as_ref()
+-                                .map(moniker_to_symbol)
++                                .map(|moniker| Self::context_symbol(moniker, token, contexts))
+                                 .map(scip::symbol::format_symbol),
+                             is_inherent_impl: false,
+                         }
+@@ -522,6 +633,127 @@ mod test {
+     use test_fixture::ChangeFixture;
+     use vfs::VfsPath;
+ 
++    #[test]
++    fn same_package_targets_preserve_definition_context_in_references_and_sidecar() {
++        use ide_db::base_db::{CrateOrigin, SourceDatabase, salsa::Setter};
++        use test_fixture::WithFixture;
++
++        let source = "pub fn api() {}\nfn main() { api(); library::api(); }\n";
++        let (mut db, files) = RootDatabase::with_many_files(&format!(
++            "//- /library.rs crate:library@1.0.0,https://example.invalid/shared.git\npub fn api() {{}}\n//- /binary.rs crate:binary@1.0.0,https://example.invalid/shared.git deps:library\n{source}"
++        ));
++        let root = vfs::AbsPathBuf::assert_utf8(std::env::temp_dir().join("sniff-shared-package"));
++        let mut vfs = vfs::Vfs::default();
++        for (file, path) in files.iter().zip(["library.rs", "binary.rs"]) {
++            let path = VfsPath::from(root.join(path));
++            vfs.set_file_contents(
++                path.clone(),
++                Some(db.file_text(file.file_id(&db)).text(&db).as_bytes().to_vec()),
++            );
++            assert_eq!(vfs.file_id(&path).unwrap().0, file.file_id(&db));
++        }
++        for krate in hir::Crate::all(&db) {
++            let base = krate.base();
++            let mut data = base.data(&db).clone();
++            data.origin = CrateOrigin::Local {
++                repo: None,
++                name: Some(intern::Symbol::intern("shared-package")),
++            };
++            base.set_data(&mut db).to(data);
++        }
++        let selected = super::super::sniff_crate_context::select_crate(
++            &mut db,
++            &vfs,
++            &root.join("binary.rs"),
++            "binary",
++        )
++        .unwrap();
++        let contexts = super::super::sniff_project_model::context_namespaces(&db, &vfs).unwrap();
++        assert_eq!(contexts.len(), 2);
++        let host = AnalysisHost::with_database(db);
++        let db = host.raw_database();
++        let analysis = host.analysis();
++        let index = StaticIndex::compute_with_all_macro_associations(
++            &analysis,
++            VendoredLibrariesConfig::Excluded,
++        );
++        let apis = index
++            .tokens
++            .iter_ref()
++            .filter(|(_, token)| token.display_name.as_deref() == Some("api"))
++            .collect::<Vec<_>>();
++        assert_eq!(apis.len(), 2);
++        let unqualified = apis
++            .iter()
++            .map(|(_, token)| {
++                let Some(MonikerResult::Moniker(moniker)) = &token.moniker else {
++                    panic!("API is not globally identified");
++                };
++                scip::symbol::format_symbol(moniker_to_symbol(moniker))
++            })
++            .collect::<Vec<_>>();
++        assert_eq!(unqualified[0], unqualified[1]);
++
++        let mut generator = SymbolGenerator::with_contexts(&index, contexts.clone()).unwrap();
++        let symbols = apis
++            .iter()
++            .map(|(id, token)| generator.token_symbols(*id, token).unwrap().symbol)
++            .collect::<Vec<_>>();
++        assert_ne!(symbols[0], symbols[1]);
++        let binary = index.files.iter().find(|file| file.file_id == files[1].file_id(db)).unwrap();
++        let own_call = source.find("api();").unwrap() as u32;
++        let dependency_call = source.rfind("api();").unwrap() as u32;
++        let mut occurrences = Vec::new();
++        for (offset, is_selected) in [(own_call, true), (dependency_call, false)] {
++            let (_, id) =
++                binary.tokens.iter().find(|(range, _)| u32::from(range.start()) == offset).unwrap();
++            let token = index.tokens.get(*id).unwrap();
++            assert_eq!(token.definition_crate == Some(selected), is_selected);
++            let symbol = generator.token_symbols(*id, token).unwrap().symbol;
++            let namespace = &contexts[&token.definition_crate.unwrap()];
++            assert!(symbol.contains(namespace));
++            occurrences.push(scip_types::Occurrence { symbol, ..Default::default() });
++        }
++        assert_ne!(occurrences[0].symbol, occurrences[1].symbol);
++
++        let mut missing = contexts.clone();
++        missing.remove(&selected.dependencies(db)[0].krate);
++        assert!(SymbolGenerator::with_contexts(&index, missing).is_err());
++        let aliased = contexts.keys().map(|krate| (*krate, "same-context".to_owned())).collect();
++        assert!(SymbolGenerator::with_contexts(&index, aliased).is_err());
++
++        let dir = tempfile::tempdir().unwrap();
++        let model_path = dir.path().join("model.json");
++        super::super::sniff_project_model::ObservedOutputs::prepare(
++            &dir.path().join("index.scip"),
++            &model_path,
++        )
++        .unwrap()
++        .bind_context(Some(selected))
++        .publish(
++            scip_types::Index {
++                documents: vec![scip_types::Document {
++                    relative_path: "binary.rs".to_owned(),
++                    occurrences,
++                    ..Default::default()
++                }],
++                ..Default::default()
++            },
++            db,
++            &vfs,
++            &root,
++        )
++        .unwrap();
++        let model: serde_json::Value =
++            serde_json::from_slice(&std::fs::read(model_path).unwrap()).unwrap();
++        let ledger = model["scip_binding"]["symbol_context_namespaces"].as_array().unwrap();
++        assert_eq!(ledger.len(), 2);
++        for (krate, namespace) in contexts {
++            let entry = ledger.iter().find(|entry| entry["namespace"] == namespace).unwrap();
++            assert_eq!(entry["context"]["root"], vfs.file_path(krate.root_file(db)).to_string());
++        }
++    }
++
+     fn position(#[rust_analyzer::rust_fixture] ra_fixture: &str) -> (AnalysisHost, FilePosition) {
+         let mut host = AnalysisHost::default();
+         let change_fixture = ChangeFixture::parse(ra_fixture);
+diff --git a/crates/rust-analyzer/src/cli/sniff_crate_context.rs b/crates/rust-analyzer/src/cli/sniff_crate_context.rs
+new file mode 100644
+index 0000000..1e254cd
+--- /dev/null
++++ b/crates/rust-analyzer/src/cli/sniff_crate_context.rs
+@@ -0,0 +1,315 @@
++//! Select backend crate inputs before constructing any analysis snapshots.
++
++use std::path::Path;
++
++use anyhow::{Result, ensure};
++use hir::{Crate, Semantics};
++use ide::RootDatabase;
++use ide_db::{
++    FxHashSet,
++    base_db::{all_crates, salsa::Durability, set_all_crates_with_durability},
++};
++use vfs::{AbsPathBuf, FileId, Vfs};
++
++pub(super) fn requested_context(
++    root: &AbsPathBuf,
++    path: Option<&Path>,
++    name: Option<&str>,
++    observed_output: bool,
++) -> Result<Option<(AbsPathBuf, String)>> {
++    match (path, name) {
++        (None, None) => Ok(None),
++        (Some(path), Some(name)) => {
++            ensure!(observed_output, "crate selection requires observed context output");
++            ensure!(!name.is_empty(), "crate name must not be empty");
++            let root_path: &Path = root.as_path().as_ref();
++            let path = AbsPathBuf::assert_utf8(root_path.join(path)).normalize();
++            ensure!(path.starts_with(root), "selected crate root is outside the repository");
++            Ok(Some((path, name.to_owned())))
++        }
++        _ => anyhow::bail!("crate selection requires both root and name"),
++    }
++}
++
++pub(super) fn select_crate(
++    db: &mut RootDatabase,
++    vfs: &Vfs,
++    root: &AbsPathBuf,
++    name: &str,
++) -> Result<Crate> {
++    let candidates = Crate::all(db)
++        .into_iter()
++        .filter(|krate| {
++            vfs.file_path(krate.root_file(db))
++                .as_path()
++                .is_some_and(|path| path.normalize() == *root)
++                && krate.display_name(db).is_some_and(|display| display.to_string() == name)
++        })
++        .collect::<Vec<_>>();
++    ensure!(candidates.len() == 1, "selected backend crate root/name is missing or ambiguous");
++    let selected = candidates[0];
++    let mut keep = FxHashSet::default();
++    let mut work = vec![selected];
++    while let Some(krate) = work.pop() {
++        if keep.insert(krate) {
++            work.extend(krate.dependencies(db).into_iter().map(|dependency| dependency.krate));
++        }
++    }
++    // Preserve upstream topological order and unmodified compiler dependency inputs.
++    let retained = all_crates(db)
++        .iter()
++        .copied()
++        .filter(|krate| keep.contains(&Crate::from(*krate)))
++        .collect::<Vec<_>>();
++    ensure!(retained.len() == keep.len(), "selected compiler dependency closure is incomplete");
++    set_all_crates_with_durability(db, retained, Durability::HIGH);
++    Ok(selected)
++}
++
++#[cfg(test)]
++fn document_owner(db: &RootDatabase, file: FileId) -> Result<Crate> {
++    let counts = super::sniff_source_context::association_counts(db);
++    document_owner_with_counts(db, file, &counts)
++}
++
++pub(super) fn document_owner_with_counts(
++    db: &RootDatabase,
++    file: FileId,
++    counts: &ide_db::FxHashMap<FileId, usize>,
++) -> Result<Crate> {
++    ensure!(
++        counts.get(&file) == Some(&1),
++        "indexed source has missing or competing compiler file/include/block associations: {file:?}"
++    );
++    hir::attach_db(db, || {
++        let sema = Semantics::new(db);
++        let modules = sema.file_to_module_defs(file).collect::<Vec<_>>();
++        ensure!(
++            modules.len() == 1,
++            "indexed source has missing or ambiguous compiler module ownership: {file:?}"
++        );
++        Ok(modules[0].krate(db))
++    })
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use ide::{AnalysisHost, StaticIndex, VendoredLibrariesConfig};
++    use ide_db::base_db::SourceDatabase;
++    use test_fixture::WithFixture;
++    use vfs::VfsPath;
++
++    fn fixture(text: &str, paths: &[&str]) -> (RootDatabase, Vfs, AbsPathBuf) {
++        let (db, files) = RootDatabase::with_many_files(text);
++        let root = AbsPathBuf::assert_utf8(std::env::temp_dir().join("sniff-crate-context-unit"));
++        let mut vfs = Vfs::default();
++        assert_eq!(files.len(), paths.len());
++        for (file, path) in files.iter().zip(paths) {
++            let path = VfsPath::from(root.join(path));
++            vfs.set_file_contents(
++                path.clone(),
++                Some(db.file_text(file.file_id(&db)).text(&db).as_bytes().to_vec()),
++            );
++            assert_eq!(vfs.file_id(&path).unwrap().0, file.file_id(&db));
++        }
++        (db, vfs, root)
++    }
++
++    #[test]
++    fn selector_requires_a_complete_pair_and_observation_output() {
++        let root = AbsPathBuf::assert_utf8(std::env::temp_dir().join("sniff-context-request"));
++        assert!(requested_context(&root, Some(Path::new("lib.rs")), None, true).is_err());
++        assert!(requested_context(&root, None, Some("main"), true).is_err());
++        assert!(requested_context(&root, Some(Path::new("lib.rs")), Some("main"), false).is_err());
++        assert!(requested_context(&root, Some(Path::new("lib.rs")), Some(""), true).is_err());
++        assert!(
++            requested_context(&root, Some(Path::new("../lib.rs")), Some("main"), true).is_err()
++        );
++        assert!(requested_context(&root, None, None, false).unwrap().is_none());
++    }
++
++    #[test]
++    fn unknown_selection_does_not_mutate_the_backend_graph() {
++        let (mut db, vfs, root) = fixture("//- /lib.rs crate:main\nfn active() {}\n", &["lib.rs"]);
++        let before = Crate::all(&db);
++        assert!(select_crate(&mut db, &vfs, &root.join("missing.rs"), "main").is_err());
++        assert!(select_crate(&mut db, &vfs, &root.join("lib.rs"), "missing").is_err());
++        assert_eq!(Crate::all(&db), before);
++    }
++
++    #[test]
++    fn selection_preserves_dependencies_but_removes_unrelated_consumers() {
++        let (mut db, vfs, root) = fixture(
++            "//- /dep.rs crate:dep\npub fn api() {}\n//- /first.rs crate:first deps:dep\nfn use_api() { dep::api(); }\n//- /second.rs crate:second deps:dep\nfn other() { dep::api(); }\n",
++            &["dep.rs", "first.rs", "second.rs"],
++        );
++        let selected = select_crate(&mut db, &vfs, &root.join("first.rs"), "first").unwrap();
++        let crates = Crate::all(&db);
++        assert_eq!(crates.len(), 2);
++        assert!(crates.contains(&selected));
++        assert_eq!(
++            selected.dependencies(&db)[0].krate.display_name(&db).unwrap().to_string(),
++            "dep"
++        );
++        assert!(
++            !crates.iter().any(|krate| krate.display_name(&db).unwrap().to_string() == "second")
++        );
++        let host = AnalysisHost::with_database(db);
++        let analysis = host.analysis();
++        let index = StaticIndex::compute(&analysis, VendoredLibrariesConfig::Excluded);
++        assert!(index.tokens.iter().any(|(_, token)| token.display_name.as_deref() == Some("api")
++            && !token.references.is_empty()));
++    }
++
++    #[test]
++    fn same_source_under_two_crates_is_resolved_only_after_selection() {
++        let (mut db, vfs, root) = fixture(
++            "//- /one.rs crate:one\n#[path = \"shared.rs\"] mod shared;\n//- /two.rs crate:two cfg:feature=on\n#[path = \"shared.rs\"] mod shared;\n//- /shared.rs\n#[cfg(feature = \"on\")] fn optional() {}\nfn active() {}\n",
++            &["one.rs", "two.rs", "shared.rs"],
++        );
++        let file = vfs.file_id(&VfsPath::from(root.join("shared.rs"))).unwrap().0;
++        assert!(document_owner(&db, file).is_err());
++        let selected = select_crate(&mut db, &vfs, &root.join("two.rs"), "two").unwrap();
++        assert_eq!(document_owner(&db, file).unwrap(), selected);
++        let host = AnalysisHost::with_database(db);
++        let analysis = host.analysis();
++        let index = StaticIndex::compute(&analysis, VendoredLibrariesConfig::Excluded);
++        assert!(
++            index.tokens.iter().any(|(_, token)| token.display_name.as_deref() == Some("optional"))
++        );
++    }
++
++    #[test]
++    fn multiple_modules_in_one_crate_are_not_silently_selected() {
++        let (mut db, vfs, root) = fixture(
++            "//- /lib.rs crate:main\n#[path = \"shared.rs\"] mod a;\n#[path = \"shared.rs\"] mod b;\n//- /shared.rs\nfn active() {}\n",
++            &["lib.rs", "shared.rs"],
++        );
++        select_crate(&mut db, &vfs, &root.join("lib.rs"), "main").unwrap();
++        let file = vfs.file_id(&VfsPath::from(root.join("shared.rs"))).unwrap().0;
++        assert!(document_owner(&db, file).is_err());
++    }
++
++    #[test]
++    fn published_document_context_matches_the_selected_backend_crate() {
++        let (mut db, vfs, root) = fixture(
++            "//- /one.rs crate:one\n#[path = \"shared.rs\"] mod shared;\n//- /two.rs crate:two cfg:feature=on\n#[path = \"shared.rs\"] mod shared;\n//- /shared.rs\nfn active() {}\n",
++            &["one.rs", "two.rs", "shared.rs"],
++        );
++        let selected = select_crate(&mut db, &vfs, &root.join("two.rs"), "two").unwrap();
++        let dir = tempfile::tempdir().unwrap();
++        let scip_path = dir.path().join("index.scip");
++        let model_path = dir.path().join("model.json");
++        let index = scip::types::Index {
++            documents: vec![scip::types::Document {
++                relative_path: "shared.rs".to_owned(),
++                ..Default::default()
++            }],
++            ..Default::default()
++        };
++        super::super::sniff_project_model::ObservedOutputs::prepare(&scip_path, &model_path)
++            .unwrap()
++            .bind_context(Some(selected))
++            .publish(index, &db, &vfs, &root)
++            .unwrap();
++        let model: serde_json::Value =
++            serde_json::from_slice(&std::fs::read(model_path).unwrap()).unwrap();
++        assert_eq!(model["selected_root_context"]["name"], "two");
++        assert_eq!(
++            model["scip_binding"]["occurrence_context_selection"],
++            "selected-crate-closure-unique-source-associations"
++        );
++        assert_eq!(model["scip_binding"]["document_contexts"][0]["relative_path"], "shared.rs");
++        assert_eq!(model["scip_binding"]["document_contexts"][0]["context"]["name"], "two");
++        assert_eq!(model["scip_binding"]["symbol_context_namespaces"].as_array().unwrap().len(), 1);
++        assert_eq!(model["scip_binding"]["symbol_context_namespaces"][0]["context"]["name"], "two");
++        assert!(
++            model["scip_binding"]["symbol_context_namespaces"][0]["namespace"]
++                .as_str()
++                .unwrap()
++                .starts_with("sniff-context-")
++        );
++        assert_eq!(model["declared_world_domain_complete"], false);
++        assert_eq!(model["input_closure_proven"], false);
++    }
++
++    #[test]
++    fn direct_module_and_include_are_competing_source_contexts() {
++        let (mut db, vfs, root) = fixture(
++            "//- /lib.rs crate:main\n#[rustc_builtin_macro] macro_rules! include { () => {} }\n#[path = \"shared.rs\"] mod direct;\nmod injected { include!(\"shared.rs\"); }\n//- /shared.rs\npub fn api() {}\n",
++            &["lib.rs", "shared.rs"],
++        );
++        select_crate(&mut db, &vfs, &root.join("lib.rs"), "main").unwrap();
++        let file = vfs.file_id(&VfsPath::from(root.join("shared.rs"))).unwrap().0;
++        let counts = super::super::sniff_source_context::association_counts(&db);
++        assert_eq!(counts.get(&file), Some(&2));
++        assert!(document_owner_with_counts(&db, file, &counts).is_err());
++    }
++
++    #[test]
++    fn associated_method_block_modules_compete_with_direct_modules() {
++        let (mut db, vfs, root) = fixture(
++            "//- /lib.rs crate:main\n#[path = \"shared.rs\"] mod direct;\ntrait Api { fn work() { #[path = \"shared.rs\"] mod nested; } }\n//- /shared.rs\npub fn api() {}\n",
++            &["lib.rs", "shared.rs"],
++        );
++        select_crate(&mut db, &vfs, &root.join("lib.rs"), "main").unwrap();
++        let file = vfs.file_id(&VfsPath::from(root.join("shared.rs"))).unwrap().0;
++        let counts = super::super::sniff_source_context::association_counts(&db);
++        assert_eq!(counts.get(&file), Some(&2));
++        assert!(document_owner_with_counts(&db, file, &counts).is_err());
++    }
++
++    #[test]
++    fn duplicated_macro_argument_preserves_both_backend_definitions() {
++        let source = "macro_rules! twice { ($name:ident) => { mod a { pub struct $name; } mod b { pub struct $name; } }; } twice!(S);\n";
++        let (mut db, vfs, root) =
++            fixture(&format!("//- /lib.rs crate:main\n{source}"), &["lib.rs"]);
++        let selected = select_crate(&mut db, &vfs, &root.join("lib.rs"), "main").unwrap();
++        let host = AnalysisHost::with_database(db);
++        let analysis = host.analysis();
++        let index = StaticIndex::compute_with_all_macro_associations(
++            &analysis,
++            VendoredLibrariesConfig::Excluded,
++        );
++        let definitions = index
++            .tokens
++            .iter_ref()
++            .filter(|(_, token)| token.display_name.as_deref() == Some("S"))
++            .collect::<Vec<_>>();
++        assert_eq!(definitions.len(), 2);
++        assert!(definitions.iter().all(|(_, token)| token.definition_crate == Some(selected)));
++        let offset = source.rfind('S').unwrap() as u32;
++        assert_eq!(
++            index.files[0]
++                .tokens
++                .iter()
++                .filter(|(range, _)| u32::from(range.start()) == offset)
++                .count(),
++            2
++        );
++    }
++
++    #[test]
++    fn signature_field_discriminant_and_unnamed_const_blocks_are_not_omitted() {
++        for declaration in [
++            "const _: () = { #[path = \"shared.rs\"] mod nested; };",
++            "type Alias = [u8; { #[path = \"shared.rs\"] mod nested; 0 }];",
++            "struct Holder { value: [u8; { #[path = \"shared.rs\"] mod nested; 0 }] }",
++            "enum Choice { A = { #[path = \"shared.rs\"] mod nested; 0 } }",
++            "struct Api; impl Api { fn work() { #[path = \"shared.rs\"] mod nested; } }",
++        ] {
++            let (mut db, vfs, root) = fixture(
++                &format!(
++                    "//- /lib.rs crate:main\n#[path = \"shared.rs\"] mod direct;\n{declaration}\n//- /shared.rs\npub fn api() {{}}\n"
++                ),
++                &["lib.rs", "shared.rs"],
++            );
++            select_crate(&mut db, &vfs, &root.join("lib.rs"), "main").unwrap();
++            let file = vfs.file_id(&VfsPath::from(root.join("shared.rs"))).unwrap().0;
++            let counts = super::super::sniff_source_context::association_counts(&db);
++            assert_eq!(counts.get(&file), Some(&2), "{declaration}");
++            assert!(document_owner_with_counts(&db, file, &counts).is_err(), "{declaration}");
++        }
++    }
++}
 diff --git a/crates/rust-analyzer/src/cli/sniff_project_model.rs b/crates/rust-analyzer/src/cli/sniff_project_model.rs
 new file mode 100644
-index 0000000..2ac4db6
+index 0000000..fc70cdc
 --- /dev/null
 +++ b/crates/rust-analyzer/src/cli/sniff_project_model.rs
-@@ -0,0 +1,543 @@
+@@ -0,0 +1,655 @@
 +//! Observed rust-analyzer contexts. This export does not claim an exhaustive Cargo world domain.
 +
 +use anyhow::{Context, Result, ensure};
@@ -297,6 +1018,20 @@ index 0000000..2ac4db6
 +    tenthash_hex: String,
 +    cryptographic_seal: bool,
 +    occurrence_context_selection: &'static str,
++    document_contexts: Option<Vec<DocumentContext>>,
++    symbol_context_namespaces: Option<Vec<SymbolContextNamespace>>,
++}
++
++#[derive(Serialize)]
++struct SymbolContextNamespace {
++    namespace: String,
++    context: CrateIdentity,
++}
++
++#[derive(Serialize)]
++struct DocumentContext {
++    relative_path: String,
++    context: CrateIdentity,
 +}
 +
 +#[derive(Serialize)]
@@ -307,6 +1042,7 @@ index 0000000..2ac4db6
 +    declared_world_domain_complete: bool,
 +    input_closure_proven: bool,
 +    scip_binding: Option<ScipBinding>,
++    selected_root_context: Option<CrateIdentity>,
 +    crates: Vec<CrateContext>,
 +}
 +
@@ -382,6 +1118,23 @@ index 0000000..2ac4db6
 +
 +fn observed_model(db: &RootDatabase, vfs: &Vfs, root: &AbsPathBuf) -> Result<ObservedModel> {
 +    hir::attach_db(db, || observed_model_attached(db, vfs, root))
++}
++
++pub(super) fn context_namespaces(
++    db: &RootDatabase,
++    vfs: &Vfs,
++) -> Result<ide_db::FxHashMap<Crate, String>> {
++    let mut namespaces = ide_db::FxHashMap::default();
++    let mut seen = BTreeSet::new();
++    for krate in Crate::all(db) {
++        let bytes = serde_json::to_vec(&identity(krate, db, vfs)?)?;
++        let digest: String =
++            tenthash::hash(bytes).iter().map(|byte| format!("{byte:02x}")).collect();
++        let name = format!("sniff-context-{digest}");
++        ensure!(seen.insert(name.clone()), "ambiguous compiler-context namespace");
++        namespaces.insert(krate, name);
++    }
++    Ok(namespaces)
 +}
 +
 +fn observed_model_attached(
@@ -490,12 +1243,13 @@ index 0000000..2ac4db6
 +        "ambiguous backend crate context identity"
 +    );
 +    Ok(ObservedModel {
-+        schema_version: 1,
-+        contract: "sniff-rust-observed-crate-contexts-v1-not-world-admission",
++        schema_version: 2,
++        contract: "sniff-rust-observed-crate-contexts-v2-not-world-admission",
 +        provider_version: crate::version::version().to_string(),
 +        declared_world_domain_complete: false,
 +        input_closure_proven: false,
 +        scip_binding: None,
++        selected_root_context: None,
 +        crates,
 +    })
 +}
@@ -503,6 +1257,7 @@ index 0000000..2ac4db6
 +pub(super) struct ObservedOutputs {
 +    scip_path: PathBuf,
 +    model_path: PathBuf,
++    selected_context: Option<Crate>,
 +}
 +
 +fn destination(path: &Path) -> Result<PathBuf> {
@@ -530,7 +1285,12 @@ index 0000000..2ac4db6
 +            scip_path == model_path
 +        };
 +        ensure!(!same, "SCIP and observed-context outputs must be distinct");
-+        Ok(Self { scip_path, model_path })
++        Ok(Self { scip_path, model_path, selected_context: None })
++    }
++
++    pub(super) fn bind_context(mut self, context: Option<Crate>) -> Self {
++        self.selected_context = context;
++        self
 +    }
 +
 +    pub(super) fn publish(
@@ -541,6 +1301,51 @@ index 0000000..2ac4db6
 +        root: &AbsPathBuf,
 +    ) -> Result<()> {
 +        let mut model = observed_model(db, vfs, root)?;
++        let symbol_context_namespaces = if self.selected_context.is_some() {
++            let mut namespaces = context_namespaces(db, vfs)?
++                .into_iter()
++                .map(|(krate, namespace)| {
++                    Ok(SymbolContextNamespace { namespace, context: identity(krate, db, vfs)? })
++                })
++                .collect::<Result<Vec<_>>>()?;
++            namespaces.sort_by(|left, right| left.namespace.cmp(&right.namespace));
++            Some(namespaces)
++        } else {
++            None
++        };
++        let document_contexts = if let Some(selected) = self.selected_context {
++            ensure!(
++                Crate::all(db).contains(&selected),
++                "selected compiler context was not retained"
++            );
++            model.selected_root_context = Some(identity(selected, db, vfs)?);
++            let mut contexts = Vec::new();
++            let counts = super::sniff_source_context::association_counts(db);
++            for document in &index.documents {
++                let path = vfs::VfsPath::from(root.join(&document.relative_path));
++                let (file, excluded) = vfs
++                    .file_id(&path)
++                    .context("indexed document has no compiler source identity")?;
++                ensure!(
++                    excluded == vfs::FileExcluded::No,
++                    "indexed document is excluded from compiler source"
++                );
++                let owner =
++                    super::sniff_crate_context::document_owner_with_counts(db, file, &counts)?;
++                contexts.push(DocumentContext {
++                    relative_path: document.relative_path.clone(),
++                    context: identity(owner, db, vfs)?,
++                });
++            }
++            contexts.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
++            ensure!(
++                contexts.windows(2).all(|pair| pair[0].relative_path != pair[1].relative_path),
++                "duplicate context-bound SCIP document"
++            );
++            Some(contexts)
++        } else {
++            None
++        };
 +        let scip_bytes = protobuf::Message::write_to_bytes(&index)?;
 +        let mut staged_scip = tempfile::NamedTempFile::new_in(self.scip_path.parent().unwrap())?;
 +        staged_scip.write_all(&scip_bytes)?;
@@ -553,7 +1358,13 @@ index 0000000..2ac4db6
 +                .collect(),
 +            // This checksum pairs observations, not a security or admission seal.
 +            cryptographic_seal: false,
-+            occurrence_context_selection: "unavailable",
++            occurrence_context_selection: if self.selected_context.is_some() {
++                "selected-crate-closure-unique-source-associations"
++            } else {
++                "unavailable"
++            },
++            document_contexts,
++            symbol_context_namespaces,
 +        });
 +        let mut staged_model = tempfile::NamedTempFile::new_in(self.model_path.parent().unwrap())?;
 +        staged_model.write_all(&serde_json::to_vec(&model)?)?;
@@ -582,6 +1393,28 @@ index 0000000..2ac4db6
 +            panic!("SCIP subcommand was not parsed");
 +        };
 +        assert_eq!(scip.sniff_project_model_output, Some(PathBuf::from("model.json")));
++    }
++
++    #[test]
++    fn scip_cli_parses_the_explicit_backend_crate_selector() {
++        let args = [
++            "scip",
++            ".",
++            "--sniff-project-model-output",
++            "model.json",
++            "--sniff-crate-root",
++            "src/lib.rs",
++            "--sniff-crate-name",
++            "main",
++        ];
++        let flags =
++            crate::cli::flags::RustAnalyzer::from_vec(args.into_iter().map(Into::into).collect())
++                .unwrap();
++        let crate::cli::flags::RustAnalyzerCmd::Scip(scip) = flags.subcommand else {
++            panic!("SCIP subcommand was not parsed");
++        };
++        assert_eq!(scip.sniff_crate_root, Some(PathBuf::from("src/lib.rs")));
++        assert_eq!(scip.sniff_crate_name.as_deref(), Some("main"));
 +    }
 +
 +    fn model(fixture: &str, paths: &[&str]) -> ObservedModel {
@@ -749,4 +1582,136 @@ index 0000000..2ac4db6
 +        assert!(scip_path.is_file());
 +        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 2);
 +    }
++}
+diff --git a/crates/rust-analyzer/src/cli/sniff_source_context.rs b/crates/rust-analyzer/src/cli/sniff_source_context.rs
+new file mode 100644
+index 0000000..26ff3ca
+--- /dev/null
++++ b/crates/rust-analyzer/src/cli/sniff_source_context.rs
+@@ -0,0 +1,126 @@
++//! Compiler-owned source associations, including body/block maps and include expansions.
++
++use hir::{Crate, MacroCallId};
++use hir_def::{
++    AdtId, DefWithBodyId, ExpressionStoreOwnerId, GenericDefId, ModuleDefId,
++    expr_store::ExpressionStore,
++    nameres::{
++        assoc::{ImplItems, TraitItems},
++        crate_def_map,
++    },
++};
++use ide::RootDatabase;
++use ide_db::{FxHashMap, FxHashSet};
++use vfs::FileId;
++
++fn queue_item(item: ModuleDefId, stores: &mut Vec<ExpressionStoreOwnerId>) {
++    let generic: GenericDefId = match item {
++        ModuleDefId::FunctionId(id) => id.into(),
++        ModuleDefId::StaticId(id) => id.into(),
++        ModuleDefId::ConstId(id) => id.into(),
++        ModuleDefId::AdtId(id) => id.into(),
++        ModuleDefId::TraitId(id) => id.into(),
++        ModuleDefId::TypeAliasId(id) => id.into(),
++        _ => return,
++    };
++    stores.push(generic.into());
++    match item {
++        ModuleDefId::FunctionId(id) => stores.push(DefWithBodyId::from(id).into()),
++        ModuleDefId::StaticId(id) => stores.push(DefWithBodyId::from(id).into()),
++        ModuleDefId::ConstId(id) => stores.push(DefWithBodyId::from(id).into()),
++        ModuleDefId::AdtId(AdtId::StructId(id)) => stores.push(hir_def::VariantId::from(id).into()),
++        ModuleDefId::AdtId(AdtId::UnionId(id)) => stores.push(hir_def::VariantId::from(id).into()),
++        _ => {}
++    }
++}
++
++fn record_include(
++    db: &RootDatabase,
++    call: MacroCallId,
++    includes: &mut FxHashMap<FileId, FxHashSet<MacroCallId>>,
++) {
++    if let Some(file) = call.loc(db).include_file_id(db, call) {
++        includes.entry(file.file_id(db)).or_default().insert(call);
++    }
++}
++
++pub(super) fn association_counts(db: &RootDatabase) -> FxHashMap<FileId, usize> {
++    hir::attach_db(db, || {
++        let mut direct = FxHashMap::<_, FxHashSet<_>>::default();
++        let mut includes = FxHashMap::<_, FxHashSet<_>>::default();
++        let mut maps = Crate::all(db)
++            .into_iter()
++            .map(|krate| crate_def_map(db, krate.base()))
++            .collect::<Vec<_>>();
++        let mut stores = Vec::new();
++        let mut visited_maps = FxHashSet::default();
++        let mut visited_stores = FxHashSet::default();
++        while !maps.is_empty() || !stores.is_empty() {
++            while let Some(map) = maps.pop() {
++                if !visited_maps.insert(map.root) {
++                    continue;
++                }
++                for (module_id, module) in map.modules() {
++                    if let Some(file) = module.origin.file_id() {
++                        direct.entry(file.file_id(db)).or_default().insert(module_id);
++                    }
++                    for call in module.scope.all_macro_calls() {
++                        record_include(db, call, &mut includes);
++                    }
++                    for id in module.scope.unnamed_consts() {
++                        queue_item(id.into(), &mut stores);
++                    }
++                    for item in module.scope.declarations() {
++                        queue_item(item, &mut stores);
++                        match item {
++                            ModuleDefId::TraitId(id) => {
++                                let items = &TraitItems::query_with_diagnostics(db, id).0;
++                                for (_, item) in &items.items {
++                                    queue_item((*item).into(), &mut stores);
++                                }
++                                for (_, call) in items.macro_calls() {
++                                    record_include(db, call, &mut includes);
++                                }
++                            }
++                            ModuleDefId::AdtId(AdtId::EnumId(id)) => {
++                                for &(variant, _) in id.enum_variants(db).variants.values() {
++                                    stores.push(DefWithBodyId::from(variant).into());
++                                    stores.push(hir_def::VariantId::from(variant).into());
++                                }
++                            }
++                            _ => {}
++                        }
++                    }
++                    for id in module.scope.impls() {
++                        stores.push(id.into());
++                        let items = &ImplItems::of(db, id).0;
++                        for (_, item) in &items.items {
++                            queue_item((*item).into(), &mut stores);
++                        }
++                        for (_, call) in items.macro_calls() {
++                            record_include(db, call, &mut includes);
++                        }
++                    }
++                }
++            }
++            while let Some(owner) = stores.pop() {
++                if !visited_stores.insert(owner) {
++                    continue;
++                }
++                let (store, sources) = ExpressionStore::with_source_map(db, owner);
++                maps.extend(store.blocks(db).map(|(_, map)| map));
++                for (_, call) in sources.macro_calls() {
++                    record_include(db, call, &mut includes);
++                }
++            }
++        }
++        let mut counts = direct
++            .into_iter()
++            .map(|(file, modules)| (file, modules.len()))
++            .collect::<FxHashMap<_, _>>();
++        for (file, calls) in includes {
++            *counts.entry(file).or_default() += calls.len();
++        }
++        counts
++    })
 +}
